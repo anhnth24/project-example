@@ -67,11 +67,21 @@ là "sai chữ". Độ chính xác = (1 − CER)×100.
 | ảnh scan kém (OCR) | **99.0%** | nhờ tiền xử lý (trước chỉ 81%) |
 | ảnh "viết tay" (OCR) | **~40%** | *mô phỏng bằng font; Tesseract không hợp chữ viết tay* |
 
-> **Tăng độ chính xác OCR** (đo bằng `bench/ocr_experiment.py`): tiền xử lý ảnh
-> (grayscale → phóng to ×2 nếu nhỏ → unsharp → normalize, thuần Rust qua crate `image`)
-> đưa ảnh chữ in 98.5%→99.5% và ảnh phân giải thấp **81%→99%**. Thử model `tessdata_best`
-> (12MB) lại KHÔNG tốt hơn model mặc định cho các mẫu này, nên giữ model nhẹ + tiền xử lý.
-> PDF scan render ở 300 DPI. Chữ viết tay cần engine khác (PaddleOCR/TrOCR/vision-LLM).
+> **Tăng độ chính xác OCR:**
+> 1. **Tiền xử lý ảnh** (grayscale → phóng to ×2 nếu nhỏ → unsharp → normalize, thuần
+>    Rust qua crate `image`): ảnh chữ in 98.5%→99.5%, ảnh phân giải thấp **81%→99%**.
+> 2. **Chọn model theo loại tài liệu** (đo bằng `bench/ocr_experiment.py`):
+>    - Ảnh **synthetic sạch** (sans-serif): model nhẹ tốt hơn (~99% vs ~95%).
+>    - **Tài liệu thật** (serif/đậm/IN HOA — giấy mời, văn bản luật): **`tessdata_best`
+>      tốt hơn hẳn**, phục hồi dấu ở chữ IN HOA mà model nhẹ mất
+>      (vd "MOT SO DIEU"→"MỘT SỐ ĐIỀU", "LUAT TRO GIUP"→"LUẬT TRỢ GIÚP").
+>    → Backend **tự dùng `tessdata_best` nếu có** (`bench/download_tessdata.sh`), vì tài
+>      liệu thật là mục tiêu chính; không có thì fallback model nhẹ.
+> 3. PDF scan render ở 300 DPI.
+>
+> **Còn yếu** (cần xử lý tiếp): dính chữ ở tiêu đề IN HOA ("BỘTƯPHÁP"), bảng **nhiều cột**
+> đọc lộn thứ tự. Hướng: tách cột trước khi OCR, hoặc tier **vision-LLM/PaddleOCR** cho
+> tài liệu khó. Chữ viết tay: cần engine khác (Tesseract không hợp).
 
 **Kết luận**: chữ Việt (dấu thanh, ơ/ư/ă/đ) được giữ gần như tuyệt đối ở mọi định dạng
 văn bản và ở OCR ảnh chữ in. Điểm trừ nhỏ của pptx/xlsx là **nhãn cấu trúc** chứ không
