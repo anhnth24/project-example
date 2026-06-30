@@ -15,3 +15,4 @@
 /*.md
 !README.md
 pdfium/
+/tessdata_best/

@@ -63,9 +63,15 @@ là "sai chữ". Độ chính xác = (1 − CER)×100.
 | xlsx text | **98.5%** | dư nhãn "## Sheet"; chữ Việt đúng 100% |
 | pptx text | **98.0%** | dư nhãn "## Slide N"; chữ Việt đúng 100% |
 | html text | **99.2%** | gần hoàn hảo |
-| **ảnh chữ in (OCR vie)** | **98.5%** | Tesseract tiếng Việt rất tốt |
-| ảnh scan kém (OCR) | **81.0%** | phân giải thấp |
-| ảnh "viết tay" (OCR) | **47.9%** | *mô phỏng bằng font, không phải chữ viết tay thật* |
+| **ảnh chữ in (OCR vie)** | **99.2%** | Tesseract `vie` + tiền xử lý ảnh |
+| ảnh scan kém (OCR) | **99.0%** | nhờ tiền xử lý (trước chỉ 81%) |
+| ảnh "viết tay" (OCR) | **~40%** | *mô phỏng bằng font; Tesseract không hợp chữ viết tay* |
+
+> **Tăng độ chính xác OCR** (đo bằng `bench/ocr_experiment.py`): tiền xử lý ảnh
+> (grayscale → phóng to ×2 nếu nhỏ → unsharp → normalize, thuần Rust qua crate `image`)
+> đưa ảnh chữ in 98.5%→99.5% và ảnh phân giải thấp **81%→99%**. Thử model `tessdata_best`
+> (12MB) lại KHÔNG tốt hơn model mặc định cho các mẫu này, nên giữ model nhẹ + tiền xử lý.
+> PDF scan render ở 300 DPI. Chữ viết tay cần engine khác (PaddleOCR/TrOCR/vision-LLM).
 
 **Kết luận**: chữ Việt (dấu thanh, ơ/ư/ă/đ) được giữ gần như tuyệt đối ở mọi định dạng
 văn bản và ở OCR ảnh chữ in. Điểm trừ nhỏ của pptx/xlsx là **nhãn cấu trúc** chứ không

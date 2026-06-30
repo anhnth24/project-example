@@ -12,10 +12,8 @@
 //! Không có libpdfium → fallback toàn file `pdf-extract`.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
-use image::{DynamicImage, ImageFormat};
 use pdfium_render::prelude::*;
 
 use super::fail;
@@ -30,8 +28,8 @@ thread_local! {
 const PAGE_TEXT_MIN_CHARS: usize = 10;
 /// Chỉ OCR ảnh nhúng đủ lớn (px²) — bỏ qua logo/icon nhỏ.
 const MIN_IMG_AREA: i64 = 200 * 200;
-
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+/// DPI render trang khi OCR (cao hơn = OCR tốt hơn, chậm hơn).
+const OCR_DPI: f32 = 300.0;
 
 pub fn to_markdown(
     path: &Path,
@@ -111,7 +109,7 @@ fn ocr_page_images(
         let Ok(img) = img_obj.get_processed_image(doc) else {
             continue;
         };
-        if let Ok(text) = ocr_dynimage(&img, langs) {
+        if let Ok(text) = image_ocr::ocr_dynimage(&img, langs) {
             let text = text.trim();
             // Chỉ thêm nếu có nội dung chữ thực sự.
             if text.chars().filter(|c| c.is_alphanumeric()).count() >= 4 {
@@ -128,23 +126,13 @@ fn ocr_page_images(
     }
 }
 
-/// Render cả trang ở ~200 DPI rồi OCR.
+/// Render cả trang ở OCR_DPI rồi OCR (qua image_ocr có tiền xử lý).
 fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<String, ConvertError> {
-    let w = (((page.width().value / 72.0) * 200.0).round() as i32).clamp(100, 4000);
-    let h = (((page.height().value / 72.0) * 200.0).round() as i32).clamp(100, 6000);
+    let w = (((page.width().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 5000);
+    let h = (((page.height().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 7000);
     let bitmap = page.render(w, h, None).map_err(|e| fail(format!("render: {e}")))?;
     let img = bitmap.as_image().map_err(|e| fail(format!("as_image: {e}")))?;
-    ocr_dynimage(&img, langs)
-}
-
-/// Lưu ảnh ra PNG tạm rồi OCR bằng Tesseract.
-fn ocr_dynimage(img: &DynamicImage, langs: &str) -> Result<String, ConvertError> {
-    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp: PathBuf = std::env::temp_dir().join(format!("fileconv_pdf_{}_{seq}.png", std::process::id()));
-    img.save_with_format(&tmp, ImageFormat::Png).map_err(fail)?;
-    let text = image_ocr::ocr_image(&tmp, langs).map_err(fail)?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(text)
+    image_ocr::ocr_dynimage(&img, langs).map_err(fail)
 }
 
 /// Bind libpdfium (nếu có).
