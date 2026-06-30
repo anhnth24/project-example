@@ -1,27 +1,38 @@
 :root {
-  --bg: #f5f6f8;
+  /* Palette: blue/slate "professional tool" (ui-ux-pro-max — Productivity/CRM) */
+  --bg: #f1f5f9; /* slate-100 canvas */
   --panel: #ffffff;
-  --sidebar: #fbfbfc;
-  --border: #e8e9ee;
-  --border-strong: #d8dae2;
-  --text: #1b1d22;
-  --muted: #71757e;
-  --faint: #9aa0aa;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef0fe;
-  --accent-text: #4338ca;
-  --hover: #f1f2f5;
-  --danger: #e5484d;
-  --amber: #f5a524;
-  --radius: 9px;
-  --radius-sm: 6px;
-  --shadow-sm: 0 1px 2px rgba(20, 22, 30, 0.06);
-  --shadow-md: 0 6px 24px rgba(20, 22, 30, 0.12);
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --sidebar: #f8fafc; /* slate-50 */
+  --border: #e2e8f0; /* slate-200 */
+  --border-strong: #cbd5e1; /* slate-300 */
+  --text: #0f172a; /* slate-900 */
+  --muted: #64748b; /* slate-500 */
+  --faint: #94a3b8; /* slate-400 */
+  --accent: #2563eb; /* blue-600 trust */
+  --accent-hover: #1d4ed8; /* blue-700 */
+  --accent-soft: #eff6ff; /* blue-50 */
+  --accent-text: #1d4ed8;
+  --hover: #f1f5f9; /* slate-100 */
+  --success: #059669;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --amber: #f59e0b; /* folder/badge */
+  --radius: 10px;
+  --radius-sm: 7px;
+  /* Soft UI Evolution: subtle layered shadows */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 1px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 12px 32px rgba(15, 23, 42, 0.14);
+  --ring: 0 0 0 3px rgba(37, 99, 235, 0.35);
+  /* z-index scale */
+  --z-modal: 30;
+  --z-toast: 50;
+  --font-ui: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --font-display: "Plus Jakarta Sans Variable", var(--font-ui);
+  font-family: var(--font-ui);
   font-size: 14px;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
@@ -214,7 +225,8 @@ input:focus {
   color: #fff;
 }
 .brand-name {
-  font-weight: 650;
+  font-family: var(--font-display);
+  font-weight: 700;
   font-size: 15px;
   letter-spacing: -0.01em;
 }
@@ -403,8 +415,10 @@ input:focus {
   margin-bottom: 18px;
 }
 .empty h1 {
+  font-family: var(--font-display);
+  font-weight: 700;
   margin: 0 0 8px;
-  font-size: 26px;
+  font-size: 27px;
   letter-spacing: -0.02em;
 }
 .empty-sub {
@@ -446,7 +460,8 @@ input:focus {
   letter-spacing: 0.05em;
 }
 .step-title {
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 700;
   font-size: 15px;
   margin: 3px 0 6px;
 }
@@ -643,6 +658,7 @@ input:focus {
 }
 .markdown-body h1,
 .markdown-body h2 {
+  font-family: var(--font-display);
   letter-spacing: -0.01em;
   border-bottom: 1px solid var(--border);
   padding-bottom: 0.25em;
@@ -710,7 +726,7 @@ input:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: var(--z-modal);
 }
 .modal {
   background: var(--panel);
@@ -729,6 +745,8 @@ input:focus {
   margin-bottom: 6px;
 }
 .modal-head h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
   margin: 0;
   font-size: 17px;
 }
@@ -798,7 +816,7 @@ hr {
   gap: 12px;
   align-items: center;
   max-width: 80vw;
-  z-index: 60;
+  z-index: var(--z-toast);
   box-shadow: var(--shadow-md);
   font-size: 13px;
 }
@@ -815,6 +833,22 @@ hr {
   cursor: pointer;
 }
 
+/* ───────── Focus rings (a11y) ───────── */
+.btn-primary:focus-visible,
+.btn-ghost:focus-visible,
+.seg:focus-visible,
+.ghost-icon:focus-visible,
+.row-act:focus-visible,
+.sidebar-settings:focus-visible,
+.row:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+.row:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+
 /* ───────── Anim ───────── */
 .spin {
   animation: spin 0.9s linear infinite;
@@ -822,5 +856,16 @@ hr {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* Tôn trọng người dùng tắt hiệu ứng chuyển động */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

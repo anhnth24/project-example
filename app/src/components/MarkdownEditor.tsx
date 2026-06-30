@@ -9,10 +9,16 @@ import { Pencil, Eye } from "lucide-react";
 type Tab = "edit" | "preview";
 
 const cmTheme = EditorView.theme({
-  "&": { fontSize: "13px", height: "100%", backgroundColor: "#ffffff" },
-  ".cm-gutters": { backgroundColor: "#fbfbfd", border: "none", color: "#b9bcc4" },
-  ".cm-activeLine": { backgroundColor: "#f7f8ff" },
-  ".cm-activeLineGutter": { backgroundColor: "#f0f1fb" },
+  "&": {
+    fontSize: "13px",
+    height: "100%",
+    backgroundColor: "#ffffff",
+    fontFamily: "var(--font-ui)",
+  },
+  ".cm-content": { fontFamily: "ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace" },
+  ".cm-gutters": { backgroundColor: "#f8fafc", border: "none", color: "#94a3b8" },
+  ".cm-activeLine": { backgroundColor: "#eff6ff" },
+  ".cm-activeLineGutter": { backgroundColor: "#dbeafe", color: "#1d4ed8" },
   "&.cm-focused": { outline: "none" },
 });
 

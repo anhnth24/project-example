@@ -16,6 +16,13 @@ export default function App() {
     init();
   }, [init]);
 
+  // Toast tự ẩn sau 5s (theo guideline: toast auto-dismiss 3–5s).
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 5000);
+    return () => clearTimeout(t);
+  }, [error, setError]);
+
   return (
     <div className="app">
       <Sidebar onOpenSettings={() => setSettingsOpen(true)} />
