@@ -93,6 +93,11 @@ pub struct ConverterOptions {
     pub audio_lang: String,
     /// Số thread cho whisper (mặc định 4).
     pub audio_threads: i32,
+    /// Bật OCR cho TRANG scan (không/ít lớp text). Mặc định true.
+    pub pdf_ocr: bool,
+    /// Bật OCR thêm cho ẢNH NHÚNG lớn trong trang có text (trang trộn).
+    /// Mặc định false vì có thể chậm/nhiễu với tài liệu nhiều hình.
+    pub pdf_ocr_images: bool,
 }
 
 impl Default for ConverterOptions {
@@ -102,6 +107,8 @@ impl Default for ConverterOptions {
             whisper_model: None,
             audio_lang: "vi".to_string(),
             audio_threads: 4,
+            pdf_ocr: true,
+            pdf_ocr_images: false,
         }
     }
 }
@@ -151,7 +158,12 @@ impl Converter {
     pub fn convert_path(&self, path: &Path) -> Result<ConversionResult, ConvertError> {
         let format = FormatKind::from_path(path);
         let md = match format {
-            FormatKind::Pdf => conv::pdf::to_markdown(path),
+            FormatKind::Pdf => conv::pdf::to_markdown(
+                path,
+                &self.opts.ocr_langs,
+                self.opts.pdf_ocr,
+                self.opts.pdf_ocr_images,
+            ),
             FormatKind::Docx => conv::docx::to_markdown(path),
             FormatKind::Pptx => conv::pptx::to_markdown(path),
             FormatKind::Xlsx => conv::xlsx::to_markdown(path),

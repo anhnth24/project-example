@@ -34,3 +34,4 @@ whisper-rs = "0.16"      # audio -> text (whisper.cpp), hỗ trợ tiếng Việ
 # (symphonia pin 0.5: API ổn định; 0.6 đổi cấu trúc module)
 symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "flac", "wav", "pcm", "ogg", "vorbis", "alac"] }  # decode audio thuần Rust
 pdfium-render = "0.9.2"
+image = { version = "0.25", default-features = false, features = ["png"] }  # lưu ảnh trang PDF để OCR
