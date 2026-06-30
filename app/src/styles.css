@@ -610,6 +610,88 @@ input:focus {
   color: var(--muted);
 }
 
+/* loading state cho preview */
+.preview-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* PDF (pdf.js -> canvas) */
+.pdf-canvas {
+  background: #e9edf3;
+  padding: 16px;
+}
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.pdf-page {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: var(--shadow-sm);
+  background: #fff;
+}
+
+/* DOCX (docx-preview) */
+.docx-wrap {
+  background: #e9edf3;
+  padding: 16px 0;
+}
+.docx-wrap .docx-wrapper {
+  background: transparent;
+  padding: 0;
+}
+.docx-wrap .docx-wrapper > section.docx {
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 14px;
+  border-radius: 4px;
+}
+
+/* Excel (SheetJS -> HTML table) */
+.excel-wrap {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sheet-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.excel-table {
+  overflow: auto;
+  padding: 12px;
+}
+.excel-table table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.excel-table td,
+.excel-table th {
+  border: 1px solid var(--border-strong);
+  padding: 5px 9px;
+  white-space: nowrap;
+  color: var(--text);
+}
+.excel-table tr:first-child td {
+  background: var(--sidebar);
+  font-weight: 600;
+}
+
 /* ───────── Markdown editor ───────── */
 .md-editor {
   display: flex;

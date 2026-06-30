@@ -45,8 +45,21 @@ app/
     tauri.conf.json    # cấu hình app + asset protocol cho preview
 ```
 
-## Hạn chế đã biết (giai đoạn 1)
+## Preview file gốc trong app (side-by-side với Markdown)
 
-- Preview file gốc native chỉ cho **ảnh / audio / text/csv/html / pdf** (PDF tùy webview OS).
-  **docx/pptx/xlsx** không xem trước trong app → nút "Mở ngoài" + đối chiếu bản Markdown.
-- Chưa có drag-drop, đa tab, tìm kiếm, đóng gói cài đặt (Win/Mac/Ubuntu) — dự kiến giai đoạn 2.
+| Loại | Thư viện | Ghi chú |
+|------|----------|---------|
+| PDF | `pdfjs-dist` (pdf.js) | render từng trang ra canvas |
+| Word `.docx` | `docx-preview` | giữ định dạng |
+| Excel `.xlsx/.xls/.ods` | `@e965/xlsx` (SheetJS) | có tab chọn sheet |
+| Ảnh, audio | asset protocol | `<img>` / `<audio>` |
+| csv, html, text, markdown | đọc trực tiếp | hiển thị thô |
+| `.pptx` | — | webview render chưa đáng tin → nút **Mở ngoài** |
+
+Bytes file đọc qua command Rust `read_bytes` (trả ArrayBuffer); KHÔNG `fetch(asset://)`
+vì webview chặn 403.
+
+## Hạn chế đã biết
+
+- `.pptx`: chưa preview trong app (dùng "Mở ngoài").
+- Chưa có drag-drop, đa tab, tìm kiếm, đóng gói cài đặt (Win/Mac/Ubuntu) — dự kiến sau.

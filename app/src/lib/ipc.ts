@@ -27,6 +27,8 @@ export const api = {
     invoke<void>("write_text_file", { relPath, content }),
 
   resolvePath: (relPath: string) => invoke<string>("resolve_path", { relPath }),
+  /** Bytes thô của file (ArrayBuffer) cho pdf.js/docx-preview/SheetJS. */
+  readBytes: (relPath: string) => invoke<ArrayBuffer>("read_bytes", { relPath }),
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),

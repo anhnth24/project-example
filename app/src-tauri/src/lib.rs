@@ -489,11 +489,20 @@ fn write_text_file(
     fs::write(&p, content).map_err(es)
 }
 
-/// Đường dẫn tuyệt đối của rel_path (để UI gọi `convertFileSrc` hiển thị ảnh/pdf/audio).
+/// Đường dẫn tuyệt đối của rel_path (để UI gọi `convertFileSrc` hiển thị ảnh/audio).
 #[tauri::command]
 fn resolve_path(state: State<AppState>, rel_path: String) -> Result<String, String> {
     let p = resolve_within(&data_root(&state), &rel_path)?;
     Ok(p.to_string_lossy().to_string())
+}
+
+/// Đọc bytes thô của file (UI nhận ArrayBuffer) — dùng cho pdf.js/docx-preview/SheetJS.
+/// (Không dùng fetch(asset://) vì webview chặn 403 với fetch.)
+#[tauri::command]
+fn read_bytes(state: State<AppState>, rel_path: String) -> Result<tauri::ipc::Response, String> {
+    let p = resolve_within(&data_root(&state), &rel_path)?;
+    let bytes = fs::read(&p).map_err(es)?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
@@ -559,6 +568,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             resolve_path,
+            read_bytes,
             get_settings,
             set_settings,
         ])
