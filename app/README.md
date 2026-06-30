@@ -1,16 +1,17 @@
 # FileConv Docs (desktop)
 
-App desktop (Tauri 2 + React/TS) cho **BA/PM** soạn tài liệu cho Dev: đưa file gốc vào
-workspace, app gọi lõi Rust `fileconv-core` chuyển sang **Markdown** (link 1-1 với file gốc),
+App desktop (Tauri 2 + React/TS) cho **BA/PM** soạn tài liệu cho Dev: tải file gốc vào
+thư mục, app gọi lõi Rust `fileconv-core` chuyển sang **Markdown** (link 1-1 với file gốc),
 xem **song song** (gốc ↔ markdown) hoặc **sửa** markdown. **Toàn bộ dữ liệu lưu local.**
 
 ## Mô hình
 
-- **Workspace** = một thư mục thật trên đĩa bạn chọn (danh sách lưu ở `app_config_dir`).
-- **Folder** = thư mục con thật. **Document** = cặp `(file gốc, file .md)`.
+- Một **thư mục gốc DATA** duy nhất. Mặc định `app_data_dir()/DATA`; có thể **map** sang
+  thư mục bất kỳ của bạn (nút đổi thư mục trên sidebar; lưu ở `app_config_dir/config.json`).
+- **Folder** = thư mục con thật trong DATA. **Document** = cặp `(file gốc, file .md)`.
 - Quy ước link 1-1: `report.pdf` → `report.pdf.md` đặt cạnh nhau. Filesystem là nguồn sự thật.
 - Định dạng nhận vào = đuôi mà `fileconv-core` hỗ trợ (pdf, docx, pptx, xlsx/xls/ods, csv,
-  html, ảnh, audio). File không hỗ trợ sẽ bị chặn khi import.
+  html, ảnh, audio). File không hỗ trợ sẽ bị chặn khi tải lên.
 
 ## Chạy dev
 
