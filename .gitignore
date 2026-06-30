@@ -14,3 +14,4 @@
 # File .md kết quả convert sinh ở thư mục gốc (không commit), trừ README
 /*.md
 !README.md
+pdfium/
