@@ -1,0 +1,33 @@
+[package]
+name = "fileconv-desktop"
+version = "0.1.0"
+description = "Desktop app (Tauri) cho BA/PM soạn tài liệu cho Dev — convert file → Markdown"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version = "1.80"
+
+# Tauri 2: lib (mobile-ready) + bin desktop.
+[lib]
+name = "fileconv_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "fileconv-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pin có chủ đích: time 0.3.52 đổi chữ ký `Parsable::parse` làm vỡ `cookie 0.18.1`
+# (dep gián tiếp của tauri/wry). Giữ 0.3.51 cho tới khi cookie phát hành bản tương thích.
+time = "=0.3.51"
+
+# Lõi convert dùng chung với CLI — KHÔNG viết lại.
+fileconv-core = { path = "../../crates/core" }
