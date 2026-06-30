@@ -76,7 +76,7 @@ function HomeState() {
     <div className="home">
       <EmptyState
         icon={<Icon icon={FileText} size="lg" />}
-        title="Any to Markdown"
+        title="Markhand"
         description="Biến mọi tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA & PM."
       />
       <div className="home-steps">

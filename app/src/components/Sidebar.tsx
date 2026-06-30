@@ -65,7 +65,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     <aside className="sidebar">
       <div className="brand">
         <span className="brand-mark">A&rarr;M</span>
-        <span className="brand-name">Any to Markdown</span>
+        <span className="brand-name">Markhand</span>
       </div>
 
       <div className="data-card" title={dataRoot}>
