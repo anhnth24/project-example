@@ -8,28 +8,20 @@ import sys
 
 def run(img, lang="vi"):
     from paddleocr import PaddleOCR
-    try:
-        ocr = PaddleOCR(use_angle_cls=True, lang=lang, show_log=False)
-    except TypeError:
-        ocr = PaddleOCR(lang=lang)  # API mới có thể bỏ tham số
+    # enable_mkldnn=False để tránh bug oneDNN/PIR của paddlepaddle CPU build này.
+    ocr = PaddleOCR(lang=lang, enable_mkldnn=False)  # PaddleOCR 3.x
 
-    # API cũ: .ocr() trả [[ [box,(text,conf)], ... ]]
+    res = ocr.predict(img)
+    r = res[0]
+    # OCRResult truy cập như dict: 'rec_texts' + 'rec_polys' (hoặc 'dt_polys')
+    texts = r["rec_texts"]
+    polys = r["rec_polys"] if "rec_polys" in r else r["dt_polys"]
+
     items = []
-    try:
-        res = ocr.ocr(img, cls=True)
-        page = res[0] if res and isinstance(res, list) else res
-        for line in page:
-            box, (text, conf) = line[0], line[1]
-            ys = [p[1] for p in box]; xs = [p[0] for p in box]
-            items.append((min(ys), min(xs), text))
-    except Exception:
-        # API mới (3.x): predict() trả dict có 'rec_texts','rec_polys'
-        res = ocr.predict(img)
-        r = res[0]
-        texts = r["rec_texts"]; polys = r["rec_polys"]
-        for poly, text in zip(polys, texts):
-            ys = [p[1] for p in poly]; xs = [p[0] for p in poly]
-            items.append((min(ys), min(xs), text))
+    for poly, text in zip(polys, texts):
+        ys = [p[1] for p in poly]
+        xs = [p[0] for p in poly]
+        items.append((min(ys), min(xs), text))
 
     # Gom thành hàng: sắp theo y, ngắt hàng khi y nhảy > ngưỡng
     items.sort(key=lambda t: (t[0], t[1]))
