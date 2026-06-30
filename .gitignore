@@ -11,3 +11,6 @@
 /models/
 # Audio sinh ra (giữ .txt + manifest + script)
 /bench/vn_audio/*.mp3
+# File .md kết quả convert sinh ở thư mục gốc (không commit), trừ README
+/*.md
+!README.md
