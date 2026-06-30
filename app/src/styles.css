@@ -953,6 +953,69 @@ hr {
   cursor: pointer;
 }
 
+/* ───────── Astryx integration wrappers ───────── */
+.home {
+  margin: auto;
+  max-width: 780px;
+  width: 100%;
+  padding: 40px 32px;
+  text-align: center;
+}
+.home-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-top: 20px;
+  text-align: left;
+}
+.toolbar-grow {
+  flex: 1;
+  display: flex;
+}
+.toolbar-grow button {
+  width: 100%;
+}
+.sidebar-foot {
+  border-top: 1px solid var(--border);
+  padding: 8px;
+}
+.doc-modes {
+  margin: 0 auto;
+}
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 2px 8px;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 140px;
+  gap: 12px;
+}
+.settings-whisper {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.settings-whisper > :first-child {
+  flex: 1;
+}
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.toast-wrap {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-toast);
+  width: max-content;
+  max-width: 80vw;
+}
+
 /* ───────── Focus rings (a11y) ───────── */
 .btn-primary:focus-visible,
 .btn-ghost:focus-visible,

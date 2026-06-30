@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { X } from "lucide-react";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { Layout, LayoutFooter } from "@astryxdesign/core/Layout";
+import { Button } from "@astryxdesign/core/Button";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { NumberInput } from "@astryxdesign/core/NumberInput";
+import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { useStore } from "../state/store";
 import type { Settings } from "../lib/types";
 
@@ -42,76 +47,33 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h2>Cài đặt convert</h2>
-          <button className="ghost-icon" onClick={onClose}>
-            <X size={18} />
-          </button>
-        </div>
-
-        <label className="field">
-          <span>Ngôn ngữ OCR (ảnh / PDF scan)</span>
-          <input value={form.ocrLangs} onChange={(e) => set("ocrLangs", e.target.value)} placeholder="vie+eng" />
-        </label>
-
-        <label className="field check">
-          <input type="checkbox" checked={form.pdfOcr} onChange={(e) => set("pdfOcr", e.target.checked)} />
-          <span>OCR trang PDF dạng scan (ít/không có lớp text)</span>
-        </label>
-
-        <label className="field check">
-          <input
-            type="checkbox"
-            checked={form.pdfOcrImages}
-            onChange={(e) => set("pdfOcrImages", e.target.checked)}
-          />
-          <span>OCR thêm ảnh nhúng trong trang PDF có text (chậm hơn)</span>
-        </label>
-
-        <hr />
-
-        <div className="field-grid">
-          <label className="field">
-            <span>Ngôn ngữ audio</span>
-            <input value={form.audioLang} onChange={(e) => set("audioLang", e.target.value)} />
-          </label>
-          <label className="field">
-            <span>Thread audio</span>
-            <input
-              type="number"
-              min={1}
-              max={32}
-              value={form.audioThreads}
-              onChange={(e) => set("audioThreads", Number(e.target.value) || 1)}
-            />
-          </label>
-        </div>
-
-        <label className="field">
-          <span>Model whisper (.bin) — để trống nếu không dùng audio</span>
-          <div className="row-inline">
-            <input
-              value={form.whisperModel ?? ""}
-              onChange={(e) => set("whisperModel", e.target.value || null)}
-              placeholder="đường dẫn tới ggml-*.bin"
-            />
-            <button className="btn-ghost" onClick={pickWhisper}>
-              Chọn…
-            </button>
+    <Dialog isOpen onOpenChange={(open: boolean) => !open && onClose()} width={520}>
+      <Layout
+        header={<DialogHeader title="Cài đặt convert" onOpenChange={(open: boolean) => !open && onClose()} />}
+        content={
+          <div className="settings-form">
+            <TextInput label="Ngôn ngữ OCR (ảnh / PDF scan)" value={form.ocrLangs} onChange={(v: string) => set("ocrLangs", v)} placeholder="vie+eng" />
+            <CheckboxInput label="OCR trang PDF dạng scan (ít/không có lớp text)" value={form.pdfOcr} onChange={(v: boolean) => set("pdfOcr", v)} />
+            <CheckboxInput label="OCR thêm ảnh nhúng trong trang PDF có text (chậm hơn)" value={form.pdfOcrImages} onChange={(v: boolean) => set("pdfOcrImages", v)} />
+            <div className="settings-grid">
+              <TextInput label="Ngôn ngữ audio" value={form.audioLang} onChange={(v: string) => set("audioLang", v)} />
+              <NumberInput label="Thread audio" value={form.audioThreads} onChange={(v: number) => set("audioThreads", v || 1)} min={1} max={32} />
+            </div>
+            <div className="settings-whisper">
+              <TextInput label="Model whisper (.bin) — để trống nếu không dùng audio" value={form.whisperModel ?? ""} onChange={(v: string) => set("whisperModel", v || null)} placeholder="đường dẫn tới ggml-*.bin" />
+              <Button label="Chọn…" variant="secondary" onClick={pickWhisper} />
+            </div>
           </div>
-        </label>
-
-        <div className="modal-actions">
-          <button className="btn-ghost" onClick={onClose}>
-            Hủy
-          </button>
-          <button className="btn-primary" onClick={onSave}>
-            Lưu
-          </button>
-        </div>
-      </div>
-    </div>
+        }
+        footer={
+          <LayoutFooter hasDivider>
+            <div className="settings-actions">
+              <Button label="Hủy" variant="ghost" onClick={onClose} />
+              <Button label="Lưu" variant="primary" onClick={onSave} />
+            </div>
+          </LayoutFooter>
+        }
+      />
+    </Dialog>
   );
 }

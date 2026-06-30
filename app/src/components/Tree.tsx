@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronRight, Folder, FolderOpen, Pencil, Trash2 } from "lucide-react";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { fileIcon } from "../lib/icons";
@@ -57,11 +58,7 @@ export function Tree({ node, depth }: { node: FsNode; depth: number }) {
         </span>
         <span className="row-icon">
           {node.isDir ? (
-            open ? (
-              <FolderOpen size={16} color="#e0a83e" />
-            ) : (
-              <Folder size={16} color="#e0a83e" />
-            )
+            open ? <FolderOpen size={16} color="#e0a83e" /> : <Folder size={16} color="#e0a83e" />
           ) : (
             fileIcon(node)
           )}
@@ -69,12 +66,8 @@ export function Tree({ node, depth }: { node: FsNode; depth: number }) {
         <span className="row-label">{node.name}</span>
         {unconverted && <span className="dot" title="Chưa convert" />}
         <span className="row-actions">
-          <button className="row-act" title="Đổi tên" onClick={onRename}>
-            <Pencil size={13} />
-          </button>
-          <button className="row-act" title="Xóa" onClick={onDelete}>
-            <Trash2 size={13} />
-          </button>
+          <IconButton label="Đổi tên" tooltip="Đổi tên" variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={onRename} />
+          <IconButton label="Xóa" tooltip="Xóa" variant="ghost" size="sm" icon={<Trash2 size={13} />} onClick={onDelete} />
         </span>
       </div>
       {node.isDir && open && node.children.length > 0 && (

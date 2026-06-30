@@ -1,13 +1,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import {
-  FileText,
-  FolderPlus,
-  Upload,
-  FilePlus2,
-  Settings as SettingsIcon,
-  FolderCog,
-  Folder,
-} from "lucide-react";
+import { FileText, FolderPlus, Upload, FilePlus2, Settings as SettingsIcon, FolderCog, Folder } from "lucide-react";
+import { Button } from "@astryxdesign/core/Button";
+import { IconButton } from "@astryxdesign/core/IconButton";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { Tree } from "./Tree";
@@ -82,21 +76,15 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
           <div className="data-label">Thư mục dữ liệu</div>
           <div className="data-path">{dataRoot || "…"}</div>
         </div>
-        <button className="ghost-icon" title="Đổi thư mục DATA" onClick={changeDir}>
-          <FolderCog size={16} />
-        </button>
+        <IconButton label="Đổi thư mục DATA" tooltip="Đổi thư mục DATA" variant="ghost" size="sm" icon={<FolderCog size={16} />} onClick={changeDir} />
       </div>
 
       <div className="toolbar-row">
-        <button className="btn-primary" onClick={uploadFiles}>
-          <Upload size={15} /> Tải file
-        </button>
-        <button className="btn-ghost" title="Thư mục mới" onClick={newFolder}>
-          <FolderPlus size={15} />
-        </button>
-        <button className="btn-ghost" title="Markdown mới" onClick={newMarkdown}>
-          <FilePlus2 size={15} />
-        </button>
+        <div className="toolbar-grow">
+          <Button label="Tải file" variant="primary" size="sm" icon={<Upload size={15} />} onClick={uploadFiles} />
+        </div>
+        <IconButton label="Thư mục mới" tooltip="Thư mục mới" variant="secondary" size="sm" icon={<FolderPlus size={15} />} onClick={newFolder} />
+        <IconButton label="Markdown mới" tooltip="Markdown mới" variant="secondary" size="sm" icon={<FilePlus2 size={15} />} onClick={newMarkdown} />
       </div>
 
       <div className="dest-hint">
@@ -111,9 +99,9 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
       </div>
 
-      <button className="sidebar-settings" onClick={onOpenSettings}>
-        <SettingsIcon size={15} /> Cài đặt convert
-      </button>
+      <div className="sidebar-foot">
+        <Button label="Cài đặt convert" variant="ghost" size="sm" icon={<SettingsIcon size={15} />} onClick={onOpenSettings} />
+      </div>
     </aside>
   );
 }

@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { FileText, FolderPlus, Upload, Columns2, X } from "lucide-react";
+import { FileText, FolderPlus, Upload, Columns2 } from "lucide-react";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Card } from "@astryxdesign/core/Card";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Icon } from "@astryxdesign/core/Icon";
 import { useStore } from "./state/store";
 import { Sidebar } from "./components/Sidebar";
 import { DocView } from "./components/DocView";
@@ -16,10 +20,9 @@ export default function App() {
     init();
   }, [init]);
 
-  // Toast tự ẩn sau 5s (theo guideline: toast auto-dismiss 3–5s).
   useEffect(() => {
     if (!error) return;
-    const t = setTimeout(() => setError(null), 5000);
+    const t = setTimeout(() => setError(null), 6000);
     return () => clearTimeout(t);
   }, [error, setError]);
 
@@ -31,25 +34,27 @@ export default function App() {
         {selected && !selected.isDir ? (
           <DocView key={selected.relPath} node={selected} />
         ) : (
-          <EmptyState />
+          <HomeState />
         )}
       </main>
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 
       {error && (
-        <div className="toast" role="alert">
-          <span>{error}</span>
-          <button className="toast-close" onClick={() => setError(null)}>
-            <X size={15} />
-          </button>
+        <div className="toast-wrap">
+          <Banner
+            status="error"
+            title={error}
+            isDismissable
+            onDismiss={() => setError(null)}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function EmptyState() {
+function HomeState() {
   const steps = [
     {
       icon: <FolderPlus size={18} />,
@@ -68,22 +73,20 @@ function EmptyState() {
     },
   ];
   return (
-    <div className="empty">
-      <div className="empty-badge">
-        <FileText size={28} />
-      </div>
-      <h1>FileConv Docs</h1>
-      <p className="empty-sub">
-        Biến tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA & PM.
-      </p>
-      <div className="empty-steps">
+    <div className="home">
+      <EmptyState
+        icon={<Icon icon={FileText} size="lg" />}
+        title="FileConv Docs"
+        description="Biến tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA & PM."
+      />
+      <div className="home-steps">
         {steps.map((s, i) => (
-          <div className="step-card" key={i}>
+          <Card key={i} padding={4}>
             <div className="step-icon">{s.icon}</div>
             <div className="step-num">Bước {i + 1}</div>
             <div className="step-title">{s.title}</div>
             <div className="step-desc">{s.desc}</div>
-          </div>
+          </Card>
         ))}
       </div>
     </div>

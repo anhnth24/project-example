@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { Columns2, FileText, Image as ImageIcon, Save, RefreshCw, ExternalLink } from "lucide-react";
+import { Save, RefreshCw, ExternalLink } from "lucide-react";
+import { Button } from "@astryxdesign/core/Button";
+import { TabList, Tab } from "@astryxdesign/core/TabList";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { fileIcon } from "../lib/icons";
@@ -29,15 +31,12 @@ export function DocView({ node }: { node: FsNode }) {
   useEffect(() => {
     let alive = true;
     if (mdRel) {
-      api
-        .readTextFile(mdRel)
-        .then((t) => {
-          if (alive) {
-            setMd(t);
-            setDirty(false);
-          }
-        })
-        .catch((e) => setError(String(e)));
+      api.readTextFile(mdRel).then((t) => {
+        if (alive) {
+          setMd(t);
+          setDirty(false);
+        }
+      }).catch((e) => setError(String(e)));
     } else {
       setMd("");
       setDirty(false);
@@ -91,12 +90,6 @@ export function DocView({ node }: { node: FsNode }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const seg = (m: Mode, icon: React.ReactNode, label: string) => (
-    <button className={`seg ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>
-      {icon} {label}
-    </button>
-  );
-
   return (
     <div className="docview">
       <header className="doc-toolbar">
@@ -106,28 +99,23 @@ export function DocView({ node }: { node: FsNode }) {
           {dirty && <span className="dirty-dot" title="Chưa lưu" />}
         </div>
 
-        <div className="segmented">
-          {canSource && canMd && seg("split", <Columns2 size={15} />, "Song song")}
-          {canMd && seg("md", <FileText size={15} />, "Markdown")}
-          {canSource && seg("source", <ImageIcon size={15} />, "File gốc")}
+        <div className="doc-modes">
+          <TabList value={mode} onChange={(v: string) => setMode(v as Mode)}>
+            {canSource && canMd ? <Tab value="split" label="Song song" /> : <></>}
+            {canMd ? <Tab value="md" label="Markdown" /> : <></>}
+            {canSource ? <Tab value="source" label="File gốc" /> : <></>}
+          </TabList>
         </div>
 
         <div className="doc-actions">
           {canMd && (
-            <button className="btn-primary sm" onClick={save} disabled={!dirty || saving}>
-              <Save size={15} /> {saving ? "Đang lưu…" : "Lưu"}
-            </button>
+            <Button label={saving ? "Đang lưu…" : "Lưu"} variant="primary" size="sm" icon={<Save size={15} />} isDisabled={!dirty || saving} isLoading={saving} onClick={save} />
           )}
           {canConvert && (
-            <button className="btn-ghost sm" onClick={convert} disabled={converting}>
-              <RefreshCw size={15} className={converting ? "spin" : ""} />
-              {mdRel ? "Convert lại" : "Convert"}
-            </button>
+            <Button label={mdRel ? "Convert lại" : "Convert"} variant="secondary" size="sm" icon={<RefreshCw size={15} />} isLoading={converting} onClick={convert} />
           )}
           {canSource && (
-            <button className="btn-ghost sm" onClick={openExternal} title="Mở bằng app mặc định">
-              <ExternalLink size={15} /> Mở ngoài
-            </button>
+            <Button label="Mở ngoài" variant="ghost" size="sm" icon={<ExternalLink size={15} />} onClick={openExternal} />
           )}
         </div>
       </header>
@@ -155,9 +143,7 @@ export function DocView({ node }: { node: FsNode }) {
                   <>
                     <RefreshCw size={28} className="placeholder-icon" />
                     <p>File này chưa có bản Markdown.</p>
-                    <button className="btn-primary" onClick={convert} disabled={converting}>
-                      {converting ? "Đang convert…" : "Convert ngay"}
-                    </button>
+                    <Button label={converting ? "Đang convert…" : "Convert ngay"} variant="primary" isLoading={converting} onClick={convert} />
                   </>
                 ) : (
                   <p>Định dạng không hỗ trợ convert sang Markdown.</p>

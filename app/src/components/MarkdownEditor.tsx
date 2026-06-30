@@ -4,9 +4,9 @@ import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Pencil, Eye } from "lucide-react";
+import { TabList, Tab } from "@astryxdesign/core/TabList";
 
-type Tab = "edit" | "preview";
+type TabVal = "edit" | "preview";
 
 const cmTheme = EditorView.theme({
   "&": {
@@ -29,17 +29,15 @@ export function MarkdownEditor({
   value: string;
   onChange: (v: string) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("edit");
+  const [tab, setTab] = useState<TabVal>("edit");
 
   return (
     <div className="md-editor">
       <div className="md-tabs">
-        <button className={`seg ${tab === "edit" ? "on" : ""}`} onClick={() => setTab("edit")}>
-          <Pencil size={14} /> Soạn
-        </button>
-        <button className={`seg ${tab === "preview" ? "on" : ""}`} onClick={() => setTab("preview")}>
-          <Eye size={14} /> Xem trước
-        </button>
+        <TabList value={tab} onChange={(v: string) => setTab(v as TabVal)} size="sm">
+          <Tab value="edit" label="Soạn" />
+          <Tab value="preview" label="Xem trước" />
+        </TabList>
       </div>
 
       {tab === "edit" ? (
