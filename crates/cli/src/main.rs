@@ -14,6 +14,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
+use fileconv_core::audio::AudioEngine;
 use fileconv_core::{Converter, FormatKind};
 use walkdir::WalkDir;
 
@@ -45,6 +46,12 @@ fn main() -> Result<()> {
             let manifest = args.get(2).context("thiếu manifest")?;
             let out = args.get(3).map(PathBuf::from);
             cmd_accuracy(Path::new(manifest), out.as_deref())
+        }
+        "audio" => {
+            let models = args.get(2).context("thiếu danh sách model (phân tách dấu phẩy)")?;
+            let manifest = args.get(3).context("thiếu manifest")?;
+            let out = args.get(4).map(PathBuf::from);
+            cmd_audio(models, Path::new(manifest), out.as_deref())
         }
         "one" => {
             let f = args.get(2).context("thiếu file")?;
@@ -301,6 +308,138 @@ fn render_accuracy_report(rows: &[AccRow]) -> String {
             acc,
             cer,
             wer
+        ));
+    }
+    s.push('\n');
+    s
+}
+
+// ----------------------------- AUDIO (whisper) -----------------------------
+
+struct AudioRow {
+    model: String,
+    clip: String,
+    label: String,
+    audio_secs: f64,
+    decode_ms: f64,
+    infer_ms: f64,
+    rtf: f64,
+    cer: f64,
+    wer: f64,
+    acc: f64,
+}
+
+fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()> {
+    let text = fs::read_to_string(manifest).with_context(|| format!("đọc {manifest:?}"))?;
+    let base = manifest.parent().unwrap_or(Path::new("."));
+
+    // (file, ground_truth, label)
+    let mut items: Vec<(PathBuf, String, String)> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let p: Vec<&str> = line.split('\t').collect();
+        if p.len() < 2 {
+            continue;
+        }
+        let gt = fs::read_to_string(resolve(base, p[1]))
+            .with_context(|| format!("đọc ground-truth {}", p[1]))?;
+        items.push((
+            resolve(base, p[0]),
+            gt,
+            p.get(2).copied().unwrap_or("").to_string(),
+        ));
+    }
+
+    let mut rows: Vec<AudioRow> = Vec::new();
+    for model_path in models_csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        let model_name = Path::new(model_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| model_path.to_string());
+        eprintln!("[audio] load model {model_name} …");
+        let engine = match AudioEngine::load(Path::new(model_path)) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("  bỏ qua {model_name}: {e}");
+                continue;
+            }
+        };
+        for (file, gt, label) in &items {
+            let t = match engine.transcribe_file(file, Some("vi")) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("  lỗi {}: {e}", file.display());
+                    continue;
+                }
+            };
+            let r_norm = metrics::normalize(gt);
+            let h_norm = metrics::normalize(&t.text);
+            let cer = metrics::cer(&r_norm, &h_norm);
+            let wer = metrics::wer(&r_norm, &h_norm);
+            let rtf = if t.audio_secs > 0.0 {
+                (t.infer_ms / 1000.0) / t.audio_secs
+            } else {
+                0.0
+            };
+            rows.push(AudioRow {
+                model: model_name.clone(),
+                clip: file.file_name().unwrap().to_string_lossy().into_owned(),
+                label: label.clone(),
+                audio_secs: t.audio_secs,
+                decode_ms: t.decode_ms,
+                infer_ms: t.infer_ms,
+                rtf,
+                cer,
+                wer,
+                acc: (1.0 - cer).max(0.0) * 100.0,
+            });
+        }
+    }
+
+    let report = render_audio_report(&rows);
+    print!("{report}");
+    if let Some(p) = out {
+        fs::write(p, &report)?;
+        eprintln!("\n[đã ghi báo cáo: {}]", p.display());
+    }
+    Ok(())
+}
+
+fn render_audio_report(rows: &[AudioRow]) -> String {
+    let mut s = String::new();
+    s.push_str("# Báo cáo AUDIO (whisper, tiếng Việt) — fileconv-core\n\n");
+    s.push_str("RTF = thời gian suy luận / độ dài audio (càng nhỏ càng nhanh; <1 = nhanh hơn thời gian thực). \
+                Độ chính xác = (1 − CER)×100.\n\n");
+    s.push_str("| Model | Clip | Kịch bản | Audio (s) | Decode (ms) | Infer (ms) | RTF | CER | WER | Độ chính xác |\n");
+    s.push_str("|---|---|---|--:|--:|--:|--:|--:|--:|--:|\n");
+    for r in rows {
+        s.push_str(&format!(
+            "| {} | {} | {} | {:.2} | {:.0} | {:.0} | {:.2} | {:.3} | {:.3} | **{:.1}%** |\n",
+            r.model, r.clip, r.label, r.audio_secs, r.decode_ms, r.infer_ms, r.rtf, r.cer, r.wer, r.acc
+        ));
+    }
+    s.push_str("\n## Trung bình theo model\n\n");
+    s.push_str("| Model | Số clip | Độ chính xác TB | WER TB | RTF TB |\n");
+    s.push_str("|---|--:|--:|--:|--:|\n");
+    let mut by_model: BTreeMap<&str, Vec<&AudioRow>> = BTreeMap::new();
+    for r in rows {
+        by_model.entry(r.model.as_str()).or_default().push(r);
+    }
+    for (model, rs) in &by_model {
+        let n = rs.len() as f64;
+        let acc = rs.iter().map(|r| r.acc).sum::<f64>() / n;
+        let wer = rs.iter().map(|r| r.wer).sum::<f64>() / n;
+        let rtf = rs.iter().map(|r| r.rtf).sum::<f64>() / n;
+        s.push_str(&format!(
+            "| {} | {} | **{:.1}%** | {:.3} | {:.2} |\n",
+            model,
+            rs.len(),
+            acc,
+            wer,
+            rtf
         ));
     }
     s.push('\n');

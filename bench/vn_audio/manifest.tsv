@@ -1,0 +1,5 @@
+# audio	ground_truth	label
+clip1.mp3	clip1.txt	tts-vi
+clip2.mp3	clip2.txt	tts-vi
+clip3.mp3	clip3.txt	tts-vi
+clip4.mp3	clip4.txt	tts-vi

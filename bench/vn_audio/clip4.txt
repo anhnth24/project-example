@@ -1,0 +1,1 @@
+Công cụ này được viết bằng ngôn ngữ Rust để đạt tốc độ xử lý cao và an toàn bộ nhớ.

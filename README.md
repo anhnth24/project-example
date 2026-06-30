@@ -17,15 +17,17 @@ vendor/markitdown-rs/  # CHỈ tham khảo (không build, không phụ thuộc)
 
 ## Định dạng hỗ trợ (phase 1)
 
-pdf, docx, pptx, xlsx/xls, csv, html + **ảnh OCR tiếng Việt** (Tesseract `vie+eng`).
-Mỗi định dạng gọi thẳng crate Rust gốc (calamine/docx-rust/pdf-extract/quick-xml/htmd).
-Audio (whisper) ở phase sau.
+pdf, docx, pptx, xlsx/xls, csv, html + **ảnh OCR tiếng Việt** (Tesseract `vie+eng`)
++ **audio tiếng Việt** (whisper-rs + symphonia).
+Mỗi định dạng gọi thẳng crate Rust gốc (calamine/docx-rust/pdf-extract/quick-xml/htmd/whisper-rs).
 
 ## Kết quả tóm tắt (Intel Xeon 2.8GHz, release)
 
-- **Tốc độ**: pptx/csv/xlsx/docx < 1 ms/file; pdf ~18 ms/trang; html theo kích thước DOM.
+- **Tốc độ**: pptx/csv/xlsx/docx < 1 ms/file; pdf ~18 ms/trang; html ~17 ms/file.
 - **Độ chính xác tiếng Việt**: docx/csv 100%, html 99%, **ảnh chữ in OCR 98.5%**,
-  ảnh scan kém 81%, chữ viết tay 33–62% (giới hạn của Tesseract).
+  ảnh scan kém 81%, chữ viết tay 33–62% (giới hạn Tesseract).
+- **Audio tiếng Việt** (whisper): tiny 86.8% / base 94.5% / small 97.0% độ chính xác;
+  RTF 0.15 / 0.30 / 0.99 (nhỏ hơn 1 = nhanh hơn thời gian thực).
 
 ## Chạy thử
 
@@ -47,6 +49,11 @@ bash bench/download_corpus.sh
 python3 bench/make_vn_corpus.py
 bash bench/make_vn_images.sh
 ./target/release/fileconv accuracy bench/vn_corpus/manifest.tsv bench/REPORT_ACCURACY.md
+
+# 5) Audio tiếng Việt (whisper)
+bash bench/download_models.sh
+python3 bench/make_vn_audio.py
+./target/release/fileconv audio models/ggml-base.bin bench/vn_audio/manifest.tsv bench/REPORT_AUDIO.md
 ```
 
 ## Đã sửa so với markitdown-rs (bản tham khảo)

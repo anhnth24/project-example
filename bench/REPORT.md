@@ -19,6 +19,7 @@ markitdown-rs):
 | csv | `csv` | xuất **bảng Markdown** đúng chuẩn |
 | html | `htmd` (html5ever) | thay `html2md` — hết lỗi phình output |
 | ảnh (OCR) | `tesseract` CLI (`vie+eng`) | OCR tiếng Việt |
+| audio | `whisper-rs` + `symphonia` | phiên âm tiếng Việt, decode thuần Rust + resample 16kHz |
 
 Toàn bộ là binary Rust native; **đã bỏ** dependency LLM nặng (`rig-core`/`tokio`) và
 mọi `println!` debug mà markitdown-rs có.
@@ -70,6 +71,22 @@ là "sai chữ". Độ chính xác = (1 − CER)×100.
 văn bản và ở OCR ảnh chữ in. Điểm trừ nhỏ của pptx/xlsx là **nhãn cấu trúc** chứ không
 phải lỗi nội dung.
 
+## 4b. Kết quả AUDIO (whisper, tiếng Việt)
+
+Dữ liệu: 4 clip tiếng Việt sinh bằng gTTS (giọng TTS tổng hợp, có ground-truth chính xác).
+RTF = thời-gian-suy-luận / độ-dài-audio (<1 = nhanh hơn thời gian thực). Máy CPU 4 nhân.
+
+| Model | Cỡ | Độ chính xác TB | WER TB | RTF TB | Nhận xét |
+|---|--:|--:|--:|--:|---|
+| ggml-tiny | 77 MB | **86.8%** | 0.256 | **0.15** | nhanh nhất, chính xác thấp |
+| ggml-base | 148 MB | **94.5%** | 0.122 | **0.30** | cân bằng tốt (khuyến nghị) |
+| ggml-small | 488 MB | **97.0%** | 0.052 | **0.99** | chính xác nhất, ~thời gian thực |
+
+- Càng model lớn càng chính xác nhưng chậm hơn. **base** là điểm cân bằng (94.5%, nhanh ~3× thời gian thực).
+- Decode + resample (symphonia, Rust thuần) chỉ ~5 ms/clip — không đáng kể so với suy luận.
+- *Lưu ý*: đây là giọng **TTS tổng hợp** (rõ ràng). Giọng người thật/nhiễu nền sẽ khó hơn;
+  cần mẫu có nhãn (vd Common Voice tiếng Việt) để đo sát thực tế. Có thể chạy GPU để nhanh hơn nhiều.
+
 ## 5. Hạn chế còn lại & hướng tiếp
 
 - **OCR chữ viết tay**: Tesseract không hợp (47.9% trên mẫu mô phỏng). Cần engine khác
@@ -78,17 +95,22 @@ phải lỗi nội dung.
   đo chính xác.*
 - **PDF**: `pdf-extract` panic trên PDF phức tạp (đã chặn bằng catch_unwind + pin 0.8.2);
   cân nhắc `pdfium-render` nếu cần độ bền/tốc độ cao hơn. PDF scan ảnh cần OCR (chưa làm).
-- **Audio (whisper-rs)**: chưa làm — đo WER tiếng Việt theo cỡ model ở phase sau.
+- **Audio**: đã có (whisper-rs). Còn có thể: cache model giữa các file, chạy GPU (CUDA),
+  và kiểm thử trên giọng người thật có nhãn (Common Voice vi) thay vì chỉ TTS.
 
 ## 6. Tái lập
 
 ```bash
 bash bench/download_corpus.sh                 # 60 file thật
 python3 bench/make_vn_corpus.py && bash bench/make_vn_images.sh   # corpus tiếng Việt + ảnh
+python3 bench/make_vn_audio.py                # audio tiếng Việt (gTTS)
+bash bench/download_models.sh                 # model whisper tiny/base/small
 cargo build --release
 ./target/release/fileconv speed    bench/corpus                 bench/REPORT_SPEED.md
 ./target/release/fileconv accuracy bench/vn_corpus/manifest.tsv  bench/REPORT_ACCURACY.md
+./target/release/fileconv audio    models/ggml-tiny.bin,models/ggml-base.bin,models/ggml-small.bin \
+                                   bench/vn_audio/manifest.tsv   bench/REPORT_AUDIO.md
 ```
 
-Chi tiết từng file: `bench/REPORT_SPEED.md`, `bench/REPORT_ACCURACY.md`.
+Chi tiết: `bench/REPORT_SPEED.md`, `bench/REPORT_ACCURACY.md`, `bench/REPORT_AUDIO.md`.
 Source tham khảo (không build): `vendor/markitdown-rs/`.

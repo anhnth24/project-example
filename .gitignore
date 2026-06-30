@@ -7,3 +7,7 @@
 /bench/vn_corpus/*.pptx
 /bench/vn_corpus/*.xlsx
 /bench/vn_corpus/*.png
+# Model whisper nặng (tải bằng script, không commit)
+/models/
+# Audio sinh ra (giữ .txt + manifest + script)
+/bench/vn_audio/*.mp3

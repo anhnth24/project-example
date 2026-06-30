@@ -16,3 +16,6 @@ quick-xml = "0.37"       # pptx (parse XML slide)
 zip = "2.2"              # pptx (giải nén)
 csv = "1.3"              # csv
 htmd = "0.5"             # html -> markdown (thay html2md để tránh phình output)
+whisper-rs = "0.16"      # audio -> text (whisper.cpp), hỗ trợ tiếng Việt
+# (symphonia pin 0.5: API ổn định; 0.6 đổi cấu trúc module)
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "flac", "wav", "pcm", "ogg", "vorbis", "alac"] }  # decode audio thuần Rust

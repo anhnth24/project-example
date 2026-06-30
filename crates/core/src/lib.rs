@@ -8,8 +8,9 @@
 //!   - pptx: đọc slide theo ĐÚNG thứ tự số.
 //!   - bỏ toàn bộ `println!` debug và dependency LLM nặng (rig-core/tokio).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+pub mod audio;
 mod conv;
 pub mod image_ocr;
 
@@ -83,12 +84,18 @@ pub enum ConvertError {
 pub struct ConverterOptions {
     /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng").
     pub ocr_langs: String,
+    /// Đường dẫn model whisper GGML cho audio (None = audio chưa khả dụng).
+    pub whisper_model: Option<PathBuf>,
+    /// Ngôn ngữ audio (mặc định "vi").
+    pub audio_lang: String,
 }
 
 impl Default for ConverterOptions {
     fn default() -> Self {
         Self {
             ocr_langs: "vie+eng".to_string(),
+            whisper_model: None,
+            audio_lang: "vi".to_string(),
         }
     }
 }
@@ -125,7 +132,17 @@ impl Converter {
             FormatKind::Html => conv::html::to_markdown(path),
             FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
                 .map_err(|e| ConvertError::Failed(e.to_string())),
-            FormatKind::Audio => return Err(ConvertError::Unsupported("audio (phase sau)")),
+            FormatKind::Audio => {
+                let model = self
+                    .opts
+                    .whisper_model
+                    .as_ref()
+                    .ok_or(ConvertError::Unsupported("audio: chưa cấu hình whisper_model"))?;
+                let engine = audio::AudioEngine::load(model)?;
+                engine
+                    .transcribe_file(path, Some(&self.opts.audio_lang))
+                    .map(|t| t.text)
+            }
             FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
         }?;
 
