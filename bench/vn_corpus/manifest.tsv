@@ -1,0 +1,10 @@
+# file	ground_truth	label
+vn.docx	ref.txt	docx-text
+vn.pptx	ref.txt	pptx-text
+vn.xlsx	ref.txt	xlsx-text
+vn.csv	ref.txt	csv-text
+vn.html	ref.txt	html-text
+vn_printed.png	ref.txt	image-print-OCR
+vn_lowres.png	ref.txt	image-lowres-OCR
+vn_hand_caveat.png	ref.txt	handwrite-OCR
+vn_hand_dancing.png	ref.txt	handwrite-OCR

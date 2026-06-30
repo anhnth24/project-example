@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+# Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng
+/bench/corpus/
+/bench/vn_corpus/fonts/
+/bench/vn_corpus/*.docx
+/bench/vn_corpus/*.pptx
+/bench/vn_corpus/*.xlsx
+/bench/vn_corpus/*.png
