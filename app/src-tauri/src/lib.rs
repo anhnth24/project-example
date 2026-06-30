@@ -1,14 +1,13 @@
 //! Backend Tauri cho FileConv Docs.
 //!
-//! Cầu nối giữa UI (React) và lõi `fileconv-core`. Mọi thao tác filesystem đều chạy
-//! trong tiến trình Rust (không bật plugin fs) để kiểm soát chặt đường dẫn.
+//! Cầu nối giữa UI (React) và lõi `fileconv-core`. Mọi thao tác filesystem chạy trong
+//! tiến trình Rust để kiểm soát chặt đường dẫn (không bật plugin fs).
 //!
-//! Mô hình dữ liệu:
-//!   - Workspace = một thư mục THẬT trên đĩa người dùng chọn. Danh sách lưu ở
-//!     `app_config_dir()/workspaces.json`.
-//!   - Folder = thư mục con thật. Document = cặp (file gốc, file `.md`).
-//!   - Quy ước link 1-1: md = "<tên file gốc>.md" đặt cạnh file gốc
-//!     (vd `report.pdf` -> `report.pdf.md`). Filesystem là nguồn sự thật.
+//! Mô hình dữ liệu (đơn giản hóa — không còn multi-workspace):
+//!   - Một **thư mục gốc DATA** duy nhất. Mặc định: `app_data_dir()/DATA`.
+//!     Người dùng có thể **map** DATA sang thư mục bất kỳ (lưu ở `config.json`).
+//!   - Trong DATA: tạo folder thật → upload file vào → convert → ghi `.md` cạnh file gốc.
+//!   - Quy ước link 1-1: `report.pdf` -> `report.pdf.md`. Filesystem là nguồn sự thật.
 
 use std::collections::HashSet;
 use std::fs;
@@ -22,19 +21,12 @@ use fileconv_core::{ConverterOptions, FormatKind};
 
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Workspace {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-}
-
 /// Một node trong cây thư mục gửi cho UI.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
     pub name: String,
-    /// Đường dẫn tương đối so với gốc workspace (dùng `/`). "" với node gốc.
+    /// Đường dẫn tương đối so với gốc DATA (dùng `/`). "" với node gốc.
     pub rel_path: String,
     pub is_dir: bool,
     /// "folder" | format (pdf/docx/...) | "markdown" | "other".
@@ -57,7 +49,6 @@ pub struct Settings {
     pub pdf_ocr_images: bool,
     pub audio_lang: String,
     pub audio_threads: i32,
-    /// Đường dẫn model whisper GGML; None = audio chưa khả dụng.
     pub whisper_model: Option<String>,
 }
 
@@ -88,8 +79,16 @@ impl Settings {
     }
 }
 
+/// File cấu hình app (lưu vị trí DATA root mà người dùng map).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AppConfig {
+    data_root: Option<String>,
+}
+
 pub struct AppState {
     config_dir: PathBuf,
+    data_root: Mutex<PathBuf>,
     settings: Mutex<Settings>,
 }
 
@@ -105,44 +104,30 @@ const SUPPORTED_EXTS: &[&str] = &[
     "jpeg", "webp", "bmp", "tif", "tiff", "gif", "wav", "mp3", "m4a", "flac", "ogg",
 ];
 
-fn workspaces_file(config_dir: &Path) -> PathBuf {
-    config_dir.join("workspaces.json")
+fn config_file(config_dir: &Path) -> PathBuf {
+    config_dir.join("config.json")
 }
 
 fn settings_file(config_dir: &Path) -> PathBuf {
     config_dir.join("settings.json")
 }
 
-fn load_workspaces(config_dir: &Path) -> Vec<Workspace> {
-    let p = workspaces_file(config_dir);
-    fs::read_to_string(p)
+fn load_config(config_dir: &Path) -> AppConfig {
+    fs::read_to_string(config_file(config_dir))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
-fn save_workspaces(config_dir: &Path, list: &[Workspace]) -> Result<(), String> {
-    let p = workspaces_file(config_dir);
-    let s = serde_json::to_string_pretty(list).map_err(es)?;
-    fs::write(p, s).map_err(es)
+fn save_config(config_dir: &Path, cfg: &AppConfig) -> Result<(), String> {
+    fs::write(
+        config_file(config_dir),
+        serde_json::to_string_pretty(cfg).map_err(es)?,
+    )
+    .map_err(es)
 }
 
-fn find_workspace(config_dir: &Path, id: &str) -> Result<Workspace, String> {
-    load_workspaces(config_dir)
-        .into_iter()
-        .find(|w| w.id == id)
-        .ok_or_else(|| format!("không tìm thấy workspace: {id}"))
-}
-
-/// id ổn định theo đường dẫn (hash) — cùng thư mục => cùng id, tránh trùng.
-fn workspace_id(path: &str) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    path.hash(&mut h);
-    format!("ws_{:016x}", h.finish())
-}
-
-/// Ghép `rel` vào trong `root` một cách an toàn (chặn `..`, đường dẫn tuyệt đối).
+/// Ghép `rel` vào trong `root` an toàn (chặn `..`, đường dẫn tuyệt đối).
 fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, String> {
     let mut p = root.to_path_buf();
     for comp in Path::new(rel).components() {
@@ -162,7 +147,6 @@ fn rel_of(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// Tên file phải hợp lệ: không rỗng, không chứa ký tự tách đường dẫn / traversal.
 fn validate_name(name: &str) -> Result<(), String> {
     if name.trim().is_empty()
         || name.contains('/')
@@ -175,8 +159,8 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Dựng cây thư mục đệ quy. Bỏ qua file/thư mục ẩn (vd `.fileconv`).
-/// File `.md` là "md liên kết" của một file gốc cùng tên thì KHÔNG hiện riêng.
+/// Dựng cây thư mục đệ quy. Bỏ qua mục ẩn. File `.md` là md-liên-kết của một file
+/// gốc cùng tên thì KHÔNG hiện riêng (gắn vào node của file gốc).
 fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
     let mut entries: Vec<(String, PathBuf, bool)> = Vec::new();
     for e in fs::read_dir(abs).map_err(es)? {
@@ -190,7 +174,6 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
         entries.push((name, p, is_dir));
     }
 
-    // Tập tên FILE trong thư mục này (để nhận diện md-liên-kết).
     let file_names: HashSet<String> = entries
         .iter()
         .filter(|(_, _, d)| !d)
@@ -207,10 +190,8 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
         if lower.ends_with(".md") {
             let base = &name[..name.len() - 3];
             if file_names.contains(base) {
-                // md liên kết của `base` -> thể hiện qua node của file gốc, bỏ qua ở đây.
-                continue;
+                continue; // md liên kết -> bỏ qua, thể hiện qua file gốc.
             }
-            // md đứng riêng.
             let rel = rel_of(root, path);
             children.push(Node {
                 name: name.clone(),
@@ -248,7 +229,6 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
         }
     }
 
-    // Sắp xếp: thư mục trước, rồi theo tên (không phân biệt hoa thường).
     children.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
@@ -259,7 +239,7 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
         name: abs
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default(),
+            .unwrap_or_else(|| "DATA".into()),
         rel_path: rel_of(root, abs),
         is_dir: true,
         kind: "folder".into(),
@@ -270,7 +250,6 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
     })
 }
 
-/// Convert một file gốc -> markdown rồi ghi `<file>.md` cạnh nó.
 fn convert_and_write_md(opts: ConverterOptions, source: PathBuf) -> Result<PathBuf, String> {
     let md_path = source.with_file_name(format!(
         "{}.md",
@@ -287,6 +266,10 @@ fn convert_and_write_md(opts: ConverterOptions, source: PathBuf) -> Result<PathB
     Ok(md_path)
 }
 
+fn data_root(state: &AppState) -> PathBuf {
+    state.data_root.lock().map(|p| p.clone()).unwrap_or_default()
+}
+
 // ───────────────────────────── Commands ─────────────────────────────
 
 #[tauri::command]
@@ -295,76 +278,40 @@ fn supported_extensions() -> Vec<String> {
 }
 
 #[tauri::command]
-fn list_workspaces(state: State<AppState>) -> Vec<Workspace> {
-    load_workspaces(&state.config_dir)
+fn get_data_root(state: State<AppState>) -> String {
+    data_root(&state).to_string_lossy().to_string()
 }
 
+/// Map DATA sang thư mục người dùng chọn (tạo nếu chưa có), lưu vào config.
 #[tauri::command]
-fn add_workspace(
-    state: State<AppState>,
-    path: String,
-    name: Option<String>,
-) -> Result<Workspace, String> {
+fn set_data_root(state: State<AppState>, path: String) -> Result<String, String> {
     let dir = PathBuf::from(&path);
-    if !dir.is_dir() {
-        return Err("thư mục không tồn tại".into());
-    }
+    fs::create_dir_all(&dir).map_err(es)?;
     let abs = fs::canonicalize(&dir).map_err(es)?;
-    let path_str = abs.to_string_lossy().to_string();
-    let id = workspace_id(&path_str);
-
-    let mut list = load_workspaces(&state.config_dir);
-    if let Some(existing) = list.iter().find(|w| w.id == id) {
-        return Ok(existing.clone()); // đã có -> trả lại, không nhân đôi.
+    {
+        let mut dr = state.data_root.lock().map_err(|_| "lock lỗi")?;
+        *dr = abs.clone();
     }
-    let ws = Workspace {
-        id,
-        name: name.unwrap_or_else(|| {
-            abs.file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| path_str.clone())
-        }),
-        path: path_str,
-    };
-    list.push(ws.clone());
-    save_workspaces(&state.config_dir, &list)?;
-    Ok(ws)
+    let mut cfg = load_config(&state.config_dir);
+    cfg.data_root = Some(abs.to_string_lossy().to_string());
+    save_config(&state.config_dir, &cfg)?;
+    Ok(abs.to_string_lossy().to_string())
 }
 
 #[tauri::command]
-fn remove_workspace(state: State<AppState>, id: String) -> Result<(), String> {
-    // Chỉ gỡ khỏi danh sách — KHÔNG xóa file trên đĩa của người dùng.
-    let mut list = load_workspaces(&state.config_dir);
-    list.retain(|w| w.id != id);
-    save_workspaces(&state.config_dir, &list)
+fn read_tree(state: State<AppState>) -> Result<Node, String> {
+    let root = data_root(&state);
+    fs::create_dir_all(&root).map_err(es)?;
+    build_tree(&root, &root)
 }
 
 #[tauri::command]
-fn read_tree(state: State<AppState>, workspace_id: String) -> Result<Node, String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
-    if !root.is_dir() {
-        return Err("thư mục workspace không còn tồn tại".into());
-    }
-    let mut node = build_tree(&root, &root)?;
-    node.name = ws.name; // node gốc lấy tên workspace.
-    Ok(node)
-}
-
-#[tauri::command]
-fn create_folder(
-    state: State<AppState>,
-    workspace_id: String,
-    parent_rel: String,
-    name: String,
-) -> Result<(), String> {
+fn create_folder(state: State<AppState>, parent_rel: String, name: String) -> Result<(), String> {
     validate_name(&name)?;
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
-    let parent = resolve_within(&root, &parent_rel)?;
-    let target = parent.join(&name);
+    let root = data_root(&state);
+    let target = resolve_within(&root, &parent_rel)?.join(&name);
     if target.exists() {
-        return Err("thư mục/đã tồn tại".into());
+        return Err("thư mục đã tồn tại".into());
     }
     fs::create_dir_all(&target).map_err(es)
 }
@@ -372,13 +319,11 @@ fn create_folder(
 #[tauri::command]
 fn create_markdown(
     state: State<AppState>,
-    workspace_id: String,
     parent_rel: String,
     name: String,
 ) -> Result<Node, String> {
     validate_name(&name)?;
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
+    let root = data_root(&state);
     let parent = resolve_within(&root, &parent_rel)?;
     let file_name = if name.to_ascii_lowercase().ends_with(".md") {
         name.clone()
@@ -404,15 +349,9 @@ fn create_markdown(
 }
 
 #[tauri::command]
-fn rename_node(
-    state: State<AppState>,
-    workspace_id: String,
-    rel_path: String,
-    new_name: String,
-) -> Result<(), String> {
+fn rename_node(state: State<AppState>, rel_path: String, new_name: String) -> Result<(), String> {
     validate_name(&new_name)?;
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
+    let root = data_root(&state);
     let src = resolve_within(&root, &rel_path)?;
     if !src.exists() {
         return Err("không tồn tại".into());
@@ -422,34 +361,26 @@ fn rename_node(
     if dst.exists() {
         return Err("tên đích đã tồn tại".into());
     }
-    // Nếu là file gốc có md liên kết, đổi tên md theo.
-    let is_file = src.is_file();
     let old_name = src
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let is_md = old_name.to_ascii_lowercase().ends_with(".md");
-    if is_file && !is_md {
+    if src.is_file() && !is_md {
         let old_md = parent.join(format!("{old_name}.md"));
         if old_md.exists() {
-            let new_md = parent.join(format!("{new_name}.md"));
-            fs::rename(&old_md, &new_md).map_err(es)?;
+            fs::rename(&old_md, parent.join(format!("{new_name}.md"))).map_err(es)?;
         }
     }
     fs::rename(&src, &dst).map_err(es)
 }
 
 #[tauri::command]
-fn delete_node(
-    state: State<AppState>,
-    workspace_id: String,
-    rel_path: String,
-) -> Result<(), String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
+fn delete_node(state: State<AppState>, rel_path: String) -> Result<(), String> {
+    let root = data_root(&state);
     let target = resolve_within(&root, &rel_path)?;
     if rel_path.is_empty() || target == root {
-        return Err("không thể xóa gốc workspace".into());
+        return Err("không thể xóa gốc DATA".into());
     }
     if !target.exists() {
         return Err("không tồn tại".into());
@@ -457,7 +388,6 @@ fn delete_node(
     if target.is_dir() {
         return fs::remove_dir_all(&target).map_err(es);
     }
-    // File: nếu là file gốc, xóa kèm md liên kết.
     let name = target
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -474,15 +404,12 @@ fn delete_node(
 #[tauri::command]
 async fn import_file(
     state: State<'_, AppState>,
-    workspace_id: String,
     folder_rel: String,
     source_abs: String,
 ) -> Result<Node, String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
+    let root = data_root(&state);
     let source = PathBuf::from(&source_abs);
 
-    // Chặn định dạng không hỗ trợ.
     if FormatKind::from_path(&source) == FormatKind::Unknown {
         return Err(format!(
             "định dạng không hỗ trợ: chỉ nhận {}",
@@ -496,30 +423,23 @@ async fn import_file(
         .to_string();
 
     let folder = resolve_within(&root, &folder_rel)?;
-    if !folder.is_dir() {
-        return Err("thư mục đích không tồn tại".into());
-    }
+    fs::create_dir_all(&folder).map_err(es)?;
     let dest = folder.join(&file_name);
     if dest.exists() {
         return Err(format!("đã tồn tại file '{file_name}' trong thư mục"));
     }
     fs::copy(&source, &dest).map_err(es)?;
 
-    // Convert nặng -> chạy ngoài luồng UI.
     let opts = state.settings.lock().map_err(|_| "lock lỗi")?.to_options();
     let dest_for_conv = dest.clone();
-    let conv_result = tauri::async_runtime::spawn_blocking(move || {
-        convert_and_write_md(opts, dest_for_conv)
-    })
-    .await
-    .map_err(es)?;
+    let conv_result =
+        tauri::async_runtime::spawn_blocking(move || convert_and_write_md(opts, dest_for_conv))
+            .await
+            .map_err(es)?;
 
     let md_rel = match conv_result {
         Ok(md_path) => Some(rel_of(&root, &md_path)),
-        Err(e) => {
-            // Vẫn giữ file gốc đã copy; báo lỗi để UI hiện toast, người dùng có thể Convert lại.
-            return Err(format!("đã thêm file nhưng convert lỗi: {e}"));
-        }
+        Err(e) => return Err(format!("đã thêm file nhưng convert lỗi: {e}")),
     };
 
     let kind = FormatKind::from_path(&dest);
@@ -536,13 +456,8 @@ async fn import_file(
 }
 
 #[tauri::command]
-async fn reconvert(
-    state: State<'_, AppState>,
-    workspace_id: String,
-    source_rel: String,
-) -> Result<String, String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
+async fn reconvert(state: State<'_, AppState>, source_rel: String) -> Result<String, String> {
+    let root = data_root(&state);
     let source = resolve_within(&root, &source_rel)?;
     if !source.is_file() {
         return Err("file gốc không tồn tại".into());
@@ -558,14 +473,8 @@ async fn reconvert(
 }
 
 #[tauri::command]
-fn read_text_file(
-    state: State<AppState>,
-    workspace_id: String,
-    rel_path: String,
-) -> Result<String, String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
-    let p = resolve_within(&root, &rel_path)?;
+fn read_text_file(state: State<AppState>, rel_path: String) -> Result<String, String> {
+    let p = resolve_within(&data_root(&state), &rel_path)?;
     let bytes = fs::read(&p).map_err(es)?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
 }
@@ -573,26 +482,17 @@ fn read_text_file(
 #[tauri::command]
 fn write_text_file(
     state: State<AppState>,
-    workspace_id: String,
     rel_path: String,
     content: String,
 ) -> Result<(), String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
-    let p = resolve_within(&root, &rel_path)?;
+    let p = resolve_within(&data_root(&state), &rel_path)?;
     fs::write(&p, content).map_err(es)
 }
 
-/// Trả đường dẫn tuyệt đối của một rel_path (để UI gọi `convertFileSrc` hiển thị ảnh/pdf/audio).
+/// Đường dẫn tuyệt đối của rel_path (để UI gọi `convertFileSrc` hiển thị ảnh/pdf/audio).
 #[tauri::command]
-fn resolve_path(
-    state: State<AppState>,
-    workspace_id: String,
-    rel_path: String,
-) -> Result<String, String> {
-    let ws = find_workspace(&state.config_dir, &workspace_id)?;
-    let root = PathBuf::from(&ws.path);
-    let p = resolve_within(&root, &rel_path)?;
+fn resolve_path(state: State<AppState>, rel_path: String) -> Result<String, String> {
+    let p = resolve_within(&data_root(&state), &rel_path)?;
     Ok(p.to_string_lossy().to_string())
 }
 
@@ -607,8 +507,11 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
         let mut s = state.settings.lock().map_err(|_| "lock lỗi")?;
         *s = settings.clone();
     }
-    let p = settings_file(&state.config_dir);
-    fs::write(p, serde_json::to_string_pretty(&settings).map_err(es)?).map_err(es)
+    fs::write(
+        settings_file(&state.config_dir),
+        serde_json::to_string_pretty(&settings).map_err(es)?,
+    )
+    .map_err(es)
 }
 
 // ───────────────────────────── Bootstrap ─────────────────────────────
@@ -621,22 +524,31 @@ pub fn run() {
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             fs::create_dir_all(&config_dir).ok();
-            // Nạp settings đã lưu (nếu có).
+
+            // DATA root: lấy từ config nếu có, mặc định app_data_dir()/DATA.
+            let cfg = load_config(&config_dir);
+            let root = match cfg.data_root {
+                Some(p) => PathBuf::from(p),
+                None => app.path().app_data_dir()?.join("DATA"),
+            };
+            fs::create_dir_all(&root).ok();
+
             let settings = fs::read_to_string(settings_file(&config_dir))
                 .ok()
                 .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
                 .unwrap_or_default();
+
             app.manage(AppState {
                 config_dir,
+                data_root: Mutex::new(root),
                 settings: Mutex::new(settings),
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             supported_extensions,
-            list_workspaces,
-            add_workspace,
-            remove_workspace,
+            get_data_root,
+            set_data_root,
             read_tree,
             create_folder,
             create_markdown,
@@ -687,28 +599,17 @@ mod tests {
     }
 
     #[test]
-    fn workspace_id_is_stable() {
-        assert_eq!(workspace_id("/home/x"), workspace_id("/home/x"));
-        assert_ne!(workspace_id("/home/x"), workspace_id("/home/y"));
-    }
-
-    #[test]
     fn build_tree_pairs_source_with_md() {
         let root = temp_dir();
-        // report.pdf + report.pdf.md  -> 1 node "report.pdf" có mdRelPath, md không hiện riêng.
         fs::write(root.join("report.pdf"), b"%PDF").unwrap();
         fs::write(root.join("report.pdf.md"), b"# md").unwrap();
-        // notes.md đứng riêng (không có file "notes").
         fs::write(root.join("notes.md"), b"# notes").unwrap();
-        // thư mục con.
         fs::create_dir_all(root.join("sub")).unwrap();
-        // file ẩn bị bỏ qua.
         fs::write(root.join(".secret"), b"x").unwrap();
 
         let tree = build_tree(&root, &root).unwrap();
         let names: Vec<&str> = tree.children.iter().map(|n| n.name.as_str()).collect();
 
-        // Có "sub", "report.pdf", "notes.md"; KHÔNG có "report.pdf.md" hay ".secret".
         assert!(names.contains(&"sub"));
         assert!(names.contains(&"report.pdf"));
         assert!(names.contains(&"notes.md"));
@@ -719,13 +620,10 @@ mod tests {
         assert_eq!(pdf.kind, "pdf");
         assert!(pdf.supported);
         assert_eq!(pdf.md_rel_path.as_deref(), Some("report.pdf.md"));
-        assert!(!pdf.standalone_md);
 
         let notes = tree.children.iter().find(|n| n.name == "notes.md").unwrap();
         assert!(notes.standalone_md);
         assert_eq!(notes.kind, "markdown");
-
-        // thư mục đứng trước file (sắp xếp).
         assert!(tree.children[0].is_dir);
 
         fs::remove_dir_all(&root).ok();

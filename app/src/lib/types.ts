@@ -1,11 +1,5 @@
 // Kiểu dữ liệu khớp với serde (camelCase) ở backend Rust.
 
-export interface Workspace {
-  id: string;
-  name: string;
-  path: string;
-}
-
 export interface FsNode {
   name: string;
   relPath: string;

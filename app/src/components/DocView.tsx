@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { Columns2, FileText, Image as ImageIcon, Save, RefreshCw, ExternalLink } from "lucide-react";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
+import { fileIcon } from "../lib/icons";
 import type { FsNode } from "../lib/types";
 import { SourcePreview } from "./SourcePreview";
 import { MarkdownEditor } from "./MarkdownEditor";
@@ -9,7 +11,6 @@ import { MarkdownEditor } from "./MarkdownEditor";
 type Mode = "split" | "md" | "source";
 
 export function DocView({ node }: { node: FsNode }) {
-  const currentWsId = useStore((s) => s.currentWsId)!;
   const refreshTree = useStore((s) => s.refreshTree);
   const setError = useStore((s) => s.setError);
 
@@ -19,20 +20,17 @@ export function DocView({ node }: { node: FsNode }) {
   const canMd = !!mdRel;
   const canConvert = canSource && node.supported;
 
-  const [mode, setMode] = useState<Mode>(
-    canSource && canMd ? "split" : canMd ? "md" : "source"
-  );
+  const [mode, setMode] = useState<Mode>(canSource && canMd ? "split" : canMd ? "md" : "source");
   const [md, setMd] = useState("");
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [converting, setConverting] = useState(false);
 
-  // Nạp nội dung markdown khi đổi file hoặc sau khi convert (mdRel xuất hiện).
   useEffect(() => {
     let alive = true;
     if (mdRel) {
       api
-        .readTextFile(currentWsId, mdRel)
+        .readTextFile(mdRel)
         .then((t) => {
           if (alive) {
             setMd(t);
@@ -47,13 +45,13 @@ export function DocView({ node }: { node: FsNode }) {
     return () => {
       alive = false;
     };
-  }, [currentWsId, mdRel, setError]);
+  }, [mdRel, setError]);
 
   async function save() {
     if (!mdRel || !dirty) return;
     setSaving(true);
     try {
-      await api.writeTextFile(currentWsId, mdRel, md);
+      await api.writeTextFile(mdRel, md);
       setDirty(false);
     } catch (e) {
       setError(String(e));
@@ -65,8 +63,8 @@ export function DocView({ node }: { node: FsNode }) {
   async function convert() {
     setConverting(true);
     try {
-      await api.reconvert(currentWsId, node.relPath);
-      await refreshTree(); // node.mdRelPath sẽ được cập nhật -> effect nạp lại md.
+      await api.reconvert(node.relPath);
+      await refreshTree();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -76,14 +74,12 @@ export function DocView({ node }: { node: FsNode }) {
 
   async function openExternal() {
     try {
-      const abs = await api.resolvePath(currentWsId, node.relPath);
-      await openPath(abs);
+      await openPath(await api.resolvePath(node.relPath));
     } catch (e) {
       setError(String(e));
     }
   }
 
-  // Ctrl/Cmd+S để lưu.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
@@ -95,46 +91,42 @@ export function DocView({ node }: { node: FsNode }) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  const seg = (m: Mode, icon: React.ReactNode, label: string) => (
+    <button className={`seg ${mode === m ? "on" : ""}`} onClick={() => setMode(m)}>
+      {icon} {label}
+    </button>
+  );
+
   return (
     <div className="docview">
       <header className="doc-toolbar">
-        <div className="doc-title" title={node.relPath}>
-          {node.name}
-          {dirty && <span className="dirty">●</span>}
+        <div className="doc-title">
+          <span className="doc-title-icon">{fileIcon(node, { size: 18 })}</span>
+          <span className="doc-title-name">{node.name}</span>
+          {dirty && <span className="dirty-dot" title="Chưa lưu" />}
         </div>
 
-        <div className="modes">
-          {canSource && canMd && (
-            <button className={mode === "split" ? "on" : ""} onClick={() => setMode("split")}>
-              Song song
-            </button>
-          )}
-          {canMd && (
-            <button className={mode === "md" ? "on" : ""} onClick={() => setMode("md")}>
-              Markdown
-            </button>
-          )}
-          {canSource && (
-            <button className={mode === "source" ? "on" : ""} onClick={() => setMode("source")}>
-              File gốc
-            </button>
-          )}
+        <div className="segmented">
+          {canSource && canMd && seg("split", <Columns2 size={15} />, "Song song")}
+          {canMd && seg("md", <FileText size={15} />, "Markdown")}
+          {canSource && seg("source", <ImageIcon size={15} />, "File gốc")}
         </div>
 
         <div className="doc-actions">
           {canMd && (
-            <button onClick={save} disabled={!dirty || saving}>
-              {saving ? "Đang lưu…" : "Lưu"}
+            <button className="btn-primary sm" onClick={save} disabled={!dirty || saving}>
+              <Save size={15} /> {saving ? "Đang lưu…" : "Lưu"}
             </button>
           )}
           {canConvert && (
-            <button onClick={convert} disabled={converting}>
-              {converting ? "Đang convert…" : mdRel ? "Convert lại" : "Convert"}
+            <button className="btn-ghost sm" onClick={convert} disabled={converting}>
+              <RefreshCw size={15} className={converting ? "spin" : ""} />
+              {mdRel ? "Convert lại" : "Convert"}
             </button>
           )}
           {canSource && (
-            <button onClick={openExternal} title="Mở file gốc bằng ứng dụng mặc định">
-              Mở ngoài
+            <button className="btn-ghost sm" onClick={openExternal} title="Mở bằng app mặc định">
+              <ExternalLink size={15} /> Mở ngoài
             </button>
           )}
         </div>
@@ -143,7 +135,7 @@ export function DocView({ node }: { node: FsNode }) {
       <div className={`doc-body ${mode}`}>
         {(mode === "split" || mode === "source") && canSource && (
           <div className="pane source-pane">
-            <SourcePreview workspaceId={currentWsId} node={node} onError={setError} />
+            <SourcePreview node={node} onError={setError} />
           </div>
         )}
 
@@ -161,8 +153,9 @@ export function DocView({ node }: { node: FsNode }) {
               <div className="placeholder">
                 {canConvert ? (
                   <>
+                    <RefreshCw size={28} className="placeholder-icon" />
                     <p>File này chưa có bản Markdown.</p>
-                    <button onClick={convert} disabled={converting}>
+                    <button className="btn-primary" onClick={convert} disabled={converting}>
                       {converting ? "Đang convert…" : "Convert ngay"}
                     </button>
                   </>

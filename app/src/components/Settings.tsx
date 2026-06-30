@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { X } from "lucide-react";
 import { useStore } from "../state/store";
 import type { Settings } from "../lib/types";
 
@@ -43,23 +44,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Cài đặt convert</h2>
+        <div className="modal-head">
+          <h2>Cài đặt convert</h2>
+          <button className="ghost-icon" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
 
         <label className="field">
           <span>Ngôn ngữ OCR (ảnh / PDF scan)</span>
-          <input
-            value={form.ocrLangs}
-            onChange={(e) => set("ocrLangs", e.target.value)}
-            placeholder="vie+eng"
-          />
+          <input value={form.ocrLangs} onChange={(e) => set("ocrLangs", e.target.value)} placeholder="vie+eng" />
         </label>
 
         <label className="field check">
-          <input
-            type="checkbox"
-            checked={form.pdfOcr}
-            onChange={(e) => set("pdfOcr", e.target.checked)}
-          />
+          <input type="checkbox" checked={form.pdfOcr} onChange={(e) => set("pdfOcr", e.target.checked)} />
           <span>OCR trang PDF dạng scan (ít/không có lớp text)</span>
         </label>
 
@@ -74,21 +72,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         <hr />
 
-        <label className="field">
-          <span>Ngôn ngữ audio (whisper)</span>
-          <input value={form.audioLang} onChange={(e) => set("audioLang", e.target.value)} />
-        </label>
-
-        <label className="field">
-          <span>Số thread audio</span>
-          <input
-            type="number"
-            min={1}
-            max={32}
-            value={form.audioThreads}
-            onChange={(e) => set("audioThreads", Number(e.target.value) || 1)}
-          />
-        </label>
+        <div className="field-grid">
+          <label className="field">
+            <span>Ngôn ngữ audio</span>
+            <input value={form.audioLang} onChange={(e) => set("audioLang", e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Thread audio</span>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={form.audioThreads}
+              onChange={(e) => set("audioThreads", Number(e.target.value) || 1)}
+            />
+          </label>
+        </div>
 
         <label className="field">
           <span>Model whisper (.bin) — để trống nếu không dùng audio</span>
@@ -98,13 +97,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => set("whisperModel", e.target.value || null)}
               placeholder="đường dẫn tới ggml-*.bin"
             />
-            <button onClick={pickWhisper}>Chọn…</button>
+            <button className="btn-ghost" onClick={pickWhisper}>
+              Chọn…
+            </button>
           </div>
         </label>
 
         <div className="modal-actions">
-          <button onClick={onClose}>Hủy</button>
-          <button className="primary" onClick={onSave}>
+          <button className="btn-ghost" onClick={onClose}>
+            Hủy
+          </button>
+          <button className="btn-primary" onClick={onSave}>
             Lưu
           </button>
         </div>
