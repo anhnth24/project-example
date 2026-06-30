@@ -7,7 +7,7 @@
 //!   - ảnh phân giải thấp: 81% → 99%
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -71,17 +71,35 @@ fn normalize(buf: &mut GrayImage) {
     }
 }
 
+/// Tìm thư mục tessdata chất lượng cao (tessdata_best) để tăng độ chính xác:
+/// biến môi trường FILECONV_TESSDATA → ./tessdata_best (nếu có vie.traineddata).
+/// Không có → dùng model hệ thống mặc định ("fast").
+fn tessdata_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FILECONV_TESSDATA") {
+        return Some(PathBuf::from(p));
+    }
+    let local = PathBuf::from("tessdata_best");
+    if local.join("vie.traineddata").exists() {
+        return Some(local);
+    }
+    None
+}
+
 fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
-    let output = Command::new("tesseract")
-        .arg(path)
+    let mut cmd = Command::new("tesseract");
+    cmd.arg(path)
         .arg("stdout")
         .arg("-l")
         .arg(langs)
         .arg("--psm")
         .arg("3")
         .arg("--dpi")
-        .arg("300")
-        .output()?;
+        .arg("300");
+    // Dùng model best nếu có (tăng độ chính xác tài liệu thật).
+    if let Some(dir) = tessdata_dir() {
+        cmd.env("TESSDATA_PREFIX", dir);
+    }
+    let output = cmd.output()?;
 
     if !output.status.success() {
         return Err(io::Error::new(
