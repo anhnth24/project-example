@@ -25,6 +25,12 @@ export const api = {
   readTextFile: (relPath: string) => invoke<string>("read_text_file", { relPath }),
   writeTextFile: (relPath: string, content: string) =>
     invoke<void>("write_text_file", { relPath, content }),
+  readTextPreview: (relPath: string, maxBytes: number) =>
+    invoke<{ text: string; truncated: boolean; size: number }>("read_text_preview", {
+      relPath,
+      maxBytes,
+    }),
+  fileSize: (relPath: string) => invoke<number>("file_size", { relPath }),
 
   resolvePath: (relPath: string) => invoke<string>("resolve_path", { relPath }),
   /** Bytes thô của file (ArrayBuffer) cho pdf.js/docx-preview/SheetJS. */

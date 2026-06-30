@@ -56,8 +56,16 @@ app/
 | csv, html, text, markdown | đọc trực tiếp | hiển thị thô |
 | `.pptx` | — | webview render chưa đáng tin → nút **Mở ngoài** |
 
-Bytes file đọc qua command Rust `read_bytes` (trả ArrayBuffer); KHÔNG `fetch(asset://)`
-vì webview chặn 403.
+Bytes file đọc qua command Rust `read_bytes` (trả ArrayBuffer); ảnh/audio dựng `Blob`
+URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì webview chặn (403).
+
+### File quá khổ
+
+- Text/CSV/log: chỉ đọc 512KB đầu (`read_text_preview`) + banner "Mở ngoài để xem đầy đủ".
+- PDF: render **lazy** từng trang theo viewport (IntersectionObserver) → mở file nhiều trang vẫn nhẹ.
+- Excel: tối đa 1000 dòng/sheet khi preview + báo số dòng thật.
+- Trước khi render, kiểm tra kích thước (`file_size`); vượt ngưỡng (pdf 80MB, docx/excel 40MB,
+  ảnh 60MB, audio 120MB) sẽ hỏi "Vẫn xem trong app / Mở ngoài".
 
 ## Hạn chế đã biết
 

@@ -489,7 +489,46 @@ fn write_text_file(
     fs::write(&p, content).map_err(es)
 }
 
-/// Đường dẫn tuyệt đối của rel_path (để UI gọi `convertFileSrc` hiển thị ảnh/audio).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextPreview {
+    text: String,
+    truncated: bool,
+    size: u64,
+}
+
+/// Đọc TỐI ĐA `max_bytes` đầu file (cho preview text/csv/log lớn — tránh treo UI).
+#[tauri::command]
+fn read_text_preview(
+    state: State<AppState>,
+    rel_path: String,
+    max_bytes: u64,
+) -> Result<TextPreview, String> {
+    use std::io::Read;
+    let p = resolve_within(&data_root(&state), &rel_path)?;
+    let size = fs::metadata(&p).map_err(es)?.len();
+    let mut bytes = Vec::new();
+    fs::File::open(&p)
+        .map_err(es)?
+        .take(max_bytes)
+        .read_to_end(&mut bytes)
+        .map_err(es)?;
+    let truncated = size > bytes.len() as u64;
+    Ok(TextPreview {
+        text: String::from_utf8_lossy(&bytes).to_string(),
+        truncated,
+        size,
+    })
+}
+
+/// Kích thước file (byte) — UI dùng để cảnh báo/giới hạn trước khi render file lớn.
+#[tauri::command]
+fn file_size(state: State<AppState>, rel_path: String) -> Result<u64, String> {
+    let p = resolve_within(&data_root(&state), &rel_path)?;
+    Ok(fs::metadata(&p).map_err(es)?.len())
+}
+
+/// Đường dẫn tuyệt đối của rel_path (dùng cho "Mở ngoài").
 #[tauri::command]
 fn resolve_path(state: State<AppState>, rel_path: String) -> Result<String, String> {
     let p = resolve_within(&data_root(&state), &rel_path)?;
@@ -567,6 +606,8 @@ pub fn run() {
             reconvert,
             read_text_file,
             write_text_file,
+            read_text_preview,
+            file_size,
             resolve_path,
             read_bytes,
             get_settings,

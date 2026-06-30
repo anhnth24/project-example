@@ -1,14 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { FileQuestion, ExternalLink, Loader2 } from "lucide-react";
+import { FileQuestion, ExternalLink, Loader2, FileWarning } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { renderAsync } from "docx-preview";
 import * as XLSX from "@e965/xlsx";
-import { api, assetUrl } from "../lib/ipc";
+import { api } from "../lib/ipc";
 import type { FsNode } from "../lib/types";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+
+const KB = 1024;
+const MB = 1024 * 1024;
+const TEXT_CAP = 512 * KB; // chỉ đọc 512KB đầu cho text/csv/log
+const XLSX_ROW_CAP = 1000; // tối đa 1000 dòng/sheet khi preview
+const LIMIT: Record<string, number> = {
+  image: 60 * MB,
+  audio: 120 * MB,
+  pdf: 80 * MB,
+  docx: 40 * MB,
+  excel: 40 * MB,
+};
 
 type Cat = "image" | "audio" | "pdf" | "docx" | "excel" | "text" | "binary";
 
@@ -17,9 +29,35 @@ function categoryOf(kind: string): Cat {
   if (kind === "audio") return "audio";
   if (kind === "pdf") return "pdf";
   if (kind === "docx") return "docx";
-  if (kind === "xlsx") return "excel"; // gồm cả xls/ods (FormatKind gộp về "xlsx")
-  if (kind === "pptx") return "binary"; // webview chưa render được tốt -> mở ngoài
-  return "text"; // csv, html, markdown, other
+  if (kind === "xlsx") return "excel";
+  if (kind === "pptx") return "binary";
+  return "text";
+}
+
+function humanSize(b: number): string {
+  if (b < KB) return `${b} B`;
+  if (b < MB) return `${(b / KB).toFixed(0)} KB`;
+  if (b < 1024 * MB) return `${(b / MB).toFixed(1)} MB`;
+  return `${(b / (1024 * MB)).toFixed(2)} GB`;
+}
+
+function mimeOf(name: string): string {
+  const e = name.toLowerCase().split(".").pop() || "";
+  const m: Record<string, string> = {
+    jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif",
+    webp: "image/webp", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff",
+    svg: "image/svg+xml", mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
+    m4a: "audio/mp4", flac: "audio/flac",
+  };
+  return m[e] || "application/octet-stream";
+}
+
+async function openExternal(relPath: string, onErr: (e: string) => void) {
+  try {
+    await openPath(await api.resolvePath(relPath));
+  } catch (e) {
+    onErr(String(e));
+  }
 }
 
 function Loading() {
@@ -31,77 +69,237 @@ function Loading() {
   );
 }
 
-function PdfPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
+/** Cổng kích thước: file lớn -> hỏi trước khi render trong app. */
+function useSizeGate(relPath: string, limit: number) {
+  const [size, setSize] = useState<number | null>(null);
+  const [forced, setForced] = useState(false);
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await api.readBytes(relPath);
-        const pdf = await pdfjsLib.getDocument({ data }).promise;
-        const cont = ref.current;
-        if (cancelled || !cont) return;
-        cont.innerHTML = "";
-        const width = (cont.clientWidth || 800) - 8;
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          if (cancelled) return;
-          const base = page.getViewport({ scale: 1 });
-          const scale = Math.min(2, Math.max(0.6, width / base.width));
-          const vp = page.getViewport({ scale });
-          const canvas = document.createElement("canvas");
-          canvas.width = vp.width;
-          canvas.height = vp.height;
-          canvas.className = "pdf-page";
-          cont.appendChild(canvas);
-          await page.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport: vp })
-            .promise;
-        }
-        if (!cancelled) setLoading(false);
-      } catch (e) {
-        onErr(String(e));
-        setLoading(false);
-      }
-    })();
+    let c = false;
+    setSize(null);
+    setForced(false);
+    api.fileSize(relPath).then((s) => !c && setSize(s)).catch(() => !c && setSize(0));
     return () => {
-      cancelled = true;
+      c = true;
+    };
+  }, [relPath]);
+  return {
+    ready: size !== null,
+    size: size ?? 0,
+    tooBig: size !== null && size > limit && !forced,
+    force: () => setForced(true),
+  };
+}
+
+function BigGuard({
+  size,
+  onForce,
+  relPath,
+  onErr,
+}: {
+  size: number;
+  onForce: () => void;
+  relPath: string;
+  onErr: (e: string) => void;
+}) {
+  return (
+    <div className="preview center-preview">
+      <FileWarning size={40} className="muted" />
+      <p>
+        File khá lớn (<b>{humanSize(size)}</b>). Render trong app có thể chậm hoặc tốn bộ nhớ.
+      </p>
+      <div className="guard-actions">
+        <button className="btn-ghost" onClick={onForce}>
+          Vẫn xem trong app
+        </button>
+        <button className="btn-primary" onClick={() => openExternal(relPath, onErr)}>
+          <ExternalLink size={15} /> Mở bằng app ngoài
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BlobMedia({
+  relPath,
+  name,
+  kind,
+  onErr,
+}: {
+  relPath: string;
+  name: string;
+  kind: "image" | "audio";
+  onErr: (e: string) => void;
+}) {
+  const gate = useSizeGate(relPath, LIMIT[kind]);
+  const [url, setUrl] = useState<string | null>(null);
+  const show = gate.ready && !gate.tooBig;
+  useEffect(() => {
+    if (!show) return;
+    let c = false;
+    let obj: string | undefined;
+    (async () => {
+      const buf = await api.readBytes(relPath);
+      if (c) return;
+      obj = URL.createObjectURL(new Blob([buf], { type: mimeOf(name) }));
+      setUrl(obj);
+    })().catch((e) => onErr(String(e)));
+    return () => {
+      c = true;
+      if (obj) URL.revokeObjectURL(obj);
+    };
+  }, [relPath, name, show, onErr]);
+
+  if (!gate.ready) return <div className="preview"><Loading /></div>;
+  if (gate.tooBig) return <BigGuard size={gate.size} onForce={gate.force} relPath={relPath} onErr={onErr} />;
+  if (!url) return <div className="preview"><Loading /></div>;
+  return kind === "image" ? (
+    <div className="preview image-preview">
+      <img src={url} alt={name} />
+    </div>
+  ) : (
+    <div className="preview audio-preview">
+      <audio controls src={url} />
+      <p className="muted">{name}</p>
+    </div>
+  );
+}
+
+function TextPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) => void }) {
+  const [data, setData] = useState<{ text: string; truncated: boolean; size: number } | null>(null);
+  useEffect(() => {
+    let c = false;
+    setData(null);
+    api.readTextPreview(relPath, TEXT_CAP).then((d) => !c && setData(d)).catch((e) => onErr(String(e)));
+    return () => {
+      c = true;
     };
   }, [relPath, onErr]);
+  if (!data) return <div className="preview"><Loading /></div>;
   return (
-    <div className="preview pdf-canvas">
-      <div ref={ref} className="pdf-pages" />
+    <div className="preview text-preview">
+      {data.truncated && (
+        <div className="preview-banner">
+          File lớn ({humanSize(data.size)}) — chỉ hiển thị {humanSize(TEXT_CAP)} đầu.{" "}
+          <button className="link" onClick={() => openExternal(relPath, onErr)}>
+            Mở ngoài để xem đầy đủ
+          </button>
+        </div>
+      )}
+      <pre>{data.text}</pre>
+    </div>
+  );
+}
+
+function PdfPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) => void }) {
+  const gate = useSizeGate(relPath, LIMIT.pdf);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pagesRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(true);
+  const show = gate.ready && !gate.tooBig;
+
+  useEffect(() => {
+    if (!show) return;
+    let cancelled = false;
+    let observer: IntersectionObserver | null = null;
+    setLoading(true);
+    (async () => {
+      const data = await api.readBytes(relPath);
+      const pdf = await pdfjsLib.getDocument({ data }).promise;
+      const scroll = scrollRef.current;
+      const pages = pagesRef.current;
+      if (cancelled || !scroll || !pages) return;
+      pages.innerHTML = "";
+      const width = (scroll.clientWidth || 800) - 40;
+      const p1 = await pdf.getPage(1);
+      const b1 = p1.getViewport({ scale: 1 });
+      const fit = Math.min(2, Math.max(0.6, width / b1.width));
+      const estH = Math.round(b1.height * fit);
+      const done = new Set<number>();
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue;
+            const div = e.target as HTMLDivElement;
+            const n = Number(div.dataset.page);
+            if (done.has(n)) continue;
+            done.add(n);
+            observer!.unobserve(div);
+            pdf.getPage(n).then(async (page) => {
+              if (cancelled) return;
+              const vp = page.getViewport({ scale: fit });
+              const canvas = document.createElement("canvas");
+              canvas.width = vp.width;
+              canvas.height = vp.height;
+              canvas.className = "pdf-page";
+              div.style.height = "auto";
+              div.innerHTML = "";
+              div.appendChild(canvas);
+              await page.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport: vp }).promise;
+            });
+          }
+        },
+        { root: scroll, rootMargin: "800px 0px" }
+      );
+      // chỉ render trang vào tầm nhìn -> mở PDF nhiều trang vẫn nhẹ.
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const ph = document.createElement("div");
+        ph.className = "pdf-ph";
+        ph.dataset.page = String(i);
+        ph.style.height = `${estH}px`;
+        pages.appendChild(ph);
+        observer.observe(ph);
+      }
+      if (!cancelled) setLoading(false);
+    })().catch((e) => {
+      onErr(String(e));
+      setLoading(false);
+    });
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+    };
+  }, [relPath, show, onErr]);
+
+  if (!gate.ready) return <div className="preview"><Loading /></div>;
+  if (gate.tooBig) return <BigGuard size={gate.size} onForce={gate.force} relPath={relPath} onErr={onErr} />;
+  return (
+    <div className="preview pdf-canvas" ref={scrollRef}>
+      <div ref={pagesRef} className="pdf-pages" />
       {loading && <Loading />}
     </div>
   );
 }
 
 function DocxPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) => void }) {
+  const gate = useSizeGate(relPath, LIMIT.docx);
   const ref = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
+  const show = gate.ready && !gate.tooBig;
   useEffect(() => {
+    if (!show) return;
     let cancelled = false;
+    setLoading(true);
     (async () => {
-      try {
-        const buf = await api.readBytes(relPath);
-        const el = ref.current;
-        if (cancelled || !el) return;
-        el.innerHTML = "";
-        await renderAsync(buf, el, undefined, {
-          inWrapper: true,
-          className: "docx",
-          ignoreLastRenderedPageBreak: true,
-        });
-        if (!cancelled) setLoading(false);
-      } catch (e) {
-        onErr(String(e));
-        setLoading(false);
-      }
-    })();
+      const buf = await api.readBytes(relPath);
+      const el = ref.current;
+      if (cancelled || !el) return;
+      el.innerHTML = "";
+      await renderAsync(buf, el, undefined, {
+        inWrapper: true,
+        className: "docx",
+        ignoreLastRenderedPageBreak: true,
+      });
+      if (!cancelled) setLoading(false);
+    })().catch((e) => {
+      onErr(String(e));
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [relPath, onErr]);
+  }, [relPath, show, onErr]);
+  if (!gate.ready) return <div className="preview"><Loading /></div>;
+  if (gate.tooBig) return <BigGuard size={gate.size} onForce={gate.force} relPath={relPath} onErr={onErr} />;
   return (
     <div className="preview docx-wrap">
       <div ref={ref} />
@@ -111,36 +309,52 @@ function DocxPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) =
 }
 
 function ExcelPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) => void }) {
-  const [sheets, setSheets] = useState<{ name: string; html: string }[]>([]);
+  const gate = useSizeGate(relPath, LIMIT.excel);
+  const [sheets, setSheets] = useState<{ name: string; html: string; capped: number }[]>([]);
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(true);
+  const show = gate.ready && !gate.tooBig;
   useEffect(() => {
+    if (!show) return;
     let cancelled = false;
+    setLoading(true);
     (async () => {
-      try {
-        const buf = await api.readBytes(relPath);
-        if (cancelled) return;
-        const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
-        const s = wb.SheetNames.map((n) => ({
-          name: n,
-          html: XLSX.utils.sheet_to_html(wb.Sheets[n], { editable: false }),
-        }));
-        if (!cancelled) {
-          setSheets(s);
-          setActive(0);
-          setLoading(false);
+      const buf = await api.readBytes(relPath);
+      if (cancelled) return;
+      const wb = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const s = wb.SheetNames.map((n) => {
+        const ws = wb.Sheets[n];
+        let capped = 0;
+        const ref = ws["!ref"];
+        if (ref) {
+          const range = XLSX.utils.decode_range(ref);
+          const rows = range.e.r - range.s.r + 1;
+          if (rows > XLSX_ROW_CAP) {
+            capped = rows;
+            range.e.r = range.s.r + XLSX_ROW_CAP - 1;
+            ws["!ref"] = XLSX.utils.encode_range(range);
+          }
         }
-      } catch (e) {
-        onErr(String(e));
+        return { name: n, html: XLSX.utils.sheet_to_html(ws, { editable: false }), capped };
+      });
+      if (!cancelled) {
+        setSheets(s);
+        setActive(0);
         setLoading(false);
       }
-    })();
+    })().catch((e) => {
+      onErr(String(e));
+      setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [relPath, onErr]);
-  if (loading) return <div className="preview"><Loading /></div>;
+  }, [relPath, show, onErr]);
+
+  if (!gate.ready || loading) return <div className="preview"><Loading /></div>;
+  if (gate.tooBig) return <BigGuard size={gate.size} onForce={gate.force} relPath={relPath} onErr={onErr} />;
   if (!sheets.length) return <div className="preview"><p className="muted">Không có sheet.</p></div>;
+  const cur = sheets[active];
   return (
     <div className="preview excel-wrap">
       {sheets.length > 1 && (
@@ -152,19 +366,20 @@ function ExcelPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) 
           ))}
         </div>
       )}
-      <div className="excel-table" dangerouslySetInnerHTML={{ __html: sheets[active].html }} />
+      {cur.capped > 0 && (
+        <div className="preview-banner">
+          Sheet lớn ({cur.capped} dòng) — chỉ hiển thị {XLSX_ROW_CAP} dòng đầu.{" "}
+          <button className="link" onClick={() => openExternal(relPath, onErr)}>
+            Mở ngoài để xem đầy đủ
+          </button>
+        </div>
+      )}
+      <div className="excel-table" dangerouslySetInnerHTML={{ __html: cur.html }} />
     </div>
   );
 }
 
-function BinaryFallback({ node, onError }: { node: FsNode; onError: (e: string) => void }) {
-  async function openExternal() {
-    try {
-      await openPath(await api.resolvePath(node.relPath));
-    } catch (e) {
-      onError(String(e));
-    }
-  }
+function BinaryFallback({ node, onErr }: { node: FsNode; onErr: (e: string) => void }) {
   return (
     <div className="preview center-preview">
       <FileQuestion size={40} className="muted" />
@@ -172,7 +387,7 @@ function BinaryFallback({ node, onError }: { node: FsNode; onError: (e: string) 
         Chưa xem trước trực tiếp được <b>.{node.kind}</b> trong app.
       </p>
       <p className="muted">Đối chiếu bản Markdown bên phải, hoặc mở file gốc.</p>
-      <button className="btn-ghost" onClick={openExternal}>
+      <button className="btn-ghost" onClick={() => openExternal(node.relPath, onErr)}>
         <ExternalLink size={15} /> Mở file gốc
       </button>
     </div>
@@ -187,49 +402,19 @@ export function SourcePreview({
   onError: (e: string) => void;
 }) {
   const cat = categoryOf(node.kind);
-  // image/audio dùng asset URL (img/audio src); pdf/docx/excel đọc bytes qua IPC.
-  const [abs, setAbs] = useState<string | null>(null);
-  const [text, setText] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setAbs(null);
-    setText(null);
-    if (cat === "text") {
-      api
-        .readTextFile(node.relPath)
-        .then((t) => !cancelled && setText(t))
-        .catch((e) => onError(String(e)));
-    } else if (cat === "image" || cat === "audio") {
-      api
-        .resolvePath(node.relPath)
-        .then((a) => !cancelled && setAbs(a))
-        .catch((e) => onError(String(e)));
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [node.relPath, cat, onError]);
-
-  if (cat === "image")
-    return <div className="preview image-preview">{abs && <img src={assetUrl(abs)} alt={node.name} />}</div>;
-
-  if (cat === "audio")
-    return (
-      <div className="preview audio-preview">
-        {abs && <audio controls src={assetUrl(abs)} />}
-        <p className="muted">{node.name}</p>
-      </div>
-    );
-
-  if (cat === "pdf") return <PdfPreview relPath={node.relPath} onErr={onError} />;
-  if (cat === "docx") return <DocxPreview relPath={node.relPath} onErr={onError} />;
-  if (cat === "excel") return <ExcelPreview relPath={node.relPath} onErr={onError} />;
-  if (cat === "binary") return <BinaryFallback node={node} onError={onError} />;
-
-  return (
-    <div className="preview text-preview">
-      {text !== null ? <pre>{text}</pre> : <Loading />}
-    </div>
-  );
+  switch (cat) {
+    case "image":
+    case "audio":
+      return <BlobMedia relPath={node.relPath} name={node.name} kind={cat} onErr={onError} />;
+    case "pdf":
+      return <PdfPreview relPath={node.relPath} onErr={onError} />;
+    case "docx":
+      return <DocxPreview relPath={node.relPath} onErr={onError} />;
+    case "excel":
+      return <ExcelPreview relPath={node.relPath} onErr={onError} />;
+    case "binary":
+      return <BinaryFallback node={node} onErr={onError} />;
+    default:
+      return <TextPreview relPath={node.relPath} onErr={onError} />;
+  }
 }

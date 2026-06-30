@@ -621,10 +621,36 @@ input:focus {
   font-size: 13px;
 }
 
-/* PDF (pdf.js -> canvas) */
+/* Banner cảnh báo file lớn (text/excel) */
+.preview-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fef9ec;
+  border-bottom: 1px solid #f5e2b8;
+  color: #8a6d1f;
+  padding: 7px 12px;
+  font-size: 12.5px;
+}
+.preview-banner .link {
+  color: var(--accent);
+}
+.guard-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* PDF (pdf.js -> canvas, lazy theo trang) */
 .pdf-canvas {
   background: #e9edf3;
   padding: 16px;
+}
+.pdf-ph {
+  width: 100%;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: var(--shadow-sm);
 }
 .pdf-pages {
   display: flex;
