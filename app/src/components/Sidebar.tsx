@@ -1,5 +1,5 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FileText, FolderPlus, Upload, FilePlus2, Settings as SettingsIcon, FolderCog, Folder } from "lucide-react";
+import { FolderPlus, Upload, FilePlus2, Settings as SettingsIcon, FolderCog, Folder } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { useStore } from "../state/store";
@@ -64,10 +64,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <span className="brand-mark">
-          <FileText size={18} />
-        </span>
-        <span className="brand-name">FileConv Docs</span>
+        <span className="brand-mark">A&rarr;M</span>
+        <span className="brand-name">Any to Markdown</span>
       </div>
 
       <div className="data-card" title={dataRoot}>

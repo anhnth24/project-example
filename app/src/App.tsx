@@ -76,8 +76,8 @@ function HomeState() {
     <div className="home">
       <EmptyState
         icon={<Icon icon={FileText} size="lg" />}
-        title="FileConv Docs"
-        description="Biến tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA & PM."
+        title="Any to Markdown"
+        description="Biến mọi tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA & PM."
       />
       <div className="home-steps">
         {steps.map((s, i) => (

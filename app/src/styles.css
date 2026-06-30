@@ -218,11 +218,14 @@ input:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  padding: 4px 9px;
   border-radius: 8px;
-  background: var(--accent);
+  background: #f47416;
   color: #fff;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.02em;
 }
 .brand-name {
   font-family: var(--font-display);
