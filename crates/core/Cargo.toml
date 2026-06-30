@@ -6,6 +6,20 @@ license.workspace = true
 authors.workspace = true
 description = "Convert documents, images and audio to Markdown (Rust, viết lại từ đầu)"
 
+[features]
+default = []
+# Tăng tốc whisper bằng GPU/BLAS — bật khi build trên máy có phần cứng tương ứng:
+#   cargo build --release --features cuda     (NVIDIA)
+#   cargo build --release --features metal    (macOS)
+#   cargo build --release --features vulkan
+#   cargo build --release --features openblas (CPU + OpenBLAS)
+cuda = ["whisper-rs/cuda"]
+metal = ["whisper-rs/metal"]
+vulkan = ["whisper-rs/vulkan"]
+hipblas = ["whisper-rs/hipblas"]
+openblas = ["whisper-rs/openblas"]
+openmp = ["whisper-rs/openmp"]
+
 [dependencies]
 thiserror.workspace = true
 # Gọi thẳng các crate gốc thay vì qua markitdown-rs:

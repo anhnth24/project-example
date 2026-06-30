@@ -318,6 +318,7 @@ fn render_accuracy_report(rows: &[AccRow]) -> String {
 
 struct AudioRow {
     model: String,
+    load_ms: f64,
     clip: String,
     label: String,
     audio_secs: f64,
@@ -360,6 +361,7 @@ fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| model_path.to_string());
         eprintln!("[audio] load model {model_name} …");
+        let tl = Instant::now();
         let engine = match AudioEngine::load(Path::new(model_path)) {
             Ok(e) => e,
             Err(e) => {
@@ -367,6 +369,7 @@ fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()
                 continue;
             }
         };
+        let load_ms = tl.elapsed().as_secs_f64() * 1000.0;
         for (file, gt, label) in &items {
             let t = match engine.transcribe_file(file, Some("vi")) {
                 Ok(t) => t,
@@ -386,6 +389,7 @@ fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()
             };
             rows.push(AudioRow {
                 model: model_name.clone(),
+                load_ms,
                 clip: file.file_name().unwrap().to_string_lossy().into_owned(),
                 label: label.clone(),
                 audio_secs: t.audio_secs,
@@ -422,8 +426,10 @@ fn render_audio_report(rows: &[AudioRow]) -> String {
         ));
     }
     s.push_str("\n## Trung bình theo model\n\n");
-    s.push_str("| Model | Số clip | Độ chính xác TB | WER TB | RTF TB |\n");
-    s.push_str("|---|--:|--:|--:|--:|\n");
+    s.push_str("Model được **load 1 lần rồi cache** (cột *Load model*); convert các file sau \
+                chỉ tốn thời gian suy luận, không load lại.\n\n");
+    s.push_str("| Model | Load model 1 lần (ms) | Số clip | Độ chính xác TB | WER TB | RTF TB |\n");
+    s.push_str("|---|--:|--:|--:|--:|--:|\n");
     let mut by_model: BTreeMap<&str, Vec<&AudioRow>> = BTreeMap::new();
     for r in rows {
         by_model.entry(r.model.as_str()).or_default().push(r);
@@ -433,9 +439,11 @@ fn render_audio_report(rows: &[AudioRow]) -> String {
         let acc = rs.iter().map(|r| r.acc).sum::<f64>() / n;
         let wer = rs.iter().map(|r| r.wer).sum::<f64>() / n;
         let rtf = rs.iter().map(|r| r.rtf).sum::<f64>() / n;
+        let load = rs.first().map(|r| r.load_ms).unwrap_or(0.0);
         s.push_str(&format!(
-            "| {} | {} | **{:.1}%** | {:.3} | {:.2} |\n",
+            "| {} | {:.0} | {} | **{:.1}%** | {:.3} | {:.2} |\n",
             model,
+            load,
             rs.len(),
             acc,
             wer,

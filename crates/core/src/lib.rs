@@ -9,10 +9,13 @@
 //!   - bỏ toàn bộ `println!` debug và dependency LLM nặng (rig-core/tokio).
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub mod audio;
 mod conv;
 pub mod image_ocr;
+
+use audio::AudioEngine;
 
 /// Loại định dạng nhận diện được.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,6 +91,8 @@ pub struct ConverterOptions {
     pub whisper_model: Option<PathBuf>,
     /// Ngôn ngữ audio (mặc định "vi").
     pub audio_lang: String,
+    /// Số thread cho whisper (mặc định 4).
+    pub audio_threads: i32,
 }
 
 impl Default for ConverterOptions {
@@ -96,13 +101,16 @@ impl Default for ConverterOptions {
             ocr_langs: "vie+eng".to_string(),
             whisper_model: None,
             audio_lang: "vi".to_string(),
+            audio_threads: 4,
         }
     }
 }
 
-/// Backend chuyển đổi.
+/// Backend chuyển đổi. Model whisper được **cache** sau lần load đầu (OnceLock),
+/// nên convert nhiều file audio không phải load lại model.
 pub struct Converter {
     opts: ConverterOptions,
+    engine: OnceLock<AudioEngine>,
 }
 
 impl Default for Converter {
@@ -117,7 +125,26 @@ impl Converter {
     }
 
     pub fn with_options(opts: ConverterOptions) -> Self {
-        Self { opts }
+        Self {
+            opts,
+            engine: OnceLock::new(),
+        }
+    }
+
+    /// Lấy AudioEngine, load model một lần rồi cache lại.
+    fn engine(&self) -> Result<&AudioEngine, ConvertError> {
+        if let Some(e) = self.engine.get() {
+            return Ok(e);
+        }
+        let model = self
+            .opts
+            .whisper_model
+            .as_ref()
+            .ok_or(ConvertError::Unsupported("audio: chưa cấu hình whisper_model"))?;
+        let eng = AudioEngine::load(model)?.with_threads(self.opts.audio_threads);
+        // Nếu thread khác set trước, bỏ qua bản của ta (vẫn dùng bản đã cache).
+        let _ = self.engine.set(eng);
+        Ok(self.engine.get().unwrap())
     }
 
     /// Chuyển một file sang Markdown.
@@ -132,17 +159,10 @@ impl Converter {
             FormatKind::Html => conv::html::to_markdown(path),
             FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
                 .map_err(|e| ConvertError::Failed(e.to_string())),
-            FormatKind::Audio => {
-                let model = self
-                    .opts
-                    .whisper_model
-                    .as_ref()
-                    .ok_or(ConvertError::Unsupported("audio: chưa cấu hình whisper_model"))?;
-                let engine = audio::AudioEngine::load(model)?;
-                engine
-                    .transcribe_file(path, Some(&self.opts.audio_lang))
-                    .map(|t| t.text)
-            }
+            FormatKind::Audio => self
+                .engine()?
+                .transcribe_file(path, Some(&self.opts.audio_lang))
+                .map(|t| t.text),
             FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
         }?;
 
