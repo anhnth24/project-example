@@ -44,10 +44,12 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
 - **`crates/core`** (`fileconv-core`) — lõi convert. `Converter::convert_path(&Path)` định
   tuyến theo `FormatKind` (suy từ đuôi file, KHÔNG sniff magic-byte) tới module trong `conv/`.
   Mỗi converter có `to_markdown(...) -> Result<String, ConvertError>`, **gọi thẳng crate gốc**:
-  - `conv/pdf.rs` — PDFium (chính) qua `pdfium-render`, fallback `pdf-extract`. **Theo từng trang**:
-    trang có lớp text → trích; trang scan (ít/không text) → render 300 DPI + OCR. PDFium phải
-    cache 1 instance/thread (`thread_local`) vì chỉ init được 1 lần/tiến trình. `pdf_ocr_images`
-    (mặc định tắt) OCR thêm ảnh nhúng cho trang trộn.
+  - `conv/pdf.rs` — **`pdf-inspector` (chính)**: markdown CÓ CẤU TRÚC theo từng trang
+    (heading theo cỡ chữ, bảng, sắp lại đa cột) + cờ `needs_ocr` (bắt cả text-layer rác/font GID).
+    Trang `needs_ocr` → render PDFium 300 DPI + OCR Tesseract (pdf-inspector không OCR).
+    Fallback: PDFium đếm ký tự → `pdf-extract`. PDFium cache 1 instance/thread (`thread_local`,
+    chỉ init 1 lần/tiến trình). `pdf_ocr_images` (mặc định tắt) OCR thêm ảnh nhúng cho trang trộn.
+    Đánh đổi: pdf-inspector ~35ms/trang (vs PDFium ~6ms) nhưng cho cấu trúc + đa cột.
   - `conv/xlsx.rs` — `calamine` (đọc MỌI sheet, hỗ trợ cả `.xls`).
   - `conv/docx.rs` — `docx-rust`: duyệt từng run, xử lý `<w:br>/<w:tab>` (tránh dính chữ),
     phát hiện heading qua style.

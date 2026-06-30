@@ -1,15 +1,15 @@
-//! PDF → Markdown, quyết định **theo từng trang** và xử lý cả **trang trộn**.
+//! PDF → Markdown, quyết định **theo từng trang**.
 //!
-//! Với mỗi trang:
-//!   - Có **lớp text** → trích trực tiếp bằng PDFium (nhanh, chính xác).
-//!   - Gần như **không có text** (trang scan/ảnh) → render trang → **OCR** Tesseract.
-//!   - **Trang trộn** (có text + ảnh scan chứa chữ): lấy text layer, và nếu bật
-//!     `pdf_ocr_images` thì OCR thêm các **ảnh nhúng lớn** để lấy chữ trong ảnh.
+//! Đường chính: **`pdf-inspector`** trích markdown CÓ CẤU TRÚC theo từng trang
+//! (heading theo cỡ chữ, bảng, **sắp lại thứ tự đọc đa cột**) và tự gắn cờ
+//! `needs_ocr` cho trang scan/ảnh HOẶC trang có **text-layer rác** (font GID,
+//! encoding hỏng) — bắt được lỗi mà cách đếm ký tự không thấy.
 //!
-//! `pdf_ocr_images` mặc định TẮT vì OCR mọi ảnh trong tài liệu thường (figure, biểu đồ,
-//! ảnh chụp) sẽ chậm và nhiễu; chỉ bật khi PDF có figure scan chứa chữ cần lấy.
+//! Trang `needs_ocr` → render bằng PDFium ở 300 DPI rồi **OCR Tesseract** (pdf-inspector
+//! không OCR). Trang trộn (text + ảnh) có thể OCR thêm ảnh nhúng khi bật `pdf_ocr_images`.
 //!
-//! Không có libpdfium → fallback toàn file `pdf-extract`.
+//! Fallback: nếu pdf-inspector lỗi → đường PDFium (đếm ký tự); nếu vẫn không được /
+//! thiếu libpdfium → `pdf-extract`.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
@@ -25,6 +25,7 @@ thread_local! {
 }
 
 /// Trang có ít hơn ngưỡng này ký tự (không tính khoảng trắng) → coi là trang scan → OCR.
+/// (Chỉ dùng ở đường fallback PDFium.)
 const PAGE_TEXT_MIN_CHARS: usize = 10;
 /// Chỉ OCR ảnh nhúng đủ lớn (px²) — bỏ qua logo/icon nhỏ.
 const MIN_IMG_AREA: i64 = 200 * 200;
@@ -37,65 +38,137 @@ pub fn to_markdown(
     ocr_enabled: bool,
     ocr_images: bool,
 ) -> Result<String, ConvertError> {
-    let via_pdfium = PDFIUM.with(|opt| -> Option<String> {
-        let pdfium = opt.as_ref()?;
-        let doc = pdfium.load_pdf_from_file(path, None).ok()?;
-        let pages = doc.pages();
+    let bytes = std::fs::read(path).map_err(fail)?;
+
+    // 1) pdf-inspector: markdown có cấu trúc + needs_ocr theo trang.
+    if let Some(md) = via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images) {
+        if !md.trim().is_empty() {
+            return Ok(md);
+        }
+    }
+    // 2) Fallback: PDFium (đếm ký tự) — giữ cho trường hợp pdf-inspector trượt.
+    if let Some(md) = via_pdfium(path, ocr_langs, ocr_enabled, ocr_images) {
+        if !md.trim().is_empty() {
+            return Ok(md);
+        }
+    }
+    // 3) Cuối cùng: pdf-extract.
+    extract_with_pdf_extract(&bytes)
+}
+
+/// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/Tesseract cho trang scan.
+fn via_pdf_inspector(
+    path: &Path,
+    bytes: &[u8],
+    langs: &str,
+    ocr_enabled: bool,
+    ocr_images: bool,
+) -> Option<String> {
+    // pdf-inspector dùng lopdf bên trong → bọc catch_unwind cho chắc.
+    let res = catch_unwind(AssertUnwindSafe(|| {
+        pdf_inspector::extract_pages_markdown_mem(bytes, None)
+    }))
+    .ok()?
+    .ok()?;
+
+    let need_pdfium = ocr_enabled && (ocr_images || res.pages.iter().any(|p| p.needs_ocr));
+
+    PDFIUM.with(|opt| -> Option<String> {
+        // Chỉ mở PDFium khi thật sự cần (OCR trang scan hoặc OCR ảnh nhúng).
+        let pdf_doc = if need_pdfium {
+            opt.as_ref().and_then(|p| p.load_pdf_from_file(path, None).ok())
+        } else {
+            None
+        };
 
         let mut out = String::new();
-        let mut any = false;
-        for (i, page) in pages.iter().enumerate() {
-            let text = page.text().map(|t| t.all()).unwrap_or_default();
-            let nonspace = text.chars().filter(|c| !c.is_whitespace()).count();
+        for pm in &res.pages {
+            let has_text = !pm.markdown.trim().is_empty();
 
-            if nonspace >= PAGE_TEXT_MIN_CHARS {
-                // Trang có lớp text → dùng trực tiếp.
-                out.push_str(text.trim_end());
+            if pm.needs_ocr && ocr_enabled {
+                // Trang scan / text rác → render + OCR.
+                if let Some(text) = pdf_doc
+                    .as_ref()
+                    .and_then(|d| ocr_page_at(d, pm.page, langs))
+                {
+                    out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", pm.page + 1));
+                    out.push_str(text.trim());
+                    out.push_str("\n\n");
+                } else if has_text {
+                    // Không OCR được (thiếu lib…) → tạm dùng text-layer dù kém.
+                    out.push_str(pm.markdown.trim_end());
+                    out.push_str("\n\n");
+                }
+            } else if has_text {
+                // Trang có text tốt → dùng markdown cấu trúc của pdf-inspector.
+                out.push_str(pm.markdown.trim_end());
                 out.push_str("\n\n");
-                any = true;
 
                 // Trang trộn: OCR thêm ảnh nhúng lớn (nếu bật).
                 if ocr_enabled && ocr_images {
+                    if let Some(doc) = pdf_doc.as_ref() {
+                        if let Ok(page) = doc.pages().get(pm.page as i32) {
+                            if let Some(extra) = ocr_page_images(doc, &page, langs, pm.page as usize + 1)
+                            {
+                                out.push_str(&extra);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if out.trim().is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    })
+}
+
+/// Render + OCR một trang theo chỉ số 0-based.
+fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String> {
+    let page = doc.pages().get(page_0idx as i32).ok()?;
+    ocr_full_page(&page, langs).ok().filter(|t| !t.trim().is_empty())
+}
+
+/// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
+fn via_pdfium(path: &Path, ocr_langs: &str, ocr_enabled: bool, ocr_images: bool) -> Option<String> {
+    PDFIUM.with(|opt| -> Option<String> {
+        let pdfium = opt.as_ref()?;
+        let doc = pdfium.load_pdf_from_file(path, None).ok()?;
+        let mut out = String::new();
+        for (i, page) in doc.pages().iter().enumerate() {
+            let text = page.text().map(|t| t.all()).unwrap_or_default();
+            let nonspace = text.chars().filter(|c| !c.is_whitespace()).count();
+            if nonspace >= PAGE_TEXT_MIN_CHARS {
+                out.push_str(text.trim_end());
+                out.push_str("\n\n");
+                if ocr_enabled && ocr_images {
                     if let Some(extra) = ocr_page_images(&doc, &page, ocr_langs, i + 1) {
                         out.push_str(&extra);
-                        any = true;
                     }
                 }
             } else if ocr_enabled {
-                // Trang scan/ảnh → render cả trang + OCR.
                 if let Ok(ocr) = ocr_full_page(&page, ocr_langs) {
                     let ocr = ocr.trim();
                     if !ocr.is_empty() {
                         out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
                         out.push_str(ocr);
                         out.push_str("\n\n");
-                        any = true;
                     }
                 }
             }
         }
-        if any {
-            Some(out)
-        } else {
+        if out.trim().is_empty() {
             None
+        } else {
+            Some(out)
         }
-    });
-
-    if let Some(t) = via_pdfium {
-        if !t.trim().is_empty() {
-            return Ok(t);
-        }
-    }
-    extract_with_pdf_extract(path)
+    })
 }
 
 /// OCR các ảnh nhúng đủ lớn trong một trang (cho trang trộn text + ảnh).
-fn ocr_page_images(
-    doc: &PdfDocument,
-    page: &PdfPage,
-    langs: &str,
-    page_no: usize,
-) -> Option<String> {
+fn ocr_page_images(doc: &PdfDocument, page: &PdfPage, langs: &str, page_no: usize) -> Option<String> {
     let mut out = String::new();
     for obj in page.objects().iter() {
         let Some(img_obj) = obj.as_image_object() else {
@@ -104,14 +177,13 @@ fn ocr_page_images(
         let w = img_obj.width().unwrap_or(0) as i64;
         let h = img_obj.height().unwrap_or(0) as i64;
         if w * h < MIN_IMG_AREA {
-            continue; // bỏ ảnh nhỏ (logo/icon)
+            continue;
         }
         let Ok(img) = img_obj.get_processed_image(doc) else {
             continue;
         };
         if let Ok(text) = image_ocr::ocr_dynimage(&img, langs) {
             let text = text.trim();
-            // Chỉ thêm nếu có nội dung chữ thực sự.
             if text.chars().filter(|c| c.is_alphanumeric()).count() >= 4 {
                 out.push_str(&format!("<!-- Ảnh trong trang {page_no} (OCR) -->\n\n"));
                 out.push_str(text);
@@ -152,11 +224,10 @@ fn load_pdfium() -> Option<Pdfium> {
     Pdfium::bind_to_system_library().ok().map(Pdfium::new)
 }
 
-/// Fallback: pdf-extract (có thể panic → bắt bằng catch_unwind).
-fn extract_with_pdf_extract(path: &Path) -> Result<String, ConvertError> {
-    let bytes = std::fs::read(path).map_err(fail)?;
+/// Fallback cuối: pdf-extract (có thể panic → bắt bằng catch_unwind).
+fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
     let result = catch_unwind(AssertUnwindSafe(|| {
-        pdf_extract::extract_text_from_mem(&bytes)
+        pdf_extract::extract_text_from_mem(bytes)
     }));
     match result {
         Ok(Ok(text)) => Ok(text),

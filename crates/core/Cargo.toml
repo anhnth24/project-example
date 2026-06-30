@@ -36,3 +36,4 @@ symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "flac", "wav"
 pdfium-render = "0.9.2"
 # Đọc/giải mã nhiều định dạng ảnh để tiền xử lý trước khi OCR (không chỉ PNG).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "tiff"] }
+pdf-inspector = "0.1.3"
