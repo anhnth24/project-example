@@ -666,19 +666,31 @@ input:focus {
   background: #fff;
 }
 
-/* DOCX (docx-preview) */
+/* DOCX (docx-preview) — reflow theo bề rộng khung */
 .docx-wrap {
-  background: #e9edf3;
-  padding: 16px 0;
+  background: #fff;
+  padding: 0;
 }
 .docx-wrap .docx-wrapper {
   background: transparent;
-  padding: 0;
+  padding: 20px 26px;
 }
 .docx-wrap .docx-wrapper > section.docx {
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 14px;
-  border-radius: 4px;
+  width: 100% !important;
+  max-width: 820px;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  box-shadow: none;
+  min-height: 0 !important;
+}
+.docx-wrap .docx-wrapper table {
+  width: 100% !important;
+  table-layout: fixed;
+  word-break: break-word;
+}
+.docx-wrap .docx-wrapper img {
+  max-width: 100%;
+  height: auto;
 }
 
 /* Excel (SheetJS -> HTML table) */

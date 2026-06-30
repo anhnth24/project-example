@@ -55,7 +55,20 @@ fn main() -> Result<()> {
         }
         "one" => {
             let f = args.get(2).context("thiếu file")?;
-            let conv = Converter::new();
+            // Cờ phụ để test: --ocr-images (OCR ảnh nhúng trang trộn), --lang <vie+eng>.
+            let rest = &args[3..];
+            let mut opts = fileconv_core::ConverterOptions::default();
+            if rest.iter().any(|a| a == "--ocr-images") {
+                opts.pdf_ocr_images = true;
+            }
+            if let Some(l) = rest
+                .iter()
+                .position(|a| a == "--lang")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.ocr_langs = l.clone();
+            }
+            let conv = Converter::with_options(opts);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
             Ok(())

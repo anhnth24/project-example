@@ -288,6 +288,11 @@ function DocxPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) =
         inWrapper: true,
         className: "docx",
         ignoreLastRenderedPageBreak: true,
+        // Cho nội dung co theo bề rộng khung (tránh trang A4 cố định bị cắt mất chữ).
+        ignoreWidth: true,
+        ignoreHeight: true,
+        breakPages: false,
+        experimental: true,
       });
       if (!cancelled) setLoading(false);
     })().catch((e) => {
