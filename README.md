@@ -9,14 +9,16 @@ cao + tiếng Việt tốt, sau này đóng gói thành **desktop app (Tauri)** 
 ## Cấu trúc
 
 ```
-crates/core/   # fileconv-core: lõi convert (bọc markitdown-rs + OCR Tesseract)
-crates/cli/    # fileconv: bench harness (đo tốc độ + độ chính xác CER/WER)
-bench/         # script tải corpus thật, sinh corpus tiếng Việt, các báo cáo
+crates/core/        # fileconv-core: lõi convert — code của mình, gọi thẳng crate gốc
+crates/cli/         # fileconv: bench harness (đo tốc độ + độ chính xác CER/WER)
+bench/              # script tải corpus thật, sinh corpus tiếng Việt, các báo cáo
+vendor/markitdown-rs/  # CHỈ tham khảo (không build, không phụ thuộc)
 ```
 
 ## Định dạng hỗ trợ (phase 1)
 
-pdf, docx, pptx, xlsx, csv, html (qua markitdown-rs) + **ảnh OCR tiếng Việt** (Tesseract `vie+eng`).
+pdf, docx, pptx, xlsx/xls, csv, html + **ảnh OCR tiếng Việt** (Tesseract `vie+eng`).
+Mỗi định dạng gọi thẳng crate Rust gốc (calamine/docx-rust/pdf-extract/quick-xml/htmd).
 Audio (whisper) ở phase sau.
 
 ## Kết quả tóm tắt (Intel Xeon 2.8GHz, release)
@@ -41,14 +43,19 @@ cargo build --release
 bash bench/download_corpus.sh
 ./target/release/fileconv speed bench/corpus bench/REPORT_SPEED.md
 
-# 4) Sinh corpus tiếng Việt & đo độ chính xác
+# 4) Sinh corpus tiếng Việt + ảnh & đo độ chính xác
 python3 bench/make_vn_corpus.py
-#   (render ảnh: xem lệnh ImageMagick trong lịch sử/REPORT.md)
+bash bench/make_vn_images.sh
 ./target/release/fileconv accuracy bench/vn_corpus/manifest.tsv bench/REPORT_ACCURACY.md
 ```
 
-## Hạn chế đã biết (markitdown-rs v0.1.11)
+## Đã sửa so với markitdown-rs (bản tham khảo)
 
-- `html2md` phình output bất thường ở trang lớn; xlsx chỉ đọc sheet đầu; docx mất
-  cấu trúc heading; lib có `println!` debug; kéo dep LLM nặng. Chi tiết & hướng xử
-  lý ở [`bench/REPORT.md`](bench/REPORT.md) §5–6.
+Bản viết lại do mình làm chủ, đã khắc phục các lỗi phát hiện qua benchmark:
+- `html2md` phình output (88M ký tự) → dùng `htmd`: nhỏ hơn ~90×, nhanh hơn ~7×.
+- xlsx chỉ đọc sheet đầu → đọc tất cả sheet (+ hỗ trợ `.xls`).
+- docx mất cấu trúc → phát hiện heading + bảng Markdown.
+- pptx sai thứ tự slide + `println!` debug → sort đúng, output sạch.
+- pdf-extract panic làm sập → `catch_unwind` + pin `0.8.2`.
+
+Chi tiết & số liệu ở [`bench/REPORT.md`](bench/REPORT.md).

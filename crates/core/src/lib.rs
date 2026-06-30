@@ -1,17 +1,19 @@
-//! fileconv-core: lõi chuyển đổi tài liệu/ảnh/âm thanh sang Markdown.
+//! fileconv-core: lõi chuyển đổi tài liệu/ảnh sang Markdown — viết lại từ đầu.
 //!
-//! Phase 1 bọc crate `markitdown` (markitdown-rs) cho các định dạng tài liệu
-//! (pdf, docx, pptx, xlsx, csv, html). OCR ảnh (Tesseract) và audio (whisper)
-//! được bổ sung ở module `image_ocr` (phase sau).
+//! Khác với phase trước (bọc markitdown-rs), bản này gọi THẲNG các crate gốc và
+//! sửa các lỗi đã phát hiện trong benchmark:
+//!   - html: dùng `htmd` (html5ever) thay `html2md` để tránh phình output.
+//!   - xlsx: đọc TẤT CẢ sheet (calamine), không chỉ sheet đầu.
+//!   - docx: phát hiện heading qua style, xuất `#`/bảng Markdown.
+//!   - pptx: đọc slide theo ĐÚNG thứ tự số.
+//!   - bỏ toàn bộ `println!` debug và dependency LLM nặng (rig-core/tokio).
 
 use std::path::Path;
 
-use markitdown::model::ConversionOptions;
-use markitdown::MarkItDown;
-
+mod conv;
 pub mod image_ocr;
 
-/// Loại định dạng nhận diện được, dùng cho báo cáo & định tuyến.
+/// Loại định dạng nhận diện được.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormatKind {
     Pdf,
@@ -26,7 +28,6 @@ pub enum FormatKind {
 }
 
 impl FormatKind {
-    /// Suy ra loại từ phần mở rộng của đường dẫn.
     pub fn from_path(path: &Path) -> Self {
         let ext = path
             .extension()
@@ -37,7 +38,7 @@ impl FormatKind {
             "pdf" => Self::Pdf,
             "docx" => Self::Docx,
             "pptx" => Self::Pptx,
-            "xlsx" | "xls" => Self::Xlsx,
+            "xlsx" | "xls" | "xlsb" | "ods" => Self::Xlsx,
             "csv" => Self::Csv,
             "html" | "htm" => Self::Html,
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "gif" => Self::Image,
@@ -61,7 +62,6 @@ impl FormatKind {
     }
 }
 
-/// Kết quả chuyển đổi.
 #[derive(Debug, Clone)]
 pub struct ConversionResult {
     pub markdown: String,
@@ -73,16 +73,15 @@ pub struct ConversionResult {
 pub enum ConvertError {
     #[error("đường dẫn không hợp lệ (non-UTF8)")]
     BadPath,
-    #[error("không nhận diện được hoặc không hỗ trợ định dạng")]
-    Unsupported,
+    #[error("định dạng chưa hỗ trợ: {0}")]
+    Unsupported(&'static str),
     #[error("chuyển đổi thất bại: {0}")]
     Failed(String),
 }
 
-/// Tuỳ chọn cho backend.
 #[derive(Debug, Clone)]
 pub struct ConverterOptions {
-    /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng" cho tiếng Việt).
+    /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng").
     pub ocr_langs: String,
 }
 
@@ -94,9 +93,8 @@ impl Default for ConverterOptions {
     }
 }
 
-/// Backend chuyển đổi. Tạo một lần rồi tái sử dụng cho nhiều file.
+/// Backend chuyển đổi.
 pub struct Converter {
-    md: MarkItDown,
     opts: ConverterOptions,
 }
 
@@ -112,50 +110,29 @@ impl Converter {
     }
 
     pub fn with_options(opts: ConverterOptions) -> Self {
-        Self {
-            md: MarkItDown::new(),
-            opts,
-        }
+        Self { opts }
     }
 
     /// Chuyển một file sang Markdown.
     pub fn convert_path(&self, path: &Path) -> Result<ConversionResult, ConvertError> {
         let format = FormatKind::from_path(path);
+        let md = match format {
+            FormatKind::Pdf => conv::pdf::to_markdown(path),
+            FormatKind::Docx => conv::docx::to_markdown(path),
+            FormatKind::Pptx => conv::pptx::to_markdown(path),
+            FormatKind::Xlsx => conv::xlsx::to_markdown(path),
+            FormatKind::Csv => conv::csv_conv::to_markdown(path),
+            FormatKind::Html => conv::html::to_markdown(path),
+            FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
+                .map_err(|e| ConvertError::Failed(e.to_string())),
+            FormatKind::Audio => return Err(ConvertError::Unsupported("audio (phase sau)")),
+            FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
+        }?;
 
-        // Ảnh: dùng OCR Tesseract (markitdown chỉ đọc EXIF), audio chưa hỗ trợ.
-        if format == FormatKind::Image {
-            let text = image_ocr::ocr_image(path, &self.opts.ocr_langs)
-                .map_err(|e| ConvertError::Failed(e.to_string()))?;
-            return Ok(ConversionResult {
-                markdown: text,
-                title: None,
-                format,
-            });
-        }
-
-        let src = path.to_str().ok_or(ConvertError::BadPath)?;
-        // Ép file_extension theo đuôi file để định tuyến đúng converter.
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!(".{}", e.to_ascii_lowercase()));
-        let opts = ConversionOptions {
-            file_extension: ext,
-            url: None,
-            llm_client: None,
-            llm_model: None,
-        };
-        let res = self
-            .md
-            .convert(src, Some(opts))
-            .map_err(|e| ConvertError::Failed(e.to_string()))?;
-        match res {
-            Some(r) => Ok(ConversionResult {
-                markdown: r.text_content,
-                title: r.title,
-                format,
-            }),
-            None => Err(ConvertError::Unsupported),
-        }
+        Ok(ConversionResult {
+            markdown: md,
+            title: None,
+            format,
+        })
     }
 }

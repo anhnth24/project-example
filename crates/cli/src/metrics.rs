@@ -1,9 +1,26 @@
 //! Đo độ chính xác: chuẩn hoá text + CER/WER bằng khoảng cách Levenshtein.
 
-/// Chuẩn hoá: gộp mọi khoảng trắng/xuống dòng thành 1 space, trim.
-/// Giữ nguyên chữ hoa/thường và dấu tiếng Việt (để phản ánh độ chính xác thật).
+/// Chuẩn hoá để đo **độ chính xác NỘI DUNG**: bỏ ký hiệu cấu trúc Markdown
+/// (dòng phân cách bảng, dấu `|`, token chỉ gồm `#`/`-`) rồi gộp khoảng trắng.
+/// Giữ nguyên chữ hoa/thường và dấu tiếng Việt. Nhờ vậy bảng/heading mà backend
+/// thêm vào (đúng chức năng) không bị tính là "sai chữ".
 pub fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut cleaned = String::new();
+    for line in s.lines() {
+        let t = line.trim();
+        // Bỏ dòng phân cách bảng kiểu "| --- | --- |" (chỉ gồm | - : khoảng trắng).
+        if !t.is_empty() && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
+            continue;
+        }
+        cleaned.push_str(&line.replace('|', " "));
+        cleaned.push(' ');
+    }
+    cleaned
+        .split_whitespace()
+        // Bỏ token chỉ gồm '#' (heading marker) hoặc '-' (bullet).
+        .filter(|tok| !tok.chars().all(|c| c == '#' || c == '-'))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Khoảng cách Levenshtein tổng quát trên slice (dùng cho cả char và word).

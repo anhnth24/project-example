@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/cli"]
+# vendor/markitdown-rs chỉ để THAM KHẢO (không build, không phụ thuộc).
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2021"

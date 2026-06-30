@@ -4,8 +4,15 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Convert documents, images and audio to Markdown"
+description = "Convert documents, images and audio to Markdown (Rust, viết lại từ đầu)"
 
 [dependencies]
 thiserror.workspace = true
-markitdown = "0.1.11"
+# Gọi thẳng các crate gốc thay vì qua markitdown-rs:
+calamine = "0.35"        # xlsx/xls — đọc TẤT CẢ sheet
+docx-rust = "0.1.11"     # docx — có lấy style heading
+pdf-extract = "=0.8.2"   # pdf (pin 0.8.2: bản 0.12 panic trên một số PDF mà 0.8.2 xử lý được)
+quick-xml = "0.37"       # pptx (parse XML slide)
+zip = "2.2"              # pptx (giải nén)
+csv = "1.3"              # csv
+htmd = "0.5"             # html -> markdown (thay html2md để tránh phình output)

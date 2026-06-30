@@ -20,6 +20,16 @@ use walkdir::WalkDir;
 mod metrics;
 
 fn main() -> Result<()> {
+    // Panic hook gọn: pdf-extract có thể panic; ta đã catch_unwind nên chỉ cần
+    // một dòng ngắn thay vì backtrace dài.
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        eprintln!("[panic đã bắt] {loc}");
+    }));
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!("dùng: fileconv <speed|accuracy|one> ...");
