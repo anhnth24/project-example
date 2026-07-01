@@ -37,22 +37,23 @@ pub fn to_markdown(
     ocr_langs: &str,
     ocr_enabled: bool,
     ocr_images: bool,
+    pages: Option<&[u32]>,
 ) -> Result<String, ConvertError> {
     let bytes = std::fs::read(path).map_err(fail)?;
 
     // 1) pdf-inspector: markdown có cấu trúc + needs_ocr theo trang.
-    if let Some(md) = via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images) {
+    if let Some(md) = via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images, pages) {
         if !md.trim().is_empty() {
             return Ok(md);
         }
     }
     // 2) Fallback: PDFium (đếm ký tự) — giữ cho trường hợp pdf-inspector trượt.
-    if let Some(md) = via_pdfium(path, ocr_langs, ocr_enabled, ocr_images) {
+    if let Some(md) = via_pdfium(path, ocr_langs, ocr_enabled, ocr_images, pages) {
         if !md.trim().is_empty() {
             return Ok(md);
         }
     }
-    // 3) Cuối cùng: pdf-extract.
+    // 3) Cuối cùng: pdf-extract (không hỗ trợ lọc trang).
     extract_with_pdf_extract(&bytes)
 }
 
@@ -63,10 +64,14 @@ fn via_pdf_inspector(
     langs: &str,
     ocr_enabled: bool,
     ocr_images: bool,
+    pages: Option<&[u32]>,
 ) -> Option<String> {
+    // pages 1-indexed từ người dùng → 0-indexed cho pdf-inspector.
+    let pages0: Option<Vec<u32>> =
+        pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect());
     // pdf-inspector dùng lopdf bên trong → bọc catch_unwind cho chắc.
     let res = catch_unwind(AssertUnwindSafe(|| {
-        pdf_inspector::extract_pages_markdown_mem(bytes, None)
+        pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
     }))
     .ok()?
     .ok()?;
@@ -132,12 +137,24 @@ fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String>
 }
 
 /// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
-fn via_pdfium(path: &Path, ocr_langs: &str, ocr_enabled: bool, ocr_images: bool) -> Option<String> {
+fn via_pdfium(
+    path: &Path,
+    ocr_langs: &str,
+    ocr_enabled: bool,
+    ocr_images: bool,
+    pages: Option<&[u32]>,
+) -> Option<String> {
     PDFIUM.with(|opt| -> Option<String> {
         let pdfium = opt.as_ref()?;
         let doc = pdfium.load_pdf_from_file(path, None).ok()?;
         let mut out = String::new();
         for (i, page) in doc.pages().iter().enumerate() {
+            // Lọc trang (1-indexed) nếu người dùng chỉ định.
+            if let Some(ps) = pages {
+                if !ps.contains(&(i as u32 + 1)) {
+                    continue;
+                }
+            }
             let text = page.text().map(|t| t.all()).unwrap_or_default();
             let nonspace = text.chars().filter(|c| !c.is_whitespace()).count();
             if nonspace >= PAGE_TEXT_MIN_CHARS {

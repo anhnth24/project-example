@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/cli", "app/src-tauri"]
+members = ["crates/core", "crates/cli", "app/src-tauri", "crates/mcp"]
 # vendor/markitdown-rs chỉ để THAM KHẢO (không build, không phụ thuộc).
 exclude = ["vendor"]
 

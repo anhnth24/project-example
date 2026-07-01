@@ -14,6 +14,9 @@ use std::sync::OnceLock;
 pub mod audio;
 mod conv;
 pub mod image_ocr;
+pub mod probe;
+
+pub use probe::{probe, FileInfo};
 
 use audio::AudioEngine;
 
@@ -98,6 +101,12 @@ pub struct ConverterOptions {
     /// Bật OCR thêm cho ẢNH NHÚNG lớn trong trang có text (trang trộn).
     /// Mặc định false vì có thể chậm/nhiễu với tài liệu nhiều hình.
     pub pdf_ocr_images: bool,
+    /// Chỉ trích các trang PDF này (1-indexed). None = mọi trang. (Giảm token.)
+    pub pdf_pages: Option<Vec<u32>>,
+    /// Chỉ trích sheet này của xlsx (theo tên). None = mọi sheet.
+    pub xlsx_sheet: Option<String>,
+    /// Cắt Markdown ở tối đa N ký tự (kèm chú thích phần bị cắt). None = không cắt.
+    pub max_chars: Option<usize>,
 }
 
 impl Default for ConverterOptions {
@@ -109,6 +118,9 @@ impl Default for ConverterOptions {
             audio_threads: 4,
             pdf_ocr: true,
             pdf_ocr_images: false,
+            pdf_pages: None,
+            xlsx_sheet: None,
+            max_chars: None,
         }
     }
 }
@@ -163,10 +175,11 @@ impl Converter {
                 &self.opts.ocr_langs,
                 self.opts.pdf_ocr,
                 self.opts.pdf_ocr_images,
+                self.opts.pdf_pages.as_deref(),
             ),
             FormatKind::Docx => conv::docx::to_markdown(path),
             FormatKind::Pptx => conv::pptx::to_markdown(path),
-            FormatKind::Xlsx => conv::xlsx::to_markdown(path),
+            FormatKind::Xlsx => conv::xlsx::to_markdown(path, self.opts.xlsx_sheet.as_deref()),
             FormatKind::Csv => conv::csv_conv::to_markdown(path),
             FormatKind::Html => conv::html::to_markdown(path),
             FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
@@ -177,6 +190,16 @@ impl Converter {
                 .map(|t| t.text),
             FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
         }?;
+
+        // Cắt theo max_chars (giảm token cho file lớn).
+        let md = match self.opts.max_chars {
+            Some(limit) if md.chars().count() > limit => {
+                let kept: String = md.chars().take(limit).collect();
+                let remaining = md.chars().count() - limit;
+                format!("{kept}\n\n<!-- (đã cắt ở {limit} ký tự, còn {remaining} ký tự) -->\n")
+            }
+            _ => md,
+        };
 
         Ok(ConversionResult {
             markdown: md,

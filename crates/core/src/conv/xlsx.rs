@@ -9,9 +9,18 @@ use super::{esc_cell, fail};
 use crate::conv::csv_conv::rows_to_md_table;
 use crate::ConvertError;
 
-pub fn to_markdown(path: &Path) -> Result<String, ConvertError> {
+pub fn to_markdown(path: &Path, sheet: Option<&str>) -> Result<String, ConvertError> {
     let mut wb = open_workbook_auto(path).map_err(fail)?;
-    let names = wb.sheet_names().to_owned();
+    let names: Vec<String> = match sheet {
+        // Chỉ sheet được chọn (khớp tên không phân biệt hoa/thường).
+        Some(want) => wb
+            .sheet_names()
+            .iter()
+            .filter(|n| n.eq_ignore_ascii_case(want))
+            .cloned()
+            .collect(),
+        None => wb.sheet_names().to_owned(),
+    };
     let mut out = String::new();
 
     for name in names {

@@ -68,6 +68,28 @@ fn main() -> Result<()> {
             {
                 opts.ocr_langs = l.clone();
             }
+            if let Some(p) = rest
+                .iter()
+                .position(|a| a == "--pages")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.pdf_pages = Some(p.split(',').filter_map(|x| x.trim().parse().ok()).collect());
+            }
+            if let Some(s) = rest
+                .iter()
+                .position(|a| a == "--sheet")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.xlsx_sheet = Some(s.clone());
+            }
+            if let Some(m) = rest
+                .iter()
+                .position(|a| a == "--max-chars")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|x| x.parse().ok())
+            {
+                opts.max_chars = Some(m);
+            }
             let conv = Converter::with_options(opts);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
