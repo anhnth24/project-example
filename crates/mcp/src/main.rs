@@ -44,6 +44,44 @@ struct ConvertReq {
     ocr_langs: Option<String>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TablesReq {
+    /// Đường dẫn file Excel (xlsx/xls) hoặc CSV.
+    path: String,
+    /// (Excel) chỉ sheet theo tên. Bỏ trống = mọi sheet.
+    #[serde(default)]
+    sheet: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LlmReq {
+    /// Đường dẫn file cần tóm tắt.
+    path: String,
+    /// Giới hạn ký tự đưa vào LLM (kiểm soát chi phí). Mặc định 40000.
+    #[serde(default)]
+    max_chars: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ExtractReq {
+    /// Đường dẫn file.
+    path: String,
+    /// Yêu cầu trích (ngôn ngữ tự nhiên), vd "lấy số hợp đồng, ngày ký, tổng tiền".
+    instruction: String,
+    #[serde(default)]
+    max_chars: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct TranslateReq {
+    /// Đường dẫn file.
+    path: String,
+    /// Ngôn ngữ đích, vd "English", "tiếng Nhật".
+    target: String,
+    #[serde(default)]
+    max_chars: Option<usize>,
+}
+
 #[derive(Clone)]
 struct Fileconv {
     tool_router: ToolRouter<Fileconv>,
@@ -99,6 +137,86 @@ impl Fileconv {
         .await
         .map_err(|e| e.to_string())?
     }
+
+    #[tool(
+        description = "Trích bảng có cấu trúc thành JSON (tất định, không cần API key). Hỗ trợ Excel (xlsx/xls) và CSV. Excel: {\"<sheet>\": [[ô,...],...]}; CSV: [[ô,...],...]."
+    )]
+    async fn extract_tables_json(
+        &self,
+        Parameters(req): Parameters<TablesReq>,
+    ) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            fileconv_core::tables::tables_json(&PathBuf::from(&req.path), req.sheet.as_deref())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    #[tool(
+        description = "Tóm tắt tài liệu (Markdown tiếng Việt). CẦN cấu hình LLM qua env FILECONV_LLM_* (provider + API key); chưa cấu hình sẽ báo lỗi."
+    )]
+    async fn summarize(&self, Parameters(req): Parameters<LlmReq>) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            let cfg = llm_cfg()?;
+            let md = convert_for_llm(&req.path, req.max_chars.unwrap_or(40_000))?;
+            fileconv_core::llm::summarize(&cfg, &md).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    #[tool(
+        description = "Trích dữ liệu có cấu trúc theo yêu cầu ngôn ngữ tự nhiên (vd 'lấy số hợp đồng, ngày, tổng tiền'), trả JSON. CẦN cấu hình LLM (FILECONV_LLM_*)."
+    )]
+    async fn extract_json(&self, Parameters(req): Parameters<ExtractReq>) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            let cfg = llm_cfg()?;
+            let md = convert_for_llm(&req.path, req.max_chars.unwrap_or(40_000))?;
+            fileconv_core::llm::extract_json(&cfg, &md, &req.instruction).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    #[tool(
+        description = "Dịch nội dung tài liệu sang ngôn ngữ đích (target, vd 'English'). CẦN cấu hình LLM (FILECONV_LLM_*)."
+    )]
+    async fn translate(&self, Parameters(req): Parameters<TranslateReq>) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            let cfg = llm_cfg()?;
+            let md = convert_for_llm(&req.path, req.max_chars.unwrap_or(40_000))?;
+            let instr = format!(
+                "Dịch toàn bộ nội dung sau sang {}. Giữ định dạng Markdown, không thêm lời bình.",
+                req.target
+            );
+            fileconv_core::llm::chat(&cfg, "Bạn là dịch giả chuyên nghiệp.", &format!("{instr}\n\n{md}"))
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+}
+
+/// Lấy cấu hình LLM từ env, lỗi rõ nếu chưa cấu hình.
+fn llm_cfg() -> Result<fileconv_core::llm::LlmConfig, String> {
+    fileconv_core::llm::LlmConfig::from_env().ok_or_else(|| {
+        "Chưa cấu hình LLM. Đặt env FILECONV_LLM_PROVIDER (openai|anthropic|gemini|openai-compatible) \
+         và FILECONV_LLM_API_KEY (+ tuỳ chọn FILECONV_LLM_MODEL/BASE_URL)."
+            .to_string()
+    })
+}
+
+/// Convert file → Markdown (giới hạn ký tự để kiểm soát chi phí LLM).
+fn convert_for_llm(path: &str, max_chars: usize) -> Result<String, String> {
+    let opts = ConverterOptions {
+        max_chars: Some(max_chars),
+        ..ConverterOptions::default()
+    };
+    Converter::with_options(opts)
+        .convert_path(&PathBuf::from(path))
+        .map(|r| r.markdown)
+        .map_err(|e| e.to_string())
 }
 
 #[tool_handler(router = self.tool_router)]

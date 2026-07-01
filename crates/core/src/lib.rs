@@ -14,7 +14,10 @@ use std::sync::OnceLock;
 pub mod audio;
 mod conv;
 pub mod image_ocr;
+#[cfg(feature = "llm")]
+pub mod llm;
 pub mod probe;
+pub mod tables;
 
 pub use probe::{probe, FileInfo};
 

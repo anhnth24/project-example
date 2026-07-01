@@ -19,8 +19,13 @@ vulkan = ["whisper-rs/vulkan"]
 hipblas = ["whisper-rs/hipblas"]
 openblas = ["whisper-rs/openblas"]
 openmp = ["whisper-rs/openmp"]
+# Lớp LLM tuỳ chọn (summarize / extract_json ngữ nghĩa) — cần API key lúc chạy.
+# Bật khi build: cargo build --features llm. Mặc định TẮT để giữ build lean/offline.
+llm = ["dep:reqwest"]
 
 [dependencies]
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 thiserror.workspace = true
 # Gọi thẳng các crate gốc thay vì qua markitdown-rs:
 calamine = "0.35"        # xlsx/xls — đọc TẤT CẢ sheet
