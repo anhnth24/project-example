@@ -1,10 +1,15 @@
 //! OCR ảnh bằng Tesseract (gọi CLI `tesseract`), kèm **tiền xử lý ảnh** để tăng
 //! độ chính xác (đặc biệt ảnh phân giải thấp).
 //!
-//! Tiền xử lý (thuần Rust, crate `image`): grayscale → phóng to nếu nhỏ → unsharp
-//! → normalize (kéo giãn histogram). Thực nghiệm trên ảnh tiếng Việt:
-//!   - ảnh chữ in: 98.5% → 99.5%
-//!   - ảnh phân giải thấp: 81% → 99%
+//! Tiền xử lý (thuần Rust, crate `image`): grayscale → chuẩn hoá KÍCH THƯỚC →
+//! unsharp → normalize (kéo giãn histogram).
+//!
+//! Chuẩn hoá kích thước (quan trọng cho TỐC ĐỘ): trước đây phóng ×2 MỌI ảnh <2000px
+//! khiến trang giấy tờ dày đặc bị đội gấp đôi thời gian OCR (vd 62s→88s) mà không tăng
+//! độ chính xác. Nay:
+//!   - Ảnh THỰC SỰ nhỏ/mờ (diện tích < ~0.5MP) → phóng ×2 (giúp OCR, mà vẫn rẻ vì ảnh nhỏ).
+//!   - Ảnh quá lớn (cạnh dài > 2400px) → thu xuống (giữ tốc độ).
+//!   - Còn lại (trang giấy tờ đủ nét) → GIỮ NGUYÊN.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -15,8 +20,10 @@ use image::{imageops, DynamicImage, GrayImage};
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Nếu cạnh dài < ngưỡng này thì phóng to ×2 trước khi OCR.
-const UPSCALE_BELOW_PX: u32 = 2000;
+/// Diện tích (px²) dưới mức này ⇒ ảnh nhỏ/mờ ⇒ phóng ×2. ~0.5 megapixel.
+const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
+/// Cạnh dài tối đa; lớn hơn ⇒ thu xuống để OCR không quá chậm.
+const MAX_LONG_SIDE: u32 = 2400;
 
 /// OCR một file ảnh. `langs` ví dụ "vie+eng".
 pub fn ocr_image(path: &Path, langs: &str) -> io::Result<String> {
@@ -39,14 +46,27 @@ pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
     text
 }
 
-/// Tiền xử lý: grayscale → phóng to nếu nhỏ → unsharp → normalize.
+/// Tiền xử lý: grayscale → chuẩn hoá kích thước → unsharp → normalize.
 fn preprocess(img: &DynamicImage) -> DynamicImage {
     let gray = img.to_luma8();
     let (w, h) = gray.dimensions();
+    let area = w as u64 * h as u64;
+    let long = w.max(h);
 
-    let scaled = if w.max(h) < UPSCALE_BELOW_PX {
+    let scaled = if area < UPSCALE_IF_AREA_BELOW {
+        // Ảnh nhỏ/mờ → phóng ×2 (rẻ vì ảnh nhỏ), giúp OCR chính xác hơn.
         imageops::resize(&gray, w * 2, h * 2, imageops::FilterType::Lanczos3)
+    } else if long > MAX_LONG_SIDE {
+        // Ảnh quá lớn → thu xuống để giữ tốc độ.
+        let f = MAX_LONG_SIDE as f32 / long as f32;
+        imageops::resize(
+            &gray,
+            (w as f32 * f).round() as u32,
+            (h as f32 * f).round() as u32,
+            imageops::FilterType::Lanczos3,
+        )
     } else {
+        // Trang giấy tờ đủ nét → giữ nguyên (không đội thời gian OCR).
         gray
     };
 
