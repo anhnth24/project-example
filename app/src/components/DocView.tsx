@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { Save, RefreshCw, ExternalLink } from "lucide-react";
+import { Save, RefreshCw, ExternalLink, Copy, Check } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { TabList, Tab } from "@astryxdesign/core/TabList";
 import { useStore } from "../state/store";
@@ -27,6 +27,8 @@ export function DocView({ node }: { node: FsNode }) {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [converting, setConverting] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -52,10 +54,21 @@ export function DocView({ node }: { node: FsNode }) {
     try {
       await api.writeTextFile(mdRel, md);
       setDirty(false);
+      setSavedAt(new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }));
     } catch (e) {
       setError(String(e));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function copyMarkdown() {
+    try {
+      await navigator.clipboard.writeText(md);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      setError(String(e));
     }
   }
 
@@ -108,6 +121,21 @@ export function DocView({ node }: { node: FsNode }) {
         </div>
 
         <div className="doc-actions">
+          {canMd && (
+            <span className="doc-meta">
+              <span>{md.length.toLocaleString("vi-VN")} ký tự</span>
+              {savedAt && !dirty && <span className="saved-at">Đã lưu {savedAt}</span>}
+            </span>
+          )}
+          {canMd && (
+            <Button
+              label={copied ? "Đã copy" : "Copy MD"}
+              variant="ghost"
+              size="sm"
+              icon={copied ? <Check size={15} /> : <Copy size={15} />}
+              onClick={copyMarkdown}
+            />
+          )}
           {canMd && (
             <Button label={saving ? "Đang lưu…" : "Lưu"} variant="primary" size="sm" icon={<Save size={15} />} isDisabled={!dirty || saving} isLoading={saving} onClick={save} />
           )}

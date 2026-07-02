@@ -11,6 +11,9 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/plus-jakarta-sans";
 import App from "./App";
 import "./styles.css";
+import { initTheme } from "./lib/theme";
+
+initTheme();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

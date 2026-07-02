@@ -1055,3 +1055,90 @@ hr {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================
+   DARK THEME (mặc định) — palette theo design-research:
+   nền #141417 / surface #1E1E22 / nổi #2A2A30 / viền #33333A
+   chữ #F4F4F5 / phụ #A1A1AA / accent #4F8CFF
+   Vùng ĐỌC nội dung (preview gốc, markdown preview) giữ nền giấy
+   sáng — pattern "editor chrome tối, giấy sáng" của Typora/Obsidian.
+   ============================================================ */
+:root[data-appearance="dark"] {
+  --bg: #141417;
+  --panel: #1e1e22;
+  --sidebar: #19191d;
+  --border: #33333a;
+  --border-strong: #44444c;
+  --text: #f4f4f5;
+  --muted: #a1a1aa;
+  --faint: #71717a;
+  --accent: #4f8cff;
+  --accent-hover: #3b7bff;
+  --accent-soft: #1b2940;
+  --accent-text: #8ab4ff;
+  --hover: #2a2a30;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --amber: #fbbf24;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 1px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --ring: 0 0 0 3px rgba(79, 140, 255, 0.4);
+}
+
+/* Vùng preview nội dung giữ "giấy sáng" để so khớp tài liệu gốc */
+:root[data-appearance="dark"] .source-pane,
+:root[data-appearance="dark"] .md-preview {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+/* CodeMirror nền tối khi dark (theme JS xử lý màu chữ) */
+:root[data-appearance="dark"] .cm-wrap {
+  background: #1e1e22;
+}
+
+/* Statusbar lưu + đếm ký tự trên toolbar */
+.doc-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.doc-meta .saved-at {
+  color: var(--success);
+}
+
+/* Dark: chữ các nút ghost/secondary (token Astryx mặc định tối) + brand */
+:root[data-appearance="dark"] .brand-name {
+  color: var(--text);
+}
+:root[data-appearance="dark"] .doc-actions button,
+:root[data-appearance="dark"] .sidebar-foot button,
+:root[data-appearance="dark"] .toolbar-row button:not([class*="primary"]),
+:root[data-appearance="dark"] .data-card button {
+  color: var(--text);
+}
+:root[data-appearance="dark"] .doc-title-name {
+  color: var(--text);
+}
+
+/* Dark: home/empty-state — title + card theo surface tối */
+:root[data-appearance="dark"] .home h1,
+:root[data-appearance="dark"] .home h2,
+:root[data-appearance="dark"] .home h3 {
+  color: var(--text) !important;
+}
+:root[data-appearance="dark"] .home svg {
+  color: var(--accent-text);
+}
+:root[data-appearance="dark"] .home-steps > * {
+  background: var(--panel) !important;
+  border-color: var(--border) !important;
+  color: var(--text);
+}
+:root[data-appearance="dark"] .step-desc {
+  color: var(--muted);
+}
