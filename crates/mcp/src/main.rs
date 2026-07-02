@@ -54,6 +54,15 @@ struct TablesReq {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct ChunksReq {
+    /// Đường dẫn file cần convert + chia chunk.
+    path: String,
+    /// Số ký tự tối đa mỗi chunk (mặc định 2000).
+    #[serde(default)]
+    max_chars: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct LlmReq {
     /// Đường dẫn file cần tóm tắt.
     path: String,
@@ -148,6 +157,25 @@ impl Fileconv {
         tokio::task::spawn_blocking(move || {
             fileconv_core::tables::tables_json(&PathBuf::from(&req.path), req.sheet.as_deref())
                 .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    #[tool(
+        description = "Convert file rồi CHIA thành chunks cho RAG/embedding: chia theo heading (giữ đường dẫn tiêu đề cha, vd 'Chương I > Điều 1'), section dài chia tiếp theo đoạn. Trả JSON [{index, heading, text, chars}]. Offline, không cần API key."
+    )]
+    async fn convert_chunks(
+        &self,
+        Parameters(req): Parameters<ChunksReq>,
+    ) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            let md = Converter::new()
+                .convert_path(&PathBuf::from(&req.path))
+                .map_err(|e| e.to_string())?
+                .markdown;
+            let chunks = fileconv_core::chunk::chunk_markdown(&md, req.max_chars.unwrap_or(2000));
+            Ok(fileconv_core::chunk::chunks_json(&chunks))
         })
         .await
         .map_err(|e| e.to_string())?

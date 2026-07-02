@@ -15,3 +15,13 @@ for m in tiny base small; do
   echo "    $(stat -c%s "$f") bytes"
 done
 echo "Xong model."
+
+# PhoWhisper (VinAI, fine-tune 844h tiếng Việt) — bản ggml cộng đồng (dongxiat).
+# Đo thật trên corpus vi: 90.8% vs 77.3% của whisper-small cùng cỡ (+13.5 điểm).
+# LƯU Ý license: repo PhoWhisper không ghi license rõ — kiểm tra trước khi phân phối thương mại.
+f="$ROOT/models/ggml-PhoWhisper-small.bin"
+if [ -s "$f" ]; then echo "  đã có ggml-PhoWhisper-small.bin"; else
+  echo "  tải ggml-PhoWhisper-small.bin …"
+  curl -sSL --max-time 900 -o "$f" "https://huggingface.co/dongxiat/ggml-PhoWhisper-small/resolve/main/ggml-PhoWhisper-small.bin"
+fi
+echo "    $(stat -c%s "$f") bytes"

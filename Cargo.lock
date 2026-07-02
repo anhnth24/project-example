@@ -1496,9 +1496,11 @@ dependencies = [
  "pdfium-render",
  "quick-xml 0.37.5",
  "reqwest 0.12.28",
+ "serde",
  "serde_json",
  "symphonia",
  "thiserror 2.0.18",
+ "unicode-normalization",
  "whisper-rs",
  "zip 2.4.2",
 ]

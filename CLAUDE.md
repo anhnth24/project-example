@@ -33,7 +33,9 @@ Manifest accuracy/audio: mỗi dòng `<file>\t<ground_truth.txt>\t<nhãn>` (đư
 - **libpdfium**: `bash bench/download_pdfium.sh` → `./pdfium/lib`. Thiếu thì PDF tự fallback `pdf-extract`.
 - **tessdata_best** (khuyến nghị): `bash bench/download_tessdata.sh` → `./tessdata_best`.
   Backend tự dùng nếu có (chính xác hơn với tài liệu thật/IN HOA), thiếu thì dùng model nhẹ hệ thống.
-- **model whisper**: `bash bench/download_models.sh` → `./models/ggml-{tiny,base,small}.bin`.
+- **model whisper**: `bash bench/download_models.sh` → `./models/ggml-{tiny,base,small}.bin`
+  + **ggml-PhoWhisper-small.bin** (VinAI fine-tune tiếng Việt — đo được 90.8% vs 77.3%
+  whisper-small cùng cỡ trên corpus vi; license PhoWhisper chưa rõ, kiểm tra trước khi phân phối).
 - Build whisper-rs cần cmake + C/C++ + clang (bindgen). Lần build đầu compile whisper.cpp (~1-2 phút).
 
 Đường dẫn override qua env: `FILECONV_PDFIUM_LIB`, `FILECONV_TESSDATA`.
@@ -59,7 +61,10 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
   - `image_ocr.rs` — Tesseract CLI. `ocr_dynimage()` là đường chung: **tiền xử lý ảnh**
     (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize) trước khi OCR (tăng accuracy rõ rệt).
   - `audio.rs` — `AudioEngine::load()` giữ `WhisperContext` (cache 1 lần); decode mp3/wav/ogg…
-    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi").
+    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"). Ưu tiên model
+    PhoWhisper cho tiếng Việt.
+  - `chunk.rs` — chia Markdown thành chunk RAG theo heading (giữ đường dẫn tiêu đề cha).
+  - Output cuối `convert_path` luôn **chuẩn hoá NFC** (tài liệu vi NFD từ macOS/PDF cũ).
 - **`crates/cli`** (`fileconv`) — bench harness: timing, đếm page (pdfinfo/python zip),
   CER/WER (`metrics.rs`, Levenshtein; `normalize()` bỏ ký hiệu markdown để đo NỘI DUNG).
 - **`bench/`** — script tải corpus thật + sinh dữ liệu ground-truth tiếng Việt + các báo cáo

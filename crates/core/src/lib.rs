@@ -16,6 +16,7 @@ mod conv;
 pub mod image_ocr;
 #[cfg(feature = "llm")]
 pub mod llm;
+pub mod chunk;
 pub mod probe;
 pub mod tables;
 
@@ -194,6 +195,17 @@ impl Converter {
             FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
         }?;
 
+        // Chuẩn hoá Unicode NFC: tài liệu tiếng Việt cũ (nhất là từ macOS/PDF legacy)
+        // hay ở dạng NFD (ê + dấu rời) — gây lệch so khớp/tìm kiếm/embedding dù nhìn
+        // giống hệt. Không đối thủ nào xử lý (xem bench/RESEARCH_COMPETITORS.md).
+        let md = {
+            use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
+            match is_nfc_quick(md.chars()) {
+                IsNormalized::Yes => md,
+                _ => md.nfc().collect::<String>(),
+            }
+        };
+
         // Cắt theo max_chars (giảm token cho file lớn).
         let md = match self.opts.max_chars {
             Some(limit) if md.chars().count() > limit => {
@@ -209,5 +221,28 @@ impl Converter {
             title: None,
             format,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tài liệu chứa tiếng Việt dạng NFD (dấu rời) phải ra NFC sau convert.
+    #[test]
+    fn output_normalized_to_nfc() {
+        // "tiếng Việt" ở dạng NFD: e + U+0302 + U+0301, ê tách dấu.
+        let nfd = "ti\u{0065}\u{0302}\u{0301}ng Vi\u{0065}\u{0323}\u{0302}t,ok\n";
+        let dir = std::env::temp_dir().join(format!("fileconv_nfc_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("nfd.csv");
+        std::fs::write(&f, nfd).unwrap();
+
+        let out = Converter::new().convert_path(&f).unwrap().markdown;
+        assert!(out.contains("tiếng"), "phải chứa 'tiếng' dạng NFC, got: {out:?}");
+        assert!(out.contains("Việt"), "phải chứa 'Việt' dạng NFC");
+        // Không còn combining mark rời nào.
+        assert!(!out.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
