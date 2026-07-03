@@ -19,6 +19,7 @@ pub mod llm;
 pub mod chunk;
 pub mod probe;
 pub mod tables;
+pub mod viet_legacy;
 
 pub use probe::{probe, FileInfo};
 

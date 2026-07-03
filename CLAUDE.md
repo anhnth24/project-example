@@ -64,6 +64,8 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
     bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"). Ưu tiên model
     PhoWhisper cho tiếng Việt.
   - `chunk.rs` — chia Markdown thành chunk RAG theo heading (giữ đường dẫn tiêu đề cha).
+  - `viet_legacy.rs` — decode bảng mã VN cũ **TCVN3** (detect + convert; VNI/VPS backlog).
+  - `llm.rs` (feature `llm`) — chat/summarize/extract_json/**vision_ocr** qua env FILECONV_LLM_*.
   - Output cuối `convert_path` luôn **chuẩn hoá NFC** (tài liệu vi NFD từ macOS/PDF cũ).
 - **`crates/cli`** (`fileconv`) — bench harness: timing, đếm page (pdfinfo/python zip),
   CER/WER (`metrics.rs`, Levenshtein; `normalize()` bỏ ký hiệu markdown để đo NỘI DUNG).
@@ -76,5 +78,5 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
 - PDF/whisper resource đắt → giữ pattern cache (thread_local PDFium, OnceLock AudioEngine trong `Converter`).
 - Khi đổi OCR/PDF, **đo lại** bằng `fileconv accuracy`/`speed` trên corpus (tái tạo bằng `bench/*.sh`).
 - Điểm yếu đã biết (xem `bench/REPORT*.md`): IN HOA dính chữ, bảng PDF nhiều cột, whisper ảo giác
-  audio không lời, chữ viết tay. Tài liệu khó cần tier vision-LLM (chưa làm).
+  audio không lời, chữ viết tay. Tài liệu khó → tier vision-LLM: MCP tool `ocr_hard` (cần key).
 - Model identifier không đưa vào commit/code.

@@ -176,3 +176,96 @@ pub fn extract_json(cfg: &LlmConfig, text: &str, instruction: &str) -> Result<St
         &format!("Yêu cầu: {instruction}\n\nTài liệu:\n{text}"),
     )
 }
+
+/// OCR/đọc tài liệu KHÓ bằng vision-LLM (đa cột, IN HOA, chữ viết tay, con dấu…):
+/// gửi ảnh cho model vision của provider, nhận Markdown. Đây là "tier chất lượng cao"
+/// cho các ca Tesseract yếu — cần API key, nội dung ảnh được gửi tới provider.
+pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<String, ConvertError> {
+    use base64::Engine as _;
+    let bytes = std::fs::read(image_path).map_err(fail)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let mime = match image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => "image/jpeg",
+    };
+    let system = "Bạn là công cụ OCR chất lượng cao cho tài liệu tiếng Việt. Chép lại TOÀN BỘ \
+                  chữ trong ảnh thành Markdown, đúng thứ tự đọc (xử lý đa cột), giữ bảng thành \
+                  bảng Markdown, giữ nguyên dấu tiếng Việt kể cả chữ IN HOA. Không bịa, không \
+                  bình luận — chỉ trả nội dung.";
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(fail)?;
+
+    match cfg.provider {
+        Provider::OpenAi | Provider::OpenAiCompatible => {
+            let base = cfg.base_url.clone().unwrap_or_else(|| "https://api.openai.com".into());
+            let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": cfg.model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{b64}")}}
+                    ]}
+                ]
+            });
+            let v = post_json(&client, &url, &body, |r| r.bearer_auth(&cfg.api_key))?;
+            v["choices"][0]["message"]["content"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| fail(format!("phản hồi OpenAI vision không hợp lệ: {v}")))
+        }
+        Provider::Anthropic => {
+            let base = cfg.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com".into());
+            let url = format!("{}/v1/messages", base.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": cfg.model,
+                "max_tokens": 8192,
+                "system": system,
+                "messages": [{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
+                ]}]
+            });
+            let v = post_json(&client, &url, &body, |r| {
+                r.header("x-api-key", &cfg.api_key)
+                    .header("anthropic-version", "2023-06-01")
+            })?;
+            v["content"][0]["text"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| fail(format!("phản hồi Anthropic vision không hợp lệ: {v}")))
+        }
+        Provider::Gemini => {
+            let base = cfg
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+            let url = format!(
+                "{}/v1beta/models/{}:generateContent?key={}",
+                base.trim_end_matches('/'),
+                cfg.model,
+                cfg.api_key
+            );
+            let body = serde_json::json!({
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"parts": [
+                    {"inline_data": {"mime_type": mime, "data": b64}}
+                ]}]
+            });
+            let v = post_json(&client, &url, &body, |r| r)?;
+            v["candidates"][0]["content"]["parts"][0]["text"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| fail(format!("phản hồi Gemini vision không hợp lệ: {v}")))
+        }
+    }
+}

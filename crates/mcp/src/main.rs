@@ -208,6 +208,18 @@ impl Fileconv {
     }
 
     #[tool(
+        description = "OCR tài liệu KHÓ bằng vision-LLM (ảnh đa cột, IN HOA mất dấu, chữ viết tay, con dấu) — chất lượng cao hơn Tesseract cho các ca này. Nhận file ảnh (png/jpg/webp). CẦN cấu hình LLM (FILECONV_LLM_*) với model vision; ảnh sẽ được gửi tới provider."
+    )]
+    async fn ocr_hard(&self, Parameters(req): Parameters<DetectReq>) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            let cfg = llm_cfg()?;
+            fileconv_core::llm::vision_ocr(&cfg, &PathBuf::from(&req.path)).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    #[tool(
         description = "Dịch nội dung tài liệu sang ngôn ngữ đích (target, vd 'English'). CẦN cấu hình LLM (FILECONV_LLM_*)."
     )]
     async fn translate(&self, Parameters(req): Parameters<TranslateReq>) -> Result<String, String> {

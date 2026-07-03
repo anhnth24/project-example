@@ -10,12 +10,9 @@ pub fn to_markdown(path: &Path) -> Result<String, ConvertError> {
     let raw = std::fs::read(path).map_err(fail)?;
     // Bỏ BOM UTF-8 nếu có.
     let bytes = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&raw[..]);
-    // Giải mã: UTF-8 chuẩn; nếu không hợp lệ (CSV legacy Windows-1252/1258…) thì
-    // dùng lossy để KHÔNG bỏ mất dòng (trước đây dòng non-UTF8 bị loại sạch).
-    let text = match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
-    };
+    // Giải mã: UTF-8 chuẩn; non-UTF8 → thử TCVN3 (bảng mã VN cũ, ra chữ Việt đúng
+    // thay vì rác); còn lại lossy để KHÔNG bỏ mất dòng.
+    let text = crate::viet_legacy::decode_text(bytes);
     // Tự nhận dấu phân tách: , ; tab | (Excel tiếng Việt hay xuất dấu ;).
     let delim = sniff_delimiter(&text);
 
