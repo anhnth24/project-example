@@ -99,8 +99,7 @@ fn es<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-static TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Write through a same-directory temporary file, then replace the target.
 /// Unix replaces atomically; Windows uses a short-lived backup because
@@ -121,10 +120,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
         .create_new(true)
         .open(&temp)
         .map_err(es)?;
-    if let Err(error) = output
-        .write_all(contents)
-        .and_then(|_| output.sync_all())
-    {
+    if let Err(error) = output.write_all(contents).and_then(|_| output.sync_all()) {
         drop(output);
         let _ = fs::remove_file(&temp);
         return Err(es(error));
@@ -134,11 +130,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     match fs::rename(&temp, path) {
         Ok(()) => Ok(()),
         Err(_) if path.exists() => {
-            let backup = parent.join(format!(
-                ".{name}.{}.{}.backup",
-                std::process::id(),
-                suffix
-            ));
+            let backup = parent.join(format!(".{name}.{}.{}.backup", std::process::id(), suffix));
             if let Err(error) = fs::rename(path, &backup) {
                 let _ = fs::remove_file(&temp);
                 return Err(es(error));
@@ -392,8 +384,7 @@ fn copy_import_source(root: &Path, folder_rel: &str, source_abs: &str) -> Result
         .create_new(true)
         .open(&temp)
         .map_err(es)?;
-    let copy_result =
-        std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all());
+    let copy_result = std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all());
     drop(output);
     if let Err(error) = copy_result {
         let _ = fs::remove_file(&temp);
@@ -430,7 +421,11 @@ fn copy_import_source(root: &Path, folder_rel: &str, source_abs: &str) -> Result
 }
 
 fn data_root(state: &AppState) -> PathBuf {
-    state.data_root.lock().map(|p| p.clone()).unwrap_or_default()
+    state
+        .data_root
+        .lock()
+        .map(|p| p.clone())
+        .unwrap_or_default()
 }
 
 // ───────────────────────────── Commands ─────────────────────────────
@@ -561,10 +556,7 @@ fn rename_node(state: State<AppState>, rel_path: String, new_name: String) -> Re
         if let Some(old_md) = child_case_insensitive(parent, &format!("{old_name}.md")) {
             let new_md = parent.join(format!("{new_name}.md"));
             if child_case_insensitive(parent, &format!("{new_name}.md")).is_some() {
-                return Err(format!(
-                    "đã tồn tại Markdown liên kết '{}.md'",
-                    new_name
-                ));
+                return Err(format!("đã tồn tại Markdown liên kết '{}.md'", new_name));
             }
             paired_rename = Some((old_md, new_md));
         }
@@ -914,7 +906,11 @@ mod tests {
         assert!(!names.contains(&"report.pdf.md"));
         assert!(!names.contains(&".secret"));
 
-        let pdf = tree.children.iter().find(|n| n.name == "report.pdf").unwrap();
+        let pdf = tree
+            .children
+            .iter()
+            .find(|n| n.name == "report.pdf")
+            .unwrap();
         assert_eq!(pdf.kind, "pdf");
         assert!(pdf.supported);
         assert_eq!(pdf.md_rel_path.as_deref(), Some("report.pdf.md"));
@@ -935,8 +931,7 @@ mod tests {
         let source = base.join("report.pdf");
         fs::write(&source, b"%PDF deferred import").unwrap();
 
-        let copied =
-            copy_import_source(&root, "incoming", source.to_str().unwrap()).unwrap();
+        let copied = copy_import_source(&root, "incoming", source.to_str().unwrap()).unwrap();
         assert_eq!(copied, root.join("incoming/report.pdf"));
         assert!(copied.exists());
         assert!(!root.join("incoming/report.pdf.md").exists());
@@ -962,10 +957,7 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), "# second\n\nNoi dung");
         assert_eq!(
-            fs::read_dir(&root)
-                .unwrap()
-                .filter_map(Result::ok)
-                .count(),
+            fs::read_dir(&root).unwrap().filter_map(Result::ok).count(),
             1
         );
         fs::remove_dir_all(&root).ok();
