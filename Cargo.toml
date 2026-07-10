@@ -8,7 +8,7 @@ exclude = ["vendor"]
 edition = "2021"
 license = "MIT"
 authors = ["anhnth24"]
-rust-version = "1.80"
+rust-version = "1.88"
 
 [workspace.dependencies]
 anyhow = "1"

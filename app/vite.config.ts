@@ -8,6 +8,8 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    // Design handoff provides the bundled planet asset one level above app/.
+    fs: { allow: [".."] },
   },
   build: {
     target: "es2021",

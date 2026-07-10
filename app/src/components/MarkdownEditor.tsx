@@ -1,12 +1,9 @@
-import { useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { TabList, Tab } from "@astryxdesign/core/TabList";
-
-type TabVal = "edit" | "preview";
+import type { MarkdownTab } from "../lib/types";
 
 const cmFont = {
   fontFamily: "ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace",
@@ -14,31 +11,60 @@ const cmFont = {
 };
 
 const cmTheme = EditorView.theme({
-  "&": { fontSize: "14px", height: "100%", backgroundColor: "#ffffff", color: "#1e293b", fontFamily: "var(--font-ui)" },
+  "&": {
+    fontSize: "13px",
+    height: "100%",
+    backgroundColor: "#171619",
+    color: "#d8d8da",
+    fontFamily: "var(--font-ui)",
+  },
   ".cm-content": cmFont,
-  ".cm-gutters": { backgroundColor: "#f8fafc", border: "none", color: "#94a3b8" },
-  ".cm-activeLine": { backgroundColor: "#eff6ff" },
-  ".cm-activeLineGutter": { backgroundColor: "#dbeafe", color: "#1d4ed8" },
-  "&.cm-focused": { outline: "none" },
+  ".cm-gutters": { backgroundColor: "#1d1c20", border: "none", color: "#68676c" },
+  ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.035)" },
+  ".cm-activeLineGutter": {
+    backgroundColor: "rgba(46,196,124,0.12)",
+    color: "#2ec47c",
+  },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+    backgroundColor: "rgba(46,196,124,0.22)",
+  },
+  "&.cm-focused": { outline: "2px solid rgba(46,196,124,0.42)", outlineOffset: "-2px" },
 });
 
 export function MarkdownEditor({
   value,
   onChange,
+  tab,
+  onTabChange,
+  readOnly = false,
 }: {
   value: string;
   onChange: (v: string) => void;
+  tab: MarkdownTab;
+  onTabChange: (tab: MarkdownTab) => void;
+  readOnly?: boolean;
 }) {
-  // mặc định Xem trước: BA/PM đọc bản render trước, bấm Soạn khi cần sửa
-  const [tab, setTab] = useState<TabVal>("preview");
-
   return (
     <div className="md-editor">
       <div className="md-tabs">
-        <TabList value={tab} onChange={(v: string) => setTab(v as TabVal)} size="sm">
-          <Tab value="edit" label="Soạn" />
-          <Tab value="preview" label="Xem trước" />
-        </TabList>
+        <div className="segmented-control" aria-label="Chế độ Markdown">
+          <button
+            type="button"
+            aria-pressed={tab === "edit"}
+            className={tab === "edit" ? "active" : ""}
+            onClick={() => onTabChange("edit")}
+          >
+            Soạn
+          </button>
+          <button
+            type="button"
+            aria-pressed={tab === "preview"}
+            className={tab === "preview" ? "active" : ""}
+            onClick={() => onTabChange("preview")}
+          >
+            Xem trước
+          </button>
+        </div>
       </div>
 
       {tab === "edit" ? (
@@ -46,7 +72,12 @@ export function MarkdownEditor({
           <CodeMirror
             value={value}
             height="100%"
-            extensions={[markdown(), EditorView.lineWrapping, cmTheme]}
+            extensions={[
+              markdown(),
+              EditorView.lineWrapping,
+              cmTheme,
+              EditorView.editable.of(!readOnly),
+            ]}
             onChange={onChange}
             basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: false }}
           />

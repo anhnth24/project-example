@@ -2,7 +2,7 @@
 
 App desktop (Tauri 2 + React/TS) cho **BA/PM** soạn tài liệu cho Dev: tải file gốc vào
 thư mục, app gọi lõi Rust `fileconv-core` chuyển sang **Markdown** (link 1-1 với file gốc),
-xem **song song** (gốc ↔ markdown) hoặc **sửa** markdown. **Toàn bộ dữ liệu lưu local.**
+xem **song song**, **đối chiếu theo khối** hoặc sửa Markdown. **Toàn bộ dữ liệu lưu local.**
 
 ## Mô hình
 
@@ -17,16 +17,16 @@ xem **song song** (gốc ↔ markdown) hoặc **sửa** markdown. **Toàn bộ d
 
 ```bash
 cd app
-npm install
-npm run tauri dev      # mở app; tự chạy Vite (cổng 1420) + biên dịch backend Rust
+pnpm install
+pnpm tauri dev      # mở app; tự chạy Vite (cổng 1420) + biên dịch backend Rust
 ```
 
-Chỉ build phần web: `npm run build` (ra `app/dist`).
+Chỉ build phần web: `pnpm build` (ra `app/dist`). Unit test frontend: `pnpm test`.
 Chỉ build backend: `cargo build -p fileconv-desktop` (từ thư mục gốc repo).
 
 ## Yêu cầu hệ thống
 
-- **Rust** + **Node 18+**.
+- **Rust** + **Node 20+** + pnpm 10.
 - **Linux**: `webkit2gtk-4.1`, `libgtk-3`, (tùy chọn) `libayatana-appindicator3`, `librsvg2`.
 - Build `fileconv-core` cần **cmake + clang** (biên dịch whisper.cpp lần đầu ~1–2 phút).
 - Tùy chọn để convert đầy đủ (xem `CLAUDE.md` ở gốc repo): `tesseract-ocr(+vie)`, libpdfium,
@@ -37,22 +37,34 @@ Chỉ build backend: `cargo build -p fileconv-desktop` (từ thư mục gốc re
 ```
 app/
   src/                 # React + TS
-    lib/{ipc,types}.ts # cầu nối invoke() + kiểu dữ liệu
-    state/store.ts     # zustand: workspace, cây, lựa chọn
-    components/        # Sidebar, Tree, DocView, SourcePreview, MarkdownEditor, Settings
+    lib/               # invoke(), types, tree + Markdown block helpers
+    state/store.ts     # Zustand: DATA tree, tabs, draft và convert queue
+    components/        # rail/drawer/tabs/library/workbench/compare/settings
   src-tauri/
     src/lib.rs         # các #[tauri::command] + thao tác filesystem an toàn
-    tauri.conf.json    # cấu hình app + asset protocol cho preview
+    tauri.conf.json    # cấu hình cửa sổ, CSP và bundle
 ```
 
-## Preview file gốc trong app (side-by-side với Markdown)
+## Luồng làm việc
+
+- Icon rail mở Trang chủ, Thư viện, drawer tài liệu, tìm kiếm `Ctrl/Cmd+K`, hàng đợi và
+  cài đặt.
+- Mỗi tài liệu mở trong một tab riêng; draft chưa lưu được giữ khi chuyển tab.
+- Upload/kéo-thả copy file vào DATA trước, sau đó convert tuần tự ở background. Queue chỉ
+  hiển thị trạng thái thật (`đợi/chạy/xong/lỗi`), không dựng phần trăm giả.
+- Bốn chế độ tài liệu: **Đối chiếu**, **Song song**, **Markdown**, **File gốc**.
+- Đối chiếu khối dùng snapshot Markdown của lần convert gần nhất ở bên trái và draft đang
+  sửa ở bên phải. File nguồn thật luôn xem được trong chế độ Song song/File gốc.
+- `Ctrl/Cmd+S` lưu, `Ctrl/Cmd+W` đóng tab có xác nhận nếu còn draft.
+
+## Preview file gốc trong app
 
 | Loại | Thư viện | Ghi chú |
 |------|----------|---------|
 | PDF | `pdfjs-dist` (pdf.js) | render từng trang ra canvas |
 | Word `.docx` | `docx-preview` | giữ định dạng |
 | Excel `.xlsx/.xls/.ods` | `@e965/xlsx` (SheetJS) | có tab chọn sheet |
-| Ảnh, audio | asset protocol | `<img>` / `<audio>` |
+| Ảnh, audio | Blob URL từ `read_bytes` | `<img>` / `<audio>` |
 | csv, html, text, markdown | đọc trực tiếp | hiển thị thô |
 | `.pptx` | — | webview render chưa đáng tin → nút **Mở ngoài** |
 
@@ -70,4 +82,7 @@ URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì web
 ## Hạn chế đã biết
 
 - `.pptx`: chưa preview trong app (dùng "Mở ngoài").
-- Chưa có drag-drop, đa tab, tìm kiếm, đóng gói cài đặt (Win/Mac/Ubuntu) — dự kiến sau.
+- Queue chưa có phần trăm theo page/segment vì `fileconv-core` chưa phát progress unit.
+- Đối chiếu hiện liên kết bản convert gốc ↔ draft Markdown; source-anchor theo page/slide/
+  sheet/timestamp cần structured converter artifact ở phase sau.
+- Chưa đóng gói bộ cài Win/Mac/Ubuntu.

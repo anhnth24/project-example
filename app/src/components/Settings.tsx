@@ -1,13 +1,9 @@
 import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
-import { Layout, LayoutFooter } from "@astryxdesign/core/Layout";
-import { Button } from "@astryxdesign/core/Button";
-import { TextInput } from "@astryxdesign/core/TextInput";
-import { NumberInput } from "@astryxdesign/core/NumberInput";
-import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
+import { FolderOpen, RotateCcw } from "lucide-react";
 import { useStore } from "../state/store";
 import type { Settings } from "../lib/types";
+import { Button, Modal, Toggle } from "./ui";
 
 const DEFAULTS: Settings = {
   ocrLangs: "vie+eng",
@@ -23,6 +19,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const saveSettings = useStore((s) => s.saveSettings);
   const setError = useStore((s) => s.setError);
   const [form, setForm] = useState<Settings>(current);
+  const [saving, setSaving] = useState(false);
 
   function set<K extends keyof Settings>(key: K, val: Settings[K]) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -42,38 +39,128 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   }
 
   async function onSave() {
-    await saveSettings(form);
-    onClose();
+    if (validation.length) return;
+    setSaving(true);
+    try {
+      await saveSettings(form);
+      onClose();
+    } catch {
+      // Store already exposes the backend error through the global alert.
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const validation: string[] = [];
+  if (!/^[a-z]{3}(?:\+[a-z]{3})*$/i.test(form.ocrLangs.trim())) {
+    validation.push("Ngôn ngữ OCR cần có dạng vie hoặc vie+eng.");
+  }
+  if (!form.audioLang.trim()) validation.push("Ngôn ngữ audio không được để trống.");
+  if (
+    !Number.isFinite(form.audioThreads) ||
+    form.audioThreads < 1 ||
+    form.audioThreads > 32
+  ) {
+    validation.push("Thread audio phải nằm trong khoảng 1–32.");
   }
 
   return (
-    <Dialog isOpen onOpenChange={(open: boolean) => !open && onClose()} width={520}>
-      <Layout
-        header={<DialogHeader title="Cài đặt convert" onOpenChange={(open: boolean) => !open && onClose()} />}
-        content={
-          <div className="settings-form">
-            <TextInput label="Ngôn ngữ OCR (ảnh / PDF scan)" value={form.ocrLangs} onChange={(v: string) => set("ocrLangs", v)} placeholder="vie+eng" />
-            <CheckboxInput label="OCR trang PDF dạng scan (ít/không có lớp text)" value={form.pdfOcr} onChange={(v: boolean) => set("pdfOcr", v)} />
-            <CheckboxInput label="OCR thêm ảnh nhúng trong trang PDF có text (chậm hơn)" value={form.pdfOcrImages} onChange={(v: boolean) => set("pdfOcrImages", v)} />
-            <div className="settings-grid">
-              <TextInput label="Ngôn ngữ audio" value={form.audioLang} onChange={(v: string) => set("audioLang", v)} />
-              <NumberInput label="Thread audio" value={form.audioThreads} onChange={(v: number) => set("audioThreads", v || 1)} min={1} max={32} />
-            </div>
-            <div className="settings-whisper">
-              <TextInput label="Model whisper (.bin) — để trống nếu không dùng audio" value={form.whisperModel ?? ""} onChange={(v: string) => set("whisperModel", v || null)} placeholder="đường dẫn tới ggml-*.bin" />
-              <Button label="Chọn…" variant="secondary" onClick={pickWhisper} />
-            </div>
+    <Modal
+      title="Cài đặt convert"
+      description="Cấu hình được lưu trên máy và áp dụng cho các job chưa bắt đầu cùng những job mới."
+      onClose={onClose}
+      width={520}
+      footer={
+        <>
+          <Button
+            variant="ghost"
+            icon={<RotateCcw size={14} />}
+            onClick={() => setForm(DEFAULTS)}
+          >
+            Khôi phục mặc định
+          </Button>
+          <span className="modal-footer-spacer" />
+          <Button variant="ghost" onClick={onClose}>
+            Hủy
+          </Button>
+          <Button
+            variant="primary"
+            loading={saving}
+            disabled={validation.length > 0}
+            onClick={onSave}
+          >
+            Lưu
+          </Button>
+        </>
+      }
+    >
+      <div className="settings-form">
+        <label className="field">
+          <span>Ngôn ngữ OCR (ảnh / PDF scan)</span>
+          <input
+            value={form.ocrLangs}
+            onChange={(event) => set("ocrLangs", event.target.value)}
+            placeholder="vie+eng"
+          />
+          <small>Có thể ghép các mã Tesseract bằng dấu “+”.</small>
+        </label>
+
+        <Toggle
+          checked={form.pdfOcr}
+          onChange={(checked) => set("pdfOcr", checked)}
+          label="OCR trang PDF dạng scan"
+          description="Dùng khi trang có ít hoặc không có lớp text."
+        />
+        <Toggle
+          checked={form.pdfOcrImages}
+          onChange={(checked) => set("pdfOcrImages", checked)}
+          label="OCR thêm ảnh nhúng"
+          description="Chính xác hơn cho trang trộn nhưng thời gian xử lý lâu hơn."
+        />
+
+        <div className="settings-grid">
+          <label className="field">
+            <span>Ngôn ngữ audio</span>
+            <input
+              value={form.audioLang}
+              onChange={(event) => set("audioLang", event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span>Thread audio</span>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={form.audioThreads}
+              onChange={(event) => set("audioThreads", Number(event.target.value))}
+            />
+          </label>
+        </div>
+
+        <div className="field">
+          <label htmlFor="whisper-model">Model Whisper (.bin)</label>
+          <div className="field-with-action">
+            <input
+              id="whisper-model"
+              value={form.whisperModel ?? ""}
+              onChange={(event) => set("whisperModel", event.target.value || null)}
+              placeholder="Để trống nếu không dùng audio"
+            />
+            <Button variant="secondary" icon={<FolderOpen size={14} />} onClick={pickWhisper}>
+              Chọn
+            </Button>
           </div>
-        }
-        footer={
-          <LayoutFooter hasDivider>
-            <div className="settings-actions">
-              <Button label="Hủy" variant="ghost" onClick={onClose} />
-              <Button label="Lưu" variant="primary" onClick={onSave} />
-            </div>
-          </LayoutFooter>
-        }
-      />
-    </Dialog>
+        </div>
+
+        {!!validation.length && (
+          <div className="form-errors" role="alert">
+            {validation.map((message) => (
+              <div key={message}>{message}</div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }

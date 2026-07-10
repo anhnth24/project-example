@@ -9,7 +9,7 @@
 //!   - Trong DATA: tạo folder thật → upload file vào → convert → ghi `.md` cạnh file gốc.
 //!   - Quy ước link 1-1: `report.pdf` -> `report.pdf.md`. Filesystem là nguồn sự thật.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
@@ -99,6 +99,69 @@ fn es<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+static TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Write through a same-directory temporary file, then replace the target.
+/// Unix replaces atomically; Windows uses a short-lived backup because
+/// `std::fs::rename` does not overwrite an existing file there.
+fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+
+    let parent = path.parent().ok_or("file đích không có thư mục cha")?;
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    let suffix = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), suffix));
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(es)?;
+    if let Err(error) = output
+        .write_all(contents)
+        .and_then(|_| output.sync_all())
+    {
+        drop(output);
+        let _ = fs::remove_file(&temp);
+        return Err(es(error));
+    }
+    drop(output);
+
+    match fs::rename(&temp, path) {
+        Ok(()) => Ok(()),
+        Err(_) if path.exists() => {
+            let backup = parent.join(format!(
+                ".{name}.{}.{}.backup",
+                std::process::id(),
+                suffix
+            ));
+            if let Err(error) = fs::rename(path, &backup) {
+                let _ = fs::remove_file(&temp);
+                return Err(es(error));
+            }
+            match fs::rename(&temp, path) {
+                Ok(()) => {
+                    let _ = fs::remove_file(backup);
+                    Ok(())
+                }
+                Err(error) => {
+                    let _ = fs::rename(&backup, path);
+                    let _ = fs::remove_file(&temp);
+                    Err(es(error))
+                }
+            }
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temp);
+            Err(es(error))
+        }
+    }
+}
+
 /// Đuôi file mà lõi convert hỗ trợ (suy từ `FormatKind::from_path`).
 const SUPPORTED_EXTS: &[&str] = &[
     "pdf", "docx", "pptx", "xlsx", "xls", "xlsb", "ods", "csv", "html", "htm", "png", "jpg",
@@ -121,11 +184,8 @@ fn load_config(config_dir: &Path) -> AppConfig {
 }
 
 fn save_config(config_dir: &Path, cfg: &AppConfig) -> Result<(), String> {
-    fs::write(
-        config_file(config_dir),
-        serde_json::to_string_pretty(cfg).map_err(es)?,
-    )
-    .map_err(es)
+    let json = serde_json::to_string_pretty(cfg).map_err(es)?;
+    atomic_write(&config_file(config_dir), json.as_bytes())
 }
 
 /// Ghép `rel` vào trong `root` an toàn (chặn `..`, đường dẫn tuyệt đối).
@@ -133,7 +193,15 @@ fn resolve_within(root: &Path, rel: &str) -> Result<PathBuf, String> {
     let mut p = root.to_path_buf();
     for comp in Path::new(rel).components() {
         match comp {
-            Component::Normal(c) => p.push(c),
+            Component::Normal(c) => {
+                p.push(c);
+                if fs::symlink_metadata(&p)
+                    .map(|meta| meta.file_type().is_symlink())
+                    .unwrap_or(false)
+                {
+                    return Err("đường dẫn qua symlink không được phép".into());
+                }
+            }
             Component::CurDir => {}
             _ => return Err("đường dẫn không hợp lệ".into()),
         }
@@ -160,6 +228,19 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn child_case_insensitive(parent: &Path, name: &str) -> Option<PathBuf> {
+    fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(name)
+        })
+        .map(|entry| entry.path())
+}
+
 /// Dựng cây thư mục đệ quy. Bỏ qua mục ẩn. File `.md` là md-liên-kết của một file
 /// gốc cùng tên thì KHÔNG hiện riêng (gắn vào node của file gốc).
 fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
@@ -171,14 +252,18 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
             continue;
         }
         let p = e.path();
-        let is_dir = p.is_dir();
+        let meta = fs::symlink_metadata(&p).map_err(es)?;
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let is_dir = meta.is_dir();
         entries.push((name, p, is_dir));
     }
 
-    let file_names: HashSet<String> = entries
+    let files_by_name: HashMap<String, PathBuf> = entries
         .iter()
         .filter(|(_, _, d)| !d)
-        .map(|(n, _, _)| n.clone())
+        .map(|(name, path, _)| (name.to_ascii_lowercase(), path.clone()))
         .collect();
 
     let mut children: Vec<Node> = Vec::new();
@@ -190,7 +275,7 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".md") {
             let base = &name[..name.len() - 3];
-            if file_names.contains(base) {
+            if files_by_name.contains_key(&base.to_ascii_lowercase()) {
                 continue; // md liên kết -> bỏ qua, thể hiện qua file gốc.
             }
             let rel = rel_of(root, path);
@@ -208,11 +293,9 @@ fn build_tree(abs: &Path, root: &Path) -> Result<Node, String> {
             let kind = FormatKind::from_path(path);
             let supported = kind != FormatKind::Unknown;
             let md_name = format!("{name}.md");
-            let md_rel = if file_names.contains(&md_name) {
-                Some(rel_of(root, &path.with_file_name(&md_name)))
-            } else {
-                None
-            };
+            let md_rel = files_by_name
+                .get(&md_name.to_ascii_lowercase())
+                .map(|md_path| rel_of(root, md_path));
             children.push(Node {
                 name: name.clone(),
                 rel_path: rel_of(root, path),
@@ -263,8 +346,87 @@ fn convert_and_write_md(opts: ConverterOptions, source: PathBuf) -> Result<PathB
     let result = conv
         .convert_path(&source)
         .map_err(|e| format!("convert thất bại: {e}"))?;
-    fs::write(&md_path, result.markdown).map_err(es)?;
+    atomic_write(&md_path, result.markdown.as_bytes())?;
     Ok(md_path)
+}
+
+/// Validate and copy one source file into a folder inside DATA.
+///
+/// Conversion is intentionally separate so the desktop UI can show the copied
+/// file immediately and process expensive conversions through its background
+/// queue.
+fn copy_import_source(root: &Path, folder_rel: &str, source_abs: &str) -> Result<PathBuf, String> {
+    let source = PathBuf::from(source_abs);
+    if FormatKind::from_path(&source) == FormatKind::Unknown {
+        return Err(format!(
+            "định dạng không hỗ trợ: chỉ nhận {}",
+            SUPPORTED_EXTS.join(", ")
+        ));
+    }
+    let file_name = source
+        .file_name()
+        .ok_or("file nguồn không hợp lệ")?
+        .to_string_lossy()
+        .to_string();
+    let folder = resolve_within(root, folder_rel)?;
+    fs::create_dir_all(&folder).map_err(es)?;
+    let dest = folder.join(&file_name);
+    if child_case_insensitive(&folder, &file_name).is_some() {
+        return Err(format!("đã tồn tại file '{file_name}' trong thư mục"));
+    }
+    if child_case_insensitive(&folder, &format!("{file_name}.md")).is_some() {
+        return Err(format!(
+            "đã tồn tại file Markdown '{file_name}.md'; không thể tự động ghép đè"
+        ));
+    }
+    use std::sync::atomic::Ordering;
+    let suffix = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = folder.join(format!(
+        ".{file_name}.{}.{}.import",
+        std::process::id(),
+        suffix
+    ));
+    let mut input = fs::File::open(&source).map_err(es)?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(es)?;
+    let copy_result =
+        std::io::copy(&mut input, &mut output).and_then(|_| output.sync_all());
+    drop(output);
+    if let Err(error) = copy_result {
+        let _ = fs::remove_file(&temp);
+        return Err(es(error));
+    }
+    // Re-check after the potentially long copy, then reserve the exact target
+    // name so another import cannot win before the final rename.
+    if child_case_insensitive(&folder, &file_name).is_some()
+        || child_case_insensitive(&folder, &format!("{file_name}.md")).is_some()
+    {
+        let _ = fs::remove_file(&temp);
+        return Err(format!(
+            "file '{file_name}' hoặc Markdown liên kết đã xuất hiện trong lúc import"
+        ));
+    }
+    let reservation = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&dest)
+        .map_err(|error| {
+            let _ = fs::remove_file(&temp);
+            es(error)
+        })?;
+    drop(reservation);
+    if let Err(first_error) = fs::rename(&temp, &dest) {
+        // Windows cannot replace the empty reservation with rename().
+        let _ = fs::remove_file(&dest);
+        if let Err(error) = fs::rename(&temp, &dest) {
+            let _ = fs::remove_file(&temp);
+            return Err(es(format!("{first_error}; {error}")));
+        }
+    }
+    Ok(dest)
 }
 
 fn data_root(state: &AppState) -> PathBuf {
@@ -289,13 +451,11 @@ fn set_data_root(state: State<AppState>, path: String) -> Result<String, String>
     let dir = PathBuf::from(&path);
     fs::create_dir_all(&dir).map_err(es)?;
     let abs = fs::canonicalize(&dir).map_err(es)?;
-    {
-        let mut dr = state.data_root.lock().map_err(|_| "lock lỗi")?;
-        *dr = abs.clone();
-    }
+    let mut dr = state.data_root.lock().map_err(|_| "lock lỗi")?;
     let mut cfg = load_config(&state.config_dir);
     cfg.data_root = Some(abs.to_string_lossy().to_string());
     save_config(&state.config_dir, &cfg)?;
+    *dr = abs.clone();
     Ok(abs.to_string_lossy().to_string())
 }
 
@@ -310,11 +470,18 @@ fn read_tree(state: State<AppState>) -> Result<Node, String> {
 fn create_folder(state: State<AppState>, parent_rel: String, name: String) -> Result<(), String> {
     validate_name(&name)?;
     let root = data_root(&state);
-    let target = resolve_within(&root, &parent_rel)?.join(&name);
-    if target.exists() {
+    let parent = resolve_within(&root, &parent_rel)?;
+    if child_case_insensitive(&parent, &name).is_some() {
         return Err("thư mục đã tồn tại".into());
     }
-    fs::create_dir_all(&target).map_err(es)
+    let target = parent.join(&name);
+    fs::create_dir(&target).map_err(|error| {
+        if fs::symlink_metadata(&target).is_ok() {
+            "thư mục đã tồn tại".to_string()
+        } else {
+            es(error)
+        }
+    })
 }
 
 #[tauri::command]
@@ -332,10 +499,32 @@ fn create_markdown(
         format!("{name}.md")
     };
     let target = parent.join(&file_name);
-    if target.exists() {
+    if child_case_insensitive(&parent, &file_name).is_some() {
         return Err("file đã tồn tại".into());
     }
-    fs::write(&target, format!("# {}\n", name.trim_end_matches(".md"))).map_err(es)?;
+    let base_name = &file_name[..file_name.len() - 3];
+    if child_case_insensitive(&parent, base_name).is_some() {
+        return Err(format!(
+            "đã có file nguồn '{base_name}'; hãy convert file đó thay vì tạo Markdown trùng cặp"
+        ));
+    }
+    let create_result = {
+        use std::io::Write;
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target)
+            .map_err(es)?;
+        let result = output
+            .write_all(format!("# {base_name}\n").as_bytes())
+            .and_then(|_| output.sync_all());
+        drop(output);
+        result
+    };
+    if let Err(error) = create_result {
+        let _ = fs::remove_file(&target);
+        return Err(es(error));
+    }
     let rel = rel_of(&root, &target);
     Ok(Node {
         name: file_name,
@@ -359,7 +548,7 @@ fn rename_node(state: State<AppState>, rel_path: String, new_name: String) -> Re
     }
     let parent = src.parent().ok_or("không có thư mục cha")?;
     let dst = parent.join(&new_name);
-    if dst.exists() {
+    if child_case_insensitive(parent, &new_name).is_some() {
         return Err("tên đích đã tồn tại".into());
     }
     let old_name = src
@@ -367,13 +556,27 @@ fn rename_node(state: State<AppState>, rel_path: String, new_name: String) -> Re
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let is_md = old_name.to_ascii_lowercase().ends_with(".md");
+    let mut paired_rename: Option<(PathBuf, PathBuf)> = None;
     if src.is_file() && !is_md {
-        let old_md = parent.join(format!("{old_name}.md"));
-        if old_md.exists() {
-            fs::rename(&old_md, parent.join(format!("{new_name}.md"))).map_err(es)?;
+        if let Some(old_md) = child_case_insensitive(parent, &format!("{old_name}.md")) {
+            let new_md = parent.join(format!("{new_name}.md"));
+            if child_case_insensitive(parent, &format!("{new_name}.md")).is_some() {
+                return Err(format!(
+                    "đã tồn tại Markdown liên kết '{}.md'",
+                    new_name
+                ));
+            }
+            paired_rename = Some((old_md, new_md));
         }
     }
-    fs::rename(&src, &dst).map_err(es)
+    fs::rename(&src, &dst).map_err(es)?;
+    if let Some((old_md, new_md)) = paired_rename {
+        if let Err(error) = fs::rename(&old_md, &new_md) {
+            let _ = fs::rename(&dst, &src);
+            return Err(es(error));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -394,12 +597,46 @@ fn delete_node(state: State<AppState>, rel_path: String) -> Result<(), String> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     if !name.to_ascii_lowercase().ends_with(".md") {
-        let md = target.with_file_name(format!("{name}.md"));
-        if md.exists() {
+        if let Some(md) = child_case_insensitive(
+            target.parent().ok_or("không có thư mục cha")?,
+            &format!("{name}.md"),
+        ) {
             let _ = fs::remove_file(&md);
         }
     }
     fs::remove_file(&target).map_err(es)
+}
+
+/// Import nhanh: chỉ copy vào DATA, chưa convert. UI sẽ đưa file vào hàng đợi
+/// và gọi `reconvert` ở background.
+#[tauri::command]
+async fn import_file_only(
+    state: State<'_, AppState>,
+    folder_rel: String,
+    source_abs: String,
+) -> Result<Node, String> {
+    let root = data_root(&state);
+    let root_for_copy = root.clone();
+    let dest = tauri::async_runtime::spawn_blocking(move || {
+        copy_import_source(&root_for_copy, &folder_rel, &source_abs)
+    })
+    .await
+    .map_err(es)??;
+    let file_name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or("file nguồn không hợp lệ")?;
+    let kind = FormatKind::from_path(&dest);
+    Ok(Node {
+        name: file_name,
+        rel_path: rel_of(&root, &dest),
+        is_dir: false,
+        kind: kind.as_str().into(),
+        supported: true,
+        md_rel_path: None,
+        standalone_md: false,
+        children: vec![],
+    })
 }
 
 #[tauri::command]
@@ -409,27 +646,17 @@ async fn import_file(
     source_abs: String,
 ) -> Result<Node, String> {
     let root = data_root(&state);
-    let source = PathBuf::from(&source_abs);
-
-    if FormatKind::from_path(&source) == FormatKind::Unknown {
-        return Err(format!(
-            "định dạng không hỗ trợ: chỉ nhận {}",
-            SUPPORTED_EXTS.join(", ")
-        ));
-    }
-    let file_name = source
+    let root_for_copy = root.clone();
+    let dest = tauri::async_runtime::spawn_blocking(move || {
+        copy_import_source(&root_for_copy, &folder_rel, &source_abs)
+    })
+    .await
+    .map_err(es)??;
+    let file_name = dest
         .file_name()
         .ok_or("file nguồn không hợp lệ")?
         .to_string_lossy()
         .to_string();
-
-    let folder = resolve_within(&root, &folder_rel)?;
-    fs::create_dir_all(&folder).map_err(es)?;
-    let dest = folder.join(&file_name);
-    if dest.exists() {
-        return Err(format!("đã tồn tại file '{file_name}' trong thư mục"));
-    }
-    fs::copy(&source, &dest).map_err(es)?;
 
     let opts = state.settings.lock().map_err(|_| "lock lỗi")?.to_options();
     let dest_for_conv = dest.clone();
@@ -487,7 +714,15 @@ fn write_text_file(
     content: String,
 ) -> Result<(), String> {
     let p = resolve_within(&data_root(&state), &rel_path)?;
-    fs::write(&p, content).map_err(es)
+    if !p.is_file()
+        || p.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| !ext.eq_ignore_ascii_case("md"))
+            .unwrap_or(true)
+    {
+        return Err("chỉ được ghi file Markdown hiện có trong DATA".into());
+    }
+    atomic_write(&p, content.as_bytes())
 }
 
 #[derive(Debug, Serialize)]
@@ -552,15 +787,25 @@ fn get_settings(state: State<AppState>) -> Settings {
 
 #[tauri::command]
 fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
-    {
-        let mut s = state.settings.lock().map_err(|_| "lock lỗi")?;
-        *s = settings.clone();
+    let valid_ocr = !settings.ocr_langs.trim().is_empty()
+        && settings
+            .ocr_langs
+            .split('+')
+            .all(|lang| lang.len() == 3 && lang.bytes().all(|byte| byte.is_ascii_alphabetic()));
+    if !valid_ocr {
+        return Err("ngôn ngữ OCR cần có dạng vie hoặc vie+eng".into());
     }
-    fs::write(
-        settings_file(&state.config_dir),
-        serde_json::to_string_pretty(&settings).map_err(es)?,
-    )
-    .map_err(es)
+    if settings.audio_lang.trim().is_empty() {
+        return Err("ngôn ngữ audio không được để trống".into());
+    }
+    if !(1..=32).contains(&settings.audio_threads) {
+        return Err("thread audio phải nằm trong khoảng 1–32".into());
+    }
+    let mut current = state.settings.lock().map_err(|_| "lock lỗi")?;
+    let json = serde_json::to_string_pretty(&settings).map_err(es)?;
+    atomic_write(&settings_file(&state.config_dir), json.as_bytes())?;
+    *current = settings;
+    Ok(())
 }
 
 // ───────────────────────────── Bootstrap ─────────────────────────────
@@ -603,6 +848,7 @@ pub fn run() {
             create_markdown,
             rename_node,
             delete_node,
+            import_file_only,
             import_file,
             reconvert,
             read_text_file,
@@ -679,5 +925,65 @@ mod tests {
         assert!(tree.children[0].is_dir);
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn copy_import_source_is_deferred_and_rejects_duplicates() {
+        let base = temp_dir();
+        let root = base.join("DATA");
+        fs::create_dir_all(&root).unwrap();
+        let source = base.join("report.pdf");
+        fs::write(&source, b"%PDF deferred import").unwrap();
+
+        let copied =
+            copy_import_source(&root, "incoming", source.to_str().unwrap()).unwrap();
+        assert_eq!(copied, root.join("incoming/report.pdf"));
+        assert!(copied.exists());
+        assert!(!root.join("incoming/report.pdf.md").exists());
+
+        let duplicate = copy_import_source(&root, "incoming", source.to_str().unwrap());
+        assert!(duplicate.is_err());
+
+        fs::remove_file(&copied).unwrap();
+        fs::write(root.join("incoming/report.pdf.MD"), b"# standalone").unwrap();
+        let paired_conflict = copy_import_source(&root, "incoming", source.to_str().unwrap());
+        assert!(paired_conflict.is_err());
+        assert!(!copied.exists());
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn atomic_write_replaces_complete_markdown() {
+        let root = temp_dir();
+        let path = root.join("report.md");
+        atomic_write(&path, b"# first").unwrap();
+        atomic_write(&path, b"# second\n\nNoi dung").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# second\n\nNoi dung");
+        assert_eq!(
+            fs::read_dir(&root)
+                .unwrap()
+                .filter_map(Result::ok)
+                .count(),
+            1
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_within_rejects_symlink_components() {
+        use std::os::unix::fs::symlink;
+
+        let base = temp_dir();
+        let root = base.join("DATA");
+        let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+
+        assert!(resolve_within(&root, "escape/file.md").is_err());
+        fs::remove_dir_all(&base).ok();
     }
 }

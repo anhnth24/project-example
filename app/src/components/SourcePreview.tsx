@@ -1,15 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { FileQuestion, ExternalLink, Loader2, FileWarning } from "lucide-react";
-import { Button } from "@astryxdesign/core/Button";
-import { Banner } from "@astryxdesign/core/Banner";
-import { TabList, Tab } from "@astryxdesign/core/TabList";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { renderAsync } from "docx-preview";
 import * as XLSX from "@e965/xlsx";
 import { api } from "../lib/ipc";
 import type { FsNode } from "../lib/types";
+import { Button, Notice } from "./ui";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -111,8 +109,16 @@ function BigGuard({
         File khá lớn (<b>{humanSize(size)}</b>). Render trong app có thể chậm hoặc tốn bộ nhớ.
       </p>
       <div className="guard-actions">
-        <Button label="Vẫn xem trong app" variant="ghost" onClick={onForce} />
-        <Button label="Mở bằng app ngoài" variant="primary" icon={<ExternalLink size={15} />} onClick={() => openExternal(relPath, onErr)} />
+        <Button variant="ghost" onClick={onForce}>
+          Vẫn xem trong app
+        </Button>
+        <Button
+          variant="primary"
+          icon={<ExternalLink size={15} />}
+          onClick={() => openExternal(relPath, onErr)}
+        >
+          Mở bằng app ngoài
+        </Button>
       </div>
     </div>
   );
@@ -178,11 +184,20 @@ function TextPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) =
     <div className="preview text-preview">
       {data.truncated && (
         <div className="preview-banner-wrap">
-          <Banner
-            status="warning"
-            title={`File lớn (${humanSize(data.size)}) — chỉ hiển thị ${humanSize(TEXT_CAP)} đầu.`}
-            endContent={<Button label="Mở ngoài" variant="ghost" size="sm" onClick={() => openExternal(relPath, onErr)} />}
-          />
+          <Notice
+            tone="warning"
+            action={
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => openExternal(relPath, onErr)}
+              >
+                Mở ngoài
+              </Button>
+            }
+          >
+            File lớn ({humanSize(data.size)}) — chỉ hiển thị {humanSize(TEXT_CAP)} đầu.
+          </Notice>
         </div>
       )}
       <pre>{data.text}</pre>
@@ -367,20 +382,37 @@ function ExcelPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) 
     <div className="preview excel-wrap">
       {sheets.length > 1 && (
         <div className="sheet-tabs">
-          <TabList value={String(active)} onChange={(v: string) => setActive(Number(v))} size="sm">
+          <div className="segmented-control" aria-label="Sheet Excel">
             {sheets.map((s, i) => (
-              <Tab key={s.name} value={String(i)} label={s.name} />
+              <button
+                type="button"
+                aria-pressed={active === i}
+                className={active === i ? "active" : ""}
+                key={s.name}
+                onClick={() => setActive(i)}
+              >
+                {s.name}
+              </button>
             ))}
-          </TabList>
+          </div>
         </div>
       )}
       {cur.capped > 0 && (
         <div className="preview-banner-wrap">
-          <Banner
-            status="warning"
-            title={`Sheet lớn (${cur.capped} dòng) — chỉ hiển thị ${XLSX_ROW_CAP} dòng đầu.`}
-            endContent={<Button label="Mở ngoài" variant="ghost" size="sm" onClick={() => openExternal(relPath, onErr)} />}
-          />
+          <Notice
+            tone="warning"
+            action={
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => openExternal(relPath, onErr)}
+              >
+                Mở ngoài
+              </Button>
+            }
+          >
+            Sheet lớn ({cur.capped} dòng) — chỉ hiển thị {XLSX_ROW_CAP} dòng đầu.
+          </Notice>
         </div>
       )}
       <div className="excel-table" dangerouslySetInnerHTML={{ __html: cur.html }} />
@@ -396,7 +428,13 @@ function BinaryFallback({ node, onErr }: { node: FsNode; onErr: (e: string) => v
         Chưa xem trước trực tiếp được <b>.{node.kind}</b> trong app.
       </p>
       <p className="muted">Đối chiếu bản Markdown bên phải, hoặc mở file gốc.</p>
-      <Button label="Mở file gốc" variant="ghost" icon={<ExternalLink size={15} />} onClick={() => openExternal(node.relPath, onErr)} />
+      <Button
+        variant="ghost"
+        icon={<ExternalLink size={15} />}
+        onClick={() => openExternal(node.relPath, onErr)}
+      >
+        Mở file gốc
+      </Button>
     </div>
   );
 }

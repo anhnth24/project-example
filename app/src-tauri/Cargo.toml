@@ -5,7 +5,7 @@ description = "Desktop app (Tauri) cho BA/PM soạn tài liệu cho Dev — conv
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-rust-version = "1.80"
+rust-version = "1.88"
 
 # Tauri 2: lib (mobile-ready) + bin desktop.
 [lib]
@@ -20,7 +20,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
