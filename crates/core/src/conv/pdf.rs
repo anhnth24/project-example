@@ -55,6 +55,11 @@ pub fn to_markdown(
         }
     }
     // 3) Cuối cùng: pdf-extract (không hỗ trợ lọc trang).
+    if pages.is_some() {
+        return Err(fail(
+            "không thể trích đúng các trang đã chọn (pdf-inspector/PDFium thất bại)",
+        ));
+    }
     extract_with_pdf_extract(&bytes)
 }
 
@@ -77,8 +82,13 @@ fn via_pdf_inspector(
     .ok()?
     .ok()?;
 
-    let need_pdfium = !res.pages_with_tables.is_empty()
-        || (ocr_enabled && (ocr_images || res.pages.iter().any(|p| p.needs_ocr)));
+    let has_malformed_tables = res
+        .pages
+        .iter()
+        .any(|page| markdown_has_malformed_table(&page.markdown));
+    let need_pdfium = has_malformed_tables
+        || res.pages.iter().any(|page| page.needs_ocr)
+        || (ocr_enabled && ocr_images);
 
     PDFIUM.with(|opt| -> Option<String> {
         // Chỉ mở PDFium khi thật sự cần (OCR trang scan hoặc OCR ảnh nhúng).
@@ -90,33 +100,42 @@ fn via_pdf_inspector(
         };
 
         let mut page_chunks: Vec<String> = Vec::with_capacity(res.pages.len());
+        let mut unresolved_page = false;
         for pm in &res.pages {
             let has_text = !pm.markdown.trim().is_empty();
             let mut page_out = String::new();
 
-            if pm.needs_ocr && ocr_enabled {
+            if pm.needs_ocr {
                 // `pdf-inspector` intentionally errs on the side of OCR when
                 // *any* GID/symbol font is present. Real Word-exported PDFs can
                 // therefore be flagged because of one logo/bullet font even
                 // though PDFium decodes the main text perfectly. Prefer that
                 // native text when it passes a conservative quality gate;
                 // only render + OCR genuinely empty/garbled pages.
-                let native_text = pdf_doc
-                    .as_ref()
-                    .and_then(|d| native_page_text_at(d, pm.page))
-                    .filter(|text| native_text_is_trustworthy(text));
+                let native_text = pm.ocr_reason.is_none().then(|| {
+                    pdf_doc
+                        .as_ref()
+                        .and_then(|d| native_page_text_at(d, pm.page))
+                        .filter(|text| native_text_is_trustworthy(text))
+                });
 
-                if let Some(text) = native_text {
+                if let Some(text) = native_text.flatten() {
                     page_out.push_str(text.trim_end());
-                } else if let Some(text) = pdf_doc
-                    .as_ref()
-                    .and_then(|d| ocr_page_at(d, pm.page, langs))
+                } else if let Some(text) = ocr_enabled
+                    .then(|| {
+                        pdf_doc
+                            .as_ref()
+                            .and_then(|d| ocr_page_at(d, pm.page, langs))
+                    })
+                    .flatten()
                 {
                     page_out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", pm.page + 1));
                     page_out.push_str(text.trim());
                 } else if has_text {
                     // Không OCR được (thiếu lib…) → tạm dùng text-layer dù kém.
                     page_out.push_str(pm.markdown.trim_end());
+                } else {
+                    unresolved_page = true;
                 }
             } else if has_text {
                 // Trang có text tốt → dùng markdown cấu trúc của pdf-inspector.
@@ -127,7 +146,10 @@ fn via_pdf_inspector(
                         pdf_doc
                             .as_ref()
                             .and_then(|d| native_page_text_at(d, pm.page))
-                            .filter(|text| native_text_is_trustworthy(text))
+                            .filter(|text| {
+                                native_text_is_trustworthy(text)
+                                    && native_text_covers_markdown(text, &pm.markdown)
+                            })
                     })
                     .flatten();
                 if let Some(text) = native_table_fallback {
@@ -155,6 +177,9 @@ fn via_pdf_inspector(
             page_chunks.push(page_out);
         }
 
+        if unresolved_page {
+            return None;
+        }
         strip_repeated_marginal_lines(&mut page_chunks);
         let out = page_chunks
             .into_iter()
@@ -210,6 +235,8 @@ fn native_text_is_trustworthy(text: &str) -> bool {
             || ch == '\0'
             || ch.is_control()
             || ('\u{E000}'..='\u{F8FF}').contains(&ch)
+            || ('\u{F0000}'..='\u{FFFFD}').contains(&ch)
+            || ('\u{100000}'..='\u{10FFFD}').contains(&ch)
         {
             bad += 1;
         }
@@ -235,6 +262,12 @@ fn native_text_is_trustworthy(text: &str) -> bool {
     // TOC pages can legitimately be dominated by dotted leaders; 20% still
     // requires substantial readable content while allowing those pages.
     word_like >= 8 && alphanumeric * 100 >= nonspace * 20
+}
+
+fn native_text_covers_markdown(native: &str, markdown: &str) -> bool {
+    let native_alnum = native.chars().filter(|ch| ch.is_alphanumeric()).count();
+    let markdown_alnum = markdown.chars().filter(|ch| ch.is_alphanumeric()).count();
+    markdown_alnum == 0 || native_alnum * 100 >= markdown_alnum * 90
 }
 
 fn table_cells(line: &str) -> Option<Vec<&str>> {
@@ -276,15 +309,19 @@ fn markdown_has_malformed_table(markdown: &str) -> bool {
             continue;
         }
         let separator = table_cells(lines[index + 1]).unwrap_or_default();
+        let empty_headers = header.iter().filter(|cell| cell.is_empty()).count();
+        let joined_header = header.join(" ").to_lowercase();
         if header.len() < 2
             || header.len() != separator.len()
-            || header.iter().any(|cell| cell.is_empty())
+            || empty_headers >= 2
+            || (empty_headers > 0
+                && (joined_header.contains("mã hiệu")
+                    || joined_header.contains("lần ban hành")
+                    || joined_header.contains("ngày hiệu lực")))
         {
             return true;
         }
 
-        let mut total_cells = header.len();
-        let mut empty_cells = 0usize;
         for row in lines
             .iter()
             .skip(index + 2)
@@ -296,20 +333,24 @@ fn markdown_has_malformed_table(markdown: &str) -> bool {
             if cells.len() != header.len() {
                 return true;
             }
-            total_cells += cells.len();
-            empty_cells += cells.iter().filter(|cell| cell.is_empty()).count();
-        }
-        if empty_cells * 4 > total_cells {
-            return true;
         }
     }
     false
 }
 
 fn normalized_margin_line(line: &str) -> Option<String> {
-    let normalized = line
+    use unicode_normalization::UnicodeNormalization;
+
+    let trimmed = line.trim();
+    if trimmed.starts_with('|') || trimmed.starts_with("```") || is_table_separator(trimmed) {
+        return None;
+    }
+    let filtered = trimmed
         .chars()
         .filter(|ch| !matches!(ch, '#' | '*' | '_' | '`'))
+        .collect::<String>();
+    let normalized = filtered
+        .nfc()
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -326,8 +367,8 @@ fn margin_indices(lines: &[&str]) -> HashSet<usize> {
         .collect();
     nonempty
         .iter()
-        .take(8)
-        .chain(nonempty.iter().rev().take(4))
+        .take(5)
+        .chain(nonempty.iter().rev().take(3))
         .copied()
         .collect()
 }
@@ -341,11 +382,13 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
     }
 
     let mut candidates: HashSet<String> = HashSet::new();
-    let normalized_pages: Vec<String> = pages
+    let normalized_margins: Vec<String> = pages
         .iter()
         .map(|page| {
-            page.lines()
-                .filter_map(normalized_margin_line)
+            let lines: Vec<&str> = page.lines().collect();
+            margin_indices(&lines)
+                .into_iter()
+                .filter_map(|index| normalized_margin_line(lines[index]))
                 .collect::<Vec<_>>()
                 .join(" ")
         })
@@ -363,9 +406,9 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
     let repeated: Vec<String> = candidates
         .into_iter()
         .filter(|line| {
-            normalized_pages
+            normalized_margins
                 .iter()
-                .filter(|page| page.contains(line))
+                .filter(|margin| margin.contains(line))
                 .count()
                 >= threshold
         })
@@ -531,7 +574,8 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        markdown_has_malformed_table, native_text_is_trustworthy, strip_repeated_marginal_lines,
+        markdown_has_malformed_table, native_text_covers_markdown, native_text_is_trustworthy,
+        strip_repeated_marginal_lines,
     };
 
     #[test]
@@ -549,9 +593,14 @@ mod tests {
     #[test]
     fn rejects_short_or_broken_native_text() {
         assert!(!native_text_is_trustworthy("Mã hiệu: 123"));
-        assert!(!native_text_is_trustworthy(
-            "(cid:123) (cid:99) /GID12 \u{FFFD}\u{FFFD}\u{FFFD} broken text"
-        ));
+        let cid_garbage = "(cid:123) readable looking words repeated many times ".repeat(20);
+        assert!(!native_text_is_trustworthy(&cid_garbage));
+        let private_use = format!(
+            "{} {}",
+            '\u{F0000}'.to_string().repeat(4),
+            "This otherwise readable page contains many normal words and sentences. ".repeat(8)
+        );
+        assert!(!native_text_is_trustworthy(&private_use));
     }
 
     #[test]
@@ -574,10 +623,28 @@ mod tests {
             | Curious | là cấp | nội dung | chuyển cấp |  |";
         assert!(markdown_has_malformed_table(empty_header));
 
+        let valid_sparse = "|  | Quý 1 | Quý 2 |\n\
+            | --- | --- | --- |\n\
+            | Doanh thu |  | 100 |";
+        assert!(!markdown_has_malformed_table(valid_sparse));
+
         let mismatched = "| Tên | Mô tả |\n\
             | --- | --- |\n\
             | CASAN | Khung năng lực | Dư cột |";
         assert!(markdown_has_malformed_table(mismatched));
+    }
+
+    #[test]
+    fn native_fallback_must_cover_structured_content() {
+        assert!(native_text_covers_markdown(
+            "CASAN là khung năng lực chuyển đổi trí tuệ nhân tạo cho doanh nghiệp.",
+            "## CASAN\n\nCASAN là khung năng lực chuyển đổi trí tuệ nhân tạo."
+        ));
+        assert!(!native_text_covers_markdown(
+            "CASAN có nội dung ngắn.",
+            "## CASAN\n\nCASAN là khung năng lực chuyển đổi trí tuệ nhân tạo với rất nhiều \
+             nội dung chi tiết không được phép biến mất khi fallback."
+        ));
     }
 
     #[test]
@@ -611,5 +678,23 @@ mod tests {
                 "trang {}",
                 ["một", "hai", "ba", "bốn", "năm"][index]
             ))));
+    }
+
+    #[test]
+    fn repeated_table_headers_are_not_stripped() {
+        let mut pages = (1..=5)
+            .map(|page| {
+                format!(
+                    "| Chỉ tiêu | Giá trị |\n| --- | --- |\n| Trang {page} | {page}00 |\nNội dung {page}"
+                )
+            })
+            .collect::<Vec<_>>();
+
+        strip_repeated_marginal_lines(&mut pages);
+
+        assert!(pages
+            .iter()
+            .all(|page| page.contains("| Chỉ tiêu | Giá trị |")));
+        assert!(pages.iter().all(|page| page.contains("| --- | --- |")));
     }
 }
