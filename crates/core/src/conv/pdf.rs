@@ -119,7 +119,7 @@ struct FastPages {
     pages_needing_ocr: HashSet<u32>,
 }
 
-fn extract_fast_pages(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
+fn extract_fast_pages_once(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
     let mut markdown_options = pdf_inspector::MarkdownOptions::default();
     markdown_options.include_page_numbers = true;
     // Keep headers in each marked chunk so our page-aware cleanup can also
@@ -138,13 +138,32 @@ fn extract_fast_pages(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
         return None;
     }
     let chunks = parse_marked_pages(&marked);
-    if selected.iter().any(|page| !chunks.contains_key(page)) {
-        return None;
-    }
     Some(FastPages {
         chunks,
         pages_needing_ocr: result.pages_needing_ocr.into_iter().collect(),
     })
+}
+
+fn extract_fast_pages(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
+    let mut extracted = extract_fast_pages_once(bytes, selected)?;
+    let missing: Vec<u32> = selected
+        .iter()
+        .copied()
+        .filter(|page| !extracted.chunks.contains_key(page))
+        .collect();
+    // Multi-page table insertion in pdf-inspector 0.1.3 can omit a page marker
+    // for table-only pages. Recover only those pages individually instead of
+    // discarding the entire fast path.
+    for page in missing {
+        let mut single = extract_fast_pages_once(bytes, &[page])?;
+        let text = single.chunks.remove(&page)?;
+        extracted.chunks.insert(page, text);
+        extracted.pages_needing_ocr.extend(single.pages_needing_ocr);
+    }
+    selected
+        .iter()
+        .all(|page| extracted.chunks.contains_key(page))
+        .then_some(extracted)
 }
 
 fn finalize_fast_pages(
