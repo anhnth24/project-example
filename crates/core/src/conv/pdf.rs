@@ -273,7 +273,7 @@ fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Option<String> 
     let (parts, native_pages) = std::thread::scope(|scope| {
         let handles: Vec<_> = ranges
             .iter()
-            .map(|range| scope.spawn(|| extract_fast_pages(bytes, range)))
+            .map(|range| scope.spawn(|| extract_fast_pages_once(bytes, range)))
             .collect();
         // Run PDFium on the caller thread so its thread-local instance remains
         // cached for subsequent desktop conversions.
@@ -297,6 +297,51 @@ fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Option<String> 
         }
         merged.pages_needing_ocr.extend(part.pages_needing_ocr);
     }
+
+    let mut recover: Vec<u32> = selected
+        .iter()
+        .copied()
+        .filter(|page| {
+            !merged.chunks.contains_key(page)
+                || merged
+                    .chunks
+                    .get(page)
+                    .is_some_and(|text| markdown_has_malformed_table(text))
+        })
+        .collect();
+    recover.sort_unstable();
+    if !recover.is_empty() {
+        let recovery_workers = workers.min(recover.len());
+        let recovery_chunk = recover.len().div_ceil(recovery_workers);
+        let recovered = std::thread::scope(|scope| {
+            let handles: Vec<_> = recover
+                .chunks(recovery_chunk)
+                .map(|group| {
+                    scope.spawn(|| {
+                        group
+                            .iter()
+                            .map(|&page| {
+                                let mut single = extract_fast_pages_once(bytes, &[page])?;
+                                let text = single.chunks.remove(&page)?;
+                                Some((page, text, single.pages_needing_ocr))
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().ok().flatten())
+                .collect::<Option<Vec<Vec<_>>>>()
+        })?;
+        for group in recovered {
+            for (page, text, pages_needing_ocr) in group {
+                merged.chunks.insert(page, text);
+                merged.pages_needing_ocr.extend(pages_needing_ocr);
+            }
+        }
+    }
+
     if merged.chunks.len() != selected.len() {
         return None;
     }
