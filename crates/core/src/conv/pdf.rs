@@ -207,7 +207,9 @@ fn native_text_is_trustworthy(text: &str) -> bool {
         .split_whitespace()
         .filter(|token| token.chars().filter(|ch| ch.is_alphabetic()).count() >= 2)
         .count();
-    word_like >= 8 && alphanumeric * 100 >= nonspace * 30
+    // TOC pages can legitimately be dominated by dotted leaders; 20% still
+    // requires substantial readable content while allowing those pages.
+    word_like >= 8 && alphanumeric * 100 >= nonspace * 20
 }
 
 /// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
@@ -344,13 +346,14 @@ mod tests {
 
     #[test]
     fn trusts_native_vietnamese_table_of_contents() {
-        let text = "MỤC LỤC\n\
-            PHẦN 1 - MÔ HÌNH CASAN........................................ 1\n\
-            1. BỐI CẢNH RA ĐỜI........................................... 1\n\
-            1.1. AI đã đi qua thời thử công cụ........................... 1\n\
-            2. MÔ HÌNH CASAN............................................. 2\n\
-            3. LỘ TRÌNH CHUYỂN ĐỔI GIỮA CÁC CẤP ĐỘ CASAN................ 4";
-        assert!(native_text_is_trustworthy(text));
+        let mut text = String::from("MỤC LỤC\n");
+        for page in 1..=35 {
+            text.push_str(&format!(
+                "{page}. Nội dung phương pháp luận chuyển đổi AI{} {page}\n",
+                ".".repeat(90)
+            ));
+        }
+        assert!(native_text_is_trustworthy(&text));
     }
 
     #[test]
