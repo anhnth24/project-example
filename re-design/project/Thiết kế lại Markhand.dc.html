@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <meta name="design_doc_mode" content="canvas">
+  <style>
+    body { margin: 0; background: #141316; font-family: Inter, system-ui, sans-serif; }
+    a { color: #9580ff; }
+    a:hover { color: #7b61ff; }
+    .dv-turn { padding: 40px 44px 32px; border-bottom: 1px solid rgba(255,255,255,0.08); scroll-margin-top: 16px; }
+    .dv-thd { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; }
+    .dv-tid { font: 600 10px ui-monospace, Menlo, monospace; padding: 3px 7px; background: #7b61ff; color: #fff; border-radius: 4px; text-decoration: none; }
+    .dv-tname { font: 600 14px/1.2 Inter, system-ui, sans-serif; color: #fff; }
+    .dv-intro { max-width: 860px; margin: 0 0 24px; font: 400 12.5px/1.65 Inter, system-ui, sans-serif; color: rgba(255,255,255,0.55); }
+    .dv-intro b { color: rgba(255,255,255,0.85); font-weight: 600; }
+    .dv-opts { display: flex; flex-wrap: wrap; gap: 36px; align-items: flex-start; }
+    .dv-opt { flex: none; display: flex; flex-direction: column; gap: 9px; scroll-margin-top: 16px; }
+    .dv-oid { font: 600 10.5px ui-monospace, Menlo, monospace; padding: 3px 7px; background: rgba(255,255,255,0.12); color: #fff; border-radius: 5px; text-decoration: none; }
+    .dv-olabel { display: flex; align-items: baseline; gap: 8px; font: 400 12px/1.4 Inter, system-ui, sans-serif; color: rgba(255,255,255,0.55); max-width: 1440px; }
+    .dv-olabel b { color: #fff; font-weight: 600; }
+    .dv-card { max-width: 100%; background: #1d1c20; border-radius: 12px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), 0 24px 64px rgba(0,0,0,0.6); overflow: hidden; }
+    .dv-opt:target .dv-oid { background: #7b61ff; color: #fff; }
+    .dv-next { margin: 26px 0 0; font: 12px/1.5 Inter, system-ui, sans-serif; color: rgba(255,255,255,0.45); }
+  </style>
+</helmet>
+
+<section class="dv-turn" id="t3">
+  <div class="dv-thd"><a class="dv-tid" href="#t3">3</a><span class="dv-tname">Hoàn thiện hướng <a class="dv-oid" href="#1b">1b</a> — Workbench, bản đầy đủ</span></div>
+  <p class="dv-intro">
+    Phát triển <a class="dv-oid" href="#1b">1b</a> lên cùng mức hoàn thiện với <a class="dv-oid" href="#2a">2a</a>: <b>trang chủ / trạng thái trống</b> (đóng hết tab hoặc bấm logo), <b>kéo-thả file</b> vào cửa sổ, flow <b>convert file chưa có Markdown</b> (mở ghi-am-hop-19-06.mp3 → Convert ngay → tiến độ chạy trong hàng đợi, xong ra transcript), Ctrl+S để lưu. Accent mặc định lục #2EC47C theo tweak bạn đã chọn ở <a class="dv-oid" href="#2a">2a</a> — đổi lại trong Tweaks.
+  </p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="3a">
+      <div class="dv-olabel"><a class="dv-oid" href="#3a">3a</a><span><b>Workbench v2</b> — thử: đóng hết tab để về trang chủ, mở file mp3 rồi Convert ngay, sửa trong tab Soạn rồi Ctrl+S, kéo file thật vào cửa sổ.</span></div>
+      <div class="dv-card" style="width: 1440px">
+        <dc-import name="PA-3a-Workbench-v2" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+      </div>
+    </div>
+  </div>
+  <p class="dv-next">Thử tiếp: "chốt <a class="dv-oid" href="#3a">3a</a>, thêm đổi tên / xóa file trong cây" · "ghép chế độ đối chiếu khối của <a class="dv-oid" href="#2a">2a</a> vào <a class="dv-oid" href="#3a">3a</a> như một chế độ xem thứ 4" · "xuất bản bàn giao cho Dev"</p>
+</section>
+<section class="dv-turn" id="t2">
+  <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Hoàn thiện hướng <a class="dv-oid" href="#1d">1d</a> — Đối chiếu, bản đầy đủ</span></div>
+  <p class="dv-intro">
+    Phát triển <a class="dv-oid" href="#1d">1d</a> thành app hoàn chỉnh: <b>trang chủ / trạng thái trống</b> (đóng hết tab hoặc bấm logo), <b>đa tab tài liệu</b>, <b>kéo-thả file</b> vào cửa sổ, <b>cài đặt convert</b>, lọc + ⌘K tìm kiếm, và nội dung đối chiếu riêng cho từng loại file — đặc biệt audio: mỗi khối transcript liên kết với một <b>đoạn ghi âm theo mốc thời gian</b> (mở ghi-am-hop-19-06.mp3 → Convert ngay để xem). Tweaks: đổi màu accent (tím/xanh/lục) và bật tắt liên kết 1-1.
+  </p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="2a">
+      <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a><span><b>Đối chiếu v2</b> — thử: đóng tab để về trang chủ, mở file audio rồi Convert ngay, click khối Markdown để sửa, kéo file thật vào cửa sổ.</span></div>
+      <div class="dv-card" style="width: 1440px">
+        <dc-import name="PA-2a-DoiChieu-v2" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+      </div>
+    </div>
+  </div>
+  <p class="dv-next">Thử tiếp: "đổi accent của <a class="dv-oid" href="#2a">2a</a> sang xanh" · "thêm đổi tên / xóa file trong danh sách" · "làm màn hình cây thư mục con trong <a class="dv-oid" href="#2a">2a</a>"</p>
+</section>
+<section class="dv-turn" id="t1">
+  <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Thiết kế lại Markhand theo LumiBase — 3 phương án + bản tái hiện UI hiện tại</span></div>
+  <p class="dv-intro">
+    Bối cảnh: app desktop (Tauri) cho BA/PM convert tài liệu nguồn → Markdown, xem song song và sửa. Cả 3 phương án đều là <b>prototype tương tác</b> (click thử tab, tìm kiếm, chọn file, convert…), giữ đủ tính năng hiện có và bổ sung 3 tính năng đã chốt: <b>tìm kiếm</b>, <b>đa tab tài liệu</b>, <b>convert hàng loạt có tiến độ</b>. Visual bám hệ LumiBase: nền tối vũ trụ, khối glass với viền hairline, accent tím, bo góc lớn, Inter. <a href="#1a">1a</a> là UI hiện tại tái hiện pixel-perfect từ code để đối chiếu.
+  </p>
+  <div class="dv-opts">
+    <div class="dv-opt" id="1b">
+      <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a><span><b>Workbench</b> — giữ cấu trúc quen thuộc (cây + song song), thêm dải tab đa tài liệu, tìm kiếm lọc cây, hàng đợi convert nổi góc phải. Ít rủi ro chuyển đổi nhất.</span></div>
+      <div class="dv-card" style="width: 1440px">
+        <dc-import name="PA-1b-Workbench" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+      </div>
+    </div>
+    <div class="dv-opt" id="1c">
+      <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a><span><b>Thư viện</b> — đảo cấu trúc: mở app thấy lưới tài liệu theo trạng thái convert, chọn nhiều file → convert hàng loạt, ⌘K tìm kiếm + lệnh; mở file mới vào chế độ song song. Tối ưu cho lô tài liệu lớn.</span></div>
+      <div class="dv-card" style="width: 1440px">
+        <dc-import name="PA-1c-ThuVien" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+      </div>
+    </div>
+    <div class="dv-opt" id="1d">
+      <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a><span><b>Đối chiếu</b> — UX song song mới: file gốc và Markdown tách thành các khối liên kết 1-1, hover để thấy khối tương ứng, click khối Markdown để sửa tại chỗ. Tối ưu cho việc rà soát bản convert.</span></div>
+      <div class="dv-card" style="width: 1440px">
+        <dc-import name="PA-1d-DoiChieu" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+      </div>
+    </div>
+    <div class="dv-opt" id="1a">
+      <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a><span><b>UI hiện tại</b> — tái hiện từ code (app/src) để đối chiếu: Astryx neutral light, sidebar cây, song song PDF ↔ Markdown, cài đặt convert.</span></div>
+      <div class="dv-card" style="width: 1440px">
+        <dc-import name="Markhand-UI-hien-tai" hint-size="1440px,900px" style="width: 1440px; height: 900px"></dc-import>
+      </div>
+    </div>
+  </div>
+  <p class="dv-next">Thử tiếp: "phát triển <a class="dv-oid" href="#1b">1b</a> nhưng lấy convert hàng loạt của <a class="dv-oid" href="#1c">1c</a>" · "làm sáng màu <a class="dv-oid" href="#1c">1c</a>" · "thêm màn hình trống / kéo-thả cho phương án chọn"</p>
+</section>
+
+</x-dc>
+</body>
+</html>

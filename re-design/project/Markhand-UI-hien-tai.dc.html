@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=Plus+Jakarta+Sans:wght@600;700;800&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="recreation/styles.css">
+  <link rel="stylesheet" href="recreation/astryx-lite.css">
+  <style>
+    :root {
+      --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+      --font-display: "Plus Jakarta Sans", var(--font-ui);
+    }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); }
+    a { color: #2563eb; }
+    a:hover { color: #1d4ed8; }
+  </style>
+</helmet>
+
+<div class="app" style="width: 1440px; height: 900px; overflow: hidden" data-screen-label="Markhand — UI hiện tại">
+
+  <aside class="sidebar" data-screen-label="Sidebar">
+    <div class="brand">
+      <span class="brand-mark">A&rarr;M</span>
+      <span class="brand-name">Markhand</span>
+    </div>
+
+    <div class="data-card" title="{{ dataRoot }}">
+      <svg class="data-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>
+      <div class="data-text">
+        <div class="data-label">Thư mục dữ liệu</div>
+        <div class="data-path">{{ dataRoot }}</div>
+      </div>
+      <button class="ax-iconbtn ghost sm" title="Đổi thư mục DATA" onClick="{{ changeDir }}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.98a2 2 0 0 1 1.69.9l.66 1.2A2 2 0 0 0 12 6h8a2 2 0 0 1 2 2v3.3"></path><path d="m14.305 19.53.923-.382"></path><path d="m15.228 16.852-.923-.383"></path><path d="m16.852 15.228-.383-.923"></path><path d="m16.852 20.772-.383.924"></path><path d="m19.148 15.228.383-.923"></path><path d="m19.53 21.696-.382-.924"></path><path d="m20.772 16.852.924-.383"></path><path d="m20.772 19.148.924.383"></path><circle cx="18" cy="18" r="3"></circle></svg>
+      </button>
+    </div>
+
+    <div class="toolbar-row">
+      <div class="toolbar-grow">
+        <button class="ax-btn primary sm" onClick="{{ uploadClick }}">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m17 8-5-5-5 5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path></svg>
+          Tải file
+        </button>
+      </div>
+      <button class="ax-iconbtn secondary sm" title="Thư mục mới" onClick="{{ newFolder }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path><path d="M12 10v6"></path><path d="M9 13h6"></path></svg>
+      </button>
+      <button class="ax-iconbtn secondary sm" title="Markdown mới" onClick="{{ newMarkdown }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.35 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5.35"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="M14 19h6"></path><path d="M17 16v6"></path></svg>
+      </button>
+      <input type="file" multiple style="display: none" ref="{{ fileInputRef }}" onChange="{{ onFilesPicked }}">
+    </div>
+
+    <div class="dest-hint">Đích: <b>{{ folderLabel }}</b></div>
+
+    <div class="tree-scroll">
+      <sc-for list="{{ rows }}" as="row" hint-placeholder-count="6">
+        <div class="{{ row.rowClass }}" style="padding-left: {{ row.pad }}px" title="{{ row.relPath }}" onClick="{{ row.onClick }}">
+          <span class="{{ row.twistyClass }}">
+            <sc-if value="{{ row.isDir }}" hint-placeholder-val="{{ false }}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+            </sc-if>
+          </span>
+          <span class="row-icon">{{ row.icon }}</span>
+          <span class="row-label">{{ row.name }}</span>
+          <sc-if value="{{ row.showDot }}" hint-placeholder-val="{{ false }}">
+            <span class="dot" title="Chưa convert"></span>
+          </sc-if>
+          <span class="row-actions">
+            <button class="ax-iconbtn ghost xs" title="Đổi tên" onClick="{{ row.onRename }}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></svg>
+            </button>
+            <button class="ax-iconbtn ghost xs" title="Xóa" onClick="{{ row.onDelete }}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>
+          </span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div class="sidebar-foot">
+      <button class="ax-btn ghost sm" style="width: 100%; justify-content: flex-start" onClick="{{ openSettings }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        Cài đặt convert
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <sc-if value="{{ showHome }}" hint-placeholder-val="{{ true }}">
+      <div class="home" data-screen-label="Trang chủ">
+        <div class="ax-empty">
+          <span class="ax-empty-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path><path d="M14 2v5a1 1 0 0 0 1 1h5"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg>
+          </span>
+          <h1>Markhand</h1>
+          <p>Biến mọi tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA &amp; PM.</p>
+        </div>
+        <div class="home-steps">
+          <div class="ax-card">
+            <div class="step-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path><path d="M12 10v6"></path><path d="M9 13h6"></path></svg>
+            </div>
+            <div class="step-num">Bước 1</div>
+            <div class="step-title">Tạo thư mục</div>
+            <div class="step-desc">Tổ chức tài liệu theo từng nhóm nghiệp vụ trong DATA.</div>
+          </div>
+          <div class="ax-card">
+            <div class="step-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m17 8-5-5-5 5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path></svg>
+            </div>
+            <div class="step-num">Bước 2</div>
+            <div class="step-title">Tải file gốc lên</div>
+            <div class="step-desc">PDF, Word, Excel, PPT, ảnh, audio… App tự convert sang Markdown (link 1-1).</div>
+          </div>
+          <div class="ax-card">
+            <div class="step-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M12 3v18"></path></svg>
+            </div>
+            <div class="step-num">Bước 3</div>
+            <div class="step-title">Xem song song &amp; sửa</div>
+            <div class="step-desc">Đối chiếu file gốc ↔ Markdown, chỉnh sửa rồi lưu — tất cả ở máy bạn.</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ showDoc }}" hint-placeholder-val="{{ false }}">
+      <div class="docview" data-screen-label="Tài liệu">
+        <header class="doc-toolbar">
+          <div class="doc-title">
+            <span class="doc-title-icon">{{ docIcon }}</span>
+            <span class="doc-title-name">{{ docName }}</span>
+            <sc-if value="{{ dirty }}" hint-placeholder-val="{{ false }}">
+              <span class="dirty-dot" title="Chưa lưu"></span>
+            </sc-if>
+          </div>
+
+          <div class="doc-modes">
+            <div class="ax-tabs">
+              <sc-if value="{{ canBoth }}" hint-placeholder-val="{{ true }}">
+                <button class="ax-tab {{ tabSplitOn }}" onClick="{{ setModeSplit }}">Song song</button>
+              </sc-if>
+              <sc-if value="{{ canMd }}" hint-placeholder-val="{{ true }}">
+                <button class="ax-tab {{ tabMdOn }}" onClick="{{ setModeMd }}">Markdown</button>
+              </sc-if>
+              <sc-if value="{{ canSource }}" hint-placeholder-val="{{ true }}">
+                <button class="ax-tab {{ tabSourceOn }}" onClick="{{ setModeSource }}">File gốc</button>
+              </sc-if>
+            </div>
+          </div>
+
+          <div class="doc-actions">
+            <sc-if value="{{ canMd }}" hint-placeholder-val="{{ true }}">
+              <span class="doc-meta">
+                <span>{{ charCount }} ký tự</span>
+                <sc-if value="{{ showSavedAt }}" hint-placeholder-val="{{ false }}">
+                  <span class="saved-at">Đã lưu {{ savedAt }}</span>
+                </sc-if>
+              </span>
+              <button class="ax-btn ghost sm" onClick="{{ copyMd }}">{{ copyIcon }} {{ copyLabel }}</button>
+              <button class="ax-btn primary sm" disabled="{{ saveDisabled }}" onClick="{{ save }}">{{ saveIcon }} {{ saveLabel }}</button>
+            </sc-if>
+            <sc-if value="{{ canConvert }}" hint-placeholder-val="{{ true }}">
+              <button class="ax-btn secondary sm" onClick="{{ convert }}">{{ convertIcon }} {{ convertLabel }}</button>
+            </sc-if>
+            <sc-if value="{{ canSource }}" hint-placeholder-val="{{ true }}">
+              <button class="ax-btn ghost sm" onClick="{{ openExternal }}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>
+                Mở ngoài
+              </button>
+            </sc-if>
+          </div>
+        </header>
+
+        <div class="doc-body {{ mode }}">
+          <sc-if value="{{ showSourcePane }}" hint-placeholder-val="{{ true }}">
+            <div class="pane source-pane">{{ sourcePreview }}</div>
+          </sc-if>
+
+          <sc-if value="{{ showMdPane }}" hint-placeholder-val="{{ true }}">
+            <div class="pane md-pane">
+              <sc-if value="{{ canMd }}" hint-placeholder-val="{{ true }}">
+                <div class="md-editor">
+                  <div class="md-tabs">
+                    <button class="ax-tab sm {{ mdTabEditOn }}" onClick="{{ setMdTabEdit }}">Soạn</button>
+                    <button class="ax-tab sm {{ mdTabPreviewOn }}" onClick="{{ setMdTabPreview }}">Xem trước</button>
+                  </div>
+                  <sc-if value="{{ showMdEdit }}" hint-placeholder-val="{{ false }}">
+                    <div class="cm-wrap" style="display: flex; background: #ffffff">
+                      <pre style="margin: 0; padding: 12px 0 24px; width: 42px; flex: none; background: #f8fafc; color: #94a3b8; font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace; font-size: 14px; line-height: 1.7; text-align: right; user-select: none">{{ gutterText }}</pre>
+                      <textarea value="{{ md }}" onChange="{{ onMdInput }}" spellCheck="{{ false }}" style="flex: 1; border: none; outline: none; resize: none; padding: 12px 14px 24px; margin: 0; background: #ffffff; color: #1e293b; font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace; font-size: 14px; line-height: 1.7; white-space: pre; overflow: auto"></textarea>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ showMdPreview }}" hint-placeholder-val="{{ true }}">
+                    <div class="md-preview markdown-body">{{ mdRendered }}</div>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <sc-if value="{{ showNoMd }}" hint-placeholder-val="{{ false }}">
+                <div class="placeholder">
+                  <svg class="placeholder-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
+                  <p>File này chưa có bản Markdown.</p>
+                  <button class="ax-btn primary" onClick="{{ convert }}">{{ convertNowLabel }}</button>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+  </main>
+
+  <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
+    <div class="ax-dialog-overlay" onClick="{{ closeSettingsBackdrop }}" data-screen-label="Cài đặt convert">
+      <div class="ax-dialog">
+        <div class="ax-dialog-head">
+          <h2>Cài đặt convert</h2>
+          <button class="ax-iconbtn ghost sm" title="Đóng" onClick="{{ closeSettings }}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+        <div class="ax-dialog-body">
+          <div class="settings-form">
+            <div class="ax-field">
+              <label>Ngôn ngữ OCR (ảnh / PDF scan)</label>
+              <input class="ax-input" value="{{ setOcrLangs }}" onChange="{{ onOcrLangs }}" placeholder="vie+eng">
+            </div>
+            <div class="{{ pdfOcrClass }}" onClick="{{ togglePdfOcr }}">
+              <span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
+              <span>OCR trang PDF dạng scan (ít/không có lớp text)</span>
+            </div>
+            <div class="{{ pdfOcrImagesClass }}" onClick="{{ togglePdfOcrImages }}">
+              <span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
+              <span>OCR thêm ảnh nhúng trong trang PDF có text (chậm hơn)</span>
+            </div>
+            <div class="settings-grid">
+              <div class="ax-field">
+                <label>Ngôn ngữ audio</label>
+                <input class="ax-input" value="{{ setAudioLang }}" onChange="{{ onAudioLang }}">
+              </div>
+              <div class="ax-field">
+                <label>Thread audio</label>
+                <input class="ax-input" type="number" value="{{ setAudioThreads }}" onChange="{{ onAudioThreads }}" min="1" max="32">
+              </div>
+            </div>
+            <div class="settings-whisper">
+              <div class="ax-field">
+                <label>Model whisper (.bin) — để trống nếu không dùng audio</label>
+                <input class="ax-input" value="{{ setWhisperModel }}" onChange="{{ onWhisperModel }}" placeholder="đường dẫn tới ggml-*.bin">
+              </div>
+              <button class="ax-btn secondary" onClick="{{ pickWhisper }}">Chọn…</button>
+            </div>
+          </div>
+        </div>
+        <div class="ax-dialog-foot">
+          <div class="settings-actions">
+            <button class="ax-btn ghost" onClick="{{ closeSettings }}">Hủy</button>
+            <button class="ax-btn primary" onClick="{{ saveSettings }}">Lưu</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ dragging }}" hint-placeholder-val="{{ false }}">
+    <div class="drop-overlay" data-screen-label="Kéo-thả">
+      <div class="drop-overlay-box">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m17 8-5-5-5 5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path></svg>
+        <div class="drop-overlay-title">Thả để thêm vào thư mục đích</div>
+        <div class="drop-overlay-sub">PDF · Word · Excel · PPT · CSV · HTML · ảnh · audio</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ hasError }}" hint-placeholder-val="{{ false }}">
+    <div class="toast-wrap">
+      <div class="ax-banner error">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg>
+        <span class="ax-banner-title">{{ error }}</span>
+        <button class="ax-banner-x" title="Đóng" onClick="{{ dismissError }}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const mdReport = [
+      '# Báo cáo đối soát giao dịch — Tháng 6/2026',
+      '',
+      'Kỳ đối soát: 01/06/2026 – 30/06/2026. Đơn vị: Phòng Vận hành thanh toán.',
+      '',
+      '## 1. Tổng quan',
+      '',
+      '| Chỉ tiêu | Hệ thống | Đối tác | Chênh lệch |',
+      '| --- | --- | --- | --- |',
+      '| Số giao dịch | 12.480 | 12.478 | 2 |',
+      '| Tổng giá trị (VND) | 8.412.350.000 | 8.410.150.000 | 2.200.000 |',
+      '| Phí giao dịch | 41.220.000 | 41.220.000 | 0 |',
+      '',
+      '## 2. Giao dịch lệch',
+      '',
+      '- GD #TX-88231 (14/06): treo bên đối tác, đã có yêu cầu tra soát.',
+      '- GD #TX-90112 (22/06): hoàn tiền trùng, chờ đối tác xác nhận.',
+      '',
+      '## 3. Kiến nghị',
+      '',
+      '1. Chốt số liệu đối soát trước ngày 05/07.',
+      '2. Bổ sung cảnh báo tự động cho giao dịch treo quá 24h.',
+    ].join('\n');
+    this.state = {
+      dataRoot: 'C:\\Users\\lan.nguyen\\Documents\\DATA',
+      tree: [
+        { name: '01 Nghiệp vụ thanh toán', relPath: '01 Nghiệp vụ thanh toán', isDir: true, kind: 'folder', children: [
+          { name: 'bao-cao-doi-soat.pdf', relPath: '01 Nghiệp vụ thanh toán/bao-cao-doi-soat.pdf', isDir: false, kind: 'pdf', supported: true, mdRelPath: 'x', standaloneMd: false, children: [] },
+          { name: 'quy-trinh-thanh-toan.docx', relPath: '01 Nghiệp vụ thanh toán/quy-trinh-thanh-toan.docx', isDir: false, kind: 'docx', supported: true, mdRelPath: 'x', standaloneMd: false, children: [] },
+          { name: 'doi-tac-cong-thanh-toan.xlsx', relPath: '01 Nghiệp vụ thanh toán/doi-tac-cong-thanh-toan.xlsx', isDir: false, kind: 'xlsx', supported: true, mdRelPath: 'x', standaloneMd: false, children: [] },
+        ] },
+        { name: '02 Yêu cầu khách hàng', relPath: '02 Yêu cầu khách hàng', isDir: true, kind: 'folder', children: [
+          { name: 'ghi-am-hop-19-06.mp3', relPath: '02 Yêu cầu khách hàng/ghi-am-hop-19-06.mp3', isDir: false, kind: 'audio', supported: true, mdRelPath: null, standaloneMd: false, children: [] },
+          { name: 'man-hinh-hien-tai.png', relPath: '02 Yêu cầu khách hàng/man-hinh-hien-tai.png', isDir: false, kind: 'image', supported: true, mdRelPath: 'x', standaloneMd: false, children: [] },
+        ] },
+        { name: 'Ghi chú bàn giao.md', relPath: 'Ghi chú bàn giao.md', isDir: false, kind: 'markdown', supported: false, mdRelPath: 'x', standaloneMd: true, children: [] },
+      ],
+      open: { '01 Nghiệp vụ thanh toán': true },
+      selectedRel: '01 Nghiệp vụ thanh toán/bao-cao-doi-soat.pdf',
+      activeFolder: '01 Nghiệp vụ thanh toán',
+      mdByRel: {
+        '01 Nghiệp vụ thanh toán/bao-cao-doi-soat.pdf': mdReport,
+        '01 Nghiệp vụ thanh toán/quy-trinh-thanh-toan.docx': '# Quy trình thanh toán\n\nTài liệu mô tả quy trình xử lý giao dịch thanh toán từ khi khởi tạo đến khi đối soát.\n\n## Các bước\n\n1. Khách hàng khởi tạo giao dịch.\n2. Hệ thống kiểm tra hạn mức và số dư.\n3. Gửi lệnh sang cổng thanh toán.\n4. Nhận webhook kết quả và cập nhật trạng thái.',
+        '01 Nghiệp vụ thanh toán/doi-tac-cong-thanh-toan.xlsx': '# Đối tác cổng thanh toán\n\n| Đối tác | Loại | Phí | Trạng thái |\n| --- | --- | --- | --- |\n| NapasPay | Chuyển khoản | 0,3% | Đang chạy |\n| VExpress | Ví điện tử | 0,5% | Đang chạy |\n| GlobalGate | Thẻ quốc tế | 1,8% | Tạm dừng |',
+        '02 Yêu cầu khách hàng/man-hinh-hien-tai.png': '# man-hinh-hien-tai.png\n\nẢnh chụp màn hình nghiệp vụ hiện tại của khách hàng (OCR vie+eng).\n\n- Màn hình danh sách giao dịch, bộ lọc theo ngày.\n- Nút "Xuất Excel" ở góc phải.',
+        'Ghi chú bàn giao.md': '# Ghi chú bàn giao cho Dev\n\n- Toàn bộ tài liệu nghiệp vụ nằm trong thư mục `01 Nghiệp vụ thanh toán`.\n- File markdown là bản chuẩn để đưa vào repo; file gốc chỉ để đối chiếu.\n- Liên hệ chị Lan (BA) khi số liệu đối soát không khớp.',
+      },
+      mode: 'split',
+      mdTab: 'preview',
+      dirty: false,
+      saving: false,
+      savedAt: null,
+      copied: false,
+      converting: false,
+      settingsOpen: false,
+      dragging: false,
+      error: null,
+      setOcrLangs: 'vie+eng',
+      setPdfOcr: true,
+      setPdfOcrImages: false,
+      setAudioLang: 'vi',
+      setAudioThreads: 4,
+      setWhisperModel: '',
+    };
+  }
+
+  componentDidMount() {
+    this._onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); this.doSave(); }
+    };
+    window.addEventListener('keydown', this._onKey);
+    let depth = 0;
+    this._onDragEnter = (e) => {
+      if (!e.dataTransfer || ![...(e.dataTransfer.types || [])].includes('Files')) return;
+      e.preventDefault(); depth++; this.setState({ dragging: true });
+    };
+    this._onDragOver = (e) => {
+      if (!e.dataTransfer || ![...(e.dataTransfer.types || [])].includes('Files')) return;
+      e.preventDefault();
+    };
+    this._onDragLeave = () => { depth = Math.max(0, depth - 1); if (depth === 0) this.setState({ dragging: false }); };
+    this._onDrop = (e) => {
+      e.preventDefault(); depth = 0; this.setState({ dragging: false });
+      const names = [...(e.dataTransfer && e.dataTransfer.files ? e.dataTransfer.files : [])].map((f) => f.name);
+      if (names.length) this.importFiles(names);
+    };
+    window.addEventListener('dragenter', this._onDragEnter);
+    window.addEventListener('dragover', this._onDragOver);
+    window.addEventListener('dragleave', this._onDragLeave);
+    window.addEventListener('drop', this._onDrop);
+  }
+
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this._onKey);
+    window.removeEventListener('dragenter', this._onDragEnter);
+    window.removeEventListener('dragover', this._onDragOver);
+    window.removeEventListener('dragleave', this._onDragLeave);
+    window.removeEventListener('drop', this._onDrop);
+  }
+
+  // ── helpers ──
+  icon(name, size, color) {
+    const P = {
+      pdf: ['M12 22h6a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v6', 'M14 2v5a1 1 0 0 0 1 1h5', 'M3 16v-1.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5V16', 'M6 22h2', 'M7 14v8'],
+      docx: ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5', 'M10 9H8', 'M16 13H8', 'M16 17H8'],
+      markdown: ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5', 'M10 9H8', 'M16 13H8', 'M16 17H8'],
+      xlsx: ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5', 'M8 13h2', 'M14 13h2', 'M8 17h2', 'M14 17h2'],
+      csv: ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5', 'M8 13h2', 'M14 13h2', 'M8 17h2', 'M14 17h2'],
+      pptx: ['M2 3h20', 'M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3', 'm7 21 5-5 5 5'],
+      html: null,
+      image: null,
+      audio: ['M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343', 'M14 2v5a1 1 0 0 0 1 1h5', 'M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0'],
+      other: ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5'],
+      folder: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'],
+      folderOpen: ['m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2'],
+    };
+    const kids = [];
+    if (name === 'image') {
+      kids.push(React.createElement('path', { key: 'a', d: 'M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z' }));
+      kids.push(React.createElement('path', { key: 'b', d: 'M14 2v5a1 1 0 0 0 1 1h5' }));
+      kids.push(React.createElement('circle', { key: 'c', cx: 10, cy: 12, r: 2 }));
+      kids.push(React.createElement('path', { key: 'd', d: 'm20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22' }));
+    } else if (name === 'html') {
+      kids.push(React.createElement('circle', { key: 'a', cx: 12, cy: 12, r: 10 }));
+      kids.push(React.createElement('path', { key: 'b', d: 'M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20' }));
+      kids.push(React.createElement('path', { key: 'c', d: 'M2 12h20' }));
+    } else {
+      (P[name] || P.other).forEach((d, i) => kids.push(React.createElement('path', { key: i, d })));
+    }
+    return React.createElement('svg', {
+      width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+      strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', style: { color },
+    }, kids);
+  }
+
+  fileIcon(node, size) {
+    const c = { pdf: '#e5484d', docx: '#2f6fed', pptx: '#e8833a', xlsx: '#1f9d57', csv: '#1f9d57', html: '#5b6cff', image: '#8a63d2', audio: '#d6409f', markdown: '#6b7280' };
+    return this.icon(node.kind in c ? node.kind : 'other', size || 16, c[node.kind] || '#9aa0aa');
+  }
+
+  find(rel, list) {
+    for (const n of list || this.state.tree) {
+      if (n.relPath === rel) return n;
+      const f = this.find(rel, n.children);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  kindOf(name) {
+    const e = (name.toLowerCase().split('.').pop() || '');
+    if (e === 'pdf') return 'pdf';
+    if (e === 'docx' || e === 'doc') return 'docx';
+    if (e === 'pptx' || e === 'ppt') return 'pptx';
+    if (['xlsx', 'xls', 'ods'].includes(e)) return 'xlsx';
+    if (e === 'csv') return 'csv';
+    if (e === 'html' || e === 'htm') return 'html';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'tif', 'tiff'].includes(e)) return 'image';
+    if (['mp3', 'wav', 'm4a', 'ogg', 'flac'].includes(e)) return 'audio';
+    if (e === 'md') return 'markdown';
+    return 'other';
+  }
+
+  importFiles(names) {
+    const errors = [];
+    this.setState((s) => {
+      const tree = JSON.parse(JSON.stringify(s.tree));
+      const parent = s.activeFolder === '' ? { children: tree } : this.find(s.activeFolder, tree);
+      for (const name of names) {
+        const kind = this.kindOf(name);
+        if (kind === 'other') { errors.push('Định dạng không hỗ trợ: ' + name); continue; }
+        const rel = (s.activeFolder ? s.activeFolder + '/' : '') + name;
+        if (!this.find(rel, tree)) {
+          parent.children.push({ name, relPath: rel, isDir: false, kind, supported: kind !== 'markdown', mdRelPath: kind === 'markdown' ? 'x' : null, standaloneMd: kind === 'markdown', children: [] });
+        }
+      }
+      return { tree, error: errors.length ? errors.join(' • ') : s.error };
+    });
+    if (errors.length) this.armErrorTimer();
+  }
+
+  armErrorTimer() {
+    clearTimeout(this._errT);
+    this._errT = setTimeout(() => this.setState({ error: null }), 6000);
+  }
+
+  showError(msg) { this.setState({ error: msg }); this.armErrorTimer(); }
+
+  doSave() {
+    const s = this.state;
+    if (!s.dirty || s.saving) return;
+    this.setState({ saving: true });
+    setTimeout(() => this.setState({
+      saving: false, dirty: false,
+      savedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+    }), 450);
+  }
+
+  // ── tiny markdown renderer (headers, tables, lists, bold/code) ──
+  inline(t, key) {
+    const parts = [];
+    let rest = t, i = 0;
+    const re = /(\*\*[^*]+\*\*|`[^`]+`)/;
+    while (rest) {
+      const m = rest.match(re);
+      if (!m) { parts.push(rest); break; }
+      if (m.index > 0) parts.push(rest.slice(0, m.index));
+      const tok = m[0];
+      if (tok.startsWith('**')) parts.push(React.createElement('strong', { key: key + '-' + i }, tok.slice(2, -2)));
+      else parts.push(React.createElement('code', { key: key + '-' + i }, tok.slice(1, -1)));
+      rest = rest.slice(m.index + tok.length);
+      i++;
+    }
+    return parts;
+  }
+
+  renderMarkdown(md) {
+    const out = [];
+    const lines = md.split('\n');
+    let i = 0, k = 0;
+    while (i < lines.length) {
+      const L = lines[i];
+      if (!L.trim()) { i++; continue; }
+      if (L.startsWith('# ')) { out.push(React.createElement('h1', { key: k++ }, this.inline(L.slice(2), k))); i++; continue; }
+      if (L.startsWith('## ')) { out.push(React.createElement('h2', { key: k++ }, this.inline(L.slice(3), k))); i++; continue; }
+      if (L.startsWith('### ')) { out.push(React.createElement('h3', { key: k++ }, this.inline(L.slice(4), k))); i++; continue; }
+      if (L.startsWith('|')) {
+        const rows = [];
+        while (i < lines.length && lines[i].startsWith('|')) { rows.push(lines[i]); i++; }
+        const cells = (r) => r.split('|').slice(1, -1).map((c) => c.trim());
+        const head = cells(rows[0]);
+        const body = rows.slice(2).map(cells);
+        out.push(React.createElement('table', { key: k++ },
+          React.createElement('thead', { key: 'h' }, React.createElement('tr', null, head.map((c, j) => React.createElement('th', { key: j }, c)))),
+          React.createElement('tbody', { key: 'b' }, body.map((r, ri) => React.createElement('tr', { key: ri }, r.map((c, j) => React.createElement('td', { key: j }, c)))))
+        ));
+        continue;
+      }
+      if (/^[-*] /.test(L)) {
+        const items = [];
+        while (i < lines.length && /^[-*] /.test(lines[i])) { items.push(lines[i].slice(2)); i++; }
+        out.push(React.createElement('ul', { key: k++ }, items.map((t, j) => React.createElement('li', { key: j }, this.inline(t, k + '-' + j)))));
+        continue;
+      }
+      if (/^\d+\. /.test(L)) {
+        const items = [];
+        while (i < lines.length && /^\d+\. /.test(lines[i])) { items.push(lines[i].replace(/^\d+\. /, '')); i++; }
+        out.push(React.createElement('ol', { key: k++ }, items.map((t, j) => React.createElement('li', { key: j }, this.inline(t, k + '-' + j)))));
+        continue;
+      }
+      out.push(React.createElement('p', { key: k++ }, this.inline(L, k)));
+      i++;
+    }
+    return out;
+  }
+
+  // ── source previews ──
+  pdfPreview() {
+    const h = React.createElement;
+    const page = (n, kids) => h('div', { key: n, className: 'pdf-page', style: { width: '100%', maxWidth: 640, aspectRatio: '210/297', padding: '48px 52px', boxSizing: 'border-box', fontFamily: "Georgia, 'Times New Roman', serif", color: '#1c1e24', overflow: 'hidden' } }, kids);
+    const t = (txt, st) => h('div', { style: Object.assign({ fontSize: 12.5, lineHeight: 1.65 }, st) }, txt);
+    const row = (cells, bold) => h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1.2fr 1.2fr 1fr', borderBottom: '1px solid #d8dbe2', fontSize: 11.5, lineHeight: 1.4, fontWeight: bold ? 700 : 400 } }, cells.map((c, i) => h('div', { key: i, style: { padding: '5px 6px', textAlign: i === 0 ? 'left' : 'right' } }, c)));
+    return h('div', { className: 'preview pdf-canvas' },
+      h('div', { className: 'pdf-pages' },
+        page(1, [
+          t('NGÂN HÀNG TMCP PHƯƠNG NAM', { fontSize: 10.5, letterSpacing: '0.08em', color: '#5a5f6b' }),
+          t('BÁO CÁO ĐỐI SOÁT GIAO DỊCH', { fontSize: 19, fontWeight: 700, margin: '18px 0 4px' }),
+          t('Tháng 6/2026 — Phòng Vận hành thanh toán', { color: '#5a5f6b', marginBottom: 22 }),
+          t('Kỳ đối soát từ ngày 01/06/2026 đến ngày 30/06/2026, đối chiếu dữ liệu giữa hệ thống ngân hàng và các cổng thanh toán đối tác.', { marginBottom: 16 }),
+          t('1. Tổng quan', { fontWeight: 700, fontSize: 14, margin: '10px 0 8px' }),
+          h('div', { key: 'tb', style: { border: '1px solid #d8dbe2', marginBottom: 18 } }, [
+            row(['Chỉ tiêu', 'Hệ thống', 'Đối tác', 'Chênh lệch'], true),
+            row(['Số giao dịch', '12.480', '12.478', '2']),
+            row(['Tổng giá trị (VND)', '8.412.350.000', '8.410.150.000', '2.200.000']),
+            row(['Phí giao dịch', '41.220.000', '41.220.000', '0']),
+          ]),
+          t('2. Giao dịch lệch', { fontWeight: 700, fontSize: 14, margin: '10px 0 8px' }),
+          t('• GD #TX-88231 (14/06): treo bên đối tác, đã có yêu cầu tra soát.'),
+          t('• GD #TX-90112 (22/06): hoàn tiền trùng, chờ đối tác xác nhận.'),
+        ]),
+        page(2, [
+          t('3. Kiến nghị', { fontWeight: 700, fontSize: 14, margin: '4px 0 8px' }),
+          t('1. Chốt số liệu đối soát trước ngày 05/07.'),
+          t('2. Bổ sung cảnh báo tự động cho giao dịch treo quá 24h.', { marginBottom: 24 }),
+          t('Người lập báo cáo', { fontSize: 11.5, color: '#5a5f6b', marginTop: 60 }),
+          t('Nguyễn Thị Lan', { fontWeight: 700 }),
+        ])
+      )
+    );
+  }
+
+  docxPreview() {
+    const h = React.createElement;
+    const t = (txt, st) => h('div', { style: Object.assign({ fontSize: 13.5, lineHeight: 1.7, color: '#111827' }, st) }, txt);
+    return h('div', { className: 'preview docx-wrap' }, h('div', { style: { maxWidth: 820, margin: '0 auto', padding: '20px 26px', fontFamily: "'Calibri', 'Segoe UI', sans-serif" } }, [
+      t('QUY TRÌNH THANH TOÁN', { fontSize: 18, fontWeight: 700, color: '#1f4e79', marginBottom: 12 }),
+      t('Tài liệu mô tả quy trình xử lý giao dịch thanh toán từ khi khởi tạo đến khi đối soát.', { marginBottom: 12 }),
+      t('Các bước', { fontSize: 15, fontWeight: 700, color: '#1f4e79', margin: '10px 0 6px' }),
+      t('1. Khách hàng khởi tạo giao dịch.'),
+      t('2. Hệ thống kiểm tra hạn mức và số dư.'),
+      t('3. Gửi lệnh sang cổng thanh toán.'),
+      t('4. Nhận webhook kết quả và cập nhật trạng thái.'),
+    ]));
+  }
+
+  xlsxPreview() {
+    const h = React.createElement;
+    const sheet = this.state.xlsxSheet || 'DoiTac';
+    const cell = (c, isHead) => h(isHead ? 'th' : 'td', { key: c }, c);
+    const tbl = sheet === 'DoiTac'
+      ? [['Đối tác', 'Loại', 'Phí', 'Trạng thái'], ['NapasPay', 'Chuyển khoản', '0,3%', 'Đang chạy'], ['VExpress', 'Ví điện tử', '0,5%', 'Đang chạy'], ['GlobalGate', 'Thẻ quốc tế', '1,8%', 'Tạm dừng']]
+      : [['Tháng', 'Số GD', 'Giá trị (VND)'], ['04/2026', '11.204', '7.815.400.000'], ['05/2026', '11.980', '8.102.750.000'], ['06/2026', '12.480', '8.412.350.000']];
+    return h('div', { className: 'preview excel-wrap', style: { padding: 0 } }, [
+      h('div', { key: 'tabs', className: 'sheet-tabs' }, ['DoiTac', 'SanLuong'].map((s) =>
+        h('button', { key: s, className: 'ax-btn sm ' + (s === sheet ? 'secondary' : 'ghost'), onClick: () => this.setState({ xlsxSheet: s }) }, s))),
+      h('div', { key: 'tb', className: 'excel-table' }, h('table', null, h('tbody', null,
+        tbl.map((r, ri) => h('tr', { key: ri }, r.map((c) => cell(c, false))))
+      ))),
+      h('div', { key: 'note', className: 'preview-note' }, '2 sheet · hiển thị tối đa 1.000 dòng/sheet'),
+    ]);
+  }
+
+  imagePreview() {
+    const h = React.createElement;
+    return h('div', { className: 'preview image-preview' },
+      h('div', { style: { width: '100%', maxWidth: 560, aspectRatio: '4/3', borderRadius: 8, boxShadow: 'var(--shadow-sm)', background: 'repeating-conic-gradient(#e2e8f0 0% 25%, #f8fafc 0% 50%) 50% / 24px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', fontSize: 13 } }, 'man-hinh-hien-tai.png · 1440×1080')
+    );
+  }
+
+  audioPreview() {
+    const h = React.createElement;
+    return h('div', { className: 'preview audio-preview' }, [
+      h('audio', { key: 'a', controls: true }),
+      h('div', { key: 'n', className: 'muted', style: { fontSize: 12.5 } }, 'ghi-am-hop-19-06.mp3 · 38:12 · 34,8 MB'),
+    ]);
+  }
+
+  sourcePreviewFor(node) {
+    if (!node) return null;
+    if (node.kind === 'pdf') return this.pdfPreview();
+    if (node.kind === 'docx') return this.docxPreview();
+    if (node.kind === 'xlsx' || node.kind === 'csv') return this.xlsxPreview();
+    if (node.kind === 'image') return this.imagePreview();
+    if (node.kind === 'audio') return this.audioPreview();
+    const h = React.createElement;
+    return h('div', { className: 'preview center-preview' }, [
+      h('p', { key: 'p', className: 'muted' }, 'Không xem trước được định dạng này trong app.'),
+    ]);
+  }
+
+  renderVals() {
+    const h = React.createElement;
+    const s = this.state;
+    const sel = s.selectedRel ? this.find(s.selectedRel) : null;
+    const isDoc = !!(sel && !sel.isDir);
+
+    // ── tree rows (flatten visible) ──
+    const rows = [];
+    const walk = (nodes, depth) => {
+      for (const n of nodes) {
+        const isSel = s.selectedRel === n.relPath;
+        const openNow = !!s.open[n.relPath];
+        rows.push({
+          key: n.relPath,
+          relPath: n.relPath,
+          name: n.name,
+          pad: 8 + depth * 14,
+          isDir: n.isDir,
+          rowClass: 'row' + (isSel ? ' selected' : ''),
+          twistyClass: 'twisty' + (n.isDir && openNow ? ' open' : ''),
+          icon: n.isDir ? this.icon(openNow ? 'folderOpen' : 'folder', 16, '#e0a83e') : this.fileIcon(n),
+          showDot: !n.isDir && n.supported && !n.mdRelPath,
+          onClick: () => {
+            if (n.isDir) {
+              this.setState((st) => ({ open: Object.assign({}, st.open, { [n.relPath]: !st.open[n.relPath] }), selectedRel: n.relPath, activeFolder: n.relPath }));
+            } else {
+              const parent = n.relPath.includes('/') ? n.relPath.slice(0, n.relPath.lastIndexOf('/')) : '';
+              this.setState({ selectedRel: n.relPath, activeFolder: parent, mode: (!n.standaloneMd && n.mdRelPath) ? 'split' : (n.mdRelPath ? 'md' : 'source'), mdTab: 'preview', dirty: false, savedAt: null });
+            }
+          },
+          onRename: (e) => {
+            e.stopPropagation();
+            const next = prompt('Tên mới:', n.name);
+            if (!next || next === n.name) return;
+            this.setState((st) => {
+              const tree = JSON.parse(JSON.stringify(st.tree));
+              const f = this.find(n.relPath, tree);
+              if (f) f.name = next.trim();
+              return { tree };
+            });
+          },
+          onDelete: (e) => {
+            e.stopPropagation();
+            const what = n.isDir ? 'thư mục (và toàn bộ bên trong)' : 'file';
+            if (!confirm(`Xóa ${what} "${n.name}"?`)) return;
+            this.setState((st) => {
+              const tree = JSON.parse(JSON.stringify(st.tree));
+              const rm = (list) => {
+                const i = list.findIndex((x) => x.relPath === n.relPath);
+                if (i >= 0) { list.splice(i, 1); return true; }
+                return list.some((x) => rm(x.children));
+              };
+              rm(tree);
+              return { tree, selectedRel: st.selectedRel === n.relPath ? null : st.selectedRel };
+            });
+          },
+        });
+        if (n.isDir && openNow) walk(n.children, depth + 1);
+      }
+    };
+    walk(s.tree, 0);
+
+    // ── doc state ──
+    const canSource = isDoc && !sel.standaloneMd;
+    const canMd = isDoc && !!sel.mdRelPath;
+    const canBoth = canSource && canMd;
+    const canConvert = canSource && sel.supported;
+    const md = isDoc ? (s.mdByRel[sel.relPath] || '') : '';
+    const gutter = md.split('\n').map((_, i) => i + 1).join('\n');
+    const effMode = canBoth ? s.mode : (canMd ? 'md' : 'source');
+
+    const setMd = (v) => this.setState((st) => ({ mdByRel: Object.assign({}, st.mdByRel, { [sel.relPath]: v }), dirty: true }));
+
+    return {
+      dataRoot: s.dataRoot,
+      folderLabel: s.activeFolder === '' ? 'DATA' : s.activeFolder.split('/').pop(),
+      rows,
+      changeDir: () => this.showError('Chọn thư mục DATA cần môi trường desktop (Tauri) — đây là bản mô phỏng.'),
+      uploadClick: () => this._fileInput && this._fileInput.click(),
+      fileInputRef: (el) => { this._fileInput = el; },
+      onFilesPicked: (e) => {
+        const names = [...(e.target.files || [])].map((f) => f.name);
+        e.target.value = '';
+        if (names.length) this.importFiles(names);
+      },
+      newFolder: () => {
+        const name = prompt('Tên thư mục mới:');
+        if (!name) return;
+        this.setState((st) => {
+          const tree = JSON.parse(JSON.stringify(st.tree));
+          const parent = st.activeFolder === '' ? { children: tree } : this.find(st.activeFolder, tree);
+          const rel = (st.activeFolder ? st.activeFolder + '/' : '') + name.trim();
+          parent.children.push({ name: name.trim(), relPath: rel, isDir: true, kind: 'folder', children: [] });
+          return { tree };
+        });
+      },
+      newMarkdown: () => {
+        const name = prompt('Tên file markdown mới (không cần .md):');
+        if (!name) return;
+        const fname = name.trim().endsWith('.md') ? name.trim() : name.trim() + '.md';
+        this.setState((st) => {
+          const tree = JSON.parse(JSON.stringify(st.tree));
+          const parent = st.activeFolder === '' ? { children: tree } : this.find(st.activeFolder, tree);
+          const rel = (st.activeFolder ? st.activeFolder + '/' : '') + fname;
+          parent.children.push({ name: fname, relPath: rel, isDir: false, kind: 'markdown', supported: false, mdRelPath: 'x', standaloneMd: true, children: [] });
+          return { tree, selectedRel: rel, mdByRel: Object.assign({}, st.mdByRel, { [rel]: '# ' + name.trim() + '\n' }), mode: 'md', mdTab: 'edit', dirty: false };
+        });
+      },
+      openSettings: () => this.setState({ settingsOpen: true }),
+
+      showHome: !isDoc,
+      showDoc: isDoc,
+      docIcon: isDoc ? this.fileIcon(sel, 18) : null,
+      docName: isDoc ? sel.name : '',
+      dirty: s.dirty,
+      canSource, canMd, canBoth, canConvert,
+      mode: effMode,
+      tabSplitOn: effMode === 'split' ? 'on' : '',
+      tabMdOn: effMode === 'md' ? 'on' : '',
+      tabSourceOn: effMode === 'source' ? 'on' : '',
+      setModeSplit: () => this.setState({ mode: 'split' }),
+      setModeMd: () => this.setState({ mode: 'md' }),
+      setModeSource: () => this.setState({ mode: 'source' }),
+      charCount: md.length.toLocaleString('vi-VN'),
+      showSavedAt: !!s.savedAt && !s.dirty,
+      savedAt: s.savedAt || '',
+      copyIcon: s.copied
+        ? this.icon('other', 15) && React.createElement('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, React.createElement('path', { d: 'M20 6 9 17l-5-5' }))
+        : React.createElement('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }, [React.createElement('rect', { key: 'r', width: 14, height: 14, x: 8, y: 8, rx: 2, ry: 2 }), React.createElement('path', { key: 'p', d: 'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2' })]),
+      copyLabel: s.copied ? 'Đã copy' : 'Copy MD',
+      copyMd: () => {
+        try { navigator.clipboard.writeText(md); } catch (e) {}
+        this.setState({ copied: true });
+        setTimeout(() => this.setState({ copied: false }), 1500);
+      },
+      saveIcon: React.createElement('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className: s.saving ? 'spin' : '' },
+        s.saving
+          ? React.createElement('path', { d: 'M21 12a9 9 0 1 1-6.219-8.56' })
+          : [React.createElement('path', { key: 'a', d: 'M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z' }), React.createElement('path', { key: 'b', d: 'M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7' }), React.createElement('path', { key: 'c', d: 'M7 3v4a1 1 0 0 0 1 1h7' })]),
+      saveLabel: s.saving ? 'Đang lưu…' : 'Lưu',
+      saveDisabled: !s.dirty || s.saving,
+      save: () => this.doSave(),
+      convertIcon: React.createElement('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', className: s.converting ? 'spin' : '' }, [React.createElement('path', { key: 'a', d: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' }), React.createElement('path', { key: 'b', d: 'M21 3v5h-5' }), React.createElement('path', { key: 'c', d: 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16' }), React.createElement('path', { key: 'd', d: 'M8 16H3v5' })]),
+      convertLabel: canMd ? 'Convert lại' : 'Convert',
+      convertNowLabel: s.converting ? 'Đang convert…' : 'Convert ngay',
+      convert: () => {
+        if (s.converting) return;
+        this.setState({ converting: true });
+        setTimeout(() => this.setState((st) => {
+          const tree = JSON.parse(JSON.stringify(st.tree));
+          const f = this.find(sel.relPath, tree);
+          if (f) f.mdRelPath = 'x';
+          const md0 = st.mdByRel[sel.relPath] || ('# ' + sel.name + '\n\nNội dung Markdown được convert từ file gốc (mô phỏng).\n');
+          return { converting: false, tree, mdByRel: Object.assign({}, st.mdByRel, { [sel.relPath]: md0 }) };
+        }), 900);
+      },
+      openExternal: () => this.showError('Mở bằng ứng dụng ngoài cần môi trường desktop (Tauri) — đây là bản mô phỏng.'),
+
+      showSourcePane: (effMode === 'split' || effMode === 'source') && canSource,
+      showMdPane: effMode === 'split' || effMode === 'md',
+      sourcePreview: this.sourcePreviewFor(sel),
+      mdTabEditOn: s.mdTab === 'edit' ? 'on' : '',
+      mdTabPreviewOn: s.mdTab === 'preview' ? 'on' : '',
+      setMdTabEdit: () => this.setState({ mdTab: 'edit' }),
+      setMdTabPreview: () => this.setState({ mdTab: 'preview' }),
+      showMdEdit: canMd && s.mdTab === 'edit',
+      showMdPreview: canMd && s.mdTab === 'preview',
+      showNoMd: isDoc && !canMd,
+      md,
+      gutterText: gutter,
+      onMdInput: (e) => setMd(e.target.value),
+      mdRendered: this.renderMarkdown(md),
+
+      settingsOpen: s.settingsOpen,
+      closeSettings: () => this.setState({ settingsOpen: false }),
+      closeSettingsBackdrop: (e) => { if (e.target === e.currentTarget) this.setState({ settingsOpen: false }); },
+      saveSettings: () => this.setState({ settingsOpen: false }),
+      setOcrLangs: s.setOcrLangs,
+      onOcrLangs: (e) => this.setState({ setOcrLangs: e.target.value }),
+      pdfOcrClass: 'ax-check' + (s.setPdfOcr ? ' on' : ''),
+      togglePdfOcr: () => this.setState({ setPdfOcr: !s.setPdfOcr }),
+      pdfOcrImagesClass: 'ax-check' + (s.setPdfOcrImages ? ' on' : ''),
+      togglePdfOcrImages: () => this.setState({ setPdfOcrImages: !s.setPdfOcrImages }),
+      setAudioLang: s.setAudioLang,
+      onAudioLang: (e) => this.setState({ setAudioLang: e.target.value }),
+      setAudioThreads: s.setAudioThreads,
+      onAudioThreads: (e) => this.setState({ setAudioThreads: Number(e.target.value) || 1 }),
+      setWhisperModel: s.setWhisperModel,
+      onWhisperModel: (e) => this.setState({ setWhisperModel: e.target.value }),
+      pickWhisper: () => this.showError('Chọn file model cần môi trường desktop (Tauri) — đây là bản mô phỏng.'),
+
+      dragging: s.dragging,
+      hasError: !!s.error,
+      error: s.error || '',
+      dismissError: () => this.setState({ error: null }),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

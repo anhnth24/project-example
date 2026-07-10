@@ -226,10 +226,13 @@ function PdfPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) =>
             observer!.unobserve(div);
             pdf.getPage(n).then(async (page) => {
               if (cancelled) return;
-              const vp = page.getViewport({ scale: fit });
+              // render theo devicePixelRatio để chữ sắc nét trên màn scale >100%
+              const dpr = window.devicePixelRatio || 1;
+              const vp = page.getViewport({ scale: fit * dpr });
               const canvas = document.createElement("canvas");
               canvas.width = vp.width;
               canvas.height = vp.height;
+              canvas.style.width = `${Math.round(vp.width / dpr)}px`;
               canvas.className = "pdf-page";
               div.style.height = "auto";
               div.innerHTML = "";

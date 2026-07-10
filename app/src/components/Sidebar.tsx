@@ -1,6 +1,5 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderPlus, Upload, FilePlus2, Settings as SettingsIcon, FolderCog, Folder, Sun, Moon } from "lucide-react";
-import { useTheme } from "../lib/theme";
+import { FolderPlus, Upload, FilePlus2, Settings as SettingsIcon, FolderCog, Folder } from "lucide-react";
 import { Button } from "@astryxdesign/core/Button";
 import { IconButton } from "@astryxdesign/core/IconButton";
 import { useStore } from "../state/store";
@@ -10,7 +9,6 @@ import { Tree } from "./Tree";
 export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { dataRoot, tree, activeFolder, supportedExts, refreshTree, changeDataRoot, setError } =
     useStore();
-  const [theme, toggleTheme] = useTheme();
 
   async function changeDir() {
     const picked = await openDialog({ directory: true, multiple: false, title: "Chọn thư mục DATA" });
@@ -101,14 +99,6 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       <div className="sidebar-foot">
         <Button label="Cài đặt convert" variant="ghost" size="sm" icon={<SettingsIcon size={15} />} onClick={onOpenSettings} />
-        <IconButton
-          label={theme === "dark" ? "Giao diện sáng" : "Giao diện tối"}
-          tooltip={theme === "dark" ? "Chuyển giao diện sáng" : "Chuyển giao diện tối"}
-          variant="ghost"
-          size="sm"
-          icon={theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
-          onClick={toggleTheme}
-        />
       </div>
     </aside>
   );

@@ -75,6 +75,7 @@ impl Settings {
             audio_threads: self.audio_threads,
             pdf_ocr: self.pdf_ocr,
             pdf_ocr_images: self.pdf_ocr_images,
+            ..Default::default()
         }
     }
 }

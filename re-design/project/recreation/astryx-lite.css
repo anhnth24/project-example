@@ -1,0 +1,268 @@
+/* astryx-lite.css — recreated styles of @astryxdesign/core components used by
+   Markhand, values extracted from the package source + theme-neutral (light).
+   Fonts: real app doesn't bundle Figtree → components render in system font. */
+
+:root {
+  --ax-font: Figtree, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --ax-accent: #262626;
+  --ax-on-accent: #ffffff;
+  --ax-neutral: rgba(0, 0, 0, 0.06);
+  --ax-hover: rgba(0, 0, 0, 0.05);
+  --ax-pressed: rgba(0, 0, 0, 0.1);
+  --ax-text: #171717;
+  --ax-text-2: #737373;
+  --ax-text-disabled: #a3a3a3;
+  --ax-border: #ebebeb;
+  --ax-border-em: #d4d4d4;
+  --ax-r-inner: 6px;
+  --ax-r-el: 10px;
+  --ax-r-container: 12px;
+}
+
+/* ── Button ── */
+.ax-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 32px;
+  border: none;
+  border-radius: var(--ax-r-el);
+  font-family: var(--ax-font);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4286;
+  cursor: pointer;
+  white-space: nowrap;
+  background-image: none;
+  transition: background-color 0.15s, opacity 0.15s;
+}
+.ax-btn.sm { height: 28px; }
+.ax-btn svg { width: 16px; height: 16px; flex: none; }
+.ax-btn.primary { background-color: var(--ax-accent); color: var(--ax-on-accent); }
+.ax-btn.primary:hover { background-image: linear-gradient(rgba(255,255,255,0.12), rgba(255,255,255,0.12)); }
+.ax-btn.secondary { background-color: var(--ax-neutral); color: var(--ax-text); }
+.ax-btn.secondary:hover { background-image: linear-gradient(var(--ax-hover), var(--ax-hover)); }
+.ax-btn.ghost { background-color: transparent; color: var(--ax-text); }
+.ax-btn.ghost:hover { background-color: var(--ax-hover); }
+.ax-btn:disabled { opacity: 0.45; cursor: not-allowed; background-image: none; }
+
+/* ── IconButton ── */
+.ax-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--ax-r-el);
+  cursor: pointer;
+  color: var(--ax-text);
+  background: transparent;
+  flex: none;
+  transition: background-color 0.15s;
+}
+.ax-iconbtn.sm { width: 28px; height: 28px; }
+.ax-iconbtn.xs { width: 22px; height: 22px; border-radius: 5px; }
+.ax-iconbtn.secondary { background-color: var(--ax-neutral); }
+.ax-iconbtn.secondary:hover { background-image: linear-gradient(var(--ax-hover), var(--ax-hover)); }
+.ax-iconbtn.ghost:hover { background-color: var(--ax-hover); }
+
+/* ── TabList / Tab ── */
+.ax-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+}
+.ax-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--ax-r-el);
+  background: transparent;
+  font-family: var(--ax-font);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4286;
+  color: var(--ax-text-2);
+  cursor: pointer;
+}
+.ax-tab.sm { height: 28px; }
+.ax-tab:hover { background-color: var(--ax-hover); }
+.ax-tab.on { color: var(--ax-text); font-weight: 600; }
+.ax-tab::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 9999px;
+  background: transparent;
+  transition: background-color 0.15s;
+}
+.ax-tab.on::after { background: var(--ax-accent); }
+/* bold text shifts layout — reserve weight like astryx does */
+.ax-tab b { font-weight: inherit; }
+
+/* ── Card ── */
+.ax-card {
+  background: #ffffff;
+  border: 1px solid transparent;
+  border-radius: var(--ax-r-container);
+  padding: 16px;
+}
+
+/* ── EmptyState ── */
+.ax-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  padding: 32px 24px;
+  font-family: var(--ax-font);
+}
+.ax-empty .ax-empty-icon { color: var(--ax-text-2); }
+.ax-empty .ax-empty-icon svg { width: 28px; height: 28px; }
+.ax-empty h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.4118;
+  color: var(--ax-text);
+  border: none;
+  padding: 0;
+  font-family: var(--ax-font);
+  letter-spacing: 0;
+}
+.ax-empty p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4286;
+  color: var(--ax-text-2);
+  max-width: 360px;
+}
+
+/* ── Banner (error) ── */
+.ax-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--ax-r-container);
+  font-family: var(--ax-font);
+  max-width: 80vw;
+}
+.ax-banner.error { background: #facecb; color: #89001a; }
+.ax-banner .ax-banner-title { font-size: 14px; font-weight: 600; line-height: 1.4286; }
+.ax-banner svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.ax-banner .ax-banner-x {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+  display: inline-flex;
+}
+.ax-banner .ax-banner-x:hover { background: rgba(0, 0, 0, 0.08); }
+
+/* ── Dialog ── */
+.ax-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+.ax-dialog {
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.25);
+  width: 520px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--ax-font);
+}
+.ax-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+}
+.ax-dialog-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ax-text);
+  border: none;
+  padding: 0;
+  font-family: var(--ax-font);
+  letter-spacing: 0;
+}
+.ax-dialog-body { padding: 8px 20px 16px; overflow: auto; }
+.ax-dialog-foot {
+  border-top: 1px solid var(--ax-border);
+  padding: 12px 20px;
+}
+
+/* ── Field / TextInput / NumberInput ── */
+.ax-field { display: flex; flex-direction: column; gap: 4px; font-family: var(--ax-font); }
+.ax-field > label { font-size: 14px; font-weight: 500; color: var(--ax-text); }
+.ax-input {
+  height: 32px;
+  border: 1px solid var(--ax-border-em);
+  border-radius: var(--ax-r-el);
+  padding: 0 10px;
+  font-size: 14px;
+  font-family: var(--ax-font);
+  color: var(--ax-text);
+  background: #ffffff;
+  width: 100%;
+}
+.ax-input::placeholder { color: var(--ax-text-2); }
+.ax-input:focus { outline: 2px solid var(--ax-accent); outline-offset: 1px; border-color: transparent; }
+
+/* ── CheckboxInput ── */
+.ax-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  font-family: var(--ax-font);
+  font-size: 14px;
+  color: var(--ax-text);
+  line-height: 1.4286;
+}
+.ax-check .box {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--ax-border-em);
+  border-radius: var(--ax-r-inner);
+  background: #ffffff;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  transition: background-color 0.12s, border-color 0.12s;
+}
+.ax-check .box svg { width: 12px; height: 12px; }
+.ax-check.on .box { background: var(--ax-accent); border-color: var(--ax-accent); color: #fff; }

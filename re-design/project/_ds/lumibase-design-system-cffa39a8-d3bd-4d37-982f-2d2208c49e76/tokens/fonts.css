@@ -1,0 +1,5 @@
+/* LumiBase — Webfonts
+   The brand uses Inter across all weights (Regular 400, Medium 500,
+   SemiBold 600, Bold 700). Served from Google Fonts CDN, which declares
+   the @font-face rules consumers ship. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');

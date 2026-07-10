@@ -11,13 +11,12 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/plus-jakarta-sans";
 import App from "./App";
 import "./styles.css";
-import { initTheme } from "./lib/theme";
-
-initTheme();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <Theme theme={neutralTheme}>
+    {/* mode=light cố định: app chỉ có giao diện sáng; mặc định "system" sẽ
+        ăn theo dark mode của Windows làm token chữ sáng đè lên nền trắng */}
+    <Theme theme={neutralTheme} mode="light">
       <App />
     </Theme>
   </React.StrictMode>
