@@ -12,11 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub mod audio;
+pub mod chunk;
 mod conv;
 pub mod image_ocr;
+pub mod intelligence;
 #[cfg(feature = "llm")]
 pub mod llm;
-pub mod chunk;
 pub mod probe;
 pub mod tables;
 pub mod viet_legacy;
@@ -164,7 +165,9 @@ impl Converter {
             .opts
             .whisper_model
             .as_ref()
-            .ok_or(ConvertError::Unsupported("audio: chưa cấu hình whisper_model"))?;
+            .ok_or(ConvertError::Unsupported(
+                "audio: chưa cấu hình whisper_model",
+            ))?;
         let eng = AudioEngine::load(model)?.with_threads(self.opts.audio_threads);
         // Nếu thread khác set trước, bỏ qua bản của ta (vẫn dùng bản đã cache).
         let _ = self.engine.set(eng);
@@ -240,7 +243,10 @@ mod tests {
         std::fs::write(&f, nfd).unwrap();
 
         let out = Converter::new().convert_path(&f).unwrap().markdown;
-        assert!(out.contains("tiếng"), "phải chứa 'tiếng' dạng NFC, got: {out:?}");
+        assert!(
+            out.contains("tiếng"),
+            "phải chứa 'tiếng' dạng NFC, got: {out:?}"
+        );
         assert!(out.contains("Việt"), "phải chứa 'Việt' dạng NFC");
         // Không còn combining mark rời nào.
         assert!(!out.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)));
