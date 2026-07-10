@@ -11,7 +11,7 @@
 //! Fallback: nếu pdf-inspector lỗi → đường PDFium (đếm ký tự); nếu vẫn không được /
 //! thiếu libpdfium → `pdf-extract`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
@@ -340,25 +340,35 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
         return;
     }
 
-    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut candidates: HashSet<String> = HashSet::new();
+    let normalized_pages: Vec<String> = pages
+        .iter()
+        .map(|page| {
+            page.lines()
+                .filter_map(normalized_margin_line)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
     for page in pages.iter() {
         let lines: Vec<&str> = page.lines().collect();
-        // Count across the page, but removal below is still restricted to the
-        // margins. This is robust when a converter inserts blank/metadata lines
-        // before the visual header.
-        let unique: HashSet<String> = lines
-            .iter()
-            .filter_map(|line| normalized_margin_line(line))
-            .collect();
-        for line in unique {
-            *counts.entry(line).or_default() += 1;
+        for index in margin_indices(&lines) {
+            if let Some(line) = normalized_margin_line(lines[index]) {
+                candidates.insert(line);
+            }
         }
     }
 
     let threshold = (pages.len() * 3).div_ceil(5).max(3);
-    let repeated: Vec<String> = counts
+    let repeated: Vec<String> = candidates
         .into_iter()
-        .filter_map(|(line, count)| (count >= threshold).then_some(line))
+        .filter(|line| {
+            normalized_pages
+                .iter()
+                .filter(|page| page.contains(line))
+                .count()
+                >= threshold
+        })
         .collect();
     if repeated.is_empty() {
         return;
