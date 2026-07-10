@@ -49,7 +49,7 @@ pub fn to_markdown(
     // Keep the slower path as fallback for OCR and malformed tables.
     if !ocr_images {
         if let Some(selected_pages) = pages {
-            if let Some(md) = via_pdf_inspector_filtered_fast(&bytes, selected_pages) {
+            if let Some(md) = via_pdf_inspector_filtered_fast(path, &bytes, selected_pages) {
                 return Ok(md);
             }
         }
@@ -105,25 +105,12 @@ fn parse_marked_pages(markdown: &str) -> HashMap<u32, String> {
     pages
 }
 
-fn remove_page_markers(markdown: &str) -> String {
-    markdown
-        .lines()
-        .filter(|line| {
-            let line = line.trim();
-            !(line.starts_with("<!-- Page ") && line.ends_with(" -->"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
 /// Fast structured extraction for a sorted, page-filtered request.
 ///
 /// Page markers let us independently validate every page that the detector
 /// considers suspicious. A genuine scan has an empty/low-confidence section
 /// and falls through to the normal PDFium/Tesseract path.
-fn via_pdf_inspector_filtered_fast(bytes: &[u8], pages: &[u32]) -> Option<String> {
+fn via_pdf_inspector_filtered_fast(path: &Path, bytes: &[u8], pages: &[u32]) -> Option<String> {
     let selected: Vec<u32> = pages.iter().copied().filter(|&page| page >= 1).collect();
     if selected.is_empty() || selected.windows(2).any(|pair| pair[0] >= pair[1]) {
         return None;
@@ -131,6 +118,9 @@ fn via_pdf_inspector_filtered_fast(bytes: &[u8], pages: &[u32]) -> Option<String
 
     let mut markdown_options = pdf_inspector::MarkdownOptions::default();
     markdown_options.include_page_numbers = true;
+    // Keep headers in each marked chunk so our page-aware cleanup can also
+    // process native-text replacements consistently.
+    markdown_options.strip_headers_footers = false;
     let options = pdf_inspector::PdfOptions::new()
         .pages(selected.iter().copied())
         .markdown(markdown_options);
@@ -140,11 +130,11 @@ fn via_pdf_inspector_filtered_fast(bytes: &[u8], pages: &[u32]) -> Option<String
     .ok()?
     .ok()?;
     let marked = result.markdown?;
-    if marked.trim().is_empty() || markdown_has_malformed_table(&marked) {
+    if marked.trim().is_empty() {
         return None;
     }
 
-    let chunks = parse_marked_pages(&marked);
+    let mut chunks = parse_marked_pages(&marked);
     if selected.iter().any(|page| !chunks.contains_key(page)) {
         return None;
     }
@@ -158,8 +148,40 @@ fn via_pdf_inspector_filtered_fast(bytes: &[u8], pages: &[u32]) -> Option<String
         }
     }
 
-    let clean = remove_page_markers(&marked);
-    (!clean.is_empty()).then_some(clean)
+    let malformed_pages: Vec<u32> = selected
+        .iter()
+        .copied()
+        .filter(|page| {
+            chunks
+                .get(page)
+                .is_some_and(|text| markdown_has_malformed_table(text))
+        })
+        .collect();
+    if !malformed_pages.is_empty() {
+        let native_pages = native_text_for_pages(path, &malformed_pages);
+        for page in malformed_pages {
+            let native = native_pages.get(&page)?;
+            let structured = chunks.get(&page)?;
+            if !native_text_is_trustworthy(native)
+                || !native_text_covers_markdown(native, structured)
+            {
+                return None;
+            }
+            chunks.insert(page, native.trim().to_string());
+        }
+    }
+
+    let mut ordered: Vec<String> = selected
+        .iter()
+        .filter_map(|page| chunks.remove(page))
+        .collect();
+    strip_repeated_marginal_lines(&mut ordered);
+    let clean = ordered
+        .into_iter()
+        .filter(|page| !page.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!clean.trim().is_empty()).then_some(clean)
 }
 
 /// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/Tesseract cho trang scan.
@@ -310,6 +332,25 @@ fn native_page_text_at(doc: &PdfDocument, page_0idx: u32) -> Option<String> {
         .ok()
         .map(|text| text.all())
         .filter(|text| !text.trim().is_empty())
+}
+
+fn native_text_for_pages(path: &Path, pages_1idx: &[u32]) -> HashMap<u32, String> {
+    PDFIUM.with(|opt| {
+        let Some(doc) = opt
+            .as_ref()
+            .and_then(|pdfium| pdfium.load_pdf_from_file(path, None).ok())
+        else {
+            return HashMap::new();
+        };
+        pages_1idx
+            .iter()
+            .filter_map(|&page| {
+                page.checked_sub(1)
+                    .and_then(|page_0idx| native_page_text_at(&doc, page_0idx))
+                    .map(|text| (page, text))
+            })
+            .collect()
+    })
 }
 
 /// Conservative trust gate for a native PDF text layer.
@@ -717,8 +758,7 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
 mod tests {
     use super::{
         markdown_has_malformed_table, native_text_covers_markdown, native_text_is_high_confidence,
-        native_text_is_trustworthy, parse_marked_pages, remove_page_markers,
-        strip_repeated_marginal_lines,
+        native_text_is_trustworthy, parse_marked_pages, strip_repeated_marginal_lines,
     };
 
     #[test]
@@ -847,7 +887,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_removes_fast_path_page_markers() {
+    fn parses_fast_path_page_markers() {
         let marked = "<!-- Page 2 -->\n\n## Hai\n\nNội dung\n\
             <!-- Page 5 -->\n\n## Năm\n\nNội dung khác";
         let pages = parse_marked_pages(marked);
@@ -860,9 +900,5 @@ mod tests {
             pages.get(&5).map(String::as_str),
             Some("## Năm\n\nNội dung khác")
         );
-        let clean = remove_page_markers(marked);
-        assert!(!clean.contains("<!-- Page"));
-        assert!(clean.contains("## Hai"));
-        assert!(clean.contains("## Năm"));
     }
 }
