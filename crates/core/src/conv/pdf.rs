@@ -311,46 +311,31 @@ fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Option<String> 
         merged.pages_needing_ocr.extend(part.pages_needing_ocr);
     }
 
-    let mut recover: Vec<u32> = selected
+    let missing: Vec<u32> = selected
         .iter()
         .copied()
-        .filter(|page| {
-            !merged.chunks.contains_key(page)
-                || merged
-                    .chunks
-                    .get(page)
-                    .is_some_and(|text| markdown_has_malformed_table(text))
-        })
+        .filter(|page| !merged.chunks.contains_key(page))
         .collect();
-    recover.sort_unstable();
-    if !recover.is_empty() {
-        let recovery_workers = workers.min(recover.len());
-        let recovery_chunk = recover.len().div_ceil(recovery_workers);
-        let recovered = std::thread::scope(|scope| {
-            let handles: Vec<_> = recover
-                .chunks(recovery_chunk)
-                .map(|group| {
-                    scope.spawn(|| {
-                        group
-                            .iter()
-                            .map(|&page| {
-                                let mut single = extract_fast_pages_once(bytes, &[page])?;
-                                let text = single.chunks.remove(&page)?;
-                                Some((page, text, single.pages_needing_ocr))
-                            })
-                            .collect::<Option<Vec<_>>>()
-                    })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| handle.join().ok().flatten())
-                .collect::<Option<Vec<Vec<_>>>>()
-        })?;
-        for group in recovered {
-            for (page, text, pages_needing_ocr) in group {
-                merged.chunks.insert(page, text);
-                merged.pages_needing_ocr.extend(pages_needing_ocr);
+    let missing_set: HashSet<u32> = missing.iter().copied().collect();
+    for page in missing {
+        let native = native_pages.get(&page)?;
+        if !native_text_is_high_confidence(native) {
+            return None;
+        }
+        merged.chunks.insert(page, native.trim().to_string());
+
+        // pdf-inspector 0.1.3 appends an unmarked table-only page to the
+        // preceding marked chunk. Replace that predecessor with its native
+        // page text as well, preventing duplicate/misattributed content.
+        if let Some(previous) = page.checked_sub(1).filter(|page| *page >= 1) {
+            if !missing_set.contains(&previous) && merged.chunks.contains_key(&previous) {
+                let previous_native = native_pages.get(&previous)?;
+                if !native_text_is_high_confidence(previous_native) {
+                    return None;
+                }
+                merged
+                    .chunks
+                    .insert(previous, previous_native.trim().to_string());
             }
         }
     }
@@ -647,9 +632,37 @@ fn native_text_is_high_confidence(text: &str) -> bool {
 }
 
 fn native_text_covers_markdown(native: &str, markdown: &str) -> bool {
-    let native_alnum = native.chars().filter(|ch| ch.is_alphanumeric()).count();
-    let markdown_alnum = markdown.chars().filter(|ch| ch.is_alphanumeric()).count();
-    markdown_alnum == 0 || native_alnum * 100 >= markdown_alnum * 90
+    fn capped_tokens(text: &str) -> HashMap<String, u8> {
+        let mut counts = HashMap::new();
+        let mut token = String::new();
+        let flush = |token: &mut String, counts: &mut HashMap<String, u8>| {
+            if !token.is_empty() {
+                let count = counts.entry(std::mem::take(token)).or_default();
+                *count = (*count + 1).min(2);
+            }
+        };
+        for ch in text.chars() {
+            if ch.is_alphanumeric() {
+                token.extend(ch.to_lowercase());
+            } else {
+                flush(&mut token, &mut counts);
+            }
+        }
+        flush(&mut token, &mut counts);
+        counts
+    }
+
+    let native_tokens = capped_tokens(native);
+    let markdown_tokens = capped_tokens(markdown);
+    let expected: usize = markdown_tokens.values().map(|&count| count as usize).sum();
+    if expected == 0 {
+        return true;
+    }
+    let overlap: usize = markdown_tokens
+        .iter()
+        .map(|(token, &count)| count.min(native_tokens.get(token).copied().unwrap_or(0)) as usize)
+        .sum();
+    overlap * 100 >= expected * 90
 }
 
 fn table_cells(line: &str) -> Option<Vec<&str>> {
