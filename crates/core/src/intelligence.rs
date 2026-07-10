@@ -407,6 +407,15 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
         let chunks = chunk_markdown(&document.markdown, max_chars.max(200));
         let mut cursor = 0usize;
         for chunk in chunks {
+            let marker_only = chunk.text.lines().all(|line| {
+                let line = line.trim();
+                line.is_empty()
+                    || (line.starts_with("<!-- Trang ") && line.ends_with(" (OCR) -->"))
+                    || (line.starts_with("<!-- Page ") && line.ends_with(" -->"))
+            });
+            if marker_only {
+                continue;
+            }
             cursor = cursor.min(document.markdown.len());
             while cursor < document.markdown.len() && !document.markdown.is_char_boundary(cursor) {
                 cursor += 1;
