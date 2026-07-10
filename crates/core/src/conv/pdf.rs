@@ -146,15 +146,23 @@ fn extract_fast_pages_once(bytes: &[u8], selected: &[u32]) -> Option<FastPages> 
 
 fn extract_fast_pages(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
     let mut extracted = extract_fast_pages_once(bytes, selected)?;
-    let missing: Vec<u32> = selected
+    let mut recover: HashSet<u32> = selected
         .iter()
         .copied()
         .filter(|page| !extracted.chunks.contains_key(page))
         .collect();
+    if selected.len() > 1 {
+        recover.extend(selected.iter().copied().filter(|page| {
+            extracted
+                .chunks
+                .get(page)
+                .is_some_and(|text| markdown_has_malformed_table(text))
+        }));
+    }
     // Multi-page table insertion in pdf-inspector 0.1.3 can omit a page marker
-    // for table-only pages. Recover only those pages individually instead of
-    // discarding the entire fast path.
-    for page in missing {
+    // or duplicate table content across page boundaries. Recover only those
+    // pages individually instead of discarding the entire fast path.
+    for page in recover {
         let mut single = extract_fast_pages_once(bytes, &[page])?;
         let text = single.chunks.remove(&page)?;
         extracted.chunks.insert(page, text);
