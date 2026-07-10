@@ -556,7 +556,7 @@ fn rename_node(state: State<AppState>, rel_path: String, new_name: String) -> Re
         if let Some(old_md) = child_case_insensitive(parent, &format!("{old_name}.md")) {
             let new_md = parent.join(format!("{new_name}.md"));
             if child_case_insensitive(parent, &format!("{new_name}.md")).is_some() {
-                return Err(format!("đã tồn tại Markdown liên kết '{}.md'", new_name));
+                return Err(format!("đã tồn tại Markdown liên kết '{new_name}.md'"));
             }
             paired_rename = Some((old_md, new_md));
         }
