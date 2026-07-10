@@ -137,7 +137,13 @@ fn extract_fast_pages_once(bytes: &[u8], selected: &[u32]) -> Option<FastPages> 
     if marked.trim().is_empty() {
         return None;
     }
-    let chunks = parse_marked_pages(&marked);
+    let mut chunks = parse_marked_pages(&marked);
+    // Table-only pages in pdf-inspector 0.1.3 can produce Markdown without the
+    // requested page marker even when marker output is enabled. A single-page
+    // request is still unambiguous.
+    if chunks.is_empty() && selected.len() == 1 {
+        chunks.insert(selected[0], marked.trim().to_string());
+    }
     Some(FastPages {
         chunks,
         pages_needing_ocr: result.pages_needing_ocr.into_iter().collect(),
