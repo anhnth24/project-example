@@ -967,8 +967,9 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        markdown_has_malformed_table, native_text_covers_markdown, native_text_is_high_confidence,
-        native_text_is_trustworthy, parse_marked_pages, strip_repeated_marginal_lines,
+        load_pdfium, markdown_has_malformed_table, native_text_covers_markdown,
+        native_text_is_high_confidence, native_text_is_trustworthy, parse_marked_pages,
+        strip_repeated_marginal_lines,
     };
 
     #[test]
@@ -1110,5 +1111,18 @@ mod tests {
             pages.get(&5).map(String::as_str),
             Some("## Năm\n\nNội dung khác")
         );
+    }
+
+    #[test]
+    fn reuses_initialized_pdfium_bindings_across_threads() {
+        if load_pdfium().is_none() {
+            return; // PDFium is an optional runtime dependency.
+        }
+        let handles: Vec<_> = (0..4)
+            .map(|_| std::thread::spawn(|| load_pdfium().is_some()))
+            .collect();
+        assert!(handles
+            .into_iter()
+            .all(|handle| handle.join().unwrap_or(false)));
     }
 }
