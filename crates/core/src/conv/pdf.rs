@@ -945,7 +945,7 @@ fn load_pdfium() -> Option<Pdfium> {
         let path = PathBuf::from(p);
         candidates.push(path.clone());
         if path.is_dir() {
-            candidates.push(Pdfium::pdfium_platform_library_name_at_path(path));
+            candidates.push(Pdfium::pdfium_platform_library_name_at_path(&path));
         }
     }
 
@@ -966,10 +966,10 @@ fn load_pdfium() -> Option<Pdfium> {
     );
     for root in roots {
         candidates.push(Pdfium::pdfium_platform_library_name_at_path(
-            root.join("pdfium/lib"),
+            &root.join("pdfium/lib"),
         ));
         candidates.push(Pdfium::pdfium_platform_library_name_at_path(
-            root.join("pdfium"),
+            &root.join("pdfium"),
         ));
     }
     let mut seen = HashSet::new();
