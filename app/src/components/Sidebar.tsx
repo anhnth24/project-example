@@ -17,8 +17,10 @@ import { Tree } from "./Tree";
 import { Button, IconButton, Modal } from "./ui";
 
 type DialogState =
-  | { kind: "create-folder" | "create-markdown" }
-  | { kind: "rename" | "delete"; node: FsNode }
+  | { kind: "create-folder" }
+  | { kind: "create-markdown" }
+  | { kind: "rename"; node: FsNode }
+  | { kind: "delete"; node: FsNode }
   | null;
 
 export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
