@@ -67,8 +67,10 @@ convert pdf
 ```
 
 Đánh đổi (đo thực): corpus cũ pdf-inspector **~18ms/trang** (có cấu trúc + đa cột)
-vs PDFium **~5.67ms/trang** (chỉ text). Đường range song song mới đo **~11.4ms/trang**
-trên PDF CASAN 45 trang/8 vCPU; chọn riêng một trang ~55–61ms thay vì ~400–440ms.
+vs PDFium **~5.67ms/trang** (chỉ text). Đường range song song mới đo **~7.8ms/trang**
+trên PDF CASAN 45 trang/8 vCPU; chọn riêng một trang ~55–59ms thay vì ~400–440ms.
+Tauri dev tối ưu tạo sidecar cùng file trong ~0.40s (trước đó 17.54s do core opt-level 0
+và không tìm thấy PDFium khi working directory là `app/`).
 Chi tiết: [`../bench/REPORT_CASAN_PDF.md`](../bench/REPORT_CASAN_PDF.md).
 
 ### Mỗi converter (tóm tắt)

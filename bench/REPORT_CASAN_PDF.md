@@ -26,23 +26,33 @@ dùng `pdftotext -raw` làm tham chiếu text-layer.
 - `pdf-inspector` và PDFium chạy chồng thời gian; PDFium binding tái sử dụng an toàn
   giữa các thread.
 - Xóa header/footer lặp nhưng không đụng dòng bảng Markdown.
+- Desktop dev tự tìm `pdfium/` và `tessdata_best/` từ các thư mục cha/executable,
+  không phụ thuộc current working directory `app/`.
+- Profile dev tối ưu core/dependency để `pnpm tauri dev` không chạy pipeline PDF
+  hoàn toàn ở `opt-level=0`.
 
 ## Kết quả
 
 | Kịch bản | Trước | Sau |
 |---|---:|---:|
-| Full 45 trang | ~0.77 s sau fix chất lượng tuần tự | **0.51 s** |
+| Full 45 trang (CLI release) | ~0.77 s sau fix chất lượng tuần tự | **0.35 s** |
 | Chọn 1 trang thường | ~0.40 s | **0.055 s** |
-| Chọn 1 trang bảng | ~0.44 s | **0.061 s** |
-| Chọn trang 1–10 | ~0.49 s | **0.29 s** |
+| Chọn 1 trang bảng | ~0.44 s | **0.059 s** |
+| Chọn trang 1–10 | ~0.49 s | **0.27 s** |
+| Desktop Tauri dev, click `Convert ngay` → `.md` | 17.54 s | **0.403 s** |
 | Trang OCR nhầm | 3 | **0** |
 | Header `Mã hiệu` lặp | 45 | **0** |
-| Token recall (bỏ header lặp) | — | **99.84%** |
+| Token recall (bỏ header lặp) | — | **99.86%** |
 | Token precision | — | **100%** |
 
 So với đường tuần tự bảo thủ, output song song giữ 99.95% token, đồng thời giữ
 nhiều heading/bảng hợp lệ hơn. PDF ảnh-only sinh từ trang 4 vẫn đi qua
 `<!-- Trang 1 (OCR) -->`.
+
+Tauri được chạy thật trong Xvfb 1440×900 với DATA riêng: mở PDF raw, bấm
+`Convert ngay`, sidecar 107.854 ký tự được tạo trong 0.403 giây; giao diện tự
+chuyển sang chế độ Đối chiếu. Lần compile dev đầu tiên lâu hơn do dependency được
+tối ưu, các lần chạy/compile tăng dần dùng incremental cache.
 
 ## Lệnh đo
 
