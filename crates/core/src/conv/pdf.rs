@@ -196,20 +196,30 @@ fn via_pdf_inspector(
     // pages 1-indexed từ người dùng → 0-indexed cho pdf-inspector.
     let pages0: Option<Vec<u32>> =
         pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect());
-    // pdf-inspector dùng lopdf bên trong → bọc catch_unwind cho chắc.
-    let res = catch_unwind(AssertUnwindSafe(|| {
-        pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
-    }))
-    .ok()?
-    .ok()?;
+    // lopdf structure extraction and PDFium native-text extraction are
+    // independent. Run them concurrently so documents that need native table
+    // rescue pay the slower stage, not the sum of both stages.
+    let (res, native_pages) = std::thread::scope(|scope| {
+        let inspector = scope.spawn(|| {
+            catch_unwind(AssertUnwindSafe(|| {
+                pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
+            }))
+            .ok()?
+            .ok()
+        });
+        let native_pages = native_text_for_requested_pages(path, pages);
+        let res = inspector.join().ok().flatten()?;
+        Some((res, native_pages))
+    })?;
 
-    let has_malformed_tables = res
-        .pages
-        .iter()
-        .any(|page| markdown_has_malformed_table(&page.markdown));
-    let need_pdfium = has_malformed_tables
-        || res.pages.iter().any(|page| page.needs_ocr)
-        || (ocr_enabled && ocr_images);
+    let needs_rendered_ocr = res.pages.iter().any(|page| {
+        page.needs_ocr
+            && !native_pages.get(&(page.page + 1)).is_some_and(|text| {
+                native_text_is_trustworthy(text)
+                    && (page.ocr_reason.is_none() || native_text_is_high_confidence(text))
+            })
+    });
+    let need_pdfium = ocr_enabled && (ocr_images || needs_rendered_ocr);
 
     PDFIUM.with(|opt| -> Option<String> {
         // Chỉ mở PDFium khi thật sự cần (OCR trang scan hoặc OCR ảnh nhúng).
@@ -233,13 +243,10 @@ fn via_pdf_inspector(
                 // though PDFium decodes the main text perfectly. Prefer that
                 // native text when it passes a conservative quality gate;
                 // only render + OCR genuinely empty/garbled pages.
-                let native_text = pdf_doc
-                    .as_ref()
-                    .and_then(|d| native_page_text_at(d, pm.page))
-                    .filter(|text| {
-                        native_text_is_trustworthy(text)
-                            && (pm.ocr_reason.is_none() || native_text_is_high_confidence(text))
-                    });
+                let native_text = native_pages.get(&(pm.page + 1)).filter(|text| {
+                    native_text_is_trustworthy(text)
+                        && (pm.ocr_reason.is_none() || native_text_is_high_confidence(text))
+                });
 
                 if let Some(text) = native_text {
                     page_out.push_str(text.trim_end());
@@ -265,13 +272,10 @@ fn via_pdf_inspector(
                 // tự đọc: ít đẹp hơn nhưng không làm mất hoặc đảo nội dung.
                 let native_table_fallback = markdown_has_malformed_table(&pm.markdown)
                     .then(|| {
-                        pdf_doc
-                            .as_ref()
-                            .and_then(|d| native_page_text_at(d, pm.page))
-                            .filter(|text| {
-                                native_text_is_trustworthy(text)
-                                    && native_text_covers_markdown(text, &pm.markdown)
-                            })
+                        native_pages.get(&(pm.page + 1)).filter(|text| {
+                            native_text_is_trustworthy(text)
+                                && native_text_covers_markdown(text, &pm.markdown)
+                        })
                     })
                     .flatten();
                 if let Some(text) = native_table_fallback {
@@ -334,7 +338,10 @@ fn native_page_text_at(doc: &PdfDocument, page_0idx: u32) -> Option<String> {
         .filter(|text| !text.trim().is_empty())
 }
 
-fn native_text_for_pages(path: &Path, pages_1idx: &[u32]) -> HashMap<u32, String> {
+fn native_text_for_requested_pages(
+    path: &Path,
+    pages_1idx: Option<&[u32]>,
+) -> HashMap<u32, String> {
     PDFIUM.with(|opt| {
         let Some(doc) = opt
             .as_ref()
@@ -342,15 +349,30 @@ fn native_text_for_pages(path: &Path, pages_1idx: &[u32]) -> HashMap<u32, String
         else {
             return HashMap::new();
         };
-        pages_1idx
-            .iter()
-            .filter_map(|&page| {
-                page.checked_sub(1)
-                    .and_then(|page_0idx| native_page_text_at(&doc, page_0idx))
-                    .map(|text| (page, text))
-            })
-            .collect()
+        match pages_1idx {
+            Some(pages) => pages
+                .iter()
+                .filter_map(|&page| {
+                    page.checked_sub(1)
+                        .and_then(|page_0idx| native_page_text_at(&doc, page_0idx))
+                        .map(|text| (page, text))
+                })
+                .collect(),
+            None => doc
+                .pages()
+                .iter()
+                .enumerate()
+                .filter_map(|(page_0idx, _)| {
+                    native_page_text_at(&doc, page_0idx as u32)
+                        .map(|text| (page_0idx as u32 + 1, text))
+                })
+                .collect(),
+        }
     })
+}
+
+fn native_text_for_pages(path: &Path, pages_1idx: &[u32]) -> HashMap<u32, String> {
+    native_text_for_requested_pages(path, Some(pages_1idx))
 }
 
 /// Conservative trust gate for a native PDF text layer.
