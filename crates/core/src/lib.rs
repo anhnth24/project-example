@@ -16,6 +16,8 @@ pub mod chunk;
 mod conv;
 pub mod image_ocr;
 pub mod intelligence;
+#[cfg(test)]
+mod intelligence_tests;
 #[cfg(feature = "llm")]
 pub mod llm;
 pub mod probe;

@@ -878,3 +878,123 @@ pub async fn export_knowledge_pack(
     .await
     .map_err(es)?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_root() -> PathBuf {
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "markhand_intelligence_tauri_{}_{}",
+            std::process::id(),
+            count
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn loads_existing_markdown_sidecar() {
+        let root = temp_root();
+        fs::write(root.join("report.pdf"), b"%PDF").unwrap();
+        fs::write(root.join("report.pdf.md"), "# Report").unwrap();
+        let document = load_document(&root, "report.pdf").unwrap();
+        assert_eq!(document.markdown, "# Report");
+        assert_eq!(document.md_rel, "report.pdf.md");
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn snapshot_returns_none_without_markdown() {
+        let root = temp_root();
+        fs::write(root.join("report.pdf"), b"%PDF").unwrap();
+        assert!(snapshot_existing_version(&root, "report.pdf")
+            .unwrap()
+            .is_none());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn snapshot_propagates_corrupt_markdown_error() {
+        let root = temp_root();
+        fs::write(root.join("report.pdf"), b"%PDF").unwrap();
+        fs::write(root.join("report.pdf.md"), [0xff, 0xfe, 0xfd]).unwrap();
+        assert!(snapshot_existing_version(&root, "report.pdf").is_err());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn repeated_snapshots_get_unique_ids() {
+        let root = temp_root();
+        fs::write(root.join("report.pdf"), b"%PDF").unwrap();
+        fs::write(root.join("report.pdf.md"), "# Report").unwrap();
+        let first = snapshot_existing_version(&root, "report.pdf")
+            .unwrap()
+            .unwrap();
+        let second = snapshot_existing_version(&root, "report.pdf")
+            .unwrap()
+            .unwrap();
+        assert_ne!(first.id, second.id);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn version_id_validation_rejects_traversal() {
+        assert!(valid_version_id("v-123-1"));
+        assert!(!valid_version_id("../secret"));
+        assert!(!valid_version_id("v/123"));
+        assert!(!valid_version_id(""));
+    }
+
+    #[test]
+    fn handoff_directory_stays_inside_data_root() {
+        let root = temp_root();
+        let dir = handoff_dir(&root, "pack", None).unwrap();
+        assert!(dir.starts_with(&root));
+        assert!(handoff_dir(&root, "pack", Some("../escape")).is_err());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn persisted_pack_round_trips() {
+        let root = temp_root();
+        let pack = intelligence::generate_handoff_pack(
+            &[CorpusDocument {
+                source_rel: "requirements.md".into(),
+                md_rel: "requirements.md".into(),
+                format: "markdown".into(),
+                markdown: "# Yêu cầu\n\nHệ thống phải lưu log.".into(),
+            }],
+            &HandoffOptions::default(),
+        );
+        let dir = handoff_dir(&root, &pack.pack_id, None).unwrap();
+        persist_pack(&dir, &pack).unwrap();
+        let relative = rel_of(&root, &dir);
+        let (_, loaded) = load_persisted_pack(&root, &relative).unwrap();
+        assert_eq!(loaded.pack_id, pack.pack_id);
+        assert!(dir.join("01-BRD.md").exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_and_markhand_symlinks_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root();
+        let outside = temp_root();
+        fs::write(root.join("report.pdf"), b"%PDF").unwrap();
+        fs::write(outside.join("outside.md"), "# Outside").unwrap();
+        symlink(outside.join("outside.md"), root.join("report.pdf.md")).unwrap();
+        assert!(markdown_path(&root, "report.pdf").is_err());
+
+        symlink(&outside, root.join(".markhand")).unwrap();
+        assert!(markhand_root(&root).is_err());
+        fs::remove_dir_all(root).ok();
+        fs::remove_dir_all(outside).ok();
+    }
+}

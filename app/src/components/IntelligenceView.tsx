@@ -28,6 +28,13 @@ import {
 } from "lucide-react";
 import { api } from "../lib/ipc";
 import { fileIcon } from "../lib/icons";
+import {
+  intelligenceSlug,
+  reconcileIntelligenceScope,
+  sameScope,
+  toggleScopeItem,
+  updateTableCell,
+} from "../lib/intelligenceUtils";
 import { flattenFiles, folderLabel } from "../lib/tree";
 import type {
   AskResult,
@@ -66,17 +73,6 @@ const MODES: {
 let cachedHandoff: HandoffResult | null = null;
 let cachedArtifactDrafts: Record<string, string> = {};
 let cachedActiveArtifact = "01-BRD.md";
-
-function slugify(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/đ/gi, "d")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 60);
-}
 
 function converted(node: FsNode): boolean {
   return !!node.mdRelPath || node.standaloneMd;
@@ -122,11 +118,11 @@ export function IntelligenceView() {
 
   useEffect(() => {
     const current = useStore.getState().intelligenceScope;
-    const valid = current.filter((relPath) =>
-      files.some((file) => file.relPath === relPath),
-    );
     setSelected(
-      valid.length || !files.length ? valid : files.map((file) => file.relPath),
+      reconcileIntelligenceScope(
+        current,
+        files.map((file) => file.relPath),
+      ),
     );
   }, [files]);
 
@@ -139,8 +135,7 @@ export function IntelligenceView() {
   const scopeKey = selected.join("\u0000");
   useEffect(() => {
     const cacheMatches =
-      cachedHandoff?.pack.sources.length === selected.length &&
-      cachedHandoff.pack.sources.every((source) => selected.includes(source));
+      !!cachedHandoff && sameScope(cachedHandoff.pack.sources, selected);
     if (!cacheMatches) {
       cachedHandoff = null;
       cachedArtifactDrafts = {};
@@ -197,11 +192,7 @@ export function IntelligenceView() {
 
   function toggleDocument(relPath: string) {
     const current = useStore.getState().intelligenceScope;
-    setSelected(
-      current.includes(relPath)
-        ? current.filter((item) => item !== relPath)
-        : [...current, relPath],
-    );
+    setSelected(toggleScopeItem(current, relPath));
   }
 
   async function generateHandoff() {
@@ -210,7 +201,7 @@ export function IntelligenceView() {
       api.generateHandoffPack({
         sourceRels: selected,
         productName: productName.trim() || "Dự án mới",
-        productSlug: slugify(productName) || "du-an",
+        productSlug: intelligenceSlug(productName) || "du-an",
         mode: handoffMode,
       }),
     );
@@ -417,7 +408,7 @@ export function IntelligenceView() {
     if (!ensureSelection()) return;
     const output = await saveDialog({
       title: "Xuất Knowledge Pack",
-      defaultPath: `${slugify(productName) || "knowledge-pack"}.zip`,
+      defaultPath: `${intelligenceSlug(productName) || "knowledge-pack"}.zip`,
       filters: [{ name: "ZIP", extensions: ["zip"] }],
     });
     if (!output) return;
@@ -427,7 +418,7 @@ export function IntelligenceView() {
         : api.exportKnowledgePack({
             sourceRels: selected,
             productName: productName.trim() || "Dự án mới",
-            productSlug: slugify(productName) || "du-an",
+            productSlug: intelligenceSlug(productName) || "du-an",
             outputAbs: output,
           }),
     );
@@ -880,23 +871,20 @@ export function IntelligenceView() {
                             {row.map((cell, columnIndex) =>
                               rowIndex === 0 ? (
                                 <th key={`${rowIndex}-${columnIndex}`} scope="col">
-                                <input
-                                  value={cell}
-                                   aria-label={`Tên cột ${columnIndex + 1}`}
-                                  onChange={(event) =>
-                                    setTableRows((current) =>
-                                      current.map((currentRow, currentRowIndex) =>
-                                        currentRowIndex === rowIndex
-                                          ? currentRow.map((currentCell, currentColumnIndex) =>
-                                              currentColumnIndex === columnIndex
-                                                ? event.target.value
-                                                : currentCell,
-                                            )
-                                          : currentRow,
-                                      ),
-                                    )
-                                  }
-                                />
+                                  <input
+                                    value={cell}
+                                    aria-label={`Tên cột ${columnIndex + 1}`}
+                                    onChange={(event) =>
+                                      setTableRows((current) =>
+                                        updateTableCell(
+                                          current,
+                                          rowIndex,
+                                          columnIndex,
+                                          event.target.value,
+                                        ),
+                                      )
+                                    }
+                                  />
                                 </th>
                               ) : (
                                 <td key={`${rowIndex}-${columnIndex}`}>
@@ -907,15 +895,11 @@ export function IntelligenceView() {
                                     }`}
                                     onChange={(event) =>
                                       setTableRows((current) =>
-                                        current.map((currentRow, currentRowIndex) =>
-                                          currentRowIndex === rowIndex
-                                            ? currentRow.map(
-                                                (currentCell, currentColumnIndex) =>
-                                                  currentColumnIndex === columnIndex
-                                                    ? event.target.value
-                                                    : currentCell,
-                                              )
-                                            : currentRow,
+                                        updateTableCell(
+                                          current,
+                                          rowIndex,
+                                          columnIndex,
+                                          event.target.value,
                                         ),
                                       )
                                     }
