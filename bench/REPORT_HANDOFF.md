@@ -56,3 +56,30 @@ Với corpus BRD/workshop/Excel traceability thật, BA/PM nên:
 2. xem cảnh báo và câu hỏi mở;
 3. chỉnh/duyệt BRD/PRD;
 4. chỉ bật LLM nếu chấp nhận gửi các đoạn citation tới provider.
+
+## Regression coverage
+
+Sau review, test suite được mở rộng từ các happy-path cơ bản thành **106 test**
+chạy tự động:
+
+| Lớp | Số test | Phạm vi |
+|---|---:|---|
+| `fileconv-core` | 68 | convert/OCR + 43 intelligence/handoff cases |
+| Tauri desktop | 14 | path jail, symlink, sidecar, snapshot, pack persistence |
+| React/TypeScript | 21 | Markdown blocks, tree và intelligence state/table helpers |
+| CLI metrics | 3 | CER/WER |
+
+Nhóm intelligence bao phủ:
+
+- corpus IDs, CRLF/UTF-8 offsets và page anchors;
+- search ranking/limit/accent folding và Q&A không có kết quả;
+- quality score cho short/OCR/repeated/encoding;
+- PII positive/negative/context/repeated/redaction bounds;
+- Markdown table parse/escape/update, schema typing và CSV formula injection;
+- diff added/removed/unchanged, merge clean/conflict;
+- watch glob và target state;
+- BR/FR/US/AC/assumption/question extraction;
+- stable IDs, đủ artifact, duplicate/missing/weak citations, empty requirements;
+- ZIP atomic replacement và archive completeness;
+- Tauri `.markhand`/sidecar symlink rejection, corrupt snapshot propagation,
+  version ID traversal và pack round-trip.
