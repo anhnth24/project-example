@@ -351,6 +351,13 @@ fn now_epoch() -> u64 {
         .as_secs()
 }
 
+fn now_nonce() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
 fn stable_hash(parts: impl IntoIterator<Item = impl AsRef<str>>) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for part in parts {
@@ -400,11 +407,18 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
         let chunks = chunk_markdown(&document.markdown, max_chars.max(200));
         let mut cursor = 0usize;
         for chunk in chunks {
+            cursor = cursor.min(document.markdown.len());
+            while cursor < document.markdown.len() && !document.markdown.is_char_boundary(cursor) {
+                cursor += 1;
+            }
             let start = document.markdown[cursor..]
                 .find(&chunk.text)
                 .map(|relative| cursor + relative)
                 .unwrap_or(cursor);
-            let end = (start + chunk.text.len()).min(document.markdown.len());
+            let mut end = (start + chunk.text.len()).min(document.markdown.len());
+            while end > start && !document.markdown.is_char_boundary(end) {
+                end -= 1;
+            }
             cursor = end;
             corpus.push(CorpusChunk {
                 id: format!(
@@ -429,18 +443,12 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
 }
 
 fn citation_from_chunk(chunk: &CorpusChunk, index: usize) -> Citation {
-    let quote = chunk
-        .text
-        .split_whitespace()
-        .take(42)
-        .collect::<Vec<_>>()
-        .join(" ");
     Citation {
         id: format!("CITE-{:04}", index + 1),
         source_rel: chunk.source_rel.clone(),
         md_rel: chunk.md_rel.clone(),
         heading: chunk.heading.clone(),
-        quote,
+        quote: chunk.text.clone(),
         start: chunk.start,
         end: chunk.end,
         page: chunk.page,
@@ -630,18 +638,19 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
     }
 }
 
-fn byte_span_for_token(line: &str, line_offset: usize, token: &str) -> Option<(usize, usize)> {
-    line.find(token)
-        .map(|relative| (line_offset + relative, line_offset + relative + token.len()))
-}
-
 pub fn detect_pii(documents: &[CorpusDocument]) -> PiiReport {
     let mut findings = Vec::new();
     for document in documents {
         let mut offset = 0usize;
         for line in document.markdown.split_inclusive('\n') {
             let lower = accent_fold(line);
+            let mut search_from = 0usize;
             for token in line.split_whitespace() {
+                let token_start = line[search_from..]
+                    .find(token)
+                    .map(|relative| search_from + relative)
+                    .unwrap_or(search_from);
+                search_from = (token_start + token.len()).min(line.len());
                 let clean = token.trim_matches(|ch: char| {
                     matches!(ch, ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']')
                 });
@@ -670,7 +679,9 @@ pub fn detect_pii(documents: &[CorpusDocument]) -> PiiReport {
                     None
                 };
                 if let Some((kind, confidence)) = kind {
-                    if let Some((start, end)) = byte_span_for_token(line, offset, clean) {
+                    if let Some(clean_start) = token.find(clean) {
+                        let start = offset + token_start + clean_start;
+                        let end = start + clean.len();
                         findings.push(PiiFinding {
                             kind,
                             text: clean.to_string(),
@@ -716,12 +727,27 @@ fn parse_table_row(line: &str) -> Option<Vec<String>> {
         .unwrap_or(trimmed)
         .strip_suffix('|')
         .unwrap_or(trimmed);
-    Some(
-        inner
-            .split('|')
-            .map(|cell| cell.trim().replace("\\|", "|"))
-            .collect(),
-    )
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut escaped = false;
+    for ch in inner.chars() {
+        if escaped {
+            cell.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '|' {
+            cells.push(cell.trim().to_string());
+            cell.clear();
+        } else {
+            cell.push(ch);
+        }
+    }
+    if escaped {
+        cell.push('\\');
+    }
+    cells.push(cell.trim().to_string());
+    Some(cells)
 }
 
 fn separator_row(row: &[String]) -> bool {
@@ -843,8 +869,18 @@ pub fn update_markdown_table(
 pub fn table_to_csv(rows: &[Vec<String>]) -> Result<Vec<u8>, ConvertError> {
     let mut writer = csv::Writer::from_writer(Vec::new());
     for row in rows {
+        let safe: Vec<String> = row
+            .iter()
+            .map(|cell| {
+                if cell.trim_start().starts_with(['=', '+', '-', '@']) {
+                    format!("'{cell}")
+                } else {
+                    cell.clone()
+                }
+            })
+            .collect();
         writer
-            .write_record(row)
+            .write_record(&safe)
             .map_err(|error| ConvertError::Failed(error.to_string()))?;
     }
     writer
@@ -1462,7 +1498,10 @@ pub fn validate_handoff(
     traceability: &[TraceabilityRow],
     strict: bool,
 ) -> HandoffValidation {
-    let citation_ids: HashSet<&str> = citations.iter().map(|cite| cite.id.as_str()).collect();
+    let citation_map: HashMap<&str, &Citation> = citations
+        .iter()
+        .map(|citation| (citation.id.as_str(), citation))
+        .collect();
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     let mut cited = 0usize;
@@ -1478,7 +1517,7 @@ pub fn validate_handoff(
         let valid_citations = item
             .citations
             .iter()
-            .filter(|citation| citation_ids.contains(citation.as_str()))
+            .filter(|citation| citation_map.contains_key(citation.as_str()))
             .count();
         if valid_citations > 0 {
             cited += 1;
@@ -1500,6 +1539,58 @@ pub fn validate_handoff(
                 item_id: Some(item.id.clone()),
                 message: "Cần BA/PM hoàn thiện và phê duyệt.".into(),
             });
+        }
+        let factual = matches!(
+            item.kind,
+            HandoffItemKind::BusinessRequirement
+                | HandoffItemKind::FunctionalRequirement
+                | HandoffItemKind::Assumption
+                | HandoffItemKind::OpenQuestion
+        );
+        if factual && item.status != "needs_elaboration" {
+            let item_tokens: HashSet<String> = tokens(&item.text).into_iter().collect();
+            let source_tokens: HashSet<String> = item
+                .citations
+                .iter()
+                .filter_map(|id| citation_map.get(id.as_str()))
+                .flat_map(|citation| tokens(&citation.quote))
+                .collect();
+            let grounded = item_tokens.is_empty()
+                || item_tokens
+                    .iter()
+                    .filter(|token| source_tokens.contains(*token))
+                    .count()
+                    * 100
+                    >= item_tokens.len() * 70;
+            if !grounded {
+                let message = ValidationMessage {
+                    code: "CITATION_GROUNDING_WEAK".into(),
+                    item_id: Some(item.id.clone()),
+                    message: "Nội dung không khớp đủ với đoạn nguồn được trích.".into(),
+                };
+                if strict {
+                    errors.push(message);
+                } else {
+                    warnings.push(message);
+                }
+            }
+        }
+    }
+    if !items.iter().any(|item| {
+        matches!(
+            item.kind,
+            HandoffItemKind::BusinessRequirement | HandoffItemKind::FunctionalRequirement
+        )
+    }) {
+        let message = ValidationMessage {
+            code: "NO_REQUIREMENTS".into(),
+            item_id: None,
+            message: "Không trích được BR/FR có căn cứ từ corpus.".into(),
+        };
+        if strict {
+            errors.push(message);
+        } else {
+            warnings.push(message);
         }
     }
     let citation_coverage = if items.is_empty() {
@@ -1538,18 +1629,32 @@ pub fn generate_handoff_pack(
     let (items, traceability) = extract_handoff_items(&chunks, &citations);
     let validation = validate_handoff(&items, &citations, &traceability, options.strict_citations);
     let artifacts = render_handoff_artifacts(options, &items, &traceability, &citations);
+    let created_at = now_epoch();
+    let nonce = now_nonce();
+    let fingerprint: Vec<String> = documents
+        .iter()
+        .map(|document| {
+            format!(
+                "{}:{}",
+                document.source_rel,
+                stable_hash([document.markdown.as_str()])
+            )
+        })
+        .chain(std::iter::once(format!("{:?}", options.mode)))
+        .collect();
     HandoffPack {
         schema_version: 1,
         pack_id: format!(
-            "handoff-{}-{}",
+            "handoff-{}-{}-{}",
             options.product_slug,
-            stable_hash(documents.iter().map(|doc| doc.source_rel.as_str()))
+            nonce,
+            stable_hash(fingerprint.iter())
         ),
         product_name: options.product_name.clone(),
         product_slug: options.product_slug.clone(),
         locale: options.locale.clone(),
         mode: options.mode.clone(),
-        created_at: now_epoch(),
+        created_at,
         sources: documents
             .iter()
             .map(|document| document.source_rel.clone())
@@ -1571,7 +1676,14 @@ pub fn enhance_handoff_artifact(
 ) -> Result<String, ConvertError> {
     let citation_text = citations
         .iter()
-        .map(|citation| format!("[{}] {}", citation.id, citation.quote))
+        .take(40)
+        .map(|citation| {
+            format!(
+                "[{}] {}",
+                citation.id,
+                citation.quote.chars().take(600).collect::<String>()
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let prompt = format!(
@@ -1588,8 +1700,22 @@ pub fn enhance_handoff_artifact(
 }
 
 pub fn export_handoff_zip(pack: &HandoffPack, output: &Path) -> Result<(), ConvertError> {
-    let file =
-        std::fs::File::create(output).map_err(|error| ConvertError::Failed(error.to_string()))?;
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|error| ConvertError::Failed(error.to_string()))?;
+    let name = output
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    let temp = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        now_nonce()
+    ));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|error| ConvertError::Failed(error.to_string()))?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -1618,6 +1744,13 @@ pub fn export_handoff_zip(pack: &HandoffPack, output: &Path) -> Result<(), Conve
     }
     zip.finish()
         .map_err(|error| ConvertError::Failed(error.to_string()))?;
+    if output.exists() {
+        std::fs::remove_file(output).map_err(|error| ConvertError::Failed(error.to_string()))?;
+    }
+    if let Err(error) = std::fs::rename(&temp, output) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(ConvertError::Failed(error.to_string()));
+    }
     Ok(())
 }
 
@@ -1670,6 +1803,7 @@ mod tests {
     fn empty_input_never_invents_requirements() {
         let pack = generate_handoff_pack(&[], &HandoffOptions::default());
         assert!(pack.items.is_empty());
+        assert!(!pack.validation.ok);
         assert!(pack.artifacts["01-BRD.md"].contains("Chưa trích"));
     }
 
@@ -1679,10 +1813,10 @@ mod tests {
             source_rel: "contact.md".into(),
             md_rel: "contact.md".into(),
             format: "markdown".into(),
-            markdown: "Email: lan@example.com\nĐiện thoại: 0912345678".into(),
+            markdown: "Email: lan@example.com và lan@example.com\nĐiện thoại: 0912345678".into(),
         };
         let report = detect_pii(std::slice::from_ref(&doc));
-        assert_eq!(report.findings.len(), 2);
+        assert_eq!(report.findings.len(), 3);
         let redacted = redact_pii(&doc.markdown, &report.findings);
         assert!(!redacted.contains("lan@example.com"));
         assert!(doc.markdown.contains("lan@example.com"));
@@ -1703,6 +1837,33 @@ mod tests {
         .unwrap();
         assert!(updated.contains("|Số lượng|20|"));
         assert!(updated.contains("Hệ thống phải"));
+    }
+
+    #[test]
+    fn escaped_table_cells_and_csv_formulas_are_safe() {
+        let doc = CorpusDocument {
+            source_rel: "table.md".into(),
+            md_rel: "table.md".into(),
+            format: "markdown".into(),
+            markdown: "| Tên | Công thức |\n|---|---|\n| A\\|B | =1+1 |\n".into(),
+        };
+        let table = parse_markdown_tables(&doc)[0].clone();
+        assert_eq!(table.rows[1][0], "A|B");
+        let csv = String::from_utf8(table_to_csv(&table.rows).unwrap()).unwrap();
+        assert!(csv.contains("'=1+1"));
+    }
+
+    #[test]
+    fn corpus_offsets_do_not_panic_on_crlf_vietnamese() {
+        let doc = CorpusDocument {
+            source_rel: "crlf.md".into(),
+            md_rel: "crlf.md".into(),
+            format: "markdown".into(),
+            markdown: "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu tiếng Việt.\r\n".into(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].end >= chunks[0].start);
     }
 
     #[test]

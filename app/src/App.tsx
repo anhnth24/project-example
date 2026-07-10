@@ -89,7 +89,11 @@ export default function App() {
         setPaletteOpen(true);
       } else if (command && event.key.toLocaleLowerCase("vi") === "s") {
         event.preventDefault();
-        void saveSession();
+        if (view === "intelligence") {
+          window.dispatchEvent(new Event("markhand:intelligence-save"));
+        } else {
+          void saveSession();
+        }
       } else if (command && event.key.toLocaleLowerCase("vi") === "w" && activeTab) {
         event.preventDefault();
         requestCloseTab(activeTab);

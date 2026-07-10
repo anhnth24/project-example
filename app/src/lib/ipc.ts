@@ -67,6 +67,14 @@ export const api = {
   }) => invoke<HandoffResult>("generate_handoff_pack", { req }),
   readHandoffArtifact: (relPath: string) =>
     invoke<string>("read_handoff_artifact", { req: { relPath } }),
+  saveHandoffArtifact: (outRelDir: string, name: string, content: string) =>
+    invoke<void>("save_handoff_artifact", {
+      req: { outRelDir, name, content },
+    }),
+  exportExistingHandoff: (outRelDir: string, outputAbs: string) =>
+    invoke<string>("export_existing_handoff", {
+      req: { outRelDir, outputAbs },
+    }),
   runQualityReport: (sourceRels: string[]) =>
     invoke<QualityReport>("run_quality_report", { req: { sourceRels } }),
   searchIntelligence: (sourceRels: string[], query: string, limit = 20) =>
@@ -98,9 +106,14 @@ export const api = {
     invoke<{ mdRelPath: string; markdown: string }>("update_markdown_table", {
       req: { sourceRel, tableId, rows },
     }),
-  exportMarkdownTable: (sourceRel: string, tableId: string, outputAbs: string) =>
+  exportMarkdownTable: (
+    sourceRel: string,
+    tableId: string,
+    rows: string[][],
+    outputAbs: string,
+  ) =>
     invoke<string>("export_markdown_table", {
-      req: { sourceRel, tableId, outputAbs },
+      req: { sourceRel, tableId, rows, outputAbs },
     }),
   snapshotDocumentVersion: (sourceRel: string) =>
     invoke<VersionMeta>("snapshot_document_version", { req: { sourceRel } }),

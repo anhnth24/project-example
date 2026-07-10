@@ -64,6 +64,21 @@ pub struct ArtifactRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SaveArtifactRequest {
+    pub out_rel_dir: String,
+    pub name: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportExistingRequest {
+    pub out_rel_dir: String,
+    pub output_abs: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RedactRequest {
     pub source_rel: String,
 }
@@ -107,6 +122,7 @@ pub struct TableUpdateRequest {
 pub struct TableExportRequest {
     pub source_rel: String,
     pub table_id: String,
+    pub rows: Vec<Vec<String>>,
     pub output_abs: String,
 }
 
@@ -175,13 +191,13 @@ fn stable_key(value: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn markdown_path(root: &Path, source_rel: &str) -> Result<PathBuf, String> {
+fn derived_markdown_path(root: &Path, source_rel: &str) -> Result<PathBuf, String> {
     let source = resolve_within(root, source_rel)?;
     let is_markdown = source
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-    let markdown = if is_markdown {
+    let candidate = if is_markdown {
         source
     } else {
         let name = source
@@ -190,6 +206,12 @@ fn markdown_path(root: &Path, source_rel: &str) -> Result<PathBuf, String> {
             .ok_or("file nguồn không hợp lệ")?;
         source.with_file_name(format!("{name}.md"))
     };
+    let relative = rel_of(root, &candidate);
+    resolve_within(root, &relative)
+}
+
+fn markdown_path(root: &Path, source_rel: &str) -> Result<PathBuf, String> {
+    let markdown = derived_markdown_path(root, source_rel)?;
     if !markdown.is_file() {
         return Err(format!(
             "chưa có Markdown cho '{}'; hãy convert trước",
@@ -221,8 +243,8 @@ fn load_documents(root: &Path, source_rels: &[String]) -> Result<Vec<CorpusDocum
         .collect()
 }
 
-fn markhand_root(root: &Path) -> PathBuf {
-    root.join(".markhand")
+fn markhand_root(root: &Path) -> Result<PathBuf, String> {
+    resolve_within(root, ".markhand")
 }
 
 fn handoff_dir(root: &Path, pack_id: &str, requested: Option<&str>) -> Result<PathBuf, String> {
@@ -285,6 +307,11 @@ pub async fn generate_handoff_pack(
                         }
                     }
                 }
+                if llm_note.is_none() {
+                    llm_note = Some(
+                        "Bản LLM là artifact bổ sung và cần rà soát; validation hiển thị áp dụng cho bản tất định.".into(),
+                    );
+                }
             } else {
                 llm_note =
                     Some("Chưa cấu hình FILECONV_LLM_*; đã sinh bản tất định offline.".into());
@@ -313,6 +340,60 @@ pub fn read_handoff_artifact(
         return Err("artifact không tồn tại".into());
     }
     fs::read_to_string(path).map_err(es)
+}
+
+fn load_persisted_pack(root: &Path, out_rel_dir: &str) -> Result<(PathBuf, HandoffPack), String> {
+    if !out_rel_dir.starts_with(".markhand/handoff/") {
+        return Err("handoff path không hợp lệ".into());
+    }
+    let directory = resolve_within(root, out_rel_dir)?;
+    let manifest = directory.join("manifest.json");
+    let pack = serde_json::from_slice(&fs::read(manifest).map_err(es)?).map_err(es)?;
+    Ok((directory, pack))
+}
+
+#[tauri::command]
+pub fn save_handoff_artifact(
+    state: State<AppState>,
+    req: SaveArtifactRequest,
+) -> Result<(), String> {
+    if req.name.contains('/') || req.name.contains('\\') || req.name.starts_with('.') {
+        return Err("tên artifact không hợp lệ".into());
+    }
+    let root = data_root(&state);
+    let (directory, mut pack) = load_persisted_pack(&root, &req.out_rel_dir)?;
+    if !pack.artifacts.contains_key(&req.name) {
+        return Err("artifact không thuộc handoff pack".into());
+    }
+    pack.artifacts.insert(req.name.clone(), req.content.clone());
+    atomic_write(&directory.join(&req.name), req.content.as_bytes())?;
+    write_json(&directory.join("manifest.json"), &pack)
+}
+
+#[tauri::command]
+pub async fn export_existing_handoff(
+    state: State<'_, AppState>,
+    req: ExportExistingRequest,
+) -> Result<String, String> {
+    let root = data_root(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let (directory, mut pack) = load_persisted_pack(&root, &req.out_rel_dir)?;
+        for name in pack.artifacts.clone().keys() {
+            let path = directory.join(name);
+            if path.is_file() {
+                pack.artifacts
+                    .insert(name.clone(), fs::read_to_string(path).map_err(es)?);
+            }
+        }
+        let output = PathBuf::from(&req.output_abs);
+        if output.extension().and_then(|value| value.to_str()) != Some("zip") {
+            return Err("Knowledge Pack phải có đuôi .zip".into());
+        }
+        intelligence::export_handoff_zip(&pack, &output).map_err(es)?;
+        Ok(output.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(es)?
 }
 
 #[tauri::command]
@@ -405,7 +486,7 @@ pub async fn redact_pii(
         let document = load_document(&root, &req.source_rel)?;
         let report = intelligence::detect_pii(std::slice::from_ref(&document));
         let redacted = intelligence::redact_pii(&document.markdown, &report.findings);
-        let out_dir = markhand_root(&root).join("redacted");
+        let out_dir = markhand_root(&root)?.join("redacted");
         fs::create_dir_all(&out_dir).map_err(es)?;
         let out = out_dir.join(format!("{}.md", stable_key(&req.source_rel)));
         atomic_write(&out, redacted.as_bytes())?;
@@ -432,7 +513,7 @@ pub async fn hard_ocr_image(
         let config = fileconv_core::llm::LlmConfig::from_env()
             .ok_or("chưa cấu hình FILECONV_LLM_* cho vision OCR")?;
         let markdown = fileconv_core::llm::vision_ocr(&config, &source).map_err(es)?;
-        let directory = markhand_root(&root).join("hard-ocr");
+        let directory = markhand_root(&root)?.join("hard-ocr");
         fs::create_dir_all(&directory).map_err(es)?;
         let artifact = directory.join(format!("{}.md", stable_key(&req.source_rel)));
         atomic_write(&artifact, markdown.as_bytes())?;
@@ -488,6 +569,7 @@ pub async fn update_markdown_table(
         let markdown = intelligence::update_markdown_table(&document.markdown, &table, &req.rows)
             .map_err(es)?;
         let md_path = resolve_within(&root, &document.md_rel)?;
+        snapshot_existing_version(&root, &req.source_rel)?;
         atomic_write(&md_path, markdown.as_bytes())?;
         Ok(TableUpdateResult {
             md_rel_path: document.md_rel,
@@ -510,7 +592,12 @@ pub async fn export_markdown_table(
             .into_iter()
             .find(|table| table.id == req.table_id)
             .ok_or("không tìm thấy bảng")?;
-        let bytes = intelligence::table_to_csv(&table.rows).map_err(es)?;
+        let rows = if req.rows.is_empty() {
+            table.rows
+        } else {
+            req.rows
+        };
+        let bytes = intelligence::table_to_csv(&rows).map_err(es)?;
         let output = PathBuf::from(&req.output_abs);
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent).map_err(es)?;
@@ -522,24 +609,26 @@ pub async fn export_markdown_table(
     .map_err(es)?
 }
 
-fn versions_dir(root: &Path, source_rel: &str) -> PathBuf {
-    markhand_root(root)
+fn versions_dir(root: &Path, source_rel: &str) -> Result<PathBuf, String> {
+    Ok(markhand_root(root)?
         .join("versions")
-        .join(stable_key(source_rel))
+        .join(stable_key(source_rel)))
 }
 
 pub(super) fn snapshot_existing_version(
     root: &Path,
     source_rel: &str,
 ) -> Result<Option<VersionMeta>, String> {
-    let Ok(document) = load_document(root, source_rel) else {
+    let markdown_path = derived_markdown_path(root, source_rel)?;
+    if !markdown_path.exists() {
         return Ok(None);
-    };
+    }
+    let document = load_document(root, source_rel)?;
     let created_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let directory = versions_dir(root, source_rel);
+    let directory = versions_dir(root, source_rel)?;
     fs::create_dir_all(&directory).map_err(es)?;
     let mut suffix = 0u32;
     let (id, path) = loop {
@@ -589,7 +678,7 @@ pub fn list_document_versions(
     req: VersionRequest,
 ) -> Result<Vec<VersionMeta>, String> {
     let root = data_root(&state);
-    let directory = versions_dir(&root, &req.source_rel);
+    let directory = versions_dir(&root, &req.source_rel)?;
     if !directory.exists() {
         return Ok(Vec::new());
     }
@@ -604,14 +693,17 @@ pub fn list_document_versions(
             .file_stem()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_default();
-        let created_at = id
-            .strip_prefix("v-")
-            .and_then(|value| value.parse().ok())
+        let metadata = fs::metadata(&path).map_err(es)?;
+        let created_at = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+            .map(|value| value.as_secs())
             .unwrap_or_default();
         versions.push(VersionMeta {
             id,
             created_at,
-            bytes: fs::metadata(path).map_err(es)?.len(),
+            bytes: metadata.len(),
         });
     }
     versions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -622,7 +714,7 @@ fn read_version(root: &Path, source_rel: &str, version_id: &str) -> Result<Strin
     if !valid_version_id(version_id) {
         return Err("version id không hợp lệ".into());
     }
-    let path = versions_dir(root, source_rel).join(format!("{version_id}.md"));
+    let path = versions_dir(root, source_rel)?.join(format!("{version_id}.md"));
     fs::read_to_string(path).map_err(es)
 }
 
@@ -633,10 +725,13 @@ pub fn read_document_version(
 ) -> Result<VersionSnapshot, String> {
     let root = data_root(&state);
     let markdown = read_version(&root, &req.source_rel, &req.version_id)?;
-    let created_at = req
-        .version_id
-        .strip_prefix("v-")
-        .and_then(|value| value.parse().ok())
+    let created_at = versions_dir(&root, &req.source_rel)?
+        .join(format!("{}.md", req.version_id))
+        .metadata()
+        .ok()
+        .and_then(|value| value.modified().ok())
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
         .unwrap_or_default();
     Ok(VersionSnapshot {
         id: req.version_id,
@@ -662,13 +757,17 @@ pub fn merge_document_versions(req: MergeRequest) -> MergeResult {
     intelligence::three_way_merge(&req.base, &req.ours, &req.theirs)
 }
 
-fn watch_rules_path(root: &Path) -> PathBuf {
-    markhand_root(root).join("watch-rules.json")
+fn watch_rules_path(root: &Path) -> Result<PathBuf, String> {
+    Ok(markhand_root(root)?.join("watch-rules.json"))
+}
+
+fn watch_state_path(root: &Path) -> Result<PathBuf, String> {
+    Ok(markhand_root(root)?.join("watch-state.json"))
 }
 
 #[tauri::command]
 pub fn get_watch_rules(state: State<AppState>) -> Result<Vec<WatchRule>, String> {
-    let path = watch_rules_path(&data_root(&state));
+    let path = watch_rules_path(&data_root(&state))?;
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -684,7 +783,7 @@ pub fn set_watch_rules(state: State<AppState>, req: WatchRulesRequest) -> Result
         }
         resolve_within(&data_root(&state), &rule.target_folder_rel)?;
     }
-    let path = watch_rules_path(&data_root(&state));
+    let path = watch_rules_path(&data_root(&state))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(es)?;
     }
@@ -695,11 +794,17 @@ pub fn set_watch_rules(state: State<AppState>, req: WatchRulesRequest) -> Result
 pub async fn scan_watch_rules(state: State<'_, AppState>) -> Result<Vec<WatchMatch>, String> {
     let root = data_root(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let path = watch_rules_path(&root);
+        let path = watch_rules_path(&root)?;
         let rules: Vec<WatchRule> = if path.exists() {
             serde_json::from_slice(&fs::read(path).map_err(es)?).map_err(es)?
         } else {
             Vec::new()
+        };
+        let state_path = watch_state_path(&root)?;
+        let mut seen: std::collections::HashMap<String, u64> = if state_path.exists() {
+            serde_json::from_slice(&fs::read(&state_path).map_err(es)?).map_err(es)?
+        } else {
+            std::collections::HashMap::new()
         };
         let mut matches = Vec::new();
         for rule in rules.into_iter().filter(|rule| rule.enabled) {
@@ -711,6 +816,19 @@ pub async fn scan_watch_rules(state: State<'_, AppState>) -> Result<Vec<WatchMat
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
                 if intelligence::watch_pattern_matches(&rule.pattern, &name) {
+                    let modified = entry
+                        .metadata()
+                        .map_err(es)?
+                        .modified()
+                        .ok()
+                        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                        .map(|value| value.as_secs())
+                        .unwrap_or_default();
+                    let key = format!("{}:{}", rule.id, entry.path().to_string_lossy());
+                    if seen.get(&key).is_some_and(|previous| *previous >= modified) {
+                        continue;
+                    }
+                    seen.insert(key, modified);
                     matches.push(WatchMatch {
                         rule_id: rule.id.clone(),
                         source_abs: entry.path().to_string_lossy().to_string(),
@@ -720,6 +838,10 @@ pub async fn scan_watch_rules(state: State<'_, AppState>) -> Result<Vec<WatchMat
                 }
             }
         }
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent).map_err(es)?;
+        }
+        write_json(&state_path, &seen)?;
         Ok(matches)
     })
     .await

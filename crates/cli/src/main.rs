@@ -133,21 +133,53 @@ fn cmd_handoff(product: &str, output: &Path, sources: &[String]) -> Result<()> {
     let mut documents = Vec::new();
     for source in sources {
         let path = Path::new(source);
-        let markdown = if path
+        let is_markdown = path
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-        {
-            fs::read_to_string(path).with_context(|| format!("đọc {}", path.display()))?
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+        let companion = path.with_file_name(format!(
+            "{}.md",
+            path.file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default()
+        ));
+        let (markdown, md_rel) = if is_markdown {
+            (
+                fs::read_to_string(path).with_context(|| format!("đọc {}", path.display()))?,
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "source.md".into()),
+            )
+        } else if companion.is_file() {
+            (
+                fs::read_to_string(&companion)
+                    .with_context(|| format!("đọc {}", companion.display()))?,
+                companion
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "source.md".into()),
+            )
         } else {
-            converter
-                .convert_path(path)
-                .with_context(|| format!("convert {}", path.display()))?
-                .markdown
+            (
+                converter
+                    .convert_path(path)
+                    .with_context(|| format!("convert {}", path.display()))?
+                    .markdown,
+                format!(
+                    "{}.md",
+                    path.file_name()
+                        .map(|name| name.to_string_lossy())
+                        .unwrap_or_default()
+                ),
+            )
         };
+        let source_rel = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "source".into());
         documents.push(CorpusDocument {
-            source_rel: source.clone(),
-            md_rel: source.clone(),
+            source_rel,
+            md_rel,
             format: FormatKind::from_path(path).as_str().to_string(),
             markdown,
         });

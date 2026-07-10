@@ -63,6 +63,10 @@ const MODES: {
   { id: "watch", label: "Theo dõi", icon: <Eye size={14} /> },
 ];
 
+let cachedHandoff: HandoffResult | null = null;
+let cachedArtifactDrafts: Record<string, string> = {};
+let cachedActiveArtifact = "01-BRD.md";
+
 function slugify(value: string): string {
   return value
     .normalize("NFD")
@@ -82,19 +86,20 @@ export function IntelligenceView() {
   const tree = useStore((state) => state.tree);
   const openNode = useStore((state) => state.openNode);
   const enqueueConversions = useStore((state) => state.enqueueConversions);
-  const importSources = useStore((state) => state.importSources);
   const setError = useStore((state) => state.setError);
+  const selected = useStore((state) => state.intelligenceScope);
+  const setSelected = useStore((state) => state.setIntelligenceScope);
 
   const files = useMemo(() => flattenFiles(tree).filter(converted), [tree]);
   const [mode, setMode] = useState<IntelligenceMode>("handoff");
-  const [selected, setSelected] = useState<string[]>([]);
   const [productName, setProductName] = useState("Dự án mới");
   const [handoffMode, setHandoffMode] = useState<HandoffMode>("deterministic");
   const [busy, setBusy] = useState<string | null>(null);
 
-  const [handoff, setHandoff] = useState<HandoffResult | null>(null);
-  const [activeArtifact, setActiveArtifact] = useState("01-BRD.md");
-  const [artifactDrafts, setArtifactDrafts] = useState<Record<string, string>>({});
+  const [handoff, setHandoff] = useState<HandoffResult | null>(cachedHandoff);
+  const [activeArtifact, setActiveArtifact] = useState(cachedActiveArtifact);
+  const [artifactDrafts, setArtifactDrafts] =
+    useState<Record<string, string>>(cachedArtifactDrafts);
   const [quality, setQuality] = useState<QualityReport | null>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -104,6 +109,7 @@ export function IntelligenceView() {
   const [answer, setAnswer] = useState<AskResult | null>(null);
   const [pii, setPii] = useState<PiiReport | null>(null);
   const [redactedPath, setRedactedPath] = useState<string | null>(null);
+  const [hardOcrPath, setHardOcrPath] = useState<string | null>(null);
   const [schemas, setSchemas] = useState<DocumentSchema[]>([]);
   const [tables, setTables] = useState<MarkdownTable[]>([]);
   const [activeTable, setActiveTable] = useState<MarkdownTable | null>(null);
@@ -115,14 +121,58 @@ export function IntelligenceView() {
   const [watchMatches, setWatchMatches] = useState<WatchMatch[]>([]);
 
   useEffect(() => {
-    setSelected((current) => {
-      const valid = current.filter((relPath) =>
-        files.some((file) => file.relPath === relPath),
-      );
-      if (valid.length || !files.length) return valid;
-      return files.map((file) => file.relPath);
-    });
+    const current = useStore.getState().intelligenceScope;
+    const valid = current.filter((relPath) =>
+      files.some((file) => file.relPath === relPath),
+    );
+    setSelected(
+      valid.length || !files.length ? valid : files.map((file) => file.relPath),
+    );
   }, [files]);
+
+  useEffect(() => {
+    if (mode === "watch" && !watchRules.length) {
+      void loadWatchRules();
+    }
+  }, [mode]);
+
+  const scopeKey = selected.join("\u0000");
+  useEffect(() => {
+    const cacheMatches =
+      cachedHandoff?.pack.sources.length === selected.length &&
+      cachedHandoff.pack.sources.every((source) => selected.includes(source));
+    if (!cacheMatches) {
+      cachedHandoff = null;
+      cachedArtifactDrafts = {};
+      setHandoff(null);
+      setArtifactDrafts({});
+    }
+    setQuality(null);
+    setHits([]);
+    setAnswer(null);
+    setPii(null);
+    setRedactedPath(null);
+    setHardOcrPath(null);
+    setSchemas([]);
+    setTables([]);
+    setActiveTable(null);
+    setTableRows([]);
+    setVersions([]);
+    setVersionSelection([]);
+    setDiff([]);
+  }, [scopeKey]);
+
+  useEffect(() => {
+    cachedHandoff = handoff;
+    cachedArtifactDrafts = artifactDrafts;
+    cachedActiveArtifact = activeArtifact;
+  }, [handoff, artifactDrafts, activeArtifact]);
+
+  useEffect(() => {
+    const save = () => void saveArtifact();
+    window.addEventListener("markhand:intelligence-save", save);
+    return () => window.removeEventListener("markhand:intelligence-save", save);
+  }, [handoff, artifactDrafts, activeArtifact]);
 
   const selectedFiles = files.filter((file) => selected.includes(file.relPath));
   const firstSelected = selectedFiles[0] ?? null;
@@ -146,7 +196,8 @@ export function IntelligenceView() {
   }
 
   function toggleDocument(relPath: string) {
-    setSelected((current) =>
+    const current = useStore.getState().intelligenceScope;
+    setSelected(
       current.includes(relPath)
         ? current.filter((item) => item !== relPath)
         : [...current, relPath],
@@ -175,9 +226,12 @@ export function IntelligenceView() {
 
   async function saveArtifact() {
     if (!handoff || !activeArtifact) return;
-    const relPath = `${handoff.outRelDir}/${activeArtifact}`;
     await run("save-artifact", () =>
-      api.writeTextFile(relPath, artifactDrafts[activeArtifact] ?? ""),
+      api.saveHandoffArtifact(
+        handoff.outRelDir,
+        activeArtifact,
+        artifactDrafts[activeArtifact] ?? "",
+      ),
     );
   }
 
@@ -218,6 +272,11 @@ export function IntelligenceView() {
     }
   }
 
+  async function runHardOcr(sourceRel: string) {
+    const result = await run("hard-ocr", () => api.hardOcrImage(sourceRel));
+    if (result) setHardOcrPath(result.artifactRelPath);
+  }
+
   async function loadSchemas() {
     if (!ensureSelection()) return;
     const result = await run("schema", () => api.extractDocumentSchema(selected));
@@ -242,6 +301,10 @@ export function IntelligenceView() {
 
   async function saveTable() {
     if (!firstSelected || !activeTable) return;
+    if (useStore.getState().sessions[firstSelected.relPath]?.dirty) {
+      setError("Hãy lưu hoặc đóng draft đang sửa trước khi cập nhật bảng.");
+      return;
+    }
     const result = await run("table-save", () =>
       api.updateMarkdownTable(firstSelected.relPath, activeTable.id, tableRows),
     );
@@ -261,7 +324,7 @@ export function IntelligenceView() {
     });
     if (!output) return;
     await run("table-export", () =>
-      api.exportMarkdownTable(firstSelected.relPath, activeTable.id, output),
+      api.exportMarkdownTable(firstSelected.relPath, activeTable.id, tableRows, output),
     );
   }
 
@@ -319,8 +382,11 @@ export function IntelligenceView() {
       enabled: true,
     };
     const rules = [...watchRules, next];
-    const saved = await run("watch-save", () => api.setWatchRules(rules));
-    if (saved === null) return;
+    const saved = await run("watch-save", async () => {
+      await api.setWatchRules(rules);
+      return true;
+    });
+    if (saved !== true) return;
     setWatchRulesState(rules);
   }
 
@@ -330,10 +396,21 @@ export function IntelligenceView() {
   }
 
   async function importWatchMatches() {
-    const paths = watchMatches.map((match) => match.sourceAbs);
-    if (!paths.length) return;
-    await importSources(paths);
-    setWatchMatches([]);
+    if (!watchMatches.length) return;
+    const convert: string[] = [];
+    const errors: string[] = [];
+    for (const match of watchMatches) {
+      try {
+        const node = await api.importFileOnly(match.targetFolderRel, match.sourceAbs);
+        if (match.action === "import_and_convert") convert.push(node.relPath);
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    await useStore.getState().refreshTree();
+    if (convert.length) enqueueConversions(convert);
+    if (errors.length) setError(errors.join(" • "));
+    if (!errors.length) setWatchMatches([]);
   }
 
   async function exportPack() {
@@ -345,12 +422,14 @@ export function IntelligenceView() {
     });
     if (!output) return;
     await run("export", () =>
-      api.exportKnowledgePack({
-        sourceRels: selected,
-        productName: productName.trim() || "Dự án mới",
-        productSlug: slugify(productName) || "du-an",
-        outputAbs: output,
-      }),
+      handoff
+        ? api.exportExistingHandoff(handoff.outRelDir, output)
+        : api.exportKnowledgePack({
+            sourceRels: selected,
+            productName: productName.trim() || "Dự án mới",
+            productSlug: slugify(productName) || "du-an",
+            outputAbs: output,
+          }),
     );
   }
 
@@ -421,7 +500,11 @@ export function IntelligenceView() {
           </div>
         </aside>
 
-        <main className="intelligence-main">
+        <div
+          className="intelligence-main"
+          role="region"
+          aria-label="Công cụ Document Intelligence"
+        >
           {mode === "handoff" && (
             <div className="intelligence-panel handoff-studio">
               <div className="panel-title">
@@ -453,7 +536,7 @@ export function IntelligenceView() {
                     setHandoffMode(checked ? "llm_assisted" : "deterministic")
                   }
                   label="Tăng cường bằng LLM"
-                  description="Tắt mặc định. Không có FILECONV_LLM_* sẽ giữ bản offline."
+                  description="Bật sẽ gửi tối đa 40 citation tới provider; không có cấu hình sẽ giữ bản offline."
                 />
               </div>
 
@@ -576,11 +659,8 @@ export function IntelligenceView() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() =>
-                                void run("hard-ocr", () =>
-                                  api.hardOcrImage(document.sourceRel),
-                                )
-                              }
+                              loading={busy === "hard-ocr"}
+                              onClick={() => void runHardOcr(document.sourceRel)}
                             >
                               OCR hard
                             </Button>
@@ -589,6 +669,7 @@ export function IntelligenceView() {
                       </article>
                     ))}
                   </div>
+                  {hardOcrPath && <Notice tone="info">OCR hard đã ghi: {hardOcrPath}</Notice>}
                 </>
               )}
             </div>
@@ -629,11 +710,14 @@ export function IntelligenceView() {
                 </div>
               )}
               <div className="ask-box">
-                <textarea
-                  value={question}
-                  onChange={(event) => setQuestion(event.target.value)}
-                  placeholder="Đặt câu hỏi chỉ dựa trên tài liệu đã chọn…"
-                />
+                <label className="ask-question">
+                  <span>Câu hỏi</span>
+                  <textarea
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    placeholder="Đặt câu hỏi chỉ dựa trên tài liệu đã chọn…"
+                  />
+                </label>
                 <div>
                   <Toggle
                     checked={useLlm}
@@ -789,13 +873,16 @@ export function IntelligenceView() {
                 {activeTable ? (
                   <div className="editable-table-wrap">
                     <table className="editable-table">
+                      <caption>Bảng Markdown đang chỉnh sửa</caption>
                       <tbody>
                         {tableRows.map((row, rowIndex) => (
                           <tr key={`${activeTable.id}-${rowIndex}`}>
-                            {row.map((cell, columnIndex) => (
-                              <td key={`${rowIndex}-${columnIndex}`}>
+                            {row.map((cell, columnIndex) =>
+                              rowIndex === 0 ? (
+                                <th key={`${rowIndex}-${columnIndex}`} scope="col">
                                 <input
                                   value={cell}
+                                   aria-label={`Tên cột ${columnIndex + 1}`}
                                   onChange={(event) =>
                                     setTableRows((current) =>
                                       current.map((currentRow, currentRowIndex) =>
@@ -810,8 +897,32 @@ export function IntelligenceView() {
                                     )
                                   }
                                 />
-                              </td>
-                            ))}
+                                </th>
+                              ) : (
+                                <td key={`${rowIndex}-${columnIndex}`}>
+                                  <input
+                                    value={cell}
+                                    aria-label={`Dòng ${rowIndex + 1}, cột ${
+                                      columnIndex + 1
+                                    }`}
+                                    onChange={(event) =>
+                                      setTableRows((current) =>
+                                        current.map((currentRow, currentRowIndex) =>
+                                          currentRowIndex === rowIndex
+                                            ? currentRow.map(
+                                                (currentCell, currentColumnIndex) =>
+                                                  currentColumnIndex === columnIndex
+                                                    ? event.target.value
+                                                    : currentCell,
+                                              )
+                                            : currentRow,
+                                        ),
+                                      )
+                                    }
+                                  />
+                                </td>
+                              ),
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -857,7 +968,8 @@ export function IntelligenceView() {
                 }
               />
               <Notice tone="info">
-                Quét regex chạy hoàn toàn trên máy; chỉ dùng LLM khi bạn bật ở Hỏi đáp.
+                Quét regex chạy hoàn toàn trên máy. Khi bật LLM ở Handoff/Hỏi đáp hoặc
+                dùng OCR hard, đoạn citation hay ảnh sẽ được gửi tới provider đã cấu hình.
               </Notice>
               {!pii ? (
                 <EmptyTool text="Quét để tìm email, số điện thoại, CCCD/CMND và tài khoản." />
@@ -956,7 +1068,7 @@ export function IntelligenceView() {
               ))}
             </div>
           )}
-        </main>
+        </div>
       </div>
     </section>
   );

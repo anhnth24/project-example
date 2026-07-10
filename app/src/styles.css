@@ -2797,6 +2797,13 @@ kbd {
   background: transparent;
 }
 
+.search-row input:focus-visible,
+.ask-box textarea:focus-visible,
+.editable-table input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .search-hits,
 .citation-list {
   display: flex;
@@ -2847,7 +2854,16 @@ kbd {
   margin-top: 14px;
 }
 
+.ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+}
+
 .ask-box textarea {
+  width: 100%;
   min-height: 90px;
   padding: 10px;
   resize: vertical;
@@ -3017,7 +3033,15 @@ kbd {
   border-collapse: collapse;
 }
 
-.editable-table td {
+.editable-table caption {
+  padding: 0 0 6px;
+  color: var(--color-text-faint);
+  font-size: 9px;
+  text-align: left;
+}
+
+.editable-table td,
+.editable-table th {
   padding: 0;
   border: 1px solid var(--color-border-strong);
 }
@@ -3061,6 +3085,7 @@ kbd {
 }
 
 .export-panel {
+  position: relative;
   align-items: center;
   justify-content: center;
   text-align: center;

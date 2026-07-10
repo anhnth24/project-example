@@ -61,6 +61,7 @@ interface AppStore {
   openTabs: string[];
   activeTab: string | null;
   sessions: Record<string, DocumentSession>;
+  intelligenceScope: string[];
 
   jobs: ConvertJob[];
   queueRunning: boolean;
@@ -71,6 +72,7 @@ interface AppStore {
   setError: (error: string | null) => void;
   refreshTree: () => Promise<void>;
   setView: (view: AppView) => void;
+  setIntelligenceScope: (sourceRels: string[]) => void;
   openNode: (node: FsNode) => void;
   closeTab: (relPath: string) => void;
   closeTabsWithin: (relPath: string) => void;
@@ -103,6 +105,7 @@ export const useStore = create<AppStore>((set, get) => ({
   openTabs: [],
   activeTab: null,
   sessions: {},
+  intelligenceScope: [],
 
   jobs: [],
   queueRunning: false,
@@ -147,6 +150,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   setView: (view) => set({ view }),
+  setIntelligenceScope: (intelligenceScope) => set({ intelligenceScope }),
 
   openNode: (node) => {
     if (node.isDir) {
@@ -382,6 +386,7 @@ export const useStore = create<AppStore>((set, get) => ({
         openTabs: [],
         activeTab: null,
         sessions: {},
+        intelligenceScope: [],
         jobs: [],
       });
       await get().refreshTree();

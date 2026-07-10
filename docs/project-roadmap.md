@@ -1,6 +1,6 @@
 # Lộ trình dự án
 
-> Trạng thái tính đến 2026-07-09. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
+> Trạng thái tính đến 2026-07-10. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
 > và điểm yếu đã biết trong các `REPORT*.md`.
 
 ## Đã hoàn thành ✅
@@ -16,6 +16,12 @@
 - **Desktop app "Markhand"** (Tauri 2 + React): kéo-thả, soạn thảo, xem trước nguồn, cài đặt OCR/audio.
 - **Nghiên cứu đối thủ** (11 công cụ) — định vị ngách offline-VN.
 - **Đo PhoWhisper**: 90.8% vs whisper-small 77.3% (+13.5 điểm) trên clip vi thật.
+- **Document Intelligence**: cited search/Q&A, quality, versions/diff/merge, table/schema,
+  PII/redaction, watch rules, hard-OCR hook và Knowledge Pack.
+- **Handoff BA/PM**: sinh BRD/PRD, user stories, acceptance criteria, glossary,
+  test cases, traceability + Jira/GitHub/Confluence/Obsidian exports.
+- **Desktop LumiBase dark**: icon rail, đa tab, Library, Intelligence workspace,
+  modal nội bộ và queue background.
 
 ## Đang làm / Gần ✋
 
@@ -43,8 +49,8 @@
 
 ### Desktop / đóng gói
 - [ ] **Đóng gói distributable** (`.msi` / `.dmg` / `.deb` / AppImage) — Tauri bundler, chưa chạy.
-- [ ] **Dark mode** thực sự (hiện ép light; cần xử lý rò rỉ token trên Windows dark theme).
-- [ ] Đổi `prompt()`/`confirm()` native trong Sidebar thành modal tuỳ chỉnh (UX).
+- [x] **Dark mode** LumiBase.
+- [x] Đổi `prompt()`/`confirm()` native trong Sidebar thành modal tuỳ chỉnh.
 - [ ] Thống nhất identity (`package.json` `fileconv-docs` vs productName `Markhand` vs identifier `com.anhnth24.fileconv-docs`).
 
 ### Tích hợp / mở rộng

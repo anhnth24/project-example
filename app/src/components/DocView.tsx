@@ -44,6 +44,7 @@ export function DocView({ node }: { node: FsNode }) {
   const jobs = useStore((state) => state.jobs);
   const setError = useStore((state) => state.setError);
   const setView = useStore((state) => state.setView);
+  const setIntelligenceScope = useStore((state) => state.setIntelligenceScope);
 
   const isStandaloneMd = node.standaloneMd;
   const canSource = !isStandaloneMd;
@@ -179,7 +180,10 @@ export function DocView({ node }: { node: FsNode }) {
               variant="ghost"
               size="sm"
               icon={<Sparkles size={14} />}
-              onClick={() => setView("intelligence")}
+              onClick={() => {
+                setIntelligenceScope([node.relPath]);
+                setView("intelligence");
+              }}
             >
               Bàn giao
             </Button>

@@ -57,6 +57,20 @@ app/
   sửa ở bên phải. File nguồn thật luôn xem được trong chế độ Song song/File gốc.
 - `Ctrl/Cmd+S` lưu, `Ctrl/Cmd+W` đóng tab có xác nhận nếu còn draft.
 
+## Document Intelligence / Bàn giao
+
+Nút ✨ trên icon rail mở workspace Intelligence:
+
+- Sinh BRD/PRD, user stories, acceptance criteria, glossary, test cases và
+  traceability có citation.
+- Baseline chạy offline; tùy chọn LLM dùng `FILECONV_LLM_*`.
+- Quality report, tìm kiếm/hỏi đáp corpus có trích dẫn.
+- Snapshot phiên bản, diff và merge an toàn trước reconvert.
+- Sửa bảng Markdown, trích schema và xuất CSV.
+- Quét/che PII, watch-folder rules và Knowledge Pack ZIP.
+- Artifacts được lưu dưới `DATA/.markhand/`; Markdown canonical cạnh file nguồn
+  không bị thay đổi trừ khi người dùng bấm lưu rõ ràng.
+
 ## Preview file gốc trong app
 
 | Loại | Thư viện | Ghi chú |

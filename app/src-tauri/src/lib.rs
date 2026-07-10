@@ -860,6 +860,8 @@ pub fn run() {
             set_settings,
             intelligence::generate_handoff_pack,
             intelligence::read_handoff_artifact,
+            intelligence::save_handoff_artifact,
+            intelligence::export_existing_handoff,
             intelligence::run_quality_report,
             intelligence::search_intelligence,
             intelligence::ask_intelligence,
