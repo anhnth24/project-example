@@ -25,6 +25,8 @@ thread_local! {
     static PDFIUM: Option<Pdfium> = load_pdfium();
 }
 
+static PDFIUM_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Trang có ít hơn ngưỡng này ký tự (không tính khoảng trắng) → coi là trang scan → OCR.
 /// (Chỉ dùng ở đường fallback PDFium.)
 const PAGE_TEXT_MIN_CHARS: usize = 10;
@@ -33,7 +35,9 @@ const MIN_IMG_AREA: i64 = 200 * 200;
 /// DPI render trang khi OCR (cao hơn = OCR tốt hơn, chậm hơn).
 const OCR_DPI: f32 = 300.0;
 const PARALLEL_MIN_PAGES: u32 = 16;
+const PARALLEL_MAX_PAGES: u32 = 200;
 const PARALLEL_MAX_PDF_BYTES: usize = 32 * 1024 * 1024;
+const PARALLEL_MIN_CPUS: usize = 5;
 
 pub fn to_markdown(
     path: &Path,
@@ -264,11 +268,14 @@ fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Option<String> 
         .ok()?
         .ok()?
         .page_count;
-    if page_count < PARALLEL_MIN_PAGES {
+    if !(PARALLEL_MIN_PAGES..=PARALLEL_MAX_PAGES).contains(&page_count) {
         return None;
     }
     let available = std::thread::available_parallelism().ok()?.get();
-    let workers = available.min(4).min(page_count.div_ceil(8) as usize);
+    if available < PARALLEL_MIN_CPUS {
+        return None;
+    }
+    let workers = 4.min(page_count.div_ceil(8) as usize);
     if workers < 2 {
         return None;
     }
@@ -917,6 +924,9 @@ fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<String, ConvertError> {
 
 /// Bind libpdfium (nếu có).
 fn load_pdfium() -> Option<Pdfium> {
+    let _init_guard = PDFIUM_INIT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut candidates: Vec<String> = Vec::new();
     if let Ok(p) = std::env::var("FILECONV_PDFIUM_LIB") {
         candidates.push(p);
@@ -925,11 +935,19 @@ fn load_pdfium() -> Option<Pdfium> {
     candidates.push("pdfium/libpdfium.so".to_string());
 
     for c in candidates {
-        if let Ok(b) = Pdfium::bind_to_library(&c) {
-            return Some(Pdfium::new(b));
+        match Pdfium::bind_to_library(&c) {
+            Ok(bindings) => return Some(Pdfium::new(bindings)),
+            Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
+                return Some(Pdfium::default());
+            }
+            Err(_) => {}
         }
     }
-    Pdfium::bind_to_system_library().ok().map(Pdfium::new)
+    match Pdfium::bind_to_system_library() {
+        Ok(bindings) => Some(Pdfium::new(bindings)),
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => Some(Pdfium::default()),
+        Err(_) => None,
+    }
 }
 
 /// Fallback cuối: pdf-extract (có thể panic → bắt bằng catch_unwind).
