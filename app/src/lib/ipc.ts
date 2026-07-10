@@ -1,5 +1,5 @@
 // Lớp bọc duy nhất gọi sang backend Rust. Tauri tự đổi key camelCase (JS) -> snake_case (Rust).
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import type { FsNode, Settings } from "./types";
 
 export const api = {
@@ -20,6 +20,8 @@ export const api = {
 
   importFile: (folderRel: string, sourceAbs: string) =>
     invoke<FsNode>("import_file", { folderRel, sourceAbs }),
+  importFileOnly: (folderRel: string, sourceAbs: string) =>
+    invoke<FsNode>("import_file_only", { folderRel, sourceAbs }),
   reconvert: (sourceRel: string) => invoke<string>("reconvert", { sourceRel }),
 
   readTextFile: (relPath: string) => invoke<string>("read_text_file", { relPath }),
@@ -39,6 +41,3 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
 };
-
-/** URL asset (asset://) để hiển thị ảnh/pdf/audio từ đường dẫn tuyệt đối. */
-export const assetUrl = (absPath: string) => convertFileSrc(absPath);

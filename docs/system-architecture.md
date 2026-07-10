@@ -130,12 +130,13 @@ system prompt yêu cầu phiên âm Markdown tiếng Việt trung thực, timeou
 
 ## Desktop "Markhand" (`app/`)
 
-**Stack**: Tauri 2 + React 19.2 + Vite 6 + TypeScript 5.6 (strict) + Zustand 5 + Astryx design system +
-lucide-react. Editor: CodeMirror, react-markdown+remark-gfm, pdfjs-dist 6.1, docx-preview, @e965/xlsx.
-Fonts offline (Inter + Plus Jakarta Sans). Rust phụ thuộc `fileconv-core` (path `../../crates/core`).
+**Stack**: Tauri 2 + React 19.2 + Vite 6 + TypeScript strict + Zustand 5 + UI primitives nội bộ theo
+LumiBase + lucide-react. Editor: CodeMirror, react-markdown+remark-gfm, pdfjs-dist 6.1, docx-preview,
+@e965/xlsx. Font Inter Variable được bundle offline. Rust phụ thuộc `fileconv-core`
+(path `../../crates/core`).
 
 **Identity** (`tauri.conf.json`): productName `Markhand`, identifier `com.anhnth24.fileconv-docs`, v0.1.0,
-cửa sổ 1280×820 (min 900×600). Permission tối thiểu: `core:default`, `dialog:default`, `opener:default`
+cửa sổ 1440×900 (min 900×600). Permission tối thiểu: `core:default`, `dialog:default`, `opener:default`
 — **không** fs scope (mọi FS qua custom command). Rust crate `fileconv-desktop`.
 
 ### Luồng UI → Rust
@@ -147,7 +148,8 @@ cửa sổ 1280×820 (min 900×600). Permission tối thiểu: `core:default`, `
                         ▼
         api.importFile(activeFolder, sourceAbs)  → invoke("import_file")
                         ▼  [Rust]
-   import_file:  validate FormatKind  →  copy vào DATA root
+  import_file_only: validate FormatKind → copy nguyên tử vào DATA root → trả Node raw
+                  Zustand queue gọi reconvert tuần tự trong background
                   spawn_blocking(convert_and_write_md(opts, dest))
                         │   Settings(mutex) → ConverterOptions
                         │   Converter::convert_path(source)   ← fileconv-core
@@ -161,24 +163,25 @@ cửa sổ 1280×820 (min 900×600). Permission tối thiểu: `core:default`, `
 ### Cầu nối Tauri (`app/src-tauri/src/lib.rs`)
 - **AppState**: `{ config_dir, data_root: Mutex<PathBuf>, settings: Mutex<Settings> }`.
 - **Path safety**: `resolve_within` chặn `..`, tuyệt đối, root-relative.
-- **18 command**: `supported_extensions`, `get/set_data_root` (persist `config.json`; mặc định `app_data_dir()/DATA`),
+- **19 command**: `supported_extensions`, `get/set_data_root` (persist `config.json`; mặc định `app_data_dir()/DATA`),
   `read_tree` (ghép cặp `report.pdf`↔`report.pdf.md` 1-1, ẩn phía `.md`, đánh dấu `standaloneMd`),
   `create_folder`, `create_markdown`, `rename_node` (rename cả `.md` ghép cặp), `delete_node` (từ chối xóa DATA root),
-  `import_file` (validate + copy + convert), `reconvert`, `read/write_text_file`, `read_text_preview` (head + truncated),
+  `import_file_only` (copy, chưa convert), `import_file` (compat: copy + convert), `reconvert`,
+  `read/write_text_file`, `read_text_preview` (head + truncated),
   `file_size`, `resolve_path`, `read_bytes` (ArrayBuffer — webview `fetch(asset://)` trả 403 nên phải dùng command này),
   `get/set_settings`.
 - `convert_and_write_md` map `Settings`→`ConverterOptions`→`Converter::convert_path`→ghi `.md`.
 
 ### State (Zustand, `app/src/state/store.ts`)
-Store duy nhất, **không middleware/persist** (Rust là nguồn sự thật). Fields: `dataRoot, tree(FsNode), selected,
-activeFolder, settings, supportedExts, error`. Actions: `init, refreshTree, selectNode, changeDataRoot, saveSettings`.
-Types `FsNode`/`Settings` (`lib/types.ts`) mirror struct serde camelCase của Rust.
+Store duy nhất, **không persist nội dung** (Rust/filesystem là nguồn sự thật). Ngoài DATA tree/settings, store giữ
+`openTabs`, `activeTab`, draft session theo `relPath`, view Home/Library/Document và hàng đợi convert tuần tự.
+Baseline của chế độ đối chiếu được cache local để không thay đổi khi người dùng lưu draft. Types IPC vẫn mirror
+struct serde camelCase của Rust.
 
 ### <a id="theme"></a>Theme
-**Ép light.** `main.tsx` hardcode `<Theme mode="light">` — mode "system" sẽ rò rỉ token dark lên canvas trắng
-trên Windows dark theme. `theme.ts` đã xoá; token lấy từ package Astryx + khối `:root` trong `styles.css` (~1100 dòng custom).
-Các bề mặt xem trước (markdown/docx/excel) cố ý hardcode màu sáng.
-> Lưu ý: commit cũ ghi "dark theme mặc định" — **code hiện tại là light**. Tài liệu này phản ánh trạng thái hiện tại.
+App dùng dark cosmic theme theo LumiBase: nền gradient, glass hairline, Inter và accent lục `#2EC47C`.
+Token production nằm trong `styles.css`; không chạy runtime HTML/JS của prototype. Bề mặt file nguồn
+(PDF/DOCX/Excel) vẫn sáng để giữ đúng hình thức tài liệu và độ tương phản.
 
 ## Tích hợp MCP vào Claude Code
 

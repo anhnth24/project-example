@@ -1,79 +1,90 @@
 import { useState } from "react";
 import { ChevronRight, Folder, FolderOpen, Pencil, Trash2 } from "lucide-react";
-import { IconButton } from "@astryxdesign/core/IconButton";
 import { useStore } from "../state/store";
-import { api } from "../lib/ipc";
 import { fileIcon } from "../lib/icons";
+import { nodeMatches } from "../lib/tree";
 import type { FsNode } from "../lib/types";
+import { IconButton } from "./ui";
 
-export function Tree({ node, depth }: { node: FsNode; depth: number }) {
+export function Tree({
+  node,
+  depth,
+  query,
+  onRename,
+  onDelete,
+}: {
+  node: FsNode;
+  depth: number;
+  query: string;
+  onRename: (node: FsNode) => void;
+  onDelete: (node: FsNode) => void;
+}) {
   const [open, setOpen] = useState(depth < 1);
-  const selected = useStore((s) => s.selected);
-  const selectNode = useStore((s) => s.selectNode);
-  const refreshTree = useStore((s) => s.refreshTree);
-  const setError = useStore((s) => s.setError);
+  const activeTab = useStore((state) => state.activeTab);
+  const activeFolder = useStore((state) => state.activeFolder);
+  const view = useStore((state) => state.view);
+  const openNode = useStore((state) => state.openNode);
 
-  const isSelected = selected?.relPath === node.relPath;
+  if (!nodeMatches(node, query)) return null;
+  const expanded = query.trim() ? true : open;
+  const isSelected = node.isDir
+    ? activeFolder === node.relPath
+    : view === "document" && activeTab === node.relPath;
   const unconverted = !node.isDir && node.supported && !node.mdRelPath;
-
-  async function onDelete(e: React.MouseEvent) {
-    e.stopPropagation();
-    const what = node.isDir ? "thư mục (và toàn bộ bên trong)" : "file";
-    if (!confirm(`Xóa ${what} "${node.name}"?`)) return;
-    try {
-      await api.deleteNode(node.relPath);
-      await refreshTree();
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  async function onRename(e: React.MouseEvent) {
-    e.stopPropagation();
-    const next = prompt("Tên mới:", node.name);
-    if (!next || next === node.name) return;
-    try {
-      await api.renameNode(node.relPath, next.trim());
-      await refreshTree();
-    } catch (err) {
-      setError(String(err));
-    }
-  }
 
   function onClick() {
     if (node.isDir) setOpen((o) => !o);
-    selectNode(node);
+    openNode(node);
   }
 
   return (
     <div className="tree-node">
-      <div
-        className={`row ${isSelected ? "selected" : ""}`}
-        style={{ paddingLeft: 8 + depth * 14 }}
-        onClick={onClick}
-        title={node.relPath}
-      >
-        <span className={`twisty ${node.isDir && open ? "open" : ""}`}>
-          {node.isDir && <ChevronRight size={14} />}
-        </span>
-        <span className="row-icon">
-          {node.isDir ? (
-            open ? <FolderOpen size={16} color="#e0a83e" /> : <Folder size={16} color="#e0a83e" />
-          ) : (
-            fileIcon(node)
-          )}
-        </span>
-        <span className="row-label">{node.name}</span>
-        {unconverted && <span className="dot" title="Chưa convert" />}
+      <div className={`tree-row ${isSelected ? "selected" : ""}`}>
+        <button
+          type="button"
+          className="tree-row-main"
+          style={{ paddingLeft: 8 + depth * 14 }}
+          onClick={onClick}
+          title={node.relPath}
+          aria-expanded={node.isDir ? expanded : undefined}
+        >
+          <span className={`twisty ${node.isDir && expanded ? "open" : ""}`}>
+            {node.isDir && <ChevronRight size={13} />}
+          </span>
+          <span className="row-icon">
+            {node.isDir ? (
+              expanded ? (
+                <FolderOpen className="folder-icon" size={15} />
+              ) : (
+                <Folder className="folder-icon" size={15} />
+              )
+            ) : (
+              fileIcon(node, { size: 15 })
+            )}
+          </span>
+          <span className="row-label">{node.name}</span>
+          {unconverted && <span className="dot" title="Chưa convert" />}
+        </button>
         <span className="row-actions">
-          <IconButton label="Đổi tên" tooltip="Đổi tên" variant="ghost" size="sm" icon={<Pencil size={13} />} onClick={onRename} />
-          <IconButton label="Xóa" tooltip="Xóa" variant="ghost" size="sm" icon={<Trash2 size={13} />} onClick={onDelete} />
+          <IconButton label={`Đổi tên ${node.name}`} onClick={() => onRename(node)}>
+            <Pencil size={12} />
+          </IconButton>
+          <IconButton label={`Xóa ${node.name}`} onClick={() => onDelete(node)}>
+            <Trash2 size={12} />
+          </IconButton>
         </span>
       </div>
-      {node.isDir && open && node.children.length > 0 && (
+      {node.isDir && expanded && node.children.length > 0 && (
         <div className="children">
           {node.children.map((c) => (
-            <Tree key={c.relPath} node={c} depth={depth + 1} />
+            <Tree
+              key={c.relPath}
+              node={c}
+              depth={depth + 1}
+              query={query}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
