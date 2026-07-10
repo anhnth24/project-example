@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::*;
 
@@ -940,15 +940,43 @@ fn load_pdfium() -> Option<Pdfium> {
     let _init_guard = PDFIUM_INIT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut candidates: Vec<String> = Vec::new();
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(p) = std::env::var("FILECONV_PDFIUM_LIB") {
-        candidates.push(p);
+        let path = PathBuf::from(p);
+        candidates.push(path.clone());
+        if path.is_dir() {
+            candidates.push(Pdfium::pdfium_platform_library_name_at_path(path));
+        }
     }
-    candidates.push("pdfium/lib/libpdfium.so".to_string());
-    candidates.push("pdfium/libpdfium.so".to_string());
+
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.extend(cwd.ancestors().take(4).map(Path::to_path_buf));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            roots.extend(parent.ancestors().take(4).map(Path::to_path_buf));
+        }
+    }
+    roots.extend(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .take(4)
+            .map(Path::to_path_buf),
+    );
+    for root in roots {
+        candidates.push(Pdfium::pdfium_platform_library_name_at_path(
+            root.join("pdfium/lib"),
+        ));
+        candidates.push(Pdfium::pdfium_platform_library_name_at_path(
+            root.join("pdfium"),
+        ));
+    }
+    let mut seen = HashSet::new();
+    candidates.retain(|path| seen.insert(path.clone()));
 
     for c in candidates {
-        match Pdfium::bind_to_library(&c) {
+        match Pdfium::bind_to_library(c) {
             Ok(bindings) => return Some(Pdfium::new(bindings)),
             Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
                 return Some(Pdfium::default());

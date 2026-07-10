@@ -98,9 +98,27 @@ fn tessdata_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("FILECONV_TESSDATA") {
         return Some(PathBuf::from(p));
     }
-    let local = PathBuf::from("tessdata_best");
-    if local.join("vie.traineddata").exists() {
-        return Some(local);
+
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.extend(cwd.ancestors().take(4).map(Path::to_path_buf));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            roots.extend(parent.ancestors().take(4).map(Path::to_path_buf));
+        }
+    }
+    roots.extend(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .take(4)
+            .map(Path::to_path_buf),
+    );
+    for root in roots {
+        let candidate = root.join("tessdata_best");
+        if candidate.join("vie.traineddata").exists() {
+            return Some(candidate);
+        }
     }
     None
 }
