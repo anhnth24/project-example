@@ -77,6 +77,19 @@ pub struct RedactResult {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HardOcrRequest {
+    pub source_rel: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardOcrResult {
+    pub markdown: String,
+    pub artifact_rel_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TableRequest {
     pub source_rel: String,
 }
@@ -87,6 +100,14 @@ pub struct TableUpdateRequest {
     pub source_rel: String,
     pub table_id: String,
     pub rows: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableExportRequest {
+    pub source_rel: String,
+    pub table_id: String,
+    pub output_abs: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -398,6 +419,33 @@ pub async fn redact_pii(
 }
 
 #[tauri::command]
+pub async fn hard_ocr_image(
+    state: State<'_, AppState>,
+    req: HardOcrRequest,
+) -> Result<HardOcrResult, String> {
+    let root = data_root(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = resolve_within(&root, &req.source_rel)?;
+        if FormatKind::from_path(&source) != FormatKind::Image {
+            return Err("OCR hard hiện hỗ trợ file ảnh; PDF hãy reprocess theo trang.".into());
+        }
+        let config = fileconv_core::llm::LlmConfig::from_env()
+            .ok_or("chưa cấu hình FILECONV_LLM_* cho vision OCR")?;
+        let markdown = fileconv_core::llm::vision_ocr(&config, &source).map_err(es)?;
+        let directory = markhand_root(&root).join("hard-ocr");
+        fs::create_dir_all(&directory).map_err(es)?;
+        let artifact = directory.join(format!("{}.md", stable_key(&req.source_rel)));
+        atomic_write(&artifact, markdown.as_bytes())?;
+        Ok(HardOcrResult {
+            markdown,
+            artifact_rel_path: rel_of(&root, &artifact),
+        })
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
 pub async fn extract_document_schema(
     state: State<'_, AppState>,
     req: ScopeRequest,
@@ -450,10 +498,68 @@ pub async fn update_markdown_table(
     .map_err(es)?
 }
 
+#[tauri::command]
+pub async fn export_markdown_table(
+    state: State<'_, AppState>,
+    req: TableExportRequest,
+) -> Result<String, String> {
+    let root = data_root(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        let document = load_document(&root, &req.source_rel)?;
+        let table = intelligence::parse_markdown_tables(&document)
+            .into_iter()
+            .find(|table| table.id == req.table_id)
+            .ok_or("không tìm thấy bảng")?;
+        let bytes = intelligence::table_to_csv(&table.rows).map_err(es)?;
+        let output = PathBuf::from(&req.output_abs);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).map_err(es)?;
+        }
+        atomic_write(&output, &bytes)?;
+        Ok(output.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(es)?
+}
+
 fn versions_dir(root: &Path, source_rel: &str) -> PathBuf {
     markhand_root(root)
         .join("versions")
         .join(stable_key(source_rel))
+}
+
+pub(super) fn snapshot_existing_version(
+    root: &Path,
+    source_rel: &str,
+) -> Result<Option<VersionMeta>, String> {
+    let Ok(document) = load_document(root, source_rel) else {
+        return Ok(None);
+    };
+    let created_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let directory = versions_dir(root, source_rel);
+    fs::create_dir_all(&directory).map_err(es)?;
+    let mut suffix = 0u32;
+    let (id, path) = loop {
+        let id = if suffix == 0 {
+            format!("v-{created_at}")
+        } else {
+            format!("v-{created_at}-{suffix}")
+        };
+        let path = directory.join(format!("{id}.md"));
+        if !path.exists() {
+            break (id, path);
+        }
+        suffix += 1;
+    };
+    atomic_write(&path, document.markdown.as_bytes())?;
+    Ok(Some(VersionMeta {
+        id,
+        created_at,
+        bytes: document.markdown.len() as u64,
+    }))
 }
 
 fn valid_version_id(value: &str) -> bool {
@@ -470,21 +576,8 @@ pub async fn snapshot_document_version(
 ) -> Result<VersionMeta, String> {
     let root = data_root(&state);
     tauri::async_runtime::spawn_blocking(move || {
-        let document = load_document(&root, &req.source_rel)?;
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let id = format!("v-{created_at}");
-        let directory = versions_dir(&root, &req.source_rel);
-        fs::create_dir_all(&directory).map_err(es)?;
-        let path = directory.join(format!("{id}.md"));
-        atomic_write(&path, document.markdown.as_bytes())?;
-        Ok(VersionMeta {
-            id,
-            created_at,
-            bytes: document.markdown.len() as u64,
-        })
+        snapshot_existing_version(&root, &req.source_rel)?
+            .ok_or_else(|| "chưa có Markdown để snapshot".to_string())
     })
     .await
     .map_err(es)?

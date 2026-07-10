@@ -688,9 +688,14 @@ async fn reconvert(state: State<'_, AppState>, source_rel: String) -> Result<Str
         return Err("định dạng không hỗ trợ convert".into());
     }
     let opts = state.settings.lock().map_err(|_| "lock lỗi")?.to_options();
-    let md_path = tauri::async_runtime::spawn_blocking(move || convert_and_write_md(opts, source))
-        .await
-        .map_err(es)??;
+    let root_for_snapshot = root.clone();
+    let source_rel_for_snapshot = source_rel.clone();
+    let md_path = tauri::async_runtime::spawn_blocking(move || {
+        intelligence::snapshot_existing_version(&root_for_snapshot, &source_rel_for_snapshot)?;
+        convert_and_write_md(opts, source)
+    })
+    .await
+    .map_err(es)??;
     Ok(rel_of(&root, &md_path))
 }
 
@@ -860,9 +865,11 @@ pub fn run() {
             intelligence::ask_intelligence,
             intelligence::scan_pii,
             intelligence::redact_pii,
+            intelligence::hard_ocr_image,
             intelligence::extract_document_schema,
             intelligence::list_markdown_tables,
             intelligence::update_markdown_table,
+            intelligence::export_markdown_table,
             intelligence::snapshot_document_version,
             intelligence::list_document_versions,
             intelligence::read_document_version,

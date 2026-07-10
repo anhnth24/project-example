@@ -252,6 +252,19 @@ export function IntelligenceView() {
     }
   }
 
+  async function exportTable() {
+    if (!firstSelected || !activeTable) return;
+    const output = await saveDialog({
+      title: "Xuất bảng CSV",
+      defaultPath: `table-${activeTable.index + 1}.csv`,
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (!output) return;
+    await run("table-export", () =>
+      api.exportMarkdownTable(firstSelected.relPath, activeTable.id, output),
+    );
+  }
+
   async function loadVersions() {
     if (!firstSelected) return;
     const result = await run("versions", () =>
@@ -558,6 +571,20 @@ export function IntelligenceView() {
                           >
                             Reprocess
                           </Button>
+                          {files.find((file) => file.relPath === document.sourceRel)?.kind ===
+                            "image" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                void run("hard-ocr", () =>
+                                  api.hardOcrImage(document.sourceRel),
+                                )
+                              }
+                            >
+                              OCR hard
+                            </Button>
+                          )}
                         </div>
                       </article>
                     ))}
@@ -796,6 +823,14 @@ export function IntelligenceView() {
                       onClick={saveTable}
                     >
                       Lưu vào Markdown
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      icon={<Download size={13} />}
+                      loading={busy === "table-export"}
+                      onClick={exportTable}
+                    >
+                      Xuất CSV
                     </Button>
                   </div>
                 ) : (

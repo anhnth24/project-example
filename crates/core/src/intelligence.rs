@@ -1406,6 +1406,53 @@ fn render_handoff_artifacts(
             render_requirements(&questions)
         ),
     );
+
+    let mut jira = String::from("Summary,Description,Issue Type,Labels\n");
+    for story in &stories {
+        let summary = story.text.replace('"', "\"\"");
+        jira.push_str(&format!(
+            "\"{}\",\"{} {}\",\"Story\",\"markhand-handoff\"\n",
+            summary,
+            citation_refs(story),
+            story.status
+        ));
+    }
+    artifacts.insert("09-JIRA-IMPORT.csv".into(), jira);
+
+    let mut github = format!(
+        "# GitHub issue drafts — {}\n\n> Import/review manually; generated items remain draft until approved.\n\n",
+        options.product_name
+    );
+    for story in &stories {
+        github.push_str(&format!(
+            "## {} — {}\n\n- Trạng thái: `{}`\n- Trích dẫn: {}\n\n",
+            story.id,
+            story.text,
+            story.status,
+            citation_refs(story)
+        ));
+    }
+    artifacts.insert("10-GITHUB-ISSUES.md".into(), github);
+
+    artifacts.insert(
+        "11-CONFLUENCE.md".into(),
+        format!(
+            "# {} — BRD/PRD\n\n## Yêu cầu nghiệp vụ\n\n{}\n## Yêu cầu chức năng\n\n{}\n## User stories\n\n{}",
+            options.product_name,
+            render_requirements(&brs),
+            render_requirements(&frs),
+            render_requirements(&stories)
+        ),
+    );
+    artifacts.insert(
+        "12-OBSIDIAN-MOC.md".into(),
+        "# Mục lục bàn giao\n\n\
+         - [[01-BRD]]\n- [[02-PRD]]\n- [[03-USER-STORIES]]\n\
+         - [[04-ACCEPTANCE-CRITERIA]]\n- [[05-GLOSSARY]]\n\
+         - [[06-TEST-CASES]]\n- [[07-TRACEABILITY]]\n\
+         - [[08-ASSUMPTIONS-QUESTIONS]]\n"
+            .into(),
+    );
     artifacts
 }
 

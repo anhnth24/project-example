@@ -86,6 +86,10 @@ export const api = {
     invoke<{ report: PiiReport; redactedRelPath: string }>("redact_pii", {
       req: { sourceRel },
     }),
+  hardOcrImage: (sourceRel: string) =>
+    invoke<{ markdown: string; artifactRelPath: string }>("hard_ocr_image", {
+      req: { sourceRel },
+    }),
   extractDocumentSchema: (sourceRels: string[]) =>
     invoke<DocumentSchema[]>("extract_document_schema", { req: { sourceRels } }),
   listMarkdownTables: (sourceRel: string) =>
@@ -93,6 +97,10 @@ export const api = {
   updateMarkdownTable: (sourceRel: string, tableId: string, rows: string[][]) =>
     invoke<{ mdRelPath: string; markdown: string }>("update_markdown_table", {
       req: { sourceRel, tableId, rows },
+    }),
+  exportMarkdownTable: (sourceRel: string, tableId: string, outputAbs: string) =>
+    invoke<string>("export_markdown_table", {
+      req: { sourceRel, tableId, outputAbs },
     }),
   snapshotDocumentVersion: (sourceRel: string) =>
     invoke<VersionMeta>("snapshot_document_version", { req: { sourceRel } }),
