@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   Check,
@@ -16,10 +16,22 @@ import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { fileIcon } from "../lib/icons";
 import type { DocumentMode, FsNode } from "../lib/types";
-import { SourcePreview } from "./SourcePreview";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { CompareView } from "./CompareView";
 import { Button } from "./ui";
+
+const SourcePreview = lazy(() =>
+  import("./SourcePreview").then((module) => ({ default: module.SourcePreview })),
+);
+
+function SourcePreviewFallback() {
+  return (
+    <div className="preview-loading">
+      <LoaderCircle className="spin" size={20} />
+      Đang tải bộ xem file…
+    </div>
+  );
+}
 
 export function DocView({ node }: { node: FsNode }) {
   const session = useStore((state) => state.sessions[node.relPath]);
@@ -189,7 +201,9 @@ export function DocView({ node }: { node: FsNode }) {
       {!canMd && canSource ? (
         <div className="doc-body split raw-document">
           <div className="pane source-pane">
-            <SourcePreview node={node} onError={setError} />
+            <Suspense fallback={<SourcePreviewFallback />}>
+              <SourcePreview node={node} onError={setError} />
+            </Suspense>
           </div>
           <div className="pane md-pane">
             <div className="placeholder">
@@ -215,7 +229,9 @@ export function DocView({ node }: { node: FsNode }) {
         <div className={`doc-body ${effectiveMode}`}>
           {(effectiveMode === "split" || effectiveMode === "source") && canSource && (
             <div className="pane source-pane">
-              <SourcePreview node={node} onError={setError} />
+              <Suspense fallback={<SourcePreviewFallback />}>
+                <SourcePreview node={node} onError={setError} />
+              </Suspense>
             </div>
           )}
           {(effectiveMode === "split" || effectiveMode === "markdown") && canMd && (
