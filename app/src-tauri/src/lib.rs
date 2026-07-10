@@ -19,6 +19,8 @@ use tauri::{Manager, State};
 
 use fileconv_core::{ConverterOptions, FormatKind};
 
+mod intelligence;
+
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────
 
 /// Một node trong cây thư mục gửi cho UI.
@@ -851,6 +853,25 @@ pub fn run() {
             read_bytes,
             get_settings,
             set_settings,
+            intelligence::generate_handoff_pack,
+            intelligence::read_handoff_artifact,
+            intelligence::run_quality_report,
+            intelligence::search_intelligence,
+            intelligence::ask_intelligence,
+            intelligence::scan_pii,
+            intelligence::redact_pii,
+            intelligence::extract_document_schema,
+            intelligence::list_markdown_tables,
+            intelligence::update_markdown_table,
+            intelligence::snapshot_document_version,
+            intelligence::list_document_versions,
+            intelligence::read_document_version,
+            intelligence::diff_document_versions,
+            intelligence::merge_document_versions,
+            intelligence::get_watch_rules,
+            intelligence::set_watch_rules,
+            intelligence::scan_watch_rules,
+            intelligence::export_knowledge_pack,
         ])
         .run(tauri::generate_context!())
         .expect("lỗi khi khởi chạy ứng dụng Tauri");

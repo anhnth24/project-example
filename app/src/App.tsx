@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, Upload } from "lucide-react";
@@ -14,6 +14,12 @@ import { LibraryView } from "./components/LibraryView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConvertQueue } from "./components/ConvertQueue";
 import { Button, IconButton, Modal } from "./components/ui";
+
+const IntelligenceView = lazy(() =>
+  import("./components/IntelligenceView").then((module) => ({
+    default: module.IntelligenceView,
+  })),
+);
 
 export default function App() {
   const init = useStore((state) => state.init);
@@ -132,6 +138,7 @@ export default function App() {
         activeJobs={activeJobs}
         onHome={() => setView("home")}
         onLibrary={() => setView("library")}
+        onIntelligence={() => setView("intelligence")}
         onToggleDrawer={() => setDrawerOpen((open) => !open)}
         onSearch={() => setPaletteOpen(true)}
         onQueue={() => setQueueOpen((open) => !open)}
@@ -141,9 +148,13 @@ export default function App() {
       {drawerOpen && <Sidebar onOpenSettings={openSettings} />}
 
       <div className="workspace">
-        <DocumentTabs onRequestClose={requestCloseTab} />
+        {view !== "intelligence" && <DocumentTabs onRequestClose={requestCloseTab} />}
         <main className="main-content">
-          {view === "library" ? (
+          {view === "intelligence" ? (
+            <Suspense fallback={<div className="docview doc-loading">Đang tải Intelligence…</div>}>
+              <IntelligenceView />
+            </Suspense>
+          ) : view === "library" ? (
             <LibraryView onUpload={uploadFiles} />
           ) : view === "document" && activeNode && !activeNode.isDir ? (
             <DocView node={activeNode} />

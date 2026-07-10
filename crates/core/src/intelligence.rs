@@ -5,7 +5,7 @@
 //! baselines for handoff packs, cited search, quality, PII, tables, schema,
 //! versions and automation. Optional LLM enhancement remains behind `llm`.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::Path;

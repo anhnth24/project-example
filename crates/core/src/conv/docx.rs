@@ -45,7 +45,11 @@ pub fn to_markdown(path: &Path) -> Result<String, ConvertError> {
 
                 if let Some(level) = style.and_then(heading_level) {
                     // Heading nằm trên một dòng: gộp các break thành khoảng trắng.
-                    let line = text.split('\n').map(str::trim).collect::<Vec<_>>().join(" ");
+                    let line = text
+                        .split('\n')
+                        .map(str::trim)
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     md.push_str(&"#".repeat(level));
                     md.push(' ');
                     md.push_str(line.trim());
@@ -212,7 +216,10 @@ mod tests {
 
     #[test]
     fn keeps_surrounding_whitespace_outside_markers() {
-        assert_eq!(wrap_emphasis("  Họ và tên  ", true, false), "  **Họ và tên**  ");
+        assert_eq!(
+            wrap_emphasis("  Họ và tên  ", true, false),
+            "  **Họ và tên**  "
+        );
     }
 
     #[test]

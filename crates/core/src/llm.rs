@@ -167,7 +167,11 @@ pub fn summarize(cfg: &LlmConfig, text: &str) -> Result<String, ConvertError> {
 }
 
 /// Trích dữ liệu có cấu trúc theo yêu cầu; trả JSON (chuỗi).
-pub fn extract_json(cfg: &LlmConfig, text: &str, instruction: &str) -> Result<String, ConvertError> {
+pub fn extract_json(
+    cfg: &LlmConfig,
+    text: &str,
+    instruction: &str,
+) -> Result<String, ConvertError> {
     let system = "Bạn trích xuất dữ liệu có cấu trúc từ tài liệu. CHỈ trả về JSON hợp lệ \
                   (không giải thích, không code fence). Nếu thiếu dữ liệu, dùng null.";
     chat(
@@ -207,7 +211,10 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
 
     match cfg.provider {
         Provider::OpenAi | Provider::OpenAiCompatible => {
-            let base = cfg.base_url.clone().unwrap_or_else(|| "https://api.openai.com".into());
+            let base = cfg
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com".into());
             let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
             let body = serde_json::json!({
                 "model": cfg.model,
@@ -225,7 +232,10 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
                 .ok_or_else(|| fail(format!("phản hồi OpenAI vision không hợp lệ: {v}")))
         }
         Provider::Anthropic => {
-            let base = cfg.base_url.clone().unwrap_or_else(|| "https://api.anthropic.com".into());
+            let base = cfg
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.anthropic.com".into());
             let url = format!("{}/v1/messages", base.trim_end_matches('/'));
             let body = serde_json::json!({
                 "model": cfg.model,
