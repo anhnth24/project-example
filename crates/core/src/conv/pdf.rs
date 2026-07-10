@@ -11,7 +11,7 @@
 //! Fallback: nếu pdf-inspector lỗi → đường PDFium (đếm ký tự); nếu vẫn không được /
 //! thiếu libpdfium → `pdf-extract`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
@@ -42,6 +42,19 @@ pub fn to_markdown(
 ) -> Result<String, ConvertError> {
     let bytes = std::fs::read(path).map_err(fail)?;
 
+    // Page-filtered requests are common in the desktop/MCP token-saving flow.
+    // The per-page API below intentionally extracts the whole document for
+    // cross-page font statistics (~400 ms even for one page). The regular
+    // options API honours its page filter during extraction and is ~8× faster.
+    // Keep the slower path as fallback for OCR and malformed tables.
+    if !ocr_images {
+        if let Some(selected_pages) = pages {
+            if let Some(md) = via_pdf_inspector_filtered_fast(&bytes, selected_pages) {
+                return Ok(md);
+            }
+        }
+    }
+
     // 1) pdf-inspector: markdown có cấu trúc + needs_ocr theo trang.
     if let Some(md) = via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images, pages) {
         if !md.trim().is_empty() {
@@ -61,6 +74,92 @@ pub fn to_markdown(
         ));
     }
     extract_with_pdf_extract(&bytes)
+}
+
+fn parse_marked_pages(markdown: &str) -> HashMap<u32, String> {
+    let mut pages = HashMap::new();
+    let mut current_page = None;
+    let mut current_text = String::new();
+
+    for line in markdown.lines() {
+        let marker = line
+            .trim()
+            .strip_prefix("<!-- Page ")
+            .and_then(|rest| rest.strip_suffix(" -->"))
+            .and_then(|page| page.parse::<u32>().ok());
+        if let Some(page) = marker {
+            if let Some(previous) = current_page.replace(page) {
+                pages.insert(previous, current_text.trim().to_string());
+                current_text.clear();
+            }
+            continue;
+        }
+        if current_page.is_some() {
+            current_text.push_str(line);
+            current_text.push('\n');
+        }
+    }
+    if let Some(page) = current_page {
+        pages.insert(page, current_text.trim().to_string());
+    }
+    pages
+}
+
+fn remove_page_markers(markdown: &str) -> String {
+    markdown
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            !(line.starts_with("<!-- Page ") && line.ends_with(" -->"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+/// Fast structured extraction for a sorted, page-filtered request.
+///
+/// Page markers let us independently validate every page that the detector
+/// considers suspicious. A genuine scan has an empty/low-confidence section
+/// and falls through to the normal PDFium/Tesseract path.
+fn via_pdf_inspector_filtered_fast(bytes: &[u8], pages: &[u32]) -> Option<String> {
+    let selected: Vec<u32> = pages.iter().copied().filter(|&page| page >= 1).collect();
+    if selected.is_empty() || selected.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return None;
+    }
+
+    let mut markdown_options = pdf_inspector::MarkdownOptions::default();
+    markdown_options.include_page_numbers = true;
+    let options = pdf_inspector::PdfOptions::new()
+        .pages(selected.iter().copied())
+        .markdown(markdown_options);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        pdf_inspector::process_pdf_mem_with_options(bytes, options)
+    }))
+    .ok()?
+    .ok()?;
+    let marked = result.markdown?;
+    if marked.trim().is_empty() || markdown_has_malformed_table(&marked) {
+        return None;
+    }
+
+    let chunks = parse_marked_pages(&marked);
+    if selected.iter().any(|page| !chunks.contains_key(page)) {
+        return None;
+    }
+    for page in result.pages_needing_ocr {
+        if selected.contains(&page)
+            && !chunks
+                .get(&page)
+                .is_some_and(|text| native_text_is_high_confidence(text))
+        {
+            return None;
+        }
+    }
+
+    let clean = remove_page_markers(&marked);
+    (!clean.is_empty()).then_some(clean)
 }
 
 /// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/Tesseract cho trang scan.
@@ -618,7 +717,8 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
 mod tests {
     use super::{
         markdown_has_malformed_table, native_text_covers_markdown, native_text_is_high_confidence,
-        native_text_is_trustworthy, strip_repeated_marginal_lines,
+        native_text_is_trustworthy, parse_marked_pages, remove_page_markers,
+        strip_repeated_marginal_lines,
     };
 
     #[test]
@@ -744,5 +844,25 @@ mod tests {
             .iter()
             .all(|page| page.contains("| Chỉ tiêu | Giá trị |")));
         assert!(pages.iter().all(|page| page.contains("| --- | --- |")));
+    }
+
+    #[test]
+    fn parses_and_removes_fast_path_page_markers() {
+        let marked = "<!-- Page 2 -->\n\n## Hai\n\nNội dung\n\
+            <!-- Page 5 -->\n\n## Năm\n\nNội dung khác";
+        let pages = parse_marked_pages(marked);
+
+        assert_eq!(
+            pages.get(&2).map(String::as_str),
+            Some("## Hai\n\nNội dung")
+        );
+        assert_eq!(
+            pages.get(&5).map(String::as_str),
+            Some("## Năm\n\nNội dung khác")
+        );
+        let clean = remove_page_markers(marked);
+        assert!(!clean.contains("<!-- Page"));
+        assert!(clean.contains("## Hai"));
+        assert!(clean.contains("## Năm"));
     }
 }
