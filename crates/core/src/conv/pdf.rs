@@ -112,14 +112,15 @@ fn via_pdf_inspector(
                 // though PDFium decodes the main text perfectly. Prefer that
                 // native text when it passes a conservative quality gate;
                 // only render + OCR genuinely empty/garbled pages.
-                let native_text = pm.ocr_reason.is_none().then(|| {
-                    pdf_doc
-                        .as_ref()
-                        .and_then(|d| native_page_text_at(d, pm.page))
-                        .filter(|text| native_text_is_trustworthy(text))
-                });
+                let native_text = pdf_doc
+                    .as_ref()
+                    .and_then(|d| native_page_text_at(d, pm.page))
+                    .filter(|text| {
+                        native_text_is_trustworthy(text)
+                            && (pm.ocr_reason.is_none() || native_text_is_high_confidence(text))
+                    });
 
-                if let Some(text) = native_text.flatten() {
+                if let Some(text) = native_text {
                     page_out.push_str(text.trim_end());
                 } else if let Some(text) = ocr_enabled
                     .then(|| {
@@ -262,6 +263,48 @@ fn native_text_is_trustworthy(text: &str) -> bool {
     // TOC pages can legitimately be dominated by dotted leaders; 20% still
     // requires substantial readable content while allowing those pages.
     word_like >= 8 && alphanumeric * 100 >= nonspace * 20
+}
+
+/// Stricter semantic-looking gate used when `pdf-inspector` explicitly reports
+/// garbled text. Printable GID noise often passes basic character checks but
+/// lacks natural vowel-bearing words and contains long repeated letter runs.
+fn native_text_is_high_confidence(text: &str) -> bool {
+    if !native_text_is_trustworthy(text) {
+        return false;
+    }
+
+    let vowels = "aeiouyAEIOUYăâêôơưĂÂÊÔƠƯ\
+        áàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ\
+        ÁÀẢÃẠẮẰẲẴẶẤẦẨẪẬÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴ";
+    let words: Vec<&str> = text
+        .split_whitespace()
+        .filter(|token| token.chars().filter(|ch| ch.is_alphabetic()).count() >= 2)
+        .collect();
+    let vowel_words = words
+        .iter()
+        .filter(|token| token.chars().any(|ch| vowels.contains(ch)))
+        .count();
+    let alphabetic = text.chars().filter(|ch| ch.is_alphabetic()).count();
+
+    let mut repeated_alnum_runs = 0usize;
+    let mut previous = None;
+    let mut run = 0usize;
+    for ch in text.chars().map(|ch| ch.to_ascii_lowercase()) {
+        if ch.is_alphanumeric() && Some(ch) == previous {
+            run += 1;
+            if run == 4 {
+                repeated_alnum_runs += 1;
+            }
+        } else {
+            run = 1;
+        }
+        previous = Some(ch);
+    }
+
+    alphabetic >= 250
+        && words.len() >= 40
+        && vowel_words * 100 >= words.len() * 70
+        && repeated_alnum_runs <= 3
 }
 
 fn native_text_covers_markdown(native: &str, markdown: &str) -> bool {
@@ -574,8 +617,8 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        markdown_has_malformed_table, native_text_covers_markdown, native_text_is_trustworthy,
-        strip_repeated_marginal_lines,
+        markdown_has_malformed_table, native_text_covers_markdown, native_text_is_high_confidence,
+        native_text_is_trustworthy, strip_repeated_marginal_lines,
     };
 
     #[test]
@@ -588,6 +631,7 @@ mod tests {
             ));
         }
         assert!(native_text_is_trustworthy(&text));
+        assert!(native_text_is_high_confidence(&text));
     }
 
     #[test]
@@ -601,6 +645,10 @@ mod tests {
             "This otherwise readable page contains many normal words and sentences. ".repeat(8)
         );
         assert!(!native_text_is_trustworthy(&private_use));
+
+        let printable_gid_noise = "bcdfg hjklm npqrs tvwxyz BCDFG HJKLM NPQRS TVWXYZ ".repeat(20);
+        assert!(native_text_is_trustworthy(&printable_gid_noise));
+        assert!(!native_text_is_high_confidence(&printable_gid_noise));
     }
 
     #[test]
