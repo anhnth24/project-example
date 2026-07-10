@@ -81,7 +81,8 @@ fn via_pdf_inspector(
     PDFIUM.with(|opt| -> Option<String> {
         // Chỉ mở PDFium khi thật sự cần (OCR trang scan hoặc OCR ảnh nhúng).
         let pdf_doc = if need_pdfium {
-            opt.as_ref().and_then(|p| p.load_pdf_from_file(path, None).ok())
+            opt.as_ref()
+                .and_then(|p| p.load_pdf_from_file(path, None).ok())
         } else {
             None
         };
@@ -91,8 +92,21 @@ fn via_pdf_inspector(
             let has_text = !pm.markdown.trim().is_empty();
 
             if pm.needs_ocr && ocr_enabled {
-                // Trang scan / text rác → render + OCR.
-                if let Some(text) = pdf_doc
+                // `pdf-inspector` intentionally errs on the side of OCR when
+                // *any* GID/symbol font is present. Real Word-exported PDFs can
+                // therefore be flagged because of one logo/bullet font even
+                // though PDFium decodes the main text perfectly. Prefer that
+                // native text when it passes a conservative quality gate;
+                // only render + OCR genuinely empty/garbled pages.
+                let native_text = pdf_doc
+                    .as_ref()
+                    .and_then(|d| native_page_text_at(d, pm.page))
+                    .filter(|text| native_text_is_trustworthy(text));
+
+                if let Some(text) = native_text {
+                    out.push_str(text.trim_end());
+                    out.push_str("\n\n");
+                } else if let Some(text) = pdf_doc
                     .as_ref()
                     .and_then(|d| ocr_page_at(d, pm.page, langs))
                 {
@@ -113,7 +127,8 @@ fn via_pdf_inspector(
                 if ocr_enabled && ocr_images {
                     if let Some(doc) = pdf_doc.as_ref() {
                         if let Ok(page) = doc.pages().get(pm.page as i32) {
-                            if let Some(extra) = ocr_page_images(doc, &page, langs, pm.page as usize + 1)
+                            if let Some(extra) =
+                                ocr_page_images(doc, &page, langs, pm.page as usize + 1)
                             {
                                 out.push_str(&extra);
                             }
@@ -133,7 +148,66 @@ fn via_pdf_inspector(
 /// Render + OCR một trang theo chỉ số 0-based.
 fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String> {
     let page = doc.pages().get(page_0idx as i32).ok()?;
-    ocr_full_page(&page, langs).ok().filter(|t| !t.trim().is_empty())
+    ocr_full_page(&page, langs)
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+}
+
+/// Extract the page's native text layer through PDFium.
+fn native_page_text_at(doc: &PdfDocument, page_0idx: u32) -> Option<String> {
+    let page = doc.pages().get(page_0idx as i32).ok()?;
+    page.text()
+        .ok()
+        .map(|text| text.all())
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// Conservative trust gate for a native PDF text layer.
+///
+/// A useful page must contain enough word-like/alphanumeric content and almost
+/// no decoding sentinels or control/private-use characters. This deliberately
+/// accepts punctuation-heavy tables of contents while rejecting empty scans,
+/// `(cid:123)` output and broken font mappings.
+fn native_text_is_trustworthy(text: &str) -> bool {
+    let mut nonspace = 0usize;
+    let mut alphanumeric = 0usize;
+    let mut bad = 0usize;
+
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        nonspace += 1;
+        if ch.is_alphanumeric() {
+            alphanumeric += 1;
+        }
+        if ch == '\u{FFFD}'
+            || ch == '\0'
+            || ch.is_control()
+            || ('\u{E000}'..='\u{F8FF}').contains(&ch)
+        {
+            bad += 1;
+        }
+    }
+
+    if nonspace < 80 || alphanumeric < 40 || bad * 200 > nonspace {
+        return false;
+    }
+
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("(cid:")
+        || lower.contains("/gid")
+        || lower.contains("<gid")
+        || lower.contains("uni+")
+    {
+        return false;
+    }
+
+    let word_like = text
+        .split_whitespace()
+        .filter(|token| token.chars().filter(|ch| ch.is_alphabetic()).count() >= 2)
+        .count();
+    word_like >= 8 && alphanumeric * 100 >= nonspace * 30
 }
 
 /// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
@@ -185,7 +259,12 @@ fn via_pdfium(
 }
 
 /// OCR các ảnh nhúng đủ lớn trong một trang (cho trang trộn text + ảnh).
-fn ocr_page_images(doc: &PdfDocument, page: &PdfPage, langs: &str, page_no: usize) -> Option<String> {
+fn ocr_page_images(
+    doc: &PdfDocument,
+    page: &PdfPage,
+    langs: &str,
+    page_no: usize,
+) -> Option<String> {
     let mut out = String::new();
     for obj in page.objects().iter() {
         let Some(img_obj) = obj.as_image_object() else {
@@ -219,8 +298,12 @@ fn ocr_page_images(doc: &PdfDocument, page: &PdfPage, langs: &str, page_no: usiz
 fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<String, ConvertError> {
     let w = (((page.width().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 5000);
     let h = (((page.height().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 7000);
-    let bitmap = page.render(w, h, None).map_err(|e| fail(format!("render: {e}")))?;
-    let img = bitmap.as_image().map_err(|e| fail(format!("as_image: {e}")))?;
+    let bitmap = page
+        .render(w, h, None)
+        .map_err(|e| fail(format!("render: {e}")))?;
+    let img = bitmap
+        .as_image()
+        .map_err(|e| fail(format!("as_image: {e}")))?;
     image_ocr::ocr_dynimage(&img, langs).map_err(fail)
 }
 
@@ -252,5 +335,37 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
         Err(_) => Err(ConvertError::Failed(
             "pdf-extract panic (PDF phức tạp/không chuẩn)".to_string(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_text_is_trustworthy;
+
+    #[test]
+    fn trusts_native_vietnamese_table_of_contents() {
+        let text = "MỤC LỤC\n\
+            PHẦN 1 - MÔ HÌNH CASAN........................................ 1\n\
+            1. BỐI CẢNH RA ĐỜI........................................... 1\n\
+            1.1. AI đã đi qua thời thử công cụ........................... 1\n\
+            2. MÔ HÌNH CASAN............................................. 2\n\
+            3. LỘ TRÌNH CHUYỂN ĐỔI GIỮA CÁC CẤP ĐỘ CASAN................ 4";
+        assert!(native_text_is_trustworthy(text));
+    }
+
+    #[test]
+    fn rejects_short_or_broken_native_text() {
+        assert!(!native_text_is_trustworthy("Mã hiệu: 123"));
+        assert!(!native_text_is_trustworthy(
+            "(cid:123) (cid:99) /GID12 \u{FFFD}\u{FFFD}\u{FFFD} broken text"
+        ));
+    }
+
+    #[test]
+    fn trusts_long_plain_english_text() {
+        let text = "This document contains a complete native text layer with enough readable \
+            words to avoid unnecessary optical character recognition. The source remains \
+            searchable, selectable, and substantially more accurate than a rendered OCR pass.";
+        assert!(native_text_is_trustworthy(text));
     }
 }
