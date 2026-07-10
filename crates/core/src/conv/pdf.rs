@@ -32,6 +32,8 @@ const PAGE_TEXT_MIN_CHARS: usize = 10;
 const MIN_IMG_AREA: i64 = 200 * 200;
 /// DPI render trang khi OCR (cao hơn = OCR tốt hơn, chậm hơn).
 const OCR_DPI: f32 = 300.0;
+const PARALLEL_MIN_PAGES: u32 = 16;
+const PARALLEL_MAX_PDF_BYTES: usize = 32 * 1024 * 1024;
 
 pub fn to_markdown(
     path: &Path,
@@ -48,9 +50,16 @@ pub fn to_markdown(
     // options API honours its page filter during extraction and is ~8× faster.
     // Keep the slower path as fallback for OCR and malformed tables.
     if !ocr_images {
-        if let Some(selected_pages) = pages {
-            if let Some(md) = via_pdf_inspector_filtered_fast(path, &bytes, selected_pages) {
-                return Ok(md);
+        match pages {
+            Some(selected_pages) => {
+                if let Some(md) = via_pdf_inspector_filtered_fast(path, &bytes, selected_pages) {
+                    return Ok(md);
+                }
+            }
+            None => {
+                if let Some(md) = via_pdf_inspector_parallel_full(path, &bytes) {
+                    return Ok(md);
+                }
             }
         }
     }
@@ -105,17 +114,12 @@ fn parse_marked_pages(markdown: &str) -> HashMap<u32, String> {
     pages
 }
 
-/// Fast structured extraction for a sorted, page-filtered request.
-///
-/// Page markers let us independently validate every page that the detector
-/// considers suspicious. A genuine scan has an empty/low-confidence section
-/// and falls through to the normal PDFium/Tesseract path.
-fn via_pdf_inspector_filtered_fast(path: &Path, bytes: &[u8], pages: &[u32]) -> Option<String> {
-    let selected: Vec<u32> = pages.iter().copied().filter(|&page| page >= 1).collect();
-    if selected.is_empty() || selected.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return None;
-    }
+struct FastPages {
+    chunks: HashMap<u32, String>,
+    pages_needing_ocr: HashSet<u32>,
+}
 
+fn extract_fast_pages(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
     let mut markdown_options = pdf_inspector::MarkdownOptions::default();
     markdown_options.include_page_numbers = true;
     // Keep headers in each marked chunk so our page-aware cleanup can also
@@ -133,15 +137,27 @@ fn via_pdf_inspector_filtered_fast(path: &Path, bytes: &[u8], pages: &[u32]) -> 
     if marked.trim().is_empty() {
         return None;
     }
-
-    let mut chunks = parse_marked_pages(&marked);
+    let chunks = parse_marked_pages(&marked);
     if selected.iter().any(|page| !chunks.contains_key(page)) {
         return None;
     }
-    for page in result.pages_needing_ocr {
-        if selected.contains(&page)
-            && !chunks
-                .get(&page)
+    Some(FastPages {
+        chunks,
+        pages_needing_ocr: result.pages_needing_ocr.into_iter().collect(),
+    })
+}
+
+fn finalize_fast_pages(
+    path: &Path,
+    selected: &[u32],
+    mut extracted: FastPages,
+    prefetched_native: Option<HashMap<u32, String>>,
+) -> Option<String> {
+    for page in &extracted.pages_needing_ocr {
+        if selected.contains(page)
+            && !extracted
+                .chunks
+                .get(page)
                 .is_some_and(|text| native_text_is_high_confidence(text))
         {
             return None;
@@ -152,28 +168,29 @@ fn via_pdf_inspector_filtered_fast(path: &Path, bytes: &[u8], pages: &[u32]) -> 
         .iter()
         .copied()
         .filter(|page| {
-            chunks
+            extracted
+                .chunks
                 .get(page)
                 .is_some_and(|text| markdown_has_malformed_table(text))
         })
         .collect();
-    if !malformed_pages.is_empty() {
-        let native_pages = native_text_for_pages(path, &malformed_pages);
-        for page in malformed_pages {
-            let native = native_pages.get(&page)?;
-            let structured = chunks.get(&page)?;
-            if !native_text_is_trustworthy(native)
-                || !native_text_covers_markdown(native, structured)
-            {
-                return None;
-            }
-            chunks.insert(page, native.trim().to_string());
+    let native_pages = match prefetched_native {
+        Some(native) => native,
+        None if malformed_pages.is_empty() => HashMap::new(),
+        None => native_text_for_pages(path, &malformed_pages),
+    };
+    for page in malformed_pages {
+        let native = native_pages.get(&page)?;
+        let structured = extracted.chunks.get(&page)?;
+        if !native_text_is_trustworthy(native) || !native_text_covers_markdown(native, structured) {
+            return None;
         }
+        extracted.chunks.insert(page, native.trim().to_string());
     }
 
     let mut ordered: Vec<String> = selected
         .iter()
-        .filter_map(|page| chunks.remove(page))
+        .filter_map(|page| extracted.chunks.remove(page))
         .collect();
     strip_repeated_marginal_lines(&mut ordered);
     let clean = ordered
@@ -182,6 +199,81 @@ fn via_pdf_inspector_filtered_fast(path: &Path, bytes: &[u8], pages: &[u32]) -> 
         .collect::<Vec<_>>()
         .join("\n\n");
     (!clean.trim().is_empty()).then_some(clean)
+}
+
+/// Fast structured extraction for a sorted, page-filtered request.
+///
+/// Page markers let us independently validate every page that the detector
+/// considers suspicious. A genuine scan has an empty/low-confidence section
+/// and falls through to the normal PDFium/Tesseract path.
+fn via_pdf_inspector_filtered_fast(path: &Path, bytes: &[u8], pages: &[u32]) -> Option<String> {
+    let selected: Vec<u32> = pages.iter().copied().filter(|&page| page >= 1).collect();
+    if selected.is_empty() || selected.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return None;
+    }
+
+    let extracted = extract_fast_pages(bytes, &selected)?;
+    finalize_fast_pages(path, &selected, extracted, None)
+}
+
+/// Split a larger full-document extraction into a few page-filtered workers.
+///
+/// `pdf-inspector`'s filtered pipeline parses font/layout data only for its
+/// requested range. Four medium-sized ranges preserve enough context for
+/// heading classification while reducing wall time substantially on normal
+/// multicore desktops. Every page is validated and merged in document order;
+/// any suspicious/missing page falls back to the conservative sequential path.
+fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Option<String> {
+    if bytes.len() > PARALLEL_MAX_PDF_BYTES {
+        return None;
+    }
+    let page_count = catch_unwind(AssertUnwindSafe(|| pdf_inspector::detect_pdf_mem(bytes)))
+        .ok()?
+        .ok()?
+        .page_count;
+    if page_count < PARALLEL_MIN_PAGES {
+        return None;
+    }
+    let available = std::thread::available_parallelism().ok()?.get();
+    let workers = available.min(4).min(page_count.div_ceil(8) as usize);
+    if workers < 2 {
+        return None;
+    }
+
+    let selected: Vec<u32> = (1..=page_count).collect();
+    let chunk_size = page_count.div_ceil(workers as u32) as usize;
+    let ranges: Vec<&[u32]> = selected.chunks(chunk_size).collect();
+    let (parts, native_pages) = std::thread::scope(|scope| {
+        let handles: Vec<_> = ranges
+            .iter()
+            .map(|range| scope.spawn(|| extract_fast_pages(bytes, range)))
+            .collect();
+        // Run PDFium on the caller thread so its thread-local instance remains
+        // cached for subsequent desktop conversions.
+        let native_pages = native_text_for_requested_pages(path, None);
+        let parts = handles
+            .into_iter()
+            .map(|handle| handle.join().ok().flatten())
+            .collect::<Option<Vec<_>>>()?;
+        Some((parts, native_pages))
+    })?;
+
+    let mut merged = FastPages {
+        chunks: HashMap::new(),
+        pages_needing_ocr: HashSet::new(),
+    };
+    for part in parts {
+        for (page, text) in part.chunks {
+            if merged.chunks.insert(page, text).is_some() {
+                return None;
+            }
+        }
+        merged.pages_needing_ocr.extend(part.pages_needing_ocr);
+    }
+    if merged.chunks.len() != selected.len() {
+        return None;
+    }
+    finalize_fast_pages(path, &selected, merged, Some(native_pages))
 }
 
 /// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/Tesseract cho trang scan.
