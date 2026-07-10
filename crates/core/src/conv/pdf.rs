@@ -315,7 +315,7 @@ fn normalized_margin_line(line: &str) -> Option<String> {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase();
-    (normalized.chars().count() >= 8 && normalized.chars().count() <= 240).then_some(normalized)
+    (normalized.chars().count() >= 8 && normalized.chars().count() <= 400).then_some(normalized)
 }
 
 fn margin_indices(lines: &[&str]) -> HashSet<usize> {
@@ -326,7 +326,7 @@ fn margin_indices(lines: &[&str]) -> HashSet<usize> {
         .collect();
     nonempty
         .iter()
-        .take(6)
+        .take(8)
         .chain(nonempty.iter().rev().take(4))
         .copied()
         .collect()
@@ -343,10 +343,12 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for page in pages.iter() {
         let lines: Vec<&str> = page.lines().collect();
-        let margins = margin_indices(&lines);
-        let unique: HashSet<String> = margins
-            .into_iter()
-            .filter_map(|index| normalized_margin_line(lines[index]))
+        // Count across the page, but removal below is still restricted to the
+        // margins. This is robust when a converter inserts blank/metadata lines
+        // before the visual header.
+        let unique: HashSet<String> = lines
+            .iter()
+            .filter_map(|line| normalized_margin_line(line))
             .collect();
         for line in unique {
             *counts.entry(line).or_default() += 1;
