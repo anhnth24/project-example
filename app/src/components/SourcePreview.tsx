@@ -359,7 +359,15 @@ function ExcelPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) 
             ws["!ref"] = XLSX.utils.encode_range(range);
           }
         }
-        return { name: n, html: XLSX.utils.sheet_to_html(ws, { editable: false }), capped };
+        return {
+          name: n,
+          html: XLSX.utils.sheet_to_html(ws, {
+            editable: false,
+            header: "",
+            footer: "",
+          }),
+          capped,
+        };
       });
       if (!cancelled) {
         setSheets(s);
