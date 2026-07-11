@@ -5,6 +5,7 @@ pub mod docx;
 pub mod html;
 pub mod pdf;
 pub mod pptx;
+pub mod text;
 pub mod xlsx;
 
 use crate::ConvertError;

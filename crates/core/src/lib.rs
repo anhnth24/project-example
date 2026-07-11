@@ -26,6 +26,7 @@ pub mod pptx_preview;
 pub mod probe;
 pub mod tables;
 pub mod viet_legacy;
+mod viet_legacy_maps;
 
 pub use probe::{probe, FileInfo};
 
@@ -40,6 +41,7 @@ pub enum FormatKind {
     Xlsx,
     Csv,
     Html,
+    Text,
     Image,
     Audio,
     Unknown,
@@ -59,6 +61,7 @@ impl FormatKind {
             "xlsx" | "xls" | "xlsb" | "ods" => Self::Xlsx,
             "csv" => Self::Csv,
             "html" | "htm" => Self::Html,
+            "txt" | "log" => Self::Text,
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "gif" => Self::Image,
             "wav" | "mp3" | "m4a" | "flac" | "ogg" => Self::Audio,
             _ => Self::Unknown,
@@ -73,6 +76,7 @@ impl FormatKind {
             Self::Xlsx => "xlsx",
             Self::Csv => "csv",
             Self::Html => "html",
+            Self::Text => "text",
             Self::Image => "image",
             Self::Audio => "audio",
             Self::Unknown => "unknown",
@@ -201,6 +205,7 @@ impl Converter {
             FormatKind::Xlsx => conv::xlsx::to_markdown(path, self.opts.xlsx_sheet.as_deref()),
             FormatKind::Csv => conv::csv_conv::to_markdown(path),
             FormatKind::Html => conv::html::to_markdown(path),
+            FormatKind::Text => conv::text::to_markdown(path),
             FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
                 .map_err(|e| ConvertError::Failed(e.to_string())),
             FormatKind::Audio => self

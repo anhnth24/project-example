@@ -1,14 +1,16 @@
 //! Giải mã bảng mã tiếng Việt CŨ (pre-Unicode) → Unicode.
 //!
-//! Hiện hỗ trợ **TCVN3 (ABC)** — bảng mã 1-byte phổ biến nhất trong văn bản hành chính
-//! miền Bắc trước ~2005. File .csv/.txt lưu TCVN3 mở bằng tool hiện đại sẽ ra "rác"
+//! Hỗ trợ **TCVN3 (ABC)**, **VNI-Windows** và **VPS** — các bảng mã phổ biến
+//! trong văn bản Việt Nam trước Unicode. File .csv/.txt legacy mở bằng tool hiện đại sẽ ra "rác"
 //! (vd "Céng hßa" thay vì "Cộng hòa") — không đối thủ nào xử lý
 //! (xem bench/RESEARCH_COMPETITORS.md, mục khoảng trống tiếng Việt).
 //!
 //! Bảng mã đối chiếu từ các converter cộng đồng (gist congkhoa, anhskohbo/u-convert)
 //! và cross-check với vietunicode.sourceforge.net (á=0xB8, ă=0xA8, đ=0xAE khớp).
 //! Lưu ý: 'ư' là 0xAD (soft-hyphen) — nhiều bảng copy trên web hiển thị sai thành '-'.
-//! VNI-Windows/VPS/VISCII: chưa hỗ trợ (backlog — thiếu bảng nguồn tin cậy).
+//! VNI/VPS maps được sinh từ bảng VietUnicode bằng `bench/generate_viet_legacy_maps.py`.
+
+use crate::viet_legacy_maps::{VNI_MAP, VPS_MAP};
 
 /// TCVN3 byte → ký tự Unicode. Byte không có trong bảng: <0x80 giữ ASCII,
 /// còn lại decode theo latin-1 (giữ nguyên hình).
@@ -126,12 +128,103 @@ pub fn decode_tcvn3(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Decode text bytes "thông minh": UTF-8 → giữ nguyên; TCVN3 → chuyển;
+fn vni_match(bytes: &[u8]) -> Option<(char, usize)> {
+    VNI_MAP
+        .iter()
+        .find(|(encoded, _)| bytes.starts_with(encoded))
+        .map(|(encoded, character)| (*character, encoded.len()))
+}
+
+fn vps_char(byte: u8) -> Option<char> {
+    VPS_MAP
+        .binary_search_by_key(&byte, |&(key, _)| key)
+        .ok()
+        .map(|index| VPS_MAP[index].1)
+}
+
+/// VNI-Windows dùng cả sequence hai byte và một byte.
+pub fn decode_vni(bytes: &[u8]) -> String {
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if let Some((character, consumed)) = vni_match(&bytes[index..]) {
+            output.push(character);
+            index += consumed;
+        } else {
+            output.push(bytes[index] as char);
+            index += 1;
+        }
+    }
+    output
+}
+
+/// VPS là bảng mã một byte; một số chữ hoa dùng cả vùng control 0x02–0x1D.
+pub fn decode_vps(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&byte| vps_char(byte).unwrap_or(byte as char))
+        .collect()
+}
+
+fn vni_score(bytes: &[u8]) -> (usize, usize, usize) {
+    let mut index = 0usize;
+    let mut hits = 0usize;
+    let mut digraphs = 0usize;
+    let suspicious = bytes.iter().filter(|byte| **byte >= 0x80).count();
+    while index < bytes.len() {
+        if let Some((_, consumed)) = vni_match(&bytes[index..]) {
+            hits += 1;
+            digraphs += usize::from(consumed == 2);
+            index += consumed;
+        } else {
+            index += 1;
+        }
+    }
+    (hits, suspicious, digraphs)
+}
+
+fn vps_score(bytes: &[u8]) -> (usize, usize, usize) {
+    let mut hits = 0usize;
+    let mut controls = 0usize;
+    let mut suspicious = 0usize;
+    for &byte in bytes {
+        let is_control_letter = byte < 0x20 && vps_char(byte).is_some();
+        if byte >= 0x80 || is_control_letter {
+            suspicious += 1;
+            if vps_char(byte).is_some() {
+                hits += 1;
+                controls += usize::from(is_control_letter || (0x80..=0x9F).contains(&byte));
+            }
+        }
+    }
+    (hits, suspicious, controls)
+}
+
+pub fn looks_like_vni(bytes: &[u8]) -> bool {
+    if std::str::from_utf8(bytes).is_ok() {
+        return false;
+    }
+    let (hits, suspicious, digraphs) = vni_score(bytes);
+    hits >= 3 && digraphs >= 2 && hits * 10 >= suspicious.max(1) * 7
+}
+
+pub fn looks_like_vps(bytes: &[u8]) -> bool {
+    if std::str::from_utf8(bytes).is_ok() {
+        return false;
+    }
+    let (hits, suspicious, distinctive) = vps_score(bytes);
+    hits >= 3 && hits * 10 >= suspicious.max(1) * 7 && (distinctive > 0 || !looks_like_tcvn3(bytes))
+}
+
+/// Decode text bytes "thông minh": UTF-8 → giữ nguyên; VNI/VPS/TCVN3 → chuyển;
 /// còn lại → lossy (giữ hành vi cũ).
 pub fn decode_text(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
+        Err(_) if looks_like_vni(bytes) => decode_vni(bytes),
+        Err(_) if vps_score(bytes).2 > 0 && looks_like_vps(bytes) => decode_vps(bytes),
         Err(_) if looks_like_tcvn3(bytes) => decode_tcvn3(bytes),
+        Err(_) if looks_like_vps(bytes) => decode_vps(bytes),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
@@ -147,6 +240,40 @@ mod tests {
         0x20, 0x63, 0x68, 0xF1, 0x20, 0x6E, 0x67, 0x68, 0xDC, 0x61, 0x20, 0x56, 0x69, 0xD6, 0x74,
         0x20, 0x4E, 0x61, 0x6D,
     ];
+
+    const LEGACY_SENTENCE: &str = "Cộng hòa xã hội chủ nghĩa Việt Nam";
+
+    fn encode_vni(text: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for character in text.chars() {
+            if character.is_ascii() {
+                bytes.push(character as u8);
+            } else {
+                let (encoded, _) = VNI_MAP
+                    .iter()
+                    .find(|(_, mapped)| *mapped == character)
+                    .unwrap_or_else(|| panic!("missing VNI mapping for {character}"));
+                bytes.extend_from_slice(encoded);
+            }
+        }
+        bytes
+    }
+
+    fn encode_vps(text: &str) -> Vec<u8> {
+        text.chars()
+            .map(|character| {
+                if character.is_ascii() {
+                    character as u8
+                } else {
+                    VPS_MAP
+                        .iter()
+                        .find(|(_, mapped)| *mapped == character)
+                        .map(|(encoded, _)| *encoded)
+                        .unwrap_or_else(|| panic!("missing VPS mapping for {character}"))
+                }
+            })
+            .collect()
+    }
 
     #[test]
     fn decodes_tcvn3_sentence() {
@@ -178,5 +305,41 @@ mod tests {
     fn decode_text_routes() {
         assert_eq!(decode_text(T1), "Cộng hòa xã hội chủ nghĩa Việt Nam");
         assert_eq!(decode_text("đã là utf8".as_bytes()), "đã là utf8");
+    }
+
+    #[test]
+    fn decodes_and_detects_vni_windows_digraphs() {
+        let bytes = encode_vni(LEGACY_SENTENCE);
+        assert!(looks_like_vni(&bytes));
+        assert_eq!(decode_vni(&bytes), LEGACY_SENTENCE);
+        assert_eq!(decode_text(&bytes), LEGACY_SENTENCE);
+    }
+
+    #[test]
+    fn decodes_and_detects_vps_control_and_high_bytes() {
+        let bytes = encode_vps(LEGACY_SENTENCE);
+        assert!(looks_like_vps(&bytes));
+        assert_eq!(decode_vps(&bytes), LEGACY_SENTENCE);
+        assert_eq!(decode_text(&bytes), LEGACY_SENTENCE);
+    }
+
+    #[test]
+    fn detectors_do_not_claim_utf8_or_cross_route_vni() {
+        let utf8 = LEGACY_SENTENCE.as_bytes();
+        assert!(!looks_like_vni(utf8));
+        assert!(!looks_like_vps(utf8));
+        let vni = encode_vni(LEGACY_SENTENCE);
+        assert_eq!(decode_text(&vni), LEGACY_SENTENCE);
+    }
+
+    #[test]
+    fn converter_routes_legacy_txt_through_decoder() {
+        let path =
+            std::env::temp_dir().join(format!("fileconv_vni_legacy_{}.txt", std::process::id()));
+        std::fs::write(&path, encode_vni(LEGACY_SENTENCE)).unwrap();
+        let result = crate::Converter::new().convert_path(&path).unwrap();
+        assert_eq!(result.format, crate::FormatKind::Text);
+        assert_eq!(result.markdown, LEGACY_SENTENCE);
+        let _ = std::fs::remove_file(path);
     }
 }

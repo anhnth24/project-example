@@ -281,7 +281,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
 /// Đuôi file mà lõi convert hỗ trợ (suy từ `FormatKind::from_path`).
 const SUPPORTED_EXTS: &[&str] = &[
     "pdf", "docx", "pptx", "xlsx", "xls", "xlsb", "ods", "csv", "html", "htm", "png", "jpg",
-    "jpeg", "webp", "bmp", "tif", "tiff", "gif", "wav", "mp3", "m4a", "flac", "ogg",
+    "jpeg", "webp", "bmp", "tif", "tiff", "gif", "txt", "log", "wav", "mp3", "m4a", "flac", "ogg",
 ];
 
 fn config_file(config_dir: &Path) -> PathBuf {
