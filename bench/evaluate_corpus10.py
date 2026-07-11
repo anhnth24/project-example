@@ -116,6 +116,36 @@ def main() -> None:
             }
         )
 
+    pptx_preview = []
+    for source in sorted((CORPUS / "pptx").glob("*.pptx")):
+        result = subprocess.run(
+            [str(BIN), "pptx-preview", str(source)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            pptx_preview.append(
+                {"file": source.name, "ok": False, "error": result.stderr.decode()}
+            )
+            continue
+        payload = json.loads(result.stdout)
+        shapes = [
+            shape
+            for slide in payload["slides"]
+            for shape in slide.get("shapes", [])
+        ]
+        pptx_preview.append(
+            {
+                "file": source.name,
+                "ok": True,
+                "slides": payload["meta"]["slideCount"],
+                "shapes": len(shapes),
+                "text": sum(shape["kind"] == "text" for shape in shapes),
+                "images": sum(shape["kind"] == "image" for shape in shapes),
+            }
+        )
+
     lines = [
         "# Markhand CORPUS10 — quality report",
         "",
@@ -156,6 +186,25 @@ def main() -> None:
     lines.extend(
         [
             "",
+            "## PPTX visual preview",
+            "",
+            "| File | Slides | Rendered shapes | Text shapes | Images | Result |",
+            "|---|--:|--:|--:|--:|---|",
+        ]
+    )
+    for item in pptx_preview:
+        if item["ok"]:
+            lines.append(
+                f"| `{item['file']}` | {item['slides']} | {item['shapes']} | "
+                f"{item['text']} | {item['images']} | pass |"
+            )
+        else:
+            lines.append(
+                f"| `{item['file']}` | — | — | — | — | error: {item['error']} |"
+            )
+    lines.extend(
+        [
+            "",
             "## Interpretation limits",
             "",
             "- Public format fixtures validate compatibility and structure, not Vietnamese semantic accuracy.",
@@ -167,7 +216,12 @@ def main() -> None:
     )
     REPORT.write_text("\n".join(lines), encoding="utf-8")
     (CORPUS / "quality-results.json").write_text(
-        json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(
+            {"conversions": rows, "pptxPreview": pptx_preview},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
 
