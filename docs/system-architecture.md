@@ -131,6 +131,11 @@ Transport **stdio** qua `rmcp 0.16`, tokio multi-thread, build với feature `ll
 `ocr_hard` (`llm.rs::vision_ocr`): base64 ảnh → POST vision endpoint của provider (OpenAI/Anthropic/Gemini),
 system prompt yêu cầu phiên âm Markdown tiếng Việt trung thực, timeout 180s.
 
+Desktop cấu hình provider trực tiếp trong Settings, ưu tiên local Ollama/LM Studio/
+llama.cpp/vLLM; cloud có OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral,
+Together và custom OpenAI-compatible. API key chỉ giữ trong memory. Chi tiết:
+[`llm-providers.md`](llm-providers.md).
+
 ## Desktop "Markhand" (`app/`)
 
 **Stack**: Tauri 2 + React 19.2 + Vite 6 + TypeScript strict + Zustand 5 + UI primitives nội bộ theo
