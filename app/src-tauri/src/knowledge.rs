@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use fileconv_core::intelligence::{self, Citation, CorpusDocument};
+use fileconv_core::intelligence::{self, CorpusDocument};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
