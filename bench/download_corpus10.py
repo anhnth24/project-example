@@ -116,7 +116,11 @@ SOURCES: dict[str, list[tuple[str, str, str]]] = {
     ],
     "html": [
         ("example.html", "https://example.com/", "IANA example"),
-        ("httpbin.html", "https://httpbin.org/html", "httpbin test page"),
+        (
+            "iana-example-domains.html",
+            "https://www.iana.org/help/example-domains",
+            "IANA documentation",
+        ),
         ("gpl3.html", "https://www.gnu.org/licenses/gpl-3.0.en.html", "GNU GPL text"),
         ("rust-book.html", "https://doc.rust-lang.org/book/title-page.html", "Rust docs"),
         ("w3c-png.html", "https://www.w3.org/TR/PNG/", "W3C specification"),
@@ -132,8 +136,8 @@ SOURCES: dict[str, list[tuple[str, str, str]]] = {
             "CC BY-SA",
         ),
         (
-            "wiki-rust-vi.html",
-            "https://vi.wikipedia.org/wiki/Ng%C3%B4n_ng%E1%BB%AF_l%E1%BA%ADp_tr%C3%ACnh_Rust",
+            "wiki-markdown-vi.html",
+            "https://vi.wikipedia.org/wiki/Markdown",
             "CC BY-SA",
         ),
         (
@@ -234,19 +238,19 @@ SOURCES: dict[str, list[tuple[str, str, str]]] = {
     ]
     + [
         (
-            "sample-3s.flac",
-            "https://download.samplelib.com/flac/sample-3s.flac",
-            "Samplelib free sample",
+            "lena.flac",
+            github("audiojs/audio-lena", "lena.flac"),
+            "audio-lena public decoder fixture",
         ),
         (
-            "sample-3s.ogg",
-            "https://download.samplelib.com/ogg/sample-3s.ogg",
-            "Samplelib free sample",
+            "lena.ogg",
+            github("audiojs/audio-lena", "lena.ogg"),
+            "audio-lena public decoder fixture",
         ),
         (
-            "sample-3s.m4a",
-            "https://download.samplelib.com/m4a/sample-3s.m4a",
-            "Samplelib free sample",
+            "lena.m4a",
+            github("audiojs/audio-lena", "lena.m4a"),
+            "audio-lena public decoder fixture",
         ),
     ],
     "text": [
