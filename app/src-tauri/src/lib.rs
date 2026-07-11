@@ -60,6 +60,13 @@ pub struct Settings {
     pub llm_model: String,
     pub llm_api_key: Option<String>,
     pub llm_cli_binary: Option<String>,
+    pub embedding_enabled: bool,
+    pub embedding_provider: String,
+    pub embedding_base_url: String,
+    pub embedding_model: String,
+    pub embedding_api_key: Option<String>,
+    pub embedding_dimensions: Option<usize>,
+    pub embedding_fallback_local: bool,
 }
 
 impl Default for Settings {
@@ -78,6 +85,13 @@ impl Default for Settings {
             llm_model: "qwen2.5:7b".into(),
             llm_api_key: None,
             llm_cli_binary: None,
+            embedding_enabled: false,
+            embedding_provider: "ollama".into(),
+            embedding_base_url: "http://127.0.0.1:11434".into(),
+            embedding_model: "nomic-embed-text".into(),
+            embedding_api_key: None,
+            embedding_dimensions: None,
+            embedding_fallback_local: true,
         }
     }
 }
@@ -141,6 +155,49 @@ impl Settings {
         fileconv_core::llm::LlmConfig::new(provider, api_key, self.llm_model.trim(), base_url)
             .map(Some)
             .map_err(|error| error.to_string())
+    }
+
+    fn embedding_config(&self) -> Result<Option<fileconv_core::llm::EmbeddingConfig>, String> {
+        if !self.embedding_enabled {
+            return Ok(None);
+        }
+        let preset = fileconv_core::llm::embedding_provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == self.embedding_provider);
+        let provider = preset
+            .as_ref()
+            .map(|preset| preset.provider)
+            .unwrap_or_else(|| fileconv_core::llm::Provider::from_name(&self.embedding_provider));
+        let api_key = self
+            .embedding_api_key
+            .clone()
+            .or_else(|| std::env::var("FILECONV_EMBEDDING_API_KEY").ok())
+            .or_else(|| std::env::var("FILECONV_LLM_API_KEY").ok())
+            .unwrap_or_default();
+        if preset
+            .as_ref()
+            .is_some_and(|preset| preset.requires_api_key)
+            && api_key.trim().is_empty()
+        {
+            return Err(format!(
+                "{} yêu cầu API key cho embedding",
+                preset
+                    .as_ref()
+                    .map(|preset| preset.label.as_str())
+                    .unwrap_or("Provider")
+            ));
+        }
+        let base_url = (!self.embedding_base_url.trim().is_empty())
+            .then(|| self.embedding_base_url.trim().to_string());
+        fileconv_core::llm::EmbeddingConfig::new(
+            provider,
+            api_key,
+            self.embedding_model.trim(),
+            base_url,
+            self.embedding_dimensions,
+        )
+        .map(Some)
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -863,9 +920,11 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
         return Err("thread audio phải nằm trong khoảng 1–32".into());
     }
     settings.llm_config()?;
+    settings.embedding_config()?;
     let mut current = state.settings.lock().map_err(|_| "lock lỗi")?;
     let mut persisted = settings.clone();
     persisted.llm_api_key = None; // Secret remains in memory; use env/keychain for persistence.
+    persisted.embedding_api_key = None;
     let json = serde_json::to_string_pretty(&persisted).map_err(es)?;
     atomic_write(&settings_file(&state.config_dir), json.as_bytes())?;
     *current = settings;
@@ -924,6 +983,8 @@ pub fn run() {
             get_settings,
             set_settings,
             intelligence::get_llm_provider_presets,
+            intelligence::get_embedding_provider_presets,
+            intelligence::test_embedding_connection,
             intelligence::get_cli_subscription_status,
             intelligence::start_cli_subscription_login,
             intelligence::test_llm_connection,
@@ -1119,6 +1180,20 @@ mod tests {
         assert_eq!(config.provider, fileconv_core::llm::Provider::CursorCli);
         assert!(config.api_key.is_empty());
         assert!(config.is_subscription_cli());
+    }
+
+    #[test]
+    fn embedding_settings_are_independent_from_chat_provider() {
+        let mut settings = Settings::default();
+        settings.llm_provider = "cursor-cli".into();
+        settings.embedding_enabled = true;
+        let config = settings.embedding_config().unwrap().unwrap();
+        assert_eq!(
+            config.provider,
+            fileconv_core::llm::Provider::OpenAiCompatible
+        );
+        assert_eq!(config.model, "nomic-embed-text");
+        assert!(config.api_key.is_empty());
     }
 
     #[test]

@@ -8,11 +8,13 @@ import type {
   HandoffMode,
   HandoffResult,
   GroundedAnswer,
-  HybridSearchHit,
+  HybridSearchResponse,
   IndexBuildResult,
   KnowledgeIndexStats,
   LlmConnectionResult,
   CliSubscriptionStatus,
+  EmbeddingConnectionResult,
+  EmbeddingProviderPreset,
   LlmProviderPreset,
   MarkdownTable,
   MergeResult,
@@ -73,7 +75,7 @@ export const api = {
   knowledgeIndexStats: () =>
     invoke<KnowledgeIndexStats>("knowledge_index_stats"),
   hybridSearch: (sourceRels: string[], query: string, limit = 20) =>
-    invoke<HybridSearchHit[]>("hybrid_search", {
+    invoke<HybridSearchResponse>("hybrid_search", {
       req: { sourceRels, query, limit },
     }),
   hybridAsk: (
@@ -102,6 +104,10 @@ export const api = {
     invoke<void>("remove_project", { req: { projectId, deleteContents } }),
   getLlmProviderPresets: () =>
     invoke<LlmProviderPreset[]>("get_llm_provider_presets"),
+  getEmbeddingProviderPresets: () =>
+    invoke<EmbeddingProviderPreset[]>("get_embedding_provider_presets"),
+  testEmbeddingConnection: () =>
+    invoke<EmbeddingConnectionResult>("test_embedding_connection"),
   getCliSubscriptionStatus: () =>
     invoke<CliSubscriptionStatus>("get_cli_subscription_status"),
   startCliSubscriptionLogin: () =>

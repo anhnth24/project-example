@@ -3,14 +3,17 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use fileconv_core::intelligence::{self, CorpusDocument};
+use fileconv_core::llm::EmbeddingConfig;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::{data_root, es, resolve_within, AppState};
 
-const VECTOR_DIMENSIONS: usize = 256;
+const LOCAL_VECTOR_DIMENSIONS: usize = 256;
 const MAX_VECTOR_CANDIDATES: usize = 100_000;
+const LOCAL_EMBEDDING_MODE: &str = "local_hash_v1";
+const PROVIDER_EMBEDDING_MODE: &str = "provider_v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +29,10 @@ pub struct IndexBuildResult {
     pub indexed: usize,
     pub skipped: usize,
     pub embedding_mode: String,
+    pub embedding_provider: String,
+    pub embedding_model: String,
+    pub vector_dimensions: usize,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +43,8 @@ pub struct IndexStats {
     pub database_bytes: u64,
     pub vector_dimensions: usize,
     pub embedding_mode: String,
+    pub embedding_provider: String,
+    pub embedding_model: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +79,14 @@ pub struct HybridSearchHit {
     pub anchor: SourceAnchor,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HybridSearchResponse {
+    pub hits: Vec<HybridSearchHit>,
+    pub warnings: Vec<String>,
+    pub embedding_mode: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridAskRequest {
@@ -102,6 +119,22 @@ struct IndexedChunk {
     slide: Option<u32>,
     sheet: Option<String>,
     vector: Vec<f32>,
+    vector_dims: usize,
+}
+
+#[derive(Debug, Clone)]
+struct IndexMetadata {
+    mode: String,
+    provider: String,
+    model: String,
+    dimensions: usize,
+    signature: String,
+}
+
+#[derive(Debug, Clone)]
+struct EmbeddingPlan {
+    config: Option<EmbeddingConfig>,
+    metadata: IndexMetadata,
 }
 
 fn stable_hash(value: &str) -> String {
@@ -113,6 +146,31 @@ fn stable_hash(value: &str) -> String {
 fn index_path(root: &Path) -> Result<PathBuf, String> {
     let markhand = resolve_within(root, ".markhand")?;
     Ok(markhand.join("knowledge.sqlite"))
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(es)?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(es)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(es)?;
+    if !columns.iter().any(|existing| existing == column) {
+        connection
+            .execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                [],
+            )
+            .map_err(es)?;
+    }
+    Ok(())
 }
 
 fn open_index(root: &Path) -> Result<Connection, String> {
@@ -133,7 +191,8 @@ fn open_index(root: &Path) -> Result<Connection, String> {
                md_rel TEXT NOT NULL,
                content_hash TEXT NOT NULL,
                format TEXT NOT NULL,
-               chunks INTEGER NOT NULL
+               chunks INTEGER NOT NULL,
+               embedding_signature TEXT NOT NULL DEFAULT ''
              );
              CREATE TABLE IF NOT EXISTS chunks (
                chunk_id TEXT PRIMARY KEY,
@@ -146,7 +205,12 @@ fn open_index(root: &Path) -> Result<Connection, String> {
                page INTEGER,
                slide INTEGER,
                sheet TEXT,
-               vector BLOB NOT NULL
+               vector BLOB NOT NULL,
+               vector_dims INTEGER NOT NULL DEFAULT 256
+             );
+             CREATE TABLE IF NOT EXISTS index_meta (
+               key TEXT PRIMARY KEY,
+               value TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS chunks_doc_rel ON chunks(doc_rel);
              CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
@@ -159,6 +223,18 @@ fn open_index(root: &Path) -> Result<Connection, String> {
              );",
         )
         .map_err(es)?;
+    ensure_column(
+        &connection,
+        "documents",
+        "embedding_signature",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &connection,
+        "chunks",
+        "vector_dims",
+        "INTEGER NOT NULL DEFAULT 256",
+    )?;
     Ok(connection)
 }
 
@@ -174,7 +250,7 @@ fn hash_index(value: &str) -> (usize, f32) {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
     let hash = hasher.finish();
-    let index = (hash as usize) % VECTOR_DIMENSIONS;
+    let index = (hash as usize) % LOCAL_VECTOR_DIMENSIONS;
     let sign = if hash & (1 << 63) == 0 { 1.0 } else { -1.0 };
     (index, sign)
 }
@@ -183,7 +259,7 @@ fn hash_index(value: &str) -> (usize, f32) {
 /// deterministic vector fallback when no embedding provider is configured.
 fn local_vector(text: &str) -> Vec<f32> {
     let folded = intelligence::normalize_search_text(text);
-    let mut vector = vec![0.0_f32; VECTOR_DIMENSIONS];
+    let mut vector = vec![0.0_f32; LOCAL_VECTOR_DIMENSIONS];
     let words = normalized_tokens(&folded);
     for token in &words {
         let (index, sign) = hash_index(token);
@@ -233,6 +309,111 @@ fn cosine(left: &[f32], right: &[f32]) -> f32 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
 }
 
+fn provider_name(provider: fileconv_core::llm::Provider) -> String {
+    format!("{provider:?}").to_ascii_lowercase()
+}
+
+fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
+    match config {
+        Some(config) => {
+            let provider = provider_name(config.provider);
+            let model = config.model.clone();
+            let signature = stable_hash(&format!(
+                "{PROVIDER_EMBEDDING_MODE}|{provider}|{model}|{}|{}",
+                config.base_url.as_deref().unwrap_or_default(),
+                config
+                    .dimensions
+                    .map(|value| value.to_string())
+                    .unwrap_or_default()
+            ));
+            EmbeddingPlan {
+                metadata: IndexMetadata {
+                    mode: PROVIDER_EMBEDDING_MODE.into(),
+                    provider,
+                    model,
+                    dimensions: config.dimensions.unwrap_or_default(),
+                    signature,
+                },
+                config: Some(config),
+            }
+        }
+        None => EmbeddingPlan {
+            config: None,
+            metadata: IndexMetadata {
+                mode: LOCAL_EMBEDDING_MODE.into(),
+                provider: "local".into(),
+                model: LOCAL_EMBEDDING_MODE.into(),
+                dimensions: LOCAL_VECTOR_DIMENSIONS,
+                signature: LOCAL_EMBEDDING_MODE.into(),
+            },
+        },
+    }
+}
+
+fn read_metadata(connection: &Connection) -> Result<IndexMetadata, String> {
+    let read = |key: &str| -> Result<Option<String>, String> {
+        connection
+            .query_row(
+                "SELECT value FROM index_meta WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(es)
+    };
+    let mode = read("embedding_mode")?.unwrap_or_else(|| LOCAL_EMBEDDING_MODE.into());
+    let provider = read("embedding_provider")?.unwrap_or_else(|| "local".into());
+    let model = read("embedding_model")?.unwrap_or_else(|| LOCAL_EMBEDDING_MODE.into());
+    let dimensions = read("embedding_dimensions")?
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(LOCAL_VECTOR_DIMENSIONS);
+    let signature = read("embedding_signature")?.unwrap_or_else(|| LOCAL_EMBEDDING_MODE.into());
+    Ok(IndexMetadata {
+        mode,
+        provider,
+        model,
+        dimensions,
+        signature,
+    })
+}
+
+fn write_metadata(
+    transaction: &rusqlite::Transaction<'_>,
+    metadata: &IndexMetadata,
+) -> Result<(), String> {
+    for (key, value) in [
+        ("embedding_mode", metadata.mode.clone()),
+        ("embedding_provider", metadata.provider.clone()),
+        ("embedding_model", metadata.model.clone()),
+        ("embedding_dimensions", metadata.dimensions.to_string()),
+        ("embedding_signature", metadata.signature.clone()),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO index_meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, value],
+            )
+            .map_err(es)?;
+    }
+    Ok(())
+}
+
+fn clear_index(connection: &mut Connection) -> Result<(), String> {
+    let transaction = connection.transaction().map_err(es)?;
+    transaction
+        .execute("DELETE FROM chunks_fts", [])
+        .map_err(es)?;
+    transaction.execute("DELETE FROM chunks", []).map_err(es)?;
+    transaction
+        .execute("DELETE FROM documents", [])
+        .map_err(es)?;
+    transaction
+        .execute("DELETE FROM index_meta", [])
+        .map_err(es)?;
+    transaction.commit().map_err(es)
+}
+
 fn infer_anchor(document: &CorpusDocument, chunk: &intelligence::CorpusChunk) -> SourceAnchor {
     let folded = intelligence::normalize_search_text(&chunk.heading);
     let slide = folded
@@ -252,24 +433,38 @@ fn infer_anchor(document: &CorpusDocument, chunk: &intelligence::CorpusChunk) ->
     }
 }
 
-fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBuildResult, String> {
+fn index_documents_with_plan(
+    root: &Path,
+    source_rels: &[String],
+    mut plan: EmbeddingPlan,
+) -> Result<IndexBuildResult, String> {
     let documents = super::intelligence::load_documents(root, source_rels)?;
     let mut connection = open_index(root)?;
+    let indexed_documents: usize = connection
+        .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+        .map_err(es)?;
+    let current_metadata = read_metadata(&connection)?;
+    if indexed_documents > 0 && current_metadata.signature != plan.metadata.signature {
+        clear_index(&mut connection)?;
+    }
     let mut indexed = 0usize;
     let mut skipped = 0usize;
     let mut total_chunks = 0usize;
 
     for document in &documents {
         let content_hash = stable_hash(&document.markdown);
-        let existing: Option<String> = connection
+        let existing: Option<(String, String)> = connection
             .query_row(
-                "SELECT content_hash FROM documents WHERE doc_rel = ?1",
+                "SELECT content_hash, embedding_signature
+                 FROM documents WHERE doc_rel = ?1",
                 params![document.source_rel],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(es)?;
-        if existing.as_deref() == Some(content_hash.as_str()) {
+        if existing.as_ref().is_some_and(|(hash, signature)| {
+            hash == &content_hash && signature == &plan.metadata.signature
+        }) {
             let count: usize = connection
                 .query_row(
                     "SELECT COUNT(*) FROM chunks WHERE doc_rel = ?1",
@@ -283,6 +478,36 @@ fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBui
         }
 
         let chunks = intelligence::build_corpus(std::slice::from_ref(document), 2_000);
+        let embedding_inputs: Vec<String> = chunks
+            .iter()
+            .map(|chunk| format!("{}\n{}", chunk.heading, chunk.text))
+            .collect();
+        let vectors = if let Some(config) = plan.config.as_ref() {
+            fileconv_core::llm::embed_batch(config, &embedding_inputs)
+                .map_err(|error| format!("embedding provider lỗi: {error}"))?
+        } else {
+            embedding_inputs
+                .iter()
+                .map(|input| local_vector(input))
+                .collect()
+        };
+        if vectors.len() != chunks.len() {
+            return Err("số vector không khớp số chunk".into());
+        }
+        if let Some(vector) = vectors.first() {
+            if vector.is_empty() || vectors.iter().any(|item| item.len() != vector.len()) {
+                return Err("embedding index có vector khác số chiều".into());
+            }
+            if plan.metadata.dimensions == 0 {
+                plan.metadata.dimensions = vector.len();
+            } else if plan.metadata.dimensions != vector.len() {
+                return Err(format!(
+                    "embedding trả {} chiều, index yêu cầu {}",
+                    vector.len(),
+                    plan.metadata.dimensions
+                ));
+            }
+        }
         let transaction = connection.transaction().map_err(es)?;
         transaction
             .execute(
@@ -296,15 +521,14 @@ fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBui
                 params![document.source_rel],
             )
             .map_err(es)?;
-        for chunk in &chunks {
-            let vector = local_vector(&format!("{}\n{}", chunk.heading, chunk.text));
+        for (chunk, vector) in chunks.iter().zip(vectors.iter()) {
             let anchor = infer_anchor(document, chunk);
             transaction
                 .execute(
                     "INSERT INTO chunks (
                        chunk_id, doc_rel, md_rel, heading, body, start_offset,
-                       end_offset, page, slide, sheet, vector
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                       end_offset, page, slide, sheet, vector, vector_dims
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                     params![
                         chunk.id,
                         chunk.source_rel,
@@ -316,7 +540,8 @@ fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBui
                         anchor.page,
                         anchor.slide,
                         anchor.sheet,
-                        vector_bytes(&vector),
+                        vector_bytes(vector),
+                        vector.len() as i64,
                     ],
                 )
                 .map_err(es)?;
@@ -339,19 +564,22 @@ fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBui
         }
         transaction
             .execute(
-                "INSERT INTO documents (doc_rel, md_rel, content_hash, format, chunks)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO documents (
+                   doc_rel, md_rel, content_hash, format, chunks, embedding_signature
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(doc_rel) DO UPDATE SET
                    md_rel=excluded.md_rel,
                    content_hash=excluded.content_hash,
                    format=excluded.format,
-                   chunks=excluded.chunks",
+                   chunks=excluded.chunks,
+                   embedding_signature=excluded.embedding_signature",
                 params![
                     document.source_rel,
                     document.md_rel,
                     content_hash,
                     document.format,
                     chunks.len() as i64,
+                    plan.metadata.signature,
                 ],
             )
             .map_err(es)?;
@@ -360,23 +588,55 @@ fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBui
         indexed += 1;
     }
 
+    let transaction = connection.transaction().map_err(es)?;
+    write_metadata(&transaction, &plan.metadata)?;
+    transaction.commit().map_err(es)?;
     Ok(IndexBuildResult {
         documents: documents.len(),
         chunks: total_chunks,
         indexed,
         skipped,
-        embedding_mode: "local_hash_v1".into(),
+        embedding_mode: plan.metadata.mode,
+        embedding_provider: plan.metadata.provider,
+        embedding_model: plan.metadata.model,
+        vector_dimensions: plan.metadata.dimensions,
+        warnings: Vec::new(),
     })
+}
+
+fn index_documents_inner(
+    root: &Path,
+    source_rels: &[String],
+    config: Option<EmbeddingConfig>,
+    fallback_local: bool,
+) -> Result<IndexBuildResult, String> {
+    let provider_requested = config.is_some();
+    match index_documents_with_plan(root, source_rels, embedding_plan(config)) {
+        Ok(result) => Ok(result),
+        Err(error)
+            if provider_requested && fallback_local && error.contains("embedding provider") =>
+        {
+            let mut connection = open_index(root)?;
+            clear_index(&mut connection)?;
+            let mut result = index_documents_with_plan(root, source_rels, embedding_plan(None))?;
+            result.warnings.push(format!(
+                "{error}; đã rebuild toàn bộ scope bằng local hash offline."
+            ));
+            Ok(result)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn load_all_chunks(
     connection: &Connection,
     scope: &HashSet<String>,
+    expected_dimensions: usize,
 ) -> Result<Vec<IndexedChunk>, String> {
     let mut statement = connection
         .prepare(
             "SELECT chunk_id, doc_rel, md_rel, heading, body, start_offset,
-                    end_offset, page, slide, sheet, vector
+                    end_offset, page, slide, sheet, vector, vector_dims
              FROM chunks",
         )
         .map_err(es)?;
@@ -395,12 +655,19 @@ fn load_all_chunks(
                 slide: row.get(8)?,
                 sheet: row.get(9)?,
                 vector: vector_from_bytes(&vector),
+                vector_dims: row.get::<_, i64>(11)? as usize,
             })
         })
         .map_err(es)?;
     let mut chunks = Vec::new();
     for row in rows {
         let chunk = row.map_err(es)?;
+        if chunk.vector_dims != expected_dimensions || chunk.vector.len() != expected_dimensions {
+            return Err(format!(
+                "index vector không nhất quán: chunk {} có {}D, metadata {}D",
+                chunk.id, chunk.vector_dims, expected_dimensions
+            ));
+        }
         if scope.is_empty() || scope.contains(&chunk.source_rel) {
             chunks.push(chunk);
             if chunks.len() > MAX_VECTOR_CANDIDATES {
@@ -441,14 +708,21 @@ fn hybrid_search_inner(
     source_rels: &[String],
     query: &str,
     limit: usize,
-) -> Result<Vec<HybridSearchHit>, String> {
+    config: Option<EmbeddingConfig>,
+    fallback_local: bool,
+) -> Result<HybridSearchResponse, String> {
     if query.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(HybridSearchResponse {
+            hits: Vec::new(),
+            warnings: Vec::new(),
+            embedding_mode: LOCAL_EMBEDDING_MODE.into(),
+        });
     }
     if !source_rels.is_empty() {
-        index_documents_inner(root, source_rels)?;
+        index_documents_inner(root, source_rels, config.clone(), fallback_local)?;
     }
     let connection = open_index(root)?;
+    let metadata = read_metadata(&connection)?;
     let scope: HashSet<String> = source_rels.iter().cloned().collect();
     let query_tokens = normalized_tokens(query);
     let fts = fts_query(query);
@@ -481,12 +755,51 @@ fn hybrid_search_inner(
         }
     }
 
-    let chunks = load_all_chunks(&connection, &scope)?;
-    let query_vector = local_vector(query);
-    let mut vector_order: Vec<(String, f32)> = chunks
-        .iter()
-        .map(|chunk| (chunk.id.clone(), cosine(&query_vector, &chunk.vector)))
-        .collect();
+    let chunks = load_all_chunks(&connection, &scope, metadata.dimensions)?;
+    let mut warnings = Vec::new();
+    let query_vector = if metadata.mode == PROVIDER_EMBEDDING_MODE {
+        match config {
+            Some(config)
+                if embedding_plan(Some(config.clone())).metadata.signature
+                    == metadata.signature =>
+            {
+                match fileconv_core::llm::embed_query(&config, query) {
+                    Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
+                    Ok(vector) => {
+                        warnings.push(format!(
+                            "Query embedding {}D không khớp index {}D; chỉ dùng FTS.",
+                            vector.len(),
+                            metadata.dimensions
+                        ));
+                        None
+                    }
+                    Err(error) => {
+                        warnings.push(format!(
+                            "Embedding provider lỗi ({error}); chỉ dùng FTS lexical."
+                        ));
+                        None
+                    }
+                }
+            }
+            _ => {
+                warnings.push(
+                    "Cấu hình embedding không khớp index; hãy rebuild. Tạm chỉ dùng FTS.".into(),
+                );
+                None
+            }
+        }
+    } else {
+        Some(local_vector(query))
+    };
+    let mut vector_order: Vec<(String, f32)> = query_vector
+        .as_ref()
+        .map(|query_vector| {
+            chunks
+                .iter()
+                .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
+                .collect()
+        })
+        .unwrap_or_default();
     vector_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let vector_rank: HashMap<String, (usize, f32)> = vector_order
         .into_iter()
@@ -555,7 +868,11 @@ fn hybrid_search_inner(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     results.truncate(limit.max(1));
-    Ok(results)
+    Ok(HybridSearchResponse {
+        hits: results,
+        warnings,
+        embedding_mode: metadata.mode,
+    })
 }
 
 fn extractive_answer(question: &str, hits: &[HybridSearchHit]) -> String {
@@ -616,9 +933,28 @@ pub async fn rebuild_knowledge_index(
     req: IndexRequest,
 ) -> Result<IndexBuildResult, String> {
     let root = data_root(&state);
-    tauri::async_runtime::spawn_blocking(move || index_documents_inner(&root, &req.source_rels))
-        .await
-        .map_err(es)?
+    let settings = state.settings.lock().map_err(|_| "lock lỗi")?.clone();
+    let (embedding_config, config_warning) = match settings.embedding_config() {
+        Ok(config) => (config, None),
+        Err(error) if settings.embedding_fallback_local => (None, Some(error)),
+        Err(error) => return Err(error),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut result = index_documents_inner(
+            &root,
+            &req.source_rels,
+            embedding_config,
+            settings.embedding_fallback_local,
+        )?;
+        if let Some(warning) = config_warning {
+            result.warnings.push(format!(
+                "Cấu hình embedding chưa dùng được ({warning}); đã dùng local hash."
+            ));
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(es)?
 }
 
 #[tauri::command]
@@ -636,12 +972,15 @@ pub fn knowledge_index_stats(state: State<AppState>) -> Result<IndexStats, Strin
         .and_then(|path| std::fs::metadata(path).ok())
         .map(|metadata| metadata.len())
         .unwrap_or_default();
+    let metadata = read_metadata(&connection)?;
     Ok(IndexStats {
         documents,
         chunks,
         database_bytes,
-        vector_dimensions: VECTOR_DIMENSIONS,
-        embedding_mode: "local_hash_v1".into(),
+        vector_dimensions: metadata.dimensions,
+        embedding_mode: metadata.mode,
+        embedding_provider: metadata.provider,
+        embedding_model: metadata.model,
     })
 }
 
@@ -649,10 +988,29 @@ pub fn knowledge_index_stats(state: State<AppState>) -> Result<IndexStats, Strin
 pub async fn hybrid_search(
     state: State<'_, AppState>,
     req: HybridSearchRequest,
-) -> Result<Vec<HybridSearchHit>, String> {
+) -> Result<HybridSearchResponse, String> {
     let root = data_root(&state);
+    let settings = state.settings.lock().map_err(|_| "lock lỗi")?.clone();
+    let (embedding_config, config_warning) = match settings.embedding_config() {
+        Ok(config) => (config, None),
+        Err(error) if settings.embedding_fallback_local => (None, Some(error)),
+        Err(error) => return Err(error),
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        hybrid_search_inner(&root, &req.source_rels, &req.query, req.limit.unwrap_or(20))
+        let mut response = hybrid_search_inner(
+            &root,
+            &req.source_rels,
+            &req.query,
+            req.limit.unwrap_or(20),
+            embedding_config,
+            settings.embedding_fallback_local,
+        )?;
+        if let Some(warning) = config_warning {
+            response.warnings.push(format!(
+                "Cấu hình embedding chưa dùng được ({warning}); đã dùng local hash."
+            ));
+        }
+        Ok(response)
     })
     .await
     .map_err(es)?
@@ -663,13 +1021,25 @@ fn hybrid_ask_inner(
     req: HybridAskRequest,
     llm_config: Option<fileconv_core::llm::LlmConfig>,
     config_warning: Option<String>,
+    embedding_config: Option<EmbeddingConfig>,
+    embedding_fallback_local: bool,
+    embedding_warning: Option<String>,
 ) -> Result<GroundedAnswer, String> {
-    let hits = hybrid_search_inner(
+    let search = hybrid_search_inner(
         root,
         &req.source_rels,
         &req.question,
         req.top_k.unwrap_or(8),
+        embedding_config,
+        embedding_fallback_local,
     )?;
+    let hits = search.hits;
+    let mut retrieval_warnings = search.warnings;
+    if let Some(warning) = embedding_warning {
+        retrieval_warnings.push(format!(
+            "Cấu hình embedding chưa dùng được ({warning}); đã dùng local hash."
+        ));
+    }
     let fallback = extractive_answer(&req.question, &hits);
     if !req.use_llm.unwrap_or(false) {
         return Ok(GroundedAnswer {
@@ -677,7 +1047,7 @@ fn hybrid_ask_inner(
             citations: hits,
             mode: "offline_extractive".into(),
             grounded: true,
-            warnings: Vec::new(),
+            warnings: retrieval_warnings,
         });
     }
     let Some(config) = llm_config else {
@@ -693,7 +1063,10 @@ fn hybrid_ask_inner(
             citations: hits,
             mode: "fallback_extractive".into(),
             grounded: true,
-            warnings: vec![warning],
+            warnings: {
+                retrieval_warnings.push(warning);
+                retrieval_warnings
+            },
         });
     };
     if hits.is_empty() {
@@ -702,7 +1075,10 @@ fn hybrid_ask_inner(
             citations: hits,
             mode: "fallback_extractive".into(),
             grounded: true,
-            warnings: vec!["Không đủ nguồn để gọi LLM.".into()],
+            warnings: {
+                retrieval_warnings.push("Không đủ nguồn để gọi LLM.".into());
+                retrieval_warnings
+            },
         });
     }
     let context = hits
@@ -737,9 +1113,12 @@ fn hybrid_ask_inner(
                 citations: hits,
                 mode: "fallback_extractive".into(),
                 grounded: true,
-                warnings: vec![format!(
-                    "LLM provider lỗi ({error}); đã fallback extractive local."
-                )],
+                warnings: {
+                    retrieval_warnings.push(format!(
+                        "LLM provider lỗi ({error}); đã fallback extractive local."
+                    ));
+                    retrieval_warnings
+                },
             });
         }
     };
@@ -763,15 +1142,18 @@ fn hybrid_ask_inner(
                     "cloud_llm".into()
                 },
                 grounded: true,
-                warnings: Vec::new(),
+                warnings: retrieval_warnings,
             })
         }
-        Err(warnings) => Ok(GroundedAnswer {
+        Err(mut warnings) => Ok(GroundedAnswer {
             answer: fallback,
             citations: hits,
             mode: "fallback_extractive".into(),
             grounded: true,
-            warnings,
+            warnings: {
+                retrieval_warnings.append(&mut warnings);
+                retrieval_warnings
+            },
         }),
     }
 }
@@ -790,8 +1172,22 @@ pub async fn hybrid_ask(
     } else {
         (None, None)
     };
+    let settings = state.settings.lock().map_err(|_| "lock lỗi")?.clone();
+    let (embedding_config, embedding_warning) = match settings.embedding_config() {
+        Ok(config) => (config, None),
+        Err(error) if settings.embedding_fallback_local => (None, Some(error)),
+        Err(error) => return Err(error),
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        hybrid_ask_inner(&root, req, llm_config, config_warning)
+        hybrid_ask_inner(
+            &root,
+            req,
+            llm_config,
+            config_warning,
+            embedding_config,
+            settings.embedding_fallback_local,
+            embedding_warning,
+        )
     })
     .await
     .map_err(es)?
@@ -844,8 +1240,8 @@ mod tests {
     fn sqlite_index_is_incremental_and_persistent() {
         let root = temp_root();
         let sources = seed(&root);
-        let first = index_documents_inner(&root, &sources).unwrap();
-        let second = index_documents_inner(&root, &sources).unwrap();
+        let first = index_documents_inner(&root, &sources, None, true).unwrap();
+        let second = index_documents_inner(&root, &sources, None, true).unwrap();
         assert_eq!(first.indexed, 2);
         assert_eq!(second.skipped, 2);
         let connection = open_index(&root).unwrap();
@@ -860,8 +1256,10 @@ mod tests {
     fn hybrid_search_ranks_relevant_document() {
         let root = temp_root();
         let sources = seed(&root);
-        index_documents_inner(&root, &sources).unwrap();
-        let hits = hybrid_search_inner(&root, &sources, "đối soát giao dịch", 5).unwrap();
+        index_documents_inner(&root, &sources, None, true).unwrap();
+        let hits = hybrid_search_inner(&root, &sources, "đối soát giao dịch", 5, None, true)
+            .unwrap()
+            .hits;
         assert_eq!(hits[0].source_rel, "payments.pdf");
         assert!(hits[0].rerank_score > 0.0);
         std::fs::remove_dir_all(root).ok();
@@ -871,9 +1269,17 @@ mod tests {
     fn scope_filters_search_results() {
         let root = temp_root();
         let sources = seed(&root);
-        index_documents_inner(&root, &sources).unwrap();
-        let hits =
-            hybrid_search_inner(&root, &["security.docx".into()], "giao dịch API", 10).unwrap();
+        index_documents_inner(&root, &sources, None, true).unwrap();
+        let hits = hybrid_search_inner(
+            &root,
+            &["security.docx".into()],
+            "giao dịch API",
+            10,
+            None,
+            true,
+        )
+        .unwrap()
+        .hits;
         assert!(hits.iter().all(|hit| hit.source_rel == "security.docx"));
         std::fs::remove_dir_all(root).ok();
     }
@@ -902,7 +1308,9 @@ mod tests {
     fn extractive_answer_always_cites_hits() {
         let root = temp_root();
         let sources = seed(&root);
-        let hits = hybrid_search_inner(&root, &sources, "xác thực API", 3).unwrap();
+        let hits = hybrid_search_inner(&root, &sources, "xác thực API", 3, None, true)
+            .unwrap()
+            .hits;
         let answer = extractive_answer("API bảo mật thế nào?", &hits);
         assert!(answer.contains("[CITE-0001]"));
         std::fs::remove_dir_all(root).ok();
@@ -921,6 +1329,9 @@ mod tests {
                 use_llm: Some(false),
             },
             None,
+            None,
+            None,
+            true,
             None,
         )
         .unwrap();
@@ -945,6 +1356,9 @@ mod tests {
             },
             None,
             Some("thiếu API key".into()),
+            None,
+            true,
+            None,
         )
         .unwrap();
         assert_eq!(result.mode, "fallback_extractive");
@@ -975,6 +1389,9 @@ mod tests {
             },
             Some(config),
             None,
+            None,
+            true,
+            None,
         )
         .unwrap();
         assert_eq!(result.mode, "fallback_extractive");
@@ -987,16 +1404,24 @@ mod tests {
     fn changed_markdown_replaces_old_chunks() {
         let root = temp_root();
         let sources = seed(&root);
-        index_documents_inner(&root, &sources).unwrap();
+        index_documents_inner(&root, &sources, None, true).unwrap();
         std::fs::write(
             root.join("payments.pdf.md"),
             "# Hoàn tiền\n\nGiao dịch hoàn tiền phải được duyệt bởi hai người.\n",
         )
         .unwrap();
-        let update = index_documents_inner(&root, &["payments.pdf".into()]).unwrap();
+        let update = index_documents_inner(&root, &["payments.pdf".into()], None, true).unwrap();
         assert_eq!(update.indexed, 1);
-        let hits =
-            hybrid_search_inner(&root, &["payments.pdf".into()], "hai người duyệt", 5).unwrap();
+        let hits = hybrid_search_inner(
+            &root,
+            &["payments.pdf".into()],
+            "hai người duyệt",
+            5,
+            None,
+            true,
+        )
+        .unwrap()
+        .hits;
         assert!(hits[0].snippet.contains("hai người"));
         let connection = open_index(&root).unwrap();
         let count: usize = connection
@@ -1019,7 +1444,9 @@ mod tests {
             "<!-- Page 7 -->\n\n# Thanh toán\n\nCho phép thanh toán QR.\n",
         )
         .unwrap();
-        let hits = hybrid_search_inner(&root, &["spec.pdf".into()], "thanh toán QR", 3).unwrap();
+        let hits = hybrid_search_inner(&root, &["spec.pdf".into()], "thanh toán QR", 3, None, true)
+            .unwrap()
+            .hits;
         assert_eq!(hits[0].anchor.page, Some(7));
         assert!(hits[0].anchor.end > hits[0].anchor.start);
         std::fs::remove_dir_all(root).ok();
@@ -1029,9 +1456,58 @@ mod tests {
     fn punctuation_cannot_break_fts_query_syntax() {
         let root = temp_root();
         let sources = seed(&root);
-        let hits =
-            hybrid_search_inner(&root, &sources, "API: \"xác thực\" OR (giao dịch)", 5).unwrap();
+        let hits = hybrid_search_inner(
+            &root,
+            &sources,
+            "API: \"xác thực\" OR (giao dịch)",
+            5,
+            None,
+            true,
+        )
+        .unwrap()
+        .hits;
         assert!(!hits.is_empty());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn unavailable_embedding_provider_rebuilds_whole_scope_locally() {
+        let root = temp_root();
+        let sources = seed(&root);
+        let config = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "",
+            "missing-model",
+            Some("http://127.0.0.1:1".into()),
+            None,
+        )
+        .unwrap();
+        let result = index_documents_inner(&root, &sources, Some(config), true).unwrap();
+        assert_eq!(result.embedding_mode, LOCAL_EMBEDDING_MODE);
+        assert_eq!(result.vector_dimensions, LOCAL_VECTOR_DIMENSIONS);
+        assert_eq!(result.indexed, 2);
+        assert!(result.warnings[0].contains("rebuild"));
+        let metadata = read_metadata(&open_index(&root).unwrap()).unwrap();
+        assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn mixed_vector_dimensions_are_rejected() {
+        let root = temp_root();
+        let sources = seed(&root);
+        index_documents_inner(&root, &sources, None, true).unwrap();
+        let connection = open_index(&root).unwrap();
+        connection
+            .execute(
+                "UPDATE chunks SET vector_dims = 3 WHERE chunk_id = (
+                   SELECT chunk_id FROM chunks LIMIT 1
+                 )",
+                [],
+            )
+            .unwrap();
+        let error = hybrid_search_inner(&root, &sources, "giao dịch", 5, None, true).unwrap_err();
+        assert!(error.contains("không nhất quán"));
         std::fs::remove_dir_all(root).ok();
     }
 }

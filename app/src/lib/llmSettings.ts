@@ -1,4 +1,8 @@
-import type { LlmProviderPreset, Settings } from "./types";
+import type {
+  EmbeddingProviderPreset,
+  LlmProviderPreset,
+  Settings,
+} from "./types";
 
 export function applyLlmPreset(
   settings: Settings,
@@ -41,4 +45,43 @@ export function isLocalLlmEndpoint(baseUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function applyEmbeddingPreset(
+  settings: Settings,
+  preset: EmbeddingProviderPreset,
+): Settings {
+  return {
+    ...settings,
+    embeddingEnabled: true,
+    embeddingProvider: preset.id,
+    embeddingBaseUrl: preset.baseUrl ?? settings.embeddingBaseUrl,
+    embeddingModel: preset.defaultModel,
+    embeddingDimensions: preset.defaultDimensions,
+  };
+}
+
+export function validateEmbeddingSettings(
+  settings: Settings,
+  preset?: EmbeddingProviderPreset,
+): string[] {
+  if (!settings.embeddingEnabled) return [];
+  const errors: string[] = [];
+  if (!settings.embeddingModel.trim()) {
+    errors.push("Model embedding không được để trống.");
+  }
+  if (
+    !settings.embeddingBaseUrl.startsWith("http://") &&
+    !settings.embeddingBaseUrl.startsWith("https://")
+  ) {
+    errors.push("Embedding base URL phải bắt đầu bằng http:// hoặc https://.");
+  }
+  if (preset?.requiresApiKey && !settings.embeddingApiKey?.trim()) {
+    errors.push(`${preset.label} yêu cầu API key.`);
+  }
+  const dimensions = settings.embeddingDimensions;
+  if (dimensions != null && (!Number.isInteger(dimensions) || dimensions < 32 || dimensions > 4096)) {
+    errors.push("Số chiều embedding phải nằm trong khoảng 32–4096.");
+  }
+  return errors;
 }

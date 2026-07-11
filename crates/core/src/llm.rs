@@ -50,6 +50,31 @@ pub struct LlmProviderPreset {
     pub description: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingConfig {
+    pub provider: Provider,
+    pub api_key: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub dimensions: Option<usize>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingProviderPreset {
+    pub id: String,
+    pub label: String,
+    pub provider: Provider,
+    pub base_url: Option<String>,
+    pub default_model: String,
+    pub models: Vec<String>,
+    pub local: bool,
+    pub requires_api_key: bool,
+    pub default_dimensions: Option<usize>,
+    pub description: String,
+}
+
 impl Provider {
     pub fn from_name(value: &str) -> Self {
         match value.trim().to_lowercase().as_str() {
@@ -151,6 +176,50 @@ impl LlmConfig {
         let model = std::env::var("FILECONV_LLM_MODEL")
             .unwrap_or_else(|_| default_model_for_name(&provider_name, provider));
         Self::new(provider, api_key, model, base_url).ok()
+    }
+}
+
+impl EmbeddingConfig {
+    pub fn new(
+        provider: Provider,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        base_url: Option<String>,
+        dimensions: Option<usize>,
+    ) -> Result<Self, ConvertError> {
+        if matches!(
+            provider,
+            Provider::Anthropic | Provider::CursorCli | Provider::CodexCli
+        ) {
+            return Err(ConvertError::Failed(
+                "provider này không có embedding API được Markhand hỗ trợ".into(),
+            ));
+        }
+        let model = model.into();
+        if model.trim().is_empty() {
+            return Err(ConvertError::Failed(
+                "model embedding không được để trống".into(),
+            ));
+        }
+        if let Some(url) = base_url.as_deref() {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(ConvertError::Failed(
+                    "embedding base URL phải bắt đầu bằng http:// hoặc https://".into(),
+                ));
+            }
+        }
+        if dimensions.is_some_and(|value| !(32..=4096).contains(&value)) {
+            return Err(ConvertError::Failed(
+                "số chiều embedding phải nằm trong khoảng 32–4096".into(),
+            ));
+        }
+        Ok(Self {
+            provider,
+            api_key: api_key.into(),
+            model,
+            base_url,
+            dimensions,
+        })
     }
 }
 
@@ -359,6 +428,104 @@ pub fn provider_presets() -> Vec<LlmProviderPreset> {
     ]
 }
 
+pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
+    let preset = |id: &str,
+                  label: &str,
+                  provider: Provider,
+                  base_url: Option<&str>,
+                  default_model: &str,
+                  models: &[&str],
+                  local: bool,
+                  requires_api_key: bool,
+                  default_dimensions: Option<usize>,
+                  description: &str| EmbeddingProviderPreset {
+        id: id.into(),
+        label: label.into(),
+        provider,
+        base_url: base_url.map(str::to_string),
+        default_model: default_model.into(),
+        models: models.iter().map(|model| (*model).to_string()).collect(),
+        local,
+        requires_api_key,
+        default_dimensions,
+        description: description.into(),
+    };
+    vec![
+        preset(
+            "ollama",
+            "Ollama embeddings (Local)",
+            Provider::OpenAiCompatible,
+            Some("http://127.0.0.1:11434"),
+            "nomic-embed-text",
+            &["nomic-embed-text", "mxbai-embed-large", "bge-m3"],
+            true,
+            false,
+            None,
+            "Neural embedding chạy local qua OpenAI-compatible /v1/embeddings.",
+        ),
+        preset(
+            "lm-studio",
+            "LM Studio embeddings (Local)",
+            Provider::OpenAiCompatible,
+            Some("http://127.0.0.1:1234"),
+            "local-model",
+            &["local-model"],
+            true,
+            false,
+            None,
+            "Load embedding model trong LM Studio Local Server.",
+        ),
+        preset(
+            "vllm",
+            "vLLM embeddings (Self-host)",
+            Provider::OpenAiCompatible,
+            Some("http://127.0.0.1:8000"),
+            "BAAI/bge-m3",
+            &["BAAI/bge-m3", "intfloat/multilingual-e5-large"],
+            true,
+            false,
+            None,
+            "Embedding server nội bộ; phù hợp corpus lớn và GPU dùng chung.",
+        ),
+        preset(
+            "openai",
+            "OpenAI embeddings",
+            Provider::OpenAi,
+            Some("https://api.openai.com"),
+            "text-embedding-3-small",
+            &["text-embedding-3-small", "text-embedding-3-large"],
+            false,
+            true,
+            Some(1536),
+            "Cloud embedding; toàn bộ chunk được gửi khi build index.",
+        ),
+        preset(
+            "gemini",
+            "Google Gemini embeddings",
+            Provider::Gemini,
+            Some("https://generativelanguage.googleapis.com"),
+            "gemini-embedding-001",
+            &["gemini-embedding-001"],
+            false,
+            true,
+            Some(768),
+            "Cloud embedding tiếng Việt; gọi embedContent theo từng chunk.",
+        ),
+        preset(
+            "custom",
+            "Custom OpenAI-compatible embeddings",
+            Provider::OpenAiCompatible,
+            None,
+            "embedding-model",
+            &["embedding-model"],
+            false,
+            false,
+            None,
+            "Endpoint embedding nội bộ hoặc gateway doanh nghiệp.",
+        ),
+    ]
+}
+
 fn fail<E: std::fmt::Display>(e: E) -> ConvertError {
     ConvertError::Failed(e.to_string())
 }
@@ -469,6 +636,201 @@ fn post_json(
         return Err(fail(format!("LLM HTTP {status}: {text}")));
     }
     serde_json::from_str(&text).map_err(fail)
+}
+
+fn openai_embeddings_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/embeddings")
+    } else {
+        format!("{base}/v1/embeddings")
+    }
+}
+
+fn normalize_embedding(vector: &mut [f32]) -> Result<(), ConvertError> {
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if !norm.is_finite() || norm <= f32::EPSILON {
+        return Err(fail("provider trả embedding rỗng hoặc không hợp lệ"));
+    }
+    for value in vector {
+        *value /= norm;
+    }
+    Ok(())
+}
+
+fn validate_embedding_dimensions(
+    cfg: &EmbeddingConfig,
+    vectors: &[Vec<f32>],
+) -> Result<(), ConvertError> {
+    let Some(first) = vectors.first() else {
+        return Ok(());
+    };
+    if first.is_empty() {
+        return Err(fail("provider trả embedding rỗng"));
+    }
+    let dimensions = first.len();
+    if vectors.iter().any(|vector| vector.len() != dimensions) {
+        return Err(fail("provider trả các vector khác số chiều"));
+    }
+    if cfg
+        .dimensions
+        .is_some_and(|expected| expected != dimensions)
+    {
+        return Err(fail(format!(
+            "provider trả {dimensions} chiều, khác cấu hình {}",
+            cfg.dimensions.unwrap_or_default()
+        )));
+    }
+    Ok(())
+}
+
+fn embed_openai_batch(
+    client: &reqwest::blocking::Client,
+    cfg: &EmbeddingConfig,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, ConvertError> {
+    let base = cfg
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://api.openai.com".into());
+    let mut body = serde_json::json!({
+        "model": cfg.model,
+        "input": texts,
+        "encoding_format": "float"
+    });
+    if let Some(dimensions) = cfg.dimensions {
+        body["dimensions"] = serde_json::json!(dimensions);
+    }
+    let response = post_json(client, &openai_embeddings_url(&base), &body, |request| {
+        if cfg.api_key.trim().is_empty() {
+            request
+        } else {
+            request.bearer_auth(&cfg.api_key)
+        }
+    })?;
+    let data = response["data"]
+        .as_array()
+        .ok_or_else(|| fail(format!("phản hồi embedding không hợp lệ: {response}")))?;
+    let mut indexed = Vec::with_capacity(data.len());
+    for (fallback_index, item) in data.iter().enumerate() {
+        let index = item["index"].as_u64().unwrap_or(fallback_index as u64) as usize;
+        let values = item["embedding"]
+            .as_array()
+            .ok_or_else(|| fail("embedding item thiếu mảng số"))?;
+        let mut vector = values
+            .iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .map(|number| number as f32)
+                    .ok_or_else(|| fail("embedding chứa giá trị không phải số"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        normalize_embedding(&mut vector)?;
+        indexed.push((index, vector));
+    }
+    indexed.sort_by_key(|(index, _)| *index);
+    let vectors: Vec<Vec<f32>> = indexed.into_iter().map(|(_, vector)| vector).collect();
+    if vectors.len() != texts.len() {
+        return Err(fail(format!(
+            "provider trả {} vector cho {} input",
+            vectors.len(),
+            texts.len()
+        )));
+    }
+    validate_embedding_dimensions(cfg, &vectors)?;
+    Ok(vectors)
+}
+
+fn embed_gemini_one(
+    client: &reqwest::blocking::Client,
+    cfg: &EmbeddingConfig,
+    text: &str,
+    task_type: &str,
+) -> Result<Vec<f32>, ConvertError> {
+    let base = cfg
+        .base_url
+        .clone()
+        .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+    let url = format!(
+        "{}/v1beta/models/{}:embedContent?key={}",
+        base.trim_end_matches('/'),
+        cfg.model,
+        cfg.api_key
+    );
+    let mut body = serde_json::json!({
+        "model": format!("models/{}", cfg.model),
+        "content": {"parts": [{"text": text}]},
+        "taskType": task_type
+    });
+    if let Some(dimensions) = cfg.dimensions {
+        body["outputDimensionality"] = serde_json::json!(dimensions);
+    }
+    let response = post_json(client, &url, &body, |request| request)?;
+    let values = response["embedding"]["values"].as_array().ok_or_else(|| {
+        fail(format!(
+            "phản hồi Gemini embedding không hợp lệ: {response}"
+        ))
+    })?;
+    let mut vector = values
+        .iter()
+        .map(|value| {
+            value
+                .as_f64()
+                .map(|number| number as f32)
+                .ok_or_else(|| fail("Gemini embedding chứa giá trị không phải số"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    normalize_embedding(&mut vector)?;
+    Ok(vector)
+}
+
+/// Embed text chunks through a configured neural embedding provider.
+/// Calls are batched for OpenAI-compatible endpoints; Gemini is sequential.
+pub fn embed_batch(cfg: &EmbeddingConfig, texts: &[String]) -> Result<Vec<Vec<f32>>, ConvertError> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(fail)?;
+    let mut vectors = Vec::with_capacity(texts.len());
+    match cfg.provider {
+        Provider::OpenAi | Provider::OpenAiCompatible => {
+            for batch in texts.chunks(64) {
+                vectors.extend(embed_openai_batch(&client, cfg, batch)?);
+            }
+        }
+        Provider::Gemini => {
+            for text in texts {
+                vectors.push(embed_gemini_one(&client, cfg, text, "RETRIEVAL_DOCUMENT")?);
+            }
+            validate_embedding_dimensions(cfg, &vectors)?;
+        }
+        Provider::Anthropic | Provider::CursorCli | Provider::CodexCli => {
+            return Err(fail("provider không hỗ trợ neural embeddings"));
+        }
+    }
+    Ok(vectors)
+}
+
+pub fn embed_query(cfg: &EmbeddingConfig, query: &str) -> Result<Vec<f32>, ConvertError> {
+    if cfg.provider == Provider::Gemini {
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(fail)?;
+        let vector = embed_gemini_one(&client, cfg, query, "RETRIEVAL_QUERY")?;
+        validate_embedding_dimensions(cfg, std::slice::from_ref(&vector))?;
+        return Ok(vector);
+    }
+    embed_batch(cfg, &[query.to_string()])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| fail("provider không trả query embedding"))
 }
 
 /// Tóm tắt văn bản (Markdown tiếng Việt).
@@ -632,6 +994,26 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
+    fn mock_json_server(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = vec![0u8; 32 * 1024];
+            let size = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..size]).to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            request
+        });
+        (format!("http://{address}"), handle)
+    }
+
     #[test]
     fn provider_aliases_map_to_expected_protocols() {
         assert_eq!(Provider::from_name("openai"), Provider::OpenAi);
@@ -687,6 +1069,10 @@ mod tests {
             openai_chat_url("http://127.0.0.1:1234/v1/"),
             "http://127.0.0.1:1234/v1/chat/completions"
         );
+        assert_eq!(
+            openai_embeddings_url("http://127.0.0.1:1234/v1/"),
+            "http://127.0.0.1:1234/v1/embeddings"
+        );
     }
 
     #[test]
@@ -713,5 +1099,47 @@ mod tests {
         assert_eq!(chat(&config, "system", "ping").unwrap(), "OK");
         let request = server.join().unwrap().to_lowercase();
         assert!(request.contains("authorization: bearer secret-key"));
+    }
+
+    #[test]
+    fn openai_compatible_embeddings_are_batched_and_normalized() {
+        let response = r#"{"data":[
+          {"index":1,"embedding":[0.0,2.0,0.0]},
+          {"index":0,"embedding":[3.0,0.0,0.0]}
+        ]}"#;
+        let (base_url, server) = mock_json_server(response);
+        let config = EmbeddingConfig::new(
+            Provider::OpenAiCompatible,
+            "",
+            "nomic-embed-text",
+            Some(base_url),
+            None,
+        )
+        .unwrap();
+        let vectors = embed_batch(&config, &["một".into(), "hai".into()]).unwrap();
+        assert_eq!(vectors, vec![vec![1.0, 0.0, 0.0], vec![0.0, 1.0, 0.0]]);
+        let request = server.join().unwrap().to_lowercase();
+        assert!(request.starts_with("post /v1/embeddings "));
+        assert!(!request.contains("authorization:"));
+    }
+
+    #[test]
+    fn embedding_config_rejects_chat_only_provider() {
+        assert!(EmbeddingConfig::new(
+            Provider::Anthropic,
+            "key",
+            "model",
+            Some("https://api.anthropic.com".into()),
+            None
+        )
+        .is_err());
+        assert!(EmbeddingConfig::new(
+            Provider::OpenAi,
+            "key",
+            "model",
+            Some("invalid".into()),
+            None
+        )
+        .is_err());
     }
 }

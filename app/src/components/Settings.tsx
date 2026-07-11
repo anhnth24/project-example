@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Cloud,
+  BrainCircuit,
   FolderOpen,
   LogIn,
   RotateCcw,
@@ -10,12 +11,19 @@ import {
   Wifi,
 } from "lucide-react";
 import { api } from "../lib/ipc";
-import { applyLlmPreset, validateLlmSettings } from "../lib/llmSettings";
+import {
+  applyEmbeddingPreset,
+  applyLlmPreset,
+  validateEmbeddingSettings,
+  validateLlmSettings,
+} from "../lib/llmSettings";
 import { useStore } from "../state/store";
 import type {
   LlmConnectionResult,
   LlmProviderPreset,
   CliSubscriptionStatus,
+  EmbeddingConnectionResult,
+  EmbeddingProviderPreset,
   Settings,
 } from "../lib/types";
 import {
@@ -40,6 +48,13 @@ const DEFAULTS: Settings = {
   llmModel: "qwen2.5:7b",
   llmApiKey: null,
   llmCliBinary: null,
+  embeddingEnabled: false,
+  embeddingProvider: "ollama",
+  embeddingBaseUrl: "http://127.0.0.1:11434",
+  embeddingModel: "nomic-embed-text",
+  embeddingApiKey: null,
+  embeddingDimensions: null,
+  embeddingFallbackLocal: true,
 };
 
 function providerOptionLabel(preset: LlmProviderPreset): string {
@@ -59,11 +74,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [llmResult, setLlmResult] = useState<LlmConnectionResult | null>(null);
   const [cliStatus, setCliStatus] = useState<CliSubscriptionStatus | null>(null);
   const [checkingCli, setCheckingCli] = useState(false);
+  const [embeddingPresets, setEmbeddingPresets] = useState<
+    EmbeddingProviderPreset[]
+  >([]);
+  const [testingEmbedding, setTestingEmbedding] = useState(false);
+  const [embeddingResult, setEmbeddingResult] =
+    useState<EmbeddingConnectionResult | null>(null);
 
   useEffect(() => {
     api
       .getLlmProviderPresets()
       .then(setPresets)
+      .catch((error) => setError(String(error)));
+    api
+      .getEmbeddingProviderPresets()
+      .then(setEmbeddingPresets)
       .catch((error) => setError(String(error)));
   }, [setError]);
 
@@ -98,6 +123,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   }
 
   const selectedPreset = presets.find((preset) => preset.id === form.llmProvider);
+  const selectedEmbeddingPreset = embeddingPresets.find(
+    (preset) => preset.id === form.embeddingProvider,
+  );
 
   function applyPreset(id: string) {
     const preset = presets.find((item) => item.id === id);
@@ -154,6 +182,28 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  function applyEmbedding(id: string) {
+    const preset = embeddingPresets.find((item) => item.id === id);
+    if (!preset) {
+      set("embeddingProvider", id);
+      return;
+    }
+    setForm((currentForm) => applyEmbeddingPreset(currentForm, preset));
+    setEmbeddingResult(null);
+  }
+
+  async function testEmbeddingConnection() {
+    if (validation.length) return;
+    setTestingEmbedding(true);
+    setEmbeddingResult(null);
+    try {
+      await saveSettings(form);
+      setEmbeddingResult(await api.testEmbeddingConnection());
+    } finally {
+      setTestingEmbedding(false);
+    }
+  }
+
   const validation: string[] = [];
   if (!/^[a-z]{3}(?:\+[a-z]{3})*$/i.test(form.ocrLangs.trim())) {
     validation.push("Ngôn ngữ OCR cần có dạng vie hoặc vie+eng.");
@@ -167,6 +217,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     validation.push("Thread audio phải nằm trong khoảng 1–32.");
   }
   validation.push(...validateLlmSettings(form, selectedPreset));
+  validation.push(
+    ...validateEmbeddingSettings(form, selectedEmbeddingPreset),
+  );
 
   return (
     <Modal
@@ -438,6 +491,144 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 <span className={llmResult.local ? "local-result" : ""}>
                   OK · {llmResult.model} · {llmResult.latencyMs}ms ·{" "}
                   {llmResult.response}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="settings-section-heading">
+          <span className="eyebrow">Hybrid retrieval</span>
+          <strong>Neural embeddings</strong>
+        </div>
+
+        <Toggle
+          checked={form.embeddingEnabled}
+          onChange={(checked) => set("embeddingEnabled", checked)}
+          label="Bật semantic embeddings"
+          description="Tắt = FTS5 + feature hashing 256D chạy hoàn toàn offline."
+        />
+
+        {form.embeddingEnabled && (
+          <div className="llm-settings">
+            <div className="field">
+              <span>Embedding provider</span>
+              <SelectControl
+                value={form.embeddingProvider}
+                onChange={applyEmbedding}
+                ariaLabel="Chọn embedding provider"
+                options={embeddingPresets.map((preset) => ({
+                  value: preset.id,
+                  label: `${preset.local ? "Local" : "Cloud"} · ${preset.label.replace(
+                    /\s*\((?:Local|Self-host)\)$/i,
+                    "",
+                  )}`,
+                }))}
+              />
+            </div>
+
+            {selectedEmbeddingPreset && (
+              <Notice tone={selectedEmbeddingPreset.local ? "info" : "warning"}>
+                <span className="provider-notice">
+                  <BrainCircuit size={14} />
+                  <span>
+                    <b>
+                      {selectedEmbeddingPreset.local
+                        ? "Neural search chạy local"
+                        : "Toàn bộ chunk sẽ được gửi lên cloud khi build index"}
+                    </b>
+                    <small>{selectedEmbeddingPreset.description}</small>
+                  </span>
+                </span>
+              </Notice>
+            )}
+
+            <div className="settings-grid llm-grid">
+              <label className="field">
+                <span>Base URL</span>
+                <input
+                  value={form.embeddingBaseUrl}
+                  onChange={(event) =>
+                    set("embeddingBaseUrl", event.target.value)
+                  }
+                  placeholder="http://127.0.0.1:11434"
+                />
+              </label>
+              <div className="field">
+                <span>Embedding model</span>
+                <Combobox
+                  value={form.embeddingModel}
+                  onChange={(model) => set("embeddingModel", model)}
+                  options={selectedEmbeddingPreset?.models ?? []}
+                  ariaLabel="Model embedding"
+                  placeholder="nomic-embed-text"
+                />
+              </div>
+            </div>
+
+            <div className="settings-grid">
+              <label className="field">
+                <span>Số chiều (để trống = model mặc định)</span>
+                <input
+                  type="number"
+                  min={32}
+                  max={4096}
+                  value={form.embeddingDimensions ?? ""}
+                  onChange={(event) =>
+                    set(
+                      "embeddingDimensions",
+                      event.target.value ? Number(event.target.value) : null,
+                    )
+                  }
+                  placeholder="768"
+                />
+              </label>
+              <label className="field">
+                <span>
+                  API key{" "}
+                  {selectedEmbeddingPreset?.requiresApiKey
+                    ? "(bắt buộc)"
+                    : "(tùy chọn)"}
+                </span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={form.embeddingApiKey ?? ""}
+                  onChange={(event) =>
+                    set("embeddingApiKey", event.target.value || null)
+                  }
+                  placeholder="Không lưu xuống settings.json"
+                />
+              </label>
+            </div>
+
+            <Toggle
+              checked={form.embeddingFallbackLocal}
+              onChange={(checked) => set("embeddingFallbackLocal", checked)}
+              label="Fallback local khi embedding lỗi"
+              description="Rebuild scope bằng local hash; không trộn vector từ hai model."
+            />
+
+            {form.embeddingProvider === "ollama" && (
+              <div className="local-setup">
+                <code>ollama pull {form.embeddingModel || "nomic-embed-text"}</code>
+              </div>
+            )}
+
+            <div className="llm-test-row">
+              <Button
+                variant="secondary"
+                icon={<Wifi size={14} />}
+                loading={testingEmbedding}
+                disabled={validation.length > 0}
+                onClick={testEmbeddingConnection}
+              >
+                Test embedding
+              </Button>
+              {embeddingResult && (
+                <span className={embeddingResult.local ? "local-result" : ""}>
+                  OK · {embeddingResult.model} · {embeddingResult.dimensions}D ·{" "}
+                  {embeddingResult.latencyMs}ms
                 </span>
               )}
             </div>

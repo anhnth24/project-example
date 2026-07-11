@@ -25,6 +25,13 @@ export interface Settings {
   llmModel: string;
   llmApiKey: string | null;
   llmCliBinary: string | null;
+  embeddingEnabled: boolean;
+  embeddingProvider: string;
+  embeddingBaseUrl: string;
+  embeddingModel: string;
+  embeddingApiKey: string | null;
+  embeddingDimensions: number | null;
+  embeddingFallbackLocal: boolean;
 }
 
 export type LlmProtocol =
@@ -55,6 +62,27 @@ export interface CliSubscriptionStatus {
   authenticated: boolean;
   accountHint: string | null;
   message: string;
+}
+
+export interface EmbeddingProviderPreset {
+  id: string;
+  label: string;
+  provider: LlmProtocol;
+  baseUrl: string | null;
+  defaultModel: string;
+  models: string[];
+  local: boolean;
+  requiresApiKey: boolean;
+  defaultDimensions: number | null;
+  description: string;
+}
+
+export interface EmbeddingConnectionResult {
+  provider: string;
+  model: string;
+  dimensions: number;
+  local: boolean;
+  latencyMs: number;
 }
 
 export interface LlmConnectionResult {
@@ -89,6 +117,8 @@ export interface KnowledgeIndexStats {
   databaseBytes: number;
   vectorDimensions: number;
   embeddingMode: string;
+  embeddingProvider: string;
+  embeddingModel: string;
 }
 
 export interface IndexBuildResult {
@@ -97,6 +127,10 @@ export interface IndexBuildResult {
   indexed: number;
   skipped: number;
   embeddingMode: string;
+  embeddingProvider: string;
+  embeddingModel: string;
+  vectorDimensions: number;
+  warnings: string[];
 }
 
 export interface SourceAnchor {
@@ -117,6 +151,12 @@ export interface HybridSearchHit {
   vectorScore: number;
   rerankScore: number;
   anchor: SourceAnchor;
+}
+
+export interface HybridSearchResponse {
+  hits: HybridSearchHit[];
+  warnings: string[];
+  embeddingMode: string;
 }
 
 export interface GroundedAnswer {

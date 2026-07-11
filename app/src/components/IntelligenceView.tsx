@@ -125,6 +125,7 @@ export function IntelligenceView() {
   const deferredQuery = useDeferredValue(query);
   const [hits, setHits] = useState<HybridSearchHit[]>([]);
   const [indexStats, setIndexStats] = useState<KnowledgeIndexStats | null>(null);
+  const [indexWarnings, setIndexWarnings] = useState<string[]>([]);
   const [question, setQuestion] = useState("");
   const [useLlm, setUseLlm] = useState(false);
   const [answer, setAnswer] = useState<GroundedAnswer | null>(null);
@@ -265,7 +266,10 @@ export function IntelligenceView() {
     const result = await run("search", () =>
       api.hybridSearch(selected, deferredQuery, 30),
     );
-    if (result) setHits(result);
+    if (result) {
+      setHits(result.hits);
+      setIndexWarnings(result.warnings);
+    }
   }
 
   async function loadIndexStats() {
@@ -279,7 +283,10 @@ export function IntelligenceView() {
   async function buildIndex() {
     if (!ensureSelection()) return;
     const result = await run("index", () => api.rebuildKnowledgeIndex(selected));
-    if (result) await loadIndexStats();
+    if (result) {
+      setIndexWarnings(result.warnings);
+      await loadIndexStats();
+    }
   }
 
   async function ask() {
@@ -719,7 +726,10 @@ export function IntelligenceView() {
                 <span>
                   <b>{indexStats?.documents ?? 0}</b> tài liệu ·{" "}
                   <b>{indexStats?.chunks ?? 0}</b> chunks · FTS5 + vector{" "}
-                  {indexStats?.vectorDimensions ?? 256}D
+                  {indexStats?.vectorDimensions ?? 256}D ·{" "}
+                  {indexStats?.embeddingMode === "provider_v1"
+                    ? `${indexStats.embeddingModel} (${indexStats.embeddingProvider})`
+                    : "local hash offline"}
                 </span>
                 <Button
                   variant="secondary"
@@ -730,6 +740,11 @@ export function IntelligenceView() {
                   Build / cập nhật index
                 </Button>
               </div>
+              {indexWarnings.map((warning) => (
+                <Notice tone="warning" key={warning}>
+                  {warning}
+                </Notice>
+              ))}
               <div className="search-row">
                 <Search size={16} />
                 <input

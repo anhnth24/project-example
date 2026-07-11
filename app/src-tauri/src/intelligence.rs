@@ -67,6 +67,16 @@ pub struct LlmConnectionResult {
     pub response: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingConnectionResult {
+    pub provider: String,
+    pub model: String,
+    pub dimensions: usize,
+    pub local: bool,
+    pub latency_ms: u128,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactRequest {
@@ -285,6 +295,41 @@ fn persist_pack(directory: &Path, pack: &HandoffPack) -> Result<(), String> {
 #[tauri::command]
 pub fn get_llm_provider_presets() -> Vec<fileconv_core::llm::LlmProviderPreset> {
     fileconv_core::llm::provider_presets()
+}
+
+#[tauri::command]
+pub fn get_embedding_provider_presets() -> Vec<fileconv_core::llm::EmbeddingProviderPreset> {
+    fileconv_core::llm::embedding_provider_presets()
+}
+
+#[tauri::command]
+pub async fn test_embedding_connection(
+    state: State<'_, AppState>,
+) -> Result<EmbeddingConnectionResult, String> {
+    let config = state
+        .settings
+        .lock()
+        .map_err(|_| "lock lỗi")?
+        .embedding_config()?
+        .ok_or("neural embeddings đang tắt")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = std::time::Instant::now();
+        let vector =
+            fileconv_core::llm::embed_query(&config, "Kiểm tra kết nối Markhand").map_err(es)?;
+        let local = config
+            .base_url
+            .as_deref()
+            .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"));
+        Ok(EmbeddingConnectionResult {
+            provider: format!("{:?}", config.provider),
+            model: config.model,
+            dimensions: vector.len(),
+            local,
+            latency_ms: started.elapsed().as_millis(),
+        })
+    })
+    .await
+    .map_err(es)?
 }
 
 #[tauri::command]
