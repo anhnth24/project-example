@@ -53,6 +53,7 @@ pub struct Settings {
     pub pdf_ocr_images: bool,
     pub audio_lang: String,
     pub audio_threads: i32,
+    pub audio_no_speech_threshold: f32,
     pub whisper_model: Option<String>,
     pub llm_enabled: bool,
     pub llm_provider: String,
@@ -78,6 +79,7 @@ impl Default for Settings {
             pdf_ocr_images: d.pdf_ocr_images,
             audio_lang: d.audio_lang,
             audio_threads: d.audio_threads,
+            audio_no_speech_threshold: d.audio_no_speech_threshold,
             whisper_model: None,
             llm_enabled: false,
             llm_provider: "ollama".into(),
@@ -103,6 +105,7 @@ impl Settings {
             whisper_model: self.whisper_model.as_ref().map(PathBuf::from),
             audio_lang: self.audio_lang.clone(),
             audio_threads: self.audio_threads,
+            audio_no_speech_threshold: self.audio_no_speech_threshold,
             pdf_ocr: self.pdf_ocr,
             pdf_ocr_images: self.pdf_ocr_images,
             ..Default::default()
@@ -918,6 +921,11 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
     }
     if !(1..=32).contains(&settings.audio_threads) {
         return Err("thread audio phải nằm trong khoảng 1–32".into());
+    }
+    if !settings.audio_no_speech_threshold.is_finite()
+        || !(0.0..=1.0).contains(&settings.audio_no_speech_threshold)
+    {
+        return Err("ngưỡng no-speech phải nằm trong khoảng 0–1".into());
     }
     settings.llm_config()?;
     settings.embedding_config()?;

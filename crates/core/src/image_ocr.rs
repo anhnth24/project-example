@@ -124,13 +124,26 @@ fn tessdata_dir() -> Option<PathBuf> {
 }
 
 fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
+    let automatic = run_tesseract_psm(path, langs, 3)?;
+    if !should_retry_layout(&automatic) {
+        return Ok(automatic);
+    }
+    let block = run_tesseract_psm(path, langs, 6)?;
+    if ocr_text_score(&block) > ocr_text_score(&automatic) {
+        Ok(block)
+    } else {
+        Ok(automatic)
+    }
+}
+
+fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
     let mut cmd = Command::new("tesseract");
     cmd.arg(path)
         .arg("stdout")
         .arg("-l")
         .arg(langs)
         .arg("--psm")
-        .arg("3")
+        .arg(psm.to_string())
         .arg("--dpi")
         .arg("300");
     // Dùng model best nếu có (tăng độ chính xác tài liệu thật).
@@ -148,6 +161,50 @@ fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+fn should_retry_layout(text: &str) -> bool {
+    let letters = text
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    if letters < 12 || text.contains('\u{fffd}') {
+        return true;
+    }
+    text.split_whitespace().any(|token| {
+        let token_letters: Vec<char> = token
+            .chars()
+            .filter(|character| character.is_alphabetic())
+            .collect();
+        token_letters.len() >= 18
+            && token_letters
+                .iter()
+                .filter(|character| character.is_uppercase())
+                .count()
+                * 10
+                >= token_letters.len() * 9
+    })
+}
+
+fn ocr_text_score(text: &str) -> i64 {
+    let letters = text
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count() as i64;
+    let words = text.split_whitespace().count() as i64;
+    let replacements = text.matches('\u{fffd}').count() as i64;
+    let glued_penalty: i64 = text
+        .split_whitespace()
+        .map(|token| {
+            token
+                .chars()
+                .filter(|character| character.is_alphabetic())
+                .count()
+        })
+        .filter(|length| *length > 18)
+        .map(|length| (length - 18) as i64)
+        .sum();
+    letters * 3 + words * 4 - replacements * 30 - glued_penalty * 2
+}
+
 /// Kiểm tra tesseract có sẵn không.
 pub fn tesseract_available() -> bool {
     Command::new("tesseract")
@@ -155,4 +212,28 @@ pub fn tesseract_available() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_sparse_replacement_and_glued_uppercase_output() {
+        assert!(should_retry_layout("ít chữ"));
+        assert!(should_retry_layout("Nội dung \u{fffd} bị lỗi encoding"));
+        assert!(should_retry_layout(
+            "BỘTƯPHÁPVÀCÁCCƠQUANLIÊNQUAN\nNội dung bình thường"
+        ));
+        assert!(!should_retry_layout(
+            "BỘ TƯ PHÁP\nNội dung văn bản hành chính đầy đủ và rõ ràng."
+        ));
+    }
+
+    #[test]
+    fn quality_score_prefers_separated_clean_text() {
+        let glued = "BỘTƯPHÁPVÀCÁCCƠQUANLIÊNQUAN";
+        let clean = "BỘ TƯ PHÁP VÀ CÁC CƠ QUAN LIÊN QUAN";
+        assert!(ocr_text_score(clean) > ocr_text_score(glued));
+    }
 }

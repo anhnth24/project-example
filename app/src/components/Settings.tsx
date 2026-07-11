@@ -41,6 +41,7 @@ const DEFAULTS: Settings = {
   pdfOcrImages: false,
   audioLang: "vi",
   audioThreads: 4,
+  audioNoSpeechThreshold: 0.6,
   whisperModel: null,
   llmEnabled: false,
   llmProvider: "ollama",
@@ -216,6 +217,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   ) {
     validation.push("Thread audio phải nằm trong khoảng 1–32.");
   }
+  if (
+    !Number.isFinite(form.audioNoSpeechThreshold) ||
+    form.audioNoSpeechThreshold < 0 ||
+    form.audioNoSpeechThreshold > 1
+  ) {
+    validation.push("Ngưỡng no-speech phải nằm trong khoảng 0–1.");
+  }
   validation.push(...validateLlmSettings(form, selectedPreset));
   validation.push(
     ...validateEmbeddingSettings(form, selectedEmbeddingPreset),
@@ -275,7 +283,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           description="Chính xác hơn cho trang trộn nhưng thời gian xử lý lâu hơn."
         />
 
-        <div className="settings-grid">
+        <div className="settings-grid audio-grid">
           <label className="field">
             <span>Ngôn ngữ audio</span>
             <input
@@ -292,6 +300,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               value={form.audioThreads}
               onChange={(event) => set("audioThreads", Number(event.target.value))}
             />
+          </label>
+          <label className="field">
+            <span>Ngưỡng no-speech</span>
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={form.audioNoSpeechThreshold}
+              onChange={(event) =>
+                set("audioNoSpeechThreshold", Number(event.target.value))
+              }
+            />
+            <small>Cao hơn = giữ nhiều segment hơn.</small>
           </label>
         </div>
 

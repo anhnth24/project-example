@@ -106,6 +106,8 @@ pub struct ConverterOptions {
     pub audio_lang: String,
     /// Số thread cho whisper (mặc định 4).
     pub audio_threads: i32,
+    /// Bỏ segment có xác suất không lời >= ngưỡng này (mặc định 0.6).
+    pub audio_no_speech_threshold: f32,
     /// Bật OCR cho TRANG scan (không/ít lớp text). Mặc định true.
     pub pdf_ocr: bool,
     /// Bật OCR thêm cho ẢNH NHÚNG lớn trong trang có text (trang trộn).
@@ -126,6 +128,7 @@ impl Default for ConverterOptions {
             whisper_model: None,
             audio_lang: "vi".to_string(),
             audio_threads: 4,
+            audio_no_speech_threshold: 0.6,
             pdf_ocr: true,
             pdf_ocr_images: false,
             pdf_pages: None,
@@ -168,11 +171,14 @@ impl Converter {
         let model = self
             .opts
             .whisper_model
-            .as_ref()
+            .clone()
+            .or_else(audio::discover_whisper_model)
             .ok_or(ConvertError::Unsupported(
-                "audio: chưa cấu hình whisper_model",
+                "audio: chưa cài hoặc cấu hình whisper_model",
             ))?;
-        let eng = AudioEngine::load(model)?.with_threads(self.opts.audio_threads);
+        let eng = AudioEngine::load(&model)?
+            .with_threads(self.opts.audio_threads)
+            .with_no_speech_threshold(self.opts.audio_no_speech_threshold);
         // Nếu thread khác set trước, bỏ qua bản của ta (vẫn dùng bản đã cache).
         let _ = self.engine.set(eng);
         Ok(self.engine.get().unwrap())
@@ -224,12 +230,35 @@ impl Converter {
             _ => md,
         };
 
+        let title = title_from_markdown(&md).or_else(|| {
+            path.file_stem()
+                .and_then(|name| name.to_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        });
+
         Ok(ConversionResult {
             markdown: md,
-            title: None,
+            title,
             format,
         })
     }
+}
+
+fn title_from_markdown(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let hashes = trimmed
+            .chars()
+            .take_while(|character| *character == '#')
+            .count();
+        if !(1..=6).contains(&hashes) {
+            return None;
+        }
+        let title = trimmed[hashes..].trim().trim_matches('#').trim();
+        (!title.is_empty() && title.chars().count() <= 240).then(|| title.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -255,5 +284,14 @@ mod tests {
         // Không còn combining mark rời nào.
         assert!(!out.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conversion_result_uses_first_heading_as_title() {
+        assert_eq!(
+            title_from_markdown("<!-- Page 1 -->\n\n# Báo cáo dự án\n\nNội dung"),
+            Some("Báo cáo dự án".into())
+        );
+        assert_eq!(title_from_markdown("nội dung không heading"), None);
     }
 }

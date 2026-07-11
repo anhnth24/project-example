@@ -18,6 +18,7 @@ const settings: Settings = {
   pdfOcrImages: false,
   audioLang: "vi",
   audioThreads: 4,
+  audioNoSpeechThreshold: 0.6,
   whisperModel: null,
   llmEnabled: false,
   llmProvider: "ollama",

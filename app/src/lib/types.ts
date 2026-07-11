@@ -18,6 +18,7 @@ export interface Settings {
   pdfOcrImages: boolean;
   audioLang: string;
   audioThreads: number;
+  audioNoSpeechThreshold: number;
   whisperModel: string | null;
   llmEnabled: boolean;
   llmProvider: string;

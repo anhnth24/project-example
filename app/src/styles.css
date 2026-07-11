@@ -2394,6 +2394,10 @@ kbd {
   gap: 12px;
 }
 
+.settings-grid.audio-grid {
+  grid-template-columns: minmax(0, 1fr) 110px 145px;
+}
+
 .settings-section-heading {
   display: flex;
   align-items: baseline;
