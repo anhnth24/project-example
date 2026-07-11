@@ -24,6 +24,7 @@ pub mod llm;
 pub mod llm_cli;
 pub mod pptx_preview;
 pub mod probe;
+mod proc;
 pub mod tables;
 pub mod viet_legacy;
 mod viet_legacy_maps;

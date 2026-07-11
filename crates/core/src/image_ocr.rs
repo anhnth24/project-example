@@ -14,7 +14,6 @@
 use std::cell::Cell;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::{imageops, DynamicImage, GrayImage};
@@ -348,7 +347,7 @@ fn run_paddle(path: &Path, langs: &str) -> io::Result<String> {
     } else {
         "en"
     };
-    let output = Command::new("python3")
+    let output = crate::proc::background_command("python3")
         .arg(script)
         .arg("--image")
         .arg(path)
@@ -396,7 +395,7 @@ fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
 }
 
 fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
-    let mut cmd = Command::new("tesseract");
+    let mut cmd = crate::proc::background_command("tesseract");
     cmd.arg(path)
         .arg("stdout")
         .arg("-l")
@@ -466,7 +465,7 @@ fn ocr_text_score(text: &str) -> i64 {
 
 /// Kiểm tra tesseract có sẵn không.
 pub fn tesseract_available() -> bool {
-    Command::new("tesseract")
+    crate::proc::background_command("tesseract")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
