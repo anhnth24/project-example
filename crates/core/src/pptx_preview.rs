@@ -403,11 +403,10 @@ pub fn preview_slide(path: &Path, index: usize) -> Result<PptxPreviewSlide, Conv
                     continue;
                 };
                 let mut bytes = Vec::new();
-                if zip
-                    .by_name(target)
-                    .and_then(|mut file| file.read_to_end(&mut bytes))
-                    .is_err()
-                {
+                let Ok(mut media) = zip.by_name(target) else {
+                    continue;
+                };
+                if media.read_to_end(&mut bytes).is_err() {
                     continue;
                 }
                 let data_url = format!(
