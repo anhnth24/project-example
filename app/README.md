@@ -1,4 +1,4 @@
-# FileConv Docs (desktop)
+# Markhand Desktop
 
 App desktop (Tauri 2 + React/TS) cho **BA/PM** soạn tài liệu cho Dev: tải file gốc vào
 thư mục, app gọi lõi Rust `fileconv-core` chuyển sang **Markdown** (link 1-1 với file gốc),

@@ -1,4 +1,4 @@
-//! Backend Tauri cho FileConv Docs.
+//! Backend Tauri cho Markhand Desktop.
 //!
 //! Cầu nối giữa UI (React) và lõi `fileconv-core`. Mọi thao tác filesystem chạy trong
 //! tiến trình Rust để kiểm soát chặt đường dẫn (không bật plugin fs).
