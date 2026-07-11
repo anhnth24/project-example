@@ -6,7 +6,7 @@ import {
   useState,
   type ButtonHTMLAttributes,
   type CSSProperties,
-  type KeyboardEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -197,10 +197,9 @@ export function SelectControl({
     buttonRef.current?.focus();
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      if (!filtered.length) return;
       if (!open) {
         setOpen(true);
         setActiveIndex(Math.max(0, selectedIndex));
@@ -216,7 +215,8 @@ export function SelectControl({
       setOpen(false);
     } else if (event.key === "Home" && open) {
       event.preventDefault();
-      setActiveIndex(options.findIndex((option) => !option.disabled));
+      const first = options.findIndex((option) => !option.disabled);
+      setActiveIndex(Math.max(0, first));
     } else if (event.key === "End" && open) {
       event.preventDefault();
       const reversed = [...options].reverse();
@@ -352,9 +352,10 @@ export function Combobox({
     inputRef.current?.focus();
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      if (!filtered.length) return;
       if (!open) {
         setOpen(true);
         setActiveIndex(0);
