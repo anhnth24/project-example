@@ -59,14 +59,14 @@ Với corpus BRD/workshop/Excel traceability thật, BA/PM nên:
 
 ## Regression coverage
 
-Sau review, test suite được mở rộng từ các happy-path cơ bản thành **125 test**
+Sau review, test suite được mở rộng từ các happy-path cơ bản thành **134 test**
 chạy tự động:
 
 | Lớp | Số test | Phạm vi |
 |---|---:|---|
 | `fileconv-core` | 75 | convert/OCR + intelligence/handoff + LLM protocols |
-| Tauri desktop | 18 | path jail, sidecar, snapshot, provider/settings security |
-| React/TypeScript | 29 | blocks, tree, intelligence và LLM setting helpers |
+| Tauri desktop | 24 | path jail, projects/import, sidecar, provider/settings security |
+| React/TypeScript | 32 | blocks, project scope, intelligence và LLM helpers |
 | CLI metrics | 3 | CER/WER |
 
 Nhóm intelligence bao phủ:
@@ -85,3 +85,5 @@ Nhóm intelligence bao phủ:
   version ID traversal và pack round-trip.
 - local OpenAI-compatible không cần key, cloud Bearer auth, URL `/v1`, provider
   aliases/presets, settings migration và API key không persist.
+- project discovery/legacy migration, Unicode slug, nested folder collection,
+  import limits, supported formats, no-overwrite copy và project-scoped tree.
