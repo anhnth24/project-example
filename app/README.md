@@ -117,6 +117,18 @@ pnpm tauri build --bundles deb       # Linux
 `target/release/bundle/`. Windows/macOS cần runner đúng hệ điều hành và
 signing/notarization trước khi phát hành công khai.
 
+Release workflow tự build unsigned khi chưa bật signing. Muốn phát hành signed:
+
+- Windows variables/secrets: `WINDOWS_SIGNING_ENABLED=true`,
+  `WINDOWS_CERTIFICATE_THUMBPRINT`, `WINDOWS_CERTIFICATE` (PFX base64),
+  `WINDOWS_CERTIFICATE_PASSWORD`.
+- macOS variables/secrets: `MACOS_SIGNING_ENABLED=true`, `APPLE_CERTIFICATE`
+  (P12 base64), `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`,
+  `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
+
+Không commit certificate hoặc password. Thiếu credential thì không thể tạo chữ
+ký Authenticode/Developer ID hay notarization thật.
+
 ## Preview file gốc trong app
 
 | Loại | Thư viện | Ghi chú |
@@ -126,7 +138,7 @@ signing/notarization trước khi phát hành công khai.
 | Excel `.xlsx/.xls/.ods` | `@e965/xlsx` (SheetJS) | có tab chọn sheet |
 | Ảnh, audio | Blob URL từ `read_bytes` | `<img>` / `<audio>` |
 | csv, html, text, markdown | đọc trực tiếp | hiển thị thô |
-| `.pptx` | — | webview render chưa đáng tin → nút **Mở ngoài** |
+| `.pptx` | parser OOXML Rust + SVG React | text, ảnh, shape cơ bản; chart/SmartArt mở ngoài |
 
 Bytes file đọc qua command Rust `read_bytes` (trả ArrayBuffer); ảnh/audio dựng `Blob`
 URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì webview chặn (403).

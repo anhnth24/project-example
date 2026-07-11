@@ -48,9 +48,85 @@ jobs:
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
         working-directory: app
-      - name: Build native installers
+
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_CERTIFICATE_THUMBPRINT }}
+        run: |
+          [IO.File]::WriteAllBytes("markhand.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath "markhand.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          $path = "app/src-tauri/tauri.windows.conf.json"
+          $config = Get-Content $path -Raw | ConvertFrom-Json
+          $config.bundle.windows | Add-Member -Force NoteProperty certificateThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
+          $config | ConvertTo-Json -Depth 12 | Set-Content $path
+
+      - name: Import Apple Developer certificate
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+      - name: Build Linux installers
+        if: runner.os == 'Linux'
         run: pnpm tauri build --bundles ${{ matrix.bundles }}
         working-directory: app
+
+      - name: Build unsigned Windows installers
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED != 'true'
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --no-sign --ci
+        working-directory: app
+
+      - name: Build signed Windows installers
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        working-directory: app
+
+      - name: Build unsigned macOS installer
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED != 'true'
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --no-sign --ci
+        working-directory: app
+
+      - name: Build signed and notarized macOS installer
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        working-directory: app
+
+      - name: Verify Windows Authenticode
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Recurse "target/release/bundle" -Include *.exe,*.msi | Select-Object -First 1
+          $signature = Get-AuthenticodeSignature $installer.FullName
+          if ($signature.Status -ne "Valid") { throw "Invalid Authenticode signature: $($signature.Status)" }
+
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        run: |
+          APP=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl -a -t exec -vv "$APP"
+
       - uses: actions/upload-artifact@v4
         with:
           name: markhand-${{ matrix.artifact }}
