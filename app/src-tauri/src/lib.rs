@@ -20,6 +20,7 @@ use tauri::{Manager, State};
 use fileconv_core::{ConverterOptions, FormatKind};
 
 mod intelligence;
+mod knowledge;
 mod projects;
 
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────
@@ -938,6 +939,10 @@ pub fn run() {
             projects::adopt_project,
             projects::import_local_folder,
             projects::remove_project,
+            knowledge::rebuild_knowledge_index,
+            knowledge::knowledge_index_stats,
+            knowledge::hybrid_search,
+            knowledge::hybrid_ask,
         ])
         .run(tauri::generate_context!())
         .expect("lỗi khi khởi chạy ứng dụng Tauri");

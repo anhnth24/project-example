@@ -31,3 +31,4 @@ time = "=0.3.51"
 
 # Lõi convert dùng chung với CLI — KHÔNG viết lại.
 fileconv-core = { path = "../../crates/core", features = ["llm"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }

@@ -66,6 +66,54 @@ export interface ImportFolderResult {
   convertRels: string[];
 }
 
+export interface KnowledgeIndexStats {
+  documents: number;
+  chunks: number;
+  databaseBytes: number;
+  vectorDimensions: number;
+  embeddingMode: string;
+}
+
+export interface IndexBuildResult {
+  documents: number;
+  chunks: number;
+  indexed: number;
+  skipped: number;
+  embeddingMode: string;
+}
+
+export interface SourceAnchor {
+  page: number | null;
+  slide: number | null;
+  sheet: string | null;
+  start: number;
+  end: number;
+}
+
+export interface HybridSearchHit {
+  chunkId: string;
+  sourceRel: string;
+  mdRel: string;
+  heading: string;
+  snippet: string;
+  lexicalScore: number;
+  vectorScore: number;
+  rerankScore: number;
+  anchor: SourceAnchor;
+}
+
+export interface GroundedAnswer {
+  answer: string;
+  citations: HybridSearchHit[];
+  mode:
+    | "offline_extractive"
+    | "local_llm"
+    | "cloud_llm"
+    | "fallback_extractive";
+  grounded: boolean;
+  warnings: string[];
+}
+
 export type AppView = "home" | "library" | "document" | "intelligence";
 export type DocumentMode = "compare" | "split" | "markdown" | "source";
 export type MarkdownTab = "edit" | "preview";

@@ -379,6 +379,10 @@ fn accent_fold(text: &str) -> String {
         .to_lowercase()
 }
 
+pub fn normalize_search_text(text: &str) -> String {
+    accent_fold(text)
+}
+
 fn tokens(text: &str) -> Vec<String> {
     accent_fold(text)
         .split(|ch: char| !ch.is_alphanumeric())

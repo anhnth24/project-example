@@ -562,6 +562,11 @@ export const useStore = create<AppStore>((set, get) => ({
           ) {
             await get().loadSession(next.relPath, true);
           }
+          try {
+            await api.rebuildKnowledgeIndex([next.relPath]);
+          } catch (indexError) {
+            set({ error: `Đã convert nhưng index lỗi: ${String(indexError)}` });
+          }
           set((state) => ({
             jobs: state.jobs.map((job) =>
               job.id === next.id ? { ...job, status: "done", error: null } : job,

@@ -37,17 +37,18 @@ import {
 } from "../lib/intelligenceUtils";
 import { filesInProject, folderLabel } from "../lib/tree";
 import type {
-  AskResult,
   DiffHunk,
   DocumentSchema,
   FsNode,
+  GroundedAnswer,
   HandoffMode,
   HandoffResult,
+  HybridSearchHit,
   IntelligenceMode,
+  KnowledgeIndexStats,
   MarkdownTable,
   PiiReport,
   QualityReport,
-  SearchHit,
   VersionMeta,
   WatchMatch,
   WatchRule,
@@ -107,10 +108,11 @@ export function IntelligenceView() {
   const [quality, setQuality] = useState<QualityReport | null>(null);
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [hits, setHits] = useState<HybridSearchHit[]>([]);
+  const [indexStats, setIndexStats] = useState<KnowledgeIndexStats | null>(null);
   const [question, setQuestion] = useState("");
   const [useLlm, setUseLlm] = useState(false);
-  const [answer, setAnswer] = useState<AskResult | null>(null);
+  const [answer, setAnswer] = useState<GroundedAnswer | null>(null);
   const [pii, setPii] = useState<PiiReport | null>(null);
   const [redactedPath, setRedactedPath] = useState<string | null>(null);
   const [hardOcrPath, setHardOcrPath] = useState<string | null>(null);
@@ -137,6 +139,9 @@ export function IntelligenceView() {
   useEffect(() => {
     if (mode === "watch" && !watchRules.length) {
       void loadWatchRules();
+    }
+    if (mode === "ask") {
+      void loadIndexStats();
     }
   }, [mode]);
 
@@ -243,15 +248,29 @@ export function IntelligenceView() {
   async function searchContent() {
     if (!ensureSelection() || deferredQuery.trim().length < 2) return;
     const result = await run("search", () =>
-      api.searchIntelligence(selected, deferredQuery, 30),
+      api.hybridSearch(selected, deferredQuery, 30),
     );
     if (result) setHits(result);
+  }
+
+  async function loadIndexStats() {
+    try {
+      setIndexStats(await api.knowledgeIndexStats());
+    } catch {
+      setIndexStats(null);
+    }
+  }
+
+  async function buildIndex() {
+    if (!ensureSelection()) return;
+    const result = await run("index", () => api.rebuildKnowledgeIndex(selected));
+    if (result) await loadIndexStats();
   }
 
   async function ask() {
     if (!ensureSelection() || !question.trim()) return;
     const result = await run("ask", () =>
-      api.askIntelligence(selected, question, 6, useLlm),
+      api.hybridAsk(selected, question, 8, useLlm),
     );
     if (result) setAnswer(result);
   }
@@ -681,6 +700,21 @@ export function IntelligenceView() {
           {mode === "ask" && (
             <div className="intelligence-panel">
               <PanelHeading eyebrow="Cited intelligence" title="Tìm kiếm và hỏi đáp" />
+              <div className="knowledge-index-bar">
+                <span>
+                  <b>{indexStats?.documents ?? 0}</b> tài liệu ·{" "}
+                  <b>{indexStats?.chunks ?? 0}</b> chunks · FTS5 + vector{" "}
+                  {indexStats?.vectorDimensions ?? 256}D
+                </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === "index"}
+                  onClick={buildIndex}
+                >
+                  Build / cập nhật index
+                </Button>
+              </div>
               <div className="search-row">
                 <Search size={16} />
                 <input
@@ -699,14 +733,15 @@ export function IntelligenceView() {
                   {hits.map((hit) => (
                     <button
                       type="button"
-                      key={hit.chunk.id}
-                      onClick={() => openSource(hit.chunk.sourceRel)}
+                      key={hit.chunkId}
+                      onClick={() => openSource(hit.sourceRel)}
                     >
-                      <b>{hit.chunk.heading || hit.chunk.sourceRel}</b>
+                      <b>{hit.heading || hit.sourceRel}</b>
                       <span>{hit.snippet}</span>
                       <small>
-                        {hit.chunk.sourceRel}
-                        {hit.chunk.page ? ` · trang ${hit.chunk.page}` : ""}
+                        {hit.sourceRel}
+                        {hit.anchor.page ? ` · trang ${hit.anchor.page}` : ""}
+                        {` · hybrid ${hit.rerankScore.toFixed(3)}`}
                       </small>
                     </button>
                   ))}
@@ -743,21 +778,34 @@ export function IntelligenceView() {
                 </div>
               </div>
               {answer && (
-                <div className="answer-pane">
-                  <pre>{answer.answer}</pre>
-                  <div className="citation-list">
-                    {answer.citations.map((citation) => (
-                      <button
-                        type="button"
-                        key={citation.id}
-                        onClick={() => openSource(citation.sourceRel)}
-                      >
-                        <b>[{citation.id}] {citation.heading || citation.sourceRel}</b>
-                        <span>{citation.quote}</span>
-                      </button>
+                <>
+                  <div className="answer-status">
+                    <span className={answer.grounded ? "grounded" : ""}>
+                      {answer.mode} · {answer.grounded ? "grounded" : "needs review"}
+                    </span>
+                    {answer.warnings.map((warning) => (
+                      <small key={warning}>{warning}</small>
                     ))}
                   </div>
-                </div>
+                  <div className="answer-pane">
+                    <pre>{answer.answer}</pre>
+                    <div className="citation-list">
+                      {answer.citations.map((citation, index) => (
+                        <button
+                          type="button"
+                          key={citation.chunkId}
+                          onClick={() => openSource(citation.sourceRel)}
+                        >
+                          <b>
+                            [CITE-{String(index + 1).padStart(4, "0")}]{" "}
+                            {citation.heading || citation.sourceRel}
+                          </b>
+                          <span>{citation.snippet}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           )}

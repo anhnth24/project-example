@@ -7,6 +7,10 @@ import type {
   FsNode,
   HandoffMode,
   HandoffResult,
+  GroundedAnswer,
+  HybridSearchHit,
+  IndexBuildResult,
+  KnowledgeIndexStats,
   LlmConnectionResult,
   LlmProviderPreset,
   MarkdownTable,
@@ -61,6 +65,25 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  rebuildKnowledgeIndex: (sourceRels: string[]) =>
+    invoke<IndexBuildResult>("rebuild_knowledge_index", {
+      req: { sourceRels },
+    }),
+  knowledgeIndexStats: () =>
+    invoke<KnowledgeIndexStats>("knowledge_index_stats"),
+  hybridSearch: (sourceRels: string[], query: string, limit = 20) =>
+    invoke<HybridSearchHit[]>("hybrid_search", {
+      req: { sourceRels, query, limit },
+    }),
+  hybridAsk: (
+    sourceRels: string[],
+    question: string,
+    topK = 8,
+    useLlm = false,
+  ) =>
+    invoke<GroundedAnswer>("hybrid_ask", {
+      req: { sourceRels, question, topK, useLlm },
+    }),
   listProjects: () => invoke<Project[]>("list_projects"),
   createProject: (name: string) =>
     invoke<Project>("create_project", { req: { name } }),

@@ -232,7 +232,7 @@ fn markdown_path(root: &Path, source_rel: &str) -> Result<PathBuf, String> {
     Ok(markdown)
 }
 
-fn load_document(root: &Path, source_rel: &str) -> Result<CorpusDocument, String> {
+pub(super) fn load_document(root: &Path, source_rel: &str) -> Result<CorpusDocument, String> {
     let source_path = resolve_within(root, source_rel)?;
     let md_path = markdown_path(root, source_rel)?;
     let markdown = fs::read_to_string(&md_path).map_err(es)?;
@@ -244,7 +244,10 @@ fn load_document(root: &Path, source_rel: &str) -> Result<CorpusDocument, String
     })
 }
 
-fn load_documents(root: &Path, source_rels: &[String]) -> Result<Vec<CorpusDocument>, String> {
+pub(super) fn load_documents(
+    root: &Path,
+    source_rels: &[String],
+) -> Result<Vec<CorpusDocument>, String> {
     if source_rels.is_empty() {
         return Err("hãy chọn ít nhất một tài liệu đã convert".into());
     }

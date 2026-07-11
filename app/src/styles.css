@@ -2918,6 +2918,24 @@ kbd {
   box-shadow: var(--ring-glass);
 }
 
+.knowledge-index-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--color-text-faint);
+  background: var(--color-glass);
+  box-shadow: var(--ring-glass);
+  font-size: 9.5px;
+}
+
+.knowledge-index-bar b {
+  color: var(--accent);
+}
+
 .search-row input {
   flex: 1;
   min-width: 0;
@@ -3015,6 +3033,27 @@ kbd {
   margin-top: 12px;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 10px;
+}
+
+.answer-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.answer-status span,
+.answer-status small {
+  padding: 4px 7px;
+  border-radius: var(--radius-pill);
+  color: var(--warning);
+  background: rgba(231, 172, 85, 0.12);
+  font-size: 8.5px;
+}
+
+.answer-status span.grounded {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .answer-pane > pre {
