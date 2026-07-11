@@ -71,6 +71,13 @@ fn main() -> Result<()> {
             {
                 opts.ocr_langs = l.clone();
             }
+            if let Some(engine) = rest
+                .iter()
+                .position(|argument| argument == "--ocr-engine")
+                .and_then(|index| rest.get(index + 1))
+            {
+                opts.ocr_engine = fileconv_core::image_ocr::OcrEngine::from_name(engine);
+            }
             if let Some(p) = rest
                 .iter()
                 .position(|a| a == "--pages")
