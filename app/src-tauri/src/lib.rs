@@ -59,6 +59,7 @@ pub struct Settings {
     pub llm_base_url: String,
     pub llm_model: String,
     pub llm_api_key: Option<String>,
+    pub llm_cli_binary: Option<String>,
 }
 
 impl Default for Settings {
@@ -76,6 +77,7 @@ impl Default for Settings {
             llm_base_url: "http://127.0.0.1:11434".into(),
             llm_model: "qwen2.5:7b".into(),
             llm_api_key: None,
+            llm_cli_binary: None,
         }
     }
 }
@@ -104,6 +106,18 @@ impl Settings {
             .as_ref()
             .map(|preset| preset.provider)
             .unwrap_or_else(|| fileconv_core::llm::Provider::from_name(&self.llm_provider));
+        if matches!(
+            provider,
+            fileconv_core::llm::Provider::CursorCli | fileconv_core::llm::Provider::CodexCli
+        ) {
+            return fileconv_core::llm::LlmConfig::new_cli(
+                provider,
+                self.llm_model.trim(),
+                self.llm_cli_binary.clone(),
+            )
+            .map(Some)
+            .map_err(|error| error.to_string());
+        }
         let api_key = self
             .llm_api_key
             .clone()
@@ -910,6 +924,8 @@ pub fn run() {
             get_settings,
             set_settings,
             intelligence::get_llm_provider_presets,
+            intelligence::get_cli_subscription_status,
+            intelligence::start_cli_subscription_login,
             intelligence::test_llm_connection,
             intelligence::generate_handoff_pack,
             intelligence::read_handoff_artifact,
@@ -1090,6 +1106,19 @@ mod tests {
         assert!(settings.llm_config().is_err());
         settings.llm_api_key = Some("secret".into());
         assert!(settings.llm_config().unwrap().is_some());
+    }
+
+    #[test]
+    fn subscription_cli_uses_official_login_without_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_enabled = true;
+        settings.llm_provider = "cursor-cli".into();
+        settings.llm_model = "auto".into();
+        settings.llm_base_url.clear();
+        let config = settings.llm_config().unwrap().unwrap();
+        assert_eq!(config.provider, fileconv_core::llm::Provider::CursorCli);
+        assert!(config.api_key.is_empty());
+        assert!(config.is_subscription_cli());
     }
 
     #[test]

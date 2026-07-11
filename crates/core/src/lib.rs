@@ -20,6 +20,8 @@ pub mod intelligence;
 mod intelligence_tests;
 #[cfg(feature = "llm")]
 pub mod llm;
+#[cfg(feature = "llm")]
+pub mod llm_cli;
 pub mod probe;
 pub mod tables;
 pub mod viet_legacy;

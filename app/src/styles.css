@@ -2421,6 +2421,26 @@ kbd {
   grid-template-columns: 1.2fr 1fr;
 }
 
+.llm-grid.subscription-grid {
+  grid-template-columns: 0.7fr 1.3fr;
+}
+
+.subscription-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.subscription-actions > small {
+  color: var(--warning);
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+
+.subscription-actions > small.local-result {
+  color: var(--accent);
+}
+
 .provider-notice {
   display: flex;
   align-items: center;

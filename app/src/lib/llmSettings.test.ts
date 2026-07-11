@@ -18,6 +18,7 @@ const settings: Settings = {
   llmBaseUrl: "http://127.0.0.1:11434",
   llmModel: "qwen2.5:7b",
   llmApiKey: null,
+  llmCliBinary: null,
 };
 
 const ollama: LlmProviderPreset = {
@@ -29,6 +30,9 @@ const ollama: LlmProviderPreset = {
   models: ["qwen2.5:7b"],
   local: true,
   requiresApiKey: false,
+  subscription: false,
+  supportsVision: true,
+  supportsEmbeddings: true,
   description: "Local",
 };
 
@@ -41,6 +45,21 @@ const openai: LlmProviderPreset = {
   defaultModel: "gpt-4o-mini",
   local: false,
   requiresApiKey: true,
+};
+
+const cursor: LlmProviderPreset = {
+  ...ollama,
+  id: "cursor-cli",
+  label: "Cursor subscription",
+  provider: "cursor_cli",
+  baseUrl: null,
+  defaultModel: "auto",
+  models: ["auto"],
+  local: false,
+  subscription: true,
+  supportsVision: false,
+  supportsEmbeddings: false,
+  description: "Official CLI",
 };
 
 describe("applyLlmPreset", () => {
@@ -57,6 +76,16 @@ describe("applyLlmPreset", () => {
     const result = applyLlmPreset(withKey, ollama);
     expect(result).not.toBe(withKey);
     expect(result.llmApiKey).toBe("secret");
+  });
+
+  it("clears HTTP credentials for subscription bridge", () => {
+    const result = applyLlmPreset(
+      { ...settings, llmApiKey: "secret" },
+      cursor,
+    );
+    expect(result.llmProvider).toBe("cursor-cli");
+    expect(result.llmBaseUrl).toBe("");
+    expect(result.llmApiKey).toBeNull();
   });
 });
 
@@ -83,6 +112,21 @@ describe("validateLlmSettings", () => {
       openai,
     );
     expect(errors).toContain("OpenAI yêu cầu API key.");
+  });
+
+  it("accepts subscription CLI without URL or API key", () => {
+    expect(
+      validateLlmSettings(
+        {
+          ...settings,
+          llmEnabled: true,
+          llmProvider: "cursor-cli",
+          llmBaseUrl: "",
+          llmModel: "auto",
+        },
+        cursor,
+      ),
+    ).toEqual([]);
   });
 
   it("rejects missing model and invalid URL", () => {

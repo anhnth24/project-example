@@ -24,9 +24,16 @@ export interface Settings {
   llmBaseUrl: string;
   llmModel: string;
   llmApiKey: string | null;
+  llmCliBinary: string | null;
 }
 
-export type LlmProtocol = "open_ai" | "anthropic" | "gemini" | "open_ai_compatible";
+export type LlmProtocol =
+  | "open_ai"
+  | "anthropic"
+  | "gemini"
+  | "open_ai_compatible"
+  | "cursor_cli"
+  | "codex_cli";
 
 export interface LlmProviderPreset {
   id: string;
@@ -37,7 +44,17 @@ export interface LlmProviderPreset {
   models: string[];
   local: boolean;
   requiresApiKey: boolean;
+  subscription: boolean;
+  supportsVision: boolean;
+  supportsEmbeddings: boolean;
   description: string;
+}
+
+export interface CliSubscriptionStatus {
+  bridge: string;
+  authenticated: boolean;
+  accountHint: string | null;
+  message: string;
 }
 
 export interface LlmConnectionResult {
@@ -109,6 +126,7 @@ export interface GroundedAnswer {
     | "offline_extractive"
     | "local_llm"
     | "cloud_llm"
+    | "subscription_cli"
     | "fallback_extractive";
   grounded: boolean;
   warnings: string[];

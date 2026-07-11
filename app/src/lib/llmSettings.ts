@@ -8,8 +8,9 @@ export function applyLlmPreset(
     ...settings,
     llmEnabled: true,
     llmProvider: preset.id,
-    llmBaseUrl: preset.baseUrl ?? settings.llmBaseUrl,
+    llmBaseUrl: preset.subscription ? "" : (preset.baseUrl ?? settings.llmBaseUrl),
     llmModel: preset.defaultModel,
+    llmApiKey: preset.subscription ? null : settings.llmApiKey,
   };
 }
 
@@ -21,6 +22,7 @@ export function validateLlmSettings(
   const errors: string[] = [];
   if (!settings.llmModel.trim()) errors.push("Model LLM không được để trống.");
   if (
+    !preset?.subscription &&
     !settings.llmBaseUrl.startsWith("http://") &&
     !settings.llmBaseUrl.startsWith("https://")
   ) {

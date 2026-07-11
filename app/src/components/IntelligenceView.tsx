@@ -85,6 +85,8 @@ function answerModeLabel(mode: GroundedAnswer["mode"]): string {
       return "LLM local · dữ liệu không rời máy";
     case "cloud_llm":
       return "LLM cloud · dữ liệu đã gửi provider";
+    case "subscription_cli":
+      return "Subscription CLI · official login";
     case "fallback_extractive":
       return "Provider không dùng được · fallback offline";
     default:

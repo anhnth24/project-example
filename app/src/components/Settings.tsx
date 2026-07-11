@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Cloud, FolderOpen, RotateCcw, Server, Wifi } from "lucide-react";
+import {
+  Cloud,
+  FolderOpen,
+  LogIn,
+  RotateCcw,
+  Server,
+  SquareTerminal,
+  Wifi,
+} from "lucide-react";
 import { api } from "../lib/ipc";
 import { applyLlmPreset, validateLlmSettings } from "../lib/llmSettings";
 import { useStore } from "../state/store";
 import type {
   LlmConnectionResult,
   LlmProviderPreset,
+  CliSubscriptionStatus,
   Settings,
 } from "../lib/types";
 import {
@@ -30,11 +39,13 @@ const DEFAULTS: Settings = {
   llmBaseUrl: "http://127.0.0.1:11434",
   llmModel: "qwen2.5:7b",
   llmApiKey: null,
+  llmCliBinary: null,
 };
 
 function providerOptionLabel(preset: LlmProviderPreset): string {
   const cleanLabel = preset.label.replace(/\s*\((?:Local|Self-host)\)$/i, "");
-  return `${preset.local ? "Local" : "Cloud"} · ${cleanLabel}`;
+  const kind = preset.subscription ? "Subscription" : preset.local ? "Local" : "Cloud";
+  return `${kind} · ${cleanLabel}`;
 }
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -46,6 +57,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [presets, setPresets] = useState<LlmProviderPreset[]>([]);
   const [testingLlm, setTestingLlm] = useState(false);
   const [llmResult, setLlmResult] = useState<LlmConnectionResult | null>(null);
+  const [cliStatus, setCliStatus] = useState<CliSubscriptionStatus | null>(null);
+  const [checkingCli, setCheckingCli] = useState(false);
 
   useEffect(() => {
     api
@@ -94,6 +107,37 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     }
     setForm((currentForm) => applyLlmPreset(currentForm, preset));
     setLlmResult(null);
+    setCliStatus(null);
+  }
+
+  async function checkCliSubscription() {
+    if (validation.length) return;
+    setCheckingCli(true);
+    try {
+      await saveSettings(form);
+      setCliStatus(await api.getCliSubscriptionStatus());
+    } catch {
+      setCliStatus(null);
+    } finally {
+      setCheckingCli(false);
+    }
+  }
+
+  async function startCliLogin() {
+    if (validation.length) return;
+    setCheckingCli(true);
+    try {
+      await saveSettings(form);
+      await api.startCliSubscriptionLogin();
+      setCliStatus({
+        bridge: selectedPreset?.label ?? "CLI",
+        authenticated: false,
+        accountHint: null,
+        message: "Đã mở luồng đăng nhập chính thức. Hoàn tất trên trình duyệt rồi kiểm tra lại.",
+      });
+    } finally {
+      setCheckingCli(false);
+    }
   }
 
   async function testLlmConnection() {
@@ -241,12 +285,26 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
 
             {selectedPreset && (
-              <Notice tone={selectedPreset.local ? "info" : "warning"}>
+              <Notice
+                tone={
+                  selectedPreset.local || selectedPreset.subscription
+                    ? "info"
+                    : "warning"
+                }
+              >
                 <span className="provider-notice">
-                  {selectedPreset.local ? <Server size={14} /> : <Cloud size={14} />}
+                  {selectedPreset.subscription ? (
+                    <SquareTerminal size={14} />
+                  ) : selectedPreset.local ? (
+                    <Server size={14} />
+                  ) : (
+                    <Cloud size={14} />
+                  )}
                   <span>
                     <b>
-                      {selectedPreset.local
+                      {selectedPreset.subscription
+                        ? "Subscription qua official CLI"
+                        : selectedPreset.local
                         ? "100% local — khuyến nghị"
                         : "Dữ liệu top citation sẽ rời máy"}
                     </b>
@@ -256,15 +314,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               </Notice>
             )}
 
-            <div className="settings-grid llm-grid">
-              <label className="field">
-                <span>Base URL</span>
-                <input
-                  value={form.llmBaseUrl}
-                  onChange={(event) => set("llmBaseUrl", event.target.value)}
-                  placeholder="http://127.0.0.1:11434"
-                />
-              </label>
+            <div
+              className={`settings-grid llm-grid ${
+                selectedPreset?.subscription ? "subscription-grid" : ""
+              }`}
+            >
+              {!selectedPreset?.subscription && (
+                <label className="field">
+                  <span>Base URL</span>
+                  <input
+                    value={form.llmBaseUrl}
+                    onChange={(event) => set("llmBaseUrl", event.target.value)}
+                    placeholder="http://127.0.0.1:11434"
+                  />
+                </label>
+              )}
               <div className="field">
                 <span>Model</span>
                 <Combobox
@@ -275,26 +339,83 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   placeholder="qwen2.5:7b"
                 />
               </div>
+              {selectedPreset?.subscription && (
+                <label className="field">
+                  <span>CLI binary override (tùy chọn)</span>
+                  <input
+                    value={form.llmCliBinary ?? ""}
+                    onChange={(event) =>
+                      set("llmCliBinary", event.target.value || null)
+                    }
+                    placeholder={
+                      form.llmProvider === "cursor-cli"
+                        ? "Tự tìm agent trong PATH"
+                        : "Tự tìm codex trong PATH"
+                    }
+                  />
+                </label>
+              )}
             </div>
 
-            <label className="field">
-              <span>API key {selectedPreset?.requiresApiKey ? "(bắt buộc)" : "(tùy chọn)"}</span>
-              <input
-                type="password"
-                autoComplete="off"
-                value={form.llmApiKey ?? ""}
-                onChange={(event) => set("llmApiKey", event.target.value || null)}
-                placeholder={
-                  selectedPreset?.local
-                    ? "Local provider thường không cần key"
-                    : "Chỉ giữ trong memory; dùng FILECONV_LLM_API_KEY để persist"
-                }
-              />
-              <small>
-                Markhand không ghi API key vào settings.json. Sau khi restart, dùng biến môi
-                trường hoặc nhập lại.
-              </small>
-            </label>
+            {!selectedPreset?.subscription && (
+              <label className="field">
+                <span>
+                  API key{" "}
+                  {selectedPreset?.requiresApiKey ? "(bắt buộc)" : "(tùy chọn)"}
+                </span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={form.llmApiKey ?? ""}
+                  onChange={(event) =>
+                    set("llmApiKey", event.target.value || null)
+                  }
+                  placeholder={
+                    selectedPreset?.local
+                      ? "Local provider thường không cần key"
+                      : "Chỉ giữ trong memory; dùng FILECONV_LLM_API_KEY để persist"
+                  }
+                />
+                <small>
+                  Markhand không ghi API key vào settings.json. Sau khi restart,
+                  dùng biến môi trường hoặc nhập lại.
+                </small>
+              </label>
+            )}
+
+            {selectedPreset?.subscription && (
+              <div className="subscription-actions">
+                <div className="inline-actions">
+                  <Button
+                    variant="secondary"
+                    icon={<LogIn size={14} />}
+                    loading={checkingCli}
+                    disabled={validation.length > 0}
+                    onClick={startCliLogin}
+                  >
+                    Đăng nhập bằng trình duyệt
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    loading={checkingCli}
+                    disabled={validation.length > 0}
+                    onClick={checkCliSubscription}
+                  >
+                    Kiểm tra đăng nhập
+                  </Button>
+                </div>
+                {cliStatus && (
+                  <small
+                    className={
+                      cliStatus.authenticated ? "local-result" : "cli-pending"
+                    }
+                  >
+                    {cliStatus.authenticated ? "Đã kết nối" : "Chờ đăng nhập"} ·{" "}
+                    {cliStatus.message}
+                  </small>
+                )}
+              </div>
+            )}
 
             {form.llmProvider === "ollama" && (
               <div className="local-setup">

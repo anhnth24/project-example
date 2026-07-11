@@ -288,6 +288,40 @@ pub fn get_llm_provider_presets() -> Vec<fileconv_core::llm::LlmProviderPreset> 
 }
 
 #[tauri::command]
+pub async fn get_cli_subscription_status(
+    state: State<'_, AppState>,
+) -> Result<fileconv_core::llm_cli::CliSubscriptionStatus, String> {
+    let config = state
+        .settings
+        .lock()
+        .map_err(|_| "lock lỗi")?
+        .llm_config()?
+        .ok_or("chưa chọn subscription CLI")?;
+    if !config.is_subscription_cli() {
+        return Err("provider hiện tại không phải Cursor/Codex subscription".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        fileconv_core::llm_cli::subscription_status(&config).map_err(es)
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
+pub fn start_cli_subscription_login(state: State<AppState>) -> Result<(), String> {
+    let config = state
+        .settings
+        .lock()
+        .map_err(|_| "lock lỗi")?
+        .llm_config()?
+        .ok_or("chưa chọn subscription CLI")?;
+    if !config.is_subscription_cli() {
+        return Err("provider hiện tại không phải Cursor/Codex subscription".into());
+    }
+    fileconv_core::llm_cli::start_login(&config).map_err(es)
+}
+
+#[tauri::command]
 pub async fn test_llm_connection(
     state: State<'_, AppState>,
 ) -> Result<LlmConnectionResult, String> {

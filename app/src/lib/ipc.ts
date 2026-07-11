@@ -12,6 +12,7 @@ import type {
   IndexBuildResult,
   KnowledgeIndexStats,
   LlmConnectionResult,
+  CliSubscriptionStatus,
   LlmProviderPreset,
   MarkdownTable,
   MergeResult,
@@ -101,6 +102,10 @@ export const api = {
     invoke<void>("remove_project", { req: { projectId, deleteContents } }),
   getLlmProviderPresets: () =>
     invoke<LlmProviderPreset[]>("get_llm_provider_presets"),
+  getCliSubscriptionStatus: () =>
+    invoke<CliSubscriptionStatus>("get_cli_subscription_status"),
+  startCliSubscriptionLogin: () =>
+    invoke<void>("start_cli_subscription_login"),
   testLlmConnection: () => invoke<LlmConnectionResult>("test_llm_connection"),
 
   generateHandoffPack: (req: {

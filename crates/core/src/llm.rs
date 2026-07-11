@@ -1,5 +1,5 @@
-//! Lớp LLM TUỲ CHỌN (feature `llm`). Chỉ hoạt động khi có API key trong env —
-//! không key thì `LlmConfig::from_env()` trả None và caller báo lỗi rõ.
+//! Lớp LLM TUỲ CHỌN (feature `llm`): HTTP API, local endpoint hoặc official
+//! Cursor/Codex subscription CLI. Không có provider thì caller dùng fallback local.
 //!
 //! Cấu hình:
 //!   FILECONV_LLM_PROVIDER = openai | anthropic | gemini | openai-compatible
@@ -18,6 +18,8 @@ pub enum Provider {
     Anthropic,
     Gemini,
     OpenAiCompatible,
+    CursorCli,
+    CodexCli,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -27,6 +29,8 @@ pub struct LlmConfig {
     pub api_key: String,
     pub model: String,
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub cli_binary: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -40,6 +44,9 @@ pub struct LlmProviderPreset {
     pub models: Vec<String>,
     pub local: bool,
     pub requires_api_key: bool,
+    pub subscription: bool,
+    pub supports_vision: bool,
+    pub supports_embeddings: bool,
     pub description: String,
 }
 
@@ -48,6 +55,8 @@ impl Provider {
         match value.trim().to_lowercase().as_str() {
             "anthropic" | "claude" => Self::Anthropic,
             "gemini" | "google" => Self::Gemini,
+            "cursor-cli" | "cursor-agent" | "cursor-subscription" => Self::CursorCli,
+            "codex-cli" | "codex" | "chatgpt-subscription" => Self::CodexCli,
             "openai-compatible" | "compatible" | "ollama" | "lm-studio" | "lmstudio"
             | "llama.cpp" | "llamacpp" | "vllm" | "openrouter" | "groq" | "mistral"
             | "together" => Self::OpenAiCompatible,
@@ -63,6 +72,11 @@ impl LlmConfig {
         model: impl Into<String>,
         base_url: Option<String>,
     ) -> Result<Self, ConvertError> {
+        if matches!(provider, Provider::CursorCli | Provider::CodexCli) {
+            return Err(ConvertError::Failed(
+                "subscription CLI phải dùng LlmConfig::new_cli".into(),
+            ));
+        }
         let model = model.into();
         if model.trim().is_empty() {
             return Err(ConvertError::Failed("model LLM không được để trống".into()));
@@ -79,7 +93,35 @@ impl LlmConfig {
             api_key: api_key.into(),
             model,
             base_url,
+            cli_binary: None,
         })
+    }
+
+    pub fn new_cli(
+        provider: Provider,
+        model: impl Into<String>,
+        cli_binary: Option<String>,
+    ) -> Result<Self, ConvertError> {
+        if !matches!(provider, Provider::CursorCli | Provider::CodexCli) {
+            return Err(ConvertError::Failed(
+                "provider không phải subscription CLI".into(),
+            ));
+        }
+        let model = model.into();
+        if model.trim().is_empty() {
+            return Err(ConvertError::Failed("model CLI không được để trống".into()));
+        }
+        Ok(Self {
+            provider,
+            api_key: String::new(),
+            model,
+            base_url: None,
+            cli_binary: cli_binary.filter(|path| !path.trim().is_empty()),
+        })
+    }
+
+    pub fn is_subscription_cli(&self) -> bool {
+        matches!(self.provider, Provider::CursorCli | Provider::CodexCli)
     }
 
     /// Đọc cấu hình từ env. Localhost/OpenAI-compatible local không bắt buộc key.
@@ -87,6 +129,11 @@ impl LlmConfig {
         let provider_name =
             std::env::var("FILECONV_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
         let provider = Provider::from_name(&provider_name);
+        if matches!(provider, Provider::CursorCli | Provider::CodexCli) {
+            let model = std::env::var("FILECONV_LLM_MODEL").unwrap_or_else(|_| "auto".into());
+            let binary = std::env::var("FILECONV_LLM_CLI_BINARY").ok();
+            return Self::new_cli(provider, model, binary).ok();
+        }
         let api_key = std::env::var("FILECONV_LLM_API_KEY").unwrap_or_default();
         let base_url = std::env::var("FILECONV_LLM_BASE_URL")
             .ok()
@@ -119,6 +166,7 @@ fn default_model_for_name(name: &str, provider: Provider) -> String {
             Provider::OpenAi | Provider::OpenAiCompatible => "gpt-4o-mini",
             Provider::Anthropic => "claude-3-5-haiku-latest",
             Provider::Gemini => "gemini-2.0-flash",
+            Provider::CursorCli | Provider::CodexCli => "auto",
         },
     }
     .to_string()
@@ -142,6 +190,12 @@ pub fn provider_presets() -> Vec<LlmProviderPreset> {
         models: models.iter().map(|model| (*model).to_string()).collect(),
         local,
         requires_api_key,
+        subscription: matches!(provider, Provider::CursorCli | Provider::CodexCli),
+        supports_vision: !matches!(provider, Provider::CursorCli | Provider::CodexCli),
+        supports_embeddings: !matches!(
+            provider,
+            Provider::Anthropic | Provider::CursorCli | Provider::CodexCli
+        ),
         description: description.into(),
     };
     vec![
@@ -188,6 +242,28 @@ pub fn provider_presets() -> Vec<LlmProviderPreset> {
             true,
             false,
             "Server OpenAI-compatible cho GPU nội bộ và nhiều người dùng.",
+        ),
+        preset(
+            "cursor-cli",
+            "Cursor subscription",
+            Provider::CursorCli,
+            None,
+            "auto",
+            &["auto"],
+            false,
+            false,
+            "Dùng official Cursor Agent CLI/ACP và quota subscription; Markhand không đọc token.",
+        ),
+        preset(
+            "codex-cli",
+            "ChatGPT / Codex subscription",
+            Provider::CodexCli,
+            None,
+            "auto",
+            &["auto"],
+            false,
+            false,
+            "Dùng official Codex CLI login; chạy ephemeral trong sandbox read-only.",
         ),
         preset(
             "openai",
@@ -298,6 +374,9 @@ fn openai_chat_url(base: &str) -> String {
 
 /// Gọi 1 lượt chat (system + user) → trả text.
 pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, ConvertError> {
+    if cfg.is_subscription_cli() {
+        return crate::llm_cli::chat(cfg, system, user);
+    }
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(120))
@@ -372,6 +451,7 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
                 .map(str::to_string)
                 .ok_or_else(|| fail(format!("phản hồi Gemini không hợp lệ: {v}")))
         }
+        Provider::CursorCli | Provider::CodexCli => unreachable!("handled above"),
     }
 }
 
@@ -418,6 +498,11 @@ pub fn extract_json(
 /// cho các ca Tesseract yếu — cần API key, nội dung ảnh được gửi tới provider.
 pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<String, ConvertError> {
     use base64::Engine as _;
+    if cfg.is_subscription_cli() {
+        return Err(fail(
+            "subscription CLI hiện chỉ hỗ trợ text; vision OCR cần API/local vision provider",
+        ));
+    }
     let bytes = std::fs::read(image_path).map_err(fail)?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let mime = match image_path
@@ -516,6 +601,7 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
                 .map(str::to_string)
                 .ok_or_else(|| fail(format!("phản hồi Gemini vision không hợp lệ: {v}")))
         }
+        Provider::CursorCli | Provider::CodexCli => unreachable!("handled above"),
     }
 }
 

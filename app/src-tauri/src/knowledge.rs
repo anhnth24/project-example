@@ -755,7 +755,9 @@ fn hybrid_ask_inner(
             Ok(GroundedAnswer {
                 answer: llm_answer,
                 citations: hits,
-                mode: if local {
+                mode: if config.is_subscription_cli() {
+                    "subscription_cli".into()
+                } else if local {
                     "local_llm".into()
                 } else {
                     "cloud_llm".into()
