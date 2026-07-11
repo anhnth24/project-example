@@ -12,6 +12,7 @@ import type {
   MarkdownTable,
   MergeResult,
   PiiReport,
+  Project,
   QualityReport,
   SearchHit,
   Settings,
@@ -19,6 +20,7 @@ import type {
   VersionSnapshot,
   WatchMatch,
   WatchRule,
+  ImportFolderResult,
 } from "./types";
 
 export const api = {
@@ -59,6 +61,21 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  listProjects: () => invoke<Project[]>("list_projects"),
+  createProject: (name: string) =>
+    invoke<Project>("create_project", { req: { name } }),
+  adoptProject: (folderRel: string, name?: string | null) =>
+    invoke<Project>("adopt_project", { req: { folderRel, name } }),
+  importLocalFolder: (
+    projectId: string,
+    sourceAbs: string,
+    targetFolderRel?: string | null,
+  ) =>
+    invoke<ImportFolderResult>("import_local_folder", {
+      req: { projectId, sourceAbs, targetFolderRel },
+    }),
+  removeProject: (projectId: string, deleteContents = false) =>
+    invoke<void>("remove_project", { req: { projectId, deleteContents } }),
   getLlmProviderPresets: () =>
     invoke<LlmProviderPreset[]>("get_llm_provider_presets"),
   testLlmConnection: () => invoke<LlmConnectionResult>("test_llm_connection"),

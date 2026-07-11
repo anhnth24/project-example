@@ -8,6 +8,12 @@ xem **song song**, **đối chiếu theo khối** hoặc sửa Markdown. **Toàn
 
 - Một **thư mục gốc DATA** duy nhất. Mặc định `app_data_dir()/DATA`; có thể **map** sang
   thư mục bất kỳ của bạn (nút đổi thư mục trên sidebar; lưu ở `app_config_dir/config.json`).
+- **Project** = một folder cấp trên trong DATA, có cây folder con độc lập. Sidebar chỉ
+  hiện tài liệu thuộc project đang chọn.
+- Có thể tạo project rỗng, tạo folder con rồi upload file; hoặc **Import folder local**
+  để copy nguyên cây thư mục vào project và tự queue convert các file được hỗ trợ.
+- Markhand không tạo symlink tới folder ngoài DATA; cách copy này giữ path-jail,
+  đóng gói và xóa project an toàn.
 - **Folder** = thư mục con thật trong DATA. **Document** = cặp `(file gốc, file .md)`.
 - Quy ước link 1-1: `report.pdf` → `report.pdf.md` đặt cạnh nhau. Filesystem là nguồn sự thật.
 - Định dạng nhận vào = đuôi mà `fileconv-core` hỗ trợ (pdf, docx, pptx, xlsx/xls/ods, csv,

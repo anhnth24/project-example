@@ -35,7 +35,7 @@ import {
   toggleScopeItem,
   updateTableCell,
 } from "../lib/intelligenceUtils";
-import { flattenFiles, folderLabel } from "../lib/tree";
+import { filesInProject, folderLabel } from "../lib/tree";
 import type {
   AskResult,
   DiffHunk,
@@ -80,6 +80,8 @@ function converted(node: FsNode): boolean {
 
 export function IntelligenceView() {
   const tree = useStore((state) => state.tree);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
   const openNode = useStore((state) => state.openNode);
   const enqueueConversions = useStore((state) => state.enqueueConversions);
   const setError = useStore((state) => state.setError);
@@ -87,7 +89,12 @@ export function IntelligenceView() {
   const selected = useStore((state) => state.intelligenceScope);
   const setSelected = useStore((state) => state.setIntelligenceScope);
 
-  const files = useMemo(() => flattenFiles(tree).filter(converted), [tree]);
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? null;
+  const files = useMemo(
+    () => filesInProject(tree, activeProject).filter(converted),
+    [tree, activeProject],
+  );
   const [mode, setMode] = useState<IntelligenceMode>("handoff");
   const [productName, setProductName] = useState("Dự án mới");
   const [handoffMode, setHandoffMode] = useState<HandoffMode>("deterministic");

@@ -1,4 +1,4 @@
-import type { FsNode } from "./types";
+import type { FsNode, Project } from "./types";
 
 export function normalizeSearch(value: string): string {
   return value
@@ -29,6 +29,18 @@ export function flattenFiles(node: FsNode | null): FsNode[] {
   };
   node.children.forEach(visit);
   return files;
+}
+
+export function filesInProject(
+  tree: FsNode | null,
+  project: Project | null,
+): FsNode[] {
+  if (!tree) return [];
+  const root =
+    project?.rootRel && project.rootRel !== ""
+      ? findByRel(tree, project.rootRel)
+      : tree;
+  return flattenFiles(root);
 }
 
 export function parentRel(relPath: string): string {

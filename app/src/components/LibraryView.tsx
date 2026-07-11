@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { CheckSquare, FileCheck2, RefreshCw, Upload } from "lucide-react";
 import { fileIcon } from "../lib/icons";
-import { flattenFiles, folderLabel } from "../lib/tree";
+import { filesInProject, folderLabel } from "../lib/tree";
 import { useStore } from "../state/store";
 import { Button } from "./ui";
 
@@ -9,13 +9,20 @@ type Filter = "all" | "raw" | "done";
 
 export function LibraryView({ onUpload }: { onUpload: () => void }) {
   const tree = useStore((state) => state.tree);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
   const openNode = useStore((state) => state.openNode);
   const enqueueConversions = useStore((state) => state.enqueueConversions);
   const jobs = useStore((state) => state.jobs);
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<string[]>([]);
 
-  const files = useMemo(() => flattenFiles(tree), [tree]);
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? null;
+  const files = useMemo(
+    () => filesInProject(tree, activeProject),
+    [tree, activeProject],
+  );
   const visible = files.filter((node) => {
     const raw = node.supported && !node.mdRelPath;
     if (filter === "raw") return raw;

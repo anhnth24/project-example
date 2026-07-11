@@ -49,6 +49,23 @@ export interface LlmConnectionResult {
   response: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  rootRel: string;
+  createdAt: number;
+  importedFrom: string | null;
+  implicit: boolean;
+}
+
+export interface ImportFolderResult {
+  project: Project;
+  imported: number;
+  skipped: number;
+  bytes: number;
+  convertRels: string[];
+}
+
 export type AppView = "home" | "library" | "document" | "intelligence";
 export type DocumentMode = "compare" | "split" | "markdown" | "source";
 export type MarkdownTab = "edit" | "preview";

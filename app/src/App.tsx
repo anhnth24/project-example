@@ -30,6 +30,8 @@ export default function App() {
   const sessions = useStore((state) => state.sessions);
   const jobs = useStore((state) => state.jobs);
   const supportedExts = useStore((state) => state.supportedExts);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
   const importSources = useStore((state) => state.importSources);
   const saveSession = useStore((state) => state.saveSession);
   const closeTab = useStore((state) => state.closeTab);
@@ -113,6 +115,11 @@ export default function App() {
   }, [error, setError]);
 
   async function uploadFiles() {
+    if (!projects.some((project) => project.id === activeProjectId)) {
+      setDrawerOpen(true);
+      setError("Hãy tạo hoặc chọn dự án trước khi tải file.");
+      return;
+    }
     const picked = await openDialog({
       multiple: true,
       title: "Chọn file để thêm vào Markhand",

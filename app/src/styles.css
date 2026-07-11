@@ -300,6 +300,57 @@ kbd {
   font-size: 10px;
 }
 
+.project-switcher {
+  display: grid;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 9px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: var(--color-glass);
+  box-shadow: var(--ring-glass);
+  grid-template-columns: 16px minmax(0, 1fr) 30px 30px;
+}
+
+.project-switcher > label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.project-switcher > label > span {
+  color: var(--color-text-faint);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-switcher select {
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0;
+  overflow: hidden;
+  border: 0;
+  outline: 0;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.project-switcher option {
+  color: #111;
+}
+
+.project-switcher .ui-icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--color-glass);
+}
+
 .drawer-search {
   display: flex;
   align-items: center;

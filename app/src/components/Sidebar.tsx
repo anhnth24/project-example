@@ -4,14 +4,17 @@ import {
   FilePlus2,
   Folder,
   FolderCog,
+  FolderInput,
   FolderPlus,
+  PanelsTopLeft,
+  Plus,
   Search,
   Settings,
   Upload,
 } from "lucide-react";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
-import { isWithinRel, parentRel } from "../lib/tree";
+import { findByRel, isWithinRel, parentRel } from "../lib/tree";
 import type { FsNode } from "../lib/types";
 import { Tree } from "./Tree";
 import { Button, IconButton, Modal } from "./ui";
@@ -19,6 +22,7 @@ import { Button, IconButton, Modal } from "./ui";
 type DialogState =
   | { kind: "create-folder" }
   | { kind: "create-markdown" }
+  | { kind: "create-project" }
   | { kind: "rename"; node: FsNode }
   | { kind: "delete"; node: FsNode }
   | null;
@@ -27,6 +31,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const {
     dataRoot,
     tree,
+    projects,
+    activeProjectId,
     activeFolder,
     supportedExts,
     sessions,
@@ -34,6 +40,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     activeImports,
     workspaceChanging,
     refreshTree,
+    refreshProjects,
+    setActiveProject,
     changeDataRoot,
     importSources,
     openNode,
@@ -59,9 +67,53 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     if (picked && !Array.isArray(picked)) await changeDataRoot(picked);
   }
 
-  function openCreate(kind: "create-folder" | "create-markdown") {
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? null;
+  const projectNode =
+    activeProject?.rootRel && tree
+      ? findByRel(tree, activeProject.rootRel)
+      : tree;
+
+  function openCreate(
+    kind: "create-folder" | "create-markdown" | "create-project",
+  ) {
     setName("");
     setDialog({ kind });
+  }
+
+  async function importLocalFolder() {
+    if (!activeProject) {
+      setError("Hãy tạo hoặc chọn dự án trước khi import folder.");
+      return;
+    }
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      title: `Import folder local vào ${activeProject.name}`,
+    });
+    if (!picked || Array.isArray(picked)) return;
+    setBusy(true);
+    try {
+      const result = await api.importLocalFolder(
+        activeProject.id,
+        picked,
+        activeFolder,
+      );
+      await refreshTree();
+      await refreshProjects();
+      if (result.convertRels.length) {
+        useStore.getState().enqueueConversions(result.convertRels);
+      }
+      if (result.skipped) {
+        setError(
+          `Đã import ${result.imported} file, bỏ qua ${result.skipped} file trùng.`,
+        );
+      }
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function openRename(node: FsNode) {
@@ -111,6 +163,13 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
         const node = await api.createMarkdown(activeFolder, value);
         await refreshTree();
         openNode(node);
+        setDialog(null);
+        return;
+      } else if (dialog.kind === "create-project") {
+        const project = await api.createProject(value);
+        await refreshProjects();
+        await refreshTree();
+        useStore.getState().setActiveProject(project.id);
         setDialog(null);
         return;
       } else {
@@ -169,7 +228,37 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
           <span className="eyebrow">Không gian làm việc</span>
           <strong>Tài liệu</strong>
         </div>
-        <span className="drawer-count">{tree?.children.length ?? 0}</span>
+        <span className="drawer-count">{projectNode?.children.length ?? 0}</span>
+      </div>
+
+      <div className="project-switcher">
+        <PanelsTopLeft size={14} />
+        <label>
+          <span>Dự án</span>
+          <select
+            value={activeProjectId ?? ""}
+            onChange={(event) => setActiveProject(event.target.value)}
+            aria-label="Chọn dự án"
+          >
+            {!projects.length && <option value="">Chưa có dự án</option>}
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+                {project.implicit ? " · legacy" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <IconButton label="Tạo dự án" onClick={() => openCreate("create-project")}>
+          <Plus size={14} />
+        </IconButton>
+        <IconButton
+          label="Import folder local vào dự án"
+          disabled={!activeProject || busy}
+          onClick={importLocalFolder}
+        >
+          <FolderInput size={14} />
+        </IconButton>
       </div>
 
       <label className="drawer-search">
@@ -184,13 +273,27 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
       </label>
 
       <div className="drawer-actions">
-        <Button variant="primary" size="sm" icon={<Upload size={14} />} onClick={uploadFiles}>
+        <Button
+          variant="primary"
+          size="sm"
+          icon={<Upload size={14} />}
+          disabled={!activeProject}
+          onClick={uploadFiles}
+        >
           Tải file
         </Button>
-        <IconButton label="Tạo thư mục" onClick={() => openCreate("create-folder")}>
+        <IconButton
+          label="Tạo thư mục"
+          disabled={!activeProject}
+          onClick={() => openCreate("create-folder")}
+        >
           <FolderPlus size={14} />
         </IconButton>
-        <IconButton label="Tạo Markdown" onClick={() => openCreate("create-markdown")}>
+        <IconButton
+          label="Tạo Markdown"
+          disabled={!activeProject}
+          onClick={() => openCreate("create-markdown")}
+        >
           <FilePlus2 size={14} />
         </IconButton>
       </div>
@@ -201,8 +304,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       <div className="tree-scroll">
-        {tree && tree.children.length ? (
-          tree.children.map((child) => (
+        {projectNode && projectNode.children.length ? (
+          projectNode.children.map((child) => (
             <Tree
               key={child.relPath}
               node={child}
@@ -213,7 +316,11 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
             />
           ))
         ) : (
-          <div className="drawer-empty">Trống — tải file hoặc tạo thư mục để bắt đầu.</div>
+          <div className="drawer-empty">
+            {activeProject
+              ? "Dự án trống — import folder, tải file hoặc tạo thư mục."
+              : "Tạo dự án đầu tiên để bắt đầu."}
+          </div>
         )}
       </div>
 
@@ -239,7 +346,9 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
               ? "Đổi tên"
               : dialog.kind === "create-folder"
                 ? "Tạo thư mục"
-                : "Tạo file Markdown"
+                : dialog.kind === "create-markdown"
+                  ? "Tạo file Markdown"
+                  : "Tạo dự án"
           }
           onClose={() => setDialog(null)}
           width={420}
@@ -261,7 +370,13 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
               value={name}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && void submitDialog()}
-              placeholder={dialog.kind === "create-markdown" ? "ghi-chu-ban-giao.md" : "Tên mới"}
+              placeholder={
+                dialog.kind === "create-markdown"
+                  ? "ghi-chu-ban-giao.md"
+                  : dialog.kind === "create-project"
+                    ? "VD: Core Banking 2026"
+                    : "Tên mới"
+              }
             />
           </label>
         </Modal>
