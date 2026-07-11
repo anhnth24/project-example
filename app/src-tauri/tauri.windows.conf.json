@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "wix": {
+        "upgradeCode": "133a478c-cf3f-59be-8970-b3d5e4993cec"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Dự án
 
-Backend Rust chuyển đổi file (pdf/docx/pptx/xlsx/csv/html + ảnh OCR + audio) → Markdown,
+Backend Rust chuyển đổi file (pdf/docx/pptx/xlsx/csv/html/txt + ảnh OCR + audio) → Markdown,
 **code do dự án làm chủ hoàn toàn**. `vendor/markitdown-rs/` chỉ là **tài liệu tham khảo**
 (MIT) — KHÔNG phải dependency, đã `exclude` khỏi workspace; đừng dùng lại hay phụ thuộc nó.
-Mục tiêu cuối là đóng gói thành desktop app (Tauri) cho Win/Mac/Ubuntu — chưa làm.
+Desktop Tauri Markhand đã có bundle config; `.deb` Linux build được, Win/Mac còn
+cần runner + signing/notarization.
 
 Ưu tiên xuyên suốt: **độ chính xác nội dung tiếng Việt** > giữ format 100%.
 
@@ -52,20 +53,24 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
     Fallback: PDFium đếm ký tự → `pdf-extract`. PDFium cache 1 instance/thread (`thread_local`,
     chỉ init 1 lần/tiến trình). `pdf_ocr_images` (mặc định tắt) OCR thêm ảnh nhúng cho trang trộn.
     Đánh đổi: pdf-inspector ~35ms/trang (vs PDFium ~6ms) nhưng cho cấu trúc + đa cột.
-  - `conv/xlsx.rs` — `calamine` (đọc MỌI sheet, hỗ trợ cả `.xls`).
+  - `conv/xlsx.rs` — `calamine` (mọi sheet, xls/xlsb/ods); merge/multiline → HTML table.
   - `conv/docx.rs` — `docx-rust`: duyệt từng run, xử lý `<w:br>/<w:tab>` (tránh dính chữ),
     phát hiện heading qua style.
-  - `conv/pptx.rs` — `zip`+`quick-xml`, đọc slide đúng thứ tự số.
+  - `conv/pptx.rs` — text Markdown; `pptx_preview.rs` parse vị trí text/ảnh/shape cho desktop SVG.
   - `conv/html.rs` — `htmd` (đã `skip_tags` script/style/noscript; thay html2md vì nó phình output).
-  - `conv/csv_conv.rs` — bảng Markdown; `rows_to_md_table()` dùng chung cho xlsx/docx.
-  - `image_ocr.rs` — Tesseract CLI. `ocr_dynimage()` là đường chung: **tiền xử lý ảnh**
-    (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize) trước khi OCR (tăng accuracy rõ rệt).
+  - `conv/csv_conv.rs` — Markdown table hoặc sanitized HTML rowspan/colspan.
+  - `image_ocr.rs` — Tesseract mặc định, Paddle opt-in; **tiền xử lý ảnh**
+    (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize); output nghi lỗi/dính
+    IN HOA retry PSM 6; scan nhiều cột tách bằng vertical projection + score fallback.
   - `audio.rs` — `AudioEngine::load()` giữ `WhisperContext` (cache 1 lần); decode mp3/wav/ogg…
-    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"). Ưu tiên model
-    PhoWhisper cho tiếng Việt.
+    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"), lọc
+    `no_speech_probability`. Tự tìm PhoWhisper đã tải về trước model chuẩn.
   - `chunk.rs` — chia Markdown thành chunk RAG theo heading (giữ đường dẫn tiêu đề cha).
-  - `viet_legacy.rs` — decode bảng mã VN cũ **TCVN3** (detect + convert; VNI/VPS backlog).
-  - `llm.rs` (feature `llm`) — chat/summarize/extract_json/**vision_ocr** qua env FILECONV_LLM_*.
+  - `viet_legacy.rs` — decode **TCVN3, VNI-Windows, VPS**; maps sinh từ VietUnicode.
+  - `llm.rs`/`llm_cli.rs` (feature `llm`) — HTTP chat/vision, neural embedding và
+    Cursor/Codex official subscription CLI; Claude subscription không route qua app thứ ba.
+  - Desktop RAG: SQLite FTS5 + local/provider vector + persistent HNSW cache; exact fallback.
+  - Desktop watch: `notify` recursive/debounce, cấm watch trong DATA để tránh loop.
   - Output cuối `convert_path` luôn **chuẩn hoá NFC** (tài liệu vi NFD từ macOS/PDF cũ).
 - **`crates/cli`** (`fileconv`) — bench harness: timing, đếm page (pdfinfo/python zip),
   CER/WER (`metrics.rs`, Levenshtein; `normalize()` bỏ ký hiệu markdown để đo NỘI DUNG).

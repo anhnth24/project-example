@@ -26,7 +26,9 @@ pub fn probe(path: &Path) -> FileInfo {
         FormatKind::Pdf => {
             if let Ok(data) = std::fs::read(path) {
                 pages = catch_unwind(AssertUnwindSafe(|| {
-                    pdf_inspector::detect_pdf_mem(&data).ok().map(|r| r.page_count)
+                    pdf_inspector::detect_pdf_mem(&data)
+                        .ok()
+                        .map(|r| r.page_count)
                 }))
                 .ok()
                 .flatten();

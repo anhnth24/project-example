@@ -11,6 +11,7 @@ import {
   LoaderCircle,
   RefreshCw,
   Save,
+  Sparkles,
 } from "lucide-react";
 import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
@@ -42,6 +43,8 @@ export function DocView({ node }: { node: FsNode }) {
   const enqueueConversions = useStore((state) => state.enqueueConversions);
   const jobs = useStore((state) => state.jobs);
   const setError = useStore((state) => state.setError);
+  const setView = useStore((state) => state.setView);
+  const setIntelligenceScope = useStore((state) => state.setIntelligenceScope);
 
   const isStandaloneMd = node.standaloneMd;
   const canSource = !isStandaloneMd;
@@ -170,6 +173,19 @@ export function DocView({ node }: { node: FsNode }) {
               onClick={convert}
             >
               {mdRel ? "Convert lại" : "Convert"}
+            </Button>
+          )}
+          {canMd && (
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<Sparkles size={14} />}
+              onClick={() => {
+                setIntelligenceScope([node.relPath]);
+                setView("intelligence");
+              }}
+            >
+              Bàn giao
             </Button>
           )}
           {canMd && (

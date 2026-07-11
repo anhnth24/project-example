@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { FsNode } from "./types";
-import { findByRel, flattenFiles, nodeMatches, parentRel } from "./tree";
+import {
+  filesInProject,
+  findByRel,
+  flattenFiles,
+  nodeMatches,
+  parentRel,
+} from "./tree";
 
 const tree: FsNode = {
   name: "DATA",
@@ -51,5 +57,55 @@ describe("tree helpers", () => {
   it("derives a relative parent", () => {
     expect(parentRel("nghiep-vu/bao-cao.pdf")).toBe("nghiep-vu");
     expect(parentRel("bao-cao.pdf")).toBe("");
+  });
+
+  it("scopes files to a selected project root", () => {
+    expect(
+      filesInProject(tree, {
+        id: "project-1",
+        name: "Nghiệp vụ",
+        rootRel: "nghiep-vu",
+        createdAt: 0,
+        importedFrom: null,
+        implicit: false,
+      }).map((node) => node.relPath),
+    ).toEqual(["nghiep-vu/bao-cao.pdf"]);
+  });
+
+  it("legacy root project sees all files", () => {
+    expect(
+      filesInProject(tree, {
+        id: "legacy-root",
+        name: "DATA",
+        rootRel: "",
+        createdAt: 0,
+        importedFrom: null,
+        implicit: true,
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("legacy root excludes managed project subtrees", () => {
+    const managed = {
+      id: "project-1",
+      name: "Nghiệp vụ",
+      rootRel: "nghiep-vu",
+      createdAt: 0,
+      importedFrom: null,
+      implicit: false,
+    };
+    expect(
+      filesInProject(
+        tree,
+        {
+          ...managed,
+          id: "legacy-root",
+          name: "DATA",
+          rootRel: "",
+          implicit: true,
+        },
+        [managed],
+      ),
+    ).toEqual([]);
   });
 });

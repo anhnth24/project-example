@@ -1,4 +1,4 @@
-//! Backend Tauri cho FileConv Docs.
+//! Backend Tauri cho Markhand Desktop.
 //!
 //! Cầu nối giữa UI (React) và lõi `fileconv-core`. Mọi thao tác filesystem chạy trong
 //! tiến trình Rust để kiểm soát chặt đường dẫn (không bật plugin fs).
@@ -18,6 +18,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
 use fileconv_core::{ConverterOptions, FormatKind};
+
+mod intelligence;
+mod knowledge;
+mod projects;
+mod vector_index;
+mod watch;
 
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────
 
@@ -42,14 +48,29 @@ pub struct Node {
 
 /// Tùy chọn convert lộ ra UI (ánh xạ sang `ConverterOptions` của lõi).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub ocr_langs: String,
+    pub ocr_engine: String,
     pub pdf_ocr: bool,
     pub pdf_ocr_images: bool,
     pub audio_lang: String,
     pub audio_threads: i32,
+    pub audio_no_speech_threshold: f32,
     pub whisper_model: Option<String>,
+    pub llm_enabled: bool,
+    pub llm_provider: String,
+    pub llm_base_url: String,
+    pub llm_model: String,
+    pub llm_api_key: Option<String>,
+    pub llm_cli_binary: Option<String>,
+    pub embedding_enabled: bool,
+    pub embedding_provider: String,
+    pub embedding_base_url: String,
+    pub embedding_model: String,
+    pub embedding_api_key: Option<String>,
+    pub embedding_dimensions: Option<usize>,
+    pub embedding_fallback_local: bool,
 }
 
 impl Default for Settings {
@@ -57,11 +78,26 @@ impl Default for Settings {
         let d = ConverterOptions::default();
         Self {
             ocr_langs: d.ocr_langs,
+            ocr_engine: "tesseract".into(),
             pdf_ocr: d.pdf_ocr,
             pdf_ocr_images: d.pdf_ocr_images,
             audio_lang: d.audio_lang,
             audio_threads: d.audio_threads,
+            audio_no_speech_threshold: d.audio_no_speech_threshold,
             whisper_model: None,
+            llm_enabled: false,
+            llm_provider: "ollama".into(),
+            llm_base_url: "http://127.0.0.1:11434".into(),
+            llm_model: "qwen2.5:7b".into(),
+            llm_api_key: None,
+            llm_cli_binary: None,
+            embedding_enabled: false,
+            embedding_provider: "ollama".into(),
+            embedding_base_url: "http://127.0.0.1:11434".into(),
+            embedding_model: "nomic-embed-text".into(),
+            embedding_api_key: None,
+            embedding_dimensions: None,
+            embedding_fallback_local: true,
         }
     }
 }
@@ -70,13 +106,106 @@ impl Settings {
     fn to_options(&self) -> ConverterOptions {
         ConverterOptions {
             ocr_langs: self.ocr_langs.clone(),
+            ocr_engine: fileconv_core::image_ocr::OcrEngine::from_name(&self.ocr_engine),
             whisper_model: self.whisper_model.as_ref().map(PathBuf::from),
             audio_lang: self.audio_lang.clone(),
             audio_threads: self.audio_threads,
+            audio_no_speech_threshold: self.audio_no_speech_threshold,
             pdf_ocr: self.pdf_ocr,
             pdf_ocr_images: self.pdf_ocr_images,
             ..Default::default()
         }
+    }
+
+    fn llm_config(&self) -> Result<Option<fileconv_core::llm::LlmConfig>, String> {
+        if !self.llm_enabled {
+            return Ok(fileconv_core::llm::LlmConfig::from_env());
+        }
+        let preset = fileconv_core::llm::provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == self.llm_provider);
+        let provider = preset
+            .as_ref()
+            .map(|preset| preset.provider)
+            .unwrap_or_else(|| fileconv_core::llm::Provider::from_name(&self.llm_provider));
+        if matches!(
+            provider,
+            fileconv_core::llm::Provider::CursorCli | fileconv_core::llm::Provider::CodexCli
+        ) {
+            return fileconv_core::llm::LlmConfig::new_cli(
+                provider,
+                self.llm_model.trim(),
+                self.llm_cli_binary.clone(),
+            )
+            .map(Some)
+            .map_err(|error| error.to_string());
+        }
+        let api_key = self
+            .llm_api_key
+            .clone()
+            .or_else(|| std::env::var("FILECONV_LLM_API_KEY").ok())
+            .unwrap_or_default();
+        if preset
+            .as_ref()
+            .is_some_and(|preset| preset.requires_api_key)
+            && api_key.trim().is_empty()
+        {
+            return Err(format!(
+                "{} yêu cầu API key",
+                preset
+                    .as_ref()
+                    .map(|preset| preset.label.as_str())
+                    .unwrap_or("Provider")
+            ));
+        }
+        let base_url =
+            (!self.llm_base_url.trim().is_empty()).then(|| self.llm_base_url.trim().to_string());
+        fileconv_core::llm::LlmConfig::new(provider, api_key, self.llm_model.trim(), base_url)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
+    fn embedding_config(&self) -> Result<Option<fileconv_core::llm::EmbeddingConfig>, String> {
+        if !self.embedding_enabled {
+            return Ok(None);
+        }
+        let preset = fileconv_core::llm::embedding_provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == self.embedding_provider);
+        let provider = preset
+            .as_ref()
+            .map(|preset| preset.provider)
+            .unwrap_or_else(|| fileconv_core::llm::Provider::from_name(&self.embedding_provider));
+        let api_key = self
+            .embedding_api_key
+            .clone()
+            .or_else(|| std::env::var("FILECONV_EMBEDDING_API_KEY").ok())
+            .or_else(|| std::env::var("FILECONV_LLM_API_KEY").ok())
+            .unwrap_or_default();
+        if preset
+            .as_ref()
+            .is_some_and(|preset| preset.requires_api_key)
+            && api_key.trim().is_empty()
+        {
+            return Err(format!(
+                "{} yêu cầu API key cho embedding",
+                preset
+                    .as_ref()
+                    .map(|preset| preset.label.as_str())
+                    .unwrap_or("Provider")
+            ));
+        }
+        let base_url = (!self.embedding_base_url.trim().is_empty())
+            .then(|| self.embedding_base_url.trim().to_string());
+        fileconv_core::llm::EmbeddingConfig::new(
+            provider,
+            api_key,
+            self.embedding_model.trim(),
+            base_url,
+            self.embedding_dimensions,
+        )
+        .map(Some)
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -91,6 +220,7 @@ pub struct AppState {
     config_dir: PathBuf,
     data_root: Mutex<PathBuf>,
     settings: Mutex<Settings>,
+    watch_service: watch::WatchService,
 }
 
 // ───────────────────────────── Helper ─────────────────────────────
@@ -157,7 +287,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
 /// Đuôi file mà lõi convert hỗ trợ (suy từ `FormatKind::from_path`).
 const SUPPORTED_EXTS: &[&str] = &[
     "pdf", "docx", "pptx", "xlsx", "xls", "xlsb", "ods", "csv", "html", "htm", "png", "jpg",
-    "jpeg", "webp", "bmp", "tif", "tiff", "gif", "wav", "mp3", "m4a", "flac", "ogg",
+    "jpeg", "webp", "bmp", "tif", "tiff", "gif", "txt", "log", "wav", "mp3", "m4a", "flac", "ogg",
 ];
 
 fn config_file(config_dir: &Path) -> PathBuf {
@@ -451,6 +581,10 @@ fn set_data_root(state: State<AppState>, path: String) -> Result<String, String>
     cfg.data_root = Some(abs.to_string_lossy().to_string());
     save_config(&state.config_dir, &cfg)?;
     *dr = abs.clone();
+    drop(dr);
+    state
+        .watch_service
+        .sync(abs.clone(), watch::load_rules(&abs))?;
     Ok(abs.to_string_lossy().to_string())
 }
 
@@ -686,9 +820,14 @@ async fn reconvert(state: State<'_, AppState>, source_rel: String) -> Result<Str
         return Err("định dạng không hỗ trợ convert".into());
     }
     let opts = state.settings.lock().map_err(|_| "lock lỗi")?.to_options();
-    let md_path = tauri::async_runtime::spawn_blocking(move || convert_and_write_md(opts, source))
-        .await
-        .map_err(es)??;
+    let root_for_snapshot = root.clone();
+    let source_rel_for_snapshot = source_rel.clone();
+    let md_path = tauri::async_runtime::spawn_blocking(move || {
+        intelligence::snapshot_existing_version(&root_for_snapshot, &source_rel_for_snapshot)?;
+        convert_and_write_md(opts, source)
+    })
+    .await
+    .map_err(es)??;
     Ok(rel_of(&root, &md_path))
 }
 
@@ -773,8 +912,46 @@ fn read_bytes(state: State<AppState>, rel_path: String) -> Result<tauri::ipc::Re
 }
 
 #[tauri::command]
+async fn preview_pptx_meta(
+    state: State<'_, AppState>,
+    rel_path: String,
+) -> Result<fileconv_core::pptx_preview::PptxPreviewMeta, String> {
+    let path = resolve_within(&data_root(&state), &rel_path)?;
+    if FormatKind::from_path(&path) != FormatKind::Pptx {
+        return Err("preview PPTX chỉ nhận file .pptx".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        fileconv_core::pptx_preview::preview_meta(&path).map_err(es)
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
+async fn preview_pptx_slide(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: usize,
+) -> Result<fileconv_core::pptx_preview::PptxPreviewSlide, String> {
+    let path = resolve_within(&data_root(&state), &rel_path)?;
+    if FormatKind::from_path(&path) != FormatKind::Pptx {
+        return Err("preview PPTX chỉ nhận file .pptx".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        fileconv_core::pptx_preview::preview_slide(&path, index).map_err(es)
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
 fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_live_watch_status(state: State<AppState>) -> watch::WatchStatus {
+    state.watch_service.status()
 }
 
 #[tauri::command]
@@ -787,14 +964,30 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
     if !valid_ocr {
         return Err("ngôn ngữ OCR cần có dạng vie hoặc vie+eng".into());
     }
+    if !matches!(
+        settings.ocr_engine.as_str(),
+        "tesseract" | "paddle" | "auto"
+    ) {
+        return Err("OCR engine phải là tesseract, paddle hoặc auto".into());
+    }
     if settings.audio_lang.trim().is_empty() {
         return Err("ngôn ngữ audio không được để trống".into());
     }
     if !(1..=32).contains(&settings.audio_threads) {
         return Err("thread audio phải nằm trong khoảng 1–32".into());
     }
+    if !settings.audio_no_speech_threshold.is_finite()
+        || !(0.0..=1.0).contains(&settings.audio_no_speech_threshold)
+    {
+        return Err("ngưỡng no-speech phải nằm trong khoảng 0–1".into());
+    }
+    settings.llm_config()?;
+    settings.embedding_config()?;
     let mut current = state.settings.lock().map_err(|_| "lock lỗi")?;
-    let json = serde_json::to_string_pretty(&settings).map_err(es)?;
+    let mut persisted = settings.clone();
+    persisted.llm_api_key = None; // Secret remains in memory; use env/keychain for persistence.
+    persisted.embedding_api_key = None;
+    let json = serde_json::to_string_pretty(&persisted).map_err(es)?;
     atomic_write(&settings_file(&state.config_dir), json.as_bytes())?;
     *current = settings;
     Ok(())
@@ -824,10 +1017,15 @@ pub fn run() {
                 .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
                 .unwrap_or_default();
 
+            let watch_service = watch::WatchService::new(app.handle().clone());
+            watch_service
+                .sync(root.clone(), watch::load_rules(&root))
+                .map_err(std::io::Error::other)?;
             app.manage(AppState {
                 config_dir,
                 data_root: Mutex::new(root),
                 settings: Mutex::new(settings),
+                watch_service,
             });
             Ok(())
         })
@@ -849,8 +1047,49 @@ pub fn run() {
             file_size,
             resolve_path,
             read_bytes,
+            preview_pptx_meta,
+            preview_pptx_slide,
             get_settings,
+            get_live_watch_status,
             set_settings,
+            intelligence::get_llm_provider_presets,
+            intelligence::get_embedding_provider_presets,
+            intelligence::test_embedding_connection,
+            intelligence::get_cli_subscription_status,
+            intelligence::start_cli_subscription_login,
+            intelligence::test_llm_connection,
+            intelligence::generate_handoff_pack,
+            intelligence::read_handoff_artifact,
+            intelligence::save_handoff_artifact,
+            intelligence::export_existing_handoff,
+            intelligence::run_quality_report,
+            intelligence::search_intelligence,
+            intelligence::ask_intelligence,
+            intelligence::scan_pii,
+            intelligence::redact_pii,
+            intelligence::hard_ocr_image,
+            intelligence::extract_document_schema,
+            intelligence::list_markdown_tables,
+            intelligence::update_markdown_table,
+            intelligence::export_markdown_table,
+            intelligence::snapshot_document_version,
+            intelligence::list_document_versions,
+            intelligence::read_document_version,
+            intelligence::diff_document_versions,
+            intelligence::merge_document_versions,
+            intelligence::get_watch_rules,
+            intelligence::set_watch_rules,
+            intelligence::scan_watch_rules,
+            intelligence::export_knowledge_pack,
+            projects::list_projects,
+            projects::create_project,
+            projects::adopt_project,
+            projects::import_local_folder,
+            projects::remove_project,
+            knowledge::rebuild_knowledge_index,
+            knowledge::knowledge_index_stats,
+            knowledge::hybrid_search,
+            knowledge::hybrid_ask,
         ])
         .run(tauri::generate_context!())
         .expect("lỗi khi khởi chạy ứng dụng Tauri");
@@ -961,6 +1200,80 @@ mod tests {
             1
         );
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn old_settings_json_receives_local_first_llm_defaults() {
+        let json = r#"{
+          "ocrLangs":"vie+eng",
+          "pdfOcr":true,
+          "pdfOcrImages":false,
+          "audioLang":"vi",
+          "audioThreads":4,
+          "whisperModel":null
+        }"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert!(!settings.llm_enabled);
+        assert_eq!(settings.llm_provider, "ollama");
+        assert_eq!(settings.llm_base_url, "http://127.0.0.1:11434");
+    }
+
+    #[test]
+    fn ollama_config_does_not_require_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_enabled = true;
+        let config = settings.llm_config().unwrap().unwrap();
+        assert!(config.api_key.is_empty());
+        assert_eq!(config.model, "qwen2.5:7b");
+    }
+
+    #[test]
+    fn cloud_provider_requires_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_enabled = true;
+        settings.llm_provider = "openai".into();
+        settings.llm_base_url = "https://api.openai.com".into();
+        settings.llm_model = "gpt-4o-mini".into();
+        assert!(settings.llm_config().is_err());
+        settings.llm_api_key = Some("secret".into());
+        assert!(settings.llm_config().unwrap().is_some());
+    }
+
+    #[test]
+    fn subscription_cli_uses_official_login_without_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_enabled = true;
+        settings.llm_provider = "cursor-cli".into();
+        settings.llm_model = "auto".into();
+        settings.llm_base_url.clear();
+        let config = settings.llm_config().unwrap().unwrap();
+        assert_eq!(config.provider, fileconv_core::llm::Provider::CursorCli);
+        assert!(config.api_key.is_empty());
+        assert!(config.is_subscription_cli());
+    }
+
+    #[test]
+    fn embedding_settings_are_independent_from_chat_provider() {
+        let mut settings = Settings::default();
+        settings.llm_provider = "cursor-cli".into();
+        settings.embedding_enabled = true;
+        let config = settings.embedding_config().unwrap().unwrap();
+        assert_eq!(
+            config.provider,
+            fileconv_core::llm::Provider::OpenAiCompatible
+        );
+        assert_eq!(config.model, "nomic-embed-text");
+        assert!(config.api_key.is_empty());
+    }
+
+    #[test]
+    fn persisted_settings_can_omit_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_api_key = Some("do-not-write-me".into());
+        let mut persisted = settings;
+        persisted.llm_api_key = None;
+        let json = serde_json::to_string(&persisted).unwrap();
+        assert!(!json.contains("do-not-write-me"));
     }
 
     #[cfg(unix)]

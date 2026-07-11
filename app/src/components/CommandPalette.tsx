@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { FileSearch, Home, LayoutGrid, Search, Settings } from "lucide-react";
+import { FileSearch, Home, LayoutGrid, Search, Settings, Sparkles } from "lucide-react";
 import { fileIcon } from "../lib/icons";
 import { flattenFiles, folderLabel, normalizeSearch } from "../lib/tree";
 import { useStore } from "../state/store";
@@ -50,6 +50,13 @@ export function CommandPalette({
         meta: "Lệnh",
         icon: <Settings size={15} />,
         run: onOpenSettings,
+      },
+      {
+        id: "intelligence",
+        label: "Sinh BRD/PRD và bàn giao",
+        meta: "Document intelligence",
+        icon: <Sparkles size={15} />,
+        run: () => setView("intelligence"),
       },
     ];
     const files = flattenFiles(tree).map<PaletteItem>((node) => ({

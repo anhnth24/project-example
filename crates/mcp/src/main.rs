@@ -107,7 +107,10 @@ impl Fileconv {
     #[tool(
         description = "Xem metadata một file (loại, kích thước, số trang PDF / số slide PPTX / danh sách sheet Excel) mà KHÔNG convert — rẻ, giúp quyết định trích phần nào."
     )]
-    async fn detect_format(&self, Parameters(req): Parameters<DetectReq>) -> Result<String, String> {
+    async fn detect_format(
+        &self,
+        Parameters(req): Parameters<DetectReq>,
+    ) -> Result<String, String> {
         let info = fileconv_core::probe(&PathBuf::from(&req.path));
         Ok(serde_json::json!({
             "format": info.format.as_str(),
@@ -197,7 +200,10 @@ impl Fileconv {
     #[tool(
         description = "Trích dữ liệu có cấu trúc theo yêu cầu ngôn ngữ tự nhiên (vd 'lấy số hợp đồng, ngày, tổng tiền'), trả JSON. CẦN cấu hình LLM (FILECONV_LLM_*)."
     )]
-    async fn extract_json(&self, Parameters(req): Parameters<ExtractReq>) -> Result<String, String> {
+    async fn extract_json(
+        &self,
+        Parameters(req): Parameters<ExtractReq>,
+    ) -> Result<String, String> {
         tokio::task::spawn_blocking(move || {
             let cfg = llm_cfg()?;
             let md = convert_for_llm(&req.path, req.max_chars.unwrap_or(40_000))?;
@@ -213,7 +219,8 @@ impl Fileconv {
     async fn ocr_hard(&self, Parameters(req): Parameters<DetectReq>) -> Result<String, String> {
         tokio::task::spawn_blocking(move || {
             let cfg = llm_cfg()?;
-            fileconv_core::llm::vision_ocr(&cfg, &PathBuf::from(&req.path)).map_err(|e| e.to_string())
+            fileconv_core::llm::vision_ocr(&cfg, &PathBuf::from(&req.path))
+                .map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| e.to_string())?
@@ -230,8 +237,12 @@ impl Fileconv {
                 "Dịch toàn bộ nội dung sau sang {}. Giữ định dạng Markdown, không thêm lời bình.",
                 req.target
             );
-            fileconv_core::llm::chat(&cfg, "Bạn là dịch giả chuyên nghiệp.", &format!("{instr}\n\n{md}"))
-                .map_err(|e| e.to_string())
+            fileconv_core::llm::chat(
+                &cfg,
+                "Bạn là dịch giả chuyên nghiệp.",
+                &format!("{instr}\n\n{md}"),
+            )
+            .map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| e.to_string())?

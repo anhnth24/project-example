@@ -17,6 +17,52 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 use crate::ConvertError;
 
+const WHISPER_MODEL_CANDIDATES: &[&str] = &[
+    "ggml-PhoWhisper-small.bin",
+    "ggml-small.bin",
+    "ggml-base.bin",
+    "ggml-tiny.bin",
+];
+
+fn discover_model_in_roots(roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    for root in roots {
+        for candidate in WHISPER_MODEL_CANDIDATES {
+            let path = root.join("models").join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Discover an installed Whisper model without bundling model weights.
+/// PhoWhisper is preferred when users downloaded it explicitly.
+pub fn discover_whisper_model() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("FILECONV_WHISPER_MODEL") {
+        let path = std::path::PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let mut roots = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        roots.extend(cwd.ancestors().take(4).map(Path::to_path_buf));
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            roots.extend(parent.ancestors().take(4).map(Path::to_path_buf));
+        }
+    }
+    roots.extend(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .take(4)
+            .map(Path::to_path_buf),
+    );
+    discover_model_in_roots(&roots)
+}
+
 /// Kết quả phiên âm kèm số liệu thời gian (phục vụ báo cáo RTF).
 #[derive(Debug, Clone)]
 pub struct Transcript {
@@ -24,12 +70,15 @@ pub struct Transcript {
     pub audio_secs: f64,
     pub decode_ms: f64,
     pub infer_ms: f64,
+    pub total_segments: usize,
+    pub filtered_segments: usize,
 }
 
 /// Engine giữ một WhisperContext đã load (tái dùng cho nhiều file).
 pub struct AudioEngine {
     ctx: WhisperContext,
     threads: i32,
+    no_speech_threshold: f32,
 }
 
 impl AudioEngine {
@@ -37,11 +86,22 @@ impl AudioEngine {
     pub fn load(model_path: &Path) -> Result<Self, ConvertError> {
         let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
             .map_err(|e| ConvertError::Failed(format!("load model whisper: {e}")))?;
-        Ok(Self { ctx, threads: 4 })
+        Ok(Self {
+            ctx,
+            threads: 4,
+            no_speech_threshold: 0.6,
+        })
     }
 
     pub fn with_threads(mut self, n: i32) -> Self {
         self.threads = n;
+        self
+    }
+
+    pub fn with_no_speech_threshold(mut self, threshold: f32) -> Self {
+        if threshold.is_finite() && (0.0..=1.0).contains(&threshold) {
+            self.no_speech_threshold = threshold;
+        }
         self
     }
 
@@ -67,6 +127,7 @@ impl AudioEngine {
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
         params.set_print_special(false);
+        params.set_no_speech_thold(self.no_speech_threshold);
 
         let t1 = Instant::now();
         state
@@ -76,10 +137,20 @@ impl AudioEngine {
 
         let n = state.full_n_segments();
         let mut text = String::new();
+        let mut filtered_segments = 0usize;
         for i in 0..n {
             if let Some(seg) = state.get_segment(i) {
                 if let Ok(s) = seg.to_str_lossy() {
-                    text.push_str(s.trim());
+                    let segment = s.trim();
+                    if !segment_is_speech(
+                        segment,
+                        seg.no_speech_probability(),
+                        self.no_speech_threshold,
+                    ) {
+                        filtered_segments += 1;
+                        continue;
+                    }
+                    text.push_str(segment);
                     text.push(' ');
                 }
             }
@@ -89,8 +160,30 @@ impl AudioEngine {
             audio_secs,
             decode_ms,
             infer_ms,
+            total_segments: n.max(0) as usize,
+            filtered_segments,
         })
     }
+}
+
+fn segment_is_speech(text: &str, no_speech_probability: f32, threshold: f32) -> bool {
+    if text.trim().is_empty() || no_speech_probability >= threshold {
+        return false;
+    }
+    let trimmed = text.trim();
+    let enclosed_marker = ((trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('(') && trimmed.ends_with(')')))
+        && trimmed.chars().count() <= 120;
+    if enclosed_marker {
+        return false;
+    }
+    let marker = trimmed
+        .trim_matches(|character| matches!(character, '[' | ']' | '(' | ')' | '♪' | ' '))
+        .to_ascii_lowercase();
+    !matches!(
+        marker.as_str(),
+        "music" | "silence" | "no speech" | "applause" | "background music" | "nhạc" | "im lặng"
+    )
 }
 
 /// Decode file audio → (PCM f32 mono 16kHz, độ dài giây).
@@ -181,4 +274,41 @@ fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
         out.push(a + (b - a) * frac);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_speech_filter_rejects_probability_and_marker_hallucinations() {
+        assert!(!segment_is_speech("văn bản bị bịa", 0.8, 0.6));
+        assert!(!segment_is_speech("[Music]", 0.1, 0.6));
+        assert!(!segment_is_speech("[Mà đồ]", 0.1, 0.6));
+        assert!(!segment_is_speech("♪ nhạc ♪", 0.1, 0.6));
+        assert!(segment_is_speech("Xin chào Việt Nam", 0.1, 0.6));
+    }
+
+    #[test]
+    fn invalid_threshold_does_not_replace_safe_default() {
+        assert!(!segment_is_speech("text", 0.7, 0.6));
+        assert!(segment_is_speech("text", 0.59, 0.6));
+    }
+
+    #[test]
+    fn model_discovery_prefers_phowhisper_then_standard_models() {
+        let root =
+            std::env::temp_dir().join(format!("fileconv_model_discovery_{}", std::process::id()));
+        let models = root.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::fs::write(models.join("ggml-base.bin"), b"base").unwrap();
+        assert!(discover_model_in_roots(std::slice::from_ref(&root))
+            .unwrap()
+            .ends_with("ggml-base.bin"));
+        std::fs::write(models.join("ggml-PhoWhisper-small.bin"), b"pho").unwrap();
+        assert!(discover_model_in_roots(std::slice::from_ref(&root))
+            .unwrap()
+            .ends_with("ggml-PhoWhisper-small.bin"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

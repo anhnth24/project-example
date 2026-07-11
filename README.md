@@ -4,7 +4,8 @@ Backend Rust chuyển đổi tài liệu / ảnh / âm thanh sang **Markdown**, 
 Code do dự án làm chủ hoàn toàn (gọi thẳng crate gốc). Mục tiêu: đóng gói thành
 **desktop app (Tauri)** cho Win / Mac / Ubuntu.
 
-> **Trạng thái: backend + kiểm thử hiệu năng/độ chính xác + desktop app prototype (chưa đóng gói distributable).**
+> **Trạng thái: backend + kiểm thử hiệu năng/độ chính xác + Markhand desktop;
+> `.deb` Linux đã build, release matrix Win/Mac/Linux đang chờ signing và smoke-test đa OS.**
 
 ## Ưu tiên xuyên suộc
 
@@ -20,6 +21,7 @@ Code do dự án làm chủ hoàn toàn (gọi thẳng crate gốc). Mục tiêu
 | Kiến trúc — định tuyến, IPC, MCP, sơ đồ | [`docs/system-architecture.md`](docs/system-architecture.md) |
 | Lộ trình (đã xong / đang làm / backlog) | [`docs/project-roadmap.md`](docs/project-roadmap.md) |
 | Số liệu đo thực | [`bench/REPORT.md`](bench/REPORT.md) |
+| 90 file internet / 9 họ converter | [`bench/REPORT_CORPUS10.md`](bench/REPORT_CORPUS10.md) |
 
 Hướng dẫn nhanh cho agent: [`CLAUDE.md`](CLAUDE.md).
 

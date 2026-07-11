@@ -4,6 +4,7 @@ import {
   LayoutGrid,
   RefreshCw,
   Search,
+  Sparkles,
   Settings,
 } from "lucide-react";
 import type { AppView } from "../lib/types";
@@ -15,6 +16,7 @@ export function IconRail({
   activeJobs,
   onHome,
   onLibrary,
+  onIntelligence,
   onToggleDrawer,
   onSearch,
   onQueue,
@@ -25,6 +27,7 @@ export function IconRail({
   activeJobs: number;
   onHome: () => void;
   onLibrary: () => void;
+  onIntelligence: () => void;
   onToggleDrawer: () => void;
   onSearch: () => void;
   onQueue: () => void;
@@ -43,6 +46,13 @@ export function IconRail({
       </IconButton>
       <IconButton label="Thư viện" active={view === "library"} onClick={onLibrary}>
         <LayoutGrid size={17} />
+      </IconButton>
+      <IconButton
+        label="Bàn giao và Intelligence"
+        active={view === "intelligence"}
+        onClick={onIntelligence}
+      >
+        <Sparkles size={17} />
       </IconButton>
       <IconButton label="Tìm kiếm (Ctrl+K)" onClick={onSearch}>
         <Search size={17} />

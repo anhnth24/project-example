@@ -78,9 +78,93 @@ pub(crate) fn rows_to_md_table(rows: &[Vec<String>]) -> String {
     out
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MergeRange {
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize,
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "<br>")
+}
+
+pub(crate) fn rows_to_html_table(rows: &[Vec<String>], merges: &[MergeRange]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let columns = rows.iter().map(Vec::len).max().unwrap_or_default();
+    if columns == 0 {
+        return String::new();
+    }
+    let mut covered = vec![vec![false; columns]; rows.len()];
+    let mut origins = std::collections::HashMap::new();
+    for merge in merges {
+        if merge.start_row >= rows.len()
+            || merge.start_col >= columns
+            || merge.end_row < merge.start_row
+            || merge.end_col < merge.start_col
+        {
+            continue;
+        }
+        let end_row = merge.end_row.min(rows.len() - 1);
+        let end_col = merge.end_col.min(columns - 1);
+        origins.insert(
+            (merge.start_row, merge.start_col),
+            (end_row - merge.start_row + 1, end_col - merge.start_col + 1),
+        );
+        for row in merge.start_row..=end_row {
+            for column in merge.start_col..=end_col {
+                if (row, column) != (merge.start_row, merge.start_col) {
+                    covered[row][column] = true;
+                }
+            }
+        }
+    }
+
+    let mut output = String::from("<table>\n");
+    for (row_index, row) in rows.iter().enumerate() {
+        output.push_str("  <tr>");
+        for column in 0..columns {
+            if covered[row_index][column] {
+                continue;
+            }
+            let tag = if row_index == 0 { "th" } else { "td" };
+            let (rowspan, colspan) = origins.get(&(row_index, column)).copied().unwrap_or((1, 1));
+            output.push('<');
+            output.push_str(tag);
+            if rowspan > 1 {
+                output.push_str(&format!(" rowspan=\"{rowspan}\""));
+            }
+            if colspan > 1 {
+                output.push_str(&format!(" colspan=\"{colspan}\""));
+            }
+            output.push('>');
+            output.push_str(&html_escape(
+                row.get(column).map(String::as_str).unwrap_or_default(),
+            ));
+            output.push_str("</");
+            output.push_str(tag);
+            output.push('>');
+        }
+        output.push_str("</tr>\n");
+    }
+    output.push_str("</table>\n");
+    output
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sniff_delimiter;
+    use super::{rows_to_html_table, sniff_delimiter, MergeRange};
 
     #[test]
     fn sniff_picks_delimiter() {
@@ -89,5 +173,25 @@ mod tests {
         assert_eq!(sniff_delimiter("a\tb\tc"), b'\t');
         assert_eq!(sniff_delimiter("a|b"), b'|');
         assert_eq!(sniff_delimiter("nodelim"), b','); // mặc định
+    }
+
+    #[test]
+    fn html_table_preserves_multiline_and_merged_cells() {
+        let rows = vec![
+            vec!["Tiêu đề".into(), String::new(), "Khác".into()],
+            vec!["A\nB".into(), "C".into(), "D".into()],
+        ];
+        let html = rows_to_html_table(
+            &rows,
+            &[MergeRange {
+                start_row: 0,
+                start_col: 0,
+                end_row: 0,
+                end_col: 1,
+            }],
+        );
+        assert!(html.contains("<th colspan=\"2\">Tiêu đề</th>"));
+        assert!(html.contains("<td>A<br>B</td>"));
+        assert!(!html.contains("<script"));
     }
 }

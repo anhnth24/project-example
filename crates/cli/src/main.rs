@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use fileconv_core::audio::AudioEngine;
+use fileconv_core::intelligence::{CorpusDocument, HandoffOptions};
 use fileconv_core::{Converter, FormatKind};
 use walkdir::WalkDir;
 
@@ -33,7 +34,7 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("dùng: fileconv <speed|accuracy|one> ...");
+        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff|pptx-preview> ...");
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -48,7 +49,9 @@ fn main() -> Result<()> {
             cmd_accuracy(Path::new(manifest), out.as_deref())
         }
         "audio" => {
-            let models = args.get(2).context("thiếu danh sách model (phân tách dấu phẩy)")?;
+            let models = args
+                .get(2)
+                .context("thiếu danh sách model (phân tách dấu phẩy)")?;
             let manifest = args.get(3).context("thiếu manifest")?;
             let out = args.get(4).map(PathBuf::from);
             cmd_audio(models, Path::new(manifest), out.as_deref())
@@ -67,6 +70,13 @@ fn main() -> Result<()> {
                 .and_then(|i| rest.get(i + 1))
             {
                 opts.ocr_langs = l.clone();
+            }
+            if let Some(engine) = rest
+                .iter()
+                .position(|argument| argument == "--ocr-engine")
+                .and_then(|index| rest.get(index + 1))
+            {
+                opts.ocr_engine = fileconv_core::image_ocr::OcrEngine::from_name(engine);
             }
             if let Some(p) = rest
                 .iter()
@@ -95,8 +105,126 @@ fn main() -> Result<()> {
             println!("{}", r.markdown);
             Ok(())
         }
+        "handoff" => {
+            let product = args.get(2).context("thiếu tên sản phẩm")?;
+            let output = args.get(3).context("thiếu đường dẫn ZIP đầu ra")?;
+            let sources = args.get(4..).context("thiếu file nguồn")?;
+            cmd_handoff(product, Path::new(output), sources)
+        }
+        "pptx-preview" => {
+            let file = args.get(2).context("thiếu file PPTX")?;
+            let path = Path::new(file);
+            let meta = fileconv_core::pptx_preview::preview_meta(path)?;
+            let mut slides = Vec::new();
+            for index in 0..meta.slide_count {
+                slides.push(fileconv_core::pptx_preview::preview_slide(path, index)?);
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "meta": meta,
+                    "slides": slides
+                }))?
+            );
+            Ok(())
+        }
         other => bail!("lệnh không hợp lệ: {other}"),
     }
+}
+
+fn handoff_slug(value: &str) -> String {
+    let slug = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    slug.split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn cmd_handoff(product: &str, output: &Path, sources: &[String]) -> Result<()> {
+    if sources.is_empty() {
+        bail!("handoff cần ít nhất một file nguồn");
+    }
+    let converter = Converter::new();
+    let mut documents = Vec::new();
+    for source in sources {
+        let path = Path::new(source);
+        let is_markdown = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+        let companion = path.with_file_name(format!(
+            "{}.md",
+            path.file_name()
+                .map(|name| name.to_string_lossy())
+                .unwrap_or_default()
+        ));
+        let (markdown, md_rel) = if is_markdown {
+            (
+                fs::read_to_string(path).with_context(|| format!("đọc {}", path.display()))?,
+                path.file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "source.md".into()),
+            )
+        } else if companion.is_file() {
+            (
+                fs::read_to_string(&companion)
+                    .with_context(|| format!("đọc {}", companion.display()))?,
+                companion
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "source.md".into()),
+            )
+        } else {
+            (
+                converter
+                    .convert_path(path)
+                    .with_context(|| format!("convert {}", path.display()))?
+                    .markdown,
+                format!(
+                    "{}.md",
+                    path.file_name()
+                        .map(|name| name.to_string_lossy())
+                        .unwrap_or_default()
+                ),
+            )
+        };
+        let source_rel = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "source".into());
+        documents.push(CorpusDocument {
+            source_rel,
+            md_rel,
+            format: FormatKind::from_path(path).as_str().to_string(),
+            markdown,
+        });
+    }
+    let pack = fileconv_core::intelligence::generate_handoff_pack(
+        &documents,
+        &HandoffOptions {
+            product_name: product.to_string(),
+            product_slug: handoff_slug(product),
+            ..Default::default()
+        },
+    );
+    fileconv_core::intelligence::export_handoff_zip(&pack, output)?;
+    println!(
+        "Đã tạo {} — {} mục, {} citation, validation={}",
+        output.display(),
+        pack.items.len(),
+        pack.citations.len(),
+        pack.validation.ok
+    );
+    Ok(())
 }
 
 // ----------------------------- SPEED -----------------------------
@@ -170,7 +298,11 @@ fn render_speed_report(rows: &[SpeedRow]) -> String {
     s.push_str("|---|---|--:|--:|--:|--:|--:|--:|:-:|\n");
     for r in rows {
         let kb = r.bytes as f64 / 1024.0;
-        let kbs = if r.ms > 0.0 { kb / (r.ms / 1000.0) } else { 0.0 };
+        let kbs = if r.ms > 0.0 {
+            kb / (r.ms / 1000.0)
+        } else {
+            0.0
+        };
         let mspp = match r.pages {
             Some(p) if p > 0 => format!("{:.2}", r.ms / p as f64),
             _ => "—".into(),
@@ -210,14 +342,22 @@ fn render_speed_report(rows: &[SpeedRow]) -> String {
         } else {
             "—".into()
         };
-        let kbs = if sum_ms > 0.0 { sum_kb / (sum_ms / 1000.0) } else { 0.0 };
+        let kbs = if sum_ms > 0.0 {
+            sum_kb / (sum_ms / 1000.0)
+        } else {
+            0.0
+        };
         s.push_str(&format!(
             "| {} | {} | {} | {:.0} | {} | {:.1} | {:.2} | {} | {:.0} |\n",
             fmt,
             n,
             ok,
             sum_kb,
-            if sum_pages > 0 { sum_pages.to_string() } else { "—".into() },
+            if sum_pages > 0 {
+                sum_pages.to_string()
+            } else {
+                "—".into()
+            },
             sum_ms,
             ms_per_file,
             ms_per_page,
@@ -314,8 +454,10 @@ fn cmd_accuracy(manifest: &Path, out: Option<&Path>) -> Result<()> {
 fn render_accuracy_report(rows: &[AccRow]) -> String {
     let mut s = String::new();
     s.push_str("# Báo cáo ĐỘ CHÍNH XÁC (tiếng Việt) — fileconv-core\n\n");
-    s.push_str("Độ chính xác ký tự = (1 − CER)×100. CER/WER tính bằng khoảng cách Levenshtein \
-                trên text đã chuẩn hoá khoảng trắng.\n\n");
+    s.push_str(
+        "Độ chính xác ký tự = (1 − CER)×100. CER/WER tính bằng khoảng cách Levenshtein \
+                trên text đã chuẩn hoá khoảng trắng.\n\n",
+    );
     s.push_str("| File | Kịch bản | Ref ký tự | Hyp ký tự | CER | WER | Độ chính xác % | ms |\n");
     s.push_str("|---|---|--:|--:|--:|--:|--:|--:|\n");
     for r in rows {
@@ -390,7 +532,11 @@ fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()
     }
 
     let mut rows: Vec<AudioRow> = Vec::new();
-    for model_path in models_csv.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+    for model_path in models_csv
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         let model_name = Path::new(model_path)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -457,12 +603,23 @@ fn render_audio_report(rows: &[AudioRow]) -> String {
     for r in rows {
         s.push_str(&format!(
             "| {} | {} | {} | {:.2} | {:.0} | {:.0} | {:.2} | {:.3} | {:.3} | **{:.1}%** |\n",
-            r.model, r.clip, r.label, r.audio_secs, r.decode_ms, r.infer_ms, r.rtf, r.cer, r.wer, r.acc
+            r.model,
+            r.clip,
+            r.label,
+            r.audio_secs,
+            r.decode_ms,
+            r.infer_ms,
+            r.rtf,
+            r.cer,
+            r.wer,
+            r.acc
         ));
     }
     s.push_str("\n## Trung bình theo model\n\n");
-    s.push_str("Model được **load 1 lần rồi cache** (cột *Load model*); convert các file sau \
-                chỉ tốn thời gian suy luận, không load lại.\n\n");
+    s.push_str(
+        "Model được **load 1 lần rồi cache** (cột *Load model*); convert các file sau \
+                chỉ tốn thời gian suy luận, không load lại.\n\n",
+    );
     s.push_str("| Model | Load model 1 lần (ms) | Số clip | Độ chính xác TB | WER TB | RTF TB |\n");
     s.push_str("|---|--:|--:|--:|--:|--:|\n");
     let mut by_model: BTreeMap<&str, Vec<&AudioRow>> = BTreeMap::new();

@@ -1,4 +1,4 @@
-# FileConv Docs (desktop)
+# Markhand Desktop
 
 App desktop (Tauri 2 + React/TS) cho **BA/PM** soạn tài liệu cho Dev: tải file gốc vào
 thư mục, app gọi lõi Rust `fileconv-core` chuyển sang **Markdown** (link 1-1 với file gốc),
@@ -8,6 +8,12 @@ xem **song song**, **đối chiếu theo khối** hoặc sửa Markdown. **Toàn
 
 - Một **thư mục gốc DATA** duy nhất. Mặc định `app_data_dir()/DATA`; có thể **map** sang
   thư mục bất kỳ của bạn (nút đổi thư mục trên sidebar; lưu ở `app_config_dir/config.json`).
+- **Project** = một folder cấp trên trong DATA, có cây folder con độc lập. Sidebar chỉ
+  hiện tài liệu thuộc project đang chọn.
+- Có thể tạo project rỗng, tạo folder con rồi upload file; hoặc **Import folder local**
+  để copy nguyên cây thư mục vào project và tự queue convert các file được hỗ trợ.
+- Markhand không tạo symlink tới folder ngoài DATA; cách copy này giữ path-jail,
+  đóng gói và xóa project an toàn.
 - **Folder** = thư mục con thật trong DATA. **Document** = cặp `(file gốc, file .md)`.
 - Quy ước link 1-1: `report.pdf` → `report.pdf.md` đặt cạnh nhau. Filesystem là nguồn sự thật.
 - Định dạng nhận vào = đuôi mà `fileconv-core` hỗ trợ (pdf, docx, pptx, xlsx/xls/ods, csv,
@@ -57,6 +63,76 @@ app/
   sửa ở bên phải. File nguồn thật luôn xem được trong chế độ Song song/File gốc.
 - `Ctrl/Cmd+S` lưu, `Ctrl/Cmd+W` đóng tab có xác nhận nếu còn draft.
 
+## Document Intelligence / Bàn giao
+
+Nút ✨ trên icon rail mở workspace Intelligence:
+
+- Sinh BRD/PRD, user stories, acceptance criteria, glossary, test cases và
+  traceability có citation.
+- Baseline chạy offline; tùy chọn LLM dùng `FILECONV_LLM_*`.
+- Quality report, SQLite FTS5 + exact/HNSW vector search và hỏi đáp có trích dẫn.
+- Snapshot phiên bản, diff và merge an toàn trước reconvert.
+- Sửa bảng Markdown, trích schema và xuất CSV.
+- Quét/che PII, live recursive watch folders và Knowledge Pack ZIP.
+- Artifacts được lưu dưới `DATA/.markhand/`; Markdown canonical cạnh file nguồn
+  không bị thay đổi trừ khi người dùng bấm lưu rõ ràng.
+
+### LLM providers
+
+Trong **Cài đặt → Document Intelligence**, Markhand có preset:
+
+- Local/self-host: Ollama, LM Studio, llama.cpp server, vLLM.
+- Cloud: OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral AI, Together AI.
+- Subscription: Cursor Agent CLI và OpenAI Codex CLI qua browser login chính thức.
+- Custom OpenAI-compatible endpoint.
+
+Mặc định LLM tắt; hybrid search, Q&A extractive và BRD/PRD deterministic vẫn
+chạy offline. Index incremental nằm ở `DATA/.markhand/knowledge.sqlite`. Nếu đã
+cấu hình nhưng provider không chạy, mất mạng hoặc thiếu key, Q&A tự fallback sang
+extractive có citation và hiển thị cảnh báo; kết quả retrieval không mất.
+Khuyến nghị Ollama/local để dữ liệu không rời máy:
+
+```bash
+ollama serve
+ollama pull qwen2.5:7b
+```
+
+API key nhập trong desktop chỉ giữ trong memory, không ghi vào `settings.json`.
+Muốn persist qua lần khởi động, đặt `FILECONV_LLM_API_KEY` trong environment.
+Cloud/LLM chỉ nhận các citation đã retrieval, không nhận toàn bộ DATA root.
+
+Neural embeddings là cấu hình riêng: Ollama/LM Studio/vLLM/OpenAI/Gemini. Nếu
+tắt, index dùng local hash 256D. Nếu bật cloud embedding, toàn bộ chunk được gửi
+khi build index (UI cảnh báo rõ), không chỉ top-K.
+
+OCR engine chọn Tesseract, PaddleOCR hoặc Auto. Paddle là Python/model tùy chọn;
+thiếu runtime sẽ fallback Tesseract. Scan nhiều cột được tách và kiểm tra score
+trước khi thay output toàn trang.
+
+### Build bộ cài
+
+```bash
+cd app
+pnpm tauri build --bundles deb       # Linux
+# CI release matrix: deb/AppImage, MSI/NSIS và DMG
+```
+
+`.deb` Linux (~17 MB) đã được build và kiểm tra metadata; artifact nằm dưới
+`target/release/bundle/`. Windows/macOS cần runner đúng hệ điều hành và
+signing/notarization trước khi phát hành công khai.
+
+Release workflow tự build unsigned khi chưa bật signing. Muốn phát hành signed:
+
+- Windows variables/secrets: `WINDOWS_SIGNING_ENABLED=true`,
+  `WINDOWS_CERTIFICATE_THUMBPRINT`, `WINDOWS_CERTIFICATE` (PFX base64),
+  `WINDOWS_CERTIFICATE_PASSWORD`.
+- macOS variables/secrets: `MACOS_SIGNING_ENABLED=true`, `APPLE_CERTIFICATE`
+  (P12 base64), `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`,
+  `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
+
+Không commit certificate hoặc password. Thiếu credential thì không thể tạo chữ
+ký Authenticode/Developer ID hay notarization thật.
+
 ## Preview file gốc trong app
 
 | Loại | Thư viện | Ghi chú |
@@ -66,7 +142,7 @@ app/
 | Excel `.xlsx/.xls/.ods` | `@e965/xlsx` (SheetJS) | có tab chọn sheet |
 | Ảnh, audio | Blob URL từ `read_bytes` | `<img>` / `<audio>` |
 | csv, html, text, markdown | đọc trực tiếp | hiển thị thô |
-| `.pptx` | — | webview render chưa đáng tin → nút **Mở ngoài** |
+| `.pptx` | parser OOXML Rust + SVG React | text, ảnh, shape cơ bản; chart/SmartArt mở ngoài |
 
 Bytes file đọc qua command Rust `read_bytes` (trả ArrayBuffer); ảnh/audio dựng `Blob`
 URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì webview chặn (403).
@@ -81,8 +157,8 @@ URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì web
 
 ## Hạn chế đã biết
 
-- `.pptx`: chưa preview trong app (dùng "Mở ngoài").
+- PPTX chart/SmartArt phức tạp hiển thị placeholder; mở ngoài để xem fidelity đầy đủ.
 - Queue chưa có phần trăm theo page/segment vì `fileconv-core` chưa phát progress unit.
 - Đối chiếu hiện liên kết bản convert gốc ↔ draft Markdown; source-anchor theo page/slide/
   sheet/timestamp cần structured converter artifact ở phase sau.
-- Chưa đóng gói bộ cài Win/Mac/Ubuntu.
+- Linux `.deb` đã xác minh; AppImage/Windows/macOS chưa smoke-test artifact hoặc ký số.

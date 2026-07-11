@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Link2, Pencil } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   alignMarkdownBlocks,
   replaceMarkdownBlock,
@@ -9,6 +7,7 @@ import {
 } from "../lib/markdownBlocks";
 import type { DocumentSession, FsNode } from "../lib/types";
 import { Button } from "./ui";
+import { SafeMarkdown } from "./SafeMarkdown";
 
 export function CompareView({
   node,
@@ -74,7 +73,7 @@ export function CompareView({
                 </div>
                 <div className="source-markdown markdown-body light-markdown">
                   {source ? (
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{source.text}</ReactMarkdown>
+                    <SafeMarkdown>{source.text}</SafeMarkdown>
                   ) : (
                     <p className="unmatched-source">Khối mới — không có trong bản convert gốc.</p>
                   )}
@@ -132,7 +131,7 @@ export function CompareView({
                   >
                     <Pencil size={13} className="block-pencil" />
                     <div className="markdown-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+                      <SafeMarkdown>{block.text}</SafeMarkdown>
                     </div>
                   </div>
                 )}

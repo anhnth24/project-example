@@ -8,6 +8,7 @@ import type {
   DocumentSession,
   FsNode,
   MarkdownTab,
+  Project,
   Settings,
 } from "../lib/types";
 
@@ -55,12 +56,15 @@ interface AppStore {
   activeFolder: string;
   settings: Settings | null;
   supportedExts: string[];
+  projects: Project[];
+  activeProjectId: string | null;
   error: string | null;
 
   view: AppView;
   openTabs: string[];
   activeTab: string | null;
   sessions: Record<string, DocumentSession>;
+  intelligenceScope: string[];
 
   jobs: ConvertJob[];
   queueRunning: boolean;
@@ -70,7 +74,10 @@ interface AppStore {
   init: () => Promise<void>;
   setError: (error: string | null) => void;
   refreshTree: () => Promise<void>;
+  refreshProjects: () => Promise<void>;
   setView: (view: AppView) => void;
+  setActiveProject: (projectId: string) => void;
+  setIntelligenceScope: (sourceRels: string[]) => void;
   openNode: (node: FsNode) => void;
   closeTab: (relPath: string) => void;
   closeTabsWithin: (relPath: string) => void;
@@ -97,12 +104,15 @@ export const useStore = create<AppStore>((set, get) => ({
   activeFolder: "",
   settings: null,
   supportedExts: [],
+  projects: [],
+  activeProjectId: null,
   error: null,
 
   view: "home",
   openTabs: [],
   activeTab: null,
   sessions: {},
+  intelligenceScope: [],
 
   jobs: [],
   queueRunning: false,
@@ -113,12 +123,23 @@ export const useStore = create<AppStore>((set, get) => ({
 
   init: async () => {
     try {
-      const [supportedExts, settings, dataRoot] = await Promise.all([
+      const [supportedExts, settings, dataRoot, projects] = await Promise.all([
         api.supportedExtensions(),
         api.getSettings(),
         api.getDataRoot(),
+        api.listProjects(),
       ]);
-      set({ supportedExts, settings, dataRoot });
+      const storedProject = localStorage.getItem(`markhand:project:${dataRoot}`);
+      const activeProject =
+        projects.find((project) => project.id === storedProject) ?? projects[0] ?? null;
+      set({
+        supportedExts,
+        settings,
+        dataRoot,
+        projects,
+        activeProjectId: activeProject?.id ?? null,
+        activeFolder: activeProject?.rootRel ?? "",
+      });
       await get().refreshTree();
     } catch (error) {
       set({ error: String(error) });
@@ -146,7 +167,44 @@ export const useStore = create<AppStore>((set, get) => ({
     }
   },
 
+  refreshProjects: async () => {
+    try {
+      const projects = await api.listProjects();
+      set((state) => {
+        const active =
+          projects.find((project) => project.id === state.activeProjectId) ??
+          projects[0] ??
+          null;
+        return {
+          projects,
+          activeProjectId: active?.id ?? null,
+          activeFolder: active
+            ? active.rootRel === "" ||
+              state.activeFolder === active.rootRel ||
+              state.activeFolder.startsWith(`${active.rootRel}/`)
+              ? state.activeFolder
+              : active.rootRel
+            : "",
+        };
+      });
+    } catch (error) {
+      set({ error: String(error) });
+    }
+  },
+
   setView: (view) => set({ view }),
+  setActiveProject: (projectId) => {
+    const project = get().projects.find((candidate) => candidate.id === projectId);
+    if (!project) return;
+    localStorage.setItem(`markhand:project:${get().dataRoot}`, project.id);
+    set({
+      activeProjectId: project.id,
+      activeFolder: project.rootRel,
+      view: "home",
+      intelligenceScope: [],
+    });
+  },
+  setIntelligenceScope: (intelligenceScope) => set({ intelligenceScope }),
 
   openNode: (node) => {
     if (node.isDir) {
@@ -382,8 +440,12 @@ export const useStore = create<AppStore>((set, get) => ({
         openTabs: [],
         activeTab: null,
         sessions: {},
+        intelligenceScope: [],
+        projects: [],
+        activeProjectId: null,
         jobs: [],
       });
+      await get().refreshProjects();
       await get().refreshTree();
     } catch (error) {
       set({ error: String(error) });
@@ -499,6 +561,11 @@ export const useStore = create<AppStore>((set, get) => ({
               currentSession.revision === startingRevision)
           ) {
             await get().loadSession(next.relPath, true);
+          }
+          try {
+            await api.rebuildKnowledgeIndex([next.relPath]);
+          } catch (indexError) {
+            set({ error: `Đã convert nhưng index lỗi: ${String(indexError)}` });
           }
           set((state) => ({
             jobs: state.jobs.map((job) =>

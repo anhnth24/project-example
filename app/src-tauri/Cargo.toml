@@ -1,7 +1,8 @@
 [package]
 name = "fileconv-desktop"
 version = "0.1.0"
-description = "Desktop app (Tauri) cho BA/PM soạn tài liệu cho Dev — convert file → Markdown"
+description = "Markhand local-first document conversion and intelligence desktop app"
+homepage = "https://github.com/anhnth24/project-example"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -13,7 +14,7 @@ name = "fileconv_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "fileconv-desktop"
+name = "markhand"
 path = "src/main.rs"
 
 [build-dependencies]
@@ -30,4 +31,7 @@ serde_json = "1"
 time = "=0.3.51"
 
 # Lõi convert dùng chung với CLI — KHÔNG viết lại.
-fileconv-core = { path = "../../crates/core" }
+fileconv-core = { path = "../../crates/core", features = ["llm"] }
+rusqlite = { version = "0.37.0", features = ["bundled"], default-features = false }
+notify = "8.2.0"
+hnsw_rs = "0.3.4"

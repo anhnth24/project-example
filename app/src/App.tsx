@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, Upload } from "lucide-react";
 import { useStore } from "./state/store";
@@ -14,6 +15,14 @@ import { LibraryView } from "./components/LibraryView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConvertQueue } from "./components/ConvertQueue";
 import { Button, IconButton, Modal } from "./components/ui";
+import { api } from "./lib/ipc";
+import type { WatchMatch } from "./lib/types";
+
+const IntelligenceView = lazy(() =>
+  import("./components/IntelligenceView").then((module) => ({
+    default: module.IntelligenceView,
+  })),
+);
 
 export default function App() {
   const init = useStore((state) => state.init);
@@ -24,6 +33,8 @@ export default function App() {
   const sessions = useStore((state) => state.sessions);
   const jobs = useStore((state) => state.jobs);
   const supportedExts = useStore((state) => state.supportedExts);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
   const importSources = useStore((state) => state.importSources);
   const saveSession = useStore((state) => state.saveSession);
   const closeTab = useStore((state) => state.closeTab);
@@ -76,6 +87,36 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    void listen<WatchMatch>("watch:match", async ({ payload }) => {
+      try {
+        const node = await api.importFileOnly(
+          payload.targetFolderRel,
+          payload.sourceAbs,
+        );
+        await useStore.getState().refreshTree();
+        if (payload.action === "import_and_convert") {
+          useStore.getState().enqueueConversions([node.relPath]);
+        }
+      } catch (watchError) {
+        const message = String(watchError);
+        // A previously imported filename is a safe no-op, not an import loop.
+        if (!message.includes("đã tồn tại")) {
+          useStore.getState().setError(`Watch folder: ${message}`);
+        }
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const command = event.ctrlKey || event.metaKey;
       if (command && event.key.toLocaleLowerCase("vi") === "k") {
@@ -83,7 +124,11 @@ export default function App() {
         setPaletteOpen(true);
       } else if (command && event.key.toLocaleLowerCase("vi") === "s") {
         event.preventDefault();
-        void saveSession();
+        if (view === "intelligence") {
+          window.dispatchEvent(new Event("markhand:intelligence-save"));
+        } else {
+          void saveSession();
+        }
       } else if (command && event.key.toLocaleLowerCase("vi") === "w" && activeTab) {
         event.preventDefault();
         requestCloseTab(activeTab);
@@ -103,6 +148,11 @@ export default function App() {
   }, [error, setError]);
 
   async function uploadFiles() {
+    if (!projects.some((project) => project.id === activeProjectId)) {
+      setDrawerOpen(true);
+      setError("Hãy tạo hoặc chọn dự án trước khi tải file.");
+      return;
+    }
     const picked = await openDialog({
       multiple: true,
       title: "Chọn file để thêm vào Markhand",
@@ -132,6 +182,7 @@ export default function App() {
         activeJobs={activeJobs}
         onHome={() => setView("home")}
         onLibrary={() => setView("library")}
+        onIntelligence={() => setView("intelligence")}
         onToggleDrawer={() => setDrawerOpen((open) => !open)}
         onSearch={() => setPaletteOpen(true)}
         onQueue={() => setQueueOpen((open) => !open)}
@@ -141,9 +192,13 @@ export default function App() {
       {drawerOpen && <Sidebar onOpenSettings={openSettings} />}
 
       <div className="workspace">
-        <DocumentTabs onRequestClose={requestCloseTab} />
+        {view !== "intelligence" && <DocumentTabs onRequestClose={requestCloseTab} />}
         <main className="main-content">
-          {view === "library" ? (
+          {view === "intelligence" ? (
+            <Suspense fallback={<div className="docview doc-loading">Đang tải Intelligence…</div>}>
+              <IntelligenceView />
+            </Suspense>
+          ) : view === "library" ? (
             <LibraryView onUpload={uploadFiles} />
           ) : view === "document" && activeNode && !activeNode.isDir ? (
             <DocView node={activeNode} />

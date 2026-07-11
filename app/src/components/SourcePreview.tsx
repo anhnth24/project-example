@@ -8,6 +8,7 @@ import * as XLSX from "@e965/xlsx";
 import { api } from "../lib/ipc";
 import type { FsNode } from "../lib/types";
 import { Button, Notice } from "./ui";
+import { PptxPreview } from "./PptxPreview";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -23,7 +24,7 @@ const LIMIT: Record<string, number> = {
   excel: 40 * MB,
 };
 
-type Cat = "image" | "audio" | "pdf" | "docx" | "excel" | "text" | "binary";
+type Cat = "image" | "audio" | "pdf" | "docx" | "excel" | "pptx" | "text" | "binary";
 
 function categoryOf(kind: string): Cat {
   if (kind === "image") return "image";
@@ -31,7 +32,7 @@ function categoryOf(kind: string): Cat {
   if (kind === "pdf") return "pdf";
   if (kind === "docx") return "docx";
   if (kind === "xlsx") return "excel";
-  if (kind === "pptx") return "binary";
+  if (kind === "pptx") return "pptx";
   return "text";
 }
 
@@ -358,7 +359,15 @@ function ExcelPreview({ relPath, onErr }: { relPath: string; onErr: (e: string) 
             ws["!ref"] = XLSX.utils.encode_range(range);
           }
         }
-        return { name: n, html: XLSX.utils.sheet_to_html(ws, { editable: false }), capped };
+        return {
+          name: n,
+          html: XLSX.utils.sheet_to_html(ws, {
+            editable: false,
+            header: "",
+            footer: "",
+          }),
+          capped,
+        };
       });
       if (!cancelled) {
         setSheets(s);
@@ -457,6 +466,8 @@ export function SourcePreview({
       return <DocxPreview relPath={node.relPath} onErr={onError} />;
     case "excel":
       return <ExcelPreview relPath={node.relPath} onErr={onError} />;
+    case "pptx":
+      return <PptxPreview relPath={node.relPath} onErr={onError} />;
     case "binary":
       return <BinaryFallback node={node} onErr={onError} />;
     default:

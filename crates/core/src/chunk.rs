@@ -20,18 +20,22 @@ use serde::ser::Serialize as _;
 /// Chia markdown thành chunks ≤ `max_chars` (xấp xỉ — đo theo ký tự).
 pub fn chunk_markdown(md: &str, max_chars: usize) -> Vec<Chunk> {
     let max_chars = max_chars.max(200); // sàn tối thiểu hợp lý
-    // 1) Gom thành section theo heading.
+                                        // 1) Gom thành section theo heading.
     let mut sections: Vec<(Vec<String>, String)> = Vec::new(); // (heading-path, body)
     let mut path: Vec<(usize, String)> = Vec::new(); // (level, title)
     let mut body = String::new();
 
-    let flush = |sections: &mut Vec<(Vec<String>, String)>, path: &[(usize, String)], body: &mut String| {
-        if !body.trim().is_empty() {
-            sections.push((path.iter().map(|(_, t)| t.clone()).collect(), std::mem::take(body)));
-        } else {
-            body.clear();
-        }
-    };
+    let flush =
+        |sections: &mut Vec<(Vec<String>, String)>, path: &[(usize, String)], body: &mut String| {
+            if !body.trim().is_empty() {
+                sections.push((
+                    path.iter().map(|(_, t)| t.clone()).collect(),
+                    std::mem::take(body),
+                ));
+            } else {
+                body.clear();
+            }
+        };
 
     for line in md.lines() {
         let trimmed = line.trim_start();
