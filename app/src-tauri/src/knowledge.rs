@@ -286,7 +286,7 @@ fn index_documents_inner(root: &Path, source_rels: &[String]) -> Result<IndexBui
         let transaction = connection.transaction().map_err(es)?;
         transaction
             .execute(
-                "DELETE FROM chunk_fts WHERE doc_rel = ?1",
+                "DELETE FROM chunks_fts WHERE doc_rel = ?1",
                 params![document.source_rel],
             )
             .map_err(es)?;
