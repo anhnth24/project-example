@@ -14,6 +14,7 @@ import {
 
 const settings: Settings = {
   ocrLangs: "vie+eng",
+  ocrEngine: "tesseract",
   pdfOcr: true,
   pdfOcrImages: false,
   audioLang: "vi",

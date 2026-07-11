@@ -313,6 +313,17 @@ pub fn provider_presets() -> Vec<LlmProviderPreset> {
             "Server OpenAI-compatible cho GPU nội bộ và nhiều người dùng.",
         ),
         preset(
+            "local-vlm",
+            "Local vision/VLM (Self-host)",
+            Provider::OpenAiCompatible,
+            Some("http://127.0.0.1:8080"),
+            "local-model",
+            &["local-model"],
+            true,
+            false,
+            "Endpoint OpenAI-compatible cho VLM local; nhập tên model đã cài, không gửi ảnh ra cloud.",
+        ),
+        preset(
             "cursor-cli",
             "Cursor subscription",
             Provider::CursorCli,

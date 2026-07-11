@@ -49,6 +49,7 @@ pub struct Node {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub ocr_langs: String,
+    pub ocr_engine: String,
     pub pdf_ocr: bool,
     pub pdf_ocr_images: bool,
     pub audio_lang: String,
@@ -75,6 +76,7 @@ impl Default for Settings {
         let d = ConverterOptions::default();
         Self {
             ocr_langs: d.ocr_langs,
+            ocr_engine: "tesseract".into(),
             pdf_ocr: d.pdf_ocr,
             pdf_ocr_images: d.pdf_ocr_images,
             audio_lang: d.audio_lang,
@@ -102,6 +104,7 @@ impl Settings {
     fn to_options(&self) -> ConverterOptions {
         ConverterOptions {
             ocr_langs: self.ocr_langs.clone(),
+            ocr_engine: fileconv_core::image_ocr::OcrEngine::from_name(&self.ocr_engine),
             whisper_model: self.whisper_model.as_ref().map(PathBuf::from),
             audio_lang: self.audio_lang.clone(),
             audio_threads: self.audio_threads,
@@ -948,6 +951,12 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
             .all(|lang| lang.len() == 3 && lang.bytes().all(|byte| byte.is_ascii_alphabetic()));
     if !valid_ocr {
         return Err("ngôn ngữ OCR cần có dạng vie hoặc vie+eng".into());
+    }
+    if !matches!(
+        settings.ocr_engine.as_str(),
+        "tesseract" | "paddle" | "auto"
+    ) {
+        return Err("OCR engine phải là tesseract, paddle hoặc auto".into());
     }
     if settings.audio_lang.trim().is_empty() {
         return Err("ngôn ngữ audio không được để trống".into());

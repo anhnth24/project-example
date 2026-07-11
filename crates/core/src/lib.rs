@@ -105,6 +105,8 @@ pub enum ConvertError {
 pub struct ConverterOptions {
     /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng").
     pub ocr_langs: String,
+    /// Tesseract mặc định; Paddle/Auto là tier tùy chọn.
+    pub ocr_engine: image_ocr::OcrEngine,
     /// Đường dẫn model whisper GGML cho audio (None = audio chưa khả dụng).
     pub whisper_model: Option<PathBuf>,
     /// Ngôn ngữ audio (mặc định "vi").
@@ -130,6 +132,7 @@ impl Default for ConverterOptions {
     fn default() -> Self {
         Self {
             ocr_langs: "vie+eng".to_string(),
+            ocr_engine: image_ocr::OcrEngine::Tesseract,
             whisper_model: None,
             audio_lang: "vi".to_string(),
             audio_threads: 4,
@@ -192,7 +195,7 @@ impl Converter {
     /// Chuyển một file sang Markdown.
     pub fn convert_path(&self, path: &Path) -> Result<ConversionResult, ConvertError> {
         let format = FormatKind::from_path(path);
-        let md = match format {
+        let md = image_ocr::with_ocr_engine(self.opts.ocr_engine, || match format {
             FormatKind::Pdf => conv::pdf::to_markdown(
                 path,
                 &self.opts.ocr_langs,
@@ -212,8 +215,8 @@ impl Converter {
                 .engine()?
                 .transcribe_file(path, Some(&self.opts.audio_lang))
                 .map(|t| t.text),
-            FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
-        }?;
+            FormatKind::Unknown => Err(ConvertError::Unsupported("không rõ đuôi file")),
+        })?;
 
         // Chuẩn hoá Unicode NFC: tài liệu tiếng Việt cũ (nhất là từ macOS/PDF legacy)
         // hay ở dạng NFD (ê + dấu rời) — gây lệch so khớp/tìm kiếm/embedding dù nhìn
