@@ -4,6 +4,7 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use hnsw_rs::api::AnnT;
 use hnsw_rs::prelude::{DistCosine, Hnsw, HnswIo};
 use serde::{Deserialize, Serialize};
 
