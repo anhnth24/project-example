@@ -34,7 +34,7 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff> ...");
+        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff|pptx-preview> ...");
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -103,6 +103,23 @@ fn main() -> Result<()> {
             let output = args.get(3).context("thiếu đường dẫn ZIP đầu ra")?;
             let sources = args.get(4..).context("thiếu file nguồn")?;
             cmd_handoff(product, Path::new(output), sources)
+        }
+        "pptx-preview" => {
+            let file = args.get(2).context("thiếu file PPTX")?;
+            let path = Path::new(file);
+            let meta = fileconv_core::pptx_preview::preview_meta(path)?;
+            let mut slides = Vec::new();
+            for index in 0..meta.slide_count {
+                slides.push(fileconv_core::pptx_preview::preview_slide(path, index)?);
+            }
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "meta": meta,
+                    "slides": slides
+                }))?
+            );
+            Ok(())
         }
         other => bail!("lệnh không hợp lệ: {other}"),
     }
