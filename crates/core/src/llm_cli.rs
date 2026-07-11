@@ -23,6 +23,7 @@ pub struct CliSubscriptionStatus {
     pub message: String,
 }
 
+#[derive(Debug)]
 struct CliOutput {
     status: ExitStatus,
     stdout: String,
@@ -335,6 +336,36 @@ pub fn start_login(config: &LlmConfig) -> Result<(), ConvertError> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn mock_cli(name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = std::env::temp_dir().join(format!(
+            "markhand_cli_bridge_{}_{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(
+            &path,
+            r#"#!/bin/sh
+if [ "$1" = "status" ] || [ "$1" = "login" ]; then
+  printf '{"email":"user@example.com"}\n'
+  exit 0
+fi
+while IFS= read -r line; do
+  :
+done
+printf '{"type":"result","result":"Grounded mock answer"}\n'
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
+
     #[test]
     fn parses_cursor_and_codex_output() {
         let cursor = r#"{"type":"result","subtype":"success","result":"Cursor answer"}"#;
@@ -374,5 +405,40 @@ mod tests {
         let config =
             LlmConfig::new_cli(Provider::CursorCli, "auto", Some("/tmp/codex".into())).unwrap();
         assert!(binary_for(&config).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn official_cli_transport_uses_status_and_stdin_chat() {
+        let binary = mock_cli("agent");
+        let config = LlmConfig::new_cli(
+            Provider::CursorCli,
+            "auto",
+            Some(binary.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        let status = subscription_status(&config).unwrap();
+        assert!(status.authenticated);
+        assert_eq!(status.account_hint.as_deref(), Some("user@example.com"));
+        assert_eq!(
+            chat(&config, "cite sources", "question").unwrap(),
+            "Grounded mock answer"
+        );
+        std::fs::remove_dir_all(binary.parent().unwrap()).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_timeout_kills_hung_bridge() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 5"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let error = run_command(command, None, Duration::from_millis(30)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

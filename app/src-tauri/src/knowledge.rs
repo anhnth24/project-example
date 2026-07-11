@@ -1196,6 +1196,8 @@ pub async fn hybrid_ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -1225,6 +1227,30 @@ mod tests {
         )
         .unwrap();
         vec!["payments.pdf".into(), "security.docx".into()]
+    }
+
+    fn mock_embedding_server(requests: usize) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for _ in 0..requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = vec![0u8; 32 * 1024];
+                let size = stream.read(&mut request).unwrap();
+                captured.push(String::from_utf8_lossy(&request[..size]).to_string());
+                let body = r#"{"data":[{"index":0,"embedding":[1.0,0.5,0.25]}]}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+            captured
+        });
+        (format!("http://{address}"), handle)
     }
 
     #[test]
@@ -1508,6 +1534,36 @@ mod tests {
             .unwrap();
         let error = hybrid_search_inner(&root, &sources, "giao dịch", 5, None, true).unwrap_err();
         assert!(error.contains("không nhất quán"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn provider_embedding_metadata_persists_and_drives_query_vector() {
+        let root = temp_root();
+        let sources = seed(&root);
+        let (base_url, server) = mock_embedding_server(2);
+        let config = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "",
+            "mock-embedding",
+            Some(base_url),
+            None,
+        )
+        .unwrap();
+        let result =
+            index_documents_inner(&root, &sources[..1], Some(config.clone()), false).unwrap();
+        assert_eq!(result.embedding_mode, PROVIDER_EMBEDDING_MODE);
+        assert_eq!(result.vector_dimensions, 3);
+        let search =
+            hybrid_search_inner(&root, &sources[..1], "đối soát", 5, Some(config), false).unwrap();
+        assert_eq!(search.embedding_mode, PROVIDER_EMBEDDING_MODE);
+        assert!(search.warnings.is_empty());
+        assert!(!search.hits.is_empty());
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|request| request.starts_with("POST /v1/embeddings ")));
         std::fs::remove_dir_all(root).ok();
     }
 }
