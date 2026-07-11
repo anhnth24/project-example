@@ -446,6 +446,11 @@ fn index_documents_with_plan(
     let current_metadata = read_metadata(&connection)?;
     if indexed_documents > 0 && current_metadata.signature != plan.metadata.signature {
         clear_index(&mut connection)?;
+    } else if indexed_documents > 0
+        && current_metadata.signature == plan.metadata.signature
+        && plan.metadata.dimensions == 0
+    {
+        plan.metadata.dimensions = current_metadata.dimensions;
     }
     let mut indexed = 0usize;
     let mut skipped = 0usize;
