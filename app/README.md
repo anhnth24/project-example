@@ -71,6 +71,26 @@ Nút ✨ trên icon rail mở workspace Intelligence:
 - Artifacts được lưu dưới `DATA/.markhand/`; Markdown canonical cạnh file nguồn
   không bị thay đổi trừ khi người dùng bấm lưu rõ ràng.
 
+### LLM providers
+
+Trong **Cài đặt → Document Intelligence**, Markhand có preset:
+
+- Local/self-host: Ollama, LM Studio, llama.cpp server, vLLM.
+- Cloud: OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral AI, Together AI.
+- Custom OpenAI-compatible endpoint.
+
+Mặc định LLM tắt; search/Q&A extractive và BRD/PRD deterministic vẫn chạy offline.
+Khuyến nghị Ollama/local để dữ liệu không rời máy:
+
+```bash
+ollama serve
+ollama pull qwen2.5:7b
+```
+
+API key nhập trong desktop chỉ giữ trong memory, không ghi vào `settings.json`.
+Muốn persist qua lần khởi động, đặt `FILECONV_LLM_API_KEY` trong environment.
+Cloud/LLM chỉ nhận các citation đã retrieval, không nhận toàn bộ DATA root.
+
 ## Preview file gốc trong app
 
 | Loại | Thư viện | Ghi chú |

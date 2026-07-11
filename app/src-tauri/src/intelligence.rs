@@ -56,6 +56,17 @@ pub struct HandoffResult {
     pub llm_note: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmConnectionResult {
+    pub provider: String,
+    pub model: String,
+    pub base_url: Option<String>,
+    pub local: bool,
+    pub latency_ms: u128,
+    pub response: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtifactRequest {
@@ -269,11 +280,60 @@ fn persist_pack(directory: &Path, pack: &HandoffPack) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn get_llm_provider_presets() -> Vec<fileconv_core::llm::LlmProviderPreset> {
+    fileconv_core::llm::provider_presets()
+}
+
+#[tauri::command]
+pub async fn test_llm_connection(
+    state: State<'_, AppState>,
+) -> Result<LlmConnectionResult, String> {
+    let config = state
+        .settings
+        .lock()
+        .map_err(|_| "lock lỗi")?
+        .llm_config()?
+        .ok_or("LLM đang tắt và chưa có FILECONV_LLM_*")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        let response = fileconv_core::llm::chat(
+            &config,
+            "Bạn kiểm tra kết nối. Chỉ trả lời đúng một từ: OK",
+            "ping",
+        )
+        .map_err(es)?;
+        let base_url = config.base_url.clone();
+        let local = base_url
+            .as_deref()
+            .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"));
+        Ok(LlmConnectionResult {
+            provider: format!("{:?}", config.provider),
+            model: config.model,
+            base_url,
+            local,
+            latency_ms: start.elapsed().as_millis(),
+            response: response.chars().take(120).collect(),
+        })
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
 pub async fn generate_handoff_pack(
     state: State<'_, AppState>,
     req: HandoffRequest,
 ) -> Result<HandoffResult, String> {
     let root = data_root(&state);
+    let llm_config = if req.mode == HandoffMode::LlmAssisted {
+        state
+            .settings
+            .lock()
+            .map_err(|_| "lock lỗi")?
+            .llm_config()?
+    } else {
+        None
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let documents = load_documents(&root, &req.source_rels)?;
         let options = HandoffOptions {
@@ -288,7 +348,7 @@ pub async fn generate_handoff_pack(
         let mut llm_note = None;
 
         if req.mode == HandoffMode::LlmAssisted {
-            if let Some(config) = fileconv_core::llm::LlmConfig::from_env() {
+            if let Some(config) = llm_config {
                 for name in ["01-BRD.md", "02-PRD.md"] {
                     if let Some(deterministic) = pack.artifacts.get(name).cloned() {
                         match intelligence::enhance_handoff_artifact(
@@ -434,12 +494,21 @@ pub async fn ask_intelligence(
     req: AskRequest,
 ) -> Result<AskResult, String> {
     let root = data_root(&state);
+    let llm_config = if req.use_llm.unwrap_or(false) {
+        state
+            .settings
+            .lock()
+            .map_err(|_| "lock lỗi")?
+            .llm_config()?
+    } else {
+        None
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let documents = load_documents(&root, &req.source_rels)?;
         let mut result =
             intelligence::ask_corpus(&documents, &req.question, req.top_k.unwrap_or(6));
         if req.use_llm.unwrap_or(false) && !result.citations.is_empty() {
-            if let Some(config) = fileconv_core::llm::LlmConfig::from_env() {
+            if let Some(config) = llm_config {
                 let sources = result
                     .citations
                     .iter()
@@ -505,13 +574,17 @@ pub async fn hard_ocr_image(
     req: HardOcrRequest,
 ) -> Result<HardOcrResult, String> {
     let root = data_root(&state);
+    let config = state
+        .settings
+        .lock()
+        .map_err(|_| "lock lỗi")?
+        .llm_config()?
+        .ok_or("chưa cấu hình LLM provider cho vision OCR")?;
     tauri::async_runtime::spawn_blocking(move || {
         let source = resolve_within(&root, &req.source_rel)?;
         if FormatKind::from_path(&source) != FormatKind::Image {
             return Err("OCR hard hiện hỗ trợ file ảnh; PDF hãy reprocess theo trang.".into());
         }
-        let config = fileconv_core::llm::LlmConfig::from_env()
-            .ok_or("chưa cấu hình FILECONV_LLM_* cho vision OCR")?;
         let markdown = fileconv_core::llm::vision_ocr(&config, &source).map_err(es)?;
         let directory = markhand_root(&root)?.join("hard-ocr");
         fs::create_dir_all(&directory).map_err(es)?;

@@ -7,6 +7,8 @@ import type {
   FsNode,
   HandoffMode,
   HandoffResult,
+  LlmConnectionResult,
+  LlmProviderPreset,
   MarkdownTable,
   MergeResult,
   PiiReport,
@@ -57,6 +59,9 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  getLlmProviderPresets: () =>
+    invoke<LlmProviderPreset[]>("get_llm_provider_presets"),
+  testLlmConnection: () => invoke<LlmConnectionResult>("test_llm_connection"),
 
   generateHandoffPack: (req: {
     sourceRels: string[];

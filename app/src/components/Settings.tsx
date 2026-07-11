@@ -1,9 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, RotateCcw } from "lucide-react";
+import { Cloud, FolderOpen, RotateCcw, Server, Wifi } from "lucide-react";
+import { api } from "../lib/ipc";
+import { applyLlmPreset, validateLlmSettings } from "../lib/llmSettings";
 import { useStore } from "../state/store";
-import type { Settings } from "../lib/types";
-import { Button, Modal, Toggle } from "./ui";
+import type {
+  LlmConnectionResult,
+  LlmProviderPreset,
+  Settings,
+} from "../lib/types";
+import { Button, Modal, Notice, Toggle } from "./ui";
 
 const DEFAULTS: Settings = {
   ocrLangs: "vie+eng",
@@ -12,6 +18,11 @@ const DEFAULTS: Settings = {
   audioLang: "vi",
   audioThreads: 4,
   whisperModel: null,
+  llmEnabled: false,
+  llmProvider: "ollama",
+  llmBaseUrl: "http://127.0.0.1:11434",
+  llmModel: "qwen2.5:7b",
+  llmApiKey: null,
 };
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -20,6 +31,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const setError = useStore((s) => s.setError);
   const [form, setForm] = useState<Settings>(current);
   const [saving, setSaving] = useState(false);
+  const [presets, setPresets] = useState<LlmProviderPreset[]>([]);
+  const [testingLlm, setTestingLlm] = useState(false);
+  const [llmResult, setLlmResult] = useState<LlmConnectionResult | null>(null);
+
+  useEffect(() => {
+    api
+      .getLlmProviderPresets()
+      .then(setPresets)
+      .catch((error) => setError(String(error)));
+  }, [setError]);
 
   function set<K extends keyof Settings>(key: K, val: Settings[K]) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -51,6 +72,32 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const selectedPreset = presets.find((preset) => preset.id === form.llmProvider);
+
+  function applyPreset(id: string) {
+    const preset = presets.find((item) => item.id === id);
+    if (!preset) {
+      set("llmProvider", id);
+      return;
+    }
+    setForm((currentForm) => applyLlmPreset(currentForm, preset));
+    setLlmResult(null);
+  }
+
+  async function testLlmConnection() {
+    if (validation.length) return;
+    setTestingLlm(true);
+    setLlmResult(null);
+    try {
+      await saveSettings(form);
+      setLlmResult(await api.testLlmConnection());
+    } catch {
+      // Store/global alert already contains the actionable error.
+    } finally {
+      setTestingLlm(false);
+    }
+  }
+
   const validation: string[] = [];
   if (!/^[a-z]{3}(?:\+[a-z]{3})*$/i.test(form.ocrLangs.trim())) {
     validation.push("Ngôn ngữ OCR cần có dạng vie hoặc vie+eng.");
@@ -63,13 +110,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   ) {
     validation.push("Thread audio phải nằm trong khoảng 1–32.");
   }
+  validation.push(...validateLlmSettings(form, selectedPreset));
 
   return (
     <Modal
-      title="Cài đặt convert"
-      description="Cấu hình được lưu trên máy và áp dụng cho các job chưa bắt đầu cùng những job mới."
+      title="Cài đặt Markhand"
+      description="Convert chạy local. LLM mặc định ưu tiên self-host; cloud chỉ nhận context khi bạn chủ động bật."
       onClose={onClose}
-      width={520}
+      width={680}
       footer={
         <>
           <Button
@@ -152,6 +200,122 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             </Button>
           </div>
         </div>
+
+        <div className="settings-section-heading">
+          <span className="eyebrow">Document Intelligence</span>
+          <strong>LLM provider</strong>
+        </div>
+
+        <Toggle
+          checked={form.llmEnabled}
+          onChange={(checked) => set("llmEnabled", checked)}
+          label="Bật LLM cho Handoff và Hỏi đáp"
+          description="Tắt = search/Q&A extractive và BRD/PRD deterministic hoàn toàn local."
+        />
+
+        {form.llmEnabled && (
+          <div className="llm-settings">
+            <label className="field">
+              <span>Provider preset</span>
+              <select
+                value={form.llmProvider}
+                onChange={(event) => applyPreset(event.target.value)}
+              >
+                {presets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.local ? "Local · " : "Cloud · "}
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {selectedPreset && (
+              <Notice tone={selectedPreset.local ? "info" : "warning"}>
+                <span className="provider-notice">
+                  {selectedPreset.local ? <Server size={14} /> : <Cloud size={14} />}
+                  <span>
+                    <b>
+                      {selectedPreset.local
+                        ? "100% local — khuyến nghị"
+                        : "Dữ liệu top citation sẽ rời máy"}
+                    </b>
+                    <small>{selectedPreset.description}</small>
+                  </span>
+                </span>
+              </Notice>
+            )}
+
+            <div className="settings-grid llm-grid">
+              <label className="field">
+                <span>Base URL</span>
+                <input
+                  value={form.llmBaseUrl}
+                  onChange={(event) => set("llmBaseUrl", event.target.value)}
+                  placeholder="http://127.0.0.1:11434"
+                />
+              </label>
+              <label className="field">
+                <span>Model</span>
+                <input
+                  list="llm-model-options"
+                  value={form.llmModel}
+                  onChange={(event) => set("llmModel", event.target.value)}
+                  placeholder="qwen2.5:7b"
+                />
+                <datalist id="llm-model-options">
+                  {selectedPreset?.models.map((model) => (
+                    <option value={model} key={model} />
+                  ))}
+                </datalist>
+              </label>
+            </div>
+
+            <label className="field">
+              <span>API key {selectedPreset?.requiresApiKey ? "(bắt buộc)" : "(tùy chọn)"}</span>
+              <input
+                type="password"
+                autoComplete="off"
+                value={form.llmApiKey ?? ""}
+                onChange={(event) => set("llmApiKey", event.target.value || null)}
+                placeholder={
+                  selectedPreset?.local
+                    ? "Local provider thường không cần key"
+                    : "Chỉ giữ trong memory; dùng FILECONV_LLM_API_KEY để persist"
+                }
+              />
+              <small>
+                Markhand không ghi API key vào settings.json. Sau khi restart, dùng biến môi
+                trường hoặc nhập lại.
+              </small>
+            </label>
+
+            {form.llmProvider === "ollama" && (
+              <div className="local-setup">
+                <code>ollama serve</code>
+                <code>ollama pull {form.llmModel || "qwen2.5:7b"}</code>
+              </div>
+            )}
+
+            <div className="llm-test-row">
+              <Button
+                variant="secondary"
+                icon={<Wifi size={14} />}
+                loading={testingLlm}
+                disabled={validation.length > 0}
+                onClick={testLlmConnection}
+              >
+                Test kết nối
+              </Button>
+              {llmResult && (
+                <span className={llmResult.local ? "local-result" : ""}>
+                  OK · {llmResult.model} · {llmResult.latencyMs}ms ·{" "}
+                  {llmResult.response}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {!!validation.length && (
           <div className="form-errors" role="alert">

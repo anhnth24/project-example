@@ -83,6 +83,7 @@ export function IntelligenceView() {
   const openNode = useStore((state) => state.openNode);
   const enqueueConversions = useStore((state) => state.enqueueConversions);
   const setError = useStore((state) => state.setError);
+  const settings = useStore((state) => state.settings);
   const selected = useStore((state) => state.intelligenceScope);
   const setSelected = useStore((state) => state.setIntelligenceScope);
 
@@ -527,7 +528,11 @@ export function IntelligenceView() {
                     setHandoffMode(checked ? "llm_assisted" : "deterministic")
                   }
                   label="Tăng cường bằng LLM"
-                  description="Bật sẽ gửi tối đa 40 citation tới provider; không có cấu hình sẽ giữ bản offline."
+                  description={
+                    settings?.llmEnabled
+                      ? `${settings.llmProvider} · ${settings.llmModel}; gửi tối đa 40 citation.`
+                      : "Chưa bật provider trong Cài đặt; sẽ giữ bản offline."
+                  }
                 />
               </div>
 
@@ -714,7 +719,11 @@ export function IntelligenceView() {
                     checked={useLlm}
                     onChange={setUseLlm}
                     label="LLM"
-                    description="Tắt = trả lời trích xuất offline."
+                    description={
+                      settings?.llmEnabled
+                        ? `${settings.llmProvider} · ${settings.llmModel}`
+                        : "Tắt = trả lời trích xuất offline."
+                    }
                   />
                   <Button
                     variant="primary"

@@ -44,7 +44,7 @@ pub struct Node {
 
 /// Tùy chọn convert lộ ra UI (ánh xạ sang `ConverterOptions` của lõi).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub ocr_langs: String,
     pub pdf_ocr: bool,
@@ -52,6 +52,11 @@ pub struct Settings {
     pub audio_lang: String,
     pub audio_threads: i32,
     pub whisper_model: Option<String>,
+    pub llm_enabled: bool,
+    pub llm_provider: String,
+    pub llm_base_url: String,
+    pub llm_model: String,
+    pub llm_api_key: Option<String>,
 }
 
 impl Default for Settings {
@@ -64,6 +69,11 @@ impl Default for Settings {
             audio_lang: d.audio_lang,
             audio_threads: d.audio_threads,
             whisper_model: None,
+            llm_enabled: false,
+            llm_provider: "ollama".into(),
+            llm_base_url: "http://127.0.0.1:11434".into(),
+            llm_model: "qwen2.5:7b".into(),
+            llm_api_key: None,
         }
     }
 }
@@ -79,6 +89,42 @@ impl Settings {
             pdf_ocr_images: self.pdf_ocr_images,
             ..Default::default()
         }
+    }
+
+    fn llm_config(&self) -> Result<Option<fileconv_core::llm::LlmConfig>, String> {
+        if !self.llm_enabled {
+            return Ok(fileconv_core::llm::LlmConfig::from_env());
+        }
+        let preset = fileconv_core::llm::provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == self.llm_provider);
+        let provider = preset
+            .as_ref()
+            .map(|preset| preset.provider)
+            .unwrap_or_else(|| fileconv_core::llm::Provider::from_name(&self.llm_provider));
+        let api_key = self
+            .llm_api_key
+            .clone()
+            .or_else(|| std::env::var("FILECONV_LLM_API_KEY").ok())
+            .unwrap_or_default();
+        if preset
+            .as_ref()
+            .is_some_and(|preset| preset.requires_api_key)
+            && api_key.trim().is_empty()
+        {
+            return Err(format!(
+                "{} yêu cầu API key",
+                preset
+                    .as_ref()
+                    .map(|preset| preset.label.as_str())
+                    .unwrap_or("Provider")
+            ));
+        }
+        let base_url =
+            (!self.llm_base_url.trim().is_empty()).then(|| self.llm_base_url.trim().to_string());
+        fileconv_core::llm::LlmConfig::new(provider, api_key, self.llm_model.trim(), base_url)
+            .map(Some)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -800,8 +846,11 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
     if !(1..=32).contains(&settings.audio_threads) {
         return Err("thread audio phải nằm trong khoảng 1–32".into());
     }
+    settings.llm_config()?;
     let mut current = state.settings.lock().map_err(|_| "lock lỗi")?;
-    let json = serde_json::to_string_pretty(&settings).map_err(es)?;
+    let mut persisted = settings.clone();
+    persisted.llm_api_key = None; // Secret remains in memory; use env/keychain for persistence.
+    let json = serde_json::to_string_pretty(&persisted).map_err(es)?;
     atomic_write(&settings_file(&state.config_dir), json.as_bytes())?;
     *current = settings;
     Ok(())
@@ -858,6 +907,8 @@ pub fn run() {
             read_bytes,
             get_settings,
             set_settings,
+            intelligence::get_llm_provider_presets,
+            intelligence::test_llm_connection,
             intelligence::generate_handoff_pack,
             intelligence::read_handoff_artifact,
             intelligence::save_handoff_artifact,
@@ -991,6 +1042,53 @@ mod tests {
             1
         );
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn old_settings_json_receives_local_first_llm_defaults() {
+        let json = r#"{
+          "ocrLangs":"vie+eng",
+          "pdfOcr":true,
+          "pdfOcrImages":false,
+          "audioLang":"vi",
+          "audioThreads":4,
+          "whisperModel":null
+        }"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert!(!settings.llm_enabled);
+        assert_eq!(settings.llm_provider, "ollama");
+        assert_eq!(settings.llm_base_url, "http://127.0.0.1:11434");
+    }
+
+    #[test]
+    fn ollama_config_does_not_require_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_enabled = true;
+        let config = settings.llm_config().unwrap().unwrap();
+        assert!(config.api_key.is_empty());
+        assert_eq!(config.model, "qwen2.5:7b");
+    }
+
+    #[test]
+    fn cloud_provider_requires_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_enabled = true;
+        settings.llm_provider = "openai".into();
+        settings.llm_base_url = "https://api.openai.com".into();
+        settings.llm_model = "gpt-4o-mini".into();
+        assert!(settings.llm_config().is_err());
+        settings.llm_api_key = Some("secret".into());
+        assert!(settings.llm_config().unwrap().is_some());
+    }
+
+    #[test]
+    fn persisted_settings_can_omit_api_key() {
+        let mut settings = Settings::default();
+        settings.llm_api_key = Some("do-not-write-me".into());
+        let mut persisted = settings;
+        persisted.llm_api_key = None;
+        let json = serde_json::to_string(&persisted).unwrap();
+        assert!(!json.contains("do-not-write-me"));
     }
 
     #[cfg(unix)]

@@ -19,6 +19,34 @@ export interface Settings {
   audioLang: string;
   audioThreads: number;
   whisperModel: string | null;
+  llmEnabled: boolean;
+  llmProvider: string;
+  llmBaseUrl: string;
+  llmModel: string;
+  llmApiKey: string | null;
+}
+
+export type LlmProtocol = "open_ai" | "anthropic" | "gemini" | "open_ai_compatible";
+
+export interface LlmProviderPreset {
+  id: string;
+  label: string;
+  provider: LlmProtocol;
+  baseUrl: string | null;
+  defaultModel: string;
+  models: string[];
+  local: boolean;
+  requiresApiKey: boolean;
+  description: string;
+}
+
+export interface LlmConnectionResult {
+  provider: string;
+  model: string;
+  baseUrl: string | null;
+  local: boolean;
+  latencyMs: number;
+  response: string;
 }
 
 export type AppView = "home" | "library" | "document" | "intelligence";
