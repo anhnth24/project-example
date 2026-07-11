@@ -112,3 +112,14 @@ The Tauri app was run under Xvfb at 1440×900:
 - The workflows now produce unsigned artifacts when credentials are absent and
   switch to signed verification when repository variables/secrets are enabled.
 - No signing secret or certificate is committed to the repository.
+
+## Final regression and package
+
+- Rust workspace: **150 tests** (102 core, 45 desktop, 3 CLI).
+- React/TypeScript: **37 tests**.
+- Total: **187/187 passed**.
+- `cargo fmt --all -- --check` and production frontend build passed.
+- Final unsigned Linux package rebuilt successfully:
+  `Markhand_0.1.0_amd64.deb`, **17,029,400 bytes**.
+- Debian metadata/package validation passed after adding notify, HNSW and PPTX
+  preview dependencies.

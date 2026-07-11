@@ -59,13 +59,13 @@ Với corpus BRD/workshop/Excel traceability thật, BA/PM nên:
 
 ## Regression coverage
 
-Sau review, test suite được mở rộng từ các happy-path cơ bản thành **171 test**
+Sau review, test suite được mở rộng từ các happy-path cơ bản thành **187 test**
 chạy tự động:
 
 | Lớp | Số test | Phạm vi |
 |---|---:|---|
-| `fileconv-core` | 90 | convert/OCR/audio + intelligence + LLM/CLI/embedding protocols |
-| Tauri desktop | 41 | path jail, projects, settings, persistent hybrid/neural RAG |
+| `fileconv-core` | 102 | convert/OCR/audio/PPTX/legacy + intelligence + LLM protocols |
+| Tauri desktop | 45 | path jail, watch service, HNSW, settings, persistent RAG |
 | React/TypeScript | 37 | blocks, project scope, provider/subscription/embedding helpers |
 | CLI metrics | 3 | CER/WER |
 
@@ -91,6 +91,8 @@ Nhóm intelligence bao phủ:
   kill và subscription status.
 - neural embedding batch/normalization, persistent model signature/dimensions,
   mixed-dimension rejection, query vector và whole-scope local fallback.
+- VNI/VPS maps/detection, column OCR, HTML rowspan/colspan, PPTX preview shapes,
+  notify loop safety và HNSW dump/reload.
 - project discovery/legacy migration, Unicode slug, nested folder collection,
   import limits, supported formats, no-overwrite copy và project-scoped tree.
 

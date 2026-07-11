@@ -36,10 +36,10 @@ tiền xử lý ảnh trước OCR.
 | Âm thanh | Phản âm tiếng Việt (whisper-rs + symphonia, ưu tiên PhoWhisper) | ✅ |
 | PDF quét | Render 300 DPI + OCR từng trang `needs_ocr` | ✅ |
 | Cấu trúc | PDF có heading/bảng/đa cột (pdf-inspector) | ✅ |
-| RAG | Tách chunk theo heading (chunk.rs) | ✅ |
-| Bảng mã cũ | Decode TCVN3 (VNI/VPS còn backlog) | ✅ TCVN3 |
+| RAG | SQLite FTS5 + neural/local vectors + persistent HNSW | ✅ |
+| Bảng mã cũ | Decode TCVN3, VNI-Windows và VPS | ✅ |
 | OCR khó | Vision-LLM (cột nhiều, IN HOA, chữ viết tay, con dấu) qua MCP `ocr_hard` | ✅ (cần key LLM) |
-| Desktop GUI | Markhand: kéo-thả, intelligence, provider/embedding settings | ✅ (`.deb` đã build; Win/Mac chờ signing) |
+| Desktop GUI | PPTX preview, merged tables, live watch, intelligence | ✅ (`.deb`; Win/Mac chờ credentials ký) |
 | NFC | Chuẩn hoá mọi output (tài liệu NFD từ macOS/PDF cũ) | ✅ |
 
 ### Yêu cầu phi chức năng

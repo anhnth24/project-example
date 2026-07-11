@@ -5,11 +5,11 @@
 
 ## Đã hoàn thành ✅
 
-- **Lõi convert** (`fileconv-core`): pdf/docx/pptx/xlsx/csv/html + ảnh OCR + audio → Markdown.
+- **Lõi convert** (`fileconv-core`): pdf/docx/pptx/xlsx/csv/html/text + ảnh OCR + audio → Markdown.
 - **PDF 3-tier**: pdf-inspector (cấu trúc, đa cột, cờ `needs_ocr`) → pdfium-render → pdf-extract fallback.
 - **Tiền xử lý ảnh OCR**: grayscale → upscale → unsharpen → normalize (in OCR 98.5→99.5%, low-res 81→99%).
 - **NFC bắt buộc** trên mọi output (sửa tài liệu NFD từ macOS/PDF cũ).
-- **Decode TCVN3** (bảng mã VN cũ) trong đường CSV/text.
+- **Decode TCVN3/VNI-Windows/VPS** với map VietUnicode trong CSV/text.
 - **RAG chunking** theo heading-path (`chunk.rs`).
 - **CLI bench**: `one` / `speed` / `accuracy` / `audio` với CER/WER Levenshtein.
 - **MCP server** (`fileconv-mcp`): 8 tool (4 deterministic + 4 LLM, gồm `ocr_hard` vision).
@@ -26,11 +26,17 @@
 - **Subscription bridge**: Cursor Agent và OpenAI Codex CLI dùng browser login,
   ask/read-only sandbox, timeout và fallback; không đọc token.
 - **Neural embeddings tùy chọn**: Ollama/LM Studio/vLLM/OpenAI/Gemini, index
-  signature + dimension guard + FTS fallback.
+  signature + dimension guard + persistent HNSW + exact/FTS fallback.
 - **Audio no-speech**: lọc theo xác suất segment và marker nhạc/im lặng; tự tìm
   PhoWhisper đã tải về trước model chuẩn.
 - **Desktop release foundation**: identity `Markhand`, icon đa nền tảng,
   CI/release matrix và `.deb` Linux đã build/kiểm tra metadata.
+- **PPTX preview**: parser OOXML Rust + SVG React cho text/ảnh/shape, navigation
+  bàn phím; chart/SmartArt có placeholder.
+- **Live watch folders**: notify recursive, debounce, chống loop DATA và tự đẩy
+  file mới vào queue frontend.
+- **Bảng merge/multiline**: XLSX/XLS/DOCX fallback HTML rowspan/colspan và render
+  qua sanitizer.
 
 ## Đang làm / Gần ✋
 
@@ -41,17 +47,18 @@
 ### Độ chính xác tiếng Việt
 - [ ] **Phục hồi dấu IN HOA đầy đủ**: đã thêm retry PSM 6 khi output sparse/lỗi/
       dính chuỗi IN HOA và chọn output theo quality score; phục hồi bằng VLM vẫn cần corpus thật.
-- [ ] **Tách cột trước OCR** cho bảng PDF đa cột (Tesseract đang đọc sai thứ tự cột).
-- [ ] **Decode VNI / VPS** đầy đủ (mới có TCVN3).
+- [x] **Tách cột trước OCR** bằng vertical projection, OCR từng cột và score fallback.
+- [x] **Decode VNI / VPS** đầy đủ từ bảng tham chiếu VietUnicode.
 - [x] **Lọc ảo giác whisper** bằng `no_speech_probability` + marker nhạc/im lặng.
 
 ### OCR / Vision tier
-- [ ] **Vintern-1B** (VLM on-device) cho tài liệu khó thay/về bên cạnh `ocr_hard` cloud.
-- [ ] **PaddleOCR vi** với sắp xếp reading-order (đã có `bench/paddle_test.py` tư liệu, chưa tích hợp).
+- [x] **Local VLM/Vintern integration** qua endpoint vision OpenAI-compatible,
+      model do người dùng chọn; không bundle weight/license chưa rõ.
+- [x] **PaddleOCR vi** opt-in qua JSON bridge, column reading-order và Tesseract fallback.
 - [ ] **Chữ viết tay** — cần dữ liệu thật có nhãn (sample hiện là font-render, không phải viết tay thật; accuracy ~47.9% là giới hạn Tesseract).
 
 ### Output / cấu trúc
-- [ ] **Bảng → HTML** cho ô phức tạp (merge cell, multi-line) thay vì chỉ Markdown table.
+- [x] **Bảng → HTML** cho merge cell/multiline, sanitize khi preview.
 - [x] **`ConversionResult.title`** — lấy heading đầu, fallback tên file.
 
 ### Desktop / đóng gói

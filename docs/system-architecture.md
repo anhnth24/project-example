@@ -78,26 +78,27 @@ Chi tiết: [`../bench/REPORT_CASAN_PDF.md`](../bench/REPORT_CASAN_PDF.md).
 | Format | Crate gốc | Điểm chính |
 |---|---|---|
 | pdf | pdf-inspector → pdfium-render → pdf-extract | 3-tier như trên |
-| docx | docx-rust 0.1.11 | style→heading; gom run theo (bold,italic) trước khi bao emphasis (tránh dính chữ); `<w:br>/<w:tab>` |
-| xlsx | calamine 0.35 (`open_workbook_auto`) | đọc MỌI sheet; hỗ trợ xls/xlsb/ods; `rows_to_md_table` chung |
-| pptx | zip 2.2 + quick-xml 0.37 | enumerate `ppt/slides/slideN.xml`, **sort theo N** (sửa lỗi zip-order) |
+| docx | docx-rust + OOXML pass | heading/run; gridSpan/vMerge → sanitized HTML table |
+| xlsx | calamine 0.35 | mọi sheet; xls/xlsb/ods; merge/multiline → rowspan/colspan |
+| pptx | zip + quick-xml | text Markdown + structured preview text/image/shape |
 | html | htmd 0.5 | skip script/style/noscript; thay html2md (cũ phình output) |
-| csv | csv 1.3 | strip BOM; TCVN3 fallback (`viet_legacy`); sniff delimiter `, ; \t \|` |
-| image | Tesseract CLI | preprocess; PSM 3, retry PSM 6 cho output sparse/lỗi/dính IN HOA và chọn theo score |
+| csv/text | csv + legacy maps | UTF-8/TCVN3/VNI/VPS; delimiter sniff; plain `.txt/.log` |
+| image | Tesseract/Paddle | preprocess, split scan columns, PSM retry; Paddle opt-in/fallback |
 | audio | whisper-rs 0.16 + symphonia 0.5 | 16k mono; tự tìm PhoWhisper; lọc segment no-speech/marker nhạc |
 
 ### Post-processing
 Mọi output: NFC (bắt buộc) → optional cắt tại `max_chars` kèm `<!-- (đã cắt...) -->`.
 
 ### ConverterOptions
-`ocr_langs` (mặc định `"vie+eng"`), `whisper_model: Option<PathBuf>`, `audio_lang` (`"vi"`),
+`ocr_langs`, `ocr_engine` (`tesseract|auto|paddle`), `whisper_model`, `audio_lang` (`"vi"`),
 `audio_threads` (4), `audio_no_speech_threshold` (0.6), `pdf_ocr` (true),
 `pdf_ocr_images` (false), `pdf_pages: Option<Vec<u32>>` (1-indexed),
 `xlsx_sheet: Option<String>`, `max_chars: Option<usize>`.
 
 ### Module công khai
 `audio` (AudioEngine, Transcript, decode_to_pcm16k_mono) · `image_ocr` (ocr_image, ocr_dynimage, tesseract_available) ·
-`chunk` (chunk_markdown, chunks_json, Chunk) · `probe` (FileInfo) · `tables` (tables_json) · `viet_legacy` (decode_text, looks_like_tcvn3, decode_tcvn3) ·
+`chunk` · `probe` · `pptx_preview` · `tables` · `viet_legacy`
+(TCVN3/VNI/VPS detect/decode) ·
 `llm`/`llm_cli` (HTTP chat/vision, neural embeddings, Cursor/Codex subscription transport).
 `conv::*` **private** — chỉ qua `convert_path`.
 
@@ -109,6 +110,7 @@ Mọi output: NFC (bắt buộc) → optional cắt tại `max_chars` kèm `<!--
 | `speed` | `<dir> [report.md]` | ms/file, ms/page, KB/s theo format (`count_pages` gọi pdfinfo/python3) |
 | `accuracy` | `<manifest.tsv> [report.md]` | CER/WER (Levenshtein, `normalize()` bỏ markdown) theo nhãn |
 | `audio` | `<models.csv> <manifest.tsv> [report.md]` | WER/RTF/load mỗi model GGML |
+| `pptx-preview` | `<file.pptx>` | JSON preview meta/slides/shapes cho QA |
 
 Panic hook in `file:line`. Manifest: mỗi dòng `<file>\t<ground_truth.txt>\t<nhãn>`, `#` = comment.
 
@@ -142,7 +144,8 @@ Anthropic. API key chỉ giữ trong memory. Chi tiết:
 ## Desktop "Markhand" (`app/`)
 
 **Stack**: Tauri 2 + React 19.2 + Vite 6 + TypeScript strict + Zustand 5 + UI primitives nội bộ theo
-LumiBase + lucide-react. Editor: CodeMirror, react-markdown+remark-gfm, pdfjs-dist 6.1, docx-preview,
+LumiBase + lucide-react. Editor: CodeMirror, react-markdown+GFM+raw HTML sanitizer,
+pdfjs-dist 6.1, docx-preview,
 @e965/xlsx. Font Inter Variable được bundle offline. Rust phụ thuộc `fileconv-core`
 (path `../../crates/core`).
 
@@ -175,9 +178,9 @@ Bundle có icon đa nền tảng, metadata deb/AppImage/MSI/DMG và CI release m
 ```
 
 ### Cầu nối Tauri (`app/src-tauri/src/lib.rs`)
-- **AppState**: `{ config_dir, data_root: Mutex<PathBuf>, settings: Mutex<Settings> }`.
+- **AppState**: config/DATA/settings + `WatchService` notify thread.
 - **Path safety**: `resolve_within` chặn `..`, tuyệt đối, root-relative.
-- **53 command**: `supported_extensions`, `get/set_data_root` (persist `config.json`; mặc định `app_data_dir()/DATA`),
+- **56 command**: `supported_extensions`, `get/set_data_root` (persist `config.json`; mặc định `app_data_dir()/DATA`),
   `read_tree` (ghép cặp `report.pdf`↔`report.pdf.md` 1-1, ẩn phía `.md`, đánh dấu `standaloneMd`),
   `create_folder`, `create_markdown`, `rename_node` (rename cả `.md` ghép cặp), `delete_node` (từ chối xóa DATA root),
   `import_file_only` (copy, chưa convert), `import_file` (compat: copy + convert), `reconvert`,
@@ -188,8 +191,10 @@ Bundle có icon đa nền tảng, metadata deb/AppImage/MSI/DMG và CI release m
   RAG mới gồm `rebuild_knowledge_index`, `knowledge_index_stats`, `hybrid_search`,
   `hybrid_ask`: SQLite FTS5 + local hash 256D hoặc neural embeddings
   OpenAI-compatible/Gemini, model signature/dimension guard, incremental content
-  hash, RRF rerank, anchors và FTS/LLM fallback có validation citation.
+  hash, persistent HNSW (>1.000 chunks), exact fallback, RRF rerank, anchors và
+  FTS/LLM fallback có validation citation.
   Bốn command cấu hình mới: subscription status/login và embedding presets/test.
+  PPTX meta/slide preview và live-watch status là ba command còn lại.
   Nhóm Project: list/create/adopt/remove project và import đệ quy folder local.
 - `convert_and_write_md` map `Settings`→`ConverterOptions`→`Converter::convert_path`→ghi `.md`.
 

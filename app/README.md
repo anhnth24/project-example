@@ -70,10 +70,10 @@ Nút ✨ trên icon rail mở workspace Intelligence:
 - Sinh BRD/PRD, user stories, acceptance criteria, glossary, test cases và
   traceability có citation.
 - Baseline chạy offline; tùy chọn LLM dùng `FILECONV_LLM_*`.
-- Quality report, SQLite FTS5 + vector search và hỏi đáp corpus có trích dẫn.
+- Quality report, SQLite FTS5 + exact/HNSW vector search và hỏi đáp có trích dẫn.
 - Snapshot phiên bản, diff và merge an toàn trước reconvert.
 - Sửa bảng Markdown, trích schema và xuất CSV.
-- Quét/che PII, watch-folder rules và Knowledge Pack ZIP.
+- Quét/che PII, live recursive watch folders và Knowledge Pack ZIP.
 - Artifacts được lưu dưới `DATA/.markhand/`; Markdown canonical cạnh file nguồn
   không bị thay đổi trừ khi người dùng bấm lưu rõ ràng.
 
@@ -105,6 +105,10 @@ Neural embeddings là cấu hình riêng: Ollama/LM Studio/vLLM/OpenAI/Gemini. N
 tắt, index dùng local hash 256D. Nếu bật cloud embedding, toàn bộ chunk được gửi
 khi build index (UI cảnh báo rõ), không chỉ top-K.
 
+OCR engine chọn Tesseract, PaddleOCR hoặc Auto. Paddle là Python/model tùy chọn;
+thiếu runtime sẽ fallback Tesseract. Scan nhiều cột được tách và kiểm tra score
+trước khi thay output toàn trang.
+
 ### Build bộ cài
 
 ```bash
@@ -113,7 +117,7 @@ pnpm tauri build --bundles deb       # Linux
 # CI release matrix: deb/AppImage, MSI/NSIS và DMG
 ```
 
-`.deb` Linux đã được build và kiểm tra metadata; artifact nằm dưới
+`.deb` Linux (~17 MB) đã được build và kiểm tra metadata; artifact nằm dưới
 `target/release/bundle/`. Windows/macOS cần runner đúng hệ điều hành và
 signing/notarization trước khi phát hành công khai.
 
@@ -153,7 +157,7 @@ URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì web
 
 ## Hạn chế đã biết
 
-- `.pptx`: chưa preview trong app (dùng "Mở ngoài").
+- PPTX chart/SmartArt phức tạp hiển thị placeholder; mở ngoài để xem fidelity đầy đủ.
 - Queue chưa có phần trăm theo page/segment vì `fileconv-core` chưa phát progress unit.
 - Đối chiếu hiện liên kết bản convert gốc ↔ draft Markdown; source-anchor theo page/slide/
   sheet/timestamp cần structured converter artifact ở phase sau.

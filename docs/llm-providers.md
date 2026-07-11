@@ -62,6 +62,11 @@ Model: tên model đã serve
 Các local provider dùng OpenAI-compatible `/v1/chat/completions` và không bắt
 buộc API key.
 
+Preset **Local vision/VLM** dùng cùng protocol vision OpenAI-compatible. Người
+dùng nhập model đã cài trên máy; Markhand không hardcode hoặc bundle model
+weight. Cách này dùng được với local Vietnamese VLM server, nhưng chất lượng và
+license phụ thuộc model người dùng chọn.
+
 ## Cursor/Codex subscription bridge
 
 Markhand không đọc cookie, browser session hay file token. Người dùng cài CLI
