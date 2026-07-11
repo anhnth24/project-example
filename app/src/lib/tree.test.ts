@@ -84,4 +84,28 @@ describe("tree helpers", () => {
       }),
     ).toHaveLength(1);
   });
+
+  it("legacy root excludes managed project subtrees", () => {
+    const managed = {
+      id: "project-1",
+      name: "Nghiệp vụ",
+      rootRel: "nghiep-vu",
+      createdAt: 0,
+      importedFrom: null,
+      implicit: false,
+    };
+    expect(
+      filesInProject(
+        tree,
+        {
+          ...managed,
+          id: "legacy-root",
+          name: "DATA",
+          rootRel: "",
+          implicit: true,
+        },
+        [managed],
+      ),
+    ).toEqual([]);
+  });
 });

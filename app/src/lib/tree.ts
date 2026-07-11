@@ -34,13 +34,20 @@ export function flattenFiles(node: FsNode | null): FsNode[] {
 export function filesInProject(
   tree: FsNode | null,
   project: Project | null,
+  projects: Project[] = [],
 ): FsNode[] {
   if (!tree) return [];
-  const root =
-    project?.rootRel && project.rootRel !== ""
-      ? findByRel(tree, project.rootRel)
-      : tree;
-  return flattenFiles(root);
+  if (project?.rootRel && project.rootRel !== "") {
+    return flattenFiles(findByRel(tree, project.rootRel));
+  }
+  const excluded = new Set(
+    projects
+      .filter((candidate) => candidate.rootRel !== "")
+      .map((candidate) => candidate.rootRel.toLocaleLowerCase()),
+  );
+  return tree.children
+    .filter((child) => !excluded.has(child.relPath.toLocaleLowerCase()))
+    .flatMap((child) => (child.isDir ? flattenFiles(child) : [child]));
 }
 
 export function parentRel(relPath: string): string {

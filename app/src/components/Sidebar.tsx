@@ -73,6 +73,15 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     activeProject?.rootRel && tree
       ? findByRel(tree, activeProject.rootRel)
       : tree;
+  const projectChildren = (projectNode?.children ?? []).filter(
+    (child) =>
+      activeProject?.rootRel !== "" ||
+      !projects.some(
+        (project) =>
+          project.rootRel !== "" &&
+          project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
+      ),
+  );
 
   function openCreate(
     kind: "create-folder" | "create-markdown" | "create-project",
@@ -228,7 +237,7 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
           <span className="eyebrow">Không gian làm việc</span>
           <strong>Tài liệu</strong>
         </div>
-        <span className="drawer-count">{projectNode?.children.length ?? 0}</span>
+        <span className="drawer-count">{projectChildren.length}</span>
       </div>
 
       <div className="project-switcher">
@@ -304,8 +313,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       <div className="tree-scroll">
-        {projectNode && projectNode.children.length ? (
-          projectNode.children.map((child) => (
+        {projectChildren.length ? (
+          projectChildren.map((child) => (
             <Tree
               key={child.relPath}
               node={child}

@@ -20,7 +20,7 @@ export function LibraryView({ onUpload }: { onUpload: () => void }) {
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ?? null;
   const files = useMemo(
-    () => filesInProject(tree, activeProject),
+    () => filesInProject(tree, activeProject, projects),
     [tree, activeProject],
   );
   const visible = files.filter((node) => {

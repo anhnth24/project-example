@@ -92,7 +92,7 @@ export function IntelligenceView() {
   const activeProject =
     projects.find((project) => project.id === activeProjectId) ?? null;
   const files = useMemo(
-    () => filesInProject(tree, activeProject).filter(converted),
+    () => filesInProject(tree, activeProject, projects).filter(converted),
     [tree, activeProject],
   );
   const [mode, setMode] = useState<IntelligenceMode>("handoff");
