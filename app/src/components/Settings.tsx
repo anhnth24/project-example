@@ -32,6 +32,11 @@ const DEFAULTS: Settings = {
   llmApiKey: null,
 };
 
+function providerOptionLabel(preset: LlmProviderPreset): string {
+  const cleanLabel = preset.label.replace(/\s*\((?:Local|Self-host)\)$/i, "");
+  return `${preset.local ? "Local" : "Cloud"} · ${cleanLabel}`;
+}
+
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const current = useStore((s) => s.settings) ?? DEFAULTS;
   const saveSettings = useStore((s) => s.saveSettings);
@@ -230,7 +235,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 ariaLabel="Chọn LLM provider"
                 options={presets.map((preset) => ({
                   value: preset.id,
-                  label: `${preset.local ? "Local" : "Cloud"} · ${preset.label}`,
+                  label: providerOptionLabel(preset),
                 }))}
               />
             </div>

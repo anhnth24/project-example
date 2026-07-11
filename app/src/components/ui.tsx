@@ -239,7 +239,6 @@ export function SelectControl({
         aria-expanded={open}
         aria-controls={listId}
         aria-haspopup="listbox"
-        title={selected?.label}
         aria-activedescendant={
           open && options[activeIndex]
             ? `${listId}-option-${activeIndex}`
