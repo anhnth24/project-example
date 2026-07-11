@@ -320,10 +320,13 @@ export function Combobox({
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [showAll, setShowAll] = useState(false);
   const foldedValue = foldForSearch(value);
-  const filtered = options.filter((option) =>
-    foldForSearch(option).includes(foldedValue),
-  );
+  const filtered = showAll
+    ? options
+    : options.filter((option) =>
+        foldForSearch(option).includes(foldedValue),
+      );
   const menuStyle = useFloatingMenu(
     open && filtered.length > 0,
     rootRef,
@@ -347,6 +350,7 @@ export function Combobox({
 
   function choose(option: string) {
     onChange(option);
+    setShowAll(false);
     setOpen(false);
     inputRef.current?.focus();
   }
@@ -356,6 +360,7 @@ export function Combobox({
       event.preventDefault();
       if (!filtered.length) return;
       if (!open) {
+        setShowAll(true);
         setOpen(true);
         setActiveIndex(0);
       } else {
@@ -392,11 +397,17 @@ export function Combobox({
         }
         onFocus={() => {
           setActiveIndex(0);
+          setShowAll(true);
+          setOpen(true);
+        }}
+        onClick={() => {
+          setShowAll(true);
           setOpen(true);
         }}
         onChange={(event) => {
           onChange(event.target.value);
           setActiveIndex(0);
+          setShowAll(false);
           setOpen(true);
         }}
         onKeyDown={handleKeyDown}
@@ -410,6 +421,7 @@ export function Combobox({
           event.preventDefault();
           if (open) setOpen(false);
           else {
+            setShowAll(true);
             inputRef.current?.focus();
             setOpen(true);
           }
