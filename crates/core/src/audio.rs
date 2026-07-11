@@ -170,8 +170,14 @@ fn segment_is_speech(text: &str, no_speech_probability: f32, threshold: f32) -> 
     if text.trim().is_empty() || no_speech_probability >= threshold {
         return false;
     }
-    let marker = text
-        .trim()
+    let trimmed = text.trim();
+    let enclosed_marker = ((trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('(') && trimmed.ends_with(')')))
+        && trimmed.chars().count() <= 120;
+    if enclosed_marker {
+        return false;
+    }
+    let marker = trimmed
         .trim_matches(|character| matches!(character, '[' | ']' | '(' | ')' | '♪' | ' '))
         .to_ascii_lowercase();
     !matches!(
@@ -278,6 +284,7 @@ mod tests {
     fn no_speech_filter_rejects_probability_and_marker_hallucinations() {
         assert!(!segment_is_speech("văn bản bị bịa", 0.8, 0.6));
         assert!(!segment_is_speech("[Music]", 0.1, 0.6));
+        assert!(!segment_is_speech("[Mà đồ]", 0.1, 0.6));
         assert!(!segment_is_speech("♪ nhạc ♪", 0.1, 0.6));
         assert!(segment_is_speech("Xin chào Việt Nam", 0.1, 0.6));
     }
