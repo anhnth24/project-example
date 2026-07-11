@@ -271,6 +271,12 @@ fn staged_copy(source: &Path, destination: &Path) -> io::Result<()> {
             .unwrap_or_default(),
         std::process::id()
     ));
+    if fs::symlink_metadata(destination).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "file đích đã tồn tại",
+        ));
+    }
     let mut input = fs::File::open(source)?;
     let mut output = fs::OpenOptions::new()
         .write(true)
@@ -279,7 +285,27 @@ fn staged_copy(source: &Path, destination: &Path) -> io::Result<()> {
     io::copy(&mut input, &mut output)?;
     output.sync_all()?;
     drop(output);
-    fs::rename(temp, destination)
+    let reservation = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = fs::remove_file(&temp);
+            return Err(error);
+        }
+    };
+    drop(reservation);
+    if let Err(first_error) = fs::rename(&temp, destination) {
+        // Windows cannot replace the empty reservation.
+        let _ = fs::remove_file(destination);
+        if let Err(error) = fs::rename(&temp, destination) {
+            let _ = fs::remove_file(&temp);
+            return Err(io::Error::other(format!("{first_error}; {error}")));
+        }
+    }
+    Ok(())
 }
 
 fn collect_files(
