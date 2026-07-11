@@ -162,6 +162,8 @@ export interface KnowledgeIndexStats {
   embeddingMode: string;
   embeddingProvider: string;
   embeddingModel: string;
+  annAvailable: boolean;
+  annThreshold: number;
 }
 
 export interface IndexBuildResult {

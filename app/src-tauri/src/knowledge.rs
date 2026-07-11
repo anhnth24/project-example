@@ -45,6 +45,8 @@ pub struct IndexStats {
     pub embedding_mode: String,
     pub embedding_provider: String,
     pub embedding_model: String,
+    pub ann_available: bool,
+    pub ann_threshold: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -302,6 +304,36 @@ fn vector_from_bytes(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+fn load_vector_points(
+    connection: &Connection,
+    expected_dimensions: usize,
+) -> Result<Vec<(String, Vec<f32>)>, String> {
+    let mut statement = connection
+        .prepare("SELECT chunk_id, vector, vector_dims FROM chunks ORDER BY chunk_id")
+        .map_err(es)?;
+    let rows = statement
+        .query_map([], |row| {
+            let bytes: Vec<u8> = row.get(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                vector_from_bytes(&bytes),
+                row.get::<_, i64>(2)? as usize,
+            ))
+        })
+        .map_err(es)?;
+    let mut points = Vec::new();
+    for row in rows {
+        let (id, vector, dimensions) = row.map_err(es)?;
+        if dimensions != expected_dimensions || vector.len() != expected_dimensions {
+            return Err(format!(
+                "không build HNSW: chunk {id} có {dimensions}D, metadata {expected_dimensions}D"
+            ));
+        }
+        points.push((id, vector));
+    }
+    Ok(points)
+}
+
 fn cosine(left: &[f32], right: &[f32]) -> f32 {
     if left.len() != right.len() || left.is_empty() {
         return 0.0;
@@ -399,7 +431,7 @@ fn write_metadata(
     Ok(())
 }
 
-fn clear_index(connection: &mut Connection) -> Result<(), String> {
+fn clear_index(root: &Path, connection: &mut Connection) -> Result<(), String> {
     let transaction = connection.transaction().map_err(es)?;
     transaction
         .execute("DELETE FROM chunks_fts", [])
@@ -411,7 +443,9 @@ fn clear_index(connection: &mut Connection) -> Result<(), String> {
     transaction
         .execute("DELETE FROM index_meta", [])
         .map_err(es)?;
-    transaction.commit().map_err(es)
+    transaction.commit().map_err(es)?;
+    super::vector_index::clear(root);
+    Ok(())
 }
 
 fn infer_anchor(document: &CorpusDocument, chunk: &intelligence::CorpusChunk) -> SourceAnchor {
@@ -445,7 +479,7 @@ fn index_documents_with_plan(
         .map_err(es)?;
     let current_metadata = read_metadata(&connection)?;
     if indexed_documents > 0 && current_metadata.signature != plan.metadata.signature {
-        clear_index(&mut connection)?;
+        clear_index(root, &mut connection)?;
     } else if indexed_documents > 0
         && current_metadata.signature == plan.metadata.signature
         && plan.metadata.dimensions == 0
@@ -596,6 +630,29 @@ fn index_documents_with_plan(
     let transaction = connection.transaction().map_err(es)?;
     write_metadata(&transaction, &plan.metadata)?;
     transaction.commit().map_err(es)?;
+    let mut warnings = Vec::new();
+    if indexed > 0
+        || !super::vector_index::is_available(
+            root,
+            &plan.metadata.signature,
+            plan.metadata.dimensions,
+        )
+    {
+        match load_vector_points(&connection, plan.metadata.dimensions).and_then(|points| {
+            super::vector_index::rebuild(
+                root,
+                &plan.metadata.signature,
+                plan.metadata.dimensions,
+                &points,
+            )
+            .map(|_| ())
+        }) {
+            Ok(()) => {}
+            Err(error) => warnings.push(format!(
+                "HNSW cache build lỗi ({error}); search sẽ dùng exact cosine."
+            )),
+        }
+    }
     Ok(IndexBuildResult {
         documents: documents.len(),
         chunks: total_chunks,
@@ -605,7 +662,7 @@ fn index_documents_with_plan(
         embedding_provider: plan.metadata.provider,
         embedding_model: plan.metadata.model,
         vector_dimensions: plan.metadata.dimensions,
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
@@ -622,7 +679,7 @@ fn index_documents_inner(
             if provider_requested && fallback_local && error.contains("embedding provider") =>
         {
             let mut connection = open_index(root)?;
-            clear_index(&mut connection)?;
+            clear_index(root, &mut connection)?;
             let mut result = index_documents_with_plan(root, source_rels, embedding_plan(None))?;
             result.warnings.push(format!(
                 "{error}; đã rebuild toàn bộ scope bằng local hash offline."
@@ -796,15 +853,50 @@ fn hybrid_search_inner(
     } else {
         Some(local_vector(query))
     };
-    let mut vector_order: Vec<(String, f32)> = query_vector
-        .as_ref()
-        .map(|query_vector| {
+    let scoped_ids: HashSet<&str> = chunks.iter().map(|chunk| chunk.id.as_str()).collect();
+    let mut vector_order: Vec<(String, f32)> = if let Some(query_vector) = query_vector.as_ref() {
+        if chunks.len() > 1_000 {
+            match super::vector_index::search(
+                root,
+                &metadata.signature,
+                metadata.dimensions,
+                query_vector,
+                (chunks.len() * 4).clamp(500, 5_000),
+            ) {
+                Ok(candidates) => {
+                    let scoped: Vec<_> = candidates
+                        .into_iter()
+                        .filter(|(id, _)| scoped_ids.contains(id.as_str()))
+                        .collect();
+                    if scoped.len() >= 20.min(chunks.len()) {
+                        scoped
+                    } else {
+                        warnings.push(
+                            "HNSW trả quá ít candidate trong scope; dùng exact cosine.".into(),
+                        );
+                        chunks
+                            .iter()
+                            .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
+                            .collect()
+                    }
+                }
+                Err(error) => {
+                    warnings.push(format!("HNSW chưa dùng được ({error}); dùng exact cosine."));
+                    chunks
+                        .iter()
+                        .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
+                        .collect()
+                }
+            }
+        } else {
             chunks
                 .iter()
                 .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
                 .collect()
-        })
-        .unwrap_or_default();
+        }
+    } else {
+        Vec::new()
+    };
     vector_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let vector_rank: HashMap<String, (usize, f32)> = vector_order
         .into_iter()
@@ -986,6 +1078,12 @@ pub fn knowledge_index_stats(state: State<AppState>) -> Result<IndexStats, Strin
         embedding_mode: metadata.mode,
         embedding_provider: metadata.provider,
         embedding_model: metadata.model,
+        ann_available: super::vector_index::is_available(
+            &root,
+            &metadata.signature,
+            metadata.dimensions,
+        ),
+        ann_threshold: 1_000,
     })
 }
 

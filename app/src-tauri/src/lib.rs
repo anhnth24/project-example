@@ -22,6 +22,7 @@ use fileconv_core::{ConverterOptions, FormatKind};
 mod intelligence;
 mod knowledge;
 mod projects;
+mod vector_index;
 mod watch;
 
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────

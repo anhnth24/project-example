@@ -738,6 +738,9 @@ export function IntelligenceView() {
                   {indexStats?.embeddingMode === "provider_v1"
                     ? `${indexStats.embeddingModel} (${indexStats.embeddingProvider})`
                     : "local hash offline"}
+                  {indexStats?.annAvailable
+                    ? ` · HNSW ANN ≥${indexStats.annThreshold}`
+                    : " · exact cosine"}
                 </span>
                 <Button
                   variant="secondary"
