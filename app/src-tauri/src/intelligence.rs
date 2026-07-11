@@ -938,18 +938,24 @@ pub fn get_watch_rules(state: State<AppState>) -> Result<Vec<WatchRule>, String>
 
 #[tauri::command]
 pub fn set_watch_rules(state: State<AppState>, req: WatchRulesRequest) -> Result<(), String> {
+    let data_root = data_root(&state);
+    let canonical_data = fs::canonicalize(&data_root).map_err(es)?;
     for rule in &req.rules {
         let watch = fs::canonicalize(&rule.watch_abs).map_err(es)?;
         if !watch.is_dir() {
             return Err(format!("watch path không phải thư mục: {}", rule.watch_abs));
         }
-        resolve_within(&data_root(&state), &rule.target_folder_rel)?;
+        if watch.starts_with(&canonical_data) {
+            return Err("không được watch thư mục nằm trong DATA".into());
+        }
+        resolve_within(&data_root, &rule.target_folder_rel)?;
     }
-    let path = watch_rules_path(&data_root(&state))?;
+    let path = watch_rules_path(&data_root)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(es)?;
     }
-    write_json(&path, &req.rules)
+    write_json(&path, &req.rules)?;
+    state.watch_service.sync(data_root, req.rules)
 }
 
 #[tauri::command]

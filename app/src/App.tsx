@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { AlertCircle, Upload } from "lucide-react";
 import { useStore } from "./state/store";
@@ -14,6 +15,8 @@ import { LibraryView } from "./components/LibraryView";
 import { CommandPalette } from "./components/CommandPalette";
 import { ConvertQueue } from "./components/ConvertQueue";
 import { Button, IconButton, Modal } from "./components/ui";
+import { api } from "./lib/ipc";
+import type { WatchMatch } from "./lib/types";
 
 const IntelligenceView = lazy(() =>
   import("./components/IntelligenceView").then((module) => ({
@@ -80,6 +83,36 @@ export default function App() {
     return () => {
       disposed = true;
       unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    void listen<WatchMatch>("watch:match", async ({ payload }) => {
+      try {
+        const node = await api.importFileOnly(
+          payload.targetFolderRel,
+          payload.sourceAbs,
+        );
+        await useStore.getState().refreshTree();
+        if (payload.action === "import_and_convert") {
+          useStore.getState().enqueueConversions([node.relPath]);
+        }
+      } catch (watchError) {
+        const message = String(watchError);
+        // A previously imported filename is a safe no-op, not an import loop.
+        if (!message.includes("đã tồn tại")) {
+          useStore.getState().setError(`Watch folder: ${message}`);
+        }
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
 

@@ -399,6 +399,13 @@ export interface WatchMatch {
   action: WatchAction;
 }
 
+export interface WatchStatus {
+  state: "idle" | "watching" | "error";
+  rules: number;
+  paths: number;
+  lastError: string | null;
+}
+
 export type HandoffMode = "deterministic" | "llm_assisted";
 
 export interface HandoffItem {

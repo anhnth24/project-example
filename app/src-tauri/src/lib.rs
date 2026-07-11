@@ -22,6 +22,7 @@ use fileconv_core::{ConverterOptions, FormatKind};
 mod intelligence;
 mod knowledge;
 mod projects;
+mod watch;
 
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────
 
@@ -218,6 +219,7 @@ pub struct AppState {
     config_dir: PathBuf,
     data_root: Mutex<PathBuf>,
     settings: Mutex<Settings>,
+    watch_service: watch::WatchService,
 }
 
 // ───────────────────────────── Helper ─────────────────────────────
@@ -578,6 +580,10 @@ fn set_data_root(state: State<AppState>, path: String) -> Result<String, String>
     cfg.data_root = Some(abs.to_string_lossy().to_string());
     save_config(&state.config_dir, &cfg)?;
     *dr = abs.clone();
+    drop(dr);
+    state
+        .watch_service
+        .sync(abs.clone(), watch::load_rules(&abs))?;
     Ok(abs.to_string_lossy().to_string())
 }
 
@@ -943,6 +949,11 @@ fn get_settings(state: State<AppState>) -> Settings {
 }
 
 #[tauri::command]
+fn get_live_watch_status(state: State<AppState>) -> watch::WatchStatus {
+    state.watch_service.status()
+}
+
+#[tauri::command]
 fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
     let valid_ocr = !settings.ocr_langs.trim().is_empty()
         && settings
@@ -1005,10 +1016,15 @@ pub fn run() {
                 .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
                 .unwrap_or_default();
 
+            let watch_service = watch::WatchService::new(app.handle().clone());
+            watch_service
+                .sync(root.clone(), watch::load_rules(&root))
+                .map_err(std::io::Error::other)?;
             app.manage(AppState {
                 config_dir,
                 data_root: Mutex::new(root),
                 settings: Mutex::new(settings),
+                watch_service,
             });
             Ok(())
         })
@@ -1033,6 +1049,7 @@ pub fn run() {
             preview_pptx_meta,
             preview_pptx_slide,
             get_settings,
+            get_live_watch_status,
             set_settings,
             intelligence::get_llm_provider_presets,
             intelligence::get_embedding_provider_presets,

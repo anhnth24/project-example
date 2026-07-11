@@ -29,6 +29,7 @@ import type {
   VersionSnapshot,
   WatchMatch,
   WatchRule,
+  WatchStatus,
   ImportFolderResult,
 } from "./types";
 
@@ -196,6 +197,7 @@ export const api = {
   mergeDocumentVersions: (base: string, ours: string, theirs: string) =>
     invoke<MergeResult>("merge_document_versions", { req: { base, ours, theirs } }),
   getWatchRules: () => invoke<WatchRule[]>("get_watch_rules"),
+  getLiveWatchStatus: () => invoke<WatchStatus>("get_live_watch_status"),
   setWatchRules: (rules: WatchRule[]) =>
     invoke<void>("set_watch_rules", { req: { rules } }),
   scanWatchRules: () => invoke<WatchMatch[]>("scan_watch_rules"),

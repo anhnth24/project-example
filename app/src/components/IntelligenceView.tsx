@@ -52,6 +52,7 @@ import type {
   VersionMeta,
   WatchMatch,
   WatchRule,
+  WatchStatus,
 } from "../lib/types";
 import { useStore } from "../state/store";
 import { Button, Notice, Toggle } from "./ui";
@@ -141,6 +142,7 @@ export function IntelligenceView() {
   const [diff, setDiff] = useState<DiffHunk[]>([]);
   const [watchRules, setWatchRulesState] = useState<WatchRule[]>([]);
   const [watchMatches, setWatchMatches] = useState<WatchMatch[]>([]);
+  const [watchStatus, setWatchStatus] = useState<WatchStatus | null>(null);
 
   useEffect(() => {
     const current = useStore.getState().intelligenceScope;
@@ -402,8 +404,14 @@ export function IntelligenceView() {
   }
 
   async function loadWatchRules() {
-    const result = await run("watch-load", api.getWatchRules);
-    if (result) setWatchRulesState(result);
+    const result = await run("watch-load", async () => ({
+      rules: await api.getWatchRules(),
+      status: await api.getLiveWatchStatus(),
+    }));
+    if (result) {
+      setWatchRulesState(result.rules);
+      setWatchStatus(result.status);
+    }
   }
 
   async function addWatchRule() {
@@ -1119,6 +1127,15 @@ export function IntelligenceView() {
                   </div>
                 }
               />
+              {watchStatus && (
+                <Notice
+                  tone={watchStatus.state === "error" ? "error" : "info"}
+                >
+                  Live watcher: {watchStatus.state} · {watchStatus.rules} rules ·{" "}
+                  {watchStatus.paths} paths
+                  {watchStatus.lastError ? ` · ${watchStatus.lastError}` : ""}
+                </Notice>
+              )}
               <div className="watch-rules">
                 {watchRules.map((rule) => (
                   <article key={rule.id}>
