@@ -1,9 +1,8 @@
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { MarkdownTab } from "../lib/types";
+import { SafeMarkdown } from "./SafeMarkdown";
 
 const cmFont = {
   fontFamily: "ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace",
@@ -84,7 +83,7 @@ export function MarkdownEditor({
         </div>
       ) : (
         <div className="md-preview markdown-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+          <SafeMarkdown>{value}</SafeMarkdown>
         </div>
       )}
     </div>
