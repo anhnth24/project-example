@@ -42,6 +42,8 @@ def evaluate(family: str, source: Path, markdown: str) -> list[tuple[str, str]]:
         issues.append(("info", "no OCR text detected"))
     if family == "audio" and chars > 500:
         issues.append(("warning", "possible hallucination on short audio sample"))
+    elif family == "audio" and chars > 0:
+        issues.append(("info", "non-empty transcript; codec fixture has no ground-truth speech"))
     if family == "text":
         ratio = chars / max(source.stat().st_size, 1)
         if not 0.85 <= ratio <= 1.2:
@@ -68,9 +70,10 @@ def main() -> None:
                 timeout=180,
             )
             elapsed_ms = (time.perf_counter() - started) * 1000
-            markdown = result.stdout.decode("utf-8", errors="replace")
+            raw_markdown = result.stdout.decode("utf-8", errors="replace")
+            markdown = raw_markdown.strip()
             output = OUTPUTS / f"{family}__{source.name}.md"
-            output.write_text(markdown, encoding="utf-8")
+            output.write_text(raw_markdown, encoding="utf-8")
             issues = evaluate(family, source, markdown) if result.returncode == 0 else [
                 ("error", result.stderr.decode("utf-8", errors="replace").strip())
             ]
