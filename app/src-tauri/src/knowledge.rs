@@ -658,125 +658,138 @@ pub async fn hybrid_search(
     .map_err(es)?
 }
 
+fn hybrid_ask_inner(
+    root: &Path,
+    req: HybridAskRequest,
+    llm_config: Option<fileconv_core::llm::LlmConfig>,
+    config_warning: Option<String>,
+) -> Result<GroundedAnswer, String> {
+    let hits = hybrid_search_inner(
+        root,
+        &req.source_rels,
+        &req.question,
+        req.top_k.unwrap_or(8),
+    )?;
+    let fallback = extractive_answer(&req.question, &hits);
+    if !req.use_llm.unwrap_or(false) {
+        return Ok(GroundedAnswer {
+            answer: fallback,
+            citations: hits,
+            mode: "offline_extractive".into(),
+            grounded: true,
+            warnings: Vec::new(),
+        });
+    }
+    let Some(config) = llm_config else {
+        let warning = config_warning
+            .map(|error| {
+                format!("Cấu hình LLM chưa dùng được ({error}); đã fallback extractive local.")
+            })
+            .unwrap_or_else(|| {
+                "Chưa cấu hình LLM provider; đã dùng câu trả lời extractive local.".into()
+            });
+        return Ok(GroundedAnswer {
+            answer: fallback,
+            citations: hits,
+            mode: "fallback_extractive".into(),
+            grounded: true,
+            warnings: vec![warning],
+        });
+    };
+    if hits.is_empty() {
+        return Ok(GroundedAnswer {
+            answer: fallback,
+            citations: hits,
+            mode: "fallback_extractive".into(),
+            grounded: true,
+            warnings: vec!["Không đủ nguồn để gọi LLM.".into()],
+        });
+    }
+    let context = hits
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| {
+            format!(
+                "[CITE-{:04}] {} > {}\n{}",
+                index + 1,
+                hit.source_rel,
+                hit.heading,
+                hit.snippet
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let prompt = format!(
+        "Câu hỏi: {}\n\nNguồn:\n{}\n\n\
+         Chỉ trả lời từ nguồn. Mỗi đoạn factual phải kết thúc bằng [CITE-xxxx]. \
+         Nếu nguồn thiếu, nói rõ không đủ dữ liệu.",
+        req.question, context
+    );
+    let llm_answer = match fileconv_core::llm::chat(
+        &config,
+        "Bạn là trợ lý kho tri thức trung thực. Không bịa và luôn trích citation.",
+        &prompt,
+    ) {
+        Ok(answer) => answer,
+        Err(error) => {
+            return Ok(GroundedAnswer {
+                answer: fallback,
+                citations: hits,
+                mode: "fallback_extractive".into(),
+                grounded: true,
+                warnings: vec![format!(
+                    "LLM provider lỗi ({error}); đã fallback extractive local."
+                )],
+            });
+        }
+    };
+    let valid_ids: HashSet<String> = (0..hits.len())
+        .map(|index| format!("CITE-{:04}", index + 1))
+        .collect();
+    match answer_is_grounded(&llm_answer, &valid_ids) {
+        Ok(()) => {
+            let local = config
+                .base_url
+                .as_deref()
+                .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"));
+            Ok(GroundedAnswer {
+                answer: llm_answer,
+                citations: hits,
+                mode: if local {
+                    "local_llm".into()
+                } else {
+                    "cloud_llm".into()
+                },
+                grounded: true,
+                warnings: Vec::new(),
+            })
+        }
+        Err(warnings) => Ok(GroundedAnswer {
+            answer: fallback,
+            citations: hits,
+            mode: "fallback_extractive".into(),
+            grounded: true,
+            warnings,
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn hybrid_ask(
     state: State<'_, AppState>,
     req: HybridAskRequest,
 ) -> Result<GroundedAnswer, String> {
     let root = data_root(&state);
-    let llm_config = if req.use_llm.unwrap_or(false) {
-        state
-            .settings
-            .lock()
-            .map_err(|_| "lock lỗi")?
-            .llm_config()?
+    let (llm_config, config_warning) = if req.use_llm.unwrap_or(false) {
+        match state.settings.lock().map_err(|_| "lock lỗi")?.llm_config() {
+            Ok(config) => (config, None),
+            Err(error) => (None, Some(error)),
+        }
     } else {
-        None
+        (None, None)
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let hits = hybrid_search_inner(
-            &root,
-            &req.source_rels,
-            &req.question,
-            req.top_k.unwrap_or(8),
-        )?;
-        let fallback = extractive_answer(&req.question, &hits);
-        if !req.use_llm.unwrap_or(false) {
-            return Ok(GroundedAnswer {
-                answer: fallback,
-                citations: hits,
-                mode: "offline_extractive".into(),
-                grounded: true,
-                warnings: Vec::new(),
-            });
-        }
-        let Some(config) = llm_config else {
-            return Ok(GroundedAnswer {
-                answer: fallback,
-                citations: hits,
-                mode: "fallback_extractive".into(),
-                grounded: true,
-                warnings: vec![
-                    "Chưa cấu hình LLM provider; đã dùng câu trả lời extractive local.".into(),
-                ],
-            });
-        };
-        if hits.is_empty() {
-            return Ok(GroundedAnswer {
-                answer: fallback,
-                citations: hits,
-                mode: "fallback_extractive".into(),
-                grounded: true,
-                warnings: vec!["Không đủ nguồn để gọi LLM.".into()],
-            });
-        }
-        let context = hits
-            .iter()
-            .enumerate()
-            .map(|(index, hit)| {
-                format!(
-                    "[CITE-{:04}] {} > {}\n{}",
-                    index + 1,
-                    hit.source_rel,
-                    hit.heading,
-                    hit.snippet
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let prompt = format!(
-            "Câu hỏi: {}\n\nNguồn:\n{}\n\n\
-             Chỉ trả lời từ nguồn. Mỗi đoạn factual phải kết thúc bằng [CITE-xxxx]. \
-             Nếu nguồn thiếu, nói rõ không đủ dữ liệu.",
-            req.question, context
-        );
-        let llm_answer = match fileconv_core::llm::chat(
-            &config,
-            "Bạn là trợ lý kho tri thức trung thực. Không bịa và luôn trích citation.",
-            &prompt,
-        ) {
-            Ok(answer) => answer,
-            Err(error) => {
-                return Ok(GroundedAnswer {
-                    answer: fallback,
-                    citations: hits,
-                    mode: "fallback_extractive".into(),
-                    grounded: true,
-                    warnings: vec![format!(
-                        "LLM provider lỗi ({error}); đã fallback extractive local."
-                    )],
-                });
-            }
-        };
-        let valid_ids: HashSet<String> = (0..hits.len())
-            .map(|index| format!("CITE-{:04}", index + 1))
-            .collect();
-        match answer_is_grounded(&llm_answer, &valid_ids) {
-            Ok(()) => {
-                let local = config
-                    .base_url
-                    .as_deref()
-                    .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"));
-                Ok(GroundedAnswer {
-                    answer: llm_answer,
-                    citations: hits,
-                    mode: if local {
-                        "local_llm".into()
-                    } else {
-                        "cloud_llm".into()
-                    },
-                    grounded: true,
-                    warnings: Vec::new(),
-                })
-            }
-            Err(warnings) => Ok(GroundedAnswer {
-                answer: fallback,
-                citations: hits,
-                mode: "fallback_extractive".into(),
-                grounded: true,
-                warnings,
-            }),
-        }
+        hybrid_ask_inner(&root, req, llm_config, config_warning)
     })
     .await
     .map_err(es)?
@@ -890,6 +903,133 @@ mod tests {
         let hits = hybrid_search_inner(&root, &sources, "xác thực API", 3).unwrap();
         let answer = extractive_answer("API bảo mật thế nào?", &hits);
         assert!(answer.contains("[CITE-0001]"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn offline_ask_never_requires_an_llm() {
+        let root = temp_root();
+        let sources = seed(&root);
+        let result = hybrid_ask_inner(
+            &root,
+            HybridAskRequest {
+                source_rels: sources,
+                question: "Đối soát khi nào?".into(),
+                top_k: Some(3),
+                use_llm: Some(false),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.mode, "offline_extractive");
+        assert!(result.grounded);
+        assert!(result.warnings.is_empty());
+        assert!(result.answer.contains("[CITE-0001]"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn missing_llm_configuration_falls_back_instead_of_failing() {
+        let root = temp_root();
+        let sources = seed(&root);
+        let result = hybrid_ask_inner(
+            &root,
+            HybridAskRequest {
+                source_rels: sources,
+                question: "API được bảo vệ thế nào?".into(),
+                top_k: Some(3),
+                use_llm: Some(true),
+            },
+            None,
+            Some("thiếu API key".into()),
+        )
+        .unwrap();
+        assert_eq!(result.mode, "fallback_extractive");
+        assert!(result.grounded);
+        assert!(result.warnings[0].contains("thiếu API key"));
+        assert!(result.warnings[0].contains("fallback"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn unavailable_llm_provider_falls_back_instead_of_failing() {
+        let root = temp_root();
+        let sources = seed(&root);
+        let config = fileconv_core::llm::LlmConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "",
+            "local-test",
+            Some("http://127.0.0.1:1".into()),
+        )
+        .unwrap();
+        let result = hybrid_ask_inner(
+            &root,
+            HybridAskRequest {
+                source_rels: sources,
+                question: "Đối soát giao dịch thế nào?".into(),
+                top_k: Some(3),
+                use_llm: Some(true),
+            },
+            Some(config),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.mode, "fallback_extractive");
+        assert!(result.warnings[0].contains("LLM provider lỗi"));
+        assert!(result.answer.contains("[CITE-0001]"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn changed_markdown_replaces_old_chunks() {
+        let root = temp_root();
+        let sources = seed(&root);
+        index_documents_inner(&root, &sources).unwrap();
+        std::fs::write(
+            root.join("payments.pdf.md"),
+            "# Hoàn tiền\n\nGiao dịch hoàn tiền phải được duyệt bởi hai người.\n",
+        )
+        .unwrap();
+        let update = index_documents_inner(&root, &["payments.pdf".into()]).unwrap();
+        assert_eq!(update.indexed, 1);
+        let hits =
+            hybrid_search_inner(&root, &["payments.pdf".into()], "hai người duyệt", 5).unwrap();
+        assert!(hits[0].snippet.contains("hai người"));
+        let connection = open_index(&root).unwrap();
+        let count: usize = connection
+            .query_row(
+                "SELECT COUNT(*) FROM chunks WHERE doc_rel = 'payments.pdf'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn page_comments_become_exact_source_anchors() {
+        let root = temp_root();
+        std::fs::write(root.join("spec.pdf"), b"%PDF").unwrap();
+        std::fs::write(
+            root.join("spec.pdf.md"),
+            "<!-- Page 7 -->\n\n# Thanh toán\n\nCho phép thanh toán QR.\n",
+        )
+        .unwrap();
+        let hits = hybrid_search_inner(&root, &["spec.pdf".into()], "thanh toán QR", 3).unwrap();
+        assert_eq!(hits[0].anchor.page, Some(7));
+        assert!(hits[0].anchor.end > hits[0].anchor.start);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn punctuation_cannot_break_fts_query_syntax() {
+        let root = temp_root();
+        let sources = seed(&root);
+        let hits =
+            hybrid_search_inner(&root, &sources, "API: \"xác thực\" OR (giao dịch)", 5).unwrap();
+        assert!(!hits.is_empty());
         std::fs::remove_dir_all(root).ok();
     }
 }

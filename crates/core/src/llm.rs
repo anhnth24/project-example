@@ -299,6 +299,7 @@ fn openai_chat_url(base: &str) -> String {
 /// Gọi 1 lượt chat (system + user) → trả text.
 pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, ConvertError> {
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(fail)?;
@@ -436,6 +437,7 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
                   bình luận — chỉ trả nội dung.";
 
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(fail)?;

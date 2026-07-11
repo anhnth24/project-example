@@ -79,6 +79,19 @@ function converted(node: FsNode): boolean {
   return !!node.mdRelPath || node.standaloneMd;
 }
 
+function answerModeLabel(mode: GroundedAnswer["mode"]): string {
+  switch (mode) {
+    case "local_llm":
+      return "LLM local · dữ liệu không rời máy";
+    case "cloud_llm":
+      return "LLM cloud · dữ liệu đã gửi provider";
+    case "fallback_extractive":
+      return "Provider không dùng được · fallback offline";
+    default:
+      return "Offline · không cần LLM";
+  }
+}
+
 export function IntelligenceView() {
   const tree = useStore((state) => state.tree);
   const projects = useStore((state) => state.projects);
@@ -763,8 +776,12 @@ export function IntelligenceView() {
                     label="LLM"
                     description={
                       settings?.llmEnabled
-                        ? `${settings.llmProvider} · ${settings.llmModel}`
-                        : "Tắt = trả lời trích xuất offline."
+                        ? `${
+                            /localhost|127\.0\.0\.1/.test(settings.llmBaseUrl)
+                              ? "Local"
+                              : "Cloud"
+                          } · ${settings.llmProvider} · ${settings.llmModel}`
+                        : "Không cấu hình vẫn hỏi đáp offline đầy đủ."
                     }
                   />
                   <Button
@@ -781,7 +798,8 @@ export function IntelligenceView() {
                 <>
                   <div className="answer-status">
                     <span className={answer.grounded ? "grounded" : ""}>
-                      {answer.mode} · {answer.grounded ? "grounded" : "needs review"}
+                      {answerModeLabel(answer.mode)} ·{" "}
+                      {answer.grounded ? "có nguồn" : "cần rà soát"}
                     </span>
                     {answer.warnings.map((warning) => (
                       <small key={warning}>{warning}</small>

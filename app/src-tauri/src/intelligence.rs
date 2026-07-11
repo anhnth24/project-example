@@ -328,14 +328,13 @@ pub async fn generate_handoff_pack(
     req: HandoffRequest,
 ) -> Result<HandoffResult, String> {
     let root = data_root(&state);
-    let llm_config = if req.mode == HandoffMode::LlmAssisted {
-        state
-            .settings
-            .lock()
-            .map_err(|_| "lock lỗi")?
-            .llm_config()?
+    let (llm_config, llm_config_error) = if req.mode == HandoffMode::LlmAssisted {
+        match state.settings.lock().map_err(|_| "lock lỗi")?.llm_config() {
+            Ok(config) => (config, None),
+            Err(error) => (None, Some(error)),
+        }
     } else {
-        None
+        (None, None)
     };
     tauri::async_runtime::spawn_blocking(move || {
         let documents = load_documents(&root, &req.source_rels)?;
@@ -376,8 +375,14 @@ pub async fn generate_handoff_pack(
                     );
                 }
             } else {
-                llm_note =
-                    Some("Chưa cấu hình FILECONV_LLM_*; đã sinh bản tất định offline.".into());
+                llm_note = Some(match llm_config_error {
+                    Some(error) => format!(
+                        "Cấu hình LLM chưa dùng được ({error}); đã sinh bản tất định offline."
+                    ),
+                    None => {
+                        "Chưa cấu hình FILECONV_LLM_*; đã sinh bản tất định offline.".into()
+                    }
+                });
             }
         }
 
@@ -502,7 +507,9 @@ pub async fn ask_intelligence(
             .settings
             .lock()
             .map_err(|_| "lock lỗi")?
-            .llm_config()?
+            .llm_config()
+            .ok()
+            .flatten()
     } else {
         None
     };
