@@ -20,6 +20,8 @@ import type {
   MergeResult,
   PiiReport,
   Project,
+  PptxPreviewMeta,
+  PptxPreviewSlide,
   QualityReport,
   SearchHit,
   Settings,
@@ -65,6 +67,10 @@ export const api = {
   resolvePath: (relPath: string) => invoke<string>("resolve_path", { relPath }),
   /** Bytes thô của file (ArrayBuffer) cho pdf.js/docx-preview/SheetJS. */
   readBytes: (relPath: string) => invoke<ArrayBuffer>("read_bytes", { relPath }),
+  previewPptxMeta: (relPath: string) =>
+    invoke<PptxPreviewMeta>("preview_pptx_meta", { relPath }),
+  previewPptxSlide: (relPath: string, index: number) =>
+    invoke<PptxPreviewSlide>("preview_pptx_slide", { relPath, index }),
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),

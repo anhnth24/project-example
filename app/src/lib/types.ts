@@ -12,6 +12,47 @@ export interface FsNode {
   children: FsNode[];
 }
 
+export interface PptxPreviewMeta {
+  slideCount: number;
+  widthEmu: number;
+  heightEmu: number;
+}
+
+interface PptxShapeBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type PptxPreviewShape =
+  | (PptxShapeBounds & {
+      kind: "text";
+      text: string;
+      fontPt: number;
+      bold: boolean;
+      color: string;
+      fill: string | null;
+    })
+  | (PptxShapeBounds & {
+      kind: "image";
+      alt: string;
+      dataUrl: string;
+    })
+  | (PptxShapeBounds & {
+      kind: "shape";
+      fill: string | null;
+      stroke: string | null;
+    });
+
+export interface PptxPreviewSlide {
+  index: number;
+  widthEmu: number;
+  heightEmu: number;
+  background: string;
+  shapes: PptxPreviewShape[];
+}
+
 export interface Settings {
   ocrLangs: string;
   pdfOcr: boolean;

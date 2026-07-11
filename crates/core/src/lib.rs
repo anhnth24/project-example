@@ -22,6 +22,7 @@ mod intelligence_tests;
 pub mod llm;
 #[cfg(feature = "llm")]
 pub mod llm_cli;
+pub mod pptx_preview;
 pub mod probe;
 pub mod tables;
 pub mod viet_legacy;

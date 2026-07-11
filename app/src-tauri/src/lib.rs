@@ -902,6 +902,39 @@ fn read_bytes(state: State<AppState>, rel_path: String) -> Result<tauri::ipc::Re
 }
 
 #[tauri::command]
+async fn preview_pptx_meta(
+    state: State<'_, AppState>,
+    rel_path: String,
+) -> Result<fileconv_core::pptx_preview::PptxPreviewMeta, String> {
+    let path = resolve_within(&data_root(&state), &rel_path)?;
+    if FormatKind::from_path(&path) != FormatKind::Pptx {
+        return Err("preview PPTX chỉ nhận file .pptx".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        fileconv_core::pptx_preview::preview_meta(&path).map_err(es)
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
+async fn preview_pptx_slide(
+    state: State<'_, AppState>,
+    rel_path: String,
+    index: usize,
+) -> Result<fileconv_core::pptx_preview::PptxPreviewSlide, String> {
+    let path = resolve_within(&data_root(&state), &rel_path)?;
+    if FormatKind::from_path(&path) != FormatKind::Pptx {
+        return Err("preview PPTX chỉ nhận file .pptx".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        fileconv_core::pptx_preview::preview_slide(&path, index).map_err(es)
+    })
+    .await
+    .map_err(es)?
+}
+
+#[tauri::command]
 fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().map(|s| s.clone()).unwrap_or_default()
 }
@@ -988,6 +1021,8 @@ pub fn run() {
             file_size,
             resolve_path,
             read_bytes,
+            preview_pptx_meta,
+            preview_pptx_slide,
             get_settings,
             set_settings,
             intelligence::get_llm_provider_presets,
