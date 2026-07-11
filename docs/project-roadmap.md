@@ -1,6 +1,6 @@
 # Lộ trình dự án
 
-> Trạng thái tính đến 2026-07-10. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
+> Trạng thái tính đến 2026-07-11. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
 > và điểm yếu đã biết trong các `REPORT*.md`.
 
 ## Đã hoàn thành ✅
@@ -23,21 +23,27 @@
   test cases, traceability + Jira/GitHub/Confluence/Obsidian exports.
 - **Desktop LumiBase dark**: icon rail, đa tab, Library, Intelligence workspace,
   modal nội bộ và queue background.
+- **Subscription bridge**: Cursor Agent và OpenAI Codex CLI dùng browser login,
+  ask/read-only sandbox, timeout và fallback; không đọc token.
+- **Neural embeddings tùy chọn**: Ollama/LM Studio/vLLM/OpenAI/Gemini, index
+  signature + dimension guard + FTS fallback.
+- **Audio no-speech**: lọc theo xác suất segment và marker nhạc/im lặng; tự tìm
+  PhoWhisper đã tải về trước model chuẩn.
+- **Desktop release foundation**: identity `Markhand`, icon đa nền tảng,
+  CI/release matrix và `.deb` Linux đã build/kiểm tra metadata.
 
 ## Đang làm / Gần ✋
 
-- Tích hợp **PhoWhisper làm backend mặc định** cho audio vi (đã đo, chưa bật default).
-- Khắc phục **bất nhất TCVN3** giữa `tables.rs` (không decode) và `csv_conv.rs` (có decode).
 - Dọn **logic trùng** đếm slide PPTX (CLI shell `python3` vs `probe.rs` native).
 
 ## Backlog
 
 ### Độ chính xác tiếng Việt
-- [ ] **Phục hồi dấu IN HOA**: Tesseract mất dấu ở header viết hoa (hiện giảm nhẹ bằng `tessdata_best`).
-      Hướng: post-OCR phục hồi dấu + thử Vintern-1B.
+- [ ] **Phục hồi dấu IN HOA đầy đủ**: đã thêm retry PSM 6 khi output sparse/lỗi/
+      dính chuỗi IN HOA và chọn output theo quality score; phục hồi bằng VLM vẫn cần corpus thật.
 - [ ] **Tách cột trước OCR** cho bảng PDF đa cột (Tesseract đang đọc sai thứ tự cột).
 - [ ] **Decode VNI / VPS** đầy đủ (mới có TCVN3).
-- [ ] **Lọc ảo giác whisper** trên audio không lời bằng `no_speech_probability` (hiện whisper bịa text trên nhạc/nhạc piano).
+- [x] **Lọc ảo giác whisper** bằng `no_speech_probability` + marker nhạc/im lặng.
 
 ### OCR / Vision tier
 - [ ] **Vintern-1B** (VLM on-device) cho tài liệu khó thay/về bên cạnh `ocr_hard` cloud.
@@ -46,13 +52,14 @@
 
 ### Output / cấu trúc
 - [ ] **Bảng → HTML** cho ô phức tạp (merge cell, multi-line) thay vì chỉ Markdown table.
-- [ ] **`ConversionResult.title`** — hiện khai báo `Option<String>` nhưng luôn `None`; chưa converter nào trả title.
+- [x] **`ConversionResult.title`** — lấy heading đầu, fallback tên file.
 
 ### Desktop / đóng gói
-- [ ] **Đóng gói distributable** (`.msi` / `.dmg` / `.deb` / AppImage) — Tauri bundler, chưa chạy.
+- [ ] **Đóng gói distributable đa OS** — `.deb` Linux đã build; AppImage/MSI/DMG
+      có release matrix nhưng Windows/macOS còn cần artifact thật và signing/notarization.
 - [x] **Dark mode** LumiBase.
 - [x] Đổi `prompt()`/`confirm()` native trong Sidebar thành modal tuỳ chỉnh.
-- [ ] Thống nhất identity (`package.json` `fileconv-docs` vs productName `Markhand` vs identifier `com.anhnth24.fileconv-docs`).
+- [x] Thống nhất identity Markhand (`com.anhnth24.markhand`, binary `markhand`).
 
 ### Tích hợp / mở rộng
 - [ ] **Plugin system** (khoảng trống vs best-in-class).

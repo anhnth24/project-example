@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Backend Rust chuyển đổi file (pdf/docx/pptx/xlsx/csv/html + ảnh OCR + audio) → Markdown,
 **code do dự án làm chủ hoàn toàn**. `vendor/markitdown-rs/` chỉ là **tài liệu tham khảo**
 (MIT) — KHÔNG phải dependency, đã `exclude` khỏi workspace; đừng dùng lại hay phụ thuộc nó.
-Mục tiêu cuối là đóng gói thành desktop app (Tauri) cho Win/Mac/Ubuntu — chưa làm.
+Desktop Tauri Markhand đã có bundle config; `.deb` Linux build được, Win/Mac còn
+cần runner + signing/notarization.
 
 Ưu tiên xuyên suốt: **độ chính xác nội dung tiếng Việt** > giữ format 100%.
 
@@ -59,13 +60,15 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
   - `conv/html.rs` — `htmd` (đã `skip_tags` script/style/noscript; thay html2md vì nó phình output).
   - `conv/csv_conv.rs` — bảng Markdown; `rows_to_md_table()` dùng chung cho xlsx/docx.
   - `image_ocr.rs` — Tesseract CLI. `ocr_dynimage()` là đường chung: **tiền xử lý ảnh**
-    (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize) trước khi OCR (tăng accuracy rõ rệt).
+    (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize); output nghi lỗi/dính
+    IN HOA retry PSM 6 và chọn theo quality score.
   - `audio.rs` — `AudioEngine::load()` giữ `WhisperContext` (cache 1 lần); decode mp3/wav/ogg…
-    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"). Ưu tiên model
-    PhoWhisper cho tiếng Việt.
+    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"), lọc
+    `no_speech_probability`. Tự tìm PhoWhisper đã tải về trước model chuẩn.
   - `chunk.rs` — chia Markdown thành chunk RAG theo heading (giữ đường dẫn tiêu đề cha).
   - `viet_legacy.rs` — decode bảng mã VN cũ **TCVN3** (detect + convert; VNI/VPS backlog).
-  - `llm.rs` (feature `llm`) — chat/summarize/extract_json/**vision_ocr** qua env FILECONV_LLM_*.
+  - `llm.rs`/`llm_cli.rs` (feature `llm`) — HTTP chat/vision, neural embedding và
+    Cursor/Codex official subscription CLI; Claude subscription không route qua app thứ ba.
   - Output cuối `convert_path` luôn **chuẩn hoá NFC** (tài liệu vi NFD từ macOS/PDF cũ).
 - **`crates/cli`** (`fileconv`) — bench harness: timing, đếm page (pdfinfo/python zip),
   CER/WER (`metrics.rs`, Levenshtein; `normalize()` bỏ ký hiệu markdown để đo NỘI DUNG).

@@ -83,6 +83,7 @@ Trong **Cài đặt → Document Intelligence**, Markhand có preset:
 
 - Local/self-host: Ollama, LM Studio, llama.cpp server, vLLM.
 - Cloud: OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral AI, Together AI.
+- Subscription: Cursor Agent CLI và OpenAI Codex CLI qua browser login chính thức.
 - Custom OpenAI-compatible endpoint.
 
 Mặc định LLM tắt; hybrid search, Q&A extractive và BRD/PRD deterministic vẫn
@@ -99,6 +100,22 @@ ollama pull qwen2.5:7b
 API key nhập trong desktop chỉ giữ trong memory, không ghi vào `settings.json`.
 Muốn persist qua lần khởi động, đặt `FILECONV_LLM_API_KEY` trong environment.
 Cloud/LLM chỉ nhận các citation đã retrieval, không nhận toàn bộ DATA root.
+
+Neural embeddings là cấu hình riêng: Ollama/LM Studio/vLLM/OpenAI/Gemini. Nếu
+tắt, index dùng local hash 256D. Nếu bật cloud embedding, toàn bộ chunk được gửi
+khi build index (UI cảnh báo rõ), không chỉ top-K.
+
+### Build bộ cài
+
+```bash
+cd app
+pnpm tauri build --bundles deb       # Linux
+# CI release matrix: deb/AppImage, MSI/NSIS và DMG
+```
+
+`.deb` Linux đã được build và kiểm tra metadata; artifact nằm dưới
+`target/release/bundle/`. Windows/macOS cần runner đúng hệ điều hành và
+signing/notarization trước khi phát hành công khai.
 
 ## Preview file gốc trong app
 
@@ -128,4 +145,4 @@ URL từ bytes đó. KHÔNG dùng `fetch(asset://)`/`<img src=asset://>` vì web
 - Queue chưa có phần trăm theo page/segment vì `fileconv-core` chưa phát progress unit.
 - Đối chiếu hiện liên kết bản convert gốc ↔ draft Markdown; source-anchor theo page/slide/
   sheet/timestamp cần structured converter artifact ở phase sau.
-- Chưa đóng gói bộ cài Win/Mac/Ubuntu.
+- Linux `.deb` đã xác minh; AppImage/Windows/macOS chưa smoke-test artifact hoặc ký số.

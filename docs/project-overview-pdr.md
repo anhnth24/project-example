@@ -39,7 +39,7 @@ tiền xử lý ảnh trước OCR.
 | RAG | Tách chunk theo heading (chunk.rs) | ✅ |
 | Bảng mã cũ | Decode TCVN3 (VNI/VPS còn backlog) | ✅ TCVN3 |
 | OCR khó | Vision-LLM (cột nhiều, IN HOA, chữ viết tay, con dấu) qua MCP `ocr_hard` | ✅ (cần key LLM) |
-| Desktop GUI | Kéo-thả, soạn thảo, xem trước nguồn, cài đặt OCR/audio | ✅ (chưa đóng gói) |
+| Desktop GUI | Markhand: kéo-thả, intelligence, provider/embedding settings | ✅ (`.deb` đã build; Win/Mac chờ signing) |
 | NFC | Chuẩn hoá mọi output (tài liệu NFD từ macOS/PDF cũ) | ✅ |
 
 ### Yêu cầu phi chức năng

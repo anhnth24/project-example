@@ -86,9 +86,11 @@ Each issue includes a severity, citation/offset and recommended reprocess action
 
 ### Search and cited Q&A
 
-- Build an in-memory token index from heading chunks.
-- Accent-insensitive Vietnamese tokenization.
-- Rank by query-term coverage, frequency and heading match.
+- Persist heading chunks in SQLite FTS5 with vector metadata.
+- Accent-insensitive Vietnamese tokenization plus local hash fallback.
+- Optional neural embeddings through local/cloud providers; model signature and
+  dimensions are hard invariants.
+- Rank lexical/vector legs with Reciprocal Rank Fusion, token and heading match.
 - Return snippets and citations.
 - Offline Q&A is extractive: top cited passages form the answer.
 - Optional LLM may summarize only the retrieved passages.
@@ -139,6 +141,7 @@ PII report, versions and handoff artifacts with a JSON manifest.
 DATA/.markhand/
 ├── handoff/<pack-id>/
 ├── versions/<document-key>/
+├── knowledge.sqlite
 ├── watch-rules.json
 └── watch-state.json
 ```
@@ -166,6 +169,9 @@ validated relative DATA paths.
 - `set_watch_rules`
 - `scan_watch_rules`
 - `export_knowledge_pack`
+- `rebuild_knowledge_index` / `knowledge_index_stats`
+- `hybrid_search` / `hybrid_ask`
+- subscription CLI status/login and embedding presets/test
 
 ## Desktop UI
 

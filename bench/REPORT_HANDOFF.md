@@ -59,14 +59,14 @@ Với corpus BRD/workshop/Excel traceability thật, BA/PM nên:
 
 ## Regression coverage
 
-Sau review, test suite được mở rộng từ các happy-path cơ bản thành **146 test**
+Sau review, test suite được mở rộng từ các happy-path cơ bản thành **171 test**
 chạy tự động:
 
 | Lớp | Số test | Phạm vi |
 |---|---:|---|
-| `fileconv-core` | 75 | convert/OCR + intelligence/handoff + LLM protocols |
-| Tauri desktop | 36 | path jail, projects/import, sidecar, provider/settings, persistent RAG |
-| React/TypeScript | 32 | blocks, project scope, intelligence và LLM helpers |
+| `fileconv-core` | 90 | convert/OCR/audio + intelligence + LLM/CLI/embedding protocols |
+| Tauri desktop | 41 | path jail, projects, settings, persistent hybrid/neural RAG |
+| React/TypeScript | 37 | blocks, project scope, provider/subscription/embedding helpers |
 | CLI metrics | 3 | CER/WER |
 
 Nhóm intelligence bao phủ:
@@ -87,5 +87,19 @@ Nhóm intelligence bao phủ:
   version ID traversal và pack round-trip.
 - local OpenAI-compatible không cần key, cloud Bearer auth, URL `/v1`, provider
   aliases/presets, settings migration và API key không persist.
+- Cursor/Codex official CLI parsing, ask/read-only args, stdin transport, timeout
+  kill và subscription status.
+- neural embedding batch/normalization, persistent model signature/dimensions,
+  mixed-dimension rejection, query vector và whole-scope local fallback.
 - project discovery/legacy migration, Unicode slug, nested folder collection,
   import limits, supported formats, no-overwrite copy và project-scoped tree.
+
+## Desktop release verification
+
+- Identity: `Markhand`, bundle ID `com.anhnth24.markhand`, binary `markhand`.
+- Sinh đủ icon Linux/macOS/Windows/mobile từ source SVG.
+- `pnpm tauri build --bundles deb` thành công trên Linux.
+- Artifact: `Markhand_0.1.0_amd64.deb`, khoảng **16.7 MB**.
+- Debian metadata: package `markhand`, section `utils`; depends
+  `libwebkit2gtk-4.1-0`, `libgtk-3-0`; recommends Tesseract + tiếng Việt.
+- CI test và release matrix đã thêm cho Linux/Windows/macOS.

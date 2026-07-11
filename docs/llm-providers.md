@@ -3,13 +3,14 @@
 Markhand chạy convert, OCR, quality, hybrid search và BRD/PRD deterministic mà
 không cần LLM. LLM chỉ tổng hợp các citation đã retrieval khi người dùng bật rõ.
 
-## Bốn trạng thái Q&A
+## Năm trạng thái Q&A
 
 | Trạng thái | Retrieval | Trả lời | Dữ liệu ra ngoài |
 |---|---|---|---|
 | Không cấu hình LLM | SQLite FTS5 + vector local | Extractive + citation | Không |
 | LLM local đang chạy | Hybrid local | LLM tổng hợp + citation | Không |
 | LLM cloud | Hybrid local | Cloud tổng hợp top-K | Chỉ top-K citation |
+| Cursor/Codex subscription | Hybrid local | Official CLI tổng hợp top-K | Chỉ top-K citation |
 | Provider lỗi / thiếu key | Hybrid local | Tự fallback extractive | Không |
 
 Provider không bao giờ là dependency bắt buộc của index/search. Nếu endpoint mất
@@ -61,6 +62,26 @@ Model: tên model đã serve
 Các local provider dùng OpenAI-compatible `/v1/chat/completions` và không bắt
 buộc API key.
 
+## Cursor/Codex subscription bridge
+
+Markhand không đọc cookie, browser session hay file token. Người dùng cài CLI
+chính thức và đăng nhập bằng trình duyệt:
+
+```bash
+agent login       # Cursor subscription
+codex login       # ChatGPT/Codex subscription
+```
+
+Trong Settings chọn **Cursor subscription** hoặc **ChatGPT / Codex
+subscription**. Cursor chạy `ask + sandbox`; Codex chạy `exec --ephemeral
+--sandbox read-only`. Prompt được truyền qua stdin trong thư mục tạm và process
+bị kill khi timeout. Provider/CLI lỗi vẫn fallback extractive.
+
+Claude Pro/Max không xuất hiện ở nhóm subscription: Anthropic cấm ứng dụng bên
+thứ ba cung cấp Claude.ai login hoặc route consumer subscription credentials.
+Claude trong Markhand cần API/Bedrock/Vertex/Foundry; chiều ngược lại có thể dùng
+`fileconv-mcp` từ Claude Code.
+
 ## Cloud presets
 
 - OpenAI
@@ -84,12 +105,29 @@ export FILECONV_LLM_MODEL=qwen2.5:7b
 export FILECONV_LLM_API_KEY=...
 ```
 
+## Neural embeddings tùy chọn
+
+Baseline luôn là FTS5 + local feature hashing 256D. Người dùng có thể bật neural
+embeddings riêng với chat provider:
+
+- Local: Ollama (`nomic-embed-text`, `mxbai-embed-large`, `bge-m3`), LM Studio,
+  vLLM.
+- Cloud: OpenAI (`text-embedding-3-*`) hoặc Gemini
+  (`gemini-embedding-001`).
+
+Index lưu mode/provider/model/dimensions/signature. Đổi model hoặc số chiều sẽ
+rebuild; mixed dimensions bị từ chối. Provider lỗi có thể rebuild toàn scope
+bằng local hash, còn query-time lỗi tự hạ xuống FTS lexical.
+
+Khác với Q&A top-K, **cloud embedding gửi toàn bộ chunk text khi build index**.
+UI cảnh báo riêng trước khi bật. API key embedding cũng chỉ giữ trong memory.
+
 ## Luồng Q&A
 
 ```text
 DATA Markdown
 → heading chunks
-→ SQLite FTS5 + vector hashing local (persist)
+→ SQLite FTS5 + local hash hoặc neural embeddings (persist)
 → Reciprocal Rank Fusion + heading/token rerank
 → top citations
 → LLM provider (nếu bật)
@@ -101,14 +139,15 @@ Markhand không gửi toàn bộ DATA root. Handoff gửi tối đa 40 citation,
 tối đa 600 ký tự. Q&A chỉ gửi các citation top-K của câu hỏi.
 
 Index nằm tại `DATA/.markhand/knowledge.sqlite`, được cập nhật theo content hash
-sau mỗi lần convert. Vector hashing 256 chiều chạy hoàn toàn local và là baseline
-không phụ thuộc model embedding; đây là feature vector cho retrieval, không được
-quảng cáo là neural semantic embedding.
+sau mỗi lần convert. Vector hashing 256 chiều vẫn là fallback không phụ thuộc
+model; chỉ mode `provider_v1` mới được hiển thị là neural semantic embedding.
 
 ## Quyền riêng tư
 
 - Local preset: dữ liệu không rời máy.
 - Cloud preset: UI hiển thị cảnh báo trước khi bật.
+- Subscription CLI: credentials do CLI/OS keychain quản lý, Markhand không đọc.
+- Cloud neural embedding: toàn corpus chunk được gửi ở lần build/rebuild.
 - PII scan chạy local.
 - LLM artifacts luôn cần review; validation hiển thị áp dụng cho baseline
   deterministic.

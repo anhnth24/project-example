@@ -4,7 +4,8 @@ Backend Rust chuyển đổi tài liệu / ảnh / âm thanh sang **Markdown**, 
 Code do dự án làm chủ hoàn toàn (gọi thẳng crate gốc). Mục tiêu: đóng gói thành
 **desktop app (Tauri)** cho Win / Mac / Ubuntu.
 
-> **Trạng thái: backend + kiểm thử hiệu năng/độ chính xác + desktop app prototype (chưa đóng gói distributable).**
+> **Trạng thái: backend + kiểm thử hiệu năng/độ chính xác + Markhand desktop;
+> `.deb` Linux đã build, release matrix Win/Mac/Linux đang chờ signing và smoke-test đa OS.**
 
 ## Ưu tiên xuyên suộc
 
