@@ -171,7 +171,7 @@ cửa sổ 1440×900 (min 900×600). Permission tối thiểu: `core:default`, `
 ### Cầu nối Tauri (`app/src-tauri/src/lib.rs`)
 - **AppState**: `{ config_dir, data_root: Mutex<PathBuf>, settings: Mutex<Settings> }`.
 - **Path safety**: `resolve_within` chặn `..`, tuyệt đối, root-relative.
-- **45 command**: `supported_extensions`, `get/set_data_root` (persist `config.json`; mặc định `app_data_dir()/DATA`),
+- **49 command**: `supported_extensions`, `get/set_data_root` (persist `config.json`; mặc định `app_data_dir()/DATA`),
   `read_tree` (ghép cặp `report.pdf`↔`report.pdf.md` 1-1, ẩn phía `.md`, đánh dấu `standaloneMd`),
   `create_folder`, `create_markdown`, `rename_node` (rename cả `.md` ghép cặp), `delete_node` (từ chối xóa DATA root),
   `import_file_only` (copy, chưa convert), `import_file` (compat: copy + convert), `reconvert`,
@@ -179,6 +179,9 @@ cửa sổ 1440×900 (min 900×600). Permission tối thiểu: `core:default`, `
   `file_size`, `resolve_path`, `read_bytes` (ArrayBuffer — webview `fetch(asset://)` trả 403 nên phải dùng command này),
   `get/set_settings`; cộng nhóm Intelligence: handoff BRD/PRD, quality, cited search/Q&A,
   PII/redaction, schema/tables/CSV, versions/diff/merge, watch rules, hard OCR và ZIP pack.
+  RAG mới gồm `rebuild_knowledge_index`, `knowledge_index_stats`, `hybrid_search`,
+  `hybrid_ask`: SQLite FTS5 + vector hashing local 256D, incremental content hash,
+  RRF rerank, page/slide/sheet/offset anchors và LLM fallback có validation citation.
   Nhóm Project: list/create/adopt/remove project và import đệ quy folder local.
 - `convert_and_write_md` map `Settings`→`ConverterOptions`→`Converter::convert_path`→ghi `.md`.
 

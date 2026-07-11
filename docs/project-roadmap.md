@@ -16,8 +16,9 @@
 - **Desktop app "Markhand"** (Tauri 2 + React): kéo-thả, soạn thảo, xem trước nguồn, cài đặt OCR/audio.
 - **Nghiên cứu đối thủ** (11 công cụ) — định vị ngách offline-VN.
 - **Đo PhoWhisper**: 90.8% vs whisper-small 77.3% (+13.5 điểm) trên clip vi thật.
-- **Document Intelligence**: cited search/Q&A, quality, versions/diff/merge, table/schema,
-  PII/redaction, watch rules, hard-OCR hook và Knowledge Pack.
+- **Document Intelligence**: persistent SQLite FTS5 + local-vector hybrid Q&A có
+  citation/fallback, quality, versions/diff/merge, table/schema, PII/redaction,
+  watch rules, hard-OCR hook và Knowledge Pack.
 - **Handoff BA/PM**: sinh BRD/PRD, user stories, acceptance criteria, glossary,
   test cases, traceability + Jira/GitHub/Confluence/Obsidian exports.
 - **Desktop LumiBase dark**: icon rail, đa tab, Library, Intelligence workspace,

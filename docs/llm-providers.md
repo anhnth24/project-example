@@ -1,7 +1,21 @@
 # LLM providers cho Markhand Intelligence
 
-Markhand chạy convert, OCR, quality, search lexical và BRD/PRD deterministic mà
+Markhand chạy convert, OCR, quality, hybrid search và BRD/PRD deterministic mà
 không cần LLM. LLM chỉ tổng hợp các citation đã retrieval khi người dùng bật rõ.
+
+## Bốn trạng thái Q&A
+
+| Trạng thái | Retrieval | Trả lời | Dữ liệu ra ngoài |
+|---|---|---|---|
+| Không cấu hình LLM | SQLite FTS5 + vector local | Extractive + citation | Không |
+| LLM local đang chạy | Hybrid local | LLM tổng hợp + citation | Không |
+| LLM cloud | Hybrid local | Cloud tổng hợp top-K | Chỉ top-K citation |
+| Provider lỗi / thiếu key | Hybrid local | Tự fallback extractive | Không |
+
+Provider không bao giờ là dependency bắt buộc của index/search. Nếu endpoint mất
+kết nối, model chưa load hoặc key hết hạn, câu hỏi vẫn trả kết quả local kèm cảnh
+báo thay vì làm hỏng toàn bộ tác vụ. Endpoint không kết nối được có connect
+timeout 5 giây; model đang sinh câu trả lời có timeout tổng 120 giây.
 
 ## Khuyến nghị: self-host local
 
@@ -75,14 +89,21 @@ export FILECONV_LLM_API_KEY=...
 ```text
 DATA Markdown
 → heading chunks
-→ lexical retrieval
+→ SQLite FTS5 + vector hashing local (persist)
+→ Reciprocal Rank Fusion + heading/token rerank
 → top citations
 → LLM provider (nếu bật)
-→ answer + citation
+→ kiểm tra citation
+→ answer; hoặc fallback extractive nếu provider/grounding lỗi
 ```
 
 Markhand không gửi toàn bộ DATA root. Handoff gửi tối đa 40 citation, mỗi citation
 tối đa 600 ký tự. Q&A chỉ gửi các citation top-K của câu hỏi.
+
+Index nằm tại `DATA/.markhand/knowledge.sqlite`, được cập nhật theo content hash
+sau mỗi lần convert. Vector hashing 256 chiều chạy hoàn toàn local và là baseline
+không phụ thuộc model embedding; đây là feature vector cho retrieval, không được
+quảng cáo là neural semantic embedding.
 
 ## Quyền riêng tư
 

@@ -70,7 +70,7 @@ Nút ✨ trên icon rail mở workspace Intelligence:
 - Sinh BRD/PRD, user stories, acceptance criteria, glossary, test cases và
   traceability có citation.
 - Baseline chạy offline; tùy chọn LLM dùng `FILECONV_LLM_*`.
-- Quality report, tìm kiếm/hỏi đáp corpus có trích dẫn.
+- Quality report, SQLite FTS5 + vector search và hỏi đáp corpus có trích dẫn.
 - Snapshot phiên bản, diff và merge an toàn trước reconvert.
 - Sửa bảng Markdown, trích schema và xuất CSV.
 - Quét/che PII, watch-folder rules và Knowledge Pack ZIP.
@@ -85,7 +85,10 @@ Trong **Cài đặt → Document Intelligence**, Markhand có preset:
 - Cloud: OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral AI, Together AI.
 - Custom OpenAI-compatible endpoint.
 
-Mặc định LLM tắt; search/Q&A extractive và BRD/PRD deterministic vẫn chạy offline.
+Mặc định LLM tắt; hybrid search, Q&A extractive và BRD/PRD deterministic vẫn
+chạy offline. Index incremental nằm ở `DATA/.markhand/knowledge.sqlite`. Nếu đã
+cấu hình nhưng provider không chạy, mất mạng hoặc thiếu key, Q&A tự fallback sang
+extractive có citation và hiển thị cảnh báo; kết quả retrieval không mất.
 Khuyến nghị Ollama/local để dữ liệu không rời máy:
 
 ```bash
