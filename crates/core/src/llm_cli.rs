@@ -89,7 +89,7 @@ fn binary_for(config: &LlmConfig) -> Result<OsString, ConvertError> {
 }
 
 fn command_for(config: &LlmConfig) -> Result<Command, ConvertError> {
-    let mut command = Command::new(binary_for(config)?);
+    let mut command = crate::proc::background_command(binary_for(config)?);
     // Subscription bridges must use the official CLI login, not API-key env vars.
     command
         .env_remove("CURSOR_API_KEY")
@@ -317,7 +317,7 @@ pub fn subscription_status(config: &LlmConfig) -> Result<CliSubscriptionStatus, 
 
 pub fn start_login(config: &LlmConfig) -> Result<(), ConvertError> {
     let binary = binary_for(config)?;
-    let mut command = Command::new(binary);
+    let mut command = crate::proc::background_command(binary);
     command
         .arg("login")
         .env_remove("CURSOR_API_KEY")
