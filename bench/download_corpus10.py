@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "corpus10"
+PINNED_LOCK = ROOT / "CORPUS10_SOURCES.lock.json"
 USER_AGENT = "Markhand public conversion benchmark/1.0"
 MAX_BYTES = 20 * 1024 * 1024
 
@@ -331,6 +332,12 @@ def download(url: str, output: Path) -> None:
 
 def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    expected = {}
+    if PINNED_LOCK.exists():
+        expected = {
+            (record["family"], record["name"]): record["sha256"]
+            for record in json.loads(PINNED_LOCK.read_text(encoding="utf-8"))
+        }
     records = []
     failures = []
     for family, sources in SOURCES.items():
@@ -345,6 +352,11 @@ def main() -> None:
                     download(url, path)
                 validate(path, family)
                 digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                pinned = expected.get((family, name))
+                if pinned and pinned != digest:
+                    raise ValueError(
+                        f"SHA-256 changed: expected {pinned}, received {digest}"
+                    )
                 records.append(
                     {
                         "family": family,

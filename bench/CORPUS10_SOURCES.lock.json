@@ -1,0 +1,722 @@
+[
+  {
+    "family": "pdf",
+    "name": "arxiv-1706.03762.pdf",
+    "url": "https://arxiv.org/pdf/1706.03762",
+    "license": "arXiv public paper",
+    "bytes": 2215244,
+    "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1810.04805.pdf",
+    "url": "https://arxiv.org/pdf/1810.04805",
+    "license": "arXiv public paper",
+    "bytes": 775166,
+    "sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1512.03385.pdf",
+    "url": "https://arxiv.org/pdf/1512.03385",
+    "license": "arXiv public paper",
+    "bytes": 819383,
+    "sha256": "1e0651b6810ecba34a3dbc5b5b0209226f889004607c1f203540a48d64e5a93a"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1409.1556.pdf",
+    "url": "https://arxiv.org/pdf/1409.1556",
+    "license": "arXiv public paper",
+    "bytes": 200010,
+    "sha256": "83728f9efc21081792902b4c17a4657022d1e4a92ec81655c2427f4ef0755e50"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1412.6980.pdf",
+    "url": "https://arxiv.org/pdf/1412.6980",
+    "license": "arXiv public paper",
+    "bytes": 584641,
+    "sha256": "eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1506.02640.pdf",
+    "url": "https://arxiv.org/pdf/1506.02640",
+    "license": "arXiv public paper",
+    "bytes": 5296750,
+    "sha256": "54bcd2dd05dc618849e8a94d8b88fe3eeb37f80e96e200600d38f1f733931678"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1505.04597.pdf",
+    "url": "https://arxiv.org/pdf/1505.04597",
+    "license": "arXiv public paper",
+    "bytes": 1648684,
+    "sha256": "a3172b2124f38e260dc2c7ed968d87c31bc94dbc19a42a7ab3dcbd7534319c44"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1810.13243.pdf",
+    "url": "https://arxiv.org/pdf/1810.13243",
+    "license": "arXiv public paper",
+    "bytes": 2824506,
+    "sha256": "f0c0bab76c9ee03731bbbf7dd440928658a44d151a3e46a2c1fe7b5d7c8f1686"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-2010.11929.pdf",
+    "url": "https://arxiv.org/pdf/2010.11929",
+    "license": "arXiv public paper",
+    "bytes": 3743814,
+    "sha256": "8ce7b83971a14508ca711a27c875c9b6914c4f6767cf3150fb1ca6c07aa056d6"
+  },
+  {
+    "family": "pdf",
+    "name": "arxiv-1707.06347.pdf",
+    "url": "https://arxiv.org/pdf/1707.06347",
+    "license": "arXiv public paper",
+    "bytes": 2923532,
+    "sha256": "e78feadadbdbb0b601b3c2bcc81404722cd431a489b307545f9b7bea1e8c4f5b"
+  },
+  {
+    "family": "docx",
+    "name": "blk-containing-table.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/blk-containing-table.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 25142,
+    "sha256": "5e036b49ff8d24f9f7eed8ae60a39f7a570f66f9bbebcf76b3ed8f2f28f89b3d"
+  },
+  {
+    "family": "docx",
+    "name": "blk-paras-and-tables.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/blk-paras-and-tables.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 15649,
+    "sha256": "93f40c8a23dbcbc75b073e0f7050a5f064e6aff58c1bc6c6003359122e9faf79"
+  },
+  {
+    "family": "docx",
+    "name": "doc-default.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/doc-default.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 21366,
+    "sha256": "0cde4019e31cf05f229e5955c6021fd07c863a2936a7f4de0d9169d426f4fe59"
+  },
+  {
+    "family": "docx",
+    "name": "doc-coreprops.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/doc-coreprops.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 11992,
+    "sha256": "358ba16289fc12f9c50a22d74ab610ef4dc74563c5ed7c889ac48f372b956dd0"
+  },
+  {
+    "family": "docx",
+    "name": "par-known-paragraphs.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/par-known-paragraphs.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 27969,
+    "sha256": "0e1381929a0833057ef0095e42f0d34f9a456821b8e9053489b596b1b417b3c9"
+  },
+  {
+    "family": "docx",
+    "name": "par-hyperlinks.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/par-hyperlinks.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 12385,
+    "sha256": "206539619eb347b1cd5b3fe88031cc18327accfe5d34a886f3d9120115f6bdad"
+  },
+  {
+    "family": "docx",
+    "name": "hdr-header-footer.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/hdr-header-footer.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 18079,
+    "sha256": "5a4cb270680d1365688073e4816be98c2ab1a7ba2921d86cb3efadca97a72d27"
+  },
+  {
+    "family": "docx",
+    "name": "run-char-style.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/run-char-style.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 26645,
+    "sha256": "cd647c103be2a6f6af62f5d093236796ac2d515307ddf44dd774b74941b79d15"
+  },
+  {
+    "family": "docx",
+    "name": "par-alignment.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/par-alignment.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 15126,
+    "sha256": "8a276964f84b5104fffdf0e29ecb96744e1c3d0139543f6feba0e2152619a7e0"
+  },
+  {
+    "family": "docx",
+    "name": "doc-odd-even-hdrs.docx",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/doc-odd-even-hdrs.docx",
+    "license": "python-docx MIT fixture",
+    "bytes": 17711,
+    "sha256": "2c29ec565cc971743f95ea7bba0b716c146c09ddfb9e5b414400b5fe33a387d7"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-shapes.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-shapes.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 125205,
+    "sha256": "302dc642b791f49da6057b69a7ef2a0804f61d9469e7e49e9e734ae3305951cc"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-autoshape-props.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-autoshape-props.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 22929,
+    "sha256": "e375b141eba8ab0aaebef4ba983851747743f4d67e0ca5598c5a19f1ab2518ea"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-common-props.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-common-props.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 81639,
+    "sha256": "3227a1f000a4d1a2785794947bf9637b9aeae3d2eccaf8ec4fb83390691f1ae0"
+  },
+  {
+    "family": "pptx",
+    "name": "sld-blank.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/sld-blank.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 16703,
+    "sha256": "657dbb1f96965bf9cbfc50ac2063d6851c517710729345f4a1fa1c3cb6473130"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-picture.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-picture.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 91730,
+    "sha256": "20b6295563e217804af81f8b5fee5e5cef9e766ac401d825d536ffe6d674edd0"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-groupshape.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-groupshape.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 23786,
+    "sha256": "37c9a0bd919f9fc4e89600939cbaf798e79c6aaf96406aee5bba2828cea3e3a6"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-freeform.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-freeform.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 16704,
+    "sha256": "ccb5272fcfb17908550bbfa28f83061b09af1d2e0bf5537750b673dab22047bc"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-connector-props.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-connector-props.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 22899,
+    "sha256": "07342c67908b5800b21cc4e035a9914fae7442cbfb406c7bc96d312b2c5e85f1"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-pos-and-size.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-pos-and-size.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 94116,
+    "sha256": "37190c51eaaac91ab7299dd2eddf794defb42af858e2c32b9e87d232751cc44d"
+  },
+  {
+    "family": "pptx",
+    "name": "shp-access-chart.pptx",
+    "url": "https://raw.githubusercontent.com/scanny/python-pptx/master/features/steps/test_files/shp-access-chart.pptx",
+    "license": "python-pptx MIT fixture",
+    "bytes": 80038,
+    "sha256": "578c330e6fe606074e197d193bc5859c3b7fc31b3de8c217b32212b5cf54b9cc"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "merged_range.xlsx",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/merged_range.xlsx",
+    "license": "calamine MIT fixture",
+    "bytes": 10741,
+    "sha256": "13553289594edda304fdd66e0176e8cb5dce365eff8f589b6d1290090f1bc575"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "inventory-table.xlsx",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/inventory-table.xlsx",
+    "license": "calamine MIT fixture",
+    "bytes": 8347,
+    "sha256": "d63fa89e938aad9635cd556f683b901cc1c118bf11b494b1156c4711e5329631"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "any_sheets.xlsx",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/any_sheets.xlsx",
+    "license": "calamine MIT fixture",
+    "bytes": 14804,
+    "sha256": "fba48e0141f847d80738a4417f0a336cba92e4ac692d8dd7516eac41e32c9e4f"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "merged_range.xls",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/merged_range.xls",
+    "license": "calamine MIT fixture",
+    "bytes": 27648,
+    "sha256": "765661fcb979adf76d610bb9c1875e3c187755d20740b78ea049393a0692b71b"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "date.xls",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/date.xls",
+    "license": "calamine MIT fixture",
+    "bytes": 5632,
+    "sha256": "e3eb3391a371cc1e0b85d94b9f1dd94bbcedf19733ed0ca449e2d269af758e9e"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "issue127.xls",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/issue127.xls",
+    "license": "calamine MIT fixture",
+    "bytes": 8704,
+    "sha256": "4de3829d7651aa8d641148bf7c3aa92b0f1706d9ad4c3c6ff9cbc496598a4b03"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "any_sheets.xlsb",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/any_sheets.xlsb",
+    "license": "calamine MIT fixture",
+    "bytes": 14837,
+    "sha256": "ad645571475f1e30875610fc51ad7726d8b7af296850135bc593e15ead0e28c6"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "date.xlsb",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/date.xlsb",
+    "license": "calamine MIT fixture",
+    "bytes": 7711,
+    "sha256": "68d36adf4d4de3890209e786eeb89a98778d25158628f83e96587e652fbb4eca"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "merged_cells.ods",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/merged_cells.ods",
+    "license": "calamine MIT fixture",
+    "bytes": 8650,
+    "sha256": "64c7c278e497d32a7a54fe4c06d1db5e01a4741ed0fb7bde2817579d483c7301"
+  },
+  {
+    "family": "spreadsheet",
+    "name": "date.ods",
+    "url": "https://raw.githubusercontent.com/tafia/calamine/master/tests/date.ods",
+    "license": "calamine MIT fixture",
+    "bytes": 11886,
+    "sha256": "d65f3198bc73f2fad356e1b097215fc2f9a833fb802638217e5adc27fbba0466"
+  },
+  {
+    "family": "csv",
+    "name": "airtravel.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/airtravel.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 321,
+    "sha256": "f6a5fc622a83ef040fe708b7305fb6f34b8725a62e19da03a9bc8ff8592d8054"
+  },
+  {
+    "family": "csv",
+    "name": "biostats.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/biostats.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 849,
+    "sha256": "97ad3c6a306b5565cfa09e9c263231bbc44cf3bfbf7a0aae7bc0d16b0fc4afe1"
+  },
+  {
+    "family": "csv",
+    "name": "cities.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/cities.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 8402,
+    "sha256": "3e4dcda051a126ed51a44ce21c5d9a2a977686d996fef258adc9363d772ac2ce"
+  },
+  {
+    "family": "csv",
+    "name": "deniro.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/deniro.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 2391,
+    "sha256": "c752334ab0d9bd33c9a4f22b9d7ab892bf3fddc768a22ee390e67f6f8b7f7ec1"
+  },
+  {
+    "family": "csv",
+    "name": "faithful.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/faithful.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 4137,
+    "sha256": "9019fa6ea45f0d868337c69406415882c7ce99793f61774b9463b212d7a080a6"
+  },
+  {
+    "family": "csv",
+    "name": "grades.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/grades.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 1545,
+    "sha256": "d1824f55508e6141225b7da236b574d3e252f9e9efa9e482ef8756eea4f896c9"
+  },
+  {
+    "family": "csv",
+    "name": "homes.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/homes.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 2128,
+    "sha256": "250d37b63b6b4ddc805d600a01d0e2a9755e3ddfdeff4f60ce79531287c48bf0"
+  },
+  {
+    "family": "csv",
+    "name": "hw_200.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/hw_200.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 3734,
+    "sha256": "77bc857c153bcd5e998f39ba9218829154ab590d1ab61edfa7171711b25e5571"
+  },
+  {
+    "family": "csv",
+    "name": "mlb_players.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/mlb_players.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 56890,
+    "sha256": "ad0568aa4e512e713cb1067be2af9edf6f66e0b683ca2f1791bacce4a7191b53"
+  },
+  {
+    "family": "csv",
+    "name": "snakes_count_10000.csv",
+    "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/snakes_count_10000.csv",
+    "license": "FSU teaching dataset",
+    "bytes": 89011,
+    "sha256": "7446b1cb2cf189797567c3afce431e6acca59246d1e78ef6234caa2e80e725dc"
+  },
+  {
+    "family": "html",
+    "name": "example.html",
+    "url": "https://example.com/",
+    "license": "IANA example",
+    "bytes": 559,
+    "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+  },
+  {
+    "family": "html",
+    "name": "iana-example-domains.html",
+    "url": "https://www.iana.org/help/example-domains",
+    "license": "IANA documentation",
+    "bytes": 4793,
+    "sha256": "3c10e3fef8f35d13ebaa7b330051249d58220561603d71b732219d8dac7a8231"
+  },
+  {
+    "family": "html",
+    "name": "gpl3.html",
+    "url": "https://www.gnu.org/licenses/gpl-3.0.en.html",
+    "license": "GNU GPL text",
+    "bytes": 50966,
+    "sha256": "fbe9174aa44a4d6a43950fb81e6f601c00bcd69fa895c3662c9ed5a7a07f0be2"
+  },
+  {
+    "family": "html",
+    "name": "rust-book.html",
+    "url": "https://doc.rust-lang.org/book/title-page.html",
+    "license": "Rust docs",
+    "bytes": 22496,
+    "sha256": "6ff39e5bf94129a072b74e34765d7e0508240096cec474a8e74a7de2eca6b84d"
+  },
+  {
+    "family": "html",
+    "name": "w3c-png.html",
+    "url": "https://www.w3.org/TR/PNG/",
+    "license": "W3C specification",
+    "bytes": 656574,
+    "sha256": "a3ac82bb9eb8664b93961a2a9ff6def3d70e3a9f63d92721143c1f391d04edec"
+  },
+  {
+    "family": "html",
+    "name": "wiki-markdown.html",
+    "url": "https://en.wikipedia.org/wiki/Markdown",
+    "license": "CC BY-SA",
+    "bytes": 309785,
+    "sha256": "85405be1837f88903c7b0327c87d401657cbb5145cbda62ed704a4614d1c9a29"
+  },
+  {
+    "family": "html",
+    "name": "wiki-rust.html",
+    "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+    "license": "CC BY-SA",
+    "bytes": 997497,
+    "sha256": "7c8552366c9b3439ac17fb385cb8d70bedfd5b20435c2cea3be49d830afee7a9"
+  },
+  {
+    "family": "html",
+    "name": "wiki-vietnam-vi.html",
+    "url": "https://vi.wikipedia.org/wiki/Vi%E1%BB%87t_Nam",
+    "license": "CC BY-SA",
+    "bytes": 2321209,
+    "sha256": "b9a444de1758536b9bac2be3a059d0da78cc6133f24b126050ba696c30ffc23d"
+  },
+  {
+    "family": "html",
+    "name": "wiki-markdown-vi.html",
+    "url": "https://vi.wikipedia.org/wiki/Markdown",
+    "license": "CC BY-SA",
+    "bytes": 127048,
+    "sha256": "8360a4398fff32e511620cc872e8a073522fca8794c5c7b89c14e602415de2a1"
+  },
+  {
+    "family": "html",
+    "name": "python-tutorial.html",
+    "url": "https://docs.python.org/3/tutorial/index.html",
+    "license": "Python documentation",
+    "bytes": 37108,
+    "sha256": "84a1f290ae5c60f04b91839ad64e7c5b3664cc625d0abc87a05c29fa67fdcd0d"
+  },
+  {
+    "family": "image",
+    "name": "monty-truth.png",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/monty-truth.png",
+    "license": "python-docx MIT fixture",
+    "bytes": 64276,
+    "sha256": "10b7f419d1870f268b69320e43dd8e9630d002b26376de5d9c337beeab09ab22"
+  },
+  {
+    "family": "image",
+    "name": "python-powered.png",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/tests/test_files/python-powered.png",
+    "license": "python-docx MIT fixture",
+    "bytes": 6111,
+    "sha256": "b60f709965eb54e1400cba53617ae2c02f8028f5399cafa32d8ef18bfc803915"
+  },
+  {
+    "family": "image",
+    "name": "test.png",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/test.png",
+    "license": "python-docx MIT fixture",
+    "bytes": 146892,
+    "sha256": "578b8710400374f406b6378d22990c799626648288606ece58900e55cbe991ec"
+  },
+  {
+    "family": "image",
+    "name": "jfif-300-dpi.jpg",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/jfif-300-dpi.jpg",
+    "license": "python-docx MIT fixture",
+    "bytes": 355196,
+    "sha256": "63a9134ea80b8601c85d4e63e3b9574a73722c9b534d63e72b260f22d51c11a5"
+  },
+  {
+    "family": "image",
+    "name": "sample.tif",
+    "url": "https://raw.githubusercontent.com/python-openxml/python-docx/master/features/steps/test_files/sample.tif",
+    "license": "python-docx MIT fixture",
+    "bytes": 10409,
+    "sha256": "71930ab271ce3dba3cbe5e544dd00902af3ba7050678fad2053ba8687a42abf4"
+  },
+  {
+    "family": "image",
+    "name": "tesseract-2col.png",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdoc/main/images/2col.png",
+    "license": "Tesseract Apache-2.0 docs",
+    "bytes": 111281,
+    "sha256": "1ebe5089fd863fcec4a23912053488553fe96349f5c19850e32ba94103db2527"
+  },
+  {
+    "family": "image",
+    "name": "tesseract-bilingual.png",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdoc/main/images/bilingual.png",
+    "license": "Tesseract Apache-2.0 docs",
+    "bytes": 110120,
+    "sha256": "4e290c90fc863fac35ccc5394f8b6b6c286c3aad12a9dc6a42aeb29a01814119"
+  },
+  {
+    "family": "image",
+    "name": "tesseract-eurotext.png",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdoc/main/images/eurotext.png",
+    "license": "Tesseract Apache-2.0 docs",
+    "bytes": 31481,
+    "sha256": "c1e0e7b3df632c26536a959197bb189faa55694f1f914b8447ec5a737bd7594d"
+  },
+  {
+    "family": "image",
+    "name": "tesseract-phototest.tif",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdoc/main/examples/phototest.tif",
+    "license": "Tesseract Apache-2.0 docs",
+    "bytes": 38668,
+    "sha256": "d2241a1eb6d6cd2eb6544b8e228c2862c852b7467d16ed636caa32179b780692"
+  },
+  {
+    "family": "image",
+    "name": "tesseract-toc.png",
+    "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdoc/main/images/toc.png",
+    "license": "Tesseract Apache-2.0 docs",
+    "bytes": 107555,
+    "sha256": "5502c740b734274328adeeec3d636a6c9ee78db21d77e1e978fc4b10aef990bb"
+  },
+  {
+    "family": "audio",
+    "name": "sample-3s.mp3",
+    "url": "https://download.samplelib.com/mp3/sample-3s.mp3",
+    "license": "Samplelib free sample",
+    "bytes": 52079,
+    "sha256": "0244590f2b4bcb62352b574e78bea940e8d89cfa69823b5208ef4c43e0abcb44"
+  },
+  {
+    "family": "audio",
+    "name": "sample-6s.mp3",
+    "url": "https://download.samplelib.com/mp3/sample-6s.mp3",
+    "license": "Samplelib free sample",
+    "bytes": 103070,
+    "sha256": "ccc7f50e7adc3625d978a483766fe40e5c7e6a74ce8d992cf13b6cf3cd0e706f"
+  },
+  {
+    "family": "audio",
+    "name": "sample-9s.mp3",
+    "url": "https://download.samplelib.com/mp3/sample-9s.mp3",
+    "license": "Samplelib free sample",
+    "bytes": 154062,
+    "sha256": "b11bda5c0f2e7e2a67a388412909f0b5c53606253ad14a86a32b21a28b5bbb5c"
+  },
+  {
+    "family": "audio",
+    "name": "sample-12s.mp3",
+    "url": "https://download.samplelib.com/mp3/sample-12s.mp3",
+    "license": "Samplelib free sample",
+    "bytes": 205470,
+    "sha256": "a4c9f14a1bed5d234e0e8e4d8f284545b2a06e2c58594c0c43c700dbd1728907"
+  },
+  {
+    "family": "audio",
+    "name": "sample-15s.mp3",
+    "url": "https://download.samplelib.com/mp3/sample-15s.mp3",
+    "license": "Samplelib free sample",
+    "bytes": 307453,
+    "sha256": "c670cc9b99d0af1d490941d87c45b09200730c44d7b2b443e850fe4193cfeb02"
+  },
+  {
+    "family": "audio",
+    "name": "sample-3s.wav",
+    "url": "https://download.samplelib.com/wav/sample-3s.wav",
+    "license": "Samplelib free sample",
+    "bytes": 563756,
+    "sha256": "b3726eac5c9612ea20e245314812575bf9df5fb6b8024b80c7cfe9033452bb2b"
+  },
+  {
+    "family": "audio",
+    "name": "sample-6s.wav",
+    "url": "https://download.samplelib.com/wav/sample-6s.wav",
+    "license": "Samplelib free sample",
+    "bytes": 1127468,
+    "sha256": "dff36235dbd15a5e8ba52141cf31e0fd5687a3c7a10acf2af5db5ae6b3988bdf"
+  },
+  {
+    "family": "audio",
+    "name": "lena.flac",
+    "url": "https://raw.githubusercontent.com/audiojs/audio-lena/master/lena.flac",
+    "license": "audio-lena public decoder fixture",
+    "bytes": 484385,
+    "sha256": "b3ab90cd34aed942e3c09f8ca5945f580279b5f2d0fda083c9a46ccb6a43bb63"
+  },
+  {
+    "family": "audio",
+    "name": "lena.ogg",
+    "url": "https://raw.githubusercontent.com/audiojs/audio-lena/master/lena.ogg",
+    "license": "audio-lena public decoder fixture",
+    "bytes": 111117,
+    "sha256": "789194eb87210a82aecb37bb857abfc8b5474c101c72d5bd9966b134189a2a24"
+  },
+  {
+    "family": "audio",
+    "name": "lena.m4a",
+    "url": "https://raw.githubusercontent.com/audiojs/audio-lena/master/lena.m4a",
+    "license": "audio-lena public decoder fixture",
+    "bytes": 248803,
+    "sha256": "5c1956b0fabf7be4f30542f0ca47735a6276a9543f1c8c969a13f03873313816"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-11.txt",
+    "url": "https://www.gutenberg.org/cache/epub/11/pg11.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 174311,
+    "sha256": "01b38ea4c710a84bc18d0bd41271a5a1a92b94e97b2812f4dece97d4a694725e"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-84.txt",
+    "url": "https://www.gutenberg.org/cache/epub/84/pg84.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 448885,
+    "sha256": "7810cd483cffcf2cc8a1d8f0d5807931e69d4f48cd14149b8c76f88af82fead3"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-1342.txt",
+    "url": "https://www.gutenberg.org/cache/epub/1342/pg1342.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 772386,
+    "sha256": "74f2665d6e6925fc2c17dec644bec9e87df478a0f1836822125e8acbb3777806"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-1661.txt",
+    "url": "https://www.gutenberg.org/cache/epub/1661/pg1661.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 607606,
+    "sha256": "922e2a12ccb43a4c9544c260b2166c6ad2097aeb5957faeee113f173bb857cd0"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-2701.txt",
+    "url": "https://www.gutenberg.org/cache/epub/2701/pg2701.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 1276263,
+    "sha256": "9a6844ac0703853720010787c7b6c70b0020f1ab1862dcd74452fa46474d1215"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-98.txt",
+    "url": "https://www.gutenberg.org/cache/epub/98/pg98.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 807197,
+    "sha256": "d54c2b80d40a40b982cd88852c6180bb944d95acdb028af3d0e01a1750681784"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-74.txt",
+    "url": "https://www.gutenberg.org/cache/epub/74/pg74.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 434357,
+    "sha256": "74d77384b123a6360db9ab58463cff8b38df8525fbdc6000c81ee388e1f3cf10"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-76.txt",
+    "url": "https://www.gutenberg.org/cache/epub/76/pg76.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 622460,
+    "sha256": "d617a37aa7ae1e1a93dcde2634db2bccb86824e31e29a55230bdbf77d6872d59"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-5200.txt",
+    "url": "https://www.gutenberg.org/cache/epub/5200/pg5200.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 141933,
+    "sha256": "0933283a19a4daaef0d412e8f69c74fae126b0a946cb74b8f3c783a8e869830d"
+  },
+  {
+    "family": "text",
+    "name": "gutenberg-345.txt",
+    "url": "https://www.gutenberg.org/cache/epub/345/pg345.txt",
+    "license": "Project Gutenberg public domain",
+    "bytes": 890348,
+    "sha256": "96cd16eacdbfebae8fdda5591f66e0cc8ee76be18e0cd1aca02bc00615782d28"
+  }
+]
