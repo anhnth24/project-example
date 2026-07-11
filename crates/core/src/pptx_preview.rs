@@ -37,7 +37,11 @@ pub struct PptxPreviewSlide {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum PptxPreviewShape {
     Text {
         x: i64,
@@ -456,7 +460,6 @@ pub fn preview_slide(path: &Path, index: usize) -> Result<PptxPreviewSlide, Conv
                     stroke: builder.stroke.or_else(|| Some("#94a3b8".into())),
                 });
             }
-            ShapeKind::Image => {}
         }
     }
     Ok(PptxPreviewSlide {
