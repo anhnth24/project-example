@@ -436,17 +436,27 @@ pub fn preview_slide(path: &Path, index: usize) -> Result<PptxPreviewSlide, Conv
                     fill: builder.fill,
                 });
             }
-            _ if builder.fill.is_some() || builder.stroke.is_some() => {
+            ShapeKind::Graphic => {
+                shapes.push(PptxPreviewShape::Shape {
+                    x: builder.x,
+                    y: builder.y,
+                    width: builder.width,
+                    height: builder.height,
+                    fill: builder.fill.or_else(|| Some("#f1f5f9".into())),
+                    stroke: builder.stroke.or_else(|| Some("#94a3b8".into())),
+                });
+            }
+            ShapeKind::Text => {
                 shapes.push(PptxPreviewShape::Shape {
                     x: builder.x,
                     y: builder.y,
                     width: builder.width,
                     height: builder.height,
                     fill: builder.fill,
-                    stroke: builder.stroke,
+                    stroke: builder.stroke.or_else(|| Some("#94a3b8".into())),
                 });
             }
-            _ => {}
+            ShapeKind::Image => {}
         }
     }
     Ok(PptxPreviewSlide {
