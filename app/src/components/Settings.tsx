@@ -9,7 +9,14 @@ import type {
   LlmProviderPreset,
   Settings,
 } from "../lib/types";
-import { Button, Modal, Notice, Toggle } from "./ui";
+import {
+  Button,
+  Combobox,
+  Modal,
+  Notice,
+  SelectControl,
+  Toggle,
+} from "./ui";
 
 const DEFAULTS: Settings = {
   ocrLangs: "vie+eng",
@@ -215,20 +222,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         {form.llmEnabled && (
           <div className="llm-settings">
-            <label className="field">
+            <div className="field">
               <span>Provider preset</span>
-              <select
+              <SelectControl
                 value={form.llmProvider}
-                onChange={(event) => applyPreset(event.target.value)}
-              >
-                {presets.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.local ? "Local · " : "Cloud · "}
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                onChange={applyPreset}
+                ariaLabel="Chọn LLM provider"
+                options={presets.map((preset) => ({
+                  value: preset.id,
+                  label: `${preset.local ? "Local" : "Cloud"} · ${preset.label}`,
+                }))}
+              />
+            </div>
 
             {selectedPreset && (
               <Notice tone={selectedPreset.local ? "info" : "warning"}>
@@ -255,20 +260,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   placeholder="http://127.0.0.1:11434"
                 />
               </label>
-              <label className="field">
+              <div className="field">
                 <span>Model</span>
-                <input
-                  list="llm-model-options"
+                <Combobox
                   value={form.llmModel}
-                  onChange={(event) => set("llmModel", event.target.value)}
+                  onChange={(model) => set("llmModel", model)}
+                  options={selectedPreset?.models ?? []}
+                  ariaLabel="Model LLM"
                   placeholder="qwen2.5:7b"
                 />
-                <datalist id="llm-model-options">
-                  {selectedPreset?.models.map((model) => (
-                    <option value={model} key={model} />
-                  ))}
-                </datalist>
-              </label>
+              </div>
             </div>
 
             <label className="field">

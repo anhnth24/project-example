@@ -17,7 +17,7 @@ import { api } from "../lib/ipc";
 import { findByRel, isWithinRel, parentRel } from "../lib/tree";
 import type { FsNode } from "../lib/types";
 import { Tree } from "./Tree";
-import { Button, IconButton, Modal } from "./ui";
+import { Button, IconButton, Modal, SelectControl } from "./ui";
 
 type DialogState =
   | { kind: "create-folder" }
@@ -242,22 +242,24 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       <div className="project-switcher">
         <PanelsTopLeft size={14} />
-        <label>
+        <div className="project-switcher-control">
           <span>Dự án</span>
-          <select
+          <SelectControl
             value={activeProjectId ?? ""}
-            onChange={(event) => setActiveProject(event.target.value)}
-            aria-label="Chọn dự án"
-          >
-            {!projects.length && <option value="">Chưa có dự án</option>}
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-                {project.implicit ? " · legacy" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
+            onChange={setActiveProject}
+            ariaLabel="Chọn dự án"
+            compact
+            disabled={!projects.length}
+            options={
+              projects.length
+                ? projects.map((project) => ({
+                    value: project.id,
+                    label: `${project.name}${project.implicit ? " · legacy" : ""}`,
+                  }))
+                : [{ value: "", label: "Chưa có dự án", disabled: true }]
+            }
+          />
+        </div>
         <IconButton label="Tạo dự án" onClick={() => openCreate("create-project")}>
           <Plus size={14} />
         </IconButton>

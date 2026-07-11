@@ -313,35 +313,17 @@ kbd {
   grid-template-columns: 16px minmax(0, 1fr) 30px 30px;
 }
 
-.project-switcher > label {
+.project-switcher-control {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.project-switcher > label > span {
+.project-switcher-control > span {
   color: var(--color-text-faint);
   font-size: 8px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-.project-switcher select {
-  width: 100%;
-  min-width: 0;
-  padding: 2px 0;
-  overflow: hidden;
-  border: 0;
-  outline: 0;
-  color: var(--color-text-secondary);
-  background: transparent;
-  font-size: 10.5px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-}
-
-.project-switcher option {
-  color: #111;
 }
 
 .project-switcher .ui-icon-button {
@@ -752,6 +734,186 @@ kbd {
   opacity: 0.42;
   cursor: not-allowed;
   filter: none;
+}
+
+.ui-select,
+.ui-combobox {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.ui-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 10px 0 11px;
+  border: 0;
+  border-radius: 10px;
+  outline: 0;
+  color: var(--color-text);
+  background: var(--color-surface-sunken);
+  box-shadow: var(--ring-glass);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  transition:
+    color 160ms ease-out,
+    background 160ms ease-out,
+    box-shadow 160ms ease-out;
+}
+
+.ui-select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select-trigger > span.placeholder {
+  color: var(--color-text-faint);
+}
+
+.ui-select-trigger:hover:not(:disabled) {
+  background: var(--color-surface-1);
+  box-shadow: var(--ring-glass-strong);
+}
+
+.ui-select-trigger:focus-visible,
+.ui-select-trigger[aria-expanded="true"] {
+  outline: 0;
+  box-shadow:
+    inset 0 0 0 1.5px var(--accent),
+    0 0 0 3px rgba(46, 196, 124, 0.1);
+}
+
+.ui-select-trigger:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.ui-select-chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-faint);
+  transition:
+    color 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.ui-select-trigger[aria-expanded="true"] .ui-select-chevron,
+.ui-combobox input[aria-expanded="true"] + .ui-combobox-toggle .ui-select-chevron {
+  color: var(--accent);
+  transform: rotate(180deg);
+}
+
+.ui-select-menu {
+  position: fixed;
+  z-index: 120;
+  padding: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: rgba(41, 41, 43, 0.97);
+  box-shadow: var(--ring-glass-strong), var(--shadow-md);
+  backdrop-filter: blur(18px);
+  animation: select-pop 150ms ease-out;
+}
+
+.ui-select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11.5px;
+  text-align: left;
+  transition:
+    color 130ms ease-out,
+    background 130ms ease-out;
+}
+
+.ui-select-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select-option:hover,
+.ui-select-option.active {
+  color: #fff;
+  background: var(--color-glass-hover);
+}
+
+.ui-select-option[aria-selected="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.ui-select-option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ui-select-compact .ui-select-trigger {
+  min-height: 23px;
+  padding: 1px 0 0;
+  color: var(--color-text-secondary);
+  background: transparent;
+  box-shadow: none;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.ui-select-compact .ui-select-trigger:hover:not(:disabled) {
+  color: #fff;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ui-select-compact .ui-select-trigger:focus-visible,
+.ui-select-compact .ui-select-trigger[aria-expanded="true"] {
+  color: #fff;
+  box-shadow: 0 2px 0 var(--accent);
+}
+
+.ui-combobox > input {
+  padding-right: 38px;
+}
+
+.ui-combobox-toggle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--color-text-faint);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ui-combobox-toggle:hover {
+  color: #fff;
+  background: var(--color-glass);
 }
 
 .segmented-control {
@@ -2187,8 +2349,7 @@ kbd {
   font-weight: 500;
 }
 
-.field input,
-.field select {
+.field input {
   width: 100%;
   min-height: 36px;
   padding: 0 11px;
@@ -2201,8 +2362,7 @@ kbd {
   font-size: 12px;
 }
 
-.field input:focus,
-.field select:focus {
+.field input:focus {
   box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 3px rgba(46, 196, 124, 0.1);
 }
 
@@ -3320,6 +3480,17 @@ kbd {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes select-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 
