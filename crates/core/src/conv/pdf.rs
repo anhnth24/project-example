@@ -27,6 +27,22 @@ thread_local! {
 
 static PDFIUM_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+// libpdfium KHÔNG thread-safe: hai conversion song song (watch worker + lệnh
+// convert desktop qua spawn_blocking) gọi FPDF đan xen vào state C toàn cục
+// → UB/crash. Feature `thread_safe` của pdfium-render chỉ chia sẻ binding qua
+// OnceCell, không khóa từng lời gọi, nên mọi vùng đụng PDFium phải giữ khóa
+// này suốt vùng đó. Khóa ôm cả đoạn OCR trang scan cho đơn giản — hai PDF scan
+// convert song song sẽ xếp hàng ở đoạn render+OCR; nếu throughput thành vấn đề
+// thì tách Tesseract ra ngoài khóa.
+static PDFIUM_CALL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Giữ khóa serialize PDFium trong suốt lifetime của guard trả về.
+fn pdfium_call_guard() -> std::sync::MutexGuard<'static, ()> {
+    PDFIUM_CALL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Trang có ít hơn ngưỡng này ký tự (không tính khoảng trắng) → coi là trang scan → OCR.
 /// (Chỉ dùng ở đường fallback PDFium.)
 const PAGE_TEXT_MIN_CHARS: usize = 10;
@@ -383,6 +399,7 @@ fn via_pdf_inspector(
     });
     let need_pdfium = ocr_enabled && (ocr_images || needs_rendered_ocr);
 
+    let _pdfium_guard = pdfium_call_guard();
     PDFIUM.with(|opt| -> Option<String> {
         // Chỉ mở PDFium khi thật sự cần (OCR trang scan hoặc OCR ảnh nhúng).
         let pdf_doc = if need_pdfium {
@@ -504,6 +521,7 @@ fn native_text_for_requested_pages(
     path: &Path,
     pages_1idx: Option<&[u32]>,
 ) -> HashMap<u32, String> {
+    let _pdfium_guard = pdfium_call_guard();
     PDFIUM.with(|opt| {
         let Some(doc) = opt
             .as_ref()
@@ -846,6 +864,7 @@ fn via_pdfium(
     ocr_images: bool,
     pages: Option<&[u32]>,
 ) -> Option<String> {
+    let _pdfium_guard = pdfium_call_guard();
     PDFIUM.with(|opt| -> Option<String> {
         let pdfium = opt.as_ref()?;
         let doc = pdfium.load_pdf_from_file(path, None).ok()?;
@@ -1009,9 +1028,42 @@ fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
 mod tests {
     use super::{
         load_pdfium, markdown_has_malformed_table, native_text_covers_markdown,
-        native_text_is_high_confidence, native_text_is_trustworthy, parse_marked_pages,
-        strip_repeated_marginal_lines,
+        native_text_for_pages, native_text_is_high_confidence, native_text_is_trustworthy,
+        parse_marked_pages, strip_repeated_marginal_lines,
     };
+
+    /// PDF một trang tối giản, tự tính offset xref để PDFium load được thật.
+    fn minimal_pdf_bytes() -> Vec<u8> {
+        let stream = "BT /F1 24 Tf 72 720 Td (Xin chao PDFium) Tj ET";
+        let objects = [
+            "<</Type/Catalog/Pages 2 0 R>>".to_string(),
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>".to_string(),
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R\
+             /Resources<</Font<</F1 5 0 R>>>>>>"
+                .to_string(),
+            format!("<</Length {}>>\nstream\n{stream}\nendstream", stream.len()),
+            "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".to_string(),
+        ];
+        let mut out = String::from("%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", i + 1));
+        }
+        let xref_at = out.len();
+        out.push_str(&format!(
+            "xref\n0 {}\n0000000000 65535 f \n",
+            objects.len() + 1
+        ));
+        for off in offsets {
+            out.push_str(&format!("{off:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<</Size {}/Root 1 0 R>>\nstartxref\n{xref_at}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        out.into_bytes()
+    }
 
     #[test]
     fn trusts_native_vietnamese_table_of_contents() {
@@ -1152,6 +1204,41 @@ mod tests {
             pages.get(&5).map(String::as_str),
             Some("## Năm\n\nNội dung khác")
         );
+    }
+
+    #[test]
+    fn concurrent_pdf_text_extraction_completes_without_deadlock() {
+        // Chống regression cho khóa serialize PDFium: nếu có nesting/lock-order
+        // sai thì test này treo; nếu thiếu khóa thì đường chạy này chính là
+        // kịch bản UB (watch-convert + convert tay đồng thời).
+        let dir = std::env::temp_dir();
+        let a_path = dir.join("fileconv_pdfium_lock_a.pdf");
+        let b_path = dir.join("fileconv_pdfium_lock_b.pdf");
+        std::fs::write(&a_path, minimal_pdf_bytes()).unwrap();
+        std::fs::write(&b_path, minimal_pdf_bytes()).unwrap();
+
+        let texts = std::thread::scope(|scope| {
+            let worker = scope.spawn(|| {
+                (0..8)
+                    .map(|_| native_text_for_pages(&a_path, &[1]))
+                    .collect::<Vec<_>>()
+            });
+            let main: Vec<_> = (0..8)
+                .map(|_| native_text_for_pages(&b_path, &[1]))
+                .collect();
+            (worker.join().unwrap(), main)
+        });
+
+        if load_pdfium().is_some() {
+            // Có libpdfium: mọi lần trích phải ra đúng nội dung trang.
+            for pages in texts.0.iter().chain(texts.1.iter()) {
+                assert!(pages.get(&1).is_some_and(|t| t.contains("Xin chao PDFium")));
+            }
+        } else {
+            eprintln!("libpdfium không có — chỉ kiểm tra không deadlock, bỏ qua assert nội dung");
+        }
+        let _ = std::fs::remove_file(&a_path);
+        let _ = std::fs::remove_file(&b_path);
     }
 
     #[test]
