@@ -114,9 +114,18 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
 
+      # Secret trống (chưa cấu hình TAURI_SIGNING_PRIVATE_KEY) vẫn được GitHub Actions
+      # export thành biến RỖNG (không phải absent) → Tauri CLI hiểu nhầm là "có key
+      # nhưng sai định dạng" và fail cứng (xác nhận bằng CI run thật:
+      # "failed to decode secret key: ... Missing comment in secret key"). unset khi
+      # rỗng để khôi phục hành vi "không có key" (bỏ qua ký updater, không lỗi).
       - name: Build Linux installers
         if: runner.os == 'Linux'
-        run: pnpm tauri build --bundles ${{ matrix.bundles }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          pnpm tauri build --bundles ${{ matrix.bundles }}
         working-directory: app
 
       # `--no-sign` chỉ tắt code-signing OS-level, nhưng cũng tắt LUÔN chữ ký
@@ -136,7 +145,12 @@ jobs:
 
       - name: Build signed Windows installers
         if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
-        run: pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          pnpm tauri build --bundles ${{ matrix.bundles }} --ci
         working-directory: app
 
       - name: Build macOS installer (no OS cert, no updater key)
@@ -156,7 +170,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          pnpm tauri build --bundles ${{ matrix.bundles }} --ci
         working-directory: app
 
       - name: Verify Windows Authenticode
