@@ -24,9 +24,18 @@
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; script-src 'self'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3REUxMTJEQkZFNDFDRUEKUldUcUhPUy9MUkhlRjQvZzdWOFpWQTBKMktqbDFvU2dFRnlwRmU3N1ZMSngraFV6UzhBOS9yL3QK",
+      "endpoints": [
+        "https://github.com/anhnth24/project-example/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "publisher": "anhnth24",
     "homepage": "https://github.com/anhnth24/project-example",
     "license": "MIT",

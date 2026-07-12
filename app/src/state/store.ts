@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { api } from "../lib/ipc";
 import { findByRel, parentRel, isWithinRel } from "../lib/tree";
 import type {
@@ -141,6 +142,16 @@ export const useStore = create<AppStore>((set, get) => ({
         activeFolder: activeProject?.rootRel ?? "",
       });
       await get().refreshTree();
+      if (settings.autoCheckUpdate) {
+        // Chạy nền, không chặn init(); lỗi mạng/offline thì im lặng bỏ qua.
+        checkForUpdate()
+          .then((update) => {
+            if (update) {
+              set({ error: `Có bản ${update.version} mới hơn — mở Cài đặt để cập nhật.` });
+            }
+          })
+          .catch(() => {});
+      }
     } catch (error) {
       set({ error: String(error) });
     }
