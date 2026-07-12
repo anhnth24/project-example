@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import {
   Cloud,
   BrainCircuit,
+  Download,
   FolderOpen,
   LogIn,
   RotateCcw,
@@ -57,6 +61,7 @@ const DEFAULTS: Settings = {
   embeddingApiKey: null,
   embeddingDimensions: null,
   embeddingFallbackLocal: true,
+  autoCheckUpdate: true,
 };
 
 function providerOptionLabel(preset: LlmProviderPreset): string {
@@ -82,6 +87,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [testingEmbedding, setTestingEmbedding] = useState(false);
   const [embeddingResult, setEmbeddingResult] =
     useState<EmbeddingConnectionResult | null>(null);
+  const [appVersion, setAppVersion] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateChecked, setUpdateChecked] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
 
   useEffect(() => {
     api
@@ -92,7 +103,37 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       .getEmbeddingProviderPresets()
       .then(setEmbeddingPresets)
       .catch((error) => setError(String(error)));
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => {});
   }, [setError]);
+
+  async function runUpdateCheck() {
+    setCheckingUpdate(true);
+    setUpdateError(null);
+    setUpdateChecked(false);
+    try {
+      setUpdateInfo(await checkForUpdate());
+      setUpdateChecked(true);
+    } catch (error) {
+      setUpdateError(String(error));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateInfo) return;
+    setInstallingUpdate(true);
+    setUpdateError(null);
+    try {
+      await updateInfo.downloadAndInstall();
+      await relaunch();
+    } catch (error) {
+      setUpdateError(String(error));
+      setInstallingUpdate(false);
+    }
+  }
 
   function set<K extends keyof Settings>(key: K, val: Settings[K]) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -674,6 +715,39 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         )}
+
+        <div className="settings-section-heading">
+          <span className="eyebrow">Phiên bản {appVersion || "…"}</span>
+          <strong>Cập nhật</strong>
+        </div>
+
+        <Toggle
+          checked={form.autoCheckUpdate}
+          onChange={(checked) => set("autoCheckUpdate", checked)}
+          label="Tự động kiểm tra khi mở app"
+          description="Chỉ kiểm tra qua GitHub Releases, không tự tải/cài khi chưa xác nhận."
+        />
+
+        <div className="llm-test-row">
+          <Button
+            variant="secondary"
+            icon={<Download size={14} />}
+            loading={checkingUpdate}
+            onClick={runUpdateCheck}
+          >
+            Kiểm tra cập nhật
+          </Button>
+          {updateChecked && !updateInfo && !updateError && <span>Đã ở bản mới nhất.</span>}
+          {updateInfo && (
+            <>
+              <span className="local-result">Có bản {updateInfo.version} mới hơn.</span>
+              <Button variant="primary" loading={installingUpdate} onClick={installUpdate}>
+                Cài đặt &amp; khởi động lại
+              </Button>
+            </>
+          )}
+          {updateError && <span>{updateError}</span>}
+        </div>
 
         {!!validation.length && (
           <div className="form-errors" role="alert">

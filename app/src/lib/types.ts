@@ -75,6 +75,7 @@ export interface Settings {
   embeddingApiKey: string | null;
   embeddingDimensions: number | null;
   embeddingFallbackLocal: boolean;
+  autoCheckUpdate: boolean;
 }
 
 export type LlmProtocol =

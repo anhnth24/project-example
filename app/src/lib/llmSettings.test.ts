@@ -34,6 +34,7 @@ const settings: Settings = {
   embeddingApiKey: null,
   embeddingDimensions: null,
   embeddingFallbackLocal: true,
+  autoCheckUpdate: true,
 };
 
 const ollama: LlmProviderPreset = {

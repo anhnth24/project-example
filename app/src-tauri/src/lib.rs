@@ -71,6 +71,7 @@ pub struct Settings {
     pub embedding_api_key: Option<String>,
     pub embedding_dimensions: Option<usize>,
     pub embedding_fallback_local: bool,
+    pub auto_check_update: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +99,7 @@ impl Default for Settings {
             embedding_api_key: None,
             embedding_dimensions: None,
             embedding_fallback_local: true,
+            auto_check_update: true,
         }
     }
 }
@@ -1000,6 +1002,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             fs::create_dir_all(&config_dir).ok();
@@ -1216,6 +1220,7 @@ mod tests {
         assert!(!settings.llm_enabled);
         assert_eq!(settings.llm_provider, "ollama");
         assert_eq!(settings.llm_base_url, "http://127.0.0.1:11434");
+        assert!(settings.auto_check_update);
     }
 
     #[test]
