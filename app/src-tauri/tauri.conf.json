@@ -26,7 +26,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3REUxMTJEQkZFNDFDRUEKUldUcUhPUy9MUkhlRjQvZzdWOFpWQTBKMktqbDFvU2dFRnlwRmU3N1ZMSngraFV6UzhBOS9yL3QK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0Q0UzNDMxMzAzODcxOQpSV1FaaHdNVFErTk1Ea2hPQ3dZb2ZGTWMxVW1JK1MyemViZE5DL3FsRVNjVGtqQlN1REYrNUtXNAo=",
       "endpoints": [
         "https://github.com/anhnth24/project-example/releases/latest/download/latest.json"
       ]
