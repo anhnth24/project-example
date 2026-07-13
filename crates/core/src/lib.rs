@@ -88,7 +88,7 @@ impl FormatKind {
         &[
             "pdf", "docx", "pptx", "xlsx", "xls", "xlsb", "ods", "csv", "html", "htm",
             "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "wav", "mp3", 
-            "m4a", "ogg", "flac"
+            "m4a", "ogg", "flac", "txt", "log"
         ]
     }
 }

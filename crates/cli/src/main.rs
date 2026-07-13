@@ -4,9 +4,7 @@
 //!   fileconv speed <corpus_dir> [report.md]   - đo tốc độ theo file & page
 //!   fileconv accuracy <manifest> [report.md]  - đo độ chính xác CER/WER vs ground truth
 //!   fileconv one <file>                       - convert 1 file, in markdown ra stdout
-//!   fileconv info                             - hiển thị định dạng file hỗ trợ, 
-//!                                               đường dẫn pdfium/tessdata (có tồn tại không),
-//!                                               và model whisper tìm thấy trong models/
+//!   fileconv info                             - hiển thị định dạng file hỗ trợ, đường dẫn pdfium/tessdata (có tồn tại không), và model whisper tìm thấy trong models/
 //!
 //! Manifest accuracy: mỗi dòng "<đường_dẫn_file>\t<đường_dẫn_text_chuẩn>\t<nhãn_kịch_bản>".
 
