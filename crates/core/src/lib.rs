@@ -83,6 +83,14 @@ impl FormatKind {
             Self::Unknown => "unknown",
         }
     }
+
+    pub fn supported_extensions() -> &'static [&'static str] {
+        &[
+            "pdf", "docx", "pptx", "xlsx", "xls", "xlsb", "ods", "csv", "html", "htm",
+            "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "wav", "mp3",
+            "m4a", "flac", "ogg",
+        ]
+    }
 }
 
 #[derive(Debug, Clone)]

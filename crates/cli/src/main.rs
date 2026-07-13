@@ -3,7 +3,10 @@
 //! Lệnh:
 //!   fileconv speed <corpus_dir> [report.md]   - đo tốc độ theo file & page
 //!   fileconv accuracy <manifest> [report.md]  - đo độ chính xác CER/WER vs ground truth
-//!   fileconv one <file>                        - convert 1 file, in markdown ra stdout
+//!   fileconv one <file>                       - convert 1 file, in markdown ra stdout
+//!   fileconv info                             - hiển thị định dạng file hỗ trợ, 
+//!                                               đường dẫn pdfium/tessdata (có tồn tại không),
+//!                                               và model whisper tìm thấy trong models/
 //!
 //! Manifest accuracy: mỗi dòng "<đường_dẫn_file>\t<đường_dẫn_text_chuẩn>\t<nhãn_kịch_bản>".
 
@@ -34,7 +37,7 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff|pptx-preview> ...");
+        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff|pptx-preview|info> ...");
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -126,6 +129,39 @@ fn main() -> Result<()> {
                     "slides": slides
                 }))?
             );
+            Ok(())
+        }
+        "info" => {
+            println!("Danh sách định dạng hỗ trợ:");
+            for ext in FormatKind::supported_extensions() {
+                println!("  .{ext}");
+            }
+
+            let base_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(2)
+                .unwrap_or_else(|| Path::new("."));
+            for (label, path) in [
+                ("PDFium lib", base_dir.join("pdfium").join("lib")),
+                ("Tesseract data", base_dir.join("tessdata_best")),
+                ("Whisper models", base_dir.join("models")),
+            ] {
+                let status = if path.exists() { "Có tồn tại file" } else { "Chưa có file" };
+                println!("{label}: {status} ({})", path.display());
+            }
+            if let Ok(entries) = fs::read_dir(base_dir.join("models")) {
+                let mut bins: Vec<_> = entries
+                    .filter_map(Result::ok)
+                    .filter_map(|e| {
+                        let p = e.path();
+                        (p.extension().and_then(|ext| ext.to_str()) == Some("bin")).then_some(p.display().to_string())
+                    })
+                    .collect();
+                bins.sort();
+                for bin in bins {
+                    println!("  model: {bin}");
+                }
+            }
             Ok(())
         }
         other => bail!("lệnh không hợp lệ: {other}"),
