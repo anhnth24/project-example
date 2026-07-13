@@ -305,6 +305,7 @@
 **Việc cần làm:**
 - [ ] Chọn + chuẩn bị bộ tài liệu demo (đủ mỗi định dạng POC 1 file, có 1 pdf scan)
 - [ ] Viết kịch bản demo từng bước (ai bấm gì, hỏi câu gì, kỳ vọng thấy gì)
+- [ ] Kịch bản có 1 câu hỏi NGOÀI tài liệu → hệ thống trả "không tìm thấy" — demo tính đáng tin (không bịa) như một tính năng, không giấu đi
 - [ ] Chạy tổng duyệt 2 lần, ghi lỗi phát sinh thành issue hotfix
 - [ ] Họp checkpoint ngày 32: qua gate / cắt Phase 5 / lùi deadline
 **DoD (= GATE POC):** demo end-to-end single-org qua UI: upload 1 tài liệu mỗi định dạng POC → hỏi đáp citation đúng.
@@ -422,6 +423,7 @@
 **Hướng làm:** Trang help trong app (markdown render sẵn có): hướng dẫn upload/format hỗ trợ/hỏi đáp/citation; onboarding lần đầu đăng nhập.
 **Việc cần làm:**
 - [ ] Nội dung help: format hỗ trợ (+ lý do từ chối .doc), flow upload→hỏi đáp, đọc citation
+- [ ] Giải thích cơ chế "open-book": hệ thống CHỈ trả lời từ tài liệu đã upload, không có trong tài liệu sẽ nói "không tìm thấy" — đặt kỳ vọng đúng, tránh user tưởng chatbot đa năng
 - [ ] Onboarding lần đầu login (checklist/tour ngắn, bỏ qua được)
 - [ ] Link help từ các điểm hay vướng (upload bị chặn, Q&A fallback)
 **DoD:** user mới tự dùng được không cần hỏi; nội dung khớp tính năng thật (không hứa tính năng backlog).
@@ -442,4 +444,5 @@
 
 BA/PM handoff + quality + versions/diff/merge · agent-driven browser test (Playwright MCP) ·
 SSO/OIDC tích hợp IdP thật · pentest bên ngoài · chuyển embedding GLM → vLLM GPU (reindex) ·
+chế độ 100% offline (Ollama/vLLM local chat + embedding — đổi provider + reindex theo signature) ·
 Qdrant benchmark đầy đủ + snapshot tự động · audio upload (check license PhoWhisper trước).

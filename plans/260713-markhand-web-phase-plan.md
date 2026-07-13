@@ -157,6 +157,9 @@ bất kỳ đường nào; vượt quota → 429; demo 2 org cách ly.
 - **SSO/OIDC tích hợp IdP thật** (interface đã sẵn từ 7.4).
 - Pentest bên ngoài (7.2 mới là checklist nội bộ).
 - Chuyển embedding GLM API → **vLLM GPU local** khi có GPU (reindex theo index signature).
+- **Chế độ 100% offline** (Ollama/vLLM local cho cả chat + embedding): client sẵn trong
+  `llm.rs`, chỉ đổi provider + reindex theo `embedding_signatures` — cho org không chấp
+  nhận cloud, khớp định vị offline-first/PDPL của dự án.
 - Qdrant benchmark đầy đủ phân bố org lệch + snapshot định kỳ tự động.
 - Audio upload (kiểm tra license PhoWhisper trước).
 
