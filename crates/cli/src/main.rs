@@ -158,8 +158,12 @@ fn main() -> Result<()> {
                     })
                     .collect();
                 bins.sort();
-                for bin in bins {
-                    println!("  model: {bin}");
+                if bins.is_empty() {
+                    println!("  (chưa có model .bin trong models/)");
+                } else {
+                    for bin in bins {
+                        println!("  model: {bin}");
+                    }
                 }
             }
             Ok(())
