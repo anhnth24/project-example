@@ -264,60 +264,126 @@
 
 ### 4.5 Demo POC tổng duyệt — cả team
 **Hướng làm:** Ingest bộ tài liệu demo thật (chọn scan vừa phải — OCR 1-5s/trang), viết kịch bản demo, tổng duyệt, fix lỗi phát sinh. Checkpoint quyết định: nếu chưa qua → họp cắt Phase 5 hay lùi deadline (KHÔNG im lặng trượt).
+**Việc cần làm:**
+- [ ] Chọn + chuẩn bị bộ tài liệu demo (đủ mỗi định dạng POC 1 file, có 1 pdf scan)
+- [ ] Viết kịch bản demo từng bước (ai bấm gì, hỏi câu gì, kỳ vọng thấy gì)
+- [ ] Chạy tổng duyệt 2 lần, ghi lỗi phát sinh thành issue hotfix
+- [ ] Họp checkpoint ngày 32: qua gate / cắt Phase 5 / lùi deadline
 **DoD (= GATE POC):** demo end-to-end single-org qua UI: upload 1 tài liệu mỗi định dạng POC → hỏi đáp citation đúng.
 
 ## Phase 5 — Hoàn thiện SPA + Intelligence rút gọn (→ M5)
 
 ### 5.1 UI Admin member/role/usage — `frontend`
 **Hướng làm:** Trang admin: danh sách member + role (đọc/ghi qua API RBAC sẵn schema), usage counters từ 2.8. Chỉ owner/admin thấy (guard perm).
+**Việc cần làm:**
+- [ ] API endpoint list/update membership (phối hợp M2 nếu 6.1 chưa tới — chỉ cần đọc/ghi role cơ bản)
+- [ ] Trang member: bảng + đổi role (dropdown, confirm)
+- [ ] Trang usage: đọc `usage_counters` (upload GB, LLM token, số job)
+- [ ] Guard route theo perm `member.manage`/`audit.view`
 **DoD:** thêm/đổi role member được; usage hiển thị đúng số thật; viewer không vào được trang.
 
 ### 5.2 Collection management + reindex UI — `frontend`
 **Hướng làm:** CRUD collection + visibility (private/org/groups), gán tài liệu, nút reindex (tạo job index lại), hiển thị lỗi ingest chi tiết + retry.
+**Việc cần làm:**
+- [ ] CRUD collection + chọn visibility
+- [ ] Gán/bỏ tài liệu vào collection (từ Thư viện 4.2)
+- [ ] Nút reindex → tạo job index (đi qua queue 2.6, không đường tắt)
+- [ ] Panel lỗi ingest: message từ `jobs.attempts/error` + nút retry
 **DoD:** đổi visibility có hiệu lực ngay ở Q&A; reindex chạy như job thường (resume được).
 
 ### 5.3 Intelligence rút gọn: tóm tắt + PII — `rust-core`
 **Hướng làm:** Port 2 tính năng từ `intelligence.rs`: tóm tắt tài liệu (GLM, cap ký tự như MCP `summarize`) + PII detect/redaction cơ bản. Còn lại (BA/PM handoff, quality, versions/diff) ở Backlog — KHÔNG kéo vào.
+**Việc cần làm:**
+- [ ] Khoanh vùng code tóm tắt + PII trong `intelligence.rs` (phần thuần đã sang `crates/knowledge` ở 2.1 chưa? — nếu chưa, chỉ port logic, không kéo dependency Tauri)
+- [ ] Endpoint summarize (cap ký tự, token vào quota 2.8)
+- [ ] Endpoint PII detect + redaction preview
+- [ ] UI entry trong DocView/Thư viện + test từng endpoint
 **DoD:** 2 tính năng chạy trên tài liệu đã index, có endpoint + UI entry + test; token tính vào quota.
 
 ### 5.4 Mở rộng Playwright E2E — `qa`
 **Hướng làm:** Thêm kịch bản admin (đổi role → quyền đổi), collection (visibility → kết quả Q&A đổi), tóm tắt/PII.
+**Việc cần làm:**
+- [ ] Kịch bản: admin đổi role viewer→editor → quyền upload đổi ngay
+- [ ] Kịch bản: đổi visibility collection → user ngoài không còn thấy trong Q&A
+- [ ] Kịch bản: tóm tắt + PII trả kết quả trên tài liệu mẫu
+- [ ] Wire vào CI cùng suite 4.4
 **DoD:** suite mở rộng xanh trên CI (**gate M5** cùng demo 5.1-5.3).
 
 ## Phase 6 — RBAC & multi-org (→ M6)
 
 ### 6.1 RBAC role/ACL mức 2 đầy đủ — `server` `security`
 **Hướng làm:** Hoàn thiện guard `require(perm)` phủ MỌI route (rà từng route một, làm checklist), ACL collection (bảng `collection_access`) enforce ở repo layer 2.2, permission string đúng danh sách design doc.
+**Việc cần làm:**
+- [ ] Lập bảng route × permission (mọi route hiện có, kể cả healthz/internal)
+- [ ] Gắn guard từng route theo bảng; route thiếu perm phù hợp → thêm permission mới có chủ đích
+- [ ] Enforce `collection_access` trong repo layer (2.2) cho search/citation/preview/download
+- [ ] Cache permission TTL ngắn + invalidate khi đổi role/ACL
 **DoD:** bảng route × permission được review; không route nào thiếu guard; ACL đổi có hiệu lực ngay (cache TTL ngắn).
 
 ### 6.2 Rate limit 2 tầng + quota dashboard — `server`
 **Hướng làm:** tower_governor per-user (per-IP khi chưa auth), auth endpoints chặt hơn; dashboard usage per-org cho admin (mở rộng 5.1); in-memory 1 node (Redis chỉ khi multi-replica — chưa cần).
+**Việc cần làm:**
+- [ ] Layer tower_governor: config per-user (key = user id) + per-IP cho route chưa auth
+- [ ] Rate chặt riêng cho login/refresh (chống brute-force)
+- [ ] Response 429 + headers (limit/remaining/reset)
+- [ ] Dashboard per-org (mở rộng trang usage 5.1): quota trần vs đã dùng
 **DoD:** spam request → 429 có header; dashboard khớp usage_counters.
 
 ### 6.3 Denial test suite — `qa` `security`
 **Hướng làm:** Suite phủ đủ 5 đường: Qdrant search, PG FTS, citation fetch, preview, download — user ngoài collection/org không nhận nội dung qua bất kỳ đường nào. Thêm case: token org A gọi resource org B, user bị thu hồi quyền giữa session.
+**Việc cần làm:**
+- [ ] Fixture 2 org + 3 user (owner org A, viewer org A ngoài collection, user org B)
+- [ ] Case từng đường × từng user (ma trận 5 đường × 3 user)
+- [ ] Case thu hồi quyền giữa session (cache TTL phải hết hiệu lực đúng)
+- [ ] Case tài liệu tombstone không trả qua bất kỳ đường nào
+- [ ] Wire vào CI, chạy mọi PR từ đây
 **DoD:** suite pass = **gate M6**; chạy trong CI từ đây về sau.
 
 ### 6.4 Rollout multi-org — cả team
 **Hướng làm:** Tạo org thứ 2 thật, ingest dữ liệu riêng, demo cách ly (search/Q&A/quota độc lập), rà quota per-org.
+**Việc cần làm:**
+- [ ] Flow tạo org mới + owner đầu tiên (script/API admin)
+- [ ] Ingest bộ dữ liệu riêng cho org 2
+- [ ] Chạy denial suite (6.3) trên môi trường 2 org thật
+- [ ] Demo kịch bản: cùng câu hỏi, 2 org ra kết quả từ dữ liệu riêng
 **DoD:** demo 2 org song song; không rò dữ liệu chéo (denial suite chạy trên môi trường 2 org).
 
 ## Phase 7 — Hardening & rollout (→ M7)
 
 ### 7.1 Backup/recovery drill — `infra`
 **Hướng làm:** PG backup + restore; Qdrant snapshot/restore (bổ sung phần cắt từ 1.10); drill: xoá Qdrant → rebuild index từ PG (chunks là nguồn sự thật); đo thời gian phục hồi.
+**Việc cần làm:**
+- [ ] Script PG backup (pg_dump/basebackup) + restore thử sang instance sạch
+- [ ] Qdrant snapshot + restore thử
+- [ ] Drill rebuild: xoá collection Qdrant → chạy reindex từ PG chunks → so kết quả Q&A trước/sau
+- [ ] Đo + ghi thời gian từng bước → runbook `docs/`
 **DoD:** drill thành công có ghi lại từng bước + thời gian; tài liệu runbook.
 
 ### 7.2 Security checklist nội bộ — `security`
 **Hướng làm:** Rà theo threat model 1.8 + OWASP ASVS mức cơ bản: authz từng route (từ 6.1), audit_log ghi đủ hành vi nhạy cảm, secret không vào log, TLS/headers.
+**Việc cần làm:**
+- [ ] Đối chiếu bảng route × permission (6.1) lần cuối
+- [ ] Rà audit_log: login/fail, đổi role/ACL, xóa tài liệu, export — đủ chưa
+- [ ] Grep log output: không secret/token/PII
+- [ ] Security headers + TLS config reverse proxy
+- [ ] Mục chưa đóng → issue `backlog` có người phụ trách
 **DoD:** checklist đóng từng mục có bằng chứng; mục chưa đóng → issue backlog có chủ.
 
 ### 7.3 Trang hướng dẫn + onboarding — `frontend`
 **Hướng làm:** Trang help trong app (markdown render sẵn có): hướng dẫn upload/format hỗ trợ/hỏi đáp/citation; onboarding lần đầu đăng nhập.
+**Việc cần làm:**
+- [ ] Nội dung help: format hỗ trợ (+ lý do từ chối .doc), flow upload→hỏi đáp, đọc citation
+- [ ] Onboarding lần đầu login (checklist/tour ngắn, bỏ qua được)
+- [ ] Link help từ các điểm hay vướng (upload bị chặn, Q&A fallback)
 **DoD:** user mới tự dùng được không cần hỏi; nội dung khớp tính năng thật (không hứa tính năng backlog).
 
 ### 7.4 Auth interface OIDC-ready — `server`
 **Hướng làm:** Refactor module auth (2.3) ra trait/interface để cắm OIDC provider sau mà không sửa call-site; document flow tích hợp IdP. KHÔNG tích hợp IdP thật (Backlog).
+**Việc cần làm:**
+- [ ] Trait auth provider (verify credential → identity) + impl JWT hiện tại
+- [ ] Điểm nối OIDC (callback route placeholder, mapping identity→user/org) — chỉ khung
+- [ ] Doc flow tích hợp IdP cho người làm sau
+- [ ] Regression: toàn bộ test auth 2.3 pass nguyên trạng
 **DoD:** JWT flow hiện tại chạy nguyên trạng qua interface mới; doc tích hợp được lead duyệt.
 
 ---
