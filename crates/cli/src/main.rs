@@ -155,10 +155,10 @@ fn main() -> Result<()> {
                         (p.extension().and_then(|ext| ext.to_str()) == Some("bin")).then_some(p.display().to_string())
                     })
                     .collect();
-                bins.sort();
                 if bins.is_empty() {
-                    println!("  (chưa có model .bin trong models/)");
+                    println!("  (Chưa có model .bin trong models/)");
                 } else {
+                    bins.sort();
                     for bin in bins {
                         println!("  model: {bin}");
                     }
