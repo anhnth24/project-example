@@ -144,7 +144,11 @@ fn main() -> Result<()> {
                 ("Tesseract data", base_dir.join("tessdata_best")),
                 ("Whisper models", base_dir.join("models")),
             ] {
-                let status = if path.exists() { "Có tồn tại file" } else { "Chưa có file" };
+                let status = if path.exists() {
+                    "Có tồn tại file"
+                } else {
+                    "Chưa có file"
+                };
                 println!("{label}: {status} ({})", path.display());
             }
             if let Ok(entries) = fs::read_dir(base_dir.join("models")) {
@@ -152,7 +156,8 @@ fn main() -> Result<()> {
                     .filter_map(Result::ok)
                     .filter_map(|e| {
                         let p = e.path();
-                        (p.extension().and_then(|ext| ext.to_str()) == Some("bin")).then_some(p.display().to_string())
+                        (p.extension().and_then(|ext| ext.to_str()) == Some("bin"))
+                            .then_some(p.display().to_string())
                     })
                     .collect();
                 if bins.is_empty() {
