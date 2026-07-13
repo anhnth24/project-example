@@ -66,6 +66,10 @@ convert pdf
  pdf_ocr_images (mặc định tắt) → OCR thêm ảnh nhúng ≥200×200px
 ```
 
+**Thread-safety lock**: libpdfium KHÔNG thread-safe. Mỗi region dùng PDFium được 
+serialized qua `PDFIUM_CALL: Mutex<()>` trong `pdf.rs`, gồm cả render+OCR các trang quét. 
+Trade-off: concurrent scanned-PDF conversions queue tại lock (move Tesseract ngoài nếu cần throughput cao).
+
 Đánh đổi (đo thực): corpus cũ pdf-inspector **~18ms/trang** (có cấu trúc + đa cột)
 vs PDFium **~5.67ms/trang** (chỉ text). Đường range song song mới đo **~7.8ms/trang**
 trên PDF CASAN 45 trang/8 vCPU; chọn riêng một trang ~55–59ms thay vì ~400–440ms.
@@ -147,14 +151,20 @@ Anthropic. API key chỉ giữ trong memory. Chi tiết:
 LumiBase + lucide-react. Editor: CodeMirror, react-markdown+GFM+raw HTML sanitizer,
 pdfjs-dist 6.1, docx-preview,
 @e965/xlsx. Font Inter Variable được bundle offline. Rust phụ thuộc `fileconv-core`
-(path `../../crates/core`).
+(path `../../crates/core`). Plugins: `tauri-plugin-updater`, `tauri-plugin-process`.
 
 **Identity** (`tauri.conf.json`): productName/binary `Markhand`/`markhand`,
-identifier `com.anhnth24.markhand`, v0.1.0,
-cửa sổ 1440×900 (min 900×600). Permission tối thiểu: `core:default`, `dialog:default`, `opener:default`
-— **không** fs scope (mọi FS qua custom command). Rust crate `fileconv-desktop`.
-Bundle có icon đa nền tảng, metadata deb/AppImage/MSI/DMG và CI release matrix;
-`.deb` Linux đã build thực tế.
+identifier `com.anhnth24.markhand`, v0.1.0 (đây là source-of-truth cho version),
+cửa sổ 1440×900 (min 900×600). Permission tối thiểu: `core:default`, `dialog:default`, `opener:default`,
+`updater:default`, `process:default` — **không** fs scope (mọi FS qua custom command). 
+Rust crate `fileconv-desktop`. Bundle có icon đa nền tảng, metadata deb/AppImage/MSI/DMG 
+và CI release matrix; `.deb` Linux đã build thực tế.
+
+**Auto-update** (`tauri.conf.json`): `plugins.updater` với endpoint 
+`https://github.com/anhnth24/project-example/releases/latest/download/latest.json` 
+và minisign public key để xác minh signatures. Artifact ký (updater artifacts) tự động 
+sinh qua `createUpdaterArtifacts: true` từ CI. Desktop khởi động background check update 
+(non-blocking, bỏ qua lỗi mạng) và hiển thị thông báo nếu có version mới; người dùng cài từ Settings.
 
 ### Luồng UI → Rust
 

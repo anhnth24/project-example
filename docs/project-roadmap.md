@@ -7,6 +7,7 @@
 
 - **Lõi convert** (`fileconv-core`): pdf/docx/pptx/xlsx/csv/html/text + ảnh OCR + audio → Markdown.
 - **PDF 3-tier**: pdf-inspector (cấu trúc, đa cột, cờ `needs_ocr`) → pdfium-render → pdf-extract fallback.
+- **PDFium thread-safety lock**: serialized `PDFIUM_CALL` để tránh UB concurrent PDF conversion.
 - **Tiền xử lý ảnh OCR**: grayscale → upscale → unsharpen → normalize (in OCR 98.5→99.5%, low-res 81→99%).
 - **NFC bắt buộc** trên mọi output (sửa tài liệu NFD từ macOS/PDF cũ).
 - **Decode TCVN3/VNI-Windows/VPS** với map VietUnicode trong CSV/text.
@@ -14,6 +15,9 @@
 - **CLI bench**: `one` / `speed` / `accuracy` / `audio` với CER/WER Levenshtein.
 - **MCP server** (`fileconv-mcp`): 8 tool (4 deterministic + 4 LLM, gồm `ocr_hard` vision).
 - **Desktop app "Markhand"** (Tauri 2 + React): kéo-thả, soạn thảo, xem trước nguồn, cài đặt OCR/audio.
+- **Auto-update via GitHub Releases**: v0.1.0 + minisign signatures, check on init, install từ Settings.
+- **CI desktop installers**: Linux/Windows/macOS matrix trên master push + tags `markhand-vX.Y.Z`, version-check từ tauri.conf.json.
+- **Windows console flash fix**: `proc::background_command()` set CREATE_NO_WINDOW khi spawn tesseract/LLM CLI.
 - **Nghiên cứu đối thủ** (11 công cụ) — định vị ngách offline-VN.
 - **Đo PhoWhisper**: 90.8% vs whisper-small 77.3% (+13.5 điểm) trên clip vi thật.
 - **Document Intelligence**: persistent SQLite FTS5 + local-vector hybrid Q&A có
@@ -62,8 +66,9 @@
 - [x] **`ConversionResult.title`** — lấy heading đầu, fallback tên file.
 
 ### Desktop / đóng gói
-- [ ] **Đóng gói distributable đa OS** — `.deb` Linux đã build; AppImage/MSI/DMG
-      có release matrix nhưng Windows/macOS còn cần artifact thật và signing/notarization.
+- [x] **CI release matrix Linux/Windows/macOS** — `.deb` Linux đã build thực tế; 
+      MSI/DMG artifact trong matrix nhưng cần signing/notarization thực.
+- [x] **Auto-update framework** — GitHub Releases endpoint, minisign signature, version check từ tauri.conf.json.
 - [x] **Dark mode** LumiBase.
 - [x] Đổi `prompt()`/`confirm()` native trong Sidebar thành modal tuỳ chỉnh.
 - [x] Thống nhất identity Markhand (`com.anhnth24.markhand`, binary `markhand`).
