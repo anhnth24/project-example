@@ -1,7 +1,7 @@
 # Markhand Web — Task breakdown giai đoạn 1 (Track A/B/C + C0)
 
-> Nguồn: [`260713-markhand-web-phase-plan.md`](260713-markhand-web-phase-plan.md) +
-> [`../docs/web-architecture.md`](../docs/web-architecture.md).
+> Nguồn: [`260713-phase-plan.md`](260713-phase-plan.md) +
+> [`../../docs/web-architecture.md`](../../docs/web-architecture.md).
 > Nhân sự đã chốt: 3-4 member (đa số chưa vững Rust) + lead + AI agent.
 > Format mỗi task theo intern guide cũ: **Hướng làm** (định hướng, không code mẫu),
 > **Cần tìm hiểu**, **File đụng**, **Tiêu chí xong**, **Cạm bẫy**.

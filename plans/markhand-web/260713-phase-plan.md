@@ -1,7 +1,7 @@
 # Markhand Web — Phase plan (TOÀN BỘ 7 phase trong 45 ngày)
 
-> Thiết kế hệ thống: [`../docs/web-architecture.md`](../docs/web-architecture.md).
-> Chẻ task chi tiết (hướng làm/tiêu chí/cạm bẫy): [`260713-markhand-web-task-breakdown.md`](260713-markhand-web-task-breakdown.md).
+> Thiết kế hệ thống: [`../../docs/web-architecture.md`](../../docs/web-architecture.md).
+> Chẻ task chi tiết (hướng làm/tiêu chí/cạm bẫy): [`260713-task-breakdown.md`](260713-task-breakdown.md).
 > Nguồn: brainstorm APPROVED 2026-07-13 (Codex review 8 finding) + review đối kháng nội bộ (10 finding).
 > Nhân sự: 3-4 member (đa số chưa vững Rust) + lead + AI agent. Ngày = ngày làm việc.
 > **Deadline user chốt: cả Phase 1-7 trong 40-45 ngày** → POC kéo lên ngày 30-32,

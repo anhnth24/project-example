@@ -1,7 +1,7 @@
 # Markhand Web — Track list (map GitHub issue)
 
-> Nguồn: [`260713-markhand-web-phase-plan.md`](260713-markhand-web-phase-plan.md) (lịch 45 ngày)
-> + [`260713-markhand-web-task-breakdown.md`](260713-markhand-web-task-breakdown.md) (hướng dẫn mở rộng Phase 1-2).
+> Nguồn: [`260713-phase-plan.md`](260713-phase-plan.md) (lịch 45 ngày)
+> + [`260713-task-breakdown.md`](260713-task-breakdown.md) (hướng dẫn mở rộng Phase 1-2).
 > Mỗi task dưới đây = 1 GitHub issue. Khi tạo issue: title = `[P<phase>] <id> <tên task>`,
 > body copy nguyên khối task (Hướng làm + Việc cần làm + DoD), gán label + milestone như ghi chú,
 > rồi điền số issue vào cột Issue ở bảng tổng.
@@ -17,7 +17,7 @@
   "blocked by"); *Chặn* = task sẽ đứng nếu task này trễ (map "blocks") — dùng để nhận diện
   critical path khi 1 task trượt.
 - Spec kỹ thuật chi tiết: DDL từng bảng/cột/index + state machine + seed permission ở
-  [`../docs/web-db-schema.md`](../docs/web-db-schema.md) (task 1.7, 2.2, 2.7, 2.8 dùng trực tiếp).
+  [`../../../docs/web-db-schema.md`](../../../docs/web-db-schema.md) (task 1.7, 2.2, 2.7, 2.8 dùng trực tiếp).
 
 ## Bảng tổng
 
@@ -126,7 +126,7 @@
 **DoD:** `cargo run -p fileconv-server` → `/healthz` trả trạng thái 3 service từ 1.1; không phá `cargo test` hiện có; không kéo dependency "cho tương lai".
 
 ### 1.7 PG schema migration + seed — `server`
-**Chờ:** 1.1, 1.6 · spec DDL: docs/web-db-schema.md · **Chặn:** 2.2, 2.3, 2.6, 2.8
+**Chờ:** 1.1, 1.6 · spec DDL: ../../docs/web-db-schema.md · **Chặn:** 2.2, 2.3, 2.6, 2.8
 **Hướng làm:** Migration sqlx theo `docs/web-architecture.md` mục 4 (tenancy, RBAC, docs, jobs, quota, audit — mọi bảng nghiệp vụ có `org_id`). Làm từng nhóm bảng một PR nhỏ để lead review kịp. Seed dev: 1 org, 2 user, 1 collection.
 **Việc cần làm:**
 - [ ] Nhóm tenancy + RBAC · nhóm docs/chunks (tsvector + GIN, partition-ready org_id) · nhóm jobs/signature · nhóm quota/audit · nhóm Q&A log (qa_sessions/qa_messages/qa_citations)
@@ -187,7 +187,7 @@
 
 ### 2.4 Qdrant collection + adapter — `server`
 **Chờ:** 1.9 (dimension), 1.10 (config), 2.2 · **Chặn:** 3.1, 3.2
-**Hướng làm:** Init collection theo spec "Thiết kế Qdrant" trong `docs/web-db-schema.md` (tên `chunks_<signature>`, point id = chunks.id, payload 4 field + 3 payload index, quantization int8; dimension theo 1.9, config chỉnh theo 1.10). Adapter **từ chối search** nếu thiếu `org_id + allowed_collection_ids`.
+**Hướng làm:** Init collection theo spec "Thiết kế Qdrant" trong `../../docs/web-db-schema.md` (tên `chunks_<signature>`, point id = chunks.id, payload 4 field + 3 payload index, quantization int8; dimension theo 1.9, config chỉnh theo 1.10). Adapter **từ chối search** nếu thiếu `org_id + allowed_collection_ids`.
 **Việc cần làm:**
 - [ ] Script/module init idempotent · [ ] Adapter upsert/search/delete theo filter
 - [ ] Test: search thiếu org context → error, không phải kết quả rỗng
@@ -210,7 +210,7 @@
 **DoD:** kill worker giữa chừng → job resume đúng checkpoint; file hỏng → `failed` + lỗi đọc được, không treo queue.
 
 ### 2.7 State machine + reconciliation — `server`
-**Chờ:** 2.6 · spec transition: docs/web-db-schema.md mục State machine · **Chặn:** 2.9
+**Chờ:** 2.6 · spec transition: ../../docs/web-db-schema.md mục State machine · **Chặn:** 2.9
 **Hướng làm:** Trạng thái `uploaded→converting→converted→indexing→indexed|failed`, PG là nguồn sự thật, mọi ghi Qdrant/MinIO idempotent (key theo document version + batch). Delete = tombstone PG trước → job xóa Qdrant/MinIO. Reconciliation job định kỳ quét lệch 3 hệ (orphan file, stale vector) và sửa.
 **Việc cần làm:**
 - [ ] Transition hợp lệ + reject transition sai · [ ] Tombstone + job xóa
@@ -261,7 +261,7 @@
 **Hướng làm:** Prompt kèm nguồn từ 3.3 → GLM stream SSE → answer + citation (doc, heading path, link). **Guardrail chống ảo giác trong system prompt: chỉ trả lời từ context được cấp; không đủ căn cứ → trả lời "không tìm thấy trong tài liệu" (kèm gợi ý chunk gần nhất), TUYỆT ĐỐI không bịa.** Citation fetch **re-check ACL + trạng thái tài liệu** (tombstone không bao giờ trả). LLM lỗi/timeout → fallback trả trích đoạn top chunk. Đếm token thật vào quota (2.8).
 **Việc cần làm:**
 - [ ] SSE endpoint + stream parse · [ ] Citation re-check · [ ] Fallback + test giả lập LLM chết
-- [ ] Persist lịch sử: `qa_sessions`/`qa_messages` (status done/fallback/error, token usage, retrieval JSONB) + `qa_citations` snapshot (schema nhóm 5 — `docs/web-db-schema.md`)
+- [ ] Persist lịch sử: `qa_sessions`/`qa_messages` (status done/fallback/error, token usage, retrieval JSONB) + `qa_citations` snapshot (schema nhóm 5 — `../../docs/web-db-schema.md`)
 **DoD:** hỏi trên golden-set → answer stream + citation click ra đúng chunk; câu hỏi negative → trả "không tìm thấy", KHÔNG bịa đáp án; tắt GLM → vẫn trả trích đoạn, không 500.
 
 ### 3.5 Eval harness recall — `qa`

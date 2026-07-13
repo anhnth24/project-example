@@ -3,7 +3,7 @@
 > Chuyển thể từ brainstorm đã APPROVED
 > ([`../plans/reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md`](../plans/reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md),
 > đã qua Codex review 8 finding) thành tài liệu thiết kế chuẩn cho team đọc trước khi nhận task.
-> Phasing & giao việc: [`../plans/260713-markhand-web-phase-plan.md`](../plans/260713-markhand-web-phase-plan.md).
+> Phasing & giao việc: [`../plans/markhand-web/260713-phase-plan.md`](../plans/markhand-web/260713-phase-plan.md).
 > Mục **Chiến lược kiểm thử** là đề xuất mới (chưa có trong brainstorm gốc), đánh dấu [Đề xuất].
 
 ## 1. Bài toán & phạm vi
@@ -209,6 +209,6 @@ Quy ước: JSON snake_case theo serde mặc định của struct Rust; lỗi tr
 ## Tham chiếu chéo
 
 - Brainstorm gốc: [`../plans/reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md`](../plans/reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md)
-- Phasing & giao việc: [`../plans/260713-markhand-web-phase-plan.md`](../plans/260713-markhand-web-phase-plan.md)
+- Phasing & giao việc: [`../plans/markhand-web/260713-phase-plan.md`](../plans/markhand-web/260713-phase-plan.md)
 - Kiến trúc desktop hiện tại: [`system-architecture.md`](system-architecture.md)
 - Quy ước code: [`code-standards.md`](code-standards.md)
