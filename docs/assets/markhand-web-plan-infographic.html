@@ -1,0 +1,412 @@
+<title>Markhand Web — Kế hoạch 45 ngày (bản kỹ thuật)</title>
+<style>
+  :root{
+    --paper:#f1f4ef; --panel:#ffffff; --ink:#111812; --muted:#5c6b5f; --line:#dce3db;
+    --hero:#0b120d; --hero-ink:#eef6ef; --hero-muted:#9db4a3;
+    --code-bg:#0d130f; --code-ink:#d9e7dc; --cmt:#7e947f; --kw:#4fd394; --str:#e0ad52; --num:#82b4f7; --fn:#c9a3f5;
+    --accent:#17a768; --accent-hi:#35d08a; --accent-ink:#0c5c39;
+    --p1:#3172bf; --p2:#dd7f1c; --p3:#7a4fd0; --p4:#17a768; --p5:#c24b82; --p6:#cc4444; --p7:#5a6c79;
+    --good-bg:#e9f6ee; --good-line:#9fd4b4; --bad-bg:#fbecec; --bad-line:#e3a5a5;
+    --chip:#eaf0e9; --warn-bg:#fdf3e2; --warn-line:#e6c78c;
+    --shadow:0 1px 2px rgba(20,40,25,.06),0 6px 18px -8px rgba(20,40,25,.14);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#0e1310; --panel:#161d17; --ink:#e4eee5; --muted:#9cb0a0; --line:#28332a;
+      --hero:#080d09; --hero-ink:#eef6ef; --hero-muted:#93a998;
+      --code-bg:#0a0f0b; --code-ink:#d3e2d6;
+      --accent:#2bbd7d; --accent-hi:#3fd694; --accent-ink:#8fe6bd;
+      --good-bg:#12271a; --good-line:#2c5c40; --bad-bg:#2a1717; --bad-line:#6b3232;
+      --chip:#1e2820; --warn-bg:#2a2213; --warn-line:#6a5527;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px -8px rgba(0,0,0,.5);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0e1310; --panel:#161d17; --ink:#e4eee5; --muted:#9cb0a0; --line:#28332a;
+    --hero:#080d09; --hero-ink:#eef6ef; --hero-muted:#93a998;
+    --code-bg:#0a0f0b; --code-ink:#d3e2d6;
+    --accent:#2bbd7d; --accent-hi:#3fd694; --accent-ink:#8fe6bd;
+    --good-bg:#12271a; --good-line:#2c5c40; --bad-bg:#2a1717; --bad-line:#6b3232;
+    --chip:#1e2820; --warn-bg:#2a2213; --warn-line:#6a5527;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 6px 18px -8px rgba(0,0,0,.5);
+  }
+  :root[data-theme="light"]{
+    --paper:#f1f4ef; --panel:#ffffff; --ink:#111812; --muted:#5c6b5f; --line:#dce3db;
+    --hero:#0b120d; --hero-ink:#eef6ef; --hero-muted:#9db4a3;
+    --code-bg:#0d130f; --code-ink:#d9e7dc;
+    --accent:#17a768; --accent-hi:#35d08a; --accent-ink:#0c5c39;
+    --good-bg:#e9f6ee; --good-line:#9fd4b4; --bad-bg:#fbecec; --bad-line:#e3a5a5;
+    --chip:#eaf0e9; --warn-bg:#fdf3e2; --warn-line:#e6c78c;
+    --shadow:0 1px 2px rgba(20,40,25,.06),0 6px 18px -8px rgba(20,40,25,.14);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font:13.5px/1.45 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+  .mono{font-family:ui-monospace,"Cascadia Mono",Consolas,Menlo,monospace}
+  .num{font-variant-numeric:tabular-nums}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+
+  /* ================= HERO ================= */
+  .hero{background:radial-gradient(1000px 420px at 22% -10%, rgba(53,208,138,.18), transparent 60%), var(--hero); color:var(--hero-ink); padding:30px 0 24px; border-bottom:4px solid var(--accent)}
+  .hero-grid{display:flex;gap:22px;flex-wrap:wrap;align-items:stretch}
+  .hero-main{flex:1 1 600px}
+  .hero h1{margin:0;font-size:clamp(30px,5.4vw,56px);line-height:.98;font-weight:900;letter-spacing:-1.2px;text-transform:uppercase;text-wrap:balance}
+  .hero h1 .hi{color:var(--accent-hi)}
+  .hero .tag{display:inline-flex;align-items:center;gap:8px;background:rgba(53,208,138,.14);border:1px solid rgba(53,208,138,.45);color:var(--accent-hi);font-weight:800;font-size:12px;letter-spacing:1.4px;text-transform:uppercase;padding:4px 12px;border-radius:99px;margin-bottom:14px}
+  .hero .sub{margin-top:12px;color:var(--hero-muted);font-size:15.5px;max-width:66ch}
+  .hero .sub b{color:var(--hero-ink)}
+  .statrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .stat{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.13);border-radius:10px;padding:8px 14px;min-width:104px}
+  .stat b{display:block;font-size:22px;font-weight:900;color:var(--accent-hi);line-height:1.1}
+  .stat span{font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--hero-muted)}
+  .pledge{flex:0 1 268px;border:1.5px solid rgba(53,208,138,.5);border-radius:14px;padding:16px 18px;background:rgba(10,20,13,.5);display:flex;flex-direction:column;gap:9px;justify-content:center}
+  .pledge b{font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--accent-hi)}
+  .pledge div{display:flex;gap:9px;font-size:13px;color:var(--hero-ink)}
+  .pledge .tick{color:var(--accent-hi);font-weight:900}
+
+  /* ================= sections ================= */
+  .sheet{padding:18px 0 34px}
+  .row{display:grid;gap:14px;margin-bottom:14px}
+  .card{background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:15px 17px;box-shadow:var(--shadow)}
+  .card>h2{margin:0 0 10px;font-size:13px;letter-spacing:1.1px;text-transform:uppercase;display:flex;align-items:center;gap:9px}
+  .nb{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:9px;color:#fff;font-weight:900;font-size:14px;flex:0 0 auto}
+
+  /* code block */
+  pre{margin:8px 0 0;background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:10px 12px;font:10.8px/1.55 ui-monospace,"Cascadia Mono",Consolas,Menlo,monospace;overflow-x:auto}
+  pre .c{color:var(--cmt)} pre .k{color:var(--kw);font-weight:700} pre .s{color:var(--str)} pre .n{color:var(--num)} pre .f{color:var(--fn)}
+  .cap{font-size:11px;color:var(--muted);margin-top:6px}
+
+  /* ============ demo Q&A ============ */
+  .demo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:14px}
+  .qa{border-radius:11px;padding:10px 13px;font-size:13px;margin-top:8px}
+  .qa.good{background:var(--good-bg);border:1.5px solid var(--good-line)}
+  .qa.bad{background:var(--bad-bg);border:1.5px solid var(--bad-line)}
+  .qa .q{font-weight:800}
+  .qa .a{margin-top:4px}
+  .cite{display:inline-flex;gap:5px;align-items:center;background:var(--panel);border:1px solid var(--good-line);border-radius:6px;padding:1px 8px;font-size:11.5px;font-weight:700;color:var(--accent-ink)}
+  .abox-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap;font-size:12.6px;margin-top:8px}
+  .abox{flex:1 1 120px;text-align:center;background:var(--chip);border-radius:10px;padding:9px 8px}
+  .abox b{display:block;font-size:12.5px}
+  .abox small{color:var(--muted)}
+  .arr{font-weight:900;color:var(--muted)}
+
+  /* ============ tech grid ============ */
+  .tech{display:grid;grid-template-columns:repeat(auto-fit,minmax(352px,1fr));gap:14px;margin-bottom:14px}
+  .t-card{background:var(--panel);border:1.5px solid var(--line);border-top:4px solid var(--tc,var(--accent));border-radius:14px;padding:13px 15px;box-shadow:var(--shadow)}
+  .t-card h3{margin:0 0 3px;font-size:14.5px;display:flex;align-items:center;gap:9px}
+  .t-card h3 .nb{background:var(--tc)}
+  .t-card .meta{color:var(--muted);font-size:11.5px;margin:0 0 6px 35px}
+  .t-card ul{margin:6px 0 0;padding-left:19px}
+  .t-card li{margin:3px 0;font-size:12.6px}
+  .flow{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:8px;font-size:11.5px;font-weight:700}
+  .flow .st{background:var(--chip);border-radius:7px;padding:3px 9px}
+  .flow .st.err{background:var(--bad-bg);border:1px solid var(--bad-line)}
+  .flow .st.ok{background:var(--good-bg);border:1px solid var(--good-line)}
+
+  /* ============ gantt ============ */
+  .gantt{overflow-x:auto}
+  .g-inner{min-width:600px;position:relative;padding:26px 40px 6px 0}
+  .g-grid{position:absolute;inset:26px 40px 6px 138px;background:repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px calc(100%/9));border-right:1px solid var(--line)}
+  .g-row{display:flex;align-items:center;gap:10px;margin:7px 0;position:relative}
+  .g-name{flex:0 0 128px;font-size:11.5px;font-weight:800}
+  .g-track{position:relative;flex:1;height:19px}
+  .g-bar{position:absolute;top:1px;height:17px;border-radius:5px;box-shadow:var(--shadow)}
+  .g-bar i{position:absolute;left:7px;top:1.5px;font-style:normal;font-size:10.5px;font-weight:800;color:#fff;white-space:nowrap}
+  .g-flags{position:absolute;inset:26px 40px 6px 138px;pointer-events:none}
+  .g-flag{position:absolute;top:-24px;bottom:0;border-left:2px dashed color-mix(in srgb, var(--ink) 34%, transparent)}
+  .g-flag b{position:absolute;top:-1px;left:-1px;transform:translate(-50%,-100%);background:var(--ink);color:var(--paper);font-size:10px;padding:2px 7px;border-radius:5px;white-space:nowrap}
+  .g-flag.poc{border-left-color:var(--accent)}
+  .g-flag.poc b{background:var(--accent);color:#fff;font-size:11px}
+  .g-scale{position:relative;height:16px;margin-left:138px;margin-right:40px}
+  .g-scale span{position:absolute;transform:translateX(-50%);font-size:10.5px;color:var(--muted)}
+
+  /* bottom */
+  .bottom{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:14px}
+  .list{margin:0;padding-left:18px}
+  .list li{margin:4px 0;font-size:12.6px}
+  .warn{background:var(--warn-bg);border-color:var(--warn-line)}
+  footer{margin-top:16px;color:var(--muted);font-size:11.5px;text-align:center}
+  footer code{font-family:ui-monospace,Consolas,monospace;font-size:11px}
+</style>
+
+<div class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-main">
+      <span class="tag">◈ Kế hoạch kỹ thuật · 2026-07</span>
+      <h1>Markhand Web<br><span class="hi">45 ngày</span> → RAG multi&#8209;org</h1>
+      <p class="sub">Tái dùng <b class="mono">fileconv-core</b> + ~80% logic RAG desktop → web quản lý tài liệu on-prem:
+      upload → convert → index → <b>hỏi đáp có citation</b>. Rust axum · PG 16 · Qdrant · MinIO · GLM API.</p>
+      <div class="statrow num">
+        <div class="stat"><b>7</b><span>phase gối đầu</span></div>
+        <div class="stat"><b>41</b><span>task = issue</span></div>
+        <div class="stat"><b>19</b><span>bảng PG (DDL sẵn)</span></div>
+        <div class="stat"><b>n30-32</b><span>🎯 gate POC</span></div>
+        <div class="stat"><b>4+AI</b><span>đội hình</span></div>
+      </div>
+    </div>
+    <div class="pledge">
+      <b>Cam kết thiết kế</b>
+      <div><span class="tick">✔</span> On-prem — dữ liệu không rời hạ tầng</div>
+      <div><span class="tick">✔</span> PG là nguồn sự thật — Qdrant rebuild được</div>
+      <div><span class="tick">✔</span> Chỉ trả lời từ tài liệu — không bịa</div>
+      <div><span class="tick">✔</span> Tenant cách ly từ tầng repository</div>
+      <div><span class="tick">✔</span> Gate nhị phân — không "xong 80%"</div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap sheet">
+
+<!-- ===== DEMO + ANALOGY ===== -->
+<div class="demo-grid">
+  <div class="card">
+    <h2><span class="nb" style="background:var(--accent)">▶</span> Demo mục tiêu (GATE POC)</h2>
+    <div class="qa good">
+      <div class="q">H: Điều kiện nâng lương trước thời hạn là gì?</div>
+      <div class="a">Đ: Theo quy chế, cần đạt danh hiệu… <em>(trả lời từ tài liệu)</em><br>
+      <span class="cite">📄 quyche-2024.pdf › Điều 12 › Khoản 2</span></div>
+    </div>
+    <div class="qa bad">
+      <div class="q">H: Giá vàng hôm nay bao nhiêu?</div>
+      <div class="a">Đ: <b>Không tìm thấy trong tài liệu.</b> <em>(không có trong corpus — từ chối, không bịa)</em></div>
+    </div>
+    <p class="cap">Cả hai hành vi đều nằm trong kịch bản demo và được đo bằng golden-set (recall@k + refusal accuracy).</p>
+  </div>
+  <div class="card">
+    <h2><span class="nb" style="background:var(--p4)">📖</span> Nguyên lý "thi mở sách"</h2>
+    <div class="abox-row">
+      <div class="abox"><b>Tài liệu của org</b><small>cuốn sách — PG + MinIO</small></div>
+      <div class="arr">→</div>
+      <div class="abox"><b>Retrieval mở đúng trang</b><small>hybrid vector ∥ FTS</small></div>
+      <div class="arr">→</div>
+      <div class="abox"><b>GLM trả lời từ trang đó</b><small>stream SSE + citation</small></div>
+    </div>
+    <pre><span class="c">-- system prompt (guardrail, task 3.4)</span>
+Bạn CHỈ trả lời dựa trên các trích đoạn dưới đây.
+Không đủ căn cứ → trả lời: <span class="s">"Không tìm thấy trong tài liệu."</span>
+Mọi ý phải kèm nguồn <span class="n">[n]</span>. Không suy diễn ngoài nguồn.</pre>
+  </div>
+</div>
+
+<!-- ===== TECH GRID ===== -->
+<div class="tech">
+
+  <div class="t-card" style="--tc:var(--p1)">
+    <h3><span class="nb">1</span> Hạ tầng dev — docker-compose</h3>
+    <p class="meta">task 1.1 · ngày 1-2 · Member 1</p>
+<pre><span class="c"># bench/web-spike/docker-compose.yml</span>
+<span class="k">services:</span>
+  postgres: <span class="s">postgres:16</span>   <span class="c"># + ext unaccent</span>
+  qdrant:   <span class="s">qdrant:v1.x</span>   <span class="c"># pin tag + volume</span>
+  minio:    <span class="s">minio/minio</span>   <span class="c"># quarantine bucket</span></pre>
+    <ul><li>Healthcheck 3 service · <span class="mono">.env.example</span>, không commit secret</li></ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p1)">
+    <h3><span class="nb">2</span> PG schema — 19 bảng, org_id mọi nơi</h3>
+    <p class="meta">task 1.7 · DDL đầy đủ: docs/web-db-schema.md · 5 nhóm migration</p>
+<pre><span class="k">CREATE TABLE</span> <span class="f">documents</span> (
+  org_id <span class="n">UUID NOT NULL</span>,  status <span class="k">CHECK</span> (...),
+  content_hash <span class="n">TEXT</span>,        <span class="c">-- BLAKE3 hex</span>
+  deleted_at <span class="n">TIMESTAMPTZ</span>    <span class="c">-- tombstone</span>
+);
+<span class="k">CREATE TABLE</span> <span class="f">chunks</span> ( ...,
+  tsv tsvector <span class="k">GENERATED ALWAYS AS</span> (to_tsvector(
+    <span class="s">'simple'</span>, <span class="f">immutable_unaccent</span>(text))) <span class="k">STORED</span>,
+  <span class="k">UNIQUE</span> (org_id, document_id,
+          version, chunk_index) <span class="c">-- partition-ready</span>
+);</pre>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p2)">
+    <h3><span class="nb">3</span> Jobs queue — resume được</h3>
+    <p class="meta">task 2.6 · claim không giẫm nhau, checkpoint từng batch</p>
+<pre><span class="k">SELECT</span> * <span class="k">FROM</span> jobs
+<span class="k">WHERE</span> status=<span class="s">'queued'</span> <span class="k">AND</span> run_after&lt;=now()
+<span class="k">ORDER BY</span> created_at
+<span class="k">FOR UPDATE SKIP LOCKED LIMIT</span> <span class="n">1</span>;
+<span class="c">-- idempotency_key='index:&lt;doc&gt;:v2' UNIQUE</span>
+<span class="c">-- checkpoint={"batch":12,</span>
+<span class="c">--             "last_chunk_index":767}</span></pre>
+    <ul><li>Kill worker giữa chừng → job mới resume đúng batch (gate M2)</li></ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p2)">
+    <h3><span class="nb">4</span> State machine tài liệu</h3>
+    <p class="meta">task 2.7 · PG là nguồn sự thật · mọi ghi Qdrant/MinIO idempotent</p>
+    <div class="flow">
+      <span class="st">uploaded</span>→<span class="st">converting</span>→<span class="st">converted</span>→<span class="st">indexing</span>→<span class="st ok">indexed</span>
+      <span>|</span><span class="st err">failed → retry</span>
+    </div>
+    <ul>
+      <li><b>Delete = tombstone</b>: set <span class="mono">deleted_at</span> → job xoá Qdrant + MinIO sau</li>
+      <li><b>Reconcile</b> định kỳ: quét lệch PG↔Qdrant↔MinIO (orphan/stale) và tự sửa</li>
+      <li>Citation/preview <b>không bao giờ</b> trả tài liệu tombstone</li>
+    </ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p2)">
+    <h3><span class="nb">5</span> Upload hardening — chặn trước converter</h3>
+    <p class="meta">task 2.5 · theo threat model 1.8 · từng lớp một PR</p>
+    <div class="flow">
+      <span class="st">multipart</span>→<span class="st">MIME sniff magic-byte ⇄ extension</span>→<span class="st">size/page limit</span>→<span class="st">zip-bomb check</span>→<span class="st">quota reserve</span>→<span class="st ok">quarantine → MinIO</span>
+    </div>
+    <ul>
+      <li>docx/xlsx bản chất là zip → quy tắc zip-bomb áp cho cả chúng</li>
+      <li><span class="mono">.doc</span> cũ → từ chối + hướng dẫn convert sang docx</li>
+      <li>Worker convert chạy sandbox + timeout + kill (PDF malformed từng panic lopdf)</li>
+    </ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p2)">
+    <h3><span class="nb">6</span> Quota atomic — không check-then-act</h3>
+    <p class="meta">task 2.8 · bảng quota_reservations · gate: 2 request đồng thời không vượt trần</p>
+<pre><span class="k">BEGIN</span>;
+  <span class="k">SELECT</span> ... <span class="k">FROM</span> org_quotas
+    <span class="k">WHERE</span> org_id=$1 <span class="k">FOR UPDATE</span>;
+  <span class="c">-- used + SUM(đang reserve) + amount &lt;= limit?</span>
+  <span class="k">INSERT INTO</span> quota_reservations
+    (status=<span class="s">'reserved'</span>, expires_at=...);
+<span class="k">COMMIT</span>;
+<span class="c">-- sau đó: finalize (cộng usage) | refund</span></pre>
+    <ul><li>Đếm LLM token <b>thật</b> từ response usage · vượt trần → <span class="mono">429</span> + quota headers</li></ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p3)">
+    <h3><span class="nb">7</span> Embedding queue + index signature</h3>
+    <p class="meta">task 3.1 · GLM API cho POC · đổi model = reindex, không đập schema</p>
+<pre><span class="c">// embedding_signatures — pin model, 1 active</span>
+{ <span class="f">provider</span>: <span class="s">"glm"</span>, <span class="f">model</span>: <span class="s">"embedding-3"</span>,
+  <span class="f">dimension</span>: <span class="n">2048</span>, <span class="f">version</span>: <span class="n">1</span>, <span class="f">active</span>: <span class="k">true</span> }
+<span class="c">// queue: batch 64 · bounded (backpressure)</span>
+<span class="c">// retry theo rate-limit GLM</span></pre>
+    <ul><li>Gate M1 (ngày 8): recall@k trên golden-set vi đạt ngưỡng — fail thì đổi provider ngay</li><li>Khi có GPU: chuyển vLLM (bge-m3/e5) — signature mới + reindex</li></ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p3)">
+    <h3><span class="nb">8</span> Qdrant — 1 collection / signature</h3>
+    <p class="meta">task 2.4 · point id = chunks.id · text nằm ở PG</p>
+<pre><span class="c">// collection: chunks_&lt;sig8&gt;</span>
+<span class="c">// Cosine · int8 quantization</span>
+payload: { <span class="f">org_id</span>, <span class="f">collection_id</span>,
+           <span class="f">document_id</span>, <span class="f">version</span> }
+payload_index: [org, collection, document]
+search.filter.must = [
+  org_id == ctx.org,
+  collection_id <span class="k">IN</span> allowed_ids ]
+<span class="c">// adapter TỪ CHỐI query thiếu org</span>
+<span class="c">// — không trả rỗng âm thầm</span></pre>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p3)">
+    <h3><span class="nb">9</span> Hybrid retrieval + rerank</h3>
+    <p class="meta">task 3.3 · công thức hybrid tái dùng từ crates/knowledge (desktop đã chạy)</p>
+<pre>Qdrant top-k (vector) <span class="k">∥</span> PG FTS unaccent
+        └───────────┬───────────┘
+            RRF merge + rerank
+<span class="c">// score(c) = Σ 1/(k + rank_nguồn)</span>
+<span class="c">// → top-N vào prompt</span></pre>
+    <ul><li>Eval harness 3.5: recall@1/5/10 + refusal accuracy + histogram độ dài chunk (quyết định cap/overlap bằng số đo)</li></ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p4)">
+    <h3><span class="nb">10</span> Q&amp;A SSE + citation trace</h3>
+    <p class="meta">task 3.4 · re-check ACL + tombstone lúc fetch · log đủ để eval</p>
+<pre><span class="k">POST</span> /api/qa <span class="c">→ SSE answer + citations</span>
+<span class="c">// qa_messages.retrieval (JSONB):</span>
+<span class="c">//   candidates + score + latency</span>
+<span class="c">// qa_citations: SNAPSHOT (doc, version,</span>
+<span class="c">//   chunk_index, excerpt) — sống sót reindex;</span>
+<span class="c">//   click = fetch live re-check ACL</span>
+GLM lỗi → <span class="s">fallback: trích đoạn top chunk</span></pre>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p6)">
+    <h3><span class="nb">11</span> Tenant isolation + RBAC mức 2</h3>
+    <p class="meta">task 2.2 (ngay từ Integration) + 6.1 · defense-in-depth</p>
+<pre><span class="c">// repo layer: KHÔNG THỂ query thiếu org</span>
+<span class="k">fn</span> <span class="f">list_documents</span>(ctx: &amp;<span class="f">OrgContext</span>, ..)
+<span class="c">// route guard:</span>
+.layer(<span class="f">require</span>(<span class="s">"doc.upload"</span>))
+<span class="c">// denial suite (gate M6): 5 đường × 3 user</span>
+<span class="c">// search/FTS/citation/preview/download</span></pre>
+    <ul><li>Role owner/admin/editor/viewer + ACL collection · rate limit 2 tầng (tower_governor + quota)</li></ul>
+  </div>
+
+  <div class="t-card" style="--tc:var(--p5)">
+    <h3><span class="nb">12</span> Web SPA — tái dùng LumiBase</h3>
+    <p class="meta">task 1.4 / 4.1-4.3 / 5.1-5.2 · Member 3 · UI làm trên mock từ ngày 20</p>
+    <ul>
+      <li>React + Vite + TS strict · Zustand · <span class="mono">api.ts</span> thay <span class="mono">ipc.ts</span></li>
+      <li>Copy <span class="mono">SafeMarkdown</span> + token LumiBase từ desktop (không package chung — tránh generic sớm)</li>
+      <li>Thư viện: trạng thái ingest realtime theo state machine · Chat: SSE render tăng dần, citation chip → mở đúng heading</li>
+      <li>Playwright E2E chạy CI bằng hash-local embedding (không cần GLM key)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ===== GANTT ===== -->
+<div class="row">
+<div class="card gantt">
+  <h2><span class="nb" style="background:var(--p1)">📅</span> Tiến độ 45 ngày — gối đầu có chủ đích · mốc = gate nhị phân</h2>
+  <div class="g-inner num">
+    <div class="g-grid"></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p1)">P1 · Nền tảng &amp; Spike</div><div class="g-track"><div class="g-bar" style="left:0%;width:17.8%;background:var(--p1)"><i>n1-8</i></div></div></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p2)">P2 · Core &amp; Integration</div><div class="g-track"><div class="g-bar" style="left:13.3%;width:28.9%;background:var(--p2)"><i>n7-19</i></div></div></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p3)">P3 · RAG pipeline</div><div class="g-track"><div class="g-bar" style="left:33.3%;width:24.5%;background:var(--p3)"><i>n16-26</i></div></div></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p4)">P4 · POC UI &amp; Demo</div><div class="g-track"><div class="g-bar" style="left:42.2%;width:28.9%;background:var(--p4)"><i>n20-32</i></div></div></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p5)">P5 · SPA + Intelligence</div><div class="g-track"><div class="g-bar" style="left:64.4%;width:20%;background:var(--p5)"><i>n30-38</i></div></div></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p6)">P6 · RBAC &amp; Multi-org</div><div class="g-track"><div class="g-bar" style="left:68.9%;width:24.4%;background:var(--p6)"><i>n32-42</i></div></div></div>
+    <div class="g-row"><div class="g-name" style="color:var(--p7)">P7 · Hardening</div><div class="g-track"><div class="g-bar" style="left:86.7%;width:13.3%;background:var(--p7)"><i>n40-45</i></div></div></div>
+    <div class="g-flags">
+      <div class="g-flag" style="left:17.8%"><b>M1</b></div>
+      <div class="g-flag" style="left:42.2%"><b>M2</b></div>
+      <div class="g-flag" style="left:57.8%"><b>M3</b></div>
+      <div class="g-flag poc" style="left:68.9%"><b>🎯 POC n30-32</b></div>
+      <div class="g-flag" style="left:84.4%"><b>M5</b></div>
+      <div class="g-flag" style="left:93.3%"><b>M6</b></div>
+      <div class="g-flag" style="left:100%"><b>M7</b></div>
+    </div>
+  </div>
+  <div class="g-scale num"><span style="left:0%">ngày 1</span><span style="left:20%">10</span><span style="left:42.2%">20</span><span style="left:64.4%">30</span><span style="left:86.7%">40</span><span style="left:100%">45</span></div>
+  <p class="cap">M1 recall đạt ngưỡng · M2 resume + chặn upload độc · M3 citation đúng golden-set · <b>POC = demo E2E qua UI</b> (chưa qua → họp cắt scope tại ngày 32, không im lặng trượt) · M5 E2E mở rộng xanh · M6 denial suite pass · M7 recovery drill.</p>
+</div>
+</div>
+
+<!-- ===== BOTTOM ===== -->
+<div class="bottom">
+  <div class="card">
+    <h2><span class="nb" style="background:var(--p1)">👥</span> Đội hình × track</h2>
+    <ul class="list">
+      <li><b>Lead + AI agent</b> — critical path: tách <span class="mono">crates/knowledge</span> → state machine/quota → RAG → intelligence</li>
+      <li><b>Member 1</b> — infra/QA: compose, golden-set, benchmark, E2E, denial suite</li>
+      <li><b>Member 2</b> — Rust học dần: migration 19 bảng, skeleton server, upload hardening (chuỗi PR nhỏ)</li>
+      <li><b>Member 3</b> — frontend: web/, thư viện, chat, admin, help</li>
+    </ul>
+  </div>
+  <div class="card warn">
+    <h2><span class="nb" style="background:var(--p6)">⚠</span> Điều kiện giữ lịch</h2>
+    <ul class="list">
+      <li>Lịch <b>không có slack</b> — trượt 3 ngày critical path là vỡ ngày 45</li>
+      <li><b>GLM API key trước ngày 5</b> · máy compose sẵn ngày 1</li>
+      <li>Lead + AI full-time trên critical path · PR member review trong ngày</li>
+      <li>Checkpoint ngày 32: chưa qua POC → cắt P5 hoặc lùi deadline</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2><span class="nb" style="background:var(--p7)">📦</span> Backlog sau 45 ngày</h2>
+    <ul class="list">
+      <li>BA/PM handoff · versions/diff · quality report</li>
+      <li>SSO/OIDC IdP thật (interface đã sẵn) · pentest ngoài · agent browser test</li>
+      <li><b>100% offline</b>: Ollama/vLLM local — đổi provider + reindex theo signature</li>
+      <li>Audio (check license PhoWhisper) · Qdrant bench đầy đủ</li>
+    </ul>
+  </div>
+</div>
+
+<footer>
+  Chi tiết: <code>plans/260713-markhand-web-phase-plan.md</code> · <code>…-tracklist.md</code> (41 task · Chờ/Chặn · DoD) ·
+  <code>docs/web-architecture.md</code> (API surface) · <code>docs/web-db-schema.md</code> (DDL 19 bảng + spec Qdrant + state machine)
+</footer>
+
+</div>
