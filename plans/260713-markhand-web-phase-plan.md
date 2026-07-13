@@ -31,10 +31,10 @@ A, B, C **chạy song song từ ngày 1**. M1 là điểm hội tụ đầu tiê
 
 | Track | Nội dung | Gate (nhị phân) | Rủi ro gắn kèm |
 |---|---|---|---|
-| **A — Spike & benchmark** (map Phase 0 gốc) | Benchmark Qdrant + PG FTS với phân bố org thật (payload filter latency, delete/update, snapshot/restore, RAM sau quantization); eval embedding golden-set tiếng Việt (bge-m3 vs e5); upload threat model; chốt số SLA | Số liệu đạt ngưỡng thống nhất → mới chốt Qdrant config + model embed + cho phép ingest hàng loạt | #1 embedding vi, #4 GPU chưa xác nhận |
+| **A — Spike & benchmark** (map Phase 0 gốc) | Benchmark Qdrant + PG FTS với phân bố org thật (payload filter latency, delete/update, snapshot/restore, RAM sau quantization); **eval GLM embedding API trên golden-set tiếng Việt** (đã chốt: POC dùng GLM embedding, GPU/vLLM tính sau); upload threat model; chốt số SLA | Số liệu đạt ngưỡng thống nhất → mới chốt Qdrant config (dimension theo model GLM) + cho phép ingest hàng loạt | #1 embedding vi; cần GLM endpoint + API key |
 | **B — Core reuse** (map Phase 1A gốc) | Tách `crates/knowledge` từ `app/src-tauri/{knowledge,vector_index,intelligence}.rs`: extract logic thuần chunk→embed→rank→citation; desktop giữ SQLite/HNSW | `cargo test` pass + desktop hành vi không đổi (test khoá hành vi viết TRƯỚC khi tách) | #3 refactor 5.200 dòng — track rủi ro cao nhất, bắt đầu sớm nhất |
 | **C — Nền tảng web** | **C1a** PG schema + migration + docker-compose dev (PG/Qdrant/MinIO) — schema đã chốt trong design doc, KHÔNG chờ A. **C1b** Qdrant collection config — **chờ gate A**. **C2** skeleton `crates/server` (axum, layout module) + skeleton `web/` (Vite, routing) | Migration chạy sạch trên PG mới; skeleton build + CI pass | — |
-| **C0 — Kickoff checklist** (task setup, KHÔNG phải phase) | Port token LumiBase từ `app/styles.css` sang `web/`; viết quy ước code server+web (phụ lục `docs/code-standards.md` hoặc file riêng — chờ chốt); ESLint/Prettier/CI cho `web/` | Checklist tick hết trong tuần đầu | — |
+| **C0 — Kickoff checklist** (task setup, KHÔNG phải phase) | Port token LumiBase từ `app/styles.css` sang `web/`; viết quy ước code server+web ở **file riêng `docs/web-code-standards.md`** (đã chốt); ESLint/Prettier/CI cho `web/` | Checklist tick hết trong tuần đầu | — |
 
 ## Milestone tuần tự (điểm hội tụ)
 
@@ -59,14 +59,14 @@ A, B, C **chạy song song từ ngày 1**. M1 là điểm hội tụ đầu tiê
 | Sau M3a | **Agent-driven browser test**: AI agent điều khiển browser (Playwright MCP) chạy exploratory smoke theo kịch bản ngôn ngữ tự nhiên trên staging — bắt lỗi UX/flow ngoài script cứng |
 | Cùng M4 | Denial test suite (điều kiện gate M4) |
 
-## Gợi ý phân nhóm giao task (bước kế tiếp: chẻ task chi tiết theo nhóm)
+## Phân nhóm giao task (đã chốt nhân sự: 3-4 member đa số chưa vững Rust + lead + AI agent)
 
-- **Backend-Infra**: A, C1a/C1b, M1 (adapter, state machine, reconciliation)
-- **Backend-Rust-Core**: B, M2 (embedding queue, hybrid rerank)
-- **Backend-API**: C2 (server), M1 (auth, tenant-scoped repo, quota), M4
-- **Frontend**: C0, C2 (web), M3a
-- **QA/Automation**: Track T (chủ trì), phối hợp gate từng milestone
-- **DevOps/Security**: A (threat model), M1 (sandbox worker), M5
+Chẻ task chi tiết: [`260713-markhand-web-task-breakdown.md`](260713-markhand-web-task-breakdown.md).
+
+- **Lead + AI agent**: Track B (tách crate — rủi ro cao nhất), M1 phần khó (tenant-scoped repo, state machine, quota atomic), review mọi PR Rust.
+- **Member 1 — Backend-Infra/QA** (không cần vững Rust): A (docker-compose, golden-set, benchmark, eval GLM), sau đó Track T.
+- **Member 2 — Backend Rust học dần**: C1a (migration), C2a (server skeleton có hướng dẫn), M1 task nhỏ (MIME sniff, size limit từng cái một).
+- **Member 3 — Frontend**: C0, C2b (web skeleton), M3a.
 
 ## Thay đổi so với draft đầu (theo review đối kháng nội bộ)
 
@@ -81,9 +81,18 @@ A, B, C **chạy song song từ ngày 1**. M1 là điểm hội tụ đầu tiê
 9. Styling + coding convention hạ xuống **C0 kickoff checklist**, không chiếm phase riêng.
 10. Rủi ro gắn trực tiếp vào cột trong bảng thay vì mục rời cuối file.
 
-## Câu hỏi mở (cần user chốt trước/trong khi chia task)
+## Quyết định đã chốt với user (2026-07-13)
 
-1. Quy ước code server+web: phụ lục trong `docs/code-standards.md` hay file `docs/web-code-standards.md` riêng?
-2. Danh sách định dạng upload cho phép ở POC: đủ bộ core hỗ trợ hay giới hạn pdf/docx/xlsx trước?
-3. Nhân sự thực tế cho các nhóm ở mục "Gợi ý phân nhóm" (số người, ai biết Rust) — quyết định độ mịn khi chẻ task.
-4. Hạ tầng: GPU server (VRAM), provisioning PG/Qdrant/MinIO, GLM endpoint — điều kiện bắt đầu Track A.
+1. Quy ước code server+web: **file riêng `docs/web-code-standards.md`** (task C0).
+2. Upload POC: **docx, xlsx, pdf (text + scan), csv, md, txt, ảnh OCR**; từ chối `.doc` binary
+   cũ với thông báo hướng dẫn convert sang docx (core không hỗ trợ, đúng YAGNI); chưa nhận audio.
+3. Nhân sự: **3-4 member đa số chưa vững Rust** + lead + AI agent → chẻ task kiểu intern guide,
+   Rust nặng dồn lead/AI.
+4. Embedding POC: **GLM embedding API** (chưa có GPU); vLLM local là phương án khi có GPU —
+   index signature pin model nên chuyển đổi chỉ cần reindex.
+
+## Câu hỏi mở còn lại
+
+1. GLM endpoint + API key provisioning — điều kiện bắt đầu task A3 (eval embedding).
+2. Số SLA cụ thể — chốt sau benchmark Track A.
+3. Server chạy PG/Qdrant/MinIO dev/staging — cần xác nhận máy trước khi A1.

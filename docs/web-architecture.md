@@ -23,8 +23,9 @@ triển khai theo lát cắt dọc single-org trước.
 |---|---|
 | Backend | Rust, axum; tách crate dùng chung với desktop |
 | Storage | **PG (system-of-record) + Qdrant (vector) + MinIO (file gốc)** |
-| Embedding | GPU nội bộ, model local qua vLLM (bge-m3/multilingual-e5) — chốt model sau eval golden-set |
+| Embedding | **POC: GLM embedding API** (chưa có GPU — quy mô POC chấp nhận chi phí/độ trễ API). Khi có GPU chuyển vLLM local (bge-m3/e5): index signature pin model+dimension nên đổi model chỉ cần reindex. Gate: eval GLM embedding trên golden-set tiếng Việt trước khi ingest hàng loạt |
 | Chat LLM | GLM cloud (user xác nhận chấp nhận gửi nội dung tài liệu; giữ option self-host) |
+| Upload POC | `docx, xlsx, pdf (text + scan), csv, md, txt, ảnh (OCR)`. **Từ chối `.doc` binary cũ với thông báo rõ** (core chỉ hỗ trợ docx; user tự convert sang docx). `md/txt` lưu pass-through qua decode `viet_legacy`. Chưa nhận audio ở POC |
 | Auth | JWT tự build cho POC; auth layer tách riêng, pluggable OIDC (SSO tương lai) |
 | RBAC | Mức 2: role per-org (owner/admin/editor/viewer) + ACL collection; schema role→permissions dạng bảng để nâng custom-role sau |
 | Rate limit | 2 tầng: request (tower_governor) + quota tài nguyên (LLM token, upload GB, concurrent jobs) |
@@ -174,9 +175,12 @@ Track chạy **xuyên suốt**, không phải phase cuối:
 
 ## 14. Câu hỏi chưa chốt
 
-- Cấu hình GPU server thực tế (VRAM quyết định bge-m3 hay e5-small).
-- Số SLA cụ thể (latency/throughput/recovery — chốt sau benchmark Phase 0).
-- Danh sách định dạng upload cho phép ở POC (đủ bộ core hỗ trợ hay giới hạn pdf/docx/xlsx trước).
+- GLM endpoint + API key provisioning (điều kiện bắt đầu eval embedding).
+- Số SLA cụ thể (latency/throughput/recovery — chốt sau benchmark Track A).
+- Thời điểm/cấu hình GPU server cho vLLM (chuyển đổi từ GLM embedding API về local).
+
+Đã chốt (2026-07-13): embedding POC dùng GLM API; danh sách format upload POC (mục 2);
+từ chối `.doc`; quy ước code server+web đặt ở file riêng `docs/web-code-standards.md`.
 
 ## Tham chiếu chéo
 
