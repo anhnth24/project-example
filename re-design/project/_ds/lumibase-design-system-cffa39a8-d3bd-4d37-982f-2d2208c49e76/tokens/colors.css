@@ -1,0 +1,51 @@
+/* LumiBase — Color tokens
+   Extracted from lumibase.dev (dark cosmic theme). */
+:root {
+  /* ---- Base ink / backgrounds ---- */
+  --color-bg-top: rgb(30, 30, 32);      /* gradient start */
+  --color-bg-bottom: rgb(14, 14, 17);   /* gradient end */
+  --color-bg: rgb(20, 19, 22);          /* flat page fallback */
+  --gradient-page: linear-gradient(135deg, rgb(30, 30, 32) 0%, rgb(14, 14, 17) 32%); /* @kind other */
+
+  /* ---- Surfaces (raised cards, panels) ---- */
+  --color-surface-1: rgb(29, 28, 32);   /* primary card */
+  --color-surface-2: rgb(36, 35, 37);   /* nested / secondary */
+  --color-surface-3: rgb(41, 41, 43);   /* control fills */
+  --color-surface-4: rgb(52, 50, 54);   /* hover fill */
+  --color-surface-violet: rgb(56, 52, 63); /* tinted surface */
+  --color-surface-sunken: rgb(23, 22, 25);
+
+  /* ---- Translucent glass (pills, nav, buttons) ---- */
+  --color-glass: rgba(255, 255, 255, 0.08);
+  --color-glass-hover: rgba(255, 255, 255, 0.14);
+  --color-glass-border: rgba(255, 255, 255, 0.08);
+
+  /* ---- Text ---- */
+  --color-text: rgb(255, 255, 255);
+  --color-text-secondary: rgb(189, 189, 192);
+  --color-text-muted: rgb(169, 169, 169);
+  --color-text-faint: rgba(255, 255, 255, 0.43);
+  --color-text-72: rgba(255, 255, 255, 0.72);
+  --color-text-on-accent: rgb(255, 255, 255);
+
+  /* ---- Brand accents ---- */
+  --color-violet: rgb(123, 97, 255);    /* Magician / primary brand */
+  --color-violet-soft: rgb(149, 128, 255);
+  --color-blue: rgb(24, 160, 251);      /* Genius / info */
+  --color-green: rgb(46, 196, 124);     /* success / Automator planet */
+  --color-red: rgb(232, 86, 86);        /* error */
+
+  /* ---- Borders & strokes ---- */
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-border-solid: rgb(49, 49, 49);
+  --color-stroke-light: rgb(221, 221, 221);
+
+  /* ---- Semantic aliases ---- */
+  --surface-card: var(--color-surface-1);
+  --surface-control: var(--color-glass);
+  --text-body: var(--color-text-secondary);
+  --text-heading: var(--color-text);
+  --accent: var(--color-violet);
+  --border-hairline: var(--color-border);
+}

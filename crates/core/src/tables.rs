@@ -60,7 +60,7 @@ fn xlsx_json(path: &Path, sheet: Option<&str>) -> Result<String, ConvertError> {
 fn csv_json(path: &Path) -> Result<String, ConvertError> {
     let raw = std::fs::read(path).map_err(|e| ConvertError::Failed(e.to_string()))?;
     let bytes = raw.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&raw[..]);
-    let text = String::from_utf8_lossy(bytes);
+    let text = crate::viet_legacy::decode_text(bytes);
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -78,4 +78,23 @@ fn csv_json(path: &Path) -> Result<String, ConvertError> {
         .collect();
     serde_json::to_string(&serde_json::Value::Array(rows))
         .map_err(|e| ConvertError::Failed(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_csv_decodes_tcvn3_like_markdown_converter() {
+        let path =
+            std::env::temp_dir().join(format!("fileconv_tables_tcvn3_{}.csv", std::process::id()));
+        let bytes = [
+            0x43, 0xE9, 0x6E, 0x67, 0x20, 0x68, 0xDF, 0x61, 0x20, 0x78, 0xB7, 0x20, 0x68, 0xE9,
+            0x69,
+        ];
+        std::fs::write(&path, bytes).unwrap();
+        let json = tables_json(&path, None).unwrap();
+        assert!(json.contains("Cộng hòa xã hội"));
+        let _ = std::fs::remove_file(path);
+    }
 }

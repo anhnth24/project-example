@@ -1,51 +1,77 @@
 # Lộ trình dự án
 
-> Trạng thái tính đến 2026-07-09. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
+> Trạng thái tính đến 2026-07-11. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
 > và điểm yếu đã biết trong các `REPORT*.md`.
 
 ## Đã hoàn thành ✅
 
-- **Lõi convert** (`fileconv-core`): pdf/docx/pptx/xlsx/csv/html + ảnh OCR + audio → Markdown.
+- **Lõi convert** (`fileconv-core`): pdf/docx/pptx/xlsx/csv/html/text + ảnh OCR + audio → Markdown.
 - **PDF 3-tier**: pdf-inspector (cấu trúc, đa cột, cờ `needs_ocr`) → pdfium-render → pdf-extract fallback.
+- **PDFium thread-safety lock**: serialized `PDFIUM_CALL` để tránh UB concurrent PDF conversion.
 - **Tiền xử lý ảnh OCR**: grayscale → upscale → unsharpen → normalize (in OCR 98.5→99.5%, low-res 81→99%).
 - **NFC bắt buộc** trên mọi output (sửa tài liệu NFD từ macOS/PDF cũ).
-- **Decode TCVN3** (bảng mã VN cũ) trong đường CSV/text.
+- **Decode TCVN3/VNI-Windows/VPS** với map VietUnicode trong CSV/text.
 - **RAG chunking** theo heading-path (`chunk.rs`).
 - **CLI bench**: `one` / `speed` / `accuracy` / `audio` với CER/WER Levenshtein.
 - **MCP server** (`fileconv-mcp`): 8 tool (4 deterministic + 4 LLM, gồm `ocr_hard` vision).
 - **Desktop app "Markhand"** (Tauri 2 + React): kéo-thả, soạn thảo, xem trước nguồn, cài đặt OCR/audio.
+- **Auto-update via GitHub Releases**: v0.1.0 + minisign signatures, check on init, install từ Settings.
+- **CI desktop installers**: Linux/Windows/macOS matrix trên master push + tags `markhand-vX.Y.Z`, version-check từ tauri.conf.json.
+- **Windows console flash fix**: `proc::background_command()` set CREATE_NO_WINDOW khi spawn tesseract/LLM CLI.
 - **Nghiên cứu đối thủ** (11 công cụ) — định vị ngách offline-VN.
 - **Đo PhoWhisper**: 90.8% vs whisper-small 77.3% (+13.5 điểm) trên clip vi thật.
+- **Document Intelligence**: persistent SQLite FTS5 + local-vector hybrid Q&A có
+  citation/fallback, quality, versions/diff/merge, table/schema, PII/redaction,
+  watch rules, hard-OCR hook và Knowledge Pack.
+- **Handoff BA/PM**: sinh BRD/PRD, user stories, acceptance criteria, glossary,
+  test cases, traceability + Jira/GitHub/Confluence/Obsidian exports.
+- **Desktop LumiBase dark**: icon rail, đa tab, Library, Intelligence workspace,
+  modal nội bộ và queue background.
+- **Subscription bridge**: Cursor Agent và OpenAI Codex CLI dùng browser login,
+  ask/read-only sandbox, timeout và fallback; không đọc token.
+- **Neural embeddings tùy chọn**: Ollama/LM Studio/vLLM/OpenAI/Gemini, index
+  signature + dimension guard + persistent HNSW + exact/FTS fallback.
+- **Audio no-speech**: lọc theo xác suất segment và marker nhạc/im lặng; tự tìm
+  PhoWhisper đã tải về trước model chuẩn.
+- **Desktop release foundation**: identity `Markhand`, icon đa nền tảng,
+  CI/release matrix và `.deb` Linux đã build/kiểm tra metadata.
+- **PPTX preview**: parser OOXML Rust + SVG React cho text/ảnh/shape, navigation
+  bàn phím; chart/SmartArt có placeholder.
+- **Live watch folders**: notify recursive, debounce, chống loop DATA và tự đẩy
+  file mới vào queue frontend.
+- **Bảng merge/multiline**: XLSX/XLS/DOCX fallback HTML rowspan/colspan và render
+  qua sanitizer.
 
 ## Đang làm / Gần ✋
 
-- Tích hợp **PhoWhisper làm backend mặc định** cho audio vi (đã đo, chưa bật default).
-- Khắc phục **bất nhất TCVN3** giữa `tables.rs` (không decode) và `csv_conv.rs` (có decode).
 - Dọn **logic trùng** đếm slide PPTX (CLI shell `python3` vs `probe.rs` native).
 
 ## Backlog
 
 ### Độ chính xác tiếng Việt
-- [ ] **Phục hồi dấu IN HOA**: Tesseract mất dấu ở header viết hoa (hiện giảm nhẹ bằng `tessdata_best`).
-      Hướng: post-OCR phục hồi dấu + thử Vintern-1B.
-- [ ] **Tách cột trước OCR** cho bảng PDF đa cột (Tesseract đang đọc sai thứ tự cột).
-- [ ] **Decode VNI / VPS** đầy đủ (mới có TCVN3).
-- [ ] **Lọc ảo giác whisper** trên audio không lời bằng `no_speech_probability` (hiện whisper bịa text trên nhạc/nhạc piano).
+- [ ] **Phục hồi dấu IN HOA đầy đủ**: đã thêm retry PSM 6 khi output sparse/lỗi/
+      dính chuỗi IN HOA và chọn output theo quality score; phục hồi bằng VLM vẫn cần corpus thật.
+- [x] **Tách cột trước OCR** bằng vertical projection, OCR từng cột và score fallback.
+- [x] **Decode VNI / VPS** đầy đủ từ bảng tham chiếu VietUnicode.
+- [x] **Lọc ảo giác whisper** bằng `no_speech_probability` + marker nhạc/im lặng.
 
 ### OCR / Vision tier
-- [ ] **Vintern-1B** (VLM on-device) cho tài liệu khó thay/về bên cạnh `ocr_hard` cloud.
-- [ ] **PaddleOCR vi** với sắp xếp reading-order (đã có `bench/paddle_test.py` tư liệu, chưa tích hợp).
+- [x] **Local VLM/Vintern integration** qua endpoint vision OpenAI-compatible,
+      model do người dùng chọn; không bundle weight/license chưa rõ.
+- [x] **PaddleOCR vi** opt-in qua JSON bridge, column reading-order và Tesseract fallback.
 - [ ] **Chữ viết tay** — cần dữ liệu thật có nhãn (sample hiện là font-render, không phải viết tay thật; accuracy ~47.9% là giới hạn Tesseract).
 
 ### Output / cấu trúc
-- [ ] **Bảng → HTML** cho ô phức tạp (merge cell, multi-line) thay vì chỉ Markdown table.
-- [ ] **`ConversionResult.title`** — hiện khai báo `Option<String>` nhưng luôn `None`; chưa converter nào trả title.
+- [x] **Bảng → HTML** cho merge cell/multiline, sanitize khi preview.
+- [x] **`ConversionResult.title`** — lấy heading đầu, fallback tên file.
 
 ### Desktop / đóng gói
-- [ ] **Đóng gói distributable** (`.msi` / `.dmg` / `.deb` / AppImage) — Tauri bundler, chưa chạy.
-- [ ] **Dark mode** thực sự (hiện ép light; cần xử lý rò rỉ token trên Windows dark theme).
-- [ ] Đổi `prompt()`/`confirm()` native trong Sidebar thành modal tuỳ chỉnh (UX).
-- [ ] Thống nhất identity (`package.json` `fileconv-docs` vs productName `Markhand` vs identifier `com.anhnth24.fileconv-docs`).
+- [x] **CI release matrix Linux/Windows/macOS** — `.deb` Linux đã build thực tế; 
+      MSI/DMG artifact trong matrix nhưng cần signing/notarization thực.
+- [x] **Auto-update framework** — GitHub Releases endpoint, minisign signature, version check từ tauri.conf.json.
+- [x] **Dark mode** LumiBase.
+- [x] Đổi `prompt()`/`confirm()` native trong Sidebar thành modal tuỳ chỉnh.
+- [x] Thống nhất identity Markhand (`com.anhnth24.markhand`, binary `markhand`).
 
 ### Tích hợp / mở rộng
 - [ ] **Plugin system** (khoảng trống vs best-in-class).

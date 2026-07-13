@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <script src="ds-base.js"></script>
+  <style>
+    html, body { margin: 0; background: rgb(20, 19, 22); }
+    body { font-family: Inter, system-ui, -apple-system, sans-serif; }
+    a { color: rgb(149, 128, 255); }
+    a:hover { color: rgb(123, 97, 255); }
+    @keyframes mh-spin { to { transform: rotate(360deg); } }
+    @keyframes mh-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  </style>
+</helmet>
+
+<div data-screen-label="PA 1b — Workbench" style="width: 1440px; height: 900px; display: flex; gap: 12px; padding: 12px; box-sizing: border-box; overflow: hidden; position: relative; color: var(--color-text); font-family: var(--font-sans, Inter, sans-serif); background: var(--gradient-page); background-attachment: fixed">
+  <div style="position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(rgba(255,255,255,0.22) 1px, transparent 1px), radial-gradient(rgba(255,255,255,0.1) 1px, transparent 1px); background-size: 260px 260px, 140px 140px; background-position: 30px 40px, 90px 120px"></div>
+
+  <!-- ───────── Sidebar ───────── -->
+  <aside data-screen-label="Sidebar" style="position: relative; width: 276px; flex: none; display: flex; flex-direction: column; background: var(--color-surface-1); border-radius: var(--radius-md); box-shadow: var(--ring-glass)">
+
+    <div style="display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px">
+      <span style="display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 10px; background: var(--color-violet); color: #fff; font-weight: 800; font-size: 12px; letter-spacing: 0.02em; box-shadow: 0 0 24px rgba(123, 97, 255, 0.55)">A→M</span>
+      <span style="display: flex; flex-direction: column">
+        <span style="font-weight: 700; font-size: 15px; letter-spacing: -0.01em">Markhand</span>
+        <span style="font-size: 11px; color: var(--color-text-faint)">Tài liệu → Markdown</span>
+      </span>
+    </div>
+
+    <div style="margin: 0 12px 10px; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px 0 12px; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-text-faint); flex: none"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg>
+      <input value="{{ query }}" onChange="{{ onQuery }}" placeholder="Tìm file, thư mục…" style="flex: 1; min-width: 0; background: transparent; border: none; outline: none; color: var(--color-text); font-size: 13px; font-family: inherit">
+      <span style="flex: none; font-size: 10.5px; color: var(--color-text-faint); padding: 2px 6px; border-radius: 6px; box-shadow: var(--ring-glass)">⌘K</span>
+    </div>
+
+    <div style="padding: 4px 16px 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-faint)">Data</div>
+
+    <div style="flex: 1; overflow: auto; padding: 0 8px 10px">
+      <sc-for list="{{ rows }}" as="row" hint-placeholder-count="6">
+        <div onClick="{{ row.onClick }}" title="{{ row.relPath }}" style="display: flex; align-items: center; gap: 8px; height: 34px; margin: 1px 0; padding: 0 8px 0 {{ row.pad }}px; border-radius: 10px; cursor: pointer; font-size: 13px; color: {{ row.color }}; background: {{ row.bg }}; box-shadow: {{ row.ring }}" style-hover="background: rgba(255,255,255,0.06)">
+          <span style="width: 14px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--color-text-faint); transform: rotate({{ row.rot }}deg); transition: transform 140ms">
+            <sc-if value="{{ row.isDir }}" hint-placeholder-val="{{ false }}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+            </sc-if>
+          </span>
+          <span style="display: inline-flex; flex: none">{{ row.icon }}</span>
+          <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ row.name }}</span>
+          <sc-if value="{{ row.converting }}" hint-placeholder-val="{{ false }}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-violet); animation: mh-spin 0.9s linear infinite; flex: none"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+          </sc-if>
+          <sc-if value="{{ row.showDot }}" hint-placeholder-val="{{ false }}">
+            <span title="Chưa convert" style="width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--color-text-faint); flex: none"></span>
+          </sc-if>
+        </div>
+      </sc-for>
+      <sc-if value="{{ noResults }}" hint-placeholder-val="{{ false }}">
+        <div style="padding: 14px 10px; font-size: 12.5px; color: var(--color-text-faint)">Không có kết quả cho “{{ query }}”.</div>
+      </sc-if>
+    </div>
+
+    <div style="margin: 0 12px 8px; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: var(--radius-sm); background: var(--color-glass); box-shadow: var(--ring-glass)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-violet-soft); flex: none"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>
+      <span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+        <span style="font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-faint)">Thư mục dữ liệu</span>
+        <span style="font-size: 11.5px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left">C:\Users\lan.nguyen\Documents\DATA</span>
+      </span>
+      <button title="Đổi thư mục DATA" style="width: 26px; height: 26px; border: none; border-radius: 8px; background: transparent; color: var(--color-text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center" style-hover="background: var(--color-glass-hover); color: var(--color-text)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.98a2 2 0 0 1 1.69.9l.66 1.2A2 2 0 0 0 12 6h8a2 2 0 0 1 2 2v3.3"></path><circle cx="18" cy="18" r="3"></circle></svg>
+      </button>
+    </div>
+
+    <div style="display: flex; gap: 8px; padding: 0 12px 12px">
+      <button onClick="{{ upload }}" style="flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; border: none; border-radius: var(--radius-pill); background: var(--color-violet); color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 0 28px rgba(123, 97, 255, 0.35)" style-hover="background: rgb(140, 116, 255)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m17 8-5-5-5 5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path></svg>
+        Tải file
+      </button>
+      <button title="Cài đặt convert" onClick="{{ openSettings }}" style="width: 36px; height: 36px; flex: none; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center" style-hover="background: var(--color-glass-hover); color: var(--color-text)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ───────── Main ───────── -->
+  <main style="position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+
+    <!-- Tab strip (đa tab) -->
+    <div data-screen-label="Thanh tab" style="display: flex; align-items: center; gap: 6px; flex: none">
+      <sc-for list="{{ tabs }}" as="tab" hint-placeholder-count="2">
+        <div onClick="{{ tab.onClick }}" style="display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px 0 12px; border-radius: var(--radius-pill); cursor: pointer; font-size: 12.5px; max-width: 240px; color: {{ tab.color }}; background: {{ tab.bg }}; box-shadow: {{ tab.ring }}" style-hover="background: var(--color-glass-hover)">
+          <span style="display: inline-flex; flex: none">{{ tab.icon }}</span>
+          <span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ tab.name }}</span>
+          <sc-if value="{{ tab.dirty }}" hint-placeholder-val="{{ false }}">
+            <span title="Chưa lưu" style="width: 6px; height: 6px; border-radius: 50%; background: var(--color-violet-soft); flex: none"></span>
+          </sc-if>
+          <button title="Đóng tab" onClick="{{ tab.onClose }}" style="width: 20px; height: 20px; flex: none; border: none; border-radius: 50%; background: transparent; color: var(--color-text-faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center" style-hover="background: rgba(255,255,255,0.12); color: var(--color-text)">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+      </sc-for>
+      <span style="font-size: 11.5px; color: var(--color-text-faint); margin-left: 4px">{{ tabHint }}</span>
+    </div>
+
+    <!-- Doc panel -->
+    <section data-screen-label="Tài liệu" style="flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--color-surface-1); border-radius: var(--radius-md); box-shadow: var(--ring-glass); overflow: hidden">
+
+      <header style="display: flex; align-items: center; gap: 14px; height: 56px; padding: 0 16px; border-bottom: 1px solid var(--color-border); flex: none">
+        <div style="display: flex; align-items: center; gap: 10px; min-width: 0; width: 340px">
+          <span style="display: inline-flex; flex: none">{{ docIcon }}</span>
+          <span style="display: flex; flex-direction: column; min-width: 0">
+            <span style="font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ docName }}</span>
+            <span style="font-size: 11px; color: var(--color-text-faint)">{{ docMeta }}</span>
+          </span>
+        </div>
+
+        <div style="margin: 0 auto; display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass)">
+          <button onClick="{{ setModeSplit }}" style="display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 14px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: {{ tabSplitColor }}; background: {{ tabSplitBg }}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M12 3v18"></path></svg>
+            Song song
+          </button>
+          <button onClick="{{ setModeMd }}" style="display: inline-flex; align-items: center; height: 28px; padding: 0 14px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: {{ tabMdColor }}; background: {{ tabMdBg }}">Markdown</button>
+          <button onClick="{{ setModeSource }}" style="display: inline-flex; align-items: center; height: 28px; padding: 0 14px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: {{ tabSourceColor }}; background: {{ tabSourceBg }}">File gốc</button>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px; flex: none">
+          <span style="font-size: 11.5px; color: var(--color-text-faint); white-space: nowrap">{{ charCount }} ký tự</span>
+          <button onClick="{{ copyMd }}" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer" style-hover="background: var(--color-glass-hover); color: var(--color-text)">{{ copyLabel }}</button>
+          <button onClick="{{ reconvert }}" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer" style-hover="background: var(--color-glass-hover); color: var(--color-text)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
+            Convert lại
+          </button>
+          <button onClick="{{ save }}" disabled="{{ saveDisabled }}" style="display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 15px; border: none; border-radius: var(--radius-pill); background: var(--color-violet); color: #fff; font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; opacity: {{ saveOpacity }}; box-shadow: 0 0 20px rgba(123, 97, 255, 0.35)" style-hover="background: rgb(140, 116, 255)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"></path><path d="M7 3v4a1 1 0 0 0 1 1h7"></path></svg>
+            {{ saveLabel }}
+          </button>
+        </div>
+      </header>
+
+      <div style="flex: 1; min-height: 0; display: flex">
+        <sc-if value="{{ showSourcePane }}" hint-placeholder-val="{{ true }}">
+          <div style="width: {{ sourceW }}; min-width: 0; display: flex; flex-direction: column; background: var(--color-surface-sunken); border-right: 1px solid var(--color-border)">
+            <div style="flex: 1; overflow: auto; padding: 20px">{{ sourcePreview }}</div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ showMdPane }}" hint-placeholder-val="{{ true }}">
+          <div style="width: {{ mdW }}; min-width: 0; display: flex; flex-direction: column">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; flex: none">
+              <div style="display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass)">
+                <button onClick="{{ setMdTabEdit }}" style="height: 24px; padding: 0 12px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 11.5px; font-weight: 500; cursor: pointer; color: {{ mdEditColor }}; background: {{ mdEditBg }}">Soạn</button>
+                <button onClick="{{ setMdTabPreview }}" style="height: 24px; padding: 0 12px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 11.5px; font-weight: 500; cursor: pointer; color: {{ mdPreviewColor }}; background: {{ mdPreviewBg }}">Xem trước</button>
+              </div>
+              <span style="font-size: 11px; color: var(--color-text-faint)">{{ savedNote }}</span>
+            </div>
+            <sc-if value="{{ showMdEdit }}" hint-placeholder-val="{{ false }}">
+              <textarea value="{{ md }}" onChange="{{ onMdInput }}" spellCheck="{{ false }}" style="flex: 1; min-height: 0; margin: 0 14px 14px; padding: 14px 16px; border: none; outline: none; resize: none; border-radius: var(--radius-sm); background: var(--color-surface-sunken); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.7; white-space: pre; overflow: auto"></textarea>
+            </sc-if>
+            <sc-if value="{{ showMdPreview }}" hint-placeholder-val="{{ true }}">
+              <div style="flex: 1; min-height: 0; overflow: auto; padding: 4px 28px 28px">{{ mdRendered }}</div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+    </section>
+
+    <!-- Convert queue -->
+    <sc-if value="{{ queueOpen }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Hàng đợi convert" style="position: absolute; right: 8px; bottom: 8px; width: 320px; background: var(--color-surface-2); border-radius: var(--radius-md); box-shadow: var(--ring-glass), var(--shadow-md); padding: 14px 16px; z-index: 20">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-violet-soft); animation: mh-spin 1.2s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg>
+          <span style="font-size: 12.5px; font-weight: 600">{{ queueTitle }}</span>
+          <button title="Ẩn hàng đợi" onClick="{{ hideQueue }}" style="margin-left: auto; width: 22px; height: 22px; border: none; border-radius: 6px; background: transparent; color: var(--color-text-faint); cursor: pointer; display: inline-flex; align-items: center; justify-content: center" style-hover="background: var(--color-glass-hover); color: var(--color-text)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+        <sc-for list="{{ queue }}" as="q" hint-placeholder-count="2">
+          <div style="margin-bottom: 10px">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 5px">
+              <span style="display: inline-flex; flex: none">{{ q.icon }}</span>
+              <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary)">{{ q.name }}</span>
+              <span style="font-size: 11px; color: {{ q.pctColor }}; flex: none">{{ q.pctLabel }}</span>
+            </div>
+            <div style="height: 4px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden">
+              <div style="height: 100%; width: {{ q.pct }}%; border-radius: 999px; background: {{ q.barColor }}; transition: width 400ms cubic-bezier(0.22, 1, 0.36, 1)"></div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+  </main>
+
+  <!-- Settings dialog -->
+  <sc-if value="{{ settingsOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeSettingsBackdrop }}" data-screen-label="Cài đặt convert" style="position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 40; border-radius: 0">
+      <div style="width: 480px; background: var(--color-surface-2); border-radius: var(--radius-lg); box-shadow: var(--ring-glass-strong), var(--shadow-lg); padding: 22px 24px">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px">
+          <span style="font-size: 16px; font-weight: 700">Cài đặt convert</span>
+          <button onClick="{{ closeSettings }}" style="width: 28px; height: 28px; border: none; border-radius: 8px; background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center" style-hover="background: var(--color-glass-hover)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 14px">
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--color-text-secondary)">
+            Ngôn ngữ OCR (ảnh / PDF scan)
+            <input value="vie+eng" style="height: 34px; border: none; outline: none; border-radius: var(--radius-sm); background: var(--color-surface-sunken); box-shadow: var(--ring-glass); color: var(--color-text); padding: 0 12px; font-size: 13px; font-family: inherit">
+          </label>
+          <div onClick="{{ togglePdfOcr }}" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; color: var(--color-text-secondary)">
+            <span style="width: 34px; height: 20px; border-radius: 999px; flex: none; position: relative; transition: background 140ms; background: {{ pdfOcrTrack }}; box-shadow: var(--ring-glass)">
+              <span style="position: absolute; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 140ms; left: {{ pdfOcrKnob }}px"></span>
+            </span>
+            OCR trang PDF dạng scan (ít/không có lớp text)
+          </div>
+          <div onClick="{{ togglePdfOcrImages }}" style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; color: var(--color-text-secondary)">
+            <span style="width: 34px; height: 20px; border-radius: 999px; flex: none; position: relative; transition: background 140ms; background: {{ pdfOcrImagesTrack }}; box-shadow: var(--ring-glass)">
+              <span style="position: absolute; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 140ms; left: {{ pdfOcrImagesKnob }}px"></span>
+            </span>
+            OCR thêm ảnh nhúng trong trang PDF có text (chậm hơn)
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 130px; gap: 12px">
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--color-text-secondary)">
+              Ngôn ngữ audio
+              <input value="vi" style="height: 34px; border: none; outline: none; border-radius: var(--radius-sm); background: var(--color-surface-sunken); box-shadow: var(--ring-glass); color: var(--color-text); padding: 0 12px; font-size: 13px; font-family: inherit">
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--color-text-secondary)">
+              Thread audio
+              <input value="4" type="number" style="height: 34px; border: none; outline: none; border-radius: var(--radius-sm); background: var(--color-surface-sunken); box-shadow: var(--ring-glass); color: var(--color-text); padding: 0 12px; font-size: 13px; font-family: inherit">
+            </label>
+          </div>
+          <label style="display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--color-text-secondary)">
+            Model whisper (.bin) — để trống nếu không dùng audio
+            <input placeholder="đường dẫn tới ggml-*.bin" style="height: 34px; border: none; outline: none; border-radius: var(--radius-sm); background: var(--color-surface-sunken); box-shadow: var(--ring-glass); color: var(--color-text); padding: 0 12px; font-size: 13px; font-family: inherit">
+          </label>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-border)">
+          <button onClick="{{ closeSettings }}" style="height: 34px; padding: 0 16px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer" style-hover="background: var(--color-glass-hover); color: var(--color-text)">Hủy</button>
+          <button onClick="{{ closeSettings }}" style="height: 34px; padding: 0 18px; border: none; border-radius: var(--radius-pill); background: var(--color-violet); color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 0 20px rgba(123, 97, 255, 0.35)" style-hover="background: rgb(140, 116, 255)">Lưu</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const mdReport = [
+      '# Báo cáo đối soát giao dịch — Tháng 6/2026',
+      '',
+      'Kỳ đối soát: 01/06/2026 – 30/06/2026. Đơn vị: Phòng Vận hành thanh toán.',
+      '',
+      '## 1. Tổng quan',
+      '',
+      '| Chỉ tiêu | Hệ thống | Đối tác | Chênh lệch |',
+      '| --- | --- | --- | --- |',
+      '| Số giao dịch | 12.480 | 12.478 | 2 |',
+      '| Tổng giá trị (VND) | 8.412.350.000 | 8.410.150.000 | 2.200.000 |',
+      '| Phí giao dịch | 41.220.000 | 41.220.000 | 0 |',
+      '',
+      '## 2. Giao dịch lệch',
+      '',
+      '- GD #TX-88231 (14/06): treo bên đối tác, đã có yêu cầu tra soát.',
+      '- GD #TX-90112 (22/06): hoàn tiền trùng, chờ đối tác xác nhận.',
+      '',
+      '## 3. Kiến nghị',
+      '',
+      '1. Chốt số liệu đối soát trước ngày 05/07.',
+      '2. Bổ sung cảnh báo tự động cho giao dịch treo quá 24h.',
+    ].join('\n');
+    this.state = {
+      tree: [
+        { name: '01 Nghiệp vụ thanh toán', relPath: 'f1', isDir: true, children: [
+          { name: 'bao-cao-doi-soat.pdf', relPath: 'f1/a', kind: 'pdf', meta: 'PDF · 2 trang · convert 09:12', children: [] },
+          { name: 'quy-trinh-thanh-toan.docx', relPath: 'f1/b', kind: 'docx', meta: 'Word · convert 09:12', children: [] },
+          { name: 'doi-tac-cong-thanh-toan.xlsx', relPath: 'f1/c', kind: 'xlsx', meta: 'Excel · 2 sheet · convert 08:55', children: [] },
+        ] },
+        { name: '02 Yêu cầu khách hàng', relPath: 'f2', isDir: true, children: [
+          { name: 'ghi-am-hop-19-06.mp3', relPath: 'f2/a', kind: 'audio', unconverted: true, meta: 'Audio · 38:12 · chưa convert', children: [] },
+          { name: 'man-hinh-hien-tai.png', relPath: 'f2/b', kind: 'image', meta: 'Ảnh · OCR vie+eng', children: [] },
+        ] },
+        { name: 'Ghi chú bàn giao.md', relPath: 'm1', kind: 'markdown', meta: 'Markdown', children: [] },
+      ],
+      open: { f1: true, f2: true },
+      query: '',
+      tabs: ['f1/a', 'f1/b'],
+      active: 'f1/a',
+      mdByRel: {
+        'f1/a': mdReport,
+        'f1/b': '# Quy trình thanh toán\n\nTài liệu mô tả quy trình xử lý giao dịch thanh toán từ khi khởi tạo đến khi đối soát.\n\n## Các bước\n\n1. Khách hàng khởi tạo giao dịch.\n2. Hệ thống kiểm tra hạn mức và số dư.\n3. Gửi lệnh sang cổng thanh toán.\n4. Nhận webhook kết quả và cập nhật trạng thái.',
+        'f1/c': '# Đối tác cổng thanh toán\n\n| Đối tác | Loại | Phí | Trạng thái |\n| --- | --- | --- | --- |\n| NapasPay | Chuyển khoản | 0,3% | Đang chạy |\n| VExpress | Ví điện tử | 0,5% | Đang chạy |\n| GlobalGate | Thẻ quốc tế | 1,8% | Tạm dừng |',
+        'f2/b': '# man-hinh-hien-tai.png\n\nẢnh chụp màn hình nghiệp vụ hiện tại của khách hàng (OCR vie+eng).\n\n- Màn hình danh sách giao dịch, bộ lọc theo ngày.\n- Nút "Xuất Excel" ở góc phải.',
+        m1: '# Ghi chú bàn giao cho Dev\n\n- Toàn bộ tài liệu nghiệp vụ nằm trong `01 Nghiệp vụ thanh toán`.\n- File markdown là bản chuẩn để đưa vào repo; file gốc chỉ để đối chiếu.',
+      },
+      mode: 'split',
+      mdTab: 'preview',
+      dirtyByRel: {},
+      savedAt: null,
+      copied: false,
+      settingsOpen: false,
+      pdfOcr: true,
+      pdfOcrImages: false,
+      queueOpen: true,
+      queue: [
+        { rel: 'f2/a', name: 'ghi-am-hop-19-06.mp3', kind: 'audio', pct: 34 },
+        { rel: 'up1', name: 'bien-ban-hop-quy-2.docx', kind: 'docx', pct: 78 },
+      ],
+    };
+  }
+
+  componentDidMount() {
+    this._qt = setInterval(() => {
+      this.setState((s) => {
+        if (!s.queue.length) return null;
+        const queue = s.queue.map((q) => ({ ...q, pct: Math.min(100, q.pct + 3 + Math.random() * 6) }));
+        return { queue };
+      });
+    }, 700);
+  }
+
+  componentWillUnmount() { clearInterval(this._qt); }
+
+  icon(kind, size) {
+    const colors = { pdf: 'var(--color-red)', docx: 'var(--color-blue)', xlsx: 'var(--color-green)', csv: 'var(--color-green)', audio: 'var(--color-violet-soft)', image: 'var(--color-blue)', markdown: 'var(--color-text-muted)', pptx: 'var(--color-violet)' };
+    const base = ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5'];
+    const P = {
+      pdf: ['M12 22h6a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v6', 'M14 2v5a1 1 0 0 0 1 1h5', 'M3 16v-1.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5V16', 'M6 22h2', 'M7 14v8'],
+      docx: base.concat(['M10 9H8', 'M16 13H8', 'M16 17H8']),
+      markdown: base.concat(['M10 9H8', 'M16 13H8', 'M16 17H8']),
+      xlsx: base.concat(['M8 13h2', 'M14 13h2', 'M8 17h2', 'M14 17h2']),
+      audio: ['M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343', 'M14 2v5a1 1 0 0 0 1 1h5', 'M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0'],
+    };
+    const kids = [];
+    if (kind === 'image') {
+      kids.push(React.createElement('path', { key: 'a', d: base[0] }), React.createElement('path', { key: 'b', d: base[1] }), React.createElement('circle', { key: 'c', cx: 10, cy: 12, r: 2 }), React.createElement('path', { key: 'd', d: 'm20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22' }));
+    } else {
+      (P[kind] || base).forEach((d, i) => kids.push(React.createElement('path', { key: i, d })));
+    }
+    return React.createElement('svg', { width: size || 15, height: size || 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', style: { color: colors[kind] || 'var(--color-text-faint)' } }, kids);
+  }
+
+  folderIcon(open) {
+    const d = open
+      ? 'm6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2'
+      : 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z';
+    return React.createElement('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', style: { color: 'var(--color-violet-soft)' } }, React.createElement('path', { d }));
+  }
+
+  find(rel, list) {
+    for (const n of list || this.state.tree) {
+      if (n.relPath === rel) return n;
+      const f = this.find(rel, n.children);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  // markdown renderer (dark theme)
+  inline(t, key) {
+    const parts = []; let rest = t, i = 0;
+    const re = /(\*\*[^*]+\*\*|`[^`]+`)/;
+    while (rest) {
+      const m = rest.match(re);
+      if (!m) { parts.push(rest); break; }
+      if (m.index > 0) parts.push(rest.slice(0, m.index));
+      const tok = m[0];
+      if (tok.startsWith('**')) parts.push(React.createElement('strong', { key: key + '-' + i, style: { color: '#fff' } }, tok.slice(2, -2)));
+      else parts.push(React.createElement('code', { key: key + '-' + i, style: { background: 'rgba(255,255,255,0.08)', padding: '1px 6px', borderRadius: 5, fontSize: '0.88em', fontFamily: 'ui-monospace, Menlo, monospace' } }, tok.slice(1, -1)));
+      rest = rest.slice(m.index + tok.length); i++;
+    }
+    return parts;
+  }
+
+  renderMarkdown(md) {
+    const h = React.createElement;
+    const out = []; const lines = md.split('\n'); let i = 0, k = 0;
+    const thS = { border: '1px solid rgba(255,255,255,0.12)', padding: '7px 12px', textAlign: 'left', background: 'rgba(255,255,255,0.06)', fontWeight: 600, color: '#fff' };
+    const tdS = { border: '1px solid rgba(255,255,255,0.12)', padding: '7px 12px', textAlign: 'left' };
+    while (i < lines.length) {
+      const L = lines[i];
+      if (!L.trim()) { i++; continue; }
+      if (L.startsWith('# ')) { out.push(h('h1', { key: k++, style: { fontSize: 21, fontWeight: 700, color: '#fff', letterSpacing: '-0.01em', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.3em', marginTop: '1em' } }, this.inline(L.slice(2), k))); i++; continue; }
+      if (L.startsWith('## ')) { out.push(h('h2', { key: k++, style: { fontSize: 16.5, fontWeight: 600, color: '#fff', marginTop: '1.2em' } }, this.inline(L.slice(3), k))); i++; continue; }
+      if (L.startsWith('|')) {
+        const rows = [];
+        while (i < lines.length && lines[i].startsWith('|')) { rows.push(lines[i]); i++; }
+        const cells = (r) => r.split('|').slice(1, -1).map((c) => c.trim());
+        const head = cells(rows[0]); const body = rows.slice(2).map(cells);
+        out.push(h('table', { key: k++, style: { borderCollapse: 'collapse', margin: '12px 0', fontSize: 13 } },
+          h('thead', { key: 'h' }, h('tr', null, head.map((c, j) => h('th', { key: j, style: thS }, c)))),
+          h('tbody', { key: 'b' }, body.map((r, ri) => h('tr', { key: ri }, r.map((c, j) => h('td', { key: j, style: tdS }, c)))))));
+        continue;
+      }
+      if (/^[-*] /.test(L)) {
+        const items = [];
+        while (i < lines.length && /^[-*] /.test(lines[i])) { items.push(lines[i].slice(2)); i++; }
+        out.push(h('ul', { key: k++, style: { paddingLeft: 22, margin: '8px 0' } }, items.map((t, j) => h('li', { key: j, style: { margin: '4px 0' } }, this.inline(t, k + '-' + j)))));
+        continue;
+      }
+      if (/^\d+\. /.test(L)) {
+        const items = [];
+        while (i < lines.length && /^\d+\. /.test(lines[i])) { items.push(lines[i].replace(/^\d+\. /, '')); i++; }
+        out.push(h('ol', { key: k++, style: { paddingLeft: 22, margin: '8px 0' } }, items.map((t, j) => h('li', { key: j, style: { margin: '4px 0' } }, this.inline(t, k + '-' + j)))));
+        continue;
+      }
+      out.push(h('p', { key: k++, style: { margin: '8px 0' } }, this.inline(L, k)));
+      i++;
+    }
+    return h('div', { style: { maxWidth: 720, fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' } }, out);
+  }
+
+  sourcePreviewFor(node) {
+    const h = React.createElement;
+    if (!node) return null;
+    if (node.kind === 'pdf') {
+      const t = (txt, st) => h('div', { style: Object.assign({ fontSize: 11.5, lineHeight: 1.65 }, st) }, txt);
+      const row = (cells, bold) => h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1.2fr 1.2fr 1fr', borderBottom: '1px solid #d8dbe2', fontSize: 10.5, fontWeight: bold ? 700 : 400 } }, cells.map((c, i) => h('div', { key: i, style: { padding: '4px 6px', textAlign: i === 0 ? 'left' : 'right' } }, c)));
+      const page = (n, kids) => h('div', { key: n, style: { width: '100%', maxWidth: 560, margin: '0 auto 18px', aspectRatio: '210/297', padding: '44px 48px', boxSizing: 'border-box', background: '#fff', borderRadius: 6, boxShadow: 'var(--shadow-md)', fontFamily: "Georgia, 'Times New Roman', serif", color: '#1c1e24', overflow: 'hidden' } }, kids);
+      return h('div', null, [
+        page(1, [
+          t('NGÂN HÀNG TMCP PHƯƠNG NAM', { fontSize: 9.5, letterSpacing: '0.08em', color: '#5a5f6b' }),
+          t('BÁO CÁO ĐỐI SOÁT GIAO DỊCH', { fontSize: 17, fontWeight: 700, margin: '16px 0 4px' }),
+          t('Tháng 6/2026 — Phòng Vận hành thanh toán', { color: '#5a5f6b', marginBottom: 18 }),
+          t('Kỳ đối soát từ ngày 01/06/2026 đến ngày 30/06/2026, đối chiếu dữ liệu giữa hệ thống ngân hàng và các cổng thanh toán đối tác.', { marginBottom: 14 }),
+          t('1. Tổng quan', { fontWeight: 700, fontSize: 12.5, margin: '8px 0 6px' }),
+          h('div', { key: 'tb', style: { border: '1px solid #d8dbe2', marginBottom: 14 } }, [
+            row(['Chỉ tiêu', 'Hệ thống', 'Đối tác', 'Chênh lệch'], true),
+            row(['Số giao dịch', '12.480', '12.478', '2']),
+            row(['Tổng giá trị (VND)', '8.412.350.000', '8.410.150.000', '2.200.000']),
+            row(['Phí giao dịch', '41.220.000', '41.220.000', '0']),
+          ]),
+          t('2. Giao dịch lệch', { fontWeight: 700, fontSize: 12.5, margin: '8px 0 6px' }),
+          t('• GD #TX-88231 (14/06): treo bên đối tác, đã có yêu cầu tra soát.'),
+          t('• GD #TX-90112 (22/06): hoàn tiền trùng, chờ đối tác xác nhận.'),
+        ]),
+        page(2, [
+          t('3. Kiến nghị', { fontWeight: 700, fontSize: 12.5, margin: '4px 0 6px' }),
+          t('1. Chốt số liệu đối soát trước ngày 05/07.'),
+          t('2. Bổ sung cảnh báo tự động cho giao dịch treo quá 24h.'),
+          t('Người lập báo cáo', { fontSize: 10.5, color: '#5a5f6b', marginTop: 56 }),
+          t('Nguyễn Thị Lan', { fontWeight: 700 }),
+        ]),
+      ]);
+    }
+    if (node.kind === 'docx') {
+      const t = (txt, st) => h('div', { style: Object.assign({ fontSize: 12.5, lineHeight: 1.7, color: '#111827' }, st) }, txt);
+      return h('div', { style: { maxWidth: 560, margin: '0 auto', background: '#fff', borderRadius: 6, boxShadow: 'var(--shadow-md)', padding: '36px 42px', fontFamily: "'Calibri', 'Segoe UI', sans-serif" } }, [
+        t('QUY TRÌNH THANH TOÁN', { fontSize: 16, fontWeight: 700, color: '#1f4e79', marginBottom: 10 }),
+        t('Tài liệu mô tả quy trình xử lý giao dịch thanh toán từ khi khởi tạo đến khi đối soát.', { marginBottom: 10 }),
+        t('Các bước', { fontSize: 13.5, fontWeight: 700, color: '#1f4e79', margin: '8px 0 4px' }),
+        t('1. Khách hàng khởi tạo giao dịch.'),
+        t('2. Hệ thống kiểm tra hạn mức và số dư.'),
+        t('3. Gửi lệnh sang cổng thanh toán.'),
+        t('4. Nhận webhook kết quả và cập nhật trạng thái.'),
+      ]);
+    }
+    if (node.kind === 'xlsx') {
+      const rows = [['Đối tác', 'Loại', 'Phí', 'Trạng thái'], ['NapasPay', 'Chuyển khoản', '0,3%', 'Đang chạy'], ['VExpress', 'Ví điện tử', '0,5%', 'Đang chạy'], ['GlobalGate', 'Thẻ quốc tế', '1,8%', 'Tạm dừng']];
+      return h('div', { style: { maxWidth: 560, margin: '0 auto', background: '#fff', borderRadius: 6, boxShadow: 'var(--shadow-md)', padding: 20 } },
+        h('table', { style: { borderCollapse: 'collapse', fontSize: 12, color: '#0f172a', width: '100%' } }, h('tbody', null,
+          rows.map((r, ri) => h('tr', { key: ri }, r.map((c, ci) => h('td', { key: ci, style: { border: '1px solid #cbd5e1', padding: '5px 9px', background: ri === 0 ? '#f1f5f9' : '#fff', fontWeight: ri === 0 ? 600 : 400 } }, c)))))));
+    }
+    if (node.kind === 'image') {
+      return h('div', { style: { maxWidth: 520, margin: '0 auto', aspectRatio: '4/3', borderRadius: 8, boxShadow: 'var(--shadow-md)', background: 'repeating-conic-gradient(#3a393e 0% 25%, #2c2b30 0% 50%) 50% / 24px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-muted)', fontSize: 12.5 } }, 'man-hinh-hien-tai.png · 1440×1080');
+    }
+    if (node.kind === 'audio') {
+      return h('div', { style: { maxWidth: 520, margin: '40px auto', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: 12.5 } }, [
+        h('audio', { key: 'a', controls: true, style: { width: '100%' } }),
+        h('div', { key: 'n', style: { marginTop: 10 } }, 'ghi-am-hop-19-06.mp3 · 38:12 · 34,8 MB'),
+      ]);
+    }
+    return h('div', { style: { padding: 40, textAlign: 'center', color: 'var(--color-text-faint)', fontSize: 13 } }, 'Không xem trước được định dạng này trong app.');
+  }
+
+  renderVals() {
+    const s = this.state;
+    const sel = this.find(s.active);
+    const md = sel ? (s.mdByRel[sel.relPath] || '') : '';
+    const dirty = !!s.dirtyByRel[s.active];
+    const q = s.query.trim().toLowerCase();
+
+    // tree rows
+    const rows = [];
+    const walk = (nodes, depth) => {
+      for (const n of nodes) {
+        const match = !q || n.name.toLowerCase().includes(q);
+        const childMatch = q && n.isDir && JSON.stringify(n.children).toLowerCase().includes(q);
+        if (q && !match && !childMatch) continue;
+        const isSel = s.active === n.relPath;
+        const openNow = q ? true : !!s.open[n.relPath];
+        const inQueue = s.queue.some((x) => x.rel === n.relPath && x.pct < 100);
+        rows.push({
+          key: n.relPath, relPath: n.relPath, name: n.name,
+          pad: 8 + depth * 14, isDir: !!n.isDir,
+          rot: n.isDir && openNow ? 90 : 0,
+          color: isSel ? '#fff' : 'var(--color-text-secondary)',
+          bg: isSel ? 'rgba(123, 97, 255, 0.18)' : 'transparent',
+          ring: isSel ? 'inset 0 0 0 1px rgba(123, 97, 255, 0.35)' : 'none',
+          icon: n.isDir ? this.folderIcon(openNow) : this.icon(n.kind),
+          converting: inQueue,
+          showDot: !n.isDir && !!n.unconverted && !inQueue,
+          onClick: () => {
+            if (n.isDir) this.setState((st) => ({ open: { ...st.open, [n.relPath]: !st.open[n.relPath] } }));
+            else this.setState((st) => ({ active: n.relPath, tabs: st.tabs.includes(n.relPath) ? st.tabs : st.tabs.concat(n.relPath) }));
+          },
+        });
+        if (n.isDir && openNow) walk(n.children, depth + 1);
+      }
+    };
+    walk(s.tree, 0);
+
+    const tabs = s.tabs.map((rel) => {
+      const n = this.find(rel);
+      const on = s.active === rel;
+      return {
+        key: rel, name: n ? n.name : rel,
+        icon: n ? this.icon(n.kind, 13) : null,
+        color: on ? '#fff' : 'var(--color-text-muted)',
+        bg: on ? 'var(--color-surface-3)' : 'var(--color-glass)',
+        ring: on ? 'var(--ring-glass-strong)' : 'var(--ring-glass)',
+        dirty: !!s.dirtyByRel[rel],
+        onClick: () => this.setState({ active: rel }),
+        onClose: (e) => {
+          e.stopPropagation();
+          this.setState((st) => {
+            const tabs2 = st.tabs.filter((t) => t !== rel);
+            return { tabs: tabs2, active: st.active === rel ? (tabs2[tabs2.length - 1] || null) : st.active };
+          });
+        },
+      };
+    });
+
+    const canSource = sel && sel.kind !== 'markdown';
+    const canMd = sel && (s.mdByRel[sel.relPath] !== undefined);
+    const effMode = !sel ? 'md' : (canSource && canMd ? s.mode : (canMd ? 'md' : 'source'));
+    const showSourcePane = !!sel && canSource && (effMode === 'split' || effMode === 'source');
+    const showMdPane = !!sel && canMd && (effMode === 'split' || effMode === 'md');
+
+    const seg = (on) => ({ color: on ? '#fff' : 'var(--color-text-muted)', bg: on ? 'var(--color-surface-4)' : 'transparent' });
+
+    return {
+      query: s.query,
+      onQuery: (e) => this.setState({ query: e.target.value }),
+      rows,
+      noResults: !!q && rows.length === 0,
+      upload: () => this.setState((st) => ({ queue: st.queue.concat({ rel: 'up' + Date.now(), name: 'tai-lieu-moi.pdf', kind: 'pdf', pct: 4 }), queueOpen: true })),
+      openSettings: () => this.setState({ settingsOpen: true }),
+
+      tabs,
+      tabHint: tabs.length ? '' : 'Chọn file trong cây để mở tab',
+      docIcon: sel ? this.icon(sel.kind, 17) : null,
+      docName: sel ? sel.name : 'Chưa mở tài liệu',
+      docMeta: sel ? (sel.meta || '') : '',
+      charCount: md.length.toLocaleString('vi-VN'),
+
+      tabSplitColor: seg(effMode === 'split').color, tabSplitBg: seg(effMode === 'split').bg,
+      tabMdColor: seg(effMode === 'md').color, tabMdBg: seg(effMode === 'md').bg,
+      tabSourceColor: seg(effMode === 'source').color, tabSourceBg: seg(effMode === 'source').bg,
+      setModeSplit: () => this.setState({ mode: 'split' }),
+      setModeMd: () => this.setState({ mode: 'md' }),
+      setModeSource: () => this.setState({ mode: 'source' }),
+
+      copyLabel: s.copied ? 'Đã copy ✓' : 'Copy MD',
+      copyMd: () => {
+        try { navigator.clipboard.writeText(md); } catch (e) {}
+        this.setState({ copied: true });
+        setTimeout(() => this.setState({ copied: false }), 1500);
+      },
+      reconvert: () => sel && this.setState((st) => ({ queue: st.queue.concat({ rel: sel.relPath, name: sel.name, kind: sel.kind, pct: 2 }), queueOpen: true })),
+      saveLabel: dirty ? 'Lưu' : (s.savedAt ? 'Đã lưu ' + s.savedAt : 'Lưu'),
+      saveDisabled: !dirty,
+      saveOpacity: dirty ? 1 : 0.45,
+      save: () => {
+        if (!dirty) return;
+        this.setState((st) => ({
+          dirtyByRel: { ...st.dirtyByRel, [st.active]: false },
+          savedAt: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        }));
+      },
+
+      showSourcePane, showMdPane,
+      sourceW: showMdPane ? '50%' : '100%',
+      mdW: showSourcePane ? '50%' : '100%',
+      sourcePreview: this.sourcePreviewFor(sel),
+
+      mdEditColor: seg(s.mdTab === 'edit').color, mdEditBg: seg(s.mdTab === 'edit').bg,
+      mdPreviewColor: seg(s.mdTab === 'preview').color, mdPreviewBg: seg(s.mdTab === 'preview').bg,
+      setMdTabEdit: () => this.setState({ mdTab: 'edit' }),
+      setMdTabPreview: () => this.setState({ mdTab: 'preview' }),
+      showMdEdit: s.mdTab === 'edit',
+      showMdPreview: s.mdTab === 'preview',
+      savedNote: dirty ? 'Chưa lưu — Ctrl+S' : (s.savedAt ? 'Đã lưu lúc ' + s.savedAt : ''),
+      md,
+      onMdInput: (e) => this.setState((st) => ({
+        mdByRel: { ...st.mdByRel, [st.active]: e.target.value },
+        dirtyByRel: { ...st.dirtyByRel, [st.active]: true },
+      })),
+      mdRendered: this.renderMarkdown(md),
+
+      queueOpen: s.queueOpen && s.queue.length > 0 && s.queue.some((x) => x.pct < 100),
+      hideQueue: () => this.setState({ queueOpen: false }),
+      queueTitle: 'Đang convert ' + s.queue.filter((x) => x.pct < 100).length + ' file',
+      queue: s.queue.map((x) => ({
+        key: x.rel,
+        name: x.name,
+        icon: this.icon(x.kind, 13),
+        pct: Math.round(x.pct),
+        pctLabel: x.pct >= 100 ? 'Xong ✓' : Math.round(x.pct) + '%',
+        pctColor: x.pct >= 100 ? 'var(--color-green)' : 'var(--color-text-faint)',
+        barColor: x.pct >= 100 ? 'var(--color-green)' : 'var(--color-violet)',
+      })),
+
+      settingsOpen: s.settingsOpen,
+      closeSettings: () => this.setState({ settingsOpen: false }),
+      closeSettingsBackdrop: (e) => { if (e.target === e.currentTarget) this.setState({ settingsOpen: false }); },
+      togglePdfOcr: () => this.setState({ pdfOcr: !s.pdfOcr }),
+      pdfOcrTrack: s.pdfOcr ? 'var(--color-violet)' : 'var(--color-glass)',
+      pdfOcrKnob: s.pdfOcr ? 16 : 2,
+      togglePdfOcrImages: () => this.setState({ pdfOcrImages: !s.pdfOcrImages }),
+      pdfOcrImagesTrack: s.pdfOcrImages ? 'var(--color-violet)' : 'var(--color-glass)',
+      pdfOcrImagesKnob: s.pdfOcrImages ? 16 : 2,
+    };
+  }
+}
+
+</script>
+</body>
+</html>

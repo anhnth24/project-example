@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <script src="ds-base.js"></script>
+  <style>
+    html, body { margin: 0; background: rgb(20, 19, 22); }
+    body { font-family: Inter, system-ui, -apple-system, sans-serif; }
+    a { color: rgb(149, 128, 255); }
+    a:hover { color: rgb(123, 97, 255); }
+    @keyframes mh-spin { to { transform: rotate(360deg); } }
+  </style>
+</helmet>
+
+<div data-screen-label="PA 1c — Thư viện" style="width: 1440px; height: 900px; position: relative; overflow: hidden; box-sizing: border-box; color: var(--color-text); font-family: var(--font-sans, Inter, sans-serif); background: var(--gradient-page)">
+  <div style="position: absolute; inset: 0; pointer-events: none; background-image: radial-gradient(rgba(255,255,255,0.22) 1px, transparent 1px), radial-gradient(rgba(255,255,255,0.1) 1px, transparent 1px); background-size: 260px 260px, 140px 140px; background-position: 30px 40px, 90px 120px"></div>
+
+  <!-- ───────── Pill nav ───────── -->
+  <div data-screen-label="Thanh điều hướng" style="position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 1180px; height: 60px; display: flex; align-items: center; gap: 14px; padding: 0 14px; border-radius: var(--radius-pill); background: rgba(29, 28, 32, 0.72); backdrop-filter: blur(12px); box-shadow: var(--ring-glass), var(--shadow-md); z-index: 30">
+    <span style="display: inline-flex; align-items: center; gap: 10px; flex: none">
+      <span style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: var(--color-violet); color: #fff; font-weight: 800; font-size: 11px; box-shadow: 0 0 24px rgba(123, 97, 255, 0.55)">A→M</span>
+      <span style="font-weight: 700; font-size: 14.5px">Markhand</span>
+    </span>
+
+    <button onClick="{{ openPalette }}" style="flex: 1; max-width: 460px; margin: 0 auto; display: flex; align-items: center; gap: 9px; height: 38px; padding: 0 8px 0 14px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-faint); font-family: inherit; font-size: 13px; cursor: pointer; text-align: left" style-hover="background: var(--color-glass-hover)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex: none"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg>
+      <span style="flex: 1">Tìm tài liệu, thư mục, lệnh…</span>
+      <span style="flex: none; font-size: 10.5px; padding: 3px 7px; border-radius: 7px; box-shadow: var(--ring-glass)">⌘K</span>
+    </button>
+
+    <span style="display: inline-flex; align-items: center; gap: 8px; flex: none">
+      <button onClick="{{ upload }}" style="display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 18px; border: none; border-radius: var(--radius-pill); background: var(--color-violet); color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 0 28px rgba(123, 97, 255, 0.4)" style-hover="background: rgb(140, 116, 255)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><path d="m17 8-5-5-5 5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path></svg>
+        Tải file
+      </button>
+      <button title="Cài đặt convert" style="width: 38px; height: 38px; border: none; border-radius: 50%; background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center" style-hover="background: var(--color-glass-hover); color: var(--color-text)">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      </button>
+    </span>
+  </div>
+
+  <!-- ───────── Library ───────── -->
+  <div data-screen-label="Thư viện tài liệu" style="position: absolute; inset: 104px 0 0; overflow: auto; padding: 8px 130px 120px">
+
+    <div style="display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px">
+      <span style="font-size: 26px; font-weight: 700; letter-spacing: -0.01em">{{ headTitle }}</span>
+      <span style="font-size: 12.5px; color: var(--color-text-faint)">{{ headMeta }}</span>
+    </div>
+    <div style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 22px">Mỗi file gốc gắn 1-1 với một bản Markdown — chọn nhiều file để convert hàng loạt.</div>
+
+    <div style="display: flex; gap: 8px; margin-bottom: 24px">
+      <sc-for list="{{ chips }}" as="chip" hint-placeholder-count="3">
+        <button onClick="{{ chip.onClick }}" style="display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 15px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: {{ chip.color }}; background: {{ chip.bg }}; box-shadow: {{ chip.ring }}" style-hover="background: var(--color-glass-hover)">
+          {{ chip.label }}
+          <span style="font-size: 10.5px; color: var(--color-text-faint)">{{ chip.count }}</span>
+        </button>
+      </sc-for>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px">
+      <sc-for list="{{ cards }}" as="card" hint-placeholder-count="6">
+        <div onClick="{{ card.onOpen }}" style="position: relative; display: flex; flex-direction: column; gap: 12px; padding: 18px; border-radius: var(--radius-lg); cursor: pointer; background: var(--color-surface-1); box-shadow: {{ card.ring }}; transition: box-shadow 140ms" style-hover="background: var(--color-surface-2)">
+          <button title="Chọn để convert hàng loạt" onClick="{{ card.onToggle }}" style="position: absolute; top: 12px; right: 12px; width: 22px; height: 22px; border: none; border-radius: 7px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; background: {{ card.checkBg }}; box-shadow: {{ card.checkRing }}; color: #fff">
+            <sc-if value="{{ card.checked }}" hint-placeholder-val="{{ false }}">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+            </sc-if>
+          </button>
+          <span style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 14px; background: {{ card.iconBg }}; box-shadow: var(--ring-glass)">{{ card.icon }}</span>
+          <span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">
+            <span style="font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ card.name }}</span>
+            <span style="font-size: 11.5px; color: var(--color-text-faint)">{{ card.meta }}</span>
+          </span>
+          <sc-if value="{{ card.showProgress }}" hint-placeholder-val="{{ false }}">
+            <span style="display: flex; align-items: center; gap: 8px">
+              <span style="flex: 1; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; display: block">
+                <span style="display: block; height: 100%; width: {{ card.pct }}%; border-radius: 999px; background: var(--color-violet); transition: width 400ms cubic-bezier(0.22, 1, 0.36, 1)"></span>
+              </span>
+              <span style="font-size: 10.5px; color: var(--color-text-faint); flex: none">{{ card.pct }}%</span>
+            </span>
+          </sc-if>
+          <sc-if value="{{ card.showStatus }}" hint-placeholder-val="{{ true }}">
+            <span style="display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: {{ card.statusColor }}">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: {{ card.statusDot }}; box-shadow: {{ card.statusGlow }}"></span>
+              {{ card.status }}
+            </span>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ───────── Selection bar ───────── -->
+  <sc-if value="{{ selBarVisible }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Thanh chọn hàng loạt" style="position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; height: 54px; padding: 0 10px 0 22px; border-radius: var(--radius-pill); background: rgba(36, 35, 37, 0.85); backdrop-filter: blur(12px); box-shadow: var(--ring-glass-strong), var(--shadow-lg); z-index: 30">
+      <span style="font-size: 13px; font-weight: 600">{{ selCount }} file đã chọn</span>
+      <span style="width: 1px; height: 22px; background: var(--color-border-strong)"></span>
+      <button onClick="{{ batchConvert }}" style="display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 18px; border: none; border-radius: var(--radius-pill); background: var(--color-violet); color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 0 24px rgba(123, 97, 255, 0.45)" style-hover="background: rgb(140, 116, 255)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
+        {{ batchLabel }}
+      </button>
+      <button onClick="{{ clearSel }}" style="height: 38px; padding: 0 14px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: inherit; font-size: 12.5px; cursor: pointer" style-hover="background: var(--color-glass-hover); color: var(--color-text)">Bỏ chọn</button>
+    </div>
+  </sc-if>
+
+  <!-- ───────── Command palette ───────── -->
+  <sc-if value="{{ paletteOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closePaletteBackdrop }}" data-screen-label="Tìm kiếm ⌘K" style="position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(4px); z-index: 50; display: flex; justify-content: center; padding-top: 120px">
+      <div style="width: 560px; height: fit-content; background: var(--color-surface-2); border-radius: var(--radius-lg); box-shadow: var(--ring-glass-strong), var(--shadow-lg); overflow: hidden">
+        <div style="display: flex; align-items: center; gap: 11px; padding: 16px 18px; border-bottom: 1px solid var(--color-border)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-text-faint); flex: none"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg>
+          <input value="{{ paletteQuery }}" onChange="{{ onPaletteQuery }}" placeholder="Tìm tài liệu, thư mục, lệnh…" autoFocus="{{ true }}" style="flex: 1; background: transparent; border: none; outline: none; color: var(--color-text); font-size: 14.5px; font-family: inherit">
+          <span style="flex: none; font-size: 10.5px; color: var(--color-text-faint); padding: 3px 7px; border-radius: 7px; box-shadow: var(--ring-glass)">Esc</span>
+        </div>
+        <div style="max-height: 380px; overflow: auto; padding: 8px">
+          <sc-for list="{{ paletteResults }}" as="r" hint-placeholder-count="4">
+            <sc-if value="{{ r.isHeader }}" hint-placeholder-val="{{ false }}">
+              <div style="padding: 10px 12px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-faint)">{{ r.label }}</div>
+            </sc-if>
+            <sc-if value="{{ r.isItem }}" hint-placeholder-val="{{ true }}">
+              <div onClick="{{ r.onClick }}" style="display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; color: var(--color-text-secondary)" style-hover="background: var(--color-glass-hover); color: #fff">
+                <span style="display: inline-flex; flex: none">{{ r.icon }}</span>
+                <span style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ r.label }}</span>
+                <span style="font-size: 11px; color: var(--color-text-faint); flex: none">{{ r.hint }}</span>
+              </div>
+            </sc-if>
+          </sc-for>
+          <sc-if value="{{ paletteEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding: 22px 12px; text-align: center; font-size: 12.5px; color: var(--color-text-faint)">Không có kết quả cho “{{ paletteQuery }}”.</div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ───────── Doc overlay (song song) ───────── -->
+  <sc-if value="{{ docOpen }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Xem tài liệu" style="position: absolute; inset: 0; z-index: 40; display: flex; flex-direction: column; background: var(--gradient-page)">
+      <div style="display: flex; align-items: center; gap: 14px; height: 64px; padding: 0 24px; flex: none">
+        <button onClick="{{ closeDoc }}" style="display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px 0 12px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer" style-hover="background: var(--color-glass-hover); color: var(--color-text)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(180deg)"><path d="m9 18 6-6-6-6"></path></svg>
+          Thư viện
+        </button>
+        <span style="display: inline-flex; align-items: center; gap: 10px; min-width: 0">
+          <span style="display: inline-flex; flex: none">{{ docIcon }}</span>
+          <span style="font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{ docName }}</span>
+          <span style="font-size: 11.5px; color: var(--color-text-faint); flex: none">{{ docMeta }}</span>
+        </span>
+        <div style="margin-left: auto; display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass)">
+          <button onClick="{{ setViewSplit }}" style="height: 28px; padding: 0 14px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: {{ viewSplitColor }}; background: {{ viewSplitBg }}">Song song</button>
+          <button onClick="{{ setViewMd }}" style="height: 28px; padding: 0 14px; border: none; border-radius: var(--radius-pill); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; color: {{ viewMdColor }}; background: {{ viewMdBg }}">Markdown</button>
+        </div>
+        <button onClick="{{ copyMd }}" style="height: 34px; padding: 0 15px; border: none; border-radius: var(--radius-pill); background: var(--color-glass); box-shadow: var(--ring-glass); color: var(--color-text-secondary); font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer" style-hover="background: var(--color-glass-hover); color: var(--color-text)">{{ copyLabel }}</button>
+      </div>
+      <div style="flex: 1; min-height: 0; display: flex; gap: 12px; padding: 0 12px 12px">
+        <sc-if value="{{ viewShowSource }}" hint-placeholder-val="{{ true }}">
+          <div style="flex: 1; min-width: 0; overflow: auto; padding: 20px; background: var(--color-surface-sunken); border-radius: var(--radius-md); box-shadow: var(--ring-glass)">{{ sourcePreview }}</div>
+        </sc-if>
+        <div style="flex: 1; min-width: 0; overflow: auto; padding: 8px 28px 28px; background: var(--color-surface-1); border-radius: var(--radius-md); box-shadow: var(--ring-glass)">{{ mdRendered }}</div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    const mdReport = [
+      '# Báo cáo đối soát giao dịch — Tháng 6/2026', '',
+      'Kỳ đối soát: 01/06/2026 – 30/06/2026. Đơn vị: Phòng Vận hành thanh toán.', '',
+      '## 1. Tổng quan', '',
+      '| Chỉ tiêu | Hệ thống | Đối tác | Chênh lệch |',
+      '| --- | --- | --- | --- |',
+      '| Số giao dịch | 12.480 | 12.478 | 2 |',
+      '| Tổng giá trị (VND) | 8.412.350.000 | 8.410.150.000 | 2.200.000 |', '',
+      '## 2. Giao dịch lệch', '',
+      '- GD #TX-88231 (14/06): treo bên đối tác, đã có yêu cầu tra soát.',
+      '- GD #TX-90112 (22/06): hoàn tiền trùng, chờ đối tác xác nhận.',
+    ].join('\n');
+    this.state = {
+      docs: [
+        { id: 'a1', folder: 'f1', name: 'bao-cao-doi-soat.pdf', kind: 'pdf', meta: 'PDF · 2 trang', status: 'done', md: mdReport },
+        { id: 'a2', folder: 'f1', name: 'quy-trinh-thanh-toan.docx', kind: 'docx', meta: 'Word · 6 trang', status: 'done', md: '# Quy trình thanh toán\n\nTài liệu mô tả quy trình xử lý giao dịch thanh toán.\n\n## Các bước\n\n1. Khách hàng khởi tạo giao dịch.\n2. Hệ thống kiểm tra hạn mức và số dư.\n3. Gửi lệnh sang cổng thanh toán.\n4. Nhận webhook kết quả và cập nhật trạng thái.' },
+        { id: 'a3', folder: 'f1', name: 'doi-tac-cong-thanh-toan.xlsx', kind: 'xlsx', meta: 'Excel · 2 sheet', status: 'done', md: '# Đối tác cổng thanh toán\n\n| Đối tác | Loại | Phí | Trạng thái |\n| --- | --- | --- | --- |\n| NapasPay | Chuyển khoản | 0,3% | Đang chạy |\n| VExpress | Ví điện tử | 0,5% | Đang chạy |\n| GlobalGate | Thẻ quốc tế | 1,8% | Tạm dừng |' },
+        { id: 'b1', folder: 'f2', name: 'ghi-am-hop-19-06.mp3', kind: 'audio', meta: 'Audio · 38:12', status: 'raw', md: '' },
+        { id: 'b2', folder: 'f2', name: 'man-hinh-hien-tai.png', kind: 'image', meta: 'Ảnh · 1440×1080', status: 'raw', md: '' },
+        { id: 'b3', folder: 'f2', name: 'yeu-cau-bo-sung.docx', kind: 'docx', meta: 'Word · 3 trang', status: 'raw', md: '' },
+        { id: 'c1', folder: 'f1', name: 'Ghi chú bàn giao.md', kind: 'markdown', meta: 'Markdown', status: 'md', md: '# Ghi chú bàn giao cho Dev\n\n- File markdown là bản chuẩn để đưa vào repo; file gốc chỉ để đối chiếu.\n- Liên hệ chị Lan (BA) khi số liệu không khớp.' },
+      ],
+      folders: [{ id: 'all', label: 'Tất cả' }, { id: 'f1', label: '01 Nghiệp vụ thanh toán' }, { id: 'f2', label: '02 Yêu cầu khách hàng' }],
+      folder: 'all',
+      selected: {},
+      progress: {},
+      paletteOpen: false,
+      paletteQuery: '',
+      docOpen: null,
+      view: 'split',
+      copied: false,
+    };
+  }
+
+  componentWillUnmount() { clearInterval(this._t); }
+
+  icon(kind, size) {
+    const colors = { pdf: 'var(--color-red)', docx: 'var(--color-blue)', xlsx: 'var(--color-green)', audio: 'var(--color-violet-soft)', image: 'var(--color-blue)', markdown: 'var(--color-text-muted)' };
+    const base = ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5'];
+    const P = {
+      pdf: ['M12 22h6a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v6', 'M14 2v5a1 1 0 0 0 1 1h5', 'M3 16v-1.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 .5.5V16', 'M6 22h2', 'M7 14v8'],
+      docx: base.concat(['M10 9H8', 'M16 13H8', 'M16 17H8']),
+      markdown: base.concat(['M10 9H8', 'M16 13H8', 'M16 17H8']),
+      xlsx: base.concat(['M8 13h2', 'M14 13h2', 'M8 17h2', 'M14 17h2']),
+      audio: ['M4 6.835V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-.343', 'M14 2v5a1 1 0 0 0 1 1h5', 'M2 19a2 2 0 0 1 4 0v1a2 2 0 0 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 0 1-4 0v-1a2 2 0 0 1 4 0'],
+    };
+    const kids = [];
+    if (kind === 'image') {
+      kids.push(React.createElement('path', { key: 'a', d: base[0] }), React.createElement('path', { key: 'b', d: base[1] }), React.createElement('circle', { key: 'c', cx: 10, cy: 12, r: 2 }), React.createElement('path', { key: 'd', d: 'm20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22' }));
+    } else {
+      (P[kind] || base).forEach((d, i) => kids.push(React.createElement('path', { key: i, d })));
+    }
+    return React.createElement('svg', { width: size || 20, height: size || 20, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', style: { color: colors[kind] || 'var(--color-text-faint)' } }, kids);
+  }
+
+  iconBg(kind) {
+    const m = { pdf: 'rgba(232, 86, 86, 0.14)', docx: 'rgba(24, 160, 251, 0.14)', xlsx: 'rgba(46, 196, 124, 0.14)', audio: 'rgba(149, 128, 255, 0.14)', image: 'rgba(24, 160, 251, 0.14)', markdown: 'rgba(255, 255, 255, 0.07)' };
+    return m[kind] || 'rgba(255,255,255,0.07)';
+  }
+
+  startBatch(ids) {
+    const progress = { ...this.state.progress };
+    ids.forEach((id) => { progress[id] = 2; });
+    this.setState({ progress, selected: {} });
+    clearInterval(this._t);
+    this._t = setInterval(() => {
+      this.setState((s) => {
+        const p = { ...s.progress };
+        let live = false;
+        const docs = s.docs.map((d) => {
+          if (p[d.id] === undefined) return d;
+          if (p[d.id] >= 100) return d;
+          p[d.id] = Math.min(100, p[d.id] + 4 + Math.random() * 8);
+          if (p[d.id] >= 100) {
+            return { ...d, status: 'done', md: d.md || ('# ' + d.name + '\n\nNội dung Markdown được convert từ file gốc.') };
+          }
+          live = true;
+          return d;
+        });
+        if (!live) clearInterval(this._t);
+        return { progress: p, docs };
+      });
+    }, 500);
+  }
+
+  inline(t, key) {
+    const parts = []; let rest = t, i = 0;
+    const re = /(\*\*[^*]+\*\*|`[^`]+`)/;
+    while (rest) {
+      const m = rest.match(re);
+      if (!m) { parts.push(rest); break; }
+      if (m.index > 0) parts.push(rest.slice(0, m.index));
+      const tok = m[0];
+      if (tok.startsWith('**')) parts.push(React.createElement('strong', { key: key + '-' + i, style: { color: '#fff' } }, tok.slice(2, -2)));
+      else parts.push(React.createElement('code', { key: key + '-' + i, style: { background: 'rgba(255,255,255,0.08)', padding: '1px 6px', borderRadius: 5, fontSize: '0.88em', fontFamily: 'ui-monospace, Menlo, monospace' } }, tok.slice(1, -1)));
+      rest = rest.slice(m.index + tok.length); i++;
+    }
+    return parts;
+  }
+
+  renderMarkdown(md) {
+    const h = React.createElement;
+    const out = []; const lines = (md || '').split('\n'); let i = 0, k = 0;
+    const thS = { border: '1px solid rgba(255,255,255,0.12)', padding: '7px 12px', textAlign: 'left', background: 'rgba(255,255,255,0.06)', fontWeight: 600, color: '#fff' };
+    const tdS = { border: '1px solid rgba(255,255,255,0.12)', padding: '7px 12px', textAlign: 'left' };
+    while (i < lines.length) {
+      const L = lines[i];
+      if (!L.trim()) { i++; continue; }
+      if (L.startsWith('# ')) { out.push(h('h1', { key: k++, style: { fontSize: 21, fontWeight: 700, color: '#fff', letterSpacing: '-0.01em', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.3em', marginTop: '1em' } }, this.inline(L.slice(2), k))); i++; continue; }
+      if (L.startsWith('## ')) { out.push(h('h2', { key: k++, style: { fontSize: 16.5, fontWeight: 600, color: '#fff', marginTop: '1.2em' } }, this.inline(L.slice(3), k))); i++; continue; }
+      if (L.startsWith('|')) {
+        const rows = [];
+        while (i < lines.length && lines[i].startsWith('|')) { rows.push(lines[i]); i++; }
+        const cells = (r) => r.split('|').slice(1, -1).map((c) => c.trim());
+        const head = cells(rows[0]); const body = rows.slice(2).map(cells);
+        out.push(h('table', { key: k++, style: { borderCollapse: 'collapse', margin: '12px 0', fontSize: 13 } },
+          h('thead', { key: 'h' }, h('tr', null, head.map((c, j) => h('th', { key: j, style: thS }, c)))),
+          h('tbody', { key: 'b' }, body.map((r, ri) => h('tr', { key: ri }, r.map((c, j) => h('td', { key: j, style: tdS }, c)))))));
+        continue;
+      }
+      if (/^[-*] /.test(L)) {
+        const items = [];
+        while (i < lines.length && /^[-*] /.test(lines[i])) { items.push(lines[i].slice(2)); i++; }
+        out.push(h('ul', { key: k++, style: { paddingLeft: 22, margin: '8px 0' } }, items.map((t, j) => h('li', { key: j, style: { margin: '4px 0' } }, this.inline(t, k + '-' + j)))));
+        continue;
+      }
+      if (/^\d+\. /.test(L)) {
+        const items = [];
+        while (i < lines.length && /^\d+\. /.test(lines[i])) { items.push(lines[i].replace(/^\d+\. /, '')); i++; }
+        out.push(h('ol', { key: k++, style: { paddingLeft: 22, margin: '8px 0' } }, items.map((t, j) => h('li', { key: j, style: { margin: '4px 0' } }, this.inline(t, k + '-' + j)))));
+        continue;
+      }
+      out.push(h('p', { key: k++, style: { margin: '8px 0' } }, this.inline(L, k)));
+      i++;
+    }
+    return h('div', { style: { maxWidth: 720, fontSize: 13.5, lineHeight: 1.7, color: 'var(--color-text-secondary)' } }, out);
+  }
+
+  sourcePreviewFor(doc) {
+    const h = React.createElement;
+    if (!doc) return null;
+    if (doc.kind === 'pdf') {
+      const t = (txt, st) => h('div', { style: Object.assign({ fontSize: 11.5, lineHeight: 1.65 }, st) }, txt);
+      const row = (cells, bold) => h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1.2fr 1.2fr 1fr', borderBottom: '1px solid #d8dbe2', fontSize: 10.5, fontWeight: bold ? 700 : 400 } }, cells.map((c, i) => h('div', { key: i, style: { padding: '4px 6px', textAlign: i === 0 ? 'left' : 'right' } }, c)));
+      return h('div', { style: { width: '100%', maxWidth: 560, margin: '0 auto', aspectRatio: '210/297', padding: '44px 48px', boxSizing: 'border-box', background: '#fff', borderRadius: 6, boxShadow: 'var(--shadow-md)', fontFamily: "Georgia, 'Times New Roman', serif", color: '#1c1e24', overflow: 'hidden' } }, [
+        t('NGÂN HÀNG TMCP PHƯƠNG NAM', { fontSize: 9.5, letterSpacing: '0.08em', color: '#5a5f6b' }),
+        t('BÁO CÁO ĐỐI SOÁT GIAO DỊCH', { fontSize: 17, fontWeight: 700, margin: '16px 0 4px' }),
+        t('Tháng 6/2026 — Phòng Vận hành thanh toán', { color: '#5a5f6b', marginBottom: 18 }),
+        t('1. Tổng quan', { fontWeight: 700, fontSize: 12.5, margin: '8px 0 6px' }),
+        h('div', { key: 'tb', style: { border: '1px solid #d8dbe2', marginBottom: 14 } }, [
+          row(['Chỉ tiêu', 'Hệ thống', 'Đối tác', 'Chênh lệch'], true),
+          row(['Số giao dịch', '12.480', '12.478', '2']),
+          row(['Tổng giá trị (VND)', '8.412.350.000', '8.410.150.000', '2.200.000']),
+        ]),
+        t('2. Giao dịch lệch', { fontWeight: 700, fontSize: 12.5, margin: '8px 0 6px' }),
+        t('• GD #TX-88231 (14/06): treo bên đối tác, đã có yêu cầu tra soát.'),
+        t('• GD #TX-90112 (22/06): hoàn tiền trùng, chờ đối tác xác nhận.'),
+      ]);
+    }
+    if (doc.kind === 'docx') {
+      const t = (txt, st) => h('div', { style: Object.assign({ fontSize: 12.5, lineHeight: 1.7, color: '#111827' }, st) }, txt);
+      return h('div', { style: { maxWidth: 560, margin: '0 auto', background: '#fff', borderRadius: 6, boxShadow: 'var(--shadow-md)', padding: '36px 42px', fontFamily: "'Calibri', 'Segoe UI', sans-serif" } }, [
+        t('QUY TRÌNH THANH TOÁN', { fontSize: 16, fontWeight: 700, color: '#1f4e79', marginBottom: 10 }),
+        t('Tài liệu mô tả quy trình xử lý giao dịch thanh toán từ khi khởi tạo đến khi đối soát.', { marginBottom: 10 }),
+        t('1. Khách hàng khởi tạo giao dịch.'),
+        t('2. Hệ thống kiểm tra hạn mức và số dư.'),
+        t('3. Gửi lệnh sang cổng thanh toán.'),
+        t('4. Nhận webhook kết quả và cập nhật trạng thái.'),
+      ]);
+    }
+    if (doc.kind === 'xlsx') {
+      const rows = [['Đối tác', 'Loại', 'Phí', 'Trạng thái'], ['NapasPay', 'Chuyển khoản', '0,3%', 'Đang chạy'], ['VExpress', 'Ví điện tử', '0,5%', 'Đang chạy'], ['GlobalGate', 'Thẻ quốc tế', '1,8%', 'Tạm dừng']];
+      return h('div', { style: { maxWidth: 560, margin: '0 auto', background: '#fff', borderRadius: 6, boxShadow: 'var(--shadow-md)', padding: 20 } },
+        h('table', { style: { borderCollapse: 'collapse', fontSize: 12, color: '#0f172a', width: '100%' } }, h('tbody', null,
+          rows.map((r, ri) => h('tr', { key: ri }, r.map((c, ci) => h('td', { key: ci, style: { border: '1px solid #cbd5e1', padding: '5px 9px', background: ri === 0 ? '#f1f5f9' : '#fff', fontWeight: ri === 0 ? 600 : 400 } }, c)))))));
+    }
+    if (doc.kind === 'image') {
+      return h('div', { style: { maxWidth: 520, margin: '0 auto', aspectRatio: '4/3', borderRadius: 8, boxShadow: 'var(--shadow-md)', background: 'repeating-conic-gradient(#3a393e 0% 25%, #2c2b30 0% 50%) 50% / 24px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-muted)', fontSize: 12.5 } }, doc.name + ' · 1440×1080');
+    }
+    if (doc.kind === 'audio') {
+      return h('div', { style: { maxWidth: 520, margin: '40px auto', textAlign: 'center', color: 'var(--color-text-muted)', fontSize: 12.5 } }, [
+        h('audio', { key: 'a', controls: true, style: { width: '100%' } }),
+        h('div', { key: 'n', style: { marginTop: 10 } }, doc.name + ' · 38:12 · 34,8 MB'),
+      ]);
+    }
+    return null;
+  }
+
+  renderVals() {
+    const s = this.state;
+    const visible = s.docs.filter((d) => s.folder === 'all' || d.folder === s.folder);
+    const selIds = Object.keys(s.selected).filter((id) => s.selected[id]);
+    const openDoc = s.docOpen ? s.docs.find((d) => d.id === s.docOpen) : null;
+    const rawCount = s.docs.filter((d) => d.status === 'raw').length;
+
+    const cards = visible.map((d) => {
+      const checked = !!s.selected[d.id];
+      const converting = s.progress[d.id] !== undefined && s.progress[d.id] < 100;
+      const statusMap = {
+        done: { label: 'Đã convert', dot: 'var(--color-green)', color: 'var(--color-text-muted)', glow: '0 0 8px rgba(46,196,124,0.8)' },
+        raw: { label: 'Chưa convert', dot: 'transparent', color: 'var(--color-text-faint)', glow: 'inset 0 0 0 1.5px rgba(255,255,255,0.35)' },
+        md: { label: 'Markdown thuần', dot: 'var(--color-text-faint)', color: 'var(--color-text-faint)', glow: 'none' },
+      };
+      const st = statusMap[d.status] || statusMap.raw;
+      return {
+        key: d.id,
+        name: d.name,
+        meta: d.meta,
+        icon: this.icon(d.kind),
+        iconBg: this.iconBg(d.kind),
+        ring: checked ? 'inset 0 0 0 1.5px var(--color-violet), 0 0 24px rgba(123,97,255,0.2)' : 'var(--ring-glass)',
+        checked,
+        checkBg: checked ? 'var(--color-violet)' : 'var(--color-glass)',
+        checkRing: checked ? 'none' : 'var(--ring-glass-strong)',
+        showProgress: converting,
+        pct: Math.round(s.progress[d.id] || 0),
+        showStatus: !converting,
+        status: st.label,
+        statusDot: st.dot,
+        statusColor: st.color,
+        statusGlow: st.glow,
+        onToggle: (e) => {
+          e.stopPropagation();
+          this.setState((st2) => ({ selected: { ...st2.selected, [d.id]: !st2.selected[d.id] } }));
+        },
+        onOpen: () => {
+          if (d.status === 'raw') {
+            this.setState((st2) => ({ selected: { ...st2.selected, [d.id]: !st2.selected[d.id] } }));
+          } else {
+            this.setState({ docOpen: d.id, view: d.kind === 'markdown' ? 'md' : 'split' });
+          }
+        },
+      };
+    });
+
+    const chips = s.folders.map((f) => {
+      const on = s.folder === f.id;
+      const count = f.id === 'all' ? s.docs.length : s.docs.filter((d) => d.folder === f.id).length;
+      return {
+        key: f.id, label: f.label, count: String(count),
+        color: on ? '#fff' : 'var(--color-text-muted)',
+        bg: on ? 'var(--color-surface-4)' : 'var(--color-glass)',
+        ring: on ? 'var(--ring-glass-strong)' : 'var(--ring-glass)',
+        onClick: () => this.setState({ folder: f.id }),
+      };
+    });
+
+    const pq = s.paletteQuery.trim().toLowerCase();
+    const docHits = s.docs.filter((d) => !pq || d.name.toLowerCase().includes(pq));
+    const cmds = [
+      { label: 'Convert tất cả file chưa convert', hint: rawCount + ' file' },
+      { label: 'Tải file mới vào thư mục hiện tại', hint: '⌘U' },
+      { label: 'Mở cài đặt convert', hint: '' },
+    ].filter((c) => !pq || c.label.toLowerCase().includes(pq));
+    const paletteResults = [];
+    if (docHits.length) {
+      paletteResults.push({ key: 'hd', isHeader: true, isItem: false, label: 'Tài liệu' });
+      docHits.forEach((d) => paletteResults.push({
+        key: d.id, isHeader: false, isItem: true, label: d.name, hint: s.folders.find((f) => f.id === d.folder) ? s.folders.find((f) => f.id === d.folder).label : '',
+        icon: this.icon(d.kind, 15),
+        onClick: () => this.setState({ paletteOpen: false, docOpen: d.status === 'raw' ? null : d.id, view: 'split' }),
+      }));
+    }
+    if (cmds.length) {
+      paletteResults.push({ key: 'hc', isHeader: true, isItem: false, label: 'Lệnh' });
+      cmds.forEach((c, i) => paletteResults.push({
+        key: 'c' + i, isHeader: false, isItem: true, label: c.label, hint: c.hint,
+        icon: React.createElement('svg', { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', style: { color: 'var(--color-violet-soft)' } }, [React.createElement('path', { key: 'a', d: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' }), React.createElement('path', { key: 'b', d: 'M21 3v5h-5' }), React.createElement('path', { key: 'c', d: 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16' }), React.createElement('path', { key: 'd', d: 'M8 16H3v5' })]),
+        onClick: () => {
+          if (i === 0) { this.startBatch(this.state.docs.filter((d) => d.status === 'raw').map((d) => d.id)); }
+          this.setState({ paletteOpen: false });
+        },
+      }));
+    }
+
+    const folderLabel = s.folders.find((f) => f.id === s.folder);
+    const seg = (on) => ({ color: on ? '#fff' : 'var(--color-text-muted)', bg: on ? 'var(--color-surface-4)' : 'transparent' });
+
+    return {
+      headTitle: s.folder === 'all' ? 'Tất cả tài liệu' : (folderLabel ? folderLabel.label : ''),
+      headMeta: visible.length + ' tài liệu · ' + rawCount + ' chưa convert',
+      chips,
+      cards,
+      upload: () => this.setState((st) => ({ docs: st.docs.concat({ id: 'n' + Date.now(), folder: st.folder === 'all' ? 'f1' : st.folder, name: 'tai-lieu-moi.pdf', kind: 'pdf', meta: 'PDF · vừa tải lên', status: 'raw', md: '' }) })),
+
+      selBarVisible: selIds.length > 0,
+      selCount: String(selIds.length),
+      batchLabel: 'Convert ' + selIds.length + ' file',
+      batchConvert: () => this.startBatch(selIds),
+      clearSel: () => this.setState({ selected: {} }),
+
+      paletteOpen: s.paletteOpen,
+      openPalette: () => this.setState({ paletteOpen: true, paletteQuery: '' }),
+      closePaletteBackdrop: (e) => { if (e.target === e.currentTarget) this.setState({ paletteOpen: false }); },
+      paletteQuery: s.paletteQuery,
+      onPaletteQuery: (e) => this.setState({ paletteQuery: e.target.value }),
+      paletteResults,
+      paletteEmpty: paletteResults.length === 0,
+
+      docOpen: !!openDoc,
+      closeDoc: () => this.setState({ docOpen: null }),
+      docIcon: openDoc ? this.icon(openDoc.kind, 17) : null,
+      docName: openDoc ? openDoc.name : '',
+      docMeta: openDoc ? openDoc.meta : '',
+      viewSplitColor: seg(s.view === 'split').color, viewSplitBg: seg(s.view === 'split').bg,
+      viewMdColor: seg(s.view === 'md').color, viewMdBg: seg(s.view === 'md').bg,
+      setViewSplit: () => this.setState({ view: 'split' }),
+      setViewMd: () => this.setState({ view: 'md' }),
+      viewShowSource: s.view === 'split' && !!openDoc && openDoc.kind !== 'markdown',
+      sourcePreview: this.sourcePreviewFor(openDoc),
+      mdRendered: this.renderMarkdown(openDoc ? openDoc.md : ''),
+      copyLabel: s.copied ? 'Đã copy ✓' : 'Copy MD',
+      copyMd: () => {
+        try { navigator.clipboard.writeText(openDoc ? openDoc.md : ''); } catch (e) {}
+        this.setState({ copied: true });
+        setTimeout(() => this.setState({ copied: false }), 1500);
+      },
+    };
+  }
+}
+
+</script>
+</body>
+</html>

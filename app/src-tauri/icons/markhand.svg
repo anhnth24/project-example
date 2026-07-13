@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#242325"/>
+      <stop offset="1" stop-color="#0e0e11"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#54e49e"/>
+      <stop offset="1" stop-color="#15945b"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="28" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="220" fill="url(#bg)"/>
+  <circle cx="512" cy="512" r="338" fill="#2ec47c" opacity=".12"/>
+  <path d="M278 714V310c0-31 25-56 56-56h258l154 154v306c0 31-25 56-56 56H334c-31 0-56-25-56-56Z"
+        fill="url(#accent)" filter="url(#glow)"/>
+  <path d="M592 254v110c0 31 25 56 56 56h98" fill="none" stroke="#bff4da"
+        stroke-width="34" stroke-linecap="round" stroke-linejoin="round" opacity=".82"/>
+  <path d="M377 650V431l135 154 135-154v219" fill="none" stroke="#fff"
+        stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -37,13 +37,14 @@ project-example/
 |---|---|
 | `src/lib.rs` | `Converter`, `convert_path()` (định tuyến), `FormatKind`, `ConverterOptions`, NFC + cắt output |
 | `src/conv/mod.rs` | khai báo module convert theo format |
-| `src/conv/pdf.rs` | **3-tier**: pdf-inspector (cấu trúc) → pdfium-render → pdf-extract; render trang quét 300DPI + OCR |
+| `src/conv/pdf.rs` | **3-tier**: pdf-inspector (cấu trúc) → pdfium-render → pdf-extract; render trang quét 300DPI + OCR; `PDFIUM_CALL` lock |
 | `src/conv/docx.rs` | docx-rust: heading theo style, gom run theo (bold,italic), xử lý `<w:br>/<w:tab>` |
 | `src/conv/xlsx.rs` | calamine: đọc MỌI sheet (xls/xlsb/ods) |
 | `src/conv/pptx.rs` | zip + quick-xml: slide sort theo số thứ tự |
 | `src/conv/html.rs` | htmd (skip script/style/noscript) |
 | `src/conv/csv_conv.rs` | csv: strip BOM, TCVN3 fallback, sniff delimiter, chứa `rows_to_md_table` chung |
-| `src/image_ocr.rs` | Tesseract CLI + tiền xử lý ảnh (grayscale/upscale/unsharpen/normalize) |
+| `src/proc.rs` | `background_command()`: CREATE_NO_WINDOW trên Windows (tránh flash console) |
+| `src/image_ocr.rs` | Tesseract CLI + tiền xử lý ảnh (grayscale/upscale/unsharpen/normalize); dùng `proc::background_command` |
 | `src/audio.rs` | AudioEngine (cache Whisper), decode symphonia + resample 16k, lang "vi" |
 | `src/chunk.rs` | tách chunk RAG theo heading-path |
 | `src/viet_legacy.rs` | decode TCVN3 (bảng 130 entry) |
@@ -100,6 +101,7 @@ project-example/
 | Thêm / sửa định dạng | `crates/core/src/conv/<fmt>.rs` + định tuyến ở `lib.rs` |
 | Đổi tiền xử lý OCR | `crates/core/src/image_ocr.rs` |
 | Đổi phụ thuộc native OCR (Tesseract/whisper) | `image_ocr.rs` / `audio.rs` |
+| Spawn subprocess (CLI, OCR, LLM) | dùng `crate::proc::background_command` chứ không `Command::new` (tránh console flash Windows) |
 | Thêm CLI flag | `crates/cli/src/main.rs` |
 | Thêm MCP tool | `crates/mcp/src/main.rs` (+ `crates/core/src/llm.rs` nếu cần LLM) |
 | Sửa GUI | `app/src/components/*.tsx` |

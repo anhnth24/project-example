@@ -1,0 +1,263 @@
+name: Build desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    tags:
+      - "markhand-v*"
+
+permissions:
+  contents: read
+
+# Mỗi push master build lại từ đầu; hủy run cũ đang chạy của cùng ref để khỏi
+# đốt runner macOS (giá 10×) cho commit đã bị vượt qua.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Chỉ chạy khi push tag `markhand-vX.Y.Z` — chặn sớm trước khi tốn runner
+  # build nếu version trong tag lệch với tauri.conf.json (nguồn sự thật duy nhất).
+  check-version:
+    if: startsWith(github.ref, 'refs/tags/markhand-v')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate tag matches tauri.conf.json version
+        run: |
+          tag_version="${GITHUB_REF_NAME#markhand-v}"
+          conf_version=$(jq -r '.version' app/src-tauri/tauri.conf.json)
+          if [ "$tag_version" != "$conf_version" ]; then
+            echo "::error::Tag markhand-v$tag_version không khớp version trong tauri.conf.json ($conf_version)"
+            exit 1
+          fi
+          echo "OK: tag khớp version $conf_version"
+
+  bundle:
+    needs: [check-version]
+    if: always() && (needs.check-version.result == 'success' || needs.check-version.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            bundles: deb,appimage
+            artifact: linux
+          - os: windows-latest
+            bundles: msi,nsis
+            artifact: windows
+          - os: macos-latest
+            bundles: dmg
+            artifact: macos
+    runs-on: ${{ matrix.os }}
+    env:
+      # Ký updater artifact (minisign) khi có secret; thiếu thì `createUpdaterArtifacts`
+      # tự bỏ qua bước ký (không fail build .deb/.msi/.dmg thường).
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux bundle dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      - name: Import Windows signing certificate
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ vars.WINDOWS_CERTIFICATE_THUMBPRINT }}
+        run: |
+          [IO.File]::WriteAllBytes("markhand.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate -FilePath "markhand.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          $path = "app/src-tauri/tauri.windows.conf.json"
+          $config = Get-Content $path -Raw | ConvertFrom-Json
+          $config.bundle.windows | Add-Member -Force NoteProperty certificateThumbprint $env:WINDOWS_CERTIFICATE_THUMBPRINT
+          $config | ConvertTo-Json -Depth 12 | Set-Content $path
+
+      - name: Import Apple Developer certificate
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+      # Secret trống (chưa cấu hình TAURI_SIGNING_PRIVATE_KEY) vẫn được GitHub Actions
+      # export thành biến RỖNG (không phải absent) → Tauri CLI hiểu nhầm là "có key
+      # nhưng sai định dạng" và fail cứng (xác nhận bằng CI run thật:
+      # "failed to decode secret key: ... Missing comment in secret key"). unset khi
+      # rỗng để khôi phục hành vi "không có key" (bỏ qua ký updater, không lỗi).
+      - name: Build Linux installers
+        if: runner.os == 'Linux'
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          pnpm tauri build --bundles ${{ matrix.bundles }}
+        working-directory: app
+
+      # `--no-sign` chỉ tắt code-signing OS-level, nhưng cũng tắt LUÔN chữ ký
+      # updater minisign (xác nhận bằng build thật trong sandbox: `--no-sign`
+      # in "Updater signing is skipped"). Nên khi đã có TAURI_SIGNING_PRIVATE_KEY
+      # (updater key) mà chưa có cert OS, bỏ `--no-sign` để vẫn ký được updater
+      # artifact — bundle .msi/.dmg vẫn ra unsigned như cũ, chỉ .sig là có thật.
+      - name: Build Windows installers (no OS cert, no updater key)
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED != 'true' && env.TAURI_SIGNING_PRIVATE_KEY == ''
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --no-sign --ci
+        working-directory: app
+
+      - name: Build Windows installers (updater-signed, no OS cert)
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED != 'true' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        working-directory: app
+
+      - name: Build signed Windows installers
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        working-directory: app
+
+      - name: Build macOS installer (no OS cert, no updater key)
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED != 'true' && env.TAURI_SIGNING_PRIVATE_KEY == ''
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --no-sign --ci
+        working-directory: app
+
+      - name: Build macOS installer (updater-signed, no OS cert)
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED != 'true' && env.TAURI_SIGNING_PRIVATE_KEY != ''
+        run: pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        working-directory: app
+
+      - name: Build signed and notarized macOS installer
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+          fi
+          pnpm tauri build --bundles ${{ matrix.bundles }} --ci
+        working-directory: app
+
+      - name: Verify Windows Authenticode
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Recurse "target/release/bundle" -Include *.exe,*.msi | Select-Object -First 1
+          $signature = Get-AuthenticodeSignature $installer.FullName
+          if ($signature.Status -ne "Valid") { throw "Invalid Authenticode signature: $($signature.Status)" }
+
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS' && vars.MACOS_SIGNING_ENABLED == 'true'
+        run: |
+          APP=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl -a -t exec -vv "$APP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: markhand-${{ matrix.artifact }}
+          path: target/release/bundle/**
+          if-no-files-found: error
+
+  # Chỉ chạy khi push tag — gom artifact 3 OS, lắp `latest.json` cho
+  # tauri-plugin-updater, tạo GitHub Release đính kèm installer + file cập nhật.
+  release:
+    needs: [check-version, bundle]
+    if: startsWith(github.ref, 'refs/tags/markhand-v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble latest.json and stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          version="${GITHUB_REF_NAME#markhand-v}"
+          pub_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Chỉ AppImage (Linux)/NSIS (Windows)/.app bundle (macOS) tự cập nhật
+          # tại chỗ được — .deb/.msi cài qua package manager, không đưa vào
+          # latest.json (đúng thiết kế: deb chỉ thông báo + link Release).
+          declare -A platform_patterns=(
+            [linux-x86_64]="artifacts/markhand-linux/**/*.AppImage.tar.gz.sig"
+            [windows-x86_64]="artifacts/markhand-windows/**/*.exe.sig"
+            [darwin-aarch64]="artifacts/markhand-macos/**/*.app.tar.gz.sig"
+          )
+          json_platforms="{}"
+          for platform in "${!platform_patterns[@]}"; do
+            pattern="${platform_patterns[$platform]}"
+            sig_file=$(shopt -s globstar nullglob; files=($pattern); [ ${#files[@]} -gt 0 ] && echo "${files[0]}" || true)
+            if [ -z "$sig_file" ]; then
+              echo "::warning::Không tìm thấy updater .sig cho $platform (thiếu TAURI_SIGNING_PRIVATE_KEY hoặc build lỗi) — bỏ qua trong latest.json"
+              continue
+            fi
+            asset_file="${sig_file%.sig}"
+            asset_name=$(basename "$asset_file")
+            signature=$(cat "$sig_file")
+            cp "$asset_file" "release/$asset_name"
+            url="https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/${asset_name}"
+            json_platforms=$(jq --arg p "$platform" --arg sig "$signature" --arg url "$url" \
+              '. + {($p): {signature: $sig, url: $url}}' <<<"$json_platforms")
+          done
+
+          jq -n --arg version "$version" --arg notes "Markhand v$version" \
+            --arg pub_date "$pub_date" --argjson platforms "$json_platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > release/latest.json
+
+          # Installer chính để user tải thủ công (không phải mọi bản đều tự-update được).
+          find artifacts -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' \
+            -o -name '*setup.exe' -o -name '*.dmg' \) -exec cp {} release/ \;
+          ls -la release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Markhand ${{ github.ref_name }}
+          files: release/*
+          fail_on_unmatched_files: true

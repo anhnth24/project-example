@@ -1,0 +1,32 @@
+/* LumiBase — Radii, shadows & effects */
+:root {
+  /* Corner radii — pills at 32, cards at 24, controls 12-16 */
+  --radius-pill: 32px;
+  --radius-card: 24px;
+  --radius-lg: 20px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
+  --radius-xs: 8px;
+  --radius-full: 999px;
+
+  /* Hairline borders are drawn as inset shadows over glass surfaces */
+  --ring-glass: inset 0 0 0 1px rgba(255, 255, 255, 0.08); /* @kind shadow */
+  --ring-glass-strong: inset 0 0 0 1px rgba(255, 255, 255, 0.16); /* @kind shadow */
+
+  /* Elevation */
+  --shadow-sm: 0px 2px 4px 0px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0px 8px 24px 0px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0px 24px 64px 0px rgba(0, 0, 0, 0.8);
+  --shadow-card: 0px 1px 0px 0px rgba(0, 0, 0, 0.07), 0px 12px 32px 0px rgba(0, 0, 0, 0.4);
+
+  /* Coloured glows behind brand planets / CTAs */
+  --glow-violet: 0px 0px 80px 0px rgba(123, 97, 255, 0.45);
+  --glow-blue: 0px 0px 80px 0px rgba(24, 160, 251, 0.4);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1); /* @kind other */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); /* @kind other */
+  --duration-fast: 140ms; /* @kind other */
+  --duration: 240ms; /* @kind other */
+  --duration-slow: 480ms; /* @kind other */
+}

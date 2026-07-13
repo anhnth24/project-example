@@ -1,59 +1,145 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { FileText, FolderPlus, Upload, Columns2 } from "lucide-react";
-import { EmptyState } from "@astryxdesign/core/EmptyState";
-import { Card } from "@astryxdesign/core/Card";
-import { Banner } from "@astryxdesign/core/Banner";
-import { Icon } from "@astryxdesign/core/Icon";
+import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { AlertCircle, Upload } from "lucide-react";
 import { useStore } from "./state/store";
-import { api } from "./lib/ipc";
+import { findByRel } from "./lib/tree";
 import { Sidebar } from "./components/Sidebar";
 import { DocView } from "./components/DocView";
 import { SettingsModal } from "./components/Settings";
+import { IconRail } from "./components/IconRail";
+import { DocumentTabs } from "./components/DocumentTabs";
+import { HomeView } from "./components/HomeView";
+import { LibraryView } from "./components/LibraryView";
+import { CommandPalette } from "./components/CommandPalette";
+import { ConvertQueue } from "./components/ConvertQueue";
+import { Button, IconButton, Modal } from "./components/ui";
+import { api } from "./lib/ipc";
+import type { WatchMatch } from "./lib/types";
+
+const IntelligenceView = lazy(() =>
+  import("./components/IntelligenceView").then((module) => ({
+    default: module.IntelligenceView,
+  })),
+);
 
 export default function App() {
-  const init = useStore((s) => s.init);
-  const error = useStore((s) => s.error);
-  const setError = useStore((s) => s.setError);
-  const selected = useStore((s) => s.selected);
+  const init = useStore((state) => state.init);
+  const tree = useStore((state) => state.tree);
+  const view = useStore((state) => state.view);
+  const setView = useStore((state) => state.setView);
+  const activeTab = useStore((state) => state.activeTab);
+  const sessions = useStore((state) => state.sessions);
+  const jobs = useStore((state) => state.jobs);
+  const supportedExts = useStore((state) => state.supportedExts);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
+  const importSources = useStore((state) => state.importSources);
+  const saveSession = useStore((state) => state.saveSession);
+  const closeTab = useStore((state) => state.closeTab);
+  const error = useStore((state) => state.error);
+  const setError = useStore((state) => state.setError);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(true);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [closeRequest, setCloseRequest] = useState<string | null>(null);
+
+  const activeNode = useMemo(
+    () => (activeTab ? findByRel(tree, activeTab) : null),
+    [activeTab, tree],
+  );
+  const activeJobs = jobs.filter(
+    (job) => job.status === "queued" || job.status === "running",
+  ).length;
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
 
   useEffect(() => {
-    init();
+    void init();
   }, [init]);
 
-  // Kéo-thả file vào BẤT KỲ đâu trong cửa sổ → import vào thư mục đích
-  // (pattern Smallpdf/Notion: toàn cửa sổ là drop target, overlay khi kéo qua).
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     (async () => {
       try {
-        unlisten = await getCurrentWebview().onDragDropEvent(async (event) => {
+        const stop = await getCurrentWebview().onDragDropEvent(async (event) => {
           const t = event.payload.type;
           if (t === "over" || t === "enter") setDragging(true);
           else if (t === "leave") setDragging(false);
           else if (t === "drop") {
             setDragging(false);
-            const { activeFolder, refreshTree, setError } = useStore.getState();
-            const errors: string[] = [];
-            for (const p of event.payload.paths ?? []) {
-              try {
-                await api.importFile(activeFolder, p);
-              } catch (e) {
-                errors.push(String(e));
-              }
-            }
-            await refreshTree();
-            if (errors.length) setError(errors.join(" • "));
+            await useStore.getState().importSources(event.payload.paths ?? []);
           }
         });
+        if (disposed) stop();
+        else unlisten = stop;
       } catch {
-        // Ngoài môi trường Tauri (dev browser) — bỏ qua.
+        // Browser-only preview: native drag paths are unavailable.
       }
     })();
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    void listen<WatchMatch>("watch:match", async ({ payload }) => {
+      try {
+        const node = await api.importFileOnly(
+          payload.targetFolderRel,
+          payload.sourceAbs,
+        );
+        await useStore.getState().refreshTree();
+        if (payload.action === "import_and_convert") {
+          useStore.getState().enqueueConversions([node.relPath]);
+        }
+      } catch (watchError) {
+        const message = String(watchError);
+        // A previously imported filename is a safe no-op, not an import loop.
+        if (!message.includes("đã tồn tại")) {
+          useStore.getState().setError(`Watch folder: ${message}`);
+        }
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else unlisteners.push(unlisten);
+    });
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const command = event.ctrlKey || event.metaKey;
+      if (command && event.key.toLocaleLowerCase("vi") === "k") {
+        event.preventDefault();
+        setPaletteOpen(true);
+      } else if (command && event.key.toLocaleLowerCase("vi") === "s") {
+        event.preventDefault();
+        if (view === "intelligence") {
+          window.dispatchEvent(new Event("markhand:intelligence-save"));
+        } else {
+          void saveSession();
+        }
+      } else if (command && event.key.toLocaleLowerCase("vi") === "w" && activeTab) {
+        event.preventDefault();
+        requestCloseTab(activeTab);
+      } else if (event.key === "Escape") {
+        setPaletteOpen(false);
+        setQueueOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   useEffect(() => {
     if (!error) return;
@@ -61,19 +147,69 @@ export default function App() {
     return () => clearTimeout(t);
   }, [error, setError]);
 
+  async function uploadFiles() {
+    if (!projects.some((project) => project.id === activeProjectId)) {
+      setDrawerOpen(true);
+      setError("Hãy tạo hoặc chọn dự án trước khi tải file.");
+      return;
+    }
+    const picked = await openDialog({
+      multiple: true,
+      title: "Chọn file để thêm vào Markhand",
+      filters: [{ name: "Định dạng hỗ trợ", extensions: supportedExts }],
+    });
+    if (!picked) return;
+    await importSources(Array.isArray(picked) ? picked : [picked]);
+    setDrawerOpen(true);
+  }
+
+  function requestCloseTab(relPath: string) {
+    if (sessions[relPath]?.dirty) {
+      setCloseRequest(relPath);
+    } else {
+      closeTab(relPath);
+    }
+  }
+
+  const requestedNode = closeRequest ? findByRel(tree, closeRequest) : null;
+
   return (
-    <div className="app">
-      <Sidebar onOpenSettings={() => setSettingsOpen(true)} />
+    <div className="app-shell">
+      <div className="starfield" aria-hidden="true" />
+      <IconRail
+        view={view}
+        drawerOpen={drawerOpen}
+        activeJobs={activeJobs}
+        onHome={() => setView("home")}
+        onLibrary={() => setView("library")}
+        onIntelligence={() => setView("intelligence")}
+        onToggleDrawer={() => setDrawerOpen((open) => !open)}
+        onSearch={() => setPaletteOpen(true)}
+        onQueue={() => setQueueOpen((open) => !open)}
+        onSettings={openSettings}
+      />
 
-      <main className="main">
-        {selected && !selected.isDir ? (
-          <DocView key={selected.relPath} node={selected} />
-        ) : (
-          <HomeState />
-        )}
-      </main>
+      {drawerOpen && <Sidebar onOpenSettings={openSettings} />}
 
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      <div className="workspace">
+        {view !== "intelligence" && <DocumentTabs onRequestClose={requestCloseTab} />}
+        <main className="main-content">
+          {view === "intelligence" ? (
+            <Suspense fallback={<div className="docview doc-loading">Đang tải Intelligence…</div>}>
+              <IntelligenceView />
+            </Suspense>
+          ) : view === "library" ? (
+            <LibraryView onUpload={uploadFiles} />
+          ) : view === "document" && activeNode && !activeNode.isDir ? (
+            <DocView node={activeNode} />
+          ) : (
+            <HomeView
+              onUpload={uploadFiles}
+              onDocuments={() => setDrawerOpen(true)}
+            />
+          )}
+        </main>
+      </div>
 
       {dragging && (
         <div className="drop-overlay">
@@ -85,55 +221,66 @@ export default function App() {
         </div>
       )}
 
+      {queueOpen && <ConvertQueue onClose={() => setQueueOpen(false)} />}
+      {paletteOpen && (
+        <CommandPalette
+          onClose={() => setPaletteOpen(false)}
+          onOpenSettings={openSettings}
+        />
+      )}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+
+      {closeRequest && (
+        <Modal
+          title={`Đóng “${requestedNode?.name ?? "tài liệu"}”?`}
+          description="Tab này có thay đổi Markdown chưa được lưu."
+          onClose={() => setCloseRequest(null)}
+          width={430}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setCloseRequest(null)}>
+                Tiếp tục sửa
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  closeTab(closeRequest);
+                  setCloseRequest(null);
+                }}
+              >
+                Bỏ thay đổi và đóng
+              </Button>
+              <Button
+                variant="primary"
+                onClick={async () => {
+                  await saveSession(closeRequest);
+                  if (!useStore.getState().sessions[closeRequest]?.dirty) {
+                    closeTab(closeRequest);
+                    setCloseRequest(null);
+                  }
+                }}
+              >
+                Lưu và đóng
+              </Button>
+            </>
+          }
+        >
+          <div className="unsaved-summary">
+            Bản nháp vẫn còn trong tab hiện tại. Chọn “Lưu và đóng” để ghi vào file
+            Markdown liên kết.
+          </div>
+        </Modal>
+      )}
+
       {error && (
-        <div className="toast-wrap">
-          <Banner
-            status="error"
-            title={error}
-            isDismissable
-            onDismiss={() => setError(null)}
-          />
+        <div className="error-toast" role="alert">
+          <AlertCircle size={16} />
+          <span>{error}</span>
+          <IconButton label="Đóng thông báo" onClick={() => setError(null)}>
+            ×
+          </IconButton>
         </div>
       )}
-    </div>
-  );
-}
-
-function HomeState() {
-  const steps = [
-    {
-      icon: <FolderPlus size={18} />,
-      title: "Tạo thư mục",
-      desc: "Tổ chức tài liệu theo từng nhóm nghiệp vụ trong DATA.",
-    },
-    {
-      icon: <Upload size={18} />,
-      title: "Tải file gốc lên",
-      desc: "PDF, Word, Excel, PPT, ảnh, audio… App tự convert sang Markdown (link 1-1).",
-    },
-    {
-      icon: <Columns2 size={18} />,
-      title: "Xem song song & sửa",
-      desc: "Đối chiếu file gốc ↔ Markdown, chỉnh sửa rồi lưu — tất cả ở máy bạn.",
-    },
-  ];
-  return (
-    <div className="home">
-      <EmptyState
-        icon={<Icon icon={FileText} size="lg" />}
-        title="Markhand"
-        description="Biến mọi tài liệu nguồn thành Markdown sạch để bàn giao cho Dev — dành cho BA & PM."
-      />
-      <div className="home-steps">
-        {steps.map((s, i) => (
-          <Card key={i} padding={4}>
-            <div className="step-icon">{s.icon}</div>
-            <div className="step-num">Bước {i + 1}</div>
-            <div className="step-title">{s.title}</div>
-            <div className="step-desc">{s.desc}</div>
-          </Card>
-        ))}
-      </div>
     </div>
   );
 }

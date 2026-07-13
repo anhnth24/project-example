@@ -25,13 +25,36 @@ Crate chính (không pin cứng nhưng cố ý giữ ổn định): `pdfium-rend
 
 PDF và whisper **đắt** → phải giữ pattern cache. Đừng "dọn" thành gọi thẳng mỗi lần.
 
-- **PDFium thread_local** (`crates/core/src/conv/pdf.rs`): `thread_local! { static PDFIUM: Option<Pdfium> = load_pdfium() }`.
+- **PDFium thread_local + PDFIUM_CALL lock** (`crates/core/src/conv/pdf.rs`): `thread_local! { static PDFIUM: Option<Pdfium> = load_pdfium() }`.
   Mỗi thread 1 instance, init 1 lần/tiến trình. Chỉ load khi thực sự cần OCR (`need_pdfium` gate).
+  **libpdfium KHÔNG thread-safe**: mỗi region dùng PDFium (cả render+OCR) phải acquire `PDFIUM_CALL: Mutex<()>` trước.
+  Concurrent scanned-PDF conversions sẽ queue tại lock (trade-off vs throughput).
   Đường dẫn lib qua env `FILECONV_PDFIUM_LIB` → `pdfium/lib/*` → thư viện hệ thống.
 - **AudioEngine OnceLock** (`crates/core/src/lib.rs`): `Converter.engine: OnceLock<AudioEngine>`,
   lazy load model Whisper GGML **một lần** mỗi `Converter`. Gọi audio sau dùng lại. Trả `Unsupported`
   nếu chưa set `whisper_model`. (Có race benign được tài liệu hoá: nếu thread khác set trước, `set` bị bỏ qua.)
-- **Tesseract**: spawn mỗi lần qua `Command` (không cache process). Temp PNG dùng bộ đếm `AtomicU64`.
+- **Tesseract**: spawn mỗi lần qua `crate::proc::background_command()` (không cache process). Temp PNG dùng bộ đếm `AtomicU64`.
+
+## Subprocess spawning — MUST dùng `crate::proc::background_command`
+
+GUI app (Tauri) không nên hiển thị console window khi spawn CLI subprocess (tesseract, python, LLM CLI).
+Luôn dùng `crate::proc::background_command()` thay vì `Command::new()` trực tiếp:
+
+```rust
+// ✅ Đúng
+let output = crate::proc::background_command("tesseract")
+    .arg(&image_path)
+    .arg(out_path)
+    .output()?;
+
+// ❌ Sai
+let output = std::process::Command::new("tesseract")
+    .arg(&image_path)
+    .arg(out_path)
+    .output()?;
+```
+
+`background_command()` tự động thêm `CREATE_NO_WINDOW` flag trên Windows. stdout/stderr capture không đổi.
 
 ## NFC — MUST trên mọi output
 

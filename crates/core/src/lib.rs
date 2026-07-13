@@ -12,14 +12,22 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub mod audio;
+pub mod chunk;
 mod conv;
 pub mod image_ocr;
+pub mod intelligence;
+#[cfg(test)]
+mod intelligence_tests;
 #[cfg(feature = "llm")]
 pub mod llm;
-pub mod chunk;
+#[cfg(feature = "llm")]
+pub mod llm_cli;
+pub mod pptx_preview;
 pub mod probe;
+mod proc;
 pub mod tables;
 pub mod viet_legacy;
+mod viet_legacy_maps;
 
 pub use probe::{probe, FileInfo};
 
@@ -34,6 +42,7 @@ pub enum FormatKind {
     Xlsx,
     Csv,
     Html,
+    Text,
     Image,
     Audio,
     Unknown,
@@ -53,6 +62,7 @@ impl FormatKind {
             "xlsx" | "xls" | "xlsb" | "ods" => Self::Xlsx,
             "csv" => Self::Csv,
             "html" | "htm" => Self::Html,
+            "txt" | "log" => Self::Text,
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "gif" => Self::Image,
             "wav" | "mp3" | "m4a" | "flac" | "ogg" => Self::Audio,
             _ => Self::Unknown,
@@ -67,6 +77,7 @@ impl FormatKind {
             Self::Xlsx => "xlsx",
             Self::Csv => "csv",
             Self::Html => "html",
+            Self::Text => "text",
             Self::Image => "image",
             Self::Audio => "audio",
             Self::Unknown => "unknown",
@@ -95,12 +106,16 @@ pub enum ConvertError {
 pub struct ConverterOptions {
     /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng").
     pub ocr_langs: String,
+    /// Tesseract mặc định; Paddle/Auto là tier tùy chọn.
+    pub ocr_engine: image_ocr::OcrEngine,
     /// Đường dẫn model whisper GGML cho audio (None = audio chưa khả dụng).
     pub whisper_model: Option<PathBuf>,
     /// Ngôn ngữ audio (mặc định "vi").
     pub audio_lang: String,
     /// Số thread cho whisper (mặc định 4).
     pub audio_threads: i32,
+    /// Bỏ segment có xác suất không lời >= ngưỡng này (mặc định 0.6).
+    pub audio_no_speech_threshold: f32,
     /// Bật OCR cho TRANG scan (không/ít lớp text). Mặc định true.
     pub pdf_ocr: bool,
     /// Bật OCR thêm cho ẢNH NHÚNG lớn trong trang có text (trang trộn).
@@ -118,9 +133,11 @@ impl Default for ConverterOptions {
     fn default() -> Self {
         Self {
             ocr_langs: "vie+eng".to_string(),
+            ocr_engine: image_ocr::OcrEngine::Tesseract,
             whisper_model: None,
             audio_lang: "vi".to_string(),
             audio_threads: 4,
+            audio_no_speech_threshold: 0.6,
             pdf_ocr: true,
             pdf_ocr_images: false,
             pdf_pages: None,
@@ -163,9 +180,14 @@ impl Converter {
         let model = self
             .opts
             .whisper_model
-            .as_ref()
-            .ok_or(ConvertError::Unsupported("audio: chưa cấu hình whisper_model"))?;
-        let eng = AudioEngine::load(model)?.with_threads(self.opts.audio_threads);
+            .clone()
+            .or_else(audio::discover_whisper_model)
+            .ok_or(ConvertError::Unsupported(
+                "audio: chưa cài hoặc cấu hình whisper_model",
+            ))?;
+        let eng = AudioEngine::load(&model)?
+            .with_threads(self.opts.audio_threads)
+            .with_no_speech_threshold(self.opts.audio_no_speech_threshold);
         // Nếu thread khác set trước, bỏ qua bản của ta (vẫn dùng bản đã cache).
         let _ = self.engine.set(eng);
         Ok(self.engine.get().unwrap())
@@ -174,7 +196,7 @@ impl Converter {
     /// Chuyển một file sang Markdown.
     pub fn convert_path(&self, path: &Path) -> Result<ConversionResult, ConvertError> {
         let format = FormatKind::from_path(path);
-        let md = match format {
+        let md = image_ocr::with_ocr_engine(self.opts.ocr_engine, || match format {
             FormatKind::Pdf => conv::pdf::to_markdown(
                 path,
                 &self.opts.ocr_langs,
@@ -187,14 +209,15 @@ impl Converter {
             FormatKind::Xlsx => conv::xlsx::to_markdown(path, self.opts.xlsx_sheet.as_deref()),
             FormatKind::Csv => conv::csv_conv::to_markdown(path),
             FormatKind::Html => conv::html::to_markdown(path),
+            FormatKind::Text => conv::text::to_markdown(path),
             FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
                 .map_err(|e| ConvertError::Failed(e.to_string())),
             FormatKind::Audio => self
                 .engine()?
                 .transcribe_file(path, Some(&self.opts.audio_lang))
                 .map(|t| t.text),
-            FormatKind::Unknown => return Err(ConvertError::Unsupported("không rõ đuôi file")),
-        }?;
+            FormatKind::Unknown => Err(ConvertError::Unsupported("không rõ đuôi file")),
+        })?;
 
         // Chuẩn hoá Unicode NFC: tài liệu tiếng Việt cũ (nhất là từ macOS/PDF legacy)
         // hay ở dạng NFD (ê + dấu rời) — gây lệch so khớp/tìm kiếm/embedding dù nhìn
@@ -217,12 +240,35 @@ impl Converter {
             _ => md,
         };
 
+        let title = title_from_markdown(&md).or_else(|| {
+            path.file_stem()
+                .and_then(|name| name.to_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        });
+
         Ok(ConversionResult {
             markdown: md,
-            title: None,
+            title,
             format,
         })
     }
+}
+
+fn title_from_markdown(markdown: &str) -> Option<String> {
+    markdown.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let hashes = trimmed
+            .chars()
+            .take_while(|character| *character == '#')
+            .count();
+        if !(1..=6).contains(&hashes) {
+            return None;
+        }
+        let title = trimmed[hashes..].trim().trim_matches('#').trim();
+        (!title.is_empty() && title.chars().count() <= 240).then(|| title.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -240,10 +286,22 @@ mod tests {
         std::fs::write(&f, nfd).unwrap();
 
         let out = Converter::new().convert_path(&f).unwrap().markdown;
-        assert!(out.contains("tiếng"), "phải chứa 'tiếng' dạng NFC, got: {out:?}");
+        assert!(
+            out.contains("tiếng"),
+            "phải chứa 'tiếng' dạng NFC, got: {out:?}"
+        );
         assert!(out.contains("Việt"), "phải chứa 'Việt' dạng NFC");
         // Không còn combining mark rời nào.
         assert!(!out.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conversion_result_uses_first_heading_as_title() {
+        assert_eq!(
+            title_from_markdown("<!-- Page 1 -->\n\n# Báo cáo dự án\n\nNội dung"),
+            Some("Báo cáo dự án".into())
+        );
+        assert_eq!(title_from_markdown("nội dung không heading"), None);
     }
 }

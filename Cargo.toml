@@ -8,9 +8,20 @@ exclude = ["vendor"]
 edition = "2021"
 license = "MIT"
 authors = ["anhnth24"]
-rust-version = "1.80"
+rust-version = "1.88"
 
 [workspace.dependencies]
 anyhow = "1"
 thiserror = "2"
 infer = "0.16"
+
+# Tauri dev otherwise runs the PDF/OCR pipeline completely unoptimized
+# (measured ~17.5s vs <1s release on the 45-page CASAN PDF).
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.fileconv-core]
+opt-level = 2
