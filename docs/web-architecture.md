@@ -114,6 +114,11 @@ Embed query → Qdrant top-k (filter `org_id` + collection ACL) ∥ PG FTS (`una
 → GLM stream SSE → answer + citation (doc, heading path, link;
 citation fetch re-check ACL + trạng thái tài liệu). LLM lỗi → fallback trả trích đoạn.
 
+**Guardrail chống ảo giác** (nguyên tắc "open-book exam"): system prompt yêu cầu chỉ trả
+lời từ context được cấp; không đủ căn cứ → trả "không tìm thấy trong tài liệu" (kèm chunk
+gần nhất làm gợi ý), không suy diễn ngoài nguồn. Golden-set có bộ câu hỏi negative
+(`no_answer`) để đo refusal accuracy — từ chối đúng khi không có, không từ chối nhầm khi có.
+
 ## 9. RBAC, tenant isolation & rate limit
 
 **Defense-in-depth (áp dụng từ ngày đầu Integration, không chờ phase multi-org):**

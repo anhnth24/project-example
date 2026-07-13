@@ -112,6 +112,7 @@
 - [ ] Chọn tài liệu phủ loại khó (scan, bảng, IN HOA — theo `bench/REPORT_EDGE.md`)
 - [ ] Convert + chunk + đánh id chunk
 - [ ] Soạn Q/A: câu hỏi viết như người dùng thật (KHÔNG copy nguyên văn trong tài liệu)
+- [ ] **10-15 câu hỏi negative** (đáp án KHÔNG có trong corpus, nhãn `no_answer`) — đo khả năng từ chối thay vì ảo giác (3.4/3.5)
 - [ ] Gitignore data nhạy cảm, chỉ commit manifest + script
 **DoD:** `bench/web-spike/golden/` có manifest + chunk chuẩn hoá; lead duyệt độ phủ.
 
@@ -257,17 +258,19 @@
 
 ### 3.4 Q&A endpoint SSE + citation — `server`
 **Chờ:** 3.3 · đếm token cần 2.8 · **Chặn:** 3.5, 4.3
-**Hướng làm:** Prompt kèm nguồn từ 3.3 → GLM stream SSE → answer + citation (doc, heading path, link). Citation fetch **re-check ACL + trạng thái tài liệu** (tombstone không bao giờ trả). LLM lỗi/timeout → fallback trả trích đoạn top chunk. Đếm token thật vào quota (2.8).
+**Hướng làm:** Prompt kèm nguồn từ 3.3 → GLM stream SSE → answer + citation (doc, heading path, link). **Guardrail chống ảo giác trong system prompt: chỉ trả lời từ context được cấp; không đủ căn cứ → trả lời "không tìm thấy trong tài liệu" (kèm gợi ý chunk gần nhất), TUYỆT ĐỐI không bịa.** Citation fetch **re-check ACL + trạng thái tài liệu** (tombstone không bao giờ trả). LLM lỗi/timeout → fallback trả trích đoạn top chunk. Đếm token thật vào quota (2.8).
 **Việc cần làm:**
 - [ ] SSE endpoint + stream parse · [ ] Citation re-check · [ ] Fallback + test giả lập LLM chết
 - [ ] Persist lịch sử: `qa_sessions`/`qa_messages` (status done/fallback/error, token usage, retrieval JSONB) + `qa_citations` snapshot (schema nhóm 5 — `docs/web-db-schema.md`)
-**DoD:** hỏi trên golden-set → answer stream + citation click ra đúng chunk; tắt GLM → vẫn trả trích đoạn, không 500.
+**DoD:** hỏi trên golden-set → answer stream + citation click ra đúng chunk; câu hỏi negative → trả "không tìm thấy", KHÔNG bịa đáp án; tắt GLM → vẫn trả trích đoạn, không 500.
 
 ### 3.5 Eval harness recall — `qa`
 **Chờ:** 3.4, 1.5 · **Chặn:** GATE M3
-**Hướng làm:** Harness chạy toàn bộ câu hỏi golden-set qua 3.3/3.4, đo recall@k + citation đúng; xuất report so sánh được giữa các lần chạy (đổi model/công thức rerank → chạy lại).
+**Hướng làm:** Harness chạy toàn bộ câu hỏi golden-set qua 3.3/3.4, đo recall@k + citation đúng + **refusal accuracy trên bộ negative** (từ chối đúng khi không có đáp án, không từ chối nhầm khi có); xuất report so sánh được giữa các lần chạy (đổi model/công thức rerank → chạy lại). Nhân tiện đánh giá phân bố độ dài chunk heading-path trên corpus thật — section quá dài/quá ngắn → đề xuất cap size + overlap cho 3.2.
 **Việc cần làm:**
 - [ ] Runner + report markdown · [ ] Lưu kết quả từng run có nhãn config
+- [ ] Metric refusal (true-refusal / false-refusal trên bộ `no_answer`)
+- [ ] Histogram độ dài chunk → khuyến nghị cap/overlap nếu cần
 **DoD:** report recall đạt ngưỡng chốt ở M1 (**gate M3**).
 
 ## Phase 4 — POC UI & Demo (→ 🎯 POC)
