@@ -255,6 +255,108 @@ CREATE TABLE audit_log (
 CREATE INDEX audit_log_org_time ON audit_log (org_id, created_at);
 ```
 
+## Nhóm 5 — Q&A sessions & RAG log (chặn 3.4, 4.3; 3.5 đọc để eval)
+
+Nguyên tắc: log RAG chứa **trích đoạn nội dung tài liệu** → org-scoped, cascade khi xoá
+org, retention policy per-org (config sau — POC giữ vô hạn). `audit_log` KHÔNG chứa
+excerpt (chỉ hành vi); nội dung nằm ở nhóm này.
+
+```sql
+CREATE TABLE qa_sessions (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id        UUID NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    user_id       UUID NOT NULL REFERENCES users(id),
+    collection_id UUID REFERENCES collections(id),  -- NULL = hỏi trên mọi collection được phép
+    title         TEXT NOT NULL DEFAULT '',          -- câu hỏi đầu tiên, cắt ngắn
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX qa_sessions_org_user ON qa_sessions (org_id, user_id, updated_at DESC);
+
+CREATE TABLE qa_messages (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id        UUID NOT NULL REFERENCES qa_sessions(id) ON DELETE CASCADE,
+    org_id            UUID NOT NULL,
+    role              TEXT NOT NULL CHECK (role IN ('user','assistant')),
+    content           TEXT NOT NULL,          -- câu hỏi, hoặc answer hoàn chỉnh sau khi stream xong
+    status            TEXT NOT NULL DEFAULT 'done' CHECK (status IN ('done','fallback','error')),
+                                              -- 'fallback' = LLM lỗi, trả trích đoạn (3.4)
+    model             TEXT,                   -- model chat tại thời điểm trả lời
+    prompt_tokens     INT,                    -- usage thật từ response (nối quota 2.8)
+    completion_tokens INT,
+    retrieval         JSONB,                  -- log retrieval để debug/eval (3.5):
+                                              -- {latency_ms, k, fts_ms, vec_ms,
+                                              --  candidates:[{chunk_id, score_vec, score_fts, rank_final}]}
+    error             TEXT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX qa_messages_session ON qa_messages (session_id, created_at);
+
+-- Citation snapshot: PHẢI sống sót qua reindex/tombstone để trace được "lúc đó trả lời
+-- dựa trên gì" → denormalize, KHÔNG FK cứng sang chunks (chunks bị thay khi reindex).
+-- Fetch live (mở citation trên UI) đi đường document_id → re-check ACL + tombstone.
+CREATE TABLE qa_citations (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    message_id   UUID NOT NULL REFERENCES qa_messages(id) ON DELETE CASCADE,
+    org_id       UUID NOT NULL,
+    document_id  UUID NOT NULL,               -- không FK: giữ trace kể cả khi doc purge
+    chunk_id     UUID,                        -- id chunk tại thời điểm trả lời (tra live nếu còn)
+    version      INT  NOT NULL,
+    chunk_index  INT  NOT NULL,
+    heading_path TEXT NOT NULL,
+    excerpt      TEXT NOT NULL,               -- trích đoạn đã đưa vào prompt
+    score        REAL,
+    rank         INT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX qa_citations_msg ON qa_citations (message_id);
+CREATE INDEX qa_citations_doc ON qa_citations (org_id, document_id);
+```
+
+Log vận hành khác KHÔNG vào DB (YAGNI): pipeline status đã có `jobs.checkpoint/error`,
+hành vi nhạy cảm đã có `audit_log`, log kỹ thuật đi `tracing` ra stdout/file — không
+dựng bảng log riêng ở POC.
+
+## Thiết kế Qdrant (spec cho task 2.4 / 3.1 / 3.2)
+
+**Collection & versioning theo embedding signature**
+- Tên collection: `chunks_<8-hex-đầu-signature-id>` — gắn 1-1 với row `embedding_signatures`.
+- Đổi model/dimension = tạo signature mới + collection mới + reindex từ PG `chunks`,
+  switch `active` khi xong, xoá collection cũ sau — KHÔNG ghi đè collection đang chạy.
+
+**Point**
+- `id` = `chunks.id` (UUID) — trùng khoá PG để đối chiếu/reconcile 1-1.
+- Vector: `dimension` theo signature, distance **Cosine**.
+
+**Payload (tối thiểu — text nằm ở PG, lấy theo chunk id)**
+
+| Field | Kiểu | Payload index |
+|---|---|---|
+| `org_id` | uuid/keyword | ✅ bắt buộc |
+| `collection_id` | uuid/keyword | ✅ bắt buộc |
+| `document_id` | uuid/keyword | ✅ (phục vụ delete theo tài liệu) |
+| `version` | integer | — |
+
+Payload index tạo NGAY khi init collection — thiếu index thì filter quét toàn collection
+(đây là điều 1.10 phải đo để xác nhận).
+
+**Config khởi điểm (1.10 benchmark xong chỉnh lại)**
+- Scalar quantization int8, `quantile 0.99`, `always_ram: true`; vector gốc `on_disk: true`.
+- HNSW mặc định (`m=16`, `ef_construct=100`); `ef` search tune theo 1.10.
+
+**Truy vấn & ghi**
+- Search: `must [org_id == ctx.org, collection_id IN allowed_ids]` — adapter **từ chối**
+  query thiếu 1 trong 2 điều kiện (2.4), không trả kết quả rỗng âm thầm.
+- Upsert (3.2): batch 64-256 điểm, `wait=true` để checkpoint per-batch chính xác
+  (chậm hơn nhưng resume đúng; nếu 1.10 cho thấy quá chậm mới cân nhắc wait=false + verify).
+- Delete: theo filter `document_id` (tombstone cleanup) và theo `version` cũ sau reindex.
+- Snapshot per-collection (7.1); restore node sạch → verify count khớp PG → switch.
+
+**Nhất quán PG ↔ Qdrant**
+- PG `chunks` là nguồn sự thật; Qdrant rebuild được toàn bộ từ PG (drill 7.1).
+- Reconcile (2.7): so `COUNT chunks` theo document vs điểm Qdrant theo `document_id`
+  filter — điểm mồ côi (doc đã purge) xoá, chunk thiếu điểm → re-embed.
+
 ## State machine `documents.status` (spec cho task 2.7)
 
 | Từ | Sang | Trigger | Side effect (idempotent) |
@@ -303,10 +405,12 @@ Seed dev (ngoài migration — script riêng): 1 org `demo`, user owner + viewer
 | embedding_signatures | 1.7 nhóm 3 | 3.1, 2.4 (tên collection Qdrant) |
 | org_quotas/usage_counters/quota_reservations | 1.7 nhóm 4 | 2.8, 3.4 (token), 5.1/6.2 (dashboard) |
 | audit_log | 1.7 nhóm 4 | 2.3 (login), 2.5, 6.1, 7.2 |
+| qa_sessions/qa_messages/qa_citations | 1.7 nhóm 5 | 3.4 (ghi), 4.3 (lịch sử chat), 3.5 (eval đọc retrieval/citations) |
+| Qdrant collection (ngoài PG) | 2.4 init theo spec trên | 3.1/3.2 (ghi), 3.3 (search), 2.7 (reconcile), 7.1 (snapshot) |
 
 ## Ghi chú cho người viết migration (task 1.7)
 
-- Thứ tự migration: extension → nhóm 1 → 2 → 3 → 4 → seed role. Mỗi nhóm 1 PR.
+- Thứ tự migration: extension → nhóm 1 → 2 → 3 → 4 → 5 → seed role. Mỗi nhóm 1 PR.
 - `sqlx migrate add -r <tên>` (có down migration ở POC cho dễ làm lại DB dev).
 - KHÔNG dùng `DefaultHasher`/bigint cho `content_hash` — BLAKE3 hex TEXT (bài học desktop).
 - `chunks.tsv` là GENERATED — insert chỉ ghi `text`, đừng ghi tsv thủ công.

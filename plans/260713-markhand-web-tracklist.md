@@ -128,7 +128,7 @@
 **Chờ:** 1.1, 1.6 · spec DDL: docs/web-db-schema.md · **Chặn:** 2.2, 2.3, 2.6, 2.8
 **Hướng làm:** Migration sqlx theo `docs/web-architecture.md` mục 4 (tenancy, RBAC, docs, jobs, quota, audit — mọi bảng nghiệp vụ có `org_id`). Làm từng nhóm bảng một PR nhỏ để lead review kịp. Seed dev: 1 org, 2 user, 1 collection.
 **Việc cần làm:**
-- [ ] Nhóm tenancy + RBAC · nhóm docs/chunks (tsvector + GIN, partition-ready org_id) · nhóm jobs/quota/audit
+- [ ] Nhóm tenancy + RBAC · nhóm docs/chunks (tsvector + GIN, partition-ready org_id) · nhóm jobs/signature · nhóm quota/audit · nhóm Q&A log (qa_sessions/qa_messages/qa_citations)
 - [ ] `content_hash` cột text/bytea (BLAKE3 hex — KHÔNG bigint) · `jobs.idempotency_key` unique
 - [ ] Seed script
 **DoD:** `sqlx migrate run` sạch trên PG của 1.1; seed chạy; lead đối chiếu từng bảng với design doc.
@@ -186,7 +186,7 @@
 
 ### 2.4 Qdrant collection + adapter — `server`
 **Chờ:** 1.9 (dimension), 1.10 (config), 2.2 · **Chặn:** 3.1, 3.2
-**Hướng làm:** Init collection theo đề xuất 1.10 (dimension theo model chốt ở 1.9, scalar quantization, payload index `org_id`/`collection_id`). Adapter **từ chối search** nếu thiếu `org_id + allowed_collection_ids`.
+**Hướng làm:** Init collection theo spec "Thiết kế Qdrant" trong `docs/web-db-schema.md` (tên `chunks_<signature>`, point id = chunks.id, payload 4 field + 3 payload index, quantization int8; dimension theo 1.9, config chỉnh theo 1.10). Adapter **từ chối search** nếu thiếu `org_id + allowed_collection_ids`.
 **Việc cần làm:**
 - [ ] Script/module init idempotent · [ ] Adapter upsert/search/delete theo filter
 - [ ] Test: search thiếu org context → error, không phải kết quả rỗng
@@ -260,6 +260,7 @@
 **Hướng làm:** Prompt kèm nguồn từ 3.3 → GLM stream SSE → answer + citation (doc, heading path, link). Citation fetch **re-check ACL + trạng thái tài liệu** (tombstone không bao giờ trả). LLM lỗi/timeout → fallback trả trích đoạn top chunk. Đếm token thật vào quota (2.8).
 **Việc cần làm:**
 - [ ] SSE endpoint + stream parse · [ ] Citation re-check · [ ] Fallback + test giả lập LLM chết
+- [ ] Persist lịch sử: `qa_sessions`/`qa_messages` (status done/fallback/error, token usage, retrieval JSONB) + `qa_citations` snapshot (schema nhóm 5 — `docs/web-db-schema.md`)
 **DoD:** hỏi trên golden-set → answer stream + citation click ra đúng chunk; tắt GLM → vẫn trả trích đoạn, không 500.
 
 ### 3.5 Eval harness recall — `qa`
@@ -286,7 +287,7 @@
 ### 4.3 UI Chat Q&A citation — `frontend`
 **Chờ:** 4.1, 3.4 · **Chặn:** 4.4
 **Hướng làm:** Chat stream SSE từ 3.4, render markdown answer, citation là chip/link → mở panel preview đúng tài liệu + heading. Hiện trạng thái fallback ("LLM lỗi — trích đoạn nguồn") trung thực.
-**Việc cần làm:** [ ] SSE client + render tăng dần · [ ] Citation chip → preview anchor · [ ] Trạng thái lỗi/fallback
+**Việc cần làm:** [ ] SSE client + render tăng dần · [ ] Citation chip → preview anchor · [ ] Trạng thái lỗi/fallback · [ ] Danh sách session + load lịch sử (`qa_sessions`/`qa_messages`)
 **DoD:** hỏi thật trên UI → answer stream + click citation mở đúng chỗ; không giả tiến trình.
 
 ### 4.4 Playwright E2E smoke — `qa`
