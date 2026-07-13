@@ -1,4 +1,3 @@
-
 // Flat config (ESLint 9+) — preset chuẩn cho Vite + React + TypeScript.
 // Tối thiểu (YAGNI): recommended của js/ts + react-hooks + react-refresh,
 // eslint-config-prettier ở CUỐI để tắt các rule format đụng Prettier.
