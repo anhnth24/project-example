@@ -16,7 +16,7 @@ import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { findByRel, isWithinRel, parentRel } from "../lib/tree";
 import type { FsNode } from "../lib/types";
-import { Tree } from "./Tree";
+import { Tree, sortChildren } from "./Tree";
 import { Button, IconButton, Modal, SelectControl } from "./ui";
 
 type DialogState =
@@ -48,6 +48,8 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     closeTabsWithin,
     setActiveFolder,
     setError,
+    sortBy,
+    setSortBy,
   } = useStore();
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -73,14 +75,17 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     activeProject?.rootRel && tree
       ? findByRel(tree, activeProject.rootRel)
       : tree;
-  const projectChildren = (projectNode?.children ?? []).filter(
-    (child) =>
-      activeProject?.rootRel !== "" ||
-      !projects.some(
-        (project) =>
-          project.rootRel !== "" &&
-          project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
-      ),
+  const projectChildren = sortChildren(
+    (projectNode?.children ?? []).filter(
+      (child) =>
+        activeProject?.rootRel !== "" ||
+        !projects.some(
+          (project) =>
+            project.rootRel !== "" &&
+            project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
+        ),
+    ),
+    sortBy,
   );
 
   function openCreate(
@@ -309,9 +314,22 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
         </IconButton>
       </div>
 
-      <div className="drawer-section-label">
+      <div className="drawer-section-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>DATA</span>
-        <span title={`File mới sẽ vào ${folderLabel}`}>Đích: {folderLabel}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span title={`File mới sẽ vào ${folderLabel}`}>Đích: {folderLabel}</span>
+          <SelectControl
+            value={sortBy}
+            onChange={(val) => setSortBy(val as any)}
+            ariaLabel="Sắp xếp"
+            compact
+            options={[
+              { value: "name", label: "Tên" },
+              { value: "type", label: "Loại file" },
+              { value: "converted", label: "Chưa convert" },
+            ]}
+          />
+        </div>
       </div>
 
       <div className="tree-scroll">

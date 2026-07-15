@@ -1,10 +1,31 @@
 import { useState } from "react";
 import { ChevronRight, Folder, FolderOpen, Pencil, Trash2 } from "lucide-react";
-import { useStore } from "../state/store";
+import { useStore, type SortOption } from "../state/store";
 import { fileIcon } from "../lib/icons";
 import { nodeMatches } from "../lib/tree";
 import type { FsNode } from "../lib/types";
 import { IconButton } from "./ui";
+
+export function sortChildren(children: FsNode[], sortBy: SortOption): FsNode[] {
+  return [...children].sort((a, b) => {
+    if (a.isDir !== b.isDir) {
+      return a.isDir ? -1 : 1;
+    }
+    if (sortBy === "type") {
+      const kindA = a.kind || "";
+      const kindB = b.kind || "";
+      const comp = kindA.localeCompare(kindB, "vi");
+      if (comp !== 0) return comp;
+    } else if (sortBy === "converted") {
+      const unconvA = !a.isDir && a.supported && !a.mdRelPath;
+      const unconvB = !b.isDir && b.supported && !b.mdRelPath;
+      if (unconvA !== unconvB) {
+        return unconvA ? -1 : 1;
+      }
+    }
+    return a.name.localeCompare(b.name, "vi", { sensitivity: "base", numeric: true });
+  });
+}
 
 export function Tree({
   node,
@@ -24,6 +45,7 @@ export function Tree({
   const activeFolder = useStore((state) => state.activeFolder);
   const view = useStore((state) => state.view);
   const openNode = useStore((state) => state.openNode);
+  const sortBy = useStore((state) => state.sortBy);
 
   if (!nodeMatches(node, query)) return null;
   const expanded = query.trim() ? true : open;
@@ -76,7 +98,7 @@ export function Tree({
       </div>
       {node.isDir && expanded && node.children.length > 0 && (
         <div className="children">
-          {node.children.map((c) => (
+          {sortChildren(node.children, sortBy).map((c) => (
             <Tree
               key={c.relPath}
               node={c}

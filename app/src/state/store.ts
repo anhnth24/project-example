@@ -51,6 +51,8 @@ function defaultSession(relPath: string): DocumentSession {
   };
 }
 
+export type SortOption = "name" | "type" | "converted";
+
 interface AppStore {
   dataRoot: string;
   tree: FsNode | null;
@@ -60,6 +62,7 @@ interface AppStore {
   projects: Project[];
   activeProjectId: string | null;
   error: string | null;
+  sortBy: SortOption;
 
   view: AppView;
   openTabs: string[];
@@ -83,6 +86,7 @@ interface AppStore {
   closeTab: (relPath: string) => void;
   closeTabsWithin: (relPath: string) => void;
   setActiveFolder: (relPath: string) => void;
+  setSortBy: (sortBy: SortOption) => void;
 
   loadSession: (relPath: string, conversionBaseline?: boolean) => Promise<void>;
   updateDraft: (relPath: string, draft: string) => void;
@@ -108,6 +112,7 @@ export const useStore = create<AppStore>((set, get) => ({
   projects: [],
   activeProjectId: null,
   error: null,
+  sortBy: "name",
 
   view: "home",
   openTabs: [],
@@ -275,6 +280,7 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   setActiveFolder: (activeFolder) => set({ activeFolder }),
+  setSortBy: (sortBy) => set({ sortBy }),
 
   loadSession: async (relPath, conversionBaseline = false) => {
     const existing = get().sessions[relPath];
