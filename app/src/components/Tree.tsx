@@ -4,19 +4,25 @@ import { useStore, type SortOption } from "../state/store";
 import { fileIcon } from "../lib/icons";
 import type { FsNode } from "../lib/types";
 import { IconButton } from "./ui";
+import { normalizeSearch } from "../lib/tree";
 
 export function hasVisibleDescendant(
   node: FsNode,
   query: string,
   filterUnconvertedOnly: boolean
 ): boolean {
+  const q = normalizeSearch(query);
   if (!node.isDir) {
-    const matchesQuery =
-      !query.trim() || node.name.toLowerCase().includes(query.toLowerCase());
+    const matchesQuery = !q || normalizeSearch(node.name).includes(q);
     const matchesFilter =
       !filterUnconvertedOnly || !!(node.supported && !node.mdRelPath);
     return matchesQuery && matchesFilter;
   }
+  // Folder: tên khớp query → hiện (kể cả trống / không có file match)
+  if (q && normalizeSearch(node.name).includes(q)) return true;
+  // Không query + không filter → hiện mọi folder (kể cả trống)
+  if (!q && !filterUnconvertedOnly) return true;
+  // Còn lại: hiện folder nếu có descendant còn visible
   return node.children.some((child) =>
     hasVisibleDescendant(child, query, filterUnconvertedOnly)
   );

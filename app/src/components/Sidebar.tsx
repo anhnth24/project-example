@@ -87,16 +87,20 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     activeProject?.rootRel && tree
       ? findByRel(tree, activeProject.rootRel)
       : tree;
+
+  const baseChildren = (projectNode?.children ?? []).filter(
+    (child) =>
+      activeProject?.rootRel !== "" ||
+      !projects.some(
+        (project) =>
+          project.rootRel !== "" &&
+          project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
+      )
+  );
+
   const projectChildren = sortChildren(
-    (projectNode?.children ?? []).filter(
-      (child) =>
-        (activeProject?.rootRel !== "" ||
-          !projects.some(
-            (project) =>
-              project.rootRel !== "" &&
-              project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
-          )) &&
-        hasVisibleDescendant(child, query, filterUnconvertedOnly),
+    baseChildren.filter((child) =>
+      hasVisibleDescendant(child, query, filterUnconvertedOnly)
     ),
     sortBy,
   );
@@ -365,7 +369,17 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
       </div>
 
       <div className="tree-scroll">
-        {projectChildren.length ? (
+        {!baseChildren.length ? (
+          <div className="drawer-empty">
+            {activeProject
+              ? "Dự án trống — import folder, tải file hoặc tạo thư mục."
+              : "Tạo dự án đầu tiên để bắt đầu."}
+          </div>
+        ) : !projectChildren.length ? (
+          <div className="drawer-empty">
+            Không có file khớp bộ lọc/tìm kiếm.
+          </div>
+        ) : (
           projectChildren.map((child) => (
             <Tree
               key={child.relPath}
@@ -376,12 +390,6 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
               onDelete={openDelete}
             />
           ))
-        ) : (
-          <div className="drawer-empty">
-            {activeProject
-              ? "Dự án trống — import folder, tải file hoặc tạo thư mục."
-              : "Tạo dự án đầu tiên để bắt đầu."}
-          </div>
         )}
       </div>
 
