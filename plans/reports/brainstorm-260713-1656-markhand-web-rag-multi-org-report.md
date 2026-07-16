@@ -3,6 +3,7 @@
 - Date: 2026-07-13
 - Status: Design APPROVED bởi user; đã qua **Codex review** (8 finding) và cập nhật thiết kế + phasing theo review. User đã trả lời 4 câu hỏi mở của review.
 - Modes: none (không --html/--wiki)
+- Implementation plans: [`../markhand-web/README.md`](../markhand-web/README.md)
 
 ## 1. Bài toán
 
@@ -12,7 +13,7 @@ Xây web app quản lý tài liệu trên nền `fileconv-core`: trích xuất (
 
 ## 2. Hiện trạng codebase (scout)
 
-- Pipeline RAG đã tồn tại trong desktop: `app/src-tauri/knowledge.rs` (1.672 dòng, SQLite FTS5 + vector hybrid + citation), `vector_index.rs` (HNSW persistent), `intelligence.rs` (1.168 dòng: quality, PII, BA/PM handoff). Tổng ~5.200 dòng gắn chặt Tauri **và** SQLite/filesystem root/sync-blocking flow (`knowledge.rs:178`, `:1027`) — refactor khó hơn mức "bỏ tauri::State".
+- Pipeline RAG đã tồn tại trong desktop: `app/src-tauri/src/knowledge.rs` (1.672 dòng, SQLite FTS5 + vector hybrid + citation), `app/src-tauri/src/vector_index.rs` (HNSW persistent), `app/src-tauri/src/intelligence.rs` (1.168 dòng: quality, PII, BA/PM handoff). Tổng ~5.200 dòng gắn chặt Tauri **và** SQLite/filesystem root/sync-blocking flow (`knowledge.rs:178`, `:1027`) — refactor khó hơn mức "bỏ tauri::State".
 - `crates/core`: `chunk.rs` (chunk heading-path), `llm.rs` (chat/vision/embedding đa provider OpenAI-compatible — GLM/vLLM dùng được ngay; lưu ý embed hiện blocking HTTP, batch 64, timeout 60s — `llm.rs:801`), `intelligence.rs` thuần.
 - Chưa có web server crate. MCP server (`crates/mcp`) là convert-tool, không phải document store.
 - Frontend React+Vite desktop có component tái dùng: `SafeMarkdown`, pattern `LibraryView`/`IntelligenceView`, `ui.tsx`.
@@ -61,7 +62,7 @@ Kết luận: ~80% logic RAG đã có. Bài toán thực = **tách lớp intelli
 
 ### Workspace
 - `crates/core` — giữ nguyên.
-- `crates/knowledge` (mới) — tách từ `app/src-tauri/{knowledge,vector_index,intelligence}.rs`: **extract tối thiểu theo use-case** — logic thuần chunk→embed→rank→citation trước; desktop giữ SQLite/HNSW và hành vi không đổi (test chốt trước khi tách).
+- `crates/knowledge` (mới) — tách từ `app/src-tauri/src/{knowledge,vector_index,intelligence}.rs`: **extract tối thiểu theo use-case** — logic thuần chunk→embed→rank→citation trước; desktop giữ SQLite/HNSW và hành vi không đổi (test chốt trước khi tách).
 - `crates/server` (mới) — axum: JWT auth (module tách riêng, pluggable OIDC sau), RBAC middleware, tower_governor + quota, REST + SSE, worker pool, adapter PG/Qdrant/MinIO.
 - `web/` (mới) — React+Vite SPA; thay `ipc.ts` bằng HTTP client; tái dùng SafeMarkdown/pattern view.
 
