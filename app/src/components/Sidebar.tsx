@@ -2,6 +2,7 @@ import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   FilePlus2,
+  Filter,
   Folder,
   FolderCog,
   FolderInput,
@@ -12,11 +13,11 @@ import {
   Settings,
   Upload,
 } from "lucide-react";
-import { useStore } from "../state/store";
+import { useStore, type SortOption } from "../state/store";
 import { api } from "../lib/ipc";
 import { findByRel, isWithinRel, parentRel } from "../lib/tree";
 import type { FsNode } from "../lib/types";
-import { Tree } from "./Tree";
+import { Tree, sortChildren, hasVisibleDescendant } from "./Tree";
 import { Button, IconButton, Modal, SelectControl } from "./ui";
 
 type DialogState =
@@ -27,28 +28,41 @@ type DialogState =
   | { kind: "delete"; node: FsNode }
   | null;
 
+function isSortOption(val: string): val is SortOption {
+  return [
+    "name_asc",
+    "name_desc",
+    "type_asc",
+    "type_desc",
+    "converted_first",
+    "unconverted_first",
+  ].includes(val);
+}
+
 export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const {
-    dataRoot,
-    tree,
-    projects,
-    activeProjectId,
-    activeFolder,
-    supportedExts,
-    sessions,
-    jobs,
-    activeImports,
-    workspaceChanging,
-    refreshTree,
-    refreshProjects,
-    setActiveProject,
-    changeDataRoot,
-    importSources,
-    openNode,
-    closeTabsWithin,
-    setActiveFolder,
-    setError,
-  } = useStore();
+  const dataRoot = useStore((state) => state.dataRoot);
+  const tree = useStore((state) => state.tree);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
+  const activeFolder = useStore((state) => state.activeFolder);
+  const supportedExts = useStore((state) => state.supportedExts);
+  const sessions = useStore((state) => state.sessions);
+  const jobs = useStore((state) => state.jobs);
+  const activeImports = useStore((state) => state.activeImports);
+  const workspaceChanging = useStore((state) => state.workspaceChanging);
+  const refreshTree = useStore((state) => state.refreshTree);
+  const refreshProjects = useStore((state) => state.refreshProjects);
+  const setActiveProject = useStore((state) => state.setActiveProject);
+  const changeDataRoot = useStore((state) => state.changeDataRoot);
+  const importSources = useStore((state) => state.importSources);
+  const openNode = useStore((state) => state.openNode);
+  const closeTabsWithin = useStore((state) => state.closeTabsWithin);
+  const setActiveFolder = useStore((state) => state.setActiveFolder);
+  const setError = useStore((state) => state.setError);
+  const sortBy = useStore((state) => state.sortBy);
+  const setSortBy = useStore((state) => state.setSortBy);
+  const filterUnconvertedOnly = useStore((state) => state.filterUnconvertedOnly);
+  const setFilterUnconvertedOnly = useStore((state) => state.setFilterUnconvertedOnly);
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<DialogState>(null);
   const [name, setName] = useState("");
@@ -73,14 +87,22 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
     activeProject?.rootRel && tree
       ? findByRel(tree, activeProject.rootRel)
       : tree;
-  const projectChildren = (projectNode?.children ?? []).filter(
+
+  const baseChildren = (projectNode?.children ?? []).filter(
     (child) =>
       activeProject?.rootRel !== "" ||
       !projects.some(
         (project) =>
           project.rootRel !== "" &&
           project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
-      ),
+      )
+  );
+
+  const projectChildren = sortChildren(
+    baseChildren.filter((child) =>
+      hasVisibleDescendant(child, query, filterUnconvertedOnly)
+    ),
+    sortBy,
   );
 
   function openCreate(
@@ -309,13 +331,55 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
         </IconButton>
       </div>
 
-      <div className="drawer-section-label">
+      <div className="drawer-section-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>DATA</span>
-        <span title={`File mới sẽ vào ${folderLabel}`}>Đích: {folderLabel}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span title={`File mới sẽ vào ${folderLabel}`}>Đích: {folderLabel}</span>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <IconButton
+              label={filterUnconvertedOnly ? "Hiển thị tất cả file" : "Chỉ hiện file chưa convert"}
+              active={filterUnconvertedOnly}
+              onClick={() => setFilterUnconvertedOnly(!filterUnconvertedOnly)}
+            >
+              <Filter size={14} />
+            </IconButton>
+            <div title="Phân loại file theo" style={{ display: "inline-flex" }}>
+              <SelectControl
+                value={sortBy}
+                onChange={(val) => {
+                  if (isSortOption(val)) {
+                    setSortBy(val);
+                  }
+                }}
+                ariaLabel="Sắp xếp"
+                placeholder="Phân loại file theo"
+                compact
+                options={[
+                  { value: "name_asc", label: "Tên (A-Z)" },
+                  { value: "name_desc", label: "Tên (Z-A)" },
+                  { value: "type_asc", label: "Loại file (A-Z)" },
+                  { value: "type_desc", label: "Loại file (Z-A)" },
+                  { value: "converted_first", label: "Đã convert trước" },
+                  { value: "unconverted_first", label: "Chưa convert trước" },
+                ]}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="tree-scroll">
-        {projectChildren.length ? (
+        {!baseChildren.length ? (
+          <div className="drawer-empty">
+            {activeProject
+              ? "Dự án trống — import folder, tải file hoặc tạo thư mục."
+              : "Tạo dự án đầu tiên để bắt đầu."}
+          </div>
+        ) : !projectChildren.length ? (
+          <div className="drawer-empty">
+            Không có file khớp bộ lọc/tìm kiếm.
+          </div>
+        ) : (
           projectChildren.map((child) => (
             <Tree
               key={child.relPath}
@@ -326,12 +390,6 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
               onDelete={openDelete}
             />
           ))
-        ) : (
-          <div className="drawer-empty">
-            {activeProject
-              ? "Dự án trống — import folder, tải file hoặc tạo thư mục."
-              : "Tạo dự án đầu tiên để bắt đầu."}
-          </div>
         )}
       </div>
 
