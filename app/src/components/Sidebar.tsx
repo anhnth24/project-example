@@ -2,6 +2,7 @@ import { useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   FilePlus2,
+  Filter,
   Folder,
   FolderCog,
   FolderInput,
@@ -16,7 +17,7 @@ import { useStore } from "../state/store";
 import { api } from "../lib/ipc";
 import { findByRel, isWithinRel, parentRel } from "../lib/tree";
 import type { FsNode } from "../lib/types";
-import { Tree, sortChildren } from "./Tree";
+import { Tree, sortChildren, hasUnconvertedDescendant } from "./Tree";
 import { Button, IconButton, Modal, SelectControl } from "./ui";
 
 type DialogState =
@@ -28,29 +29,29 @@ type DialogState =
   | null;
 
 export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const {
-    dataRoot,
-    tree,
-    projects,
-    activeProjectId,
-    activeFolder,
-    supportedExts,
-    sessions,
-    jobs,
-    activeImports,
-    workspaceChanging,
-    refreshTree,
-    refreshProjects,
-    setActiveProject,
-    changeDataRoot,
-    importSources,
-    openNode,
-    closeTabsWithin,
-    setActiveFolder,
-    setError,
-    sortBy,
-    setSortBy,
-  } = useStore();
+  const dataRoot = useStore((state) => state.dataRoot);
+  const tree = useStore((state) => state.tree);
+  const projects = useStore((state) => state.projects);
+  const activeProjectId = useStore((state) => state.activeProjectId);
+  const activeFolder = useStore((state) => state.activeFolder);
+  const supportedExts = useStore((state) => state.supportedExts);
+  const sessions = useStore((state) => state.sessions);
+  const jobs = useStore((state) => state.jobs);
+  const activeImports = useStore((state) => state.activeImports);
+  const workspaceChanging = useStore((state) => state.workspaceChanging);
+  const refreshTree = useStore((state) => state.refreshTree);
+  const refreshProjects = useStore((state) => state.refreshProjects);
+  const setActiveProject = useStore((state) => state.setActiveProject);
+  const changeDataRoot = useStore((state) => state.changeDataRoot);
+  const importSources = useStore((state) => state.importSources);
+  const openNode = useStore((state) => state.openNode);
+  const closeTabsWithin = useStore((state) => state.closeTabsWithin);
+  const setActiveFolder = useStore((state) => state.setActiveFolder);
+  const setError = useStore((state) => state.setError);
+  const sortBy = useStore((state) => state.sortBy);
+  const setSortBy = useStore((state) => state.setSortBy);
+  const filterUnconvertedOnly = useStore((state) => state.filterUnconvertedOnly);
+  const setFilterUnconvertedOnly = useStore((state) => state.setFilterUnconvertedOnly);
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<DialogState>(null);
   const [name, setName] = useState("");
@@ -78,12 +79,13 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const projectChildren = sortChildren(
     (projectNode?.children ?? []).filter(
       (child) =>
-        activeProject?.rootRel !== "" ||
-        !projects.some(
-          (project) =>
-            project.rootRel !== "" &&
-            project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
-        ),
+        (activeProject?.rootRel !== "" ||
+          !projects.some(
+            (project) =>
+              project.rootRel !== "" &&
+              project.rootRel.toLowerCase() === child.relPath.toLowerCase(),
+          )) &&
+        (!filterUnconvertedOnly || hasUnconvertedDescendant(child)),
     ),
     sortBy,
   );
@@ -318,17 +320,32 @@ export function Sidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
         <span>DATA</span>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span title={`File mới sẽ vào ${folderLabel}`}>Đích: {folderLabel}</span>
-          <SelectControl
-            value={sortBy}
-            onChange={(val) => setSortBy(val as any)}
-            ariaLabel="Sắp xếp"
-            compact
-            options={[
-              { value: "name", label: "Tên" },
-              { value: "type", label: "Loại file" },
-              { value: "converted", label: "Chưa convert" },
-            ]}
-          />
+          <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+            <IconButton
+              label={filterUnconvertedOnly ? "Hiển thị tất cả file" : "Chỉ hiện file chưa convert"}
+              active={filterUnconvertedOnly}
+              onClick={() => setFilterUnconvertedOnly(!filterUnconvertedOnly)}
+            >
+              <Filter size={14} />
+            </IconButton>
+            <div title="Phân loại file theo" style={{ display: "inline-flex" }}>
+              <SelectControl
+                value={sortBy}
+                onChange={(val) => setSortBy(val as any)}
+                ariaLabel="Sắp xếp"
+                placeholder="Phân loại file theo"
+                compact
+                options={[
+                  { value: "name_asc", label: "Tên (A-Z)" },
+                  { value: "name_desc", label: "Tên (Z-A)" },
+                  { value: "type_asc", label: "Loại file (A-Z)" },
+                  { value: "type_desc", label: "Loại file (Z-A)" },
+                  { value: "converted_first", label: "Đã convert trước" },
+                  { value: "unconverted_first", label: "Chưa convert trước" },
+                ]}
+              />
+            </div>
+          </div>
         </div>
       </div>
 

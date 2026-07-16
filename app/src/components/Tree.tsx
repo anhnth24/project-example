@@ -6,24 +6,60 @@ import { nodeMatches } from "../lib/tree";
 import type { FsNode } from "../lib/types";
 import { IconButton } from "./ui";
 
+export function hasUnconvertedDescendant(node: FsNode): boolean {
+  if (!node.isDir) {
+    return !!(node.supported && !node.mdRelPath);
+  }
+  return node.children.some(child => hasUnconvertedDescendant(child));
+}
+
 export function sortChildren(children: FsNode[], sortBy: SortOption): FsNode[] {
   return [...children].sort((a, b) => {
     if (a.isDir !== b.isDir) {
       return a.isDir ? -1 : 1;
     }
-    if (sortBy === "type") {
+
+    const nameComp = a.name.localeCompare(b.name, "vi", { sensitivity: "base", numeric: true });
+
+    if (sortBy === "name_asc") {
+      return nameComp;
+    }
+    if (sortBy === "name_desc") {
+      return -nameComp;
+    }
+
+    if (sortBy === "type_asc") {
       const kindA = a.kind || "";
       const kindB = b.kind || "";
       const comp = kindA.localeCompare(kindB, "vi");
-      if (comp !== 0) return comp;
-    } else if (sortBy === "converted") {
+      return comp !== 0 ? comp : nameComp;
+    }
+    if (sortBy === "type_desc") {
+      const kindA = a.kind || "";
+      const kindB = b.kind || "";
+      const comp = kindB.localeCompare(kindA, "vi");
+      return comp !== 0 ? comp : nameComp;
+    }
+
+    if (sortBy === "converted_first") {
+      const unconvA = !a.isDir && a.supported && !a.mdRelPath;
+      const unconvB = !b.isDir && b.supported && !b.mdRelPath;
+      if (unconvA !== unconvB) {
+        return unconvA ? 1 : -1;
+      }
+      return nameComp;
+    }
+
+    if (sortBy === "unconverted_first") {
       const unconvA = !a.isDir && a.supported && !a.mdRelPath;
       const unconvB = !b.isDir && b.supported && !b.mdRelPath;
       if (unconvA !== unconvB) {
         return unconvA ? -1 : 1;
       }
+      return nameComp;
     }
-    return a.name.localeCompare(b.name, "vi", { sensitivity: "base", numeric: true });
+
+    return nameComp;
   });
 }
 
@@ -46,8 +82,11 @@ export function Tree({
   const view = useStore((state) => state.view);
   const openNode = useStore((state) => state.openNode);
   const sortBy = useStore((state) => state.sortBy);
+  const filterUnconvertedOnly = useStore((state) => state.filterUnconvertedOnly);
 
   if (!nodeMatches(node, query)) return null;
+  if (filterUnconvertedOnly && !hasUnconvertedDescendant(node)) return null;
+
   const expanded = query.trim() ? true : open;
   const isSelected = node.isDir
     ? activeFolder === node.relPath
@@ -98,7 +137,10 @@ export function Tree({
       </div>
       {node.isDir && expanded && node.children.length > 0 && (
         <div className="children">
-          {sortChildren(node.children, sortBy).map((c) => (
+          {sortChildren(
+            node.children.filter((c) => !filterUnconvertedOnly || hasUnconvertedDescendant(c)),
+            sortBy
+          ).map((c) => (
             <Tree
               key={c.relPath}
               node={c}

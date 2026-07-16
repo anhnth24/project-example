@@ -21,3 +21,7 @@ pdfium/
 /bench/edge/
 /bench/sample10/
 /bench/corpus10/
+/.venv
+.aider*
+.env
+/tao_file_test.py
