@@ -17,22 +17,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ROADMAP = ROOT / "plans/markhand-web/roadmap.html"
 DATA_PATTERN = re.compile(
-    r"(?P<indent>[ \t]*)/\* ROADMAP_DATA_START \*/"
+    r"^(?P<indent>[ \t]*)/\* ROADMAP_DATA_START \*/[ \t]*\r?\n"
     r".*?"
-    r"(?P=indent)/\* ROADMAP_DATA_END \*/",
-    re.DOTALL,
+    r"^(?P=indent)/\* ROADMAP_DATA_END \*/[ \t]*$",
+    re.DOTALL | re.MULTILINE,
 )
 DEFAULT_STATUS_PATTERN = re.compile(
     r"<!--\s*roadmap-default-status:\s*([a-z_ ]+)\s*-->",
     re.IGNORECASE,
 )
 ISSUE_PATTERN = re.compile(
-    r"^#{2,3}\s+"
+    r"^(?P<heading>#{2,3})\s+"
     r"(?P<id>(?:F|P0|P1A|P1B|1C|P2|P3|P4)-[A-Z0-9]+)"
     r"\s+—\s+"
     r"(?P<title>.+?)\s*$",
     re.MULTILINE,
 )
+HEADING_PATTERN = re.compile(r"^(?P<heading>#{1,6})\s+", re.MULTILINE)
 STATUS_FIELD_PATTERN = re.compile(
     r"^\s*-\s*\*\*Status:\*\*\s*(?P<value>[^\r\n]*)$",
     re.IGNORECASE | re.MULTILINE,
@@ -193,8 +194,13 @@ def parse_phase(config: PhaseConfig) -> dict[str, object]:
     matches = list(ISSUE_PATTERN.finditer(content))
     issues: list[list[str]] = []
 
-    for index, match in enumerate(matches):
-        section_end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+    for match in matches:
+        heading_level = len(match.group("heading"))
+        section_end = len(content)
+        for next_heading in HEADING_PATTERN.finditer(content, match.end()):
+            if len(next_heading.group("heading")) <= heading_level:
+                section_end = next_heading.start()
+                break
         section = content[match.end() : section_end]
         status_fields = list(STATUS_FIELD_PATTERN.finditer(section))
         if len(status_fields) > 1:
@@ -288,6 +294,7 @@ def render(current: str, phases: list[dict[str, object]]) -> str:
 
 def atomic_write(path: Path, content: str) -> None:
     temporary: Path | None = None
+    mode = path.stat().st_mode & 0o777
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -302,6 +309,7 @@ def atomic_write(path: Path, content: str) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
+        os.chmod(temporary, mode)
         os.replace(temporary, path)
     finally:
         if temporary and temporary.exists():
