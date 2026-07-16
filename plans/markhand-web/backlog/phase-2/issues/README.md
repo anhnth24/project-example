@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
+<!-- roadmap-default-status: backlog -->
+
 Issue ở **Backlog**. UI/mock có thể chạy sau OpenAPI 1B; final gate phụ thuộc Phase 1C.
 
 ## Dependency

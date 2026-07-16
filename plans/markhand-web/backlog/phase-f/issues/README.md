@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-f-engineering-foundation.md`](../../../phase-f-engineering-foundation.md)
 
+<!-- roadmap-default-status: blocked -->
+
 ## Dependency
 
 ```text

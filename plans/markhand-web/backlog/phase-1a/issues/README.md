@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-1a-knowledge-extraction.md`](../../../phase-1a-knowledge-extraction.md)
 
+<!-- roadmap-default-status: blocked -->
+
 Toàn milestone blocked bởi Phase F exit gate.
 
 ## Dependency

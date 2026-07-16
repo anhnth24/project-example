@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-1c-multi-org-security.md`](../../../phase-1c-multi-org-security.md)
 
+<!-- roadmap-default-status: backlog -->
+
 Mọi issue ở trạng thái **Backlog**, activate sau Phase 1B gate.
 
 ## Dependency

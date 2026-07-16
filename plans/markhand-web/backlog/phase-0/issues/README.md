@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-0-discovery-and-gates.md`](../../../phase-0-discovery-and-gates.md)
 
+<!-- roadmap-default-status: blocked -->
+
 Toàn milestone blocked bởi Phase F exit gate.
 
 ## Dependency

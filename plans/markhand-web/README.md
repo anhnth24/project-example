@@ -21,6 +21,18 @@ Roadmap dashboard tương tác:
 [`roadmap.html`](roadmap.html) — lọc/tìm kiếm, cập nhật trạng thái, lưu local và
 export/import JSON.
 
+Roadmap là generated artifact từ `backlog/*/issues/README.md`. Chạy các lệnh sau từ
+repository root sau khi đổi tiêu đề hoặc `**Status:**` của issue:
+
+```bash
+python3 scripts/build-roadmap.py
+python3 scripts/build-roadmap.py --check
+```
+
+Mỗi catalog có `roadmap-default-status`; `**Status:**` trong issue sẽ override giá
+trị mặc định. Source hash mới tạo namespace local riêng nên trạng thái Markdown mới
+không bị local override cũ che mất.
+
 ## Phạm vi các phase
 
 | Phase | Kết quả chính | Tài liệu |

@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-3-intelligence.md`](../../../phase-3-intelligence.md)
 
+<!-- roadmap-default-status: backlog -->
+
 Mọi issue ở **Backlog**, blocked bởi Phase 2 gate trừ khi ghi khác.
 
 ## Dependency

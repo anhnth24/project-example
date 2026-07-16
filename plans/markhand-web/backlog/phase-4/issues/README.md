@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-4-production-hardening.md`](../../../phase-4-production-hardening.md)
 
+<!-- roadmap-default-status: backlog -->
+
 Mọi issue ở **Backlog**, blocked bởi P3-14. Threat-model notes có thể được ghi ở
 phase trước nhưng không activate issue Phase 4 trước gate.
 
