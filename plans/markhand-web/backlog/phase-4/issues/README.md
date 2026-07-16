@@ -133,6 +133,7 @@ P4-01..12 → P4-13 ────────────────────
 
 ## Exit gate
 
-Go-live cần OIDC/deprovision bound, no high/critical findings, reproducible production
-install, HA/distributed limits, clean DR, safe upgrade/rollback, executable operations,
+Go-live cần OIDC/deprovision bound, zero unresolved high/critical findings (accepted
+risk phải có approver/controls/expiry/retest), reproducible production install,
+HA/distributed limits, clean DR, safe upgrade/rollback, executable operations,
 accessible onboarding và toàn bộ denial/license/desktop regression evidence.

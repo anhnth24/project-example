@@ -31,6 +31,8 @@ P2-15 + Phase 1C gate → P2-16
   Q&A/admin/error/SSE fixtures và mock scenarios.
 - **Depends:** Stable 1B OpenAPI. **Acceptance/tests:** Drift fails CI; generated files
   immutable; fixture/schema/breaking-change tests; mock excluded production.
+- **Security/migration:** N/A — không thay đổi persisted schema; fixtures synthetic,
+  không chứa token/PII thật.
 - **Out:** Chờ toàn bộ 1C mới làm UI.
 
 ## P2-03 — Typed HTTP client/session refresh
@@ -55,8 +57,9 @@ P2-15 + Phase 1C gate → P2-16
 - **Depends:** P2-01/03 + P1B-F05 browser refresh contract. **Acceptance/tests:**
   Intended route, expiry, guard matrix, login/refresh/logout component tests và
   integration CSRF/cookie-origin contract theo auth ADR.
-- **Security:** HttpOnly/Secure/SameSite refresh + CSRF policy; server authority.
-  **Out:** signup/reset/MFA/OIDC.
+- **Security:** Transport theo auth ADR. Nếu chọn cookie: HttpOnly/Secure/SameSite +
+  CSRF/Origin contract; nếu chọn bearer refresh: không cookie/CSRF nhưng token không
+  được persist/log. Server luôn là authority. **Out:** signup/reset/MFA/OIDC.
 
 ## P2-06 — Org switch và scope-safe state
 

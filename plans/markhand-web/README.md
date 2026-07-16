@@ -33,8 +33,9 @@ Issue-level backlog (101 issues):
 
 ```text
 Phase 0 ──────────────┐
-                      ├─> Phase 1B ─> Phase 1C ─> Phase 2 ─> Phase 3 ─> Phase 4
-Phase 1A ─────────────┘
+                      ├─> Phase 1B ─> Phase 1C ────────> Phase 2 complete
+Phase 1A ─────────────┘         └─> stable OpenAPI ─> Phase 2 UI/mock
+                                                 Phase 2 complete ─> Phase 3 ─> Phase 4
 ```
 
 - Phase 0 và 1A có thể làm song song.

@@ -46,8 +46,8 @@ Không chuyển `Done` chỉ vì code đã merge.
 ## Quy tắc issue
 
 Catalog dùng card rút gọn nhưng phải chứa thông tin tương đương. Khi tạo issue trên
-tracker, dùng [`ISSUE_TEMPLATE.md`](ISSUE_TEMPLATE.md) và mở rộng thành đúng tám
-section:
+tracker, dùng [`ISSUE_TEMPLATE.md`](ISSUE_TEMPLATE.md) và mở rộng thành ít nhất tám
+section bắt buộc:
 
 1. Objective.
 2. Implementation plan.

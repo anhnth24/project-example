@@ -67,7 +67,8 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
 
 ## P0-04 — Spike infrastructure tái lập
 
-- **Status:** Blocked bởi P0-01; scaffold có thể chuẩn bị nhưng không đóng issue.
+- **Status:** Blocked bởi P0-01; chỉ ghi research note ngoài issue trước khi unblock,
+  không bắt đầu implementation.
 - **Objective:** Stack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.
 - **Plan:** Pin image/digest; health/init/seed/reset; tách quarantine/main; GPU
   optional để CPU validation vẫn chạy.
@@ -144,7 +145,8 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
 
 ## P0-09 — Upload threat model, sandbox và license inventory
 
-- **Status:** Blocked bởi P0-02/P0-08; draft threat model có thể bắt đầu sớm.
+- **Status:** Blocked bởi P0-02/P0-08; chỉ ghi research note ngoài issue trước khi
+  unblock, không bắt đầu implementation.
 - **Objective:** Security policy thực thi được trước khi nhận upload.
 - **Plan:** Threat model spoof/bomb/parser/SSRF/exhaustion/traversal/injection/token/
   quota/tenant/compromised worker; chốt allowlist/limits/quarantine/sandbox; inventory
