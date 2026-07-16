@@ -1,6 +1,6 @@
 # Markhand Web — kế hoạch triển khai theo phase
 
-Ngày lập: 2026-07-16  
+Ngày lập: 2026-07-16
 Nguồn thiết kế đã duyệt:
 [`../reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md`](../reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md)
 
