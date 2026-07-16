@@ -186,7 +186,14 @@ def parse_registry() -> tuple[list[PhaseConfig], int]:
                 f"registry Phase {row.group('code')}"
             )
         expected_directory = f"phase-{row.group('code').lower()}"
-        if catalog.parent.name != "issues" or catalog.parent.parent.name != expected_directory:
+        expected_catalog = (
+            MASTER_PLAN.parent
+            / "backlog"
+            / expected_directory
+            / "issues"
+            / "README.md"
+        ).resolve()
+        if catalog != expected_catalog:
             raise ValueError(
                 f"{catalog}: catalog phải nằm tại "
                 f"backlog/{expected_directory}/issues/README.md"
