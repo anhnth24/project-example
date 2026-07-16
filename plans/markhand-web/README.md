@@ -14,13 +14,14 @@ Kế hoạch này biến report kiến trúc thành các gói việc có depende
 test và gate đo được. Không dùng thời gian lịch làm tiêu chí; chỉ chuyển phase khi
 gate kỹ thuật của phase trước đã đạt.
 
-Issue-level backlog (101 issues):
+Issue-level backlog (113 issues):
 [`backlog/README.md`](backlog/README.md).
 
 ## Phạm vi các phase
 
 | Phase | Kết quả chính | Tài liệu |
 |---|---|---|
+| F | Engineering rules, skeleton, local dev environment và CI foundation | [`phase-f-engineering-foundation.md`](phase-f-engineering-foundation.md) |
 | 0 | Chốt bằng số liệu: scale, retrieval, bảo mật upload, SLA/RPO/RTO | [`phase-0-discovery-and-gates.md`](phase-0-discovery-and-gates.md) |
 | 1A | Tách logic RAG dùng chung thành `crates/knowledge`, desktop không đổi hành vi | [`phase-1a-knowledge-extraction.md`](phase-1a-knowledge-extraction.md) |
 | 1B | POC single-org hoàn chỉnh: upload → convert → index → Q&A citation | [`phase-1b-single-org-poc.md`](phase-1b-single-org-poc.md) |
@@ -32,13 +33,14 @@ Issue-level backlog (101 issues):
 ## Dependency và đường găng
 
 ```text
-Phase 0 ──────────────┐
-                      ├─> Phase 1B ─> Phase 1C ────────> Phase 2 complete
-Phase 1A ─────────────┘         └─> stable OpenAPI ─> Phase 2 UI/mock
+Phase F ─┬─> Phase 0 ─┐
+         └─> Phase 1A ┴─> Phase 1B ─> Phase 1C ────────> Phase 2 complete
+                                  └─> stable OpenAPI ─> Phase 2 UI/mock
                                                  Phase 2 complete ─> Phase 3 ─> Phase 4
 ```
 
-- Phase 0 và 1A có thể làm song song.
+- Phase F phải pass trước khi activate Phase 0/1A.
+- Sau Phase F, Phase 0 và 1A có thể làm song song.
 - 1B không được fork/copy logic RAG desktop; phải dùng kết quả 1A.
 - 1B dùng một org nhưng mọi repository, object key, job, vector và event bắt buộc
   mang `OrgContext`; 1C mở nhiều org và hoàn thiện chính sách, không retrofit tenancy.

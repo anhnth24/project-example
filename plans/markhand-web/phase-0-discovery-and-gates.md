@@ -6,6 +6,9 @@ Biến các giả định kiến trúc thành quyết định có số liệu tr
 kiến. Phase này không tạo production server; đầu ra là corpus, benchmark, threat
 model, ADR và ngưỡng chấp nhận dùng để khóa thiết kế 1B.
 
+Prerequisite: Phase F engineering foundation đã pass. Phase 0 không tự tạo coding,
+fixture, environment hoặc CI conventions riêng.
+
 ## P0.1 — Baseline và corpus đánh giá
 
 Tạo `bench/markhand_web/`:
@@ -24,7 +27,10 @@ Tạo `bench/markhand_web/`:
 Baseline phải ghi lại chất lượng và tốc độ desktop hiện tại để 1A có regression
 reference.
 
-## P0.2 — Hạ tầng spike có thể tái lập
+## P0.2 — Benchmark overrides trên dev infrastructure
+
+Tái dùng service definitions/health/init conventions của Phase F dev environment;
+không fork một stack khác. Tạo benchmark-specific overrides và isolated volumes/data:
 
 Tạo `deploy/compose.spike.yml` và `.env.example` cho:
 

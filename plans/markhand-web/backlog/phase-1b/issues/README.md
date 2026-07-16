@@ -19,10 +19,11 @@ ghi trong issue đã `Done`.
 
 ## Foundation
 
-### P1B-F01 — Server workspace và validated config
+### P1B-F01 — Extend server skeleton với runtime POC
 
-- **Plan:** Tạo API/worker binaries, typed config/state/error, secret references,
-  graceful shutdown và fail-fast validation.
+- **Plan:** Mở rộng `crates/server` API/worker skeleton từ F-02/F-07 với runtime
+  dependencies, application state, graceful shutdown và các config fields đã được
+  Phase 0 phê duyệt. Không tạo lại workspace/config conventions.
 - **Files:** `crates/server/{Cargo.toml,src/{lib,main,config,error,state}.rs}`,
   `src/bin/worker.rs`.
 - **Depends:** G0-ARCH.

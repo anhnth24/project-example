@@ -114,6 +114,7 @@ Embed query → Qdrant top-k (filter org + collection ACL) ∥ PG FTS (`unaccent
 
 | Phase | Deliverable | Gate |
 |---|---|---|
+| **F** | Engineering foundation: architecture rules, workspace skeleton, coding/API/SQL conventions, local dev environment, CI/test/observability baseline | Clean-checkout foundation gate |
 | **0** | Spike scale/security: benchmark Qdrant+PG FTS với phân bố org thật; eval embedding golden-set tiếng Việt (bge-m3 vs e5); upload threat model; chốt SLA số | Số liệu đạt ngưỡng mới đi tiếp |
 | **1A** | Tách `crates/knowledge` — desktop behavior giữ nguyên, test pass | `cargo test` + desktop chạy đúng |
 | **1B** | Server vertical slice **single-org (POC)**: auth JWT đơn giản, upload (hardening đầy đủ) → convert → index → Q&A citation, state machine + reconciliation | Demo POC 1 đơn vị, vài account test |
@@ -122,7 +123,7 @@ Embed query → Qdrant top-k (filter org + collection ACL) ∥ PG FTS (`unaccent
 | **3** | Port intelligence: tóm tắt, quality, PII/redaction, BA/PM handoff | |
 | **4** | Hardening sâu (audit review, pentest checklist), SSO/OIDC, trang hướng dẫn sử dụng + onboarding | |
 
-POC hiện tại = Phase 0 → 1B. Schema multi-org từ đầu (org_id mọi bảng) nên 1C không cần migration phá.
+POC hiện tại = Phase F → (Phase 0 ∥ 1A) → 1B. Schema multi-org từ đầu (org_id mọi bảng) nên 1C không cần migration phá.
 
 ## 7. Rủi ro
 
@@ -144,7 +145,7 @@ POC hiện tại = Phase 0 → 1B. Schema multi-org từ đầu (org_id mọi b�
 
 ## 9. Next steps
 
-1. `/ck:plan` cho POC (Phase 0 → 1B), input = report này.
+1. Thực hiện Phase F, sau đó chạy Phase 0 và 1A song song trước Phase 1B.
 2. Xác nhận hạ tầng: GPU server (VRAM → chọn model embed), provisioning PG/Qdrant/MinIO, GLM endpoint.
 3. Chuẩn bị golden-set câu hỏi-đáp tiếng Việt từ tài liệu mẫu cho Phase 0.
 

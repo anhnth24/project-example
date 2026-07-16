@@ -6,6 +6,9 @@ Tách thuật toán RAG dùng chung khỏi Tauri để desktop và server dùng 
 thật. Desktop phải giữ nguyên IPC/JSON/hành vi; chưa thêm PG/Qdrant hay port toàn bộ
 intelligence.
 
+Prerequisite: Phase F engineering foundation đã pass; crate skeleton, Rust/test/CI
+conventions và dependency rules là đầu vào, không được tái định nghĩa trong 1A.
+
 ## Boundary đích
 
 ```text
@@ -29,9 +32,9 @@ fileconv-desktop      fileconv-server (Phase 1B)
   khóa camelCase contract với `app/src/lib/types.ts`.
 - Chạy baseline desktop index → search → ask offline và LLM fallback.
 
-## P1A.2 — Scaffold crate và types
+## P1A.2 — Populate crate skeleton và types
 
-Thêm `crates/knowledge` vào workspace, cấu trúc:
+Phase F đã thêm `crates/knowledge` vào workspace. Phase 1A populate skeleton:
 
 ```text
 src/

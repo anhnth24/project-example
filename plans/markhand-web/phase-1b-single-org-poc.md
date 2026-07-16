@@ -11,9 +11,10 @@ login → upload/quarantine → convert → index → search/Q&A → citation
 POC phải có nền tenancy, isolation worker, durable jobs, observability,
 reconciliation và restore; không phải server demo chỉ chạy happy path.
 
-## P1B.1 — Server và deployment scaffold
+## P1B.1 — Extend server skeleton và POC deployment
 
-Tạo:
+Phase F đã tạo compileable skeleton và dev environment. Phase 1B mở rộng bằng
+runtime/business modules và deployment POC:
 
 ```text
 crates/server/

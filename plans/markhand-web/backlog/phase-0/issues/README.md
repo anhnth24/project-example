@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-0-discovery-and-gates.md`](../../../phase-0-discovery-and-gates.md)
 
+Toàn milestone blocked bởi Phase F exit gate.
+
 ## Dependency
 
 ```text
@@ -11,11 +13,12 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
        │          └─> P0-08 ───────────┤
        └─> P0-09 ──────────────────────┤
                                        └─> P0-10
+P1A-01 ──────────> P0-03
 ```
 
 ## P0-01 — Khóa workload, hardware và gate registry
 
-- **Status:** Ready.
+- **Status:** Blocked bởi Phase F.
 - **Objective:** Thay giả định scale/SLA bằng workload envelope, hardware profile và
   gate schema được duyệt.
 - **Plan:** Ghi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/
@@ -49,7 +52,7 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
 
 ## P0-03 — Mở rộng desktop baseline trên corpus Phase 0
 
-- **Status:** Blocked bởi P0-02.
+- **Status:** Blocked bởi P0-02 và P1A-01.
 - **Objective:** Mở rộng parity baseline P1A-01 lên corpus/metrics Phase 0; P1A-01 là
   baseline authoritative để việc extraction không phải đợi toàn bộ corpus.
 - **Plan:** Tái dùng fixtures/harness P1A-01; chạy release conversion; snapshot top-k,
@@ -57,7 +60,8 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
   warnings, stats, provider fallback và signature mismatch.
 - **Files:** `bench/markhand_web/scripts/run_desktop_baseline.sh`,
   `baselines/desktop-v1/`, `reports/desktop-baseline.md`.
-- **Dependencies/blocks:** P0-02; provider run cần config/model pin.
+- **Dependencies/blocks:** P0-02 + P1A-01 authoritative parity harness; provider run
+  cần config/model pin.
 - **Acceptance:** Mọi format/query có raw machine-readable result; offline chạy không
   cần LLM; đủ dữ liệu so parity 1A.
 - **Tests/evidence:** CER/WER/time, Recall@5/10, MRR, nDCG, citation correctness;
@@ -70,11 +74,12 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
 - **Status:** Blocked bởi P0-01; chỉ ghi research note ngoài issue trước khi unblock,
   không bắt đầu implementation.
 - **Objective:** Stack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.
-- **Plan:** Pin image/digest; health/init/seed/reset; tách quarantine/main; GPU
-  optional để CPU validation vẫn chạy.
-- **Files:** `deploy/compose.spike.yml`, `deploy/spike/`,
+- **Plan:** Tái dùng compose/services/scripts base từ F-08; thêm benchmark-specific
+  override với isolated volumes/data, vLLM/GPU profile, workload sizing, image digest
+  và environment fingerprint. Không fork dev stack.
+- **Files:** `deploy/compose.spike.yml`, `deploy/spike/`, base `deploy/dev/`,
   `bench/markhand_web/scripts/spike-{health,reset}.sh`.
-- **Dependencies/blocks:** P0-01 cho profile; có thể scaffold trước hardware.
+- **Dependencies/blocks:** Phase F/F-08 + P0-01; target hardware để đóng issue.
 - **Acceptance:** Một command boot từ empty volumes; không thao tác console; restart/
   reset đúng semantics.
 - **Tests/evidence:** Clean-machine startup, service health, version/GPU/telemetry
@@ -168,7 +173,7 @@ P0-01 ─┬─> P0-02 ─> P0-03 ─────────────┐
   index migration, backup order; chốt SLO; backup/restore ba hệ; close registry.
 - **Files:** `docs/adr/`, `docs/markhand-web-{sla-targets,risk-register}.md`,
   `bench/markhand_web/reports/restore-drill.md`.
-- **Dependencies/blocks:** Toàn bộ Phase 0 + approvers.
+- **Dependencies/blocks:** P0-01…P0-09 + approvers.
 - **Acceptance:** Mọi decision được duyệt hoặc block 1B; clean restore đạt RPO/RTO;
   gate link raw evidence; không high/critical/license issue thiếu disposition.
 - **Tests/evidence:** Independent gate rerun; component-loss restore; checksum/

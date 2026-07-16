@@ -1,6 +1,8 @@
 # Markhand Web — milestone và issue backlog
 
-Backlog này triển khai tuần tự bốn bước:
+Phase F là prerequisite cho backlog bốn bước:
+
+0. Dựng engineering foundation: rules, skeleton, dev environment và CI.
 
 1. Phase 0 + 1A được break thành issue có thể bắt đầu.
 2. Phase 1B được tổ chức thành epic/dependency graph.
@@ -13,14 +15,15 @@ Backlog này triển khai tuần tự bốn bước:
 
 | Milestone | Catalog | Issue | Trạng thái ban đầu | Exit gate |
 |---|---|---:|---|---|
-| Phase 0 | [`phase-0/issues/README.md`](phase-0/issues/README.md) | 10 | Ready/Blocked theo hardware | Decision gates |
-| Phase 1A | [`phase-1a/issues/README.md`](phase-1a/issues/README.md) | 10 | Ready theo dependency | Desktop parity |
+| Phase F | [`phase-f/issues/README.md`](phase-f/issues/README.md) | 12 | Ready/Blocked theo dependency | Engineering foundation |
+| Phase 0 | [`phase-0/issues/README.md`](phase-0/issues/README.md) | 10 | Blocked bởi Phase F/hardware | Decision gates |
+| Phase 1A | [`phase-1a/issues/README.md`](phase-1a/issues/README.md) | 10 | Blocked bởi Phase F/dependency | Desktop parity |
 | Phase 1B | [`phase-1b/issues/README.md`](phase-1b/issues/README.md) | 24 | Blocked | Single-org POC |
 | Phase 1C | [`phase-1c/issues/README.md`](phase-1c/issues/README.md) | 13 | Backlog | Multi-org denial |
 | Phase 2 | [`phase-2/issues/README.md`](phase-2/issues/README.md) | 16 | Backlog | Web E2E |
 | Phase 3 | [`phase-3/issues/README.md`](phase-3/issues/README.md) | 14 | Backlog | Intelligence quality/security |
 | Phase 4 | [`phase-4/issues/README.md`](phase-4/issues/README.md) | 14 | Backlog | Production go-live |
-| **Tổng** | | **101** | | |
+| **Tổng** | | **113** | | |
 
 ## Trạng thái
 
@@ -35,7 +38,7 @@ Không chuyển `Done` chỉ vì code đã merge.
 
 ## Nhãn đề xuất
 
-- Milestone: `web-p0`, `web-p1a`, `web-p1b`, `web-p1c`, `web-p2`, `web-p3`,
+- Milestone: `web-foundation`, `web-p0`, `web-p1a`, `web-p1b`, `web-p1c`, `web-p2`, `web-p3`,
   `web-p4`.
 - Type: `epic`, `feature`, `security`, `benchmark`, `infra`, `migration`,
   `test`, `docs`.
@@ -77,15 +80,16 @@ của từng issue là nguồn sự thật đầy đủ khi tạo tracker depend
 ## Dependency cấp milestone
 
 ```text
-Phase 0 ───────────┐
-                   ├─> Phase 1B ─> Phase 1C ────────> Phase 2 complete
-Phase 1A ──────────┘         └─> stable OpenAPI ─> Phase 2 UI/mock
+Phase F ─┬─> Phase 0 ─┐
+         └─> Phase 1A ┴─> Phase 1B ─> Phase 1C ────────> Phase 2 complete
+                                  └─> stable OpenAPI ─> Phase 2 UI/mock
                                                 Phase 2 complete ─> Phase 3 ─> Phase 4
 ```
 
+Phase F phải pass trước Phase 0/1A. Sau đó hai phase này chạy song song.
 Phase 2 có **start gate**: UI/mock bắt đầu khi OpenAPI 1B ổn định. Integration trên
 backend thật và **completion gate** vẫn phụ thuộc 1C-12/1C-13. Phase 0 và 1A có thể
-chạy song song.
+chạy song song sau foundation gate.
 
 ## Quy tắc triển khai
 

@@ -2,6 +2,8 @@
 
 Parent plan: [`../../../phase-1a-knowledge-extraction.md`](../../../phase-1a-knowledge-extraction.md)
 
+Toàn milestone blocked bởi Phase F exit gate.
+
 ## Dependency
 
 ```text
@@ -13,7 +15,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-01 — Freeze desktop RAG và IPC contracts
 
-- **Status:** Ready.
+- **Status:** Blocked bởi Phase F.
 - **Objective:** Baseline parity trước khi move code.
 - **Plan:** Inventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/
   incremental; canonical JSON cho 4 hybrid commands; offline + mock-provider flows.
@@ -26,12 +28,14 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 - **Security/migration:** Synthetic content/path, không credential.
 - **Out of scope:** Sửa ranking/concurrency.
 
-## P1A-02 — Scaffold crate và dependency boundaries
+## P1A-02 — Populate knowledge skeleton và enforce dependency boundaries
 
 - **Status:** Blocked bởi P1A-01.
-- **Objective:** Tạo reusable crate, typed errors và optional desktop features.
-- **Plan:** Add workspace member; modules types/embedding/query/rank/citation/ask;
-  features `desktop-sqlite`, `desktop-hnsw`; CI deny-list.
+- **Objective:** Hoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable
+  crate có typed errors và optional desktop features.
+- **Plan:** Populate modules types/embedding/query/rank/citation/ask; features
+  `desktop-sqlite`, `desktop-hnsw`; mở rộng CI deny-list theo boundary F-01. Không
+  tạo lại workspace member hoặc convention.
 - **Files:** `Cargo.toml`, `crates/knowledge/**`, `.github/workflows/ci.yml`.
 - **Dependencies/blocks:** Baseline committed.
 - **Acceptance:** Build no-feature/all-feature; default tree không SQLite/HNSW; không
