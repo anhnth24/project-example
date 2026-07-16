@@ -14,6 +14,9 @@ Kế hoạch này biến report kiến trúc thành các gói việc có depende
 test và gate đo được. Không dùng thời gian lịch làm tiêu chí; chỉ chuyển phase khi
 gate kỹ thuật của phase trước đã đạt.
 
+Issue-level backlog (101 issues):
+[`backlog/README.md`](backlog/README.md).
+
 ## Phạm vi các phase
 
 | Phase | Kết quả chính | Tài liệu |
@@ -81,7 +84,8 @@ MinIO cần backup riêng vì file gốc không thể tái tạo từ index.
 - Migration chạy được từ DB rỗng và từ release được hỗ trợ.
 - Có metrics/traces/audit phù hợp, không chứa dữ liệu nhạy cảm.
 - Tài liệu vận hành và rollback được cập nhật cùng thay đổi.
-- Không còn finding mức high/critical chưa có owner và quyết định rõ ràng.
+- Zero unresolved high/critical findings; accepted risk phải có approver,
+  compensating controls, expiry và retest date.
 
 ## Quyết định còn mở — Phase 0 phải chốt
 

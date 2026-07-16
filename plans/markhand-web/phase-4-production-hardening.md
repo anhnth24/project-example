@@ -39,7 +39,9 @@ UI:
 - Audit tamper evidence, retention và export.
 - Privacy/data-classification review cho GLM cloud.
 
-Không go-live nếu còn high/critical finding chưa được chấp nhận chính thức.
+Không go-live nếu còn high/critical finding chưa được giải quyết. Risk được chấp
+nhận chính thức phải có approver, compensating controls, expiry và retest date mới
+được xem là đã disposition; không được ghi nhận chung chung để bỏ qua gate.
 
 ## P4.3 — HA và degraded modes
 
@@ -174,7 +176,8 @@ Docs:
 ## Gate
 
 - OIDC, deprovision và break-glass flow pass.
-- Không high/critical security finding mở.
+- Zero unresolved high/critical security findings; mọi accepted risk có approver,
+  controls, expiry và retest date.
 - DR đạt RPO/RTO đã duyệt.
 - HA/degraded modes hoạt động đúng.
 - Upgrade và rollback rehearsal thành công.
