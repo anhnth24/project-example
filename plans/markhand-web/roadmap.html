@@ -538,6 +538,7 @@
       .phase-nav button { display: flex; flex: 0 0 100px; min-width: 100px; }
       .phase-nav-name, .phase-nav-count, .nav-label, .sidebar-note { display: none; }
       .main { padding: 22px 14px 48px; }
+      input, select { font-size: 16px; }
       .topbar { display: block; }
       .actions { justify-content: flex-start; margin-top: 18px; }
       .toolbar { grid-template-columns: 1fr; }
@@ -672,7 +673,7 @@
             <span class="visually-hidden">Lọc theo phase</span>
             <select id="phaseFilter"></select>
           </label>
-          <div class="result-count" id="resultCount" aria-live="polite">113 issues</div>
+          <div class="result-count" id="resultCount" tabindex="-1" aria-live="polite">113 issues</div>
         </section>
 
         <div id="roadmap"></div>
@@ -923,14 +924,14 @@
 
     function renderNavigation() {
       const allButton = `
-        <button type="button" data-phase="all" class="${phaseScope === "all" ? "active" : ""}" aria-pressed="${phaseScope === "all"}">
+        <button type="button" data-phase="all" class="${phaseScope === "all" ? "active" : ""}" aria-pressed="${phaseScope === "all"}" aria-label="Lọc tất cả phases">
           <span class="phase-code">ALL</span><span class="phase-nav-name">Tất cả phases</span>
           <span class="phase-nav-count">${allIssues().length}</span>
         </button>`;
       elements.phaseNav.innerHTML = allButton + phases.map(phase => {
         const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
         return `
-          <button type="button" data-phase="${phase.id}" class="${phaseScope === phase.id ? "active" : ""}" aria-pressed="${phaseScope === phase.id}">
+          <button type="button" data-phase="${phase.id}" class="${phaseScope === phase.id ? "active" : ""}" aria-pressed="${phaseScope === phase.id}" aria-label="Lọc Phase ${phase.code} — ${phase.name}">
             <span class="phase-code">${phase.code}</span><span class="phase-nav-name">${phase.name}</span>
             <span class="phase-nav-count">${done}/${phase.issues.length}</span>
           </button>`;
@@ -1055,10 +1056,13 @@
 
     function saveStatus(id, value) {
       saved[id] = value;
-      persistSaved();
+      const persisted = persistSaved();
       render();
-      requestAnimationFrame(() => document.querySelector(`[data-issue-status="${id}"]`)?.focus({ preventScroll: true }));
-      showToast(`${id} → ${STATUS[value]}`);
+      requestAnimationFrame(() => {
+        const select = document.querySelector(`[data-issue-status="${id}"]`);
+        (select || elements.resultCount).focus({ preventScroll: true });
+      });
+      if (persisted) showToast(`${id} → ${STATUS[value]}`);
     }
 
     function persistSaved() {
@@ -1129,9 +1133,9 @@
         }
         if (!confirm("Import sẽ thay thế toàn bộ trạng thái hiện tại. Tiếp tục?")) return;
         saved = next;
-        persistSaved();
+        const persisted = persistSaved();
         render();
-        showToast(`Đã import ${Object.keys(next).length} trạng thái`);
+        if (persisted) showToast(`Đã import ${Object.keys(next).length} trạng thái`);
       } catch (error) {
         showToast(error instanceof Error ? error.message : "Không thể import file");
       } finally {
@@ -1160,9 +1164,9 @@
     document.querySelector("#resetButton").addEventListener("click", () => {
       if (!confirm("Đặt lại toàn bộ trạng thái về mặc định trong plan?")) return;
       saved = {};
-      removeSaved();
+      const removed = removeSaved();
       render();
-      showToast("Đã đặt lại roadmap");
+      if (removed) showToast("Đã đặt lại roadmap");
     });
 
     render();
