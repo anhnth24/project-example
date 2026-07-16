@@ -17,6 +17,10 @@ gate kỹ thuật của phase trước đã đạt.
 Issue-level backlog (113 issues):
 [`backlog/README.md`](backlog/README.md).
 
+Roadmap dashboard tương tác:
+[`roadmap.html`](roadmap.html) — lọc/tìm kiếm, cập nhật trạng thái, lưu local và
+export/import JSON.
+
 ## Phạm vi các phase
 
 | Phase | Kết quả chính | Tài liệu |

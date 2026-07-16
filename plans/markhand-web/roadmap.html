@@ -1,0 +1,1171 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Markhand Web — Roadmap</title>
+  <style>
+    :root {
+      --bg: #090b0f;
+      --surface: #11141a;
+      --surface-raised: #171b22;
+      --surface-hover: #1d222b;
+      --border: #2b313c;
+      --border-strong: #3c4553;
+      --text: #f4f6f8;
+      --text-muted: #a4adba;
+      --text-dim: #778190;
+      --brand: #f97316;
+      --brand-soft: rgba(249, 115, 22, 0.14);
+      --brand-ring: rgba(249, 115, 22, 0.35);
+      --ready: #38bdf8;
+      --ready-soft: rgba(56, 189, 248, 0.13);
+      --blocked: #fb7185;
+      --blocked-soft: rgba(251, 113, 133, 0.13);
+      --backlog: #94a3b8;
+      --backlog-soft: rgba(148, 163, 184, 0.12);
+      --progress: #fbbf24;
+      --progress-soft: rgba(251, 191, 36, 0.13);
+      --review: #a78bfa;
+      --review-soft: rgba(167, 139, 250, 0.13);
+      --done: #34d399;
+      --done-soft: rgba(52, 211, 153, 0.13);
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+      --radius: 14px;
+      --sidebar: 260px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 80% -10%, rgba(249, 115, 22, 0.10), transparent 30rem),
+        var(--bg);
+      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input, select { font: inherit; }
+    button, select { cursor: pointer; }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 1000;
+      top: 8px;
+      left: 8px;
+      padding: 10px 14px;
+      color: #111;
+      background: #fff;
+      border-radius: 8px;
+      transform: translateY(-150%);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    :focus-visible {
+      outline: 3px solid var(--brand);
+      outline-offset: 2px;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      min-height: 100dvh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100dvh;
+      overflow-y: auto;
+      padding: 24px 18px;
+      background: rgba(13, 16, 21, 0.94);
+      border-right: 1px solid var(--border);
+      backdrop-filter: blur(16px);
+    }
+
+    .brand {
+      display: flex;
+      gap: 11px;
+      align-items: center;
+      margin: 0 6px 28px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      color: #111827;
+      background: var(--brand);
+      border-radius: 10px;
+      box-shadow: 0 8px 24px var(--brand-ring);
+    }
+
+    .brand-mark svg { width: 20px; height: 20px; }
+    .brand-name { font-weight: 750; letter-spacing: -0.02em; }
+    .brand-subtitle { color: var(--text-dim); font-size: 12px; }
+
+    .nav-label {
+      margin: 0 8px 8px;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    .phase-nav {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 24px;
+    }
+
+    .phase-nav button {
+      display: grid;
+      grid-template-columns: 30px 1fr auto;
+      gap: 9px;
+      align-items: center;
+      width: 100%;
+      min-height: 46px;
+      padding: 7px 10px;
+      color: var(--text-muted);
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      transition: 160ms ease;
+    }
+
+    .phase-nav button:hover {
+      color: var(--text);
+      background: var(--surface-hover);
+    }
+
+    .phase-nav button.active {
+      color: var(--text);
+      background: var(--brand-soft);
+      border-color: var(--brand-ring);
+    }
+
+    .phase-code {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 800;
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .phase-nav button.active .phase-code {
+      color: #111827;
+      background: var(--brand);
+      border-color: var(--brand);
+    }
+
+    .phase-nav-name { font-size: 13px; font-weight: 650; }
+    .phase-nav-count { color: var(--text-dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+    .sidebar-note {
+      margin-top: 24px;
+      padding: 14px;
+      color: var(--text-muted);
+      font-size: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    .sidebar-note strong { display: block; margin-bottom: 4px; color: var(--text); }
+
+    .main {
+      min-width: 0;
+      padding: 28px clamp(18px, 4vw, 58px) 64px;
+    }
+
+    .topbar {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      justify-content: space-between;
+      max-width: 1460px;
+      margin: 0 auto 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 44px);
+      line-height: 1.12;
+      letter-spacing: -0.045em;
+    }
+
+    .lead {
+      max-width: 720px;
+      margin: 9px 0 0;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .button {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 44px;
+      padding: 9px 13px;
+      color: var(--text);
+      background: var(--surface-raised);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      transition: 160ms ease;
+    }
+
+    .button:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+    .button.danger:hover { color: #fecdd3; border-color: var(--blocked); }
+    .button svg { width: 16px; height: 16px; }
+
+    .dashboard {
+      max-width: 1460px;
+      margin: 0 auto;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .stat {
+      min-height: 118px;
+      padding: 18px;
+      background: linear-gradient(150deg, var(--surface-raised), var(--surface));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .stat-label { color: var(--text-muted); font-size: 12px; font-weight: 650; }
+    .stat-value { margin-top: 4px; font-size: 32px; font-weight: 760; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+    .stat-meta { margin-top: 5px; color: var(--text-dim); font-size: 12px; }
+
+    .progress-shell {
+      height: 7px;
+      margin-top: 12px;
+      overflow: hidden;
+      background: #07090c;
+      border-radius: 999px;
+    }
+
+    .progress-value {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--brand), #fb923c);
+      border-radius: inherit;
+      transition: width 240ms ease;
+    }
+
+    .phase-strip {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 18px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .phase-mini {
+      min-width: 120px;
+      padding: 13px;
+      color: var(--text-muted);
+      text-align: left;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      transition: 160ms ease;
+    }
+
+    .phase-mini:hover { color: var(--text); border-color: var(--border-strong); }
+    .phase-mini.active { color: var(--text); border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand-ring); }
+    .phase-mini-head { display: flex; align-items: center; justify-content: space-between; }
+    .phase-mini-code { font-weight: 800; }
+    .phase-mini-progress { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+    .mini-bar {
+      height: 4px;
+      margin-top: 10px;
+      overflow: hidden;
+      background: #080a0d;
+      border-radius: 999px;
+    }
+
+    .mini-bar > span { display: block; height: 100%; background: var(--done); }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) 190px 190px auto;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 18px;
+      padding: 12px;
+      background: rgba(17, 20, 26, 0.86);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+    }
+
+    .field {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .field svg {
+      position: absolute;
+      left: 12px;
+      width: 16px;
+      height: 16px;
+      color: var(--text-dim);
+      pointer-events: none;
+    }
+
+    .field input,
+    .toolbar select {
+      width: 100%;
+      min-height: 44px;
+      color: var(--text);
+      background: #0b0e12;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+    }
+
+    .field input { padding: 9px 12px 9px 38px; }
+    .toolbar select { padding: 9px 34px 9px 12px; }
+    .field input::placeholder { color: var(--text-dim); }
+
+    .result-count {
+      min-width: 110px;
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .phase-section {
+      margin: 0 0 18px;
+      overflow: hidden;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    .phase-header {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 17px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .phase-badge {
+      display: grid;
+      place-items: center;
+      min-width: 42px;
+      height: 42px;
+      padding: 0 8px;
+      color: #111827;
+      font-size: 12px;
+      font-weight: 800;
+      background: var(--brand);
+      border-radius: 10px;
+    }
+
+    .phase-title { margin: 0; font-size: 17px; letter-spacing: -0.015em; }
+    .phase-description { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+    .phase-summary { color: var(--text-muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+
+    .issue-list { display: grid; }
+
+    .issue {
+      display: grid;
+      grid-template-columns: 94px minmax(220px, 1fr) 150px 38px;
+      gap: 14px;
+      align-items: center;
+      min-height: 62px;
+      padding: 10px 16px;
+      border-bottom: 1px solid rgba(43, 49, 60, 0.72);
+      transition: 140ms ease;
+    }
+
+    .issue:last-child { border-bottom: 0; }
+    .issue:hover { background: var(--surface-hover); }
+
+    .issue-id {
+      color: var(--text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .issue-title { min-width: 0; font-weight: 560; }
+    .issue.done .issue-title { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-dim); }
+
+    .status-select {
+      width: 100%;
+      min-height: 44px;
+      padding: 7px 28px 7px 10px;
+      color: var(--text);
+      background: #0b0e12;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    .status-select[data-status="ready"] { color: var(--ready); border-color: rgba(56, 189, 248, 0.35); background: var(--ready-soft); }
+    .status-select[data-status="blocked"] { color: var(--blocked); border-color: rgba(251, 113, 133, 0.35); background: var(--blocked-soft); }
+    .status-select[data-status="backlog"] { color: var(--backlog); background: var(--backlog-soft); }
+    .status-select[data-status="in_progress"] { color: var(--progress); border-color: rgba(251, 191, 36, 0.35); background: var(--progress-soft); }
+    .status-select[data-status="review"] { color: var(--review); border-color: rgba(167, 139, 250, 0.35); background: var(--review-soft); }
+    .status-select[data-status="done"] { color: var(--done); border-color: rgba(52, 211, 153, 0.35); background: var(--done-soft); }
+
+    .issue-link {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      color: var(--text-dim);
+      border-radius: 8px;
+    }
+
+    .issue-link:hover { color: var(--text); background: var(--surface-raised); }
+    .issue-link svg { width: 16px; height: 16px; }
+
+    .empty {
+      display: none;
+      padding: 54px 20px;
+      color: var(--text-muted);
+      text-align: center;
+      background: var(--surface);
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+    }
+
+    .toast {
+      position: fixed;
+      z-index: 100;
+      right: 20px;
+      bottom: 20px;
+      max-width: min(360px, calc(100vw - 40px));
+      padding: 12px 15px;
+      color: var(--text);
+      background: var(--surface-raised);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: 180ms ease;
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .visually-hidden {
+      position: absolute !important;
+      width: 1px !important;
+      height: 1px !important;
+      padding: 0 !important;
+      margin: -1px !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+      white-space: nowrap !important;
+      border: 0 !important;
+    }
+
+    @media (max-width: 1050px) {
+      :root { --sidebar: 220px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toolbar { grid-template-columns: 1fr 1fr; }
+      .result-count { text-align: left; }
+    }
+
+    @media (max-width: 760px) {
+      .app { display: block; }
+      .sidebar {
+        position: relative;
+        width: 100%;
+        height: auto;
+        padding: 16px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .brand { margin-bottom: 16px; }
+      .phase-nav {
+        display: flex;
+        overflow-x: auto;
+      }
+      .phase-nav button { display: flex; flex: 0 0 100px; min-width: 100px; }
+      .phase-nav-name, .phase-nav-count, .nav-label, .sidebar-note { display: none; }
+      .main { padding: 22px 14px 48px; }
+      .topbar { display: block; }
+      .actions { justify-content: flex-start; margin-top: 18px; }
+      .toolbar { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: 1fr 1fr; }
+      .issue {
+        grid-template-columns: 72px minmax(0, 1fr) 44px;
+        gap: 8px;
+        padding: 13px;
+      }
+      .issue > label { grid-column: 2 / 4; grid-row: 2; }
+      .issue-link { grid-column: 3; grid-row: 1; }
+      .phase-header { grid-template-columns: auto minmax(0, 1fr); }
+      .phase-summary { grid-column: 2; text-align: left; }
+    }
+
+    @media (max-width: 430px) {
+      .stats { grid-template-columns: 1fr; }
+      .actions .button span { display: none; }
+      .actions .button { width: 44px; justify-content: center; padding: 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Bỏ qua điều hướng</a>
+  <div class="app">
+    <aside class="sidebar" aria-label="Điều hướng roadmap">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/>
+            <path d="M14 3v6h6M8 13h8M8 17h5"/>
+          </svg>
+        </span>
+        <div>
+          <div class="brand-name">Markhand Web</div>
+          <div class="brand-subtitle">Delivery roadmap</div>
+        </div>
+      </div>
+      <p class="nav-label">Milestones</p>
+      <nav class="phase-nav" id="phaseNav"></nav>
+      <div class="sidebar-note">
+        <strong>Trạng thái được lưu cục bộ</strong>
+        Dùng Export JSON để chia sẻ hoặc lưu phiên bản theo dõi.
+      </div>
+    </aside>
+
+    <main class="main" id="main" tabindex="-1">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Engineering delivery plan</p>
+          <h1>Roadmap triển khai Markhand Web</h1>
+          <p class="lead">Theo dõi 8 milestones, 113 issues và các gate từ engineering foundation đến production go-live.</p>
+        </div>
+        <div class="actions" aria-label="Thao tác dữ liệu">
+          <button class="button" id="exportButton" type="button" aria-label="Export trạng thái roadmap ra JSON">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>
+            </svg>
+            <span>Export JSON</span>
+          </button>
+          <button class="button" id="importButton" type="button" aria-label="Import trạng thái roadmap từ JSON">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 21V9m0 0 4 4m-4-4-4 4M5 3h14"/>
+            </svg>
+            <span>Import</span>
+          </button>
+          <button class="button danger" id="resetButton" type="button" aria-label="Đặt lại toàn bộ trạng thái roadmap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8m0-5v5h5"/>
+            </svg>
+            <span>Đặt lại</span>
+          </button>
+          <input class="visually-hidden" id="importFile" type="file" accept="application/json">
+        </div>
+      </header>
+
+      <div class="dashboard">
+        <section class="stats" aria-label="Tổng quan tiến độ">
+          <article class="stat">
+            <div class="stat-label">Tổng issues</div>
+            <div class="stat-value" id="totalStat">113</div>
+            <div class="stat-meta">trên 8 milestones</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Đã hoàn thành</div>
+            <div class="stat-value" id="doneStat">0</div>
+            <div class="progress-shell" aria-hidden="true"><div class="progress-value" id="overallProgress"></div></div>
+            <div class="stat-meta" id="doneMeta">0% tổng tiến độ</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Đang thực hiện / review</div>
+            <div class="stat-value" id="activeStat">0</div>
+            <div class="stat-meta">issues đang có chuyển động</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Blocked</div>
+            <div class="stat-value" id="blockedStat">55</div>
+            <div class="stat-meta">cần dependency hoặc gate</div>
+          </article>
+        </section>
+
+        <section class="phase-strip" id="phaseStrip" aria-label="Tiến độ theo phase"></section>
+
+        <section class="toolbar" aria-label="Bộ lọc roadmap">
+          <label class="field">
+            <span class="visually-hidden">Tìm issue</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+            </svg>
+            <input id="searchInput" type="search" placeholder="Tìm theo ID hoặc tên issue…" autocomplete="off">
+          </label>
+          <label>
+            <span class="visually-hidden">Lọc theo trạng thái</span>
+            <select id="statusFilter">
+              <option value="all">Mọi trạng thái</option>
+              <option value="ready">Ready</option>
+              <option value="blocked">Blocked</option>
+              <option value="backlog">Backlog</option>
+              <option value="in_progress">In progress</option>
+              <option value="review">Review</option>
+              <option value="done">Done</option>
+            </select>
+          </label>
+          <label>
+            <span class="visually-hidden">Lọc theo phase</span>
+            <select id="phaseFilter"></select>
+          </label>
+          <div class="result-count" id="resultCount" aria-live="polite">113 issues</div>
+        </section>
+
+        <div id="roadmap"></div>
+        <div class="empty" id="emptyState">
+          <strong>Không tìm thấy issue phù hợp.</strong><br>
+          Thử đổi từ khóa hoặc bộ lọc.
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const STATUS = {
+      backlog: "Backlog",
+      ready: "Ready",
+      blocked: "Blocked",
+      in_progress: "In progress",
+      review: "Review",
+      done: "Done"
+    };
+
+    const phases = [
+      {
+        id: "phase-f", code: "F", name: "Engineering Foundation",
+        description: "Rules, skeleton, dev environment và CI foundation",
+        catalog: "backlog/phase-f/issues/README.md",
+        issues: [
+          ["F-01", "Architecture boundaries và dependency rules", "ready"],
+          ["F-02", "Workspace và folder skeleton", "blocked"],
+          ["F-03", "Rust coding và crate conventions", "blocked"],
+          ["F-04", "TypeScript/React conventions", "blocked"],
+          ["F-05", "SQL/data/migration conventions", "blocked"],
+          ["F-06", "REST/OpenAPI/SSE/error conventions", "blocked"],
+          ["F-07", "Configuration, secrets và environment profiles", "blocked"],
+          ["F-08", "Reproducible local development environment", "blocked"],
+          ["F-09", "Root task runner, quality tools và CI baseline", "blocked"],
+          ["F-10", "Test pyramid, fixtures và golden-data conventions", "blocked"],
+          ["F-11", "Observability/audit conventions", "blocked"],
+          ["F-12", "Contributor workflow, setup docs và foundation gate", "blocked"]
+        ]
+      },
+      {
+        id: "phase-0", code: "0", name: "Discovery & Gates",
+        description: "Benchmark, threat model, SLA và architecture decisions",
+        catalog: "backlog/phase-0/issues/README.md",
+        issues: [
+          ["P0-01", "Khóa workload, hardware và gate registry", "blocked"],
+          ["P0-02", "Golden corpus tiếng Việt và adversarial corpus", "blocked"],
+          ["P0-03", "Mở rộng desktop baseline trên corpus Phase 0", "blocked"],
+          ["P0-04", "Spike infrastructure tái lập", "blocked"],
+          ["P0-05", "Đánh giá embedding tiếng Việt", "blocked"],
+          ["P0-06", "Chunking, hybrid tuning và index signature", "blocked"],
+          ["P0-07", "PG/Qdrant target-scale topology", "blocked"],
+          ["P0-08", "Sizing converter và ingest backpressure", "blocked"],
+          ["P0-09", "Upload threat model, sandbox và license inventory", "blocked"],
+          ["P0-10", "ADR, SLO/RPO/RTO và Phase 0 gate", "blocked"]
+        ]
+      },
+      {
+        id: "phase-1a", code: "1A", name: "Knowledge Extraction",
+        description: "Tách fileconv-knowledge, giữ desktop parity",
+        catalog: "backlog/phase-1a/issues/README.md",
+        issues: [
+          ["P1A-01", "Freeze desktop RAG và IPC contracts", "blocked"],
+          ["P1A-02", "Populate knowledge skeleton và enforce dependency boundaries", "blocked"],
+          ["P1A-03", "Shared DTO và serde contract", "blocked"],
+          ["P1A-04", "Durable identities và index signatures", "blocked"],
+          ["P1A-05", "Query, local vectors và embedding plan", "blocked"],
+          ["P1A-06", "Rank, citation và grounded answer", "blocked"],
+          ["P1A-07", "SQLite desktop storage feature", "blocked"],
+          ["P1A-08", "Persistent HNSW desktop feature", "blocked"],
+          ["P1A-09", "Thin Tauri adapters", "blocked"],
+          ["P1A-10", "CI parity và extraction gate", "blocked"]
+        ]
+      },
+      {
+        id: "phase-1b", code: "1B", name: "Single-org POC",
+        description: "Upload → convert → index → Q&A citation",
+        catalog: "backlog/phase-1b/issues/README.md",
+        issues: [
+          ["P1B-F01", "Extend server skeleton với runtime POC", "blocked"],
+          ["P1B-F02", "POC deployment và isolation scaffold", "blocked"],
+          ["P1B-F03", "Multi-org-ready schema và immutable migrations", "blocked"],
+          ["P1B-F04", "OrgContext, repositories và state machine", "blocked"],
+          ["P1B-F05", "Password auth, rotating sessions và browser refresh transport", "blocked"],
+          ["P1B-F06", "Fail-closed PG/Qdrant/MinIO adapters", "blocked"],
+          ["P1B-I01", "Streaming quarantine upload validation", "blocked"],
+          ["P1B-I02", "Atomic quota admission", "blocked"],
+          ["P1B-I03", "Durable jobs, outbox và event log", "blocked"],
+          ["P1B-I04", "Isolated converter worker", "blocked"],
+          ["P1B-I05", "Idempotent conversion promotion saga", "blocked"],
+          ["P1B-I06", "Chunk/embedding/index worker", "blocked"],
+          ["P1B-I07", "Tombstone delete và reconcile", "blocked"],
+          ["P1B-R01", "Tenant-scoped hybrid retrieval", "blocked"],
+          ["P1B-R02", "Citation, preview và download authorization", "blocked"],
+          ["P1B-R03", "Grounded Q&A, stream và fallback", "blocked"],
+          ["P1B-R04", "Collection/document/job REST API", "blocked"],
+          ["P1B-R05", "Search/ask/resumable SSE API", "blocked"],
+          ["P1B-R06", "OpenAPI, rate limit và readiness", "blocked"],
+          ["P1B-O01", "End-to-end telemetry và safe audit", "blocked"],
+          ["P1B-O02", "Dashboards, alerts và runbooks", "blocked"],
+          ["P1B-O03", "Backup/restore và migration safety", "blocked"],
+          ["P1B-O04", "Vertical-slice/security release suite", "blocked"],
+          ["P1B-O05", "Mixed-load soak và POC qualification", "blocked"]
+        ]
+      },
+      {
+        id: "phase-1c", code: "1C", name: "Multi-org Security",
+        description: "RBAC, ACL, quota, fairness và denial suite",
+        catalog: "backlog/phase-1c/issues/README.md",
+        issues: [
+          ["1C-01", "Organization lifecycle và validated context", "backlog"],
+          ["1C-02", "Membership, invites và last-owner invariant", "backlog"],
+          ["1C-03", "Canonical RBAC seed", "backlog"],
+          ["1C-04", "Route/service guards và service identities", "backlog"],
+          ["1C-05", "Collection ACL resolver/cache", "backlog"],
+          ["1C-06", "PostgreSQL ACL enforcement", "backlog"],
+          ["1C-07", "Qdrant/storage/jobs fail-closed enforcement", "backlog"],
+          ["1C-08", "RLS và pool defense", "backlog"],
+          ["1C-09", "Atomic quota lifecycle", "backlog"],
+          ["1C-10", "Rate limit và per-org fairness", "backlog"],
+          ["1C-11", "Audit/admin APIs", "backlog"],
+          ["1C-12", "Multi-org denial suite", "backlog"],
+          ["1C-13", "Security/revoke/load gate", "backlog"]
+        ]
+      },
+      {
+        id: "phase-2", code: "2", name: "Web SPA MVP",
+        description: "Login, library, upload, Q&A và admin tối thiểu",
+        catalog: "backlog/phase-2/issues/README.md",
+        issues: [
+          ["P2-01", "React/Vite workspace và UI foundations", "backlog"],
+          ["P2-02", "OpenAPI contracts và mock server", "backlog"],
+          ["P2-03", "Typed HTTP client/session refresh", "backlog"],
+          ["P2-04", "Fetch-based SSE transport", "backlog"],
+          ["P2-05", "Login/session/application shell", "backlog"],
+          ["P2-06", "Org switch và scope-safe state", "backlog"],
+          ["P2-07", "Library/list/sanitized preview", "backlog"],
+          ["P2-08", "Upload progress và job lifecycle", "backlog"],
+          ["P2-09", "Download/delete/reindex/retry", "backlog"],
+          ["P2-10", "Streaming search/Q&A/citations", "backlog"],
+          ["P2-11", "Member/role admin", "backlog"],
+          ["P2-12", "Usage/quota/reservations", "backlog"],
+          ["P2-13", "Browser/SafeMarkdown hardening", "backlog"],
+          ["P2-14", "Accessibility/interaction quality", "backlog"],
+          ["P2-15", "Contract/integration/E2E suite", "backlog"],
+          ["P2-16", "Production build/static serving/final gate", "backlog"]
+        ]
+      },
+      {
+        id: "phase-3", code: "3", name: "Document Intelligence",
+        description: "BRD/PRD, quality, PII, tables, versions và export",
+        catalog: "backlog/phase-3/issues/README.md",
+        issues: [
+          ["P3-01", "Reusable intelligence service boundary", "backlog"],
+          ["P3-02", "Versioned derived-artifact schema", "backlog"],
+          ["P3-03", "Current-source ACL mỗi artifact access", "backlog"],
+          ["P3-04", "Deterministic BRD/PRD job", "backlog"],
+          ["P3-05", "Handoff edit/validate/ZIP export", "backlog"],
+          ["P3-06", "Quality và immutable reprocess", "backlog"],
+          ["P3-07", "Citation-backed summarization", "backlog"],
+          ["P3-08", "PII detection/reviewed redaction", "backlog"],
+          ["P3-09", "Schema/table edit và safe CSV", "backlog"],
+          ["P3-10", "Versions, diff và three-way merge", "backlog"],
+          ["P3-11", "Prompt/model/quota/cloud policy", "backlog"],
+          ["P3-12", "Intelligence web workspace", "backlog"],
+          ["P3-13", "Task-specific golden evaluation", "backlog"],
+          ["P3-14", "Intelligence denial/audit/reconcile/release gate", "backlog"]
+        ]
+      },
+      {
+        id: "phase-4", code: "4", name: "Production Hardening",
+        description: "OIDC, HA, DR, deployment và go-live",
+        catalog: "backlog/phase-4/issues/README.md",
+        issues: [
+          ["P4-01", "OIDC Authorization Code + PKCE", "backlog"],
+          ["P4-02", "JIT provisioning và account linking", "backlog"],
+          ["P4-03", "Group/role sync và bounded deprovision", "backlog"],
+          ["P4-04", "Session UI và break-glass", "backlog"],
+          ["P4-05", "Platform security/supply chain/secrets", "backlog"],
+          ["P4-06", "Threat review/external pentest/remediation", "backlog"],
+          ["P4-07", "HA/degraded modes/distributed limiting", "backlog"],
+          ["P4-08", "Reproducible production deployment", "backlog"],
+          ["P4-09", "Backup/PITR/restore tooling", "backlog"],
+          ["P4-10", "Clean DR/destructive failure drills", "backlog"],
+          ["P4-11", "Migration/canary/rollback discipline", "backlog"],
+          ["P4-12", "SRE dashboards/alerts/runbooks", "backlog"],
+          ["P4-13", "Onboarding/help/accessibility/operator docs", "backlog"],
+          ["P4-14", "Production go-live gate", "backlog"]
+        ]
+      }
+    ];
+
+    const STORAGE_KEY = "markhand-roadmap-status-v1";
+    let saved = loadSaved();
+    let phaseScope = "all";
+    let toastTimer;
+
+    const elements = {
+      phaseNav: document.querySelector("#phaseNav"),
+      phaseStrip: document.querySelector("#phaseStrip"),
+      phaseFilter: document.querySelector("#phaseFilter"),
+      statusFilter: document.querySelector("#statusFilter"),
+      searchInput: document.querySelector("#searchInput"),
+      roadmap: document.querySelector("#roadmap"),
+      emptyState: document.querySelector("#emptyState"),
+      resultCount: document.querySelector("#resultCount"),
+      totalStat: document.querySelector("#totalStat"),
+      doneStat: document.querySelector("#doneStat"),
+      doneMeta: document.querySelector("#doneMeta"),
+      activeStat: document.querySelector("#activeStat"),
+      blockedStat: document.querySelector("#blockedStat"),
+      overallProgress: document.querySelector("#overallProgress"),
+      toast: document.querySelector("#toast"),
+      importFile: document.querySelector("#importFile")
+    };
+
+    function loadSaved() {
+      try {
+        const value = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        return value && typeof value === "object" ? value : {};
+      } catch {
+        return {};
+      }
+    }
+
+    function statusFor(issue) {
+      return STATUS[saved[issue[0]]] ? saved[issue[0]] : issue[2];
+    }
+
+    function allIssues() {
+      return phases.flatMap(phase => phase.issues.map(issue => ({ phase, issue, status: statusFor(issue) })));
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function slugText(value) {
+      return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+    }
+
+    function renderNavigation() {
+      const allButton = `
+        <button type="button" data-phase="all" class="${phaseScope === "all" ? "active" : ""}" aria-pressed="${phaseScope === "all"}">
+          <span class="phase-code">ALL</span><span class="phase-nav-name">Tất cả phases</span>
+          <span class="phase-nav-count">${allIssues().length}</span>
+        </button>`;
+      elements.phaseNav.innerHTML = allButton + phases.map(phase => {
+        const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
+        return `
+          <button type="button" data-phase="${phase.id}" class="${phaseScope === phase.id ? "active" : ""}" aria-pressed="${phaseScope === phase.id}">
+            <span class="phase-code">${phase.code}</span><span class="phase-nav-name">${phase.name}</span>
+            <span class="phase-nav-count">${done}/${phase.issues.length}</span>
+          </button>`;
+      }).join("");
+
+      elements.phaseFilter.innerHTML = `<option value="all">Mọi phase</option>` +
+        phases.map(phase => `<option value="${phase.id}">Phase ${phase.code} — ${phase.name}</option>`).join("");
+      elements.phaseFilter.value = phaseScope;
+
+      elements.phaseStrip.innerHTML = phases.map(phase => {
+        const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
+        const percent = Math.round(done / phase.issues.length * 100);
+        return `
+          <button type="button" class="phase-mini ${phaseScope === phase.id ? "active" : ""}" data-phase="${phase.id}" aria-pressed="${phaseScope === phase.id}">
+            <span class="phase-mini-head">
+              <span class="phase-mini-code">Phase ${phase.code}</span>
+              <span class="phase-mini-progress">${done}/${phase.issues.length}</span>
+            </span>
+            <span class="mini-bar"><span style="width:${percent}%"></span></span>
+          </button>`;
+      }).join("");
+    }
+
+    function renderStats() {
+      const issues = allIssues();
+      const done = issues.filter(item => item.status === "done").length;
+      const active = issues.filter(item => item.status === "in_progress" || item.status === "review").length;
+      const blocked = issues.filter(item => item.status === "blocked").length;
+      const percent = Math.round(done / issues.length * 100);
+      elements.totalStat.textContent = issues.length;
+      elements.doneStat.textContent = done;
+      elements.activeStat.textContent = active;
+      elements.blockedStat.textContent = blocked;
+      elements.doneMeta.textContent = `${percent}% tổng tiến độ`;
+      elements.overallProgress.style.width = `${percent}%`;
+    }
+
+    function matchesFilters(phase, issue) {
+      const text = slugText(`${issue[0]} ${issue[1]}`);
+      const query = slugText(elements.searchInput.value.trim());
+      const status = statusFor(issue);
+      const statusValue = elements.statusFilter.value;
+      return (!query || text.includes(query))
+        && (statusValue === "all" || status === statusValue)
+        && (phaseScope === "all" || phase.id === phaseScope);
+    }
+
+    function statusOptions(current) {
+      return Object.entries(STATUS)
+        .map(([value, label]) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`)
+        .join("");
+    }
+
+    function renderRoadmap() {
+      let shown = 0;
+      const html = phases.map(phase => {
+        const visible = phase.issues.filter(issue => matchesFilters(phase, issue));
+        if (!visible.length) return "";
+        shown += visible.length;
+        const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
+        const active = phase.issues.filter(issue => ["in_progress", "review"].includes(statusFor(issue))).length;
+        return `
+          <section class="phase-section" id="${phase.id}">
+            <header class="phase-header">
+              <span class="phase-badge">P${phase.code}</span>
+              <div>
+                <h2 class="phase-title">Phase ${phase.code} — ${phase.name}</h2>
+                <p class="phase-description">${phase.description}</p>
+              </div>
+              <div class="phase-summary">${done} done · ${active} active · ${phase.issues.length} total</div>
+            </header>
+            <div class="issue-list">
+              ${visible.map(issue => {
+                const current = statusFor(issue);
+                return `
+                  <article class="issue ${current === "done" ? "done" : ""}" data-issue="${issue[0]}">
+                    <span class="issue-id">${issue[0]}</span>
+                    <span class="issue-title">${escapeHtml(issue[1])}</span>
+                    <label>
+                      <span class="visually-hidden">Trạng thái ${issue[0]}</span>
+                      <select class="status-select" data-issue-status="${issue[0]}" data-status="${current}">
+                        ${statusOptions(current)}
+                      </select>
+                    </label>
+                    <a class="issue-link" href="${phase.catalog}" title="Mở catalog Phase ${phase.code}" aria-label="Mở catalog chứa ${issue[0]}">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
+                      </svg>
+                    </a>
+                  </article>`;
+              }).join("")}
+            </div>
+          </section>`;
+      }).join("");
+
+      elements.roadmap.innerHTML = html;
+      elements.resultCount.textContent = `${shown} issue${shown === 1 ? "" : "s"}`;
+      elements.emptyState.style.display = shown ? "none" : "block";
+    }
+
+    function render() {
+      renderStats();
+      renderNavigation();
+      renderRoadmap();
+    }
+
+    function setPhase(value, focusTarget = "nav") {
+      phaseScope = value;
+      elements.phaseFilter.value = value;
+      render();
+      requestAnimationFrame(() => {
+        if (focusTarget === "filter") {
+          elements.phaseFilter.focus();
+          return;
+        }
+        const selector = focusTarget === "strip"
+          ? `.phase-mini[data-phase="${value}"]`
+          : `.phase-nav [data-phase="${value}"]`;
+        document.querySelector(selector)?.focus({ preventScroll: true });
+      });
+    }
+
+    function saveStatus(id, value) {
+      saved[id] = value;
+      persistSaved();
+      render();
+      requestAnimationFrame(() => document.querySelector(`[data-issue-status="${id}"]`)?.focus({ preventScroll: true }));
+      showToast(`${id} → ${STATUS[value]}`);
+    }
+
+    function persistSaved() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+        return true;
+      } catch {
+        showToast("Không thể lưu local; hãy Export JSON để giữ trạng thái");
+        return false;
+      }
+    }
+
+    function removeSaved() {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+        return true;
+      } catch {
+        showToast("Không thể xóa local storage trong trình duyệt này");
+        return false;
+      }
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      elements.toast.textContent = message;
+      elements.toast.classList.add("show");
+      toastTimer = setTimeout(() => elements.toast.classList.remove("show"), 2400);
+    }
+
+    function exportState() {
+      const payload = {
+        schemaVersion: 1,
+        project: "markhand-web",
+        exportedAt: new Date().toISOString(),
+        statuses: Object.fromEntries(allIssues().map(item => [item.issue[0], item.status]))
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `markhand-roadmap-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      showToast("Đã export trạng thái roadmap");
+    }
+
+    async function importState(file) {
+      try {
+        if (file.size > 1024 * 1024) throw new Error("File import vượt quá 1 MB");
+        const payload = JSON.parse(await file.text());
+        const isPlainObject = payload.statuses
+          && typeof payload.statuses === "object"
+          && !Array.isArray(payload.statuses)
+          && Object.getPrototypeOf(payload.statuses) === Object.prototype;
+        if (payload.schemaVersion !== 1 || payload.project !== "markhand-web" || !isPlainObject) {
+          throw new Error("Định dạng không hợp lệ");
+        }
+        const ids = new Set(allIssues().map(item => item.issue[0]));
+        const incoming = Object.entries(payload.statuses);
+        if (incoming.length !== ids.size) throw new Error(`File phải có đủ ${ids.size} issues`);
+        const next = {};
+        for (const [id, status] of incoming) {
+          if (!ids.has(id)) throw new Error(`Issue không xác định: ${id}`);
+          if (!STATUS[status]) throw new Error(`Trạng thái không hợp lệ cho ${id}`);
+          next[id] = status;
+        }
+        if (!confirm("Import sẽ thay thế toàn bộ trạng thái hiện tại. Tiếp tục?")) return;
+        saved = next;
+        persistSaved();
+        render();
+        showToast(`Đã import ${Object.keys(next).length} trạng thái`);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "Không thể import file");
+      } finally {
+        elements.importFile.value = "";
+      }
+    }
+
+    document.addEventListener("change", event => {
+      const select = event.target.closest("[data-issue-status]");
+      if (select) saveStatus(select.dataset.issueStatus, select.value);
+    });
+
+    document.addEventListener("click", event => {
+      const phaseButton = event.target.closest("[data-phase]");
+      if (phaseButton) setPhase(phaseButton.dataset.phase, phaseButton.classList.contains("phase-mini") ? "strip" : "nav");
+    });
+
+    elements.searchInput.addEventListener("input", renderRoadmap);
+    elements.statusFilter.addEventListener("change", renderRoadmap);
+    elements.phaseFilter.addEventListener("change", event => setPhase(event.target.value, "filter"));
+    document.querySelector("#exportButton").addEventListener("click", exportState);
+    document.querySelector("#importButton").addEventListener("click", () => elements.importFile.click());
+    elements.importFile.addEventListener("change", event => {
+      if (event.target.files?.[0]) importState(event.target.files[0]);
+    });
+    document.querySelector("#resetButton").addEventListener("click", () => {
+      if (!confirm("Đặt lại toàn bộ trạng thái về mặc định trong plan?")) return;
+      saved = {};
+      removeSaved();
+      render();
+      showToast("Đã đặt lại roadmap");
+    });
+
+    render();
+  </script>
+</body>
+</html>
