@@ -15,7 +15,28 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MASTER_PLAN = ROOT / "plans/markhand-web/README.md"
 ROADMAP = ROOT / "plans/markhand-web/roadmap.html"
+TOTAL_PATTERN = re.compile(r"Issue-level backlog \((\d+) issues\)")
+PHASE_ROW_PATTERN = re.compile(
+    r"^\|\s*(?P<code>F|[0-9]+[A-Z]?)\s*"
+    r"\|\s*(?P<description>.*?)\s*"
+    r"\|\s*\[[^\]]+\]\((?P<plan>[^)]+)\)\s*"
+    r"\|\s*\[(?P<count>\d+)\s+issues\]\((?P<catalog>[^)]+)\)\s*\|\s*$",
+    re.MULTILINE,
+)
+PLAN_TITLE_PATTERN = re.compile(
+    r"^#\s+Phase\s+(?P<code>[A-Z0-9]+)\s+—\s+(?P<title>.+?)\s*$",
+    re.MULTILINE,
+)
+PARENT_PLAN_PATTERN = re.compile(
+    r"^Parent plan:\s*\[[^\]]+\]\((?P<plan>[^)]+)\)\s*$",
+    re.MULTILINE,
+)
+GROUPS_PATTERN = re.compile(
+    r"<!--\s*roadmap-groups:\s*([A-Z](?:\s*,\s*[A-Z])*)\s*-->",
+    re.IGNORECASE,
+)
 DATA_PATTERN = re.compile(
     r"^(?P<indent>[ \t]*)/\* ROADMAP_DATA_START \*/[ \t]*\r?\n"
     r".*?"
@@ -28,7 +49,7 @@ DEFAULT_STATUS_PATTERN = re.compile(
 )
 ISSUE_PATTERN = re.compile(
     r"^(?P<heading>#{2,3})\s+"
-    r"(?P<id>(?:F|P0|P1A|P1B|1C|P2|P3|P4)-[A-Z0-9]+)"
+    r"(?P<id>[A-Z0-9]+(?:-[A-Z0-9]+)+)"
     r"\s+—\s+"
     r"(?P<title>.+?)\s*$",
     re.MULTILINE,
@@ -39,7 +60,8 @@ STATUS_FIELD_PATTERN = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 STATUS_VALUE_PATTERN = re.compile(
-    r"^(Ready|Blocked|Backlog|In progress|Review|Done)\b",
+    r"^(Ready|Blocked|Backlog|In progress|Review|Done)"
+    r"(?:\s*(?:[.;,:—-]\s*.*|bởi\b.*))?$",
     re.IGNORECASE,
 )
 VALID_STATUSES = {
@@ -54,89 +76,25 @@ VALID_STATUSES = {
 
 @dataclass(frozen=True)
 class PhaseConfig:
-    directory: str
     code: str
     name: str
     description: str
-    expected_ids: tuple[str, ...]
+    plan: Path
+    catalog: Path
+    expected_issues: int
+    expected_groups: tuple[str, ...] = ()
 
     @property
-    def catalog(self) -> Path:
-        return (
-            ROOT
-            / "plans/markhand-web/backlog"
-            / self.directory
-            / "issues/README.md"
-        )
+    def directory(self) -> str:
+        return self.catalog.parent.parent.name
 
     @property
     def html_catalog(self) -> str:
-        return f"backlog/{self.directory}/issues/README.md"
+        return self.catalog.relative_to(MASTER_PLAN.parent).as_posix()
 
-
-PHASES = (
-    PhaseConfig(
-        "phase-f",
-        "F",
-        "Engineering Foundation",
-        "Rules, skeleton, dev environment và CI foundation",
-        tuple(f"F-{number:02d}" for number in range(1, 13)),
-    ),
-    PhaseConfig(
-        "phase-0",
-        "0",
-        "Discovery & Gates",
-        "Benchmark, threat model, SLA và architecture decisions",
-        tuple(f"P0-{number:02d}" for number in range(1, 11)),
-    ),
-    PhaseConfig(
-        "phase-1a",
-        "1A",
-        "Knowledge Extraction",
-        "Tách fileconv-knowledge, giữ desktop parity",
-        tuple(f"P1A-{number:02d}" for number in range(1, 11)),
-    ),
-    PhaseConfig(
-        "phase-1b",
-        "1B",
-        "Single-org POC",
-        "Upload → convert → index → Q&A citation",
-        tuple(
-            [f"P1B-F{number:02d}" for number in range(1, 7)]
-            + [f"P1B-I{number:02d}" for number in range(1, 8)]
-            + [f"P1B-R{number:02d}" for number in range(1, 7)]
-            + [f"P1B-O{number:02d}" for number in range(1, 6)]
-        ),
-    ),
-    PhaseConfig(
-        "phase-1c",
-        "1C",
-        "Multi-org Security",
-        "RBAC, ACL, quota, fairness và denial suite",
-        tuple(f"1C-{number:02d}" for number in range(1, 14)),
-    ),
-    PhaseConfig(
-        "phase-2",
-        "2",
-        "Web SPA MVP",
-        "Login, library, upload, Q&A và admin tối thiểu",
-        tuple(f"P2-{number:02d}" for number in range(1, 17)),
-    ),
-    PhaseConfig(
-        "phase-3",
-        "3",
-        "Document Intelligence",
-        "BRD/PRD, quality, PII, tables, versions và export",
-        tuple(f"P3-{number:02d}" for number in range(1, 15)),
-    ),
-    PhaseConfig(
-        "phase-4",
-        "4",
-        "Production Hardening",
-        "OIDC, HA, DR, deployment và go-live",
-        tuple(f"P4-{number:02d}" for number in range(1, 15)),
-    ),
-)
+    @property
+    def html_plan(self) -> str:
+        return self.plan.relative_to(MASTER_PLAN.parent).as_posix()
 
 
 def normalize_status(raw: str, *, source: Path) -> str:
@@ -179,6 +137,162 @@ def mask_non_content(markdown: str) -> str:
     if fence is not None:
         raise ValueError("Markdown có code fence chưa đóng")
     return "".join(result)
+
+
+def resolve_registry_path(raw: str, *, kind: str) -> Path:
+    base = MASTER_PLAN.parent.resolve()
+    resolved = (MASTER_PLAN.parent / raw).resolve()
+    if not resolved.is_relative_to(base):
+        raise ValueError(f"{MASTER_PLAN}: {kind} vượt ngoài Markhand Web plan: {raw}")
+    if not resolved.is_file():
+        raise ValueError(f"{MASTER_PLAN}: không tìm thấy {kind}: {raw}")
+    return resolved
+
+
+def clean_inline_markdown(value: str) -> str:
+    return re.sub(r"`([^`]+)`", r"\1", value).strip()
+
+
+def parse_registry() -> tuple[list[PhaseConfig], int]:
+    markdown = MASTER_PLAN.read_text(encoding="utf-8")
+    total_matches = TOTAL_PATTERN.findall(markdown)
+    if len(total_matches) != 1:
+        raise ValueError(
+            f"{MASTER_PLAN}: cần đúng một Issue-level backlog total, "
+            f"có {len(total_matches)}"
+        )
+    expected_total = int(total_matches[0])
+    rows = list(PHASE_ROW_PATTERN.finditer(mask_non_content(markdown)))
+    if not rows:
+        raise ValueError(f"{MASTER_PLAN}: không tìm thấy phase registry rows")
+
+    configs: list[PhaseConfig] = []
+    for row in rows:
+        plan = resolve_registry_path(row.group("plan"), kind="phase plan")
+        catalog = resolve_registry_path(row.group("catalog"), kind="issue catalog")
+        plan_titles = list(
+            PLAN_TITLE_PATTERN.finditer(
+                mask_non_content(plan.read_text(encoding="utf-8"))
+            )
+        )
+        if len(plan_titles) != 1:
+            raise ValueError(
+                f"{plan}: cần đúng một '# Phase ... — ...' title, có {len(plan_titles)}"
+            )
+        plan_title = plan_titles[0]
+        if plan_title.group("code") != row.group("code"):
+            raise ValueError(
+                f"{plan}: title Phase {plan_title.group('code')} không khớp "
+                f"registry Phase {row.group('code')}"
+            )
+        expected_directory = f"phase-{row.group('code').lower()}"
+        if catalog.parent.name != "issues" or catalog.parent.parent.name != expected_directory:
+            raise ValueError(
+                f"{catalog}: catalog phải nằm tại "
+                f"backlog/{expected_directory}/issues/README.md"
+            )
+        catalog_markdown = catalog.read_text(encoding="utf-8")
+        parent_links = PARENT_PLAN_PATTERN.findall(
+            mask_non_content(catalog_markdown)
+        )
+        if len(parent_links) != 1:
+            raise ValueError(
+                f"{catalog}: cần đúng một Parent plan backlink, có {len(parent_links)}"
+            )
+        catalog_parent = (catalog.parent / parent_links[0]).resolve()
+        if catalog_parent != plan:
+            raise ValueError(
+                f"{catalog}: Parent plan {catalog_parent} không khớp registry {plan}"
+            )
+        group_matches = GROUPS_PATTERN.findall(catalog_markdown)
+        if row.group("code") == "1B":
+            if len(group_matches) != 1:
+                raise ValueError(
+                    f"{catalog}: Phase 1B cần đúng một roadmap-groups"
+                )
+            expected_groups = tuple(
+                part.strip().upper() for part in group_matches[0].split(",")
+            )
+        else:
+            if group_matches:
+                raise ValueError(
+                    f"{catalog}: roadmap-groups chỉ được dùng cho grouped issue IDs"
+                )
+            expected_groups = ()
+        configs.append(
+            PhaseConfig(
+                code=row.group("code"),
+                name=plan_title.group("title").strip(),
+                description=clean_inline_markdown(row.group("description")),
+                plan=plan,
+                catalog=catalog,
+                expected_issues=int(row.group("count")),
+                expected_groups=expected_groups,
+            )
+        )
+
+    codes = [config.code for config in configs]
+    plans = [config.plan for config in configs]
+    catalogs = [config.catalog for config in configs]
+    if len(codes) != len(set(codes)):
+        raise ValueError(f"{MASTER_PLAN}: trùng phase codes")
+    if len(catalogs) != len(set(catalogs)):
+        raise ValueError(f"{MASTER_PLAN}: trùng issue catalogs")
+    if len(plans) != len(set(plans)):
+        raise ValueError(f"{MASTER_PLAN}: trùng phase plans")
+    if sum(config.expected_issues for config in configs) != expected_total:
+        raise ValueError(
+            f"{MASTER_PLAN}: tổng phase issue counts không bằng {expected_total}"
+        )
+    return configs, expected_total
+
+
+def validate_phase_issue_ids(config: PhaseConfig, issue_ids: tuple[str, ...]) -> None:
+    if len(issue_ids) != config.expected_issues:
+        raise ValueError(
+            f"{config.catalog}: tìm thấy {len(issue_ids)} issues, "
+            f"registry cần {config.expected_issues}"
+        )
+
+    if config.code == "F":
+        pattern = re.compile(r"^F-(?P<number>\d{2})$")
+    elif config.code == "1C":
+        pattern = re.compile(r"^1C-(?P<number>\d{2})$")
+    elif config.code == "1B":
+        pattern = re.compile(r"^P1B-(?P<group>[A-Z])(?P<number>\d{2})$")
+    else:
+        pattern = re.compile(
+            rf"^P{re.escape(config.code)}-(?P<number>\d{{2}})$"
+        )
+
+    parsed: list[tuple[str, int]] = []
+    for issue_id in issue_ids:
+        match = pattern.fullmatch(issue_id)
+        if not match:
+            raise ValueError(
+                f"{config.catalog}: {issue_id} không thuộc Phase {config.code}"
+            )
+        parsed.append((match.groupdict().get("group") or "", int(match.group("number"))))
+
+    groups: list[str] = []
+    for group, _ in parsed:
+        if group not in groups:
+            groups.append(group)
+    if tuple(groups) != config.expected_groups and config.expected_groups:
+        raise ValueError(
+            f"{config.catalog}: groups {tuple(groups)} không khớp "
+            f"roadmap-groups {config.expected_groups}"
+        )
+    if [group for group, _ in parsed] != [
+        group for group in groups for _ in range(sum(1 for item in parsed if item[0] == group))
+    ]:
+        raise ValueError(f"{config.catalog}: issue groups không liên tục")
+    for group in groups:
+        numbers = [number for item_group, number in parsed if item_group == group]
+        if numbers != list(range(1, len(numbers) + 1)):
+            raise ValueError(
+                f"{config.catalog}: numbering group {group or 'default'} không liên tục"
+            )
 
 
 def parse_phase(config: PhaseConfig) -> dict[str, object]:
@@ -226,30 +340,27 @@ def parse_phase(config: PhaseConfig) -> dict[str, object]:
         )
 
     issue_ids = tuple(issue[0] for issue in issues)
-    if issue_ids != config.expected_ids:
-        raise ValueError(
-            f"{source}: issue IDs/order không đúng; "
-            f"found={issue_ids}, expected={config.expected_ids}"
-        )
+    validate_phase_issue_ids(config, issue_ids)
 
     return {
         "id": config.directory,
         "code": config.code,
         "name": config.name,
         "description": config.description,
+        "plan": config.html_plan,
         "catalog": config.html_catalog,
         "issues": issues,
     }
 
 
 def load_phases() -> list[dict[str, object]]:
-    phases = [parse_phase(config) for config in PHASES]
+    configs, expected = parse_registry()
+    phases = [parse_phase(config) for config in configs]
     ids = [
         issue[0]
         for phase in phases
         for issue in phase["issues"]  # type: ignore[index]
     ]
-    expected = sum(len(config.expected_ids) for config in PHASES)
     if len(ids) != expected:
         raise ValueError(f"Tổng issues {len(ids)}, cần {expected}")
     duplicate_ids = sorted({issue_id for issue_id in ids if ids.count(issue_id) > 1})

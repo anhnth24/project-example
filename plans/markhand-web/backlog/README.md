@@ -13,17 +13,9 @@ Phase F là prerequisite cho backlog bốn bước:
 
 ## Milestones
 
-| Milestone | Catalog | Issue | Trạng thái ban đầu | Exit gate |
-|---|---|---:|---|---|
-| Phase F | [`phase-f/issues/README.md`](phase-f/issues/README.md) | 12 | Ready/Blocked theo dependency | Engineering foundation |
-| Phase 0 | [`phase-0/issues/README.md`](phase-0/issues/README.md) | 10 | Blocked bởi Phase F/hardware | Decision gates |
-| Phase 1A | [`phase-1a/issues/README.md`](phase-1a/issues/README.md) | 10 | Blocked bởi Phase F/dependency | Desktop parity |
-| Phase 1B | [`phase-1b/issues/README.md`](phase-1b/issues/README.md) | 24 | Blocked | Single-org POC |
-| Phase 1C | [`phase-1c/issues/README.md`](phase-1c/issues/README.md) | 13 | Backlog | Multi-org denial |
-| Phase 2 | [`phase-2/issues/README.md`](phase-2/issues/README.md) | 16 | Backlog | Web E2E |
-| Phase 3 | [`phase-3/issues/README.md`](phase-3/issues/README.md) | 14 | Backlog | Intelligence quality/security |
-| Phase 4 | [`phase-4/issues/README.md`](phase-4/issues/README.md) | 14 | Backlog | Production go-live |
-| **Tổng** | | **113** | | |
+Phase registry, phase-plan links, issue-catalog links và issue counts chỉ được khai báo
+tại [`../README.md`](../README.md). Roadmap generator dùng registry đó làm nguồn sự thật,
+tránh duy trì một bảng milestone trùng lặp tại đây.
 
 ## Trạng thái
 

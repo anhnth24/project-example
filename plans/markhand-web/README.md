@@ -21,8 +21,10 @@ Roadmap dashboard tương tác:
 [`roadmap.html`](roadmap.html) — lọc/tìm kiếm, cập nhật trạng thái, lưu local và
 export/import JSON.
 
-Roadmap là generated artifact từ `backlog/*/issues/README.md`. Chạy các lệnh sau từ
-repository root sau khi đổi tiêu đề hoặc `**Status:**` của issue:
+File HTML nằm ngay trong repo. Generator bắt đầu từ phase registry ở bảng trên,
+theo link tới từng phase plan và issue catalog, rồi đọc tiêu đề/`**Status:**` của
+từng issue. Chạy các lệnh sau từ repository root sau khi đổi registry, tiêu đề hoặc
+trạng thái issue:
 
 ```bash
 python3 scripts/build-roadmap.py
@@ -35,16 +37,16 @@ không bị local override cũ che mất.
 
 ## Phạm vi các phase
 
-| Phase | Kết quả chính | Tài liệu |
-|---|---|---|
-| F | Engineering rules, skeleton, local dev environment và CI foundation | [`phase-f-engineering-foundation.md`](phase-f-engineering-foundation.md) |
-| 0 | Chốt bằng số liệu: scale, retrieval, bảo mật upload, SLA/RPO/RTO | [`phase-0-discovery-and-gates.md`](phase-0-discovery-and-gates.md) |
-| 1A | Tách logic RAG dùng chung thành `crates/knowledge`, desktop không đổi hành vi | [`phase-1a-knowledge-extraction.md`](phase-1a-knowledge-extraction.md) |
-| 1B | POC single-org hoàn chỉnh: upload → convert → index → Q&A citation | [`phase-1b-single-org-poc.md`](phase-1b-single-org-poc.md) |
-| 1C | Multi-org, RBAC/ACL, quota atomic và denial test | [`phase-1c-multi-org-security.md`](phase-1c-multi-org-security.md) |
-| 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [`phase-2-web-spa.md`](phase-2-web-spa.md) |
-| 3 | Port intelligence: BRD/PRD, quality, PII, bảng, version, export | [`phase-3-intelligence.md`](phase-3-intelligence.md) |
-| 4 | OIDC/SSO, hardening production, DR và onboarding/help | [`phase-4-production-hardening.md`](phase-4-production-hardening.md) |
+| Phase | Kết quả chính | Phase plan | Issue catalog |
+|---|---|---|---|
+| F | Engineering rules, skeleton, local dev environment và CI foundation | [Phase plan](phase-f-engineering-foundation.md) | [12 issues](backlog/phase-f/issues/README.md) |
+| 0 | Chốt bằng số liệu: scale, retrieval, bảo mật upload, SLA/RPO/RTO | [Phase plan](phase-0-discovery-and-gates.md) | [10 issues](backlog/phase-0/issues/README.md) |
+| 1A | Tách logic RAG dùng chung thành `crates/knowledge`, desktop không đổi hành vi | [Phase plan](phase-1a-knowledge-extraction.md) | [10 issues](backlog/phase-1a/issues/README.md) |
+| 1B | POC single-org hoàn chỉnh: upload → convert → index → Q&A citation | [Phase plan](phase-1b-single-org-poc.md) | [24 issues](backlog/phase-1b/issues/README.md) |
+| 1C | Multi-org, RBAC/ACL, quota atomic và denial test | [Phase plan](phase-1c-multi-org-security.md) | [13 issues](backlog/phase-1c/issues/README.md) |
+| 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [Phase plan](phase-2-web-spa.md) | [16 issues](backlog/phase-2/issues/README.md) |
+| 3 | Port intelligence: BRD/PRD, quality, PII, bảng, version, export | [Phase plan](phase-3-intelligence.md) | [14 issues](backlog/phase-3/issues/README.md) |
+| 4 | OIDC/SSO, hardening production, DR và onboarding/help | [Phase plan](phase-4-production-hardening.md) | [14 issues](backlog/phase-4/issues/README.md) |
 
 ## Dependency và đường găng
 

@@ -299,7 +299,7 @@
 
     .phase-strip {
       display: grid;
-      grid-template-columns: repeat(8, minmax(120px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       gap: 8px;
       margin-bottom: 18px;
       overflow-x: auto;
@@ -415,6 +415,23 @@
 
     .phase-title { margin: 0; font-size: 17px; letter-spacing: -0.015em; }
     .phase-description { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; }
+    .phase-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 7px;
+    }
+
+    .phase-links a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .phase-links a:hover { text-decoration: underline; text-underline-offset: 3px; }
     .phase-summary { color: var(--text-muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
 
     .issue-list { display: grid; }
@@ -598,7 +615,9 @@
         <div>
           <p class="eyebrow">Engineering delivery plan</p>
           <h1>Roadmap triển khai Markhand Web</h1>
-          <p class="lead">Theo dõi 8 milestones, 113 issues và các gate từ engineering foundation đến production go-live.</p>
+          <p class="lead">Theo dõi <span id="phaseCountLead">—</span> milestones,
+            <span id="issueCountLead">—</span> issues và các gate từ engineering
+            foundation đến production go-live.</p>
         </div>
         <div class="actions" aria-label="Thao tác dữ liệu">
           <button class="button" id="exportButton" type="button" aria-label="Export trạng thái roadmap ra JSON">
@@ -627,8 +646,8 @@
         <section class="stats" aria-label="Tổng quan tiến độ">
           <article class="stat">
             <div class="stat-label">Tổng issues</div>
-            <div class="stat-value" id="totalStat">113</div>
-            <div class="stat-meta">trên 8 milestones</div>
+            <div class="stat-value" id="totalStat">—</div>
+            <div class="stat-meta" id="phaseCountMeta">đang tải milestones</div>
           </article>
           <article class="stat">
             <div class="stat-label">Đã hoàn thành</div>
@@ -643,7 +662,7 @@
           </article>
           <article class="stat">
             <div class="stat-label">Blocked</div>
-            <div class="stat-value" id="blockedStat">55</div>
+            <div class="stat-value" id="blockedStat">—</div>
             <div class="stat-meta">cần dependency hoặc gate</div>
           </article>
         </section>
@@ -674,7 +693,7 @@
             <span class="visually-hidden">Lọc theo phase</span>
             <select id="phaseFilter"></select>
           </label>
-          <div class="result-count" id="resultCount" tabindex="-1" aria-live="polite">113 issues</div>
+          <div class="result-count" id="resultCount" tabindex="-1" aria-live="polite">Đang tải issues</div>
         </section>
 
         <div id="roadmap"></div>
@@ -699,13 +718,14 @@
     };
 
     /* ROADMAP_DATA_START */
-    const ROADMAP_SOURCE_HASH = "79755c7d067b56b9";
+    const ROADMAP_SOURCE_HASH = "8d2be1c12e260cf0";
     const phases = [
       {
         "id": "phase-f",
         "code": "F",
-        "name": "Engineering Foundation",
-        "description": "Rules, skeleton, dev environment và CI foundation",
+        "name": "Engineering foundation và developer platform",
+        "description": "Engineering rules, skeleton, local dev environment và CI foundation",
+        "plan": "phase-f-engineering-foundation.md",
         "catalog": "backlog/phase-f/issues/README.md",
         "issues": [
           [
@@ -773,8 +793,9 @@
       {
         "id": "phase-0",
         "code": "0",
-        "name": "Discovery & Gates",
-        "description": "Benchmark, threat model, SLA và architecture decisions",
+        "name": "Discovery, benchmark và decision gates",
+        "description": "Chốt bằng số liệu: scale, retrieval, bảo mật upload, SLA/RPO/RTO",
+        "plan": "phase-0-discovery-and-gates.md",
         "catalog": "backlog/phase-0/issues/README.md",
         "issues": [
           [
@@ -832,8 +853,9 @@
       {
         "id": "phase-1a",
         "code": "1A",
-        "name": "Knowledge Extraction",
-        "description": "Tách fileconv-knowledge, giữ desktop parity",
+        "name": "Tách `crates/knowledge`",
+        "description": "Tách logic RAG dùng chung thành crates/knowledge, desktop không đổi hành vi",
+        "plan": "phase-1a-knowledge-extraction.md",
         "catalog": "backlog/phase-1a/issues/README.md",
         "issues": [
           [
@@ -891,8 +913,9 @@
       {
         "id": "phase-1b",
         "code": "1B",
-        "name": "Single-org POC",
-        "description": "Upload → convert → index → Q&A citation",
+        "name": "Secure single-org vertical slice",
+        "description": "POC single-org hoàn chỉnh: upload → convert → index → Q&A citation",
+        "plan": "phase-1b-single-org-poc.md",
         "catalog": "backlog/phase-1b/issues/README.md",
         "issues": [
           [
@@ -1020,8 +1043,9 @@
       {
         "id": "phase-1c",
         "code": "1C",
-        "name": "Multi-org Security",
-        "description": "RBAC, ACL, quota, fairness và denial suite",
+        "name": "Multi-org, RBAC/ACL và quota",
+        "description": "Multi-org, RBAC/ACL, quota atomic và denial test",
+        "plan": "phase-1c-multi-org-security.md",
         "catalog": "backlog/phase-1c/issues/README.md",
         "issues": [
           [
@@ -1095,7 +1119,8 @@
         "id": "phase-2",
         "code": "2",
         "name": "Web SPA MVP",
-        "description": "Login, library, upload, Q&A và admin tối thiểu",
+        "description": "Web SPA MVP: login, library, Q&A, admin tối thiểu",
+        "plan": "phase-2-web-spa.md",
         "catalog": "backlog/phase-2/issues/README.md",
         "issues": [
           [
@@ -1183,8 +1208,9 @@
       {
         "id": "phase-3",
         "code": "3",
-        "name": "Document Intelligence",
-        "description": "BRD/PRD, quality, PII, tables, versions và export",
+        "name": "Document Intelligence trên web",
+        "description": "Port intelligence: BRD/PRD, quality, PII, bảng, version, export",
+        "plan": "phase-3-intelligence.md",
         "catalog": "backlog/phase-3/issues/README.md",
         "issues": [
           [
@@ -1262,8 +1288,9 @@
       {
         "id": "phase-4",
         "code": "4",
-        "name": "Production Hardening",
-        "description": "OIDC, HA, DR, deployment và go-live",
+        "name": "SSO, production hardening và onboarding",
+        "description": "OIDC/SSO, hardening production, DR và onboarding/help",
+        "plan": "phase-4-production-hardening.md",
         "catalog": "backlog/phase-4/issues/README.md",
         "issues": [
           [
@@ -1356,6 +1383,9 @@
       emptyState: document.querySelector("#emptyState"),
       resultCount: document.querySelector("#resultCount"),
       totalStat: document.querySelector("#totalStat"),
+      phaseCountLead: document.querySelector("#phaseCountLead"),
+      issueCountLead: document.querySelector("#issueCountLead"),
+      phaseCountMeta: document.querySelector("#phaseCountMeta"),
       doneStat: document.querySelector("#doneStat"),
       doneMeta: document.querySelector("#doneMeta"),
       activeStat: document.querySelector("#activeStat"),
@@ -1402,24 +1432,29 @@
         </button>`;
       elements.phaseNav.innerHTML = allButton + phases.map(phase => {
         const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
+        const id = escapeHtml(phase.id);
+        const code = escapeHtml(phase.code);
+        const name = escapeHtml(phase.name);
         return `
-          <button type="button" data-phase="${phase.id}" class="${phaseScope === phase.id ? "active" : ""}" aria-pressed="${phaseScope === phase.id}" aria-label="Lọc Phase ${phase.code} — ${phase.name}">
-            <span class="phase-code">${phase.code}</span><span class="phase-nav-name">${phase.name}</span>
+          <button type="button" data-phase="${id}" class="${phaseScope === phase.id ? "active" : ""}" aria-pressed="${phaseScope === phase.id}" aria-label="Lọc Phase ${code} — ${name}">
+            <span class="phase-code">${code}</span><span class="phase-nav-name">${name}</span>
             <span class="phase-nav-count">${done}/${phase.issues.length}</span>
           </button>`;
       }).join("");
 
       elements.phaseFilter.innerHTML = `<option value="all">Mọi phase</option>` +
-        phases.map(phase => `<option value="${phase.id}">Phase ${phase.code} — ${phase.name}</option>`).join("");
+        phases.map(phase => `<option value="${escapeHtml(phase.id)}">Phase ${escapeHtml(phase.code)} — ${escapeHtml(phase.name)}</option>`).join("");
       elements.phaseFilter.value = phaseScope;
 
       elements.phaseStrip.innerHTML = phases.map(phase => {
         const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
         const percent = Math.round(done / phase.issues.length * 100);
+        const id = escapeHtml(phase.id);
+        const code = escapeHtml(phase.code);
         return `
-          <button type="button" class="phase-mini ${phaseScope === phase.id ? "active" : ""}" data-phase="${phase.id}" aria-pressed="${phaseScope === phase.id}">
+          <button type="button" class="phase-mini ${phaseScope === phase.id ? "active" : ""}" data-phase="${id}" aria-pressed="${phaseScope === phase.id}">
             <span class="phase-mini-head">
-              <span class="phase-mini-code">Phase ${phase.code}</span>
+              <span class="phase-mini-code">Phase ${code}</span>
               <span class="phase-mini-progress">${done}/${phase.issues.length}</span>
             </span>
             <span class="mini-bar"><span style="width:${percent}%"></span></span>
@@ -1434,6 +1469,9 @@
       const blocked = issues.filter(item => item.status === "blocked").length;
       const percent = Math.round(done / issues.length * 100);
       elements.totalStat.textContent = issues.length;
+      elements.phaseCountLead.textContent = phases.length;
+      elements.issueCountLead.textContent = issues.length;
+      elements.phaseCountMeta.textContent = `trên ${phases.length} milestones`;
       elements.doneStat.textContent = done;
       elements.activeStat.textContent = active;
       elements.blockedStat.textContent = blocked;
@@ -1465,30 +1503,41 @@
         shown += visible.length;
         const done = phase.issues.filter(issue => statusFor(issue) === "done").length;
         const active = phase.issues.filter(issue => ["in_progress", "review"].includes(statusFor(issue))).length;
+        const id = escapeHtml(phase.id);
+        const code = escapeHtml(phase.code);
+        const name = escapeHtml(phase.name);
+        const description = escapeHtml(phase.description);
+        const plan = escapeHtml(phase.plan);
+        const catalog = escapeHtml(phase.catalog);
         return `
-          <section class="phase-section" id="${phase.id}">
+          <section class="phase-section" id="${id}">
             <header class="phase-header">
-              <span class="phase-badge">P${phase.code}</span>
+              <span class="phase-badge">P${code}</span>
               <div>
-                <h2 class="phase-title">Phase ${phase.code} — ${phase.name}</h2>
-                <p class="phase-description">${phase.description}</p>
+                <h2 class="phase-title">Phase ${code} — ${name}</h2>
+                <p class="phase-description">${description}</p>
+                <div class="phase-links">
+                  <a href="${plan}">Mở phase plan</a>
+                  <a href="${catalog}">Mở ${phase.issues.length} issue specs</a>
+                </div>
               </div>
               <div class="phase-summary">${done} done · ${active} active · ${phase.issues.length} total</div>
             </header>
             <div class="issue-list">
               ${visible.map(issue => {
                 const current = statusFor(issue);
+                const issueId = escapeHtml(issue[0]);
                 return `
-                  <article class="issue ${current === "done" ? "done" : ""}" data-issue="${issue[0]}">
-                    <span class="issue-id">${issue[0]}</span>
+                  <article class="issue ${current === "done" ? "done" : ""}" data-issue="${issueId}">
+                    <span class="issue-id">${issueId}</span>
                     <span class="issue-title">${escapeHtml(issue[1])}</span>
                     <label>
-                      <span class="visually-hidden">Trạng thái ${issue[0]}</span>
-                      <select class="status-select" data-issue-status="${issue[0]}" data-status="${current}">
+                      <span class="visually-hidden">Trạng thái ${issueId}</span>
+                      <select class="status-select" data-issue-status="${issueId}" data-status="${current}">
                         ${statusOptions(current)}
                       </select>
                     </label>
-                    <a class="issue-link" href="${phase.catalog}" title="Mở catalog Phase ${phase.code}" aria-label="Mở catalog chứa ${issue[0]}">
+                    <a class="issue-link" href="${catalog}" title="Mở catalog Phase ${code}" aria-label="Mở catalog chứa ${issueId}">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                         <path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>
                       </svg>

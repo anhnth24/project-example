@@ -3,6 +3,7 @@
 Parent plan: [`../../../phase-1b-single-org-poc.md`](../../../phase-1b-single-org-poc.md)
 
 <!-- roadmap-default-status: blocked -->
+<!-- roadmap-groups: F,I,R,O -->
 
 Tất cả issue bắt đầu ở **Blocked**. Chỉ chuyển `Ready` khi external gate và predecessor
 ghi trong issue đã `Done`.
