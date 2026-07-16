@@ -51,6 +51,14 @@ function defaultSession(relPath: string): DocumentSession {
   };
 }
 
+export type SortOption =
+  | "name_asc"
+  | "name_desc"
+  | "type_asc"
+  | "type_desc"
+  | "converted_first"
+  | "unconverted_first";
+
 interface AppStore {
   dataRoot: string;
   tree: FsNode | null;
@@ -60,6 +68,8 @@ interface AppStore {
   projects: Project[];
   activeProjectId: string | null;
   error: string | null;
+  sortBy: SortOption;
+  filterUnconvertedOnly: boolean;
 
   view: AppView;
   openTabs: string[];
@@ -83,6 +93,8 @@ interface AppStore {
   closeTab: (relPath: string) => void;
   closeTabsWithin: (relPath: string) => void;
   setActiveFolder: (relPath: string) => void;
+  setSortBy: (sortBy: SortOption) => void;
+  setFilterUnconvertedOnly: (filterUnconvertedOnly: boolean) => void;
 
   loadSession: (relPath: string, conversionBaseline?: boolean) => Promise<void>;
   updateDraft: (relPath: string, draft: string) => void;
@@ -108,6 +120,8 @@ export const useStore = create<AppStore>((set, get) => ({
   projects: [],
   activeProjectId: null,
   error: null,
+  sortBy: "name_asc",
+  filterUnconvertedOnly: false,
 
   view: "home",
   openTabs: [],
@@ -275,6 +289,8 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   setActiveFolder: (activeFolder) => set({ activeFolder }),
+  setSortBy: (sortBy) => set({ sortBy }),
+  setFilterUnconvertedOnly: (filterUnconvertedOnly) => set({ filterUnconvertedOnly }),
 
   loadSession: async (relPath, conversionBaseline = false) => {
     const existing = get().sessions[relPath];
