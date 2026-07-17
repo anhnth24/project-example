@@ -15,13 +15,13 @@ const MAX_VECTOR_CANDIDATES: usize = 100_000;
 const LOCAL_EMBEDDING_MODE: &str = "local_hash_v1";
 const PROVIDER_EMBEDDING_MODE: &str = "provider_v1";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexRequest {
     pub source_rels: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexBuildResult {
     pub documents: usize,
@@ -35,7 +35,7 @@ pub struct IndexBuildResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexStats {
     pub documents: usize,
@@ -49,7 +49,7 @@ pub struct IndexStats {
     pub ann_threshold: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridSearchRequest {
     pub source_rels: Vec<String>,
@@ -57,7 +57,7 @@ pub struct HybridSearchRequest {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceAnchor {
     pub page: Option<u32>,
@@ -67,7 +67,7 @@ pub struct SourceAnchor {
     pub end: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridSearchHit {
     pub chunk_id: String,
@@ -81,7 +81,7 @@ pub struct HybridSearchHit {
     pub anchor: SourceAnchor,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridSearchResponse {
     pub hits: Vec<HybridSearchHit>,
@@ -89,7 +89,7 @@ pub struct HybridSearchResponse {
     pub embedding_mode: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HybridAskRequest {
     pub source_rels: Vec<String>,
@@ -98,7 +98,7 @@ pub struct HybridAskRequest {
     pub use_llm: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroundedAnswer {
     pub answer: String,

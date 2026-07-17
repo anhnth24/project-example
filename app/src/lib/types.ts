@@ -155,6 +155,23 @@ export interface ImportFolderResult {
   convertRels: string[];
 }
 
+export interface IndexRequest {
+  sourceRels: string[];
+}
+
+export interface HybridSearchRequest {
+  sourceRels: string[];
+  query: string;
+  limit?: number;
+}
+
+export interface HybridAskRequest {
+  sourceRels: string[];
+  question: string;
+  topK?: number;
+  useLlm?: boolean;
+}
+
 export interface KnowledgeIndexStats {
   documents: number;
   chunks: number;

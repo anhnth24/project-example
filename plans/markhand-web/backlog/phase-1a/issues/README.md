@@ -17,7 +17,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-01 — Freeze desktop RAG và IPC contracts
 
-- **Status:** Ready — Phase F exit gate đã đạt.
+- **Status:** In progress — canonical desktop RAG/IPC fixtures đang được khóa.
 - **Objective:** Baseline parity trước khi move code.
 - **Plan:** Inventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/
   incremental; canonical JSON cho 4 hybrid commands; offline + mock-provider flows.

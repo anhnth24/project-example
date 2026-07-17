@@ -21,6 +21,8 @@ use fileconv_core::{ConverterOptions, FormatKind};
 
 mod intelligence;
 mod knowledge;
+#[cfg(test)]
+mod knowledge_contract;
 mod projects;
 mod vector_index;
 mod watch;

@@ -1,0 +1,11 @@
+{
+  "command": "hybrid_ask",
+  "args": {
+    "req": {
+      "sourceRels": ["payments.pdf"],
+      "question": "Quy trình đối soát gồm bước nào?",
+      "topK": 8,
+      "useLlm": false
+    }
+  }
+}

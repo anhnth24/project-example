@@ -1,0 +1,8 @@
+{
+  "command": "rebuild_knowledge_index",
+  "args": {
+    "req": {
+      "sourceRels": ["payments.pdf", "security.docx"]
+    }
+  }
+}
