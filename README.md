@@ -19,6 +19,7 @@ Code do dự án làm chủ hoàn toàn (gọi thẳng crate gốc). Mục tiêu
 | Mục đích, yêu cầu sản phẩm, vị thế thị trường | [`docs/project-overview-pdr.md`](docs/project-overview-pdr.md) |
 | Bản đồ code — sửa thì đụng file nào | [`docs/codebase-summary.md`](docs/codebase-summary.md) |
 | Quy ước, pin crate, cache pattern, cạm bẫy | [`docs/code-standards.md`](docs/code-standards.md) |
+| Setup contributor và quality gates | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 | Kiến trúc — định tuyến, IPC, MCP, sơ đồ | [`docs/system-architecture.md`](docs/system-architecture.md) |
 | Lộ trình (đã xong / đang làm / backlog) | [`docs/project-roadmap.md`](docs/project-roadmap.md) |
 | Số liệu đo thực | [`bench/REPORT.md`](bench/REPORT.md) |
@@ -32,7 +33,11 @@ Hướng dẫn nhanh cho agent: [`CLAUDE.md`](CLAUDE.md).
 crates/core/    # fileconv-core: LỎI convert — dùng chung bởi CLI + app + MCP
 crates/cli/     # fileconv: binary CLI + bench harness (đo tốc độ / CER/WER)
 crates/mcp/     # fileconv-mcp: MCP server cho Claude Code
+crates/knowledge/ # knowledge contracts dùng chung desktop/server
+crates/server/  # Markhand Web API/worker boundary
 app/            # Markhand: desktop app Tauri 2 + React 19
+web/            # Markhand Web browser SPA (HTTP/SSE, không Tauri)
+deploy/         # local Compose và deployment scripts
 bench/          # script tải corpus + sinh dữ liệu VN + các REPORT*.md
 vendor/         # markitdown-rs — CHỈ tham khảo (MIT, đã exclude khỏi workspace)
 ```

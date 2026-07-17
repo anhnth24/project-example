@@ -18,6 +18,7 @@ web/dist/
 /*.md
 !README.md
 !CLAUDE.md
+!CONTRIBUTING.md
 pdfium/
 /tessdata_best/
 /app/src-tauri/native-runtime/*
