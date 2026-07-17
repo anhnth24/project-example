@@ -1006,7 +1006,7 @@ fn rendered_page_is_blank(image: &image::DynamicImage) -> bool {
         max_row_dark = max_row_dark.max(row_dark);
     }
     dark_pixels.saturating_mul(1000) < grayscale.len()
-        && max_row_dark < (grayscale.width() as usize / 200).max(8)
+        && max_row_dark <= (grayscale.width() as usize / 200).max(8)
 }
 
 fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<PageOcr, ConvertError> {
