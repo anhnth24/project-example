@@ -13,6 +13,7 @@ for _ in $(seq 1 30); do
       init_code="$(docker inspect --format '{{.State.ExitCode}}' "$init_id")"
       [[ "$init_code" == "0" ]] || {
         echo "minio-init failed with exit code $init_code" >&2
+        docker compose logs minio-init >&2 || true
         exit 1
       }
       break

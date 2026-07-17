@@ -48,16 +48,17 @@ services:
     depends_on:
       - minio
     environment:
-      MARKHAND_MINIO_USER: ${MARKHAND_MINIO_USER:-markhand}
-      MARKHAND_MINIO_PASSWORD: ${MARKHAND_MINIO_PASSWORD:-markhand_dev_only}
-    entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      until mc alias set local http://minio:9000 "$$MARKHAND_MINIO_USER" "$$MARKHAND_MINIO_PASSWORD"; do sleep 1; done
-      mc mb --ignore-existing local/markhand-quarantine
-      mc mb --ignore-existing local/markhand-documents
-      mc mb --ignore-existing local/markhand-artifacts
+      MC_HOST_local: http://${MARKHAND_MINIO_USER:-markhand}:${MARKHAND_MINIO_PASSWORD:-markhand_dev_only}@minio:9000
+    command:
+      [
+        "mb",
+        "--ignore-existing",
+        "local/markhand-quarantine",
+        "local/markhand-documents",
+        "local/markhand-artifacts"
+      ]
     networks: [private]
-    restart: "no"
+    restart: on-failure
 
   otel:
     image: otel/opentelemetry-collector-contrib:0.156.0
