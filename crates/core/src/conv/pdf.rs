@@ -99,6 +99,9 @@ pub fn to_markdown(
     }
     // 3) Cuối cùng: pdf-extract (không hỗ trợ lọc trang).
     if pages.is_some() {
+        if let Some(error) = image_ocr::take_last_ocr_error() {
+            return Err(fail(format!("OCR trang PDF đã chọn thất bại: {error}")));
+        }
         return Err(fail(
             "không thể trích đúng các trang đã chọn (pdf-inspector/PDFium thất bại)",
         ));
@@ -540,7 +543,7 @@ fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String>
         Ok(text) if !text.trim().is_empty() => Some(text),
         Ok(_) => None,
         Err(error) => {
-            image_ocr::record_ocr_error(error);
+            image_ocr::record_ocr_error(format!("trang {}: {error}", page_0idx + 1));
             None
         }
     }
@@ -907,6 +910,7 @@ fn via_pdfium(
         let pdfium = opt.as_ref()?;
         let doc = pdfium.load_pdf_from_file(path, None).ok()?;
         let mut out = String::new();
+        let mut unresolved_pages = Vec::new();
         for (i, page) in doc.pages().iter().enumerate() {
             // Lọc trang (1-indexed) nếu người dùng chỉ định.
             if let Some(ps) = pages {
@@ -932,15 +936,24 @@ fn via_pdfium(
                             out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
                             out.push_str(ocr);
                             out.push_str("\n\n");
+                        } else {
+                            unresolved_pages.push(i + 1);
+                            image_ocr::record_ocr_error(format!(
+                                "trang {}: Tesseract không trả nội dung",
+                                i + 1
+                            ));
                         }
                     }
                     Err(error) => {
-                        image_ocr::record_ocr_error(error);
+                        unresolved_pages.push(i + 1);
+                        image_ocr::record_ocr_error(format!("trang {}: {error}", i + 1));
                     }
                 }
+            } else {
+                unresolved_pages.push(i + 1);
             }
         }
-        if out.trim().is_empty() {
+        if !unresolved_pages.is_empty() || out.trim().is_empty() {
             None
         } else {
             Some(out)
