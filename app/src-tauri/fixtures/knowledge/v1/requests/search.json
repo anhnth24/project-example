@@ -1,0 +1,10 @@
+{
+  "command": "hybrid_search",
+  "args": {
+    "req": {
+      "sourceRels": ["payments.pdf", "security.docx"],
+      "query": "quy trình đối soát thanh toán",
+      "limit": 20
+    }
+  }
+}

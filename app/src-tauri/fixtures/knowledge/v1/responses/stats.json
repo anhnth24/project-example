@@ -1,0 +1,11 @@
+{
+  "documents": 2,
+  "chunks": 2,
+  "databaseBytes": 4096,
+  "vectorDimensions": 256,
+  "embeddingMode": "local_hash_v1",
+  "embeddingProvider": "local",
+  "embeddingModel": "local_hash_v1",
+  "annAvailable": false,
+  "annThreshold": 1000
+}

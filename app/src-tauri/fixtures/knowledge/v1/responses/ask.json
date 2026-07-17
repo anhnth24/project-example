@@ -1,0 +1,25 @@
+{
+  "answer": "Đối soát giao dịch được thực hiện theo ngày. [CITE-0001]",
+  "citations": [
+    {
+      "chunkId": "fixture-chunk-payments-0001",
+      "sourceRel": "payments.pdf",
+      "mdRel": "payments.pdf.md",
+      "heading": "Đối soát",
+      "snippet": "Đối soát giao dịch được thực hiện theo ngày.",
+      "lexicalScore": 1.25,
+      "vectorScore": 0.75,
+      "rerankScore": 1.875,
+      "anchor": {
+        "page": 7,
+        "slide": null,
+        "sheet": null,
+        "start": 12,
+        "end": 68
+      }
+    }
+  ],
+  "mode": "offline_extractive",
+  "grounded": true,
+  "warnings": []
+}

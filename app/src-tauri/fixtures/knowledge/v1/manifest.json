@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "desktop.rag.v1.known-behaviors",
+      "path": "known-behaviors.md",
+      "sha256": "5807339b1441934c58614d30091d44142211ceeecbe1985d22b6f56faa436948",
+      "kind": "documentation",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.request.ask",
+      "path": "requests/ask.json",
+      "sha256": "0687a6a13aa983e9b3a4da67328b4c2f2717ab5d0d44c94daab01e2ac72e08bc",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.request.rebuild",
+      "path": "requests/rebuild.json",
+      "sha256": "f452bc8ca57cc7b76db9ca3a080ce38e0679e4775feb50e621c4fe4b66b7933c",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.request.search",
+      "path": "requests/search.json",
+      "sha256": "ab79dd214bef32fa039bc563ddad4f0e11b995a77ef02f7d333b571aabb75c58",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.request.stats",
+      "path": "requests/stats.json",
+      "sha256": "5afd7c188b7db027b58825854048c12deb4c3f9bf72d775faac7aed744f4aa5a",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.response.ask-fallback",
+      "path": "responses/ask-fallback.json",
+      "sha256": "3db4636e3bd622284cd547eb636c0c51e293533fa359c2c85a508bb6fd51f673",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.response.ask",
+      "path": "responses/ask.json",
+      "sha256": "1425ead0a9c2f7c029fb0d83010164679193ce621ff4b7e7144b27a6c324f35f",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.response.rebuild-incremental",
+      "path": "responses/rebuild-incremental.json",
+      "sha256": "26c298706e603240a532b9f959d48cc2a603d44905aa15ebc029abb77750fc0f",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.response.rebuild",
+      "path": "responses/rebuild.json",
+      "sha256": "0b315d1cd57fc2bc01592c7b48dbcb16138b8075d82a7a47abc3ef6a85bc458a",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.response.search",
+      "path": "responses/search.json",
+      "sha256": "9e453a298bd8265b71fb8bb43cd7cc9558f2cdb42620dae24c8e587131bde6f8",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "desktop.rag.v1.response.stats",
+      "path": "responses/stats.json",
+      "sha256": "e4e2b2b2ba80e04367702f1e3426d8ab126a764d9a0d0a4b972e46e34fb4abea",
+      "kind": "json-contract",
+      "owner": "desktop-rag",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    }
+  ]
+}
