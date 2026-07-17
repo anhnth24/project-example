@@ -14,5 +14,9 @@ desktop-hnsw = ["dep:hnsw_rs"]
 [dependencies]
 fileconv-core = { path = "../core" }
 thiserror.workspace = true
+serde = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.37.0", features = ["bundled"], default-features = false, optional = true }
 hnsw_rs = { version = "0.3.4", optional = true }
+
+[dev-dependencies]
+serde_json = "1"

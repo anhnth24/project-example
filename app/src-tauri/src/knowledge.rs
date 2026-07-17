@@ -4,8 +4,11 @@ use std::path::{Path, PathBuf};
 
 use fileconv_core::intelligence::{self, CorpusDocument};
 use fileconv_core::llm::EmbeddingConfig;
+pub use fileconv_knowledge::types::{
+    GroundedAnswer, HybridAskRequest, HybridSearchHit, HybridSearchRequest, HybridSearchResponse,
+    IndexBuildResult, IndexMetadata, IndexRequest, IndexStats, SourceAnchor,
+};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use super::{data_root, es, resolve_within, AppState};
@@ -14,99 +17,6 @@ const LOCAL_VECTOR_DIMENSIONS: usize = 256;
 const MAX_VECTOR_CANDIDATES: usize = 100_000;
 const LOCAL_EMBEDDING_MODE: &str = "local_hash_v1";
 const PROVIDER_EMBEDDING_MODE: &str = "provider_v1";
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexRequest {
-    pub source_rels: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexBuildResult {
-    pub documents: usize,
-    pub chunks: usize,
-    pub indexed: usize,
-    pub skipped: usize,
-    pub embedding_mode: String,
-    pub embedding_provider: String,
-    pub embedding_model: String,
-    pub vector_dimensions: usize,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexStats {
-    pub documents: usize,
-    pub chunks: usize,
-    pub database_bytes: u64,
-    pub vector_dimensions: usize,
-    pub embedding_mode: String,
-    pub embedding_provider: String,
-    pub embedding_model: String,
-    pub ann_available: bool,
-    pub ann_threshold: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HybridSearchRequest {
-    pub source_rels: Vec<String>,
-    pub query: String,
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceAnchor {
-    pub page: Option<u32>,
-    pub slide: Option<u32>,
-    pub sheet: Option<String>,
-    pub start: usize,
-    pub end: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HybridSearchHit {
-    pub chunk_id: String,
-    pub source_rel: String,
-    pub md_rel: String,
-    pub heading: String,
-    pub snippet: String,
-    pub lexical_score: f32,
-    pub vector_score: f32,
-    pub rerank_score: f32,
-    pub anchor: SourceAnchor,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HybridSearchResponse {
-    pub hits: Vec<HybridSearchHit>,
-    pub warnings: Vec<String>,
-    pub embedding_mode: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HybridAskRequest {
-    pub source_rels: Vec<String>,
-    pub question: String,
-    pub top_k: Option<usize>,
-    pub use_llm: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GroundedAnswer {
-    pub answer: String,
-    pub citations: Vec<HybridSearchHit>,
-    pub mode: String,
-    pub grounded: bool,
-    pub warnings: Vec<String>,
-}
 
 #[derive(Debug, Clone)]
 struct IndexedChunk {
@@ -122,15 +32,6 @@ struct IndexedChunk {
     sheet: Option<String>,
     vector: Vec<f32>,
     vector_dims: usize,
-}
-
-#[derive(Debug, Clone)]
-struct IndexMetadata {
-    mode: String,
-    provider: String,
-    model: String,
-    dimensions: usize,
-    signature: String,
 }
 
 #[derive(Debug, Clone)]
