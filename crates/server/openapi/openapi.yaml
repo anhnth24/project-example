@@ -1,0 +1,104 @@
+openapi: 3.1.0
+info:
+  title: Markhand Web API
+  version: 0.1.0
+  description: Phase F contract sample. Business endpoints arrive in Phase 1B.
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      operationId: health
+      responses:
+        "200":
+          description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /jobs/{jobId}/events:
+    get:
+      operationId: jobEvents
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - $ref: "#/components/parameters/LastEventId"
+      responses:
+        "200":
+          description: Sequenced job events
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SseEnvelope"
+        "401":
+          $ref: "#/components/responses/ApiError"
+components:
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      schema:
+        type: string
+  responses:
+    ApiError:
+      description: Canonical API error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+  schemas:
+    Health:
+      type: object
+      required: [status, requestId]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        requestId:
+          type: string
+          format: uuid
+    ApiError:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+        details: {}
+    PageInfo:
+      type: object
+      required: [hasMore]
+      properties:
+        nextCursor:
+          type: [string, "null"]
+        hasMore:
+          type: boolean
+    SseEnvelope:
+      type: object
+      required: [version, sequence, event, requestId, data]
+      properties:
+        version:
+          type: integer
+          const: 1
+        sequence:
+          type: integer
+          minimum: 1
+        event:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+        data: {}
