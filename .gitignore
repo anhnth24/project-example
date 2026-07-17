@@ -1,6 +1,7 @@
 /target
 node_modules/
 web/dist/
+/deploy/dev/.env
 **/*.rs.bk
 # Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng
 /bench/corpus/

@@ -1,0 +1,105 @@
+name: ${MARKHAND_COMPOSE_PROJECT:-markhand-dev}
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: ${MARKHAND_POSTGRES_DB:-markhand}
+      POSTGRES_USER: ${MARKHAND_POSTGRES_USER:-markhand}
+      POSTGRES_PASSWORD: ${MARKHAND_POSTGRES_PASSWORD:-markhand_dev_only}
+    ports:
+      - "127.0.0.1:${MARKHAND_POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.2
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports:
+      - "127.0.0.1:${MARKHAND_QDRANT_HTTP_PORT:-6333}:6333"
+      - "127.0.0.1:${MARKHAND_QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [private]
+    restart: unless-stopped
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MARKHAND_MINIO_USER:-markhand}
+      MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_PASSWORD:-markhand_dev_only}
+    ports:
+      - "127.0.0.1:${MARKHAND_MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MARKHAND_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    networks: [private]
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      - minio
+    environment:
+      MC_HOST_local: http://${MARKHAND_MINIO_USER:-markhand}:${MARKHAND_MINIO_PASSWORD:-markhand_dev_only}@minio:9000
+    command:
+      [
+        "mb",
+        "--ignore-existing",
+        "local/markhand-quarantine",
+        "local/markhand-documents",
+        "local/markhand-artifacts"
+      ]
+    networks: [private]
+    restart: on-failure
+
+  otel:
+    image: otel/opentelemetry-collector-contrib:0.156.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${MARKHAND_OTEL_HEALTH_PORT:-13133}:13133"
+      - "127.0.0.1:${MARKHAND_OTEL_GRPC_PORT:-4317}:4317"
+    networks: [private]
+    restart: unless-stopped
+
+  mock-embedding:
+    image: python:3.12.12-alpine
+    command: ["python", "/opt/mock-embedding.py"]
+    volumes:
+      - ../scripts/mock-embedding.py:/opt/mock-embedding.py:ro
+    environment:
+      MARKHAND_MOCK_EMBEDDING_DIMENSIONS: ${MARKHAND_MOCK_EMBEDDING_DIMENSIONS:-8}
+    ports:
+      - "127.0.0.1:${MARKHAND_MOCK_EMBEDDING_PORT:-8088}:8080"
+    networks: [private]
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:v0.12.0
+    profiles: ["gpu"]
+    command: ["--model", "${MARKHAND_VLLM_MODEL:-markhand-set-a-model}"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+    ports:
+      - "127.0.0.1:${MARKHAND_VLLM_PORT:-8000}:8000"
+    networks: [private]
+
+networks:
+  private:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  minio_data:

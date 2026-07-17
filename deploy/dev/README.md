@@ -1,7 +1,5 @@
-# Local development stack placeholder
+# Local development stack
 
-Phase F-08 adds the reproducible PostgreSQL, Qdrant, MinIO and telemetry Compose
-stack. This directory deliberately has no service configuration or credentials yet.
-
-Use only non-production data and bindings in the future stack. Do not place secrets,
-customer corpus or model binaries here.
+CPU-only PostgreSQL, Qdrant, MinIO, telemetry and mock embedding services for local
+development. Use [`../../docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md)
+for up/health/seed/reset commands and safety constraints.
