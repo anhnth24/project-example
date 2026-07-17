@@ -4,7 +4,7 @@ Parent plan: [`../../../phase-0-discovery-and-gates.md`](../../../phase-0-discov
 
 <!-- roadmap-default-status: blocked -->
 
-Toàn milestone blocked bởi Phase F exit gate.
+Phase F exit gate đã đạt. P0-01 được activate; các issue sau vẫn theo dependency graph.
 
 ## Dependency
 
@@ -20,7 +20,7 @@ P1A-01 ──────────> P0-03
 
 ## P0-01 — Khóa workload, hardware và gate registry
 
-- **Status:** Blocked bởi Phase F.
+- **Status:** Ready — Phase F exit gate đã đạt.
 - **Objective:** Thay giả định scale/SLA bằng workload envelope, hardware profile và
   gate schema được duyệt.
 - **Plan:** Ghi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/

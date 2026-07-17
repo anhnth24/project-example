@@ -4,7 +4,7 @@ Parent plan: [`../../../phase-1a-knowledge-extraction.md`](../../../phase-1a-kno
 
 <!-- roadmap-default-status: blocked -->
 
-Toàn milestone blocked bởi Phase F exit gate.
+Phase F exit gate đã đạt. P1A-01 được activate; các issue sau vẫn theo dependency graph.
 
 ## Dependency
 
@@ -17,7 +17,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-01 — Freeze desktop RAG và IPC contracts
 
-- **Status:** Blocked bởi Phase F.
+- **Status:** Ready — Phase F exit gate đã đạt.
 - **Objective:** Baseline parity trước khi move code.
 - **Plan:** Inventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/
   incremental; canonical JSON cho 4 hybrid commands; offline + mock-provider flows.

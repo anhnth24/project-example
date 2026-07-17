@@ -206,7 +206,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-12 — Contributor workflow, setup docs và foundation gate
 
-- **Status:** Blocked bởi F-01…F-11.
+- **Status:** Done — merged to `master` via PR #181.
 - **Objective:** Chứng minh contributor mới có thể setup và tuân conventions.
 - **Implementation plan:** ADR/RFC templates/index; ownership/CODEOWNERS; issue/PR
   templates; Definition of Ready/Done; security triggers; setup/troubleshooting.
