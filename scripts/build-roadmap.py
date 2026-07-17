@@ -37,6 +37,12 @@ GROUPS_PATTERN = re.compile(
     r"<!--\s*roadmap-groups:\s*([A-Z](?:\s*,\s*[A-Z])*)\s*-->",
     re.IGNORECASE,
 )
+TECH_STACK_BLOCK_PATTERN = re.compile(
+    r"<!--\s*roadmap-tech-stack-start\s*-->\s*"
+    r"(?P<table>.*?)"
+    r"\s*<!--\s*roadmap-tech-stack-end\s*-->",
+    re.DOTALL | re.IGNORECASE,
+)
 DATA_PATTERN = re.compile(
     r"^(?P<indent>[ \t]*)/\* ROADMAP_DATA_START \*/[ \t]*\r?\n"
     r".*?"
@@ -150,7 +156,92 @@ def resolve_registry_path(raw: str, *, kind: str) -> Path:
 
 
 def clean_inline_markdown(value: str) -> str:
-    return re.sub(r"`([^`]+)`", r"\1", value).strip()
+    return re.sub(r"(`+)(.*?)\1", r"\2", value).strip()
+
+
+def split_markdown_table_row(line: str, *, line_number: int) -> list[str]:
+    content = line[1:-1]
+    cells: list[str] = []
+    current: list[str] = []
+    index = 0
+    while index < len(content):
+        char = content[index]
+        if (
+            char == "\\"
+            and index + 1 < len(content)
+            and content[index + 1] in {"|", "`"}
+        ):
+            current.append(content[index + 1])
+            index += 2
+            continue
+        if char == "`":
+            end = index + 1
+            while end < len(content) and content[end] == "`":
+                end += 1
+            marker = content[index:end]
+            closing = re.search(
+                rf"(?<!`){re.escape(marker)}(?!`)",
+                content[end:],
+            )
+            if closing is None:
+                current.append(marker)
+                index = end
+                continue
+            closing_end = end + closing.end()
+            current.append(content[index:closing_end])
+            index = closing_end
+            continue
+        if char == "|":
+            cells.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        index += 1
+    cells.append("".join(current))
+    return cells
+
+
+def parse_tech_stack(markdown: str) -> list[dict[str, str]]:
+    blocks = TECH_STACK_BLOCK_PATTERN.findall(markdown)
+    if len(blocks) != 1:
+        raise ValueError(
+            f"{MASTER_PLAN}: cần đúng một roadmap tech-stack block, có {len(blocks)}"
+        )
+    lines = [line.strip() for line in blocks[0].splitlines() if line.strip()]
+    if len(lines) < 3:
+        raise ValueError(f"{MASTER_PLAN}: tech-stack table không có data rows")
+    if lines[0] != "| Lớp | Công nghệ | Trách nhiệm | Delivery |":
+        raise ValueError(f"{MASTER_PLAN}: tech-stack table header không hợp lệ")
+    if not re.fullmatch(r"\|\s*---\s*\|\s*---\s*\|\s*---\s*\|\s*---\s*\|", lines[1]):
+        raise ValueError(f"{MASTER_PLAN}: tech-stack table separator không hợp lệ")
+
+    stack: list[dict[str, str]] = []
+    for line_number, line in enumerate(lines[2:], start=3):
+        if not line.startswith("|") or not line.endswith("|"):
+            raise ValueError(
+                f"{MASTER_PLAN}: tech-stack row {line_number} không phải Markdown table row"
+            )
+        cells = [
+            clean_inline_markdown(cell)
+            for cell in split_markdown_table_row(line, line_number=line_number)
+        ]
+        if len(cells) != 4 or any(not cell for cell in cells):
+            raise ValueError(
+                f"{MASTER_PLAN}: tech-stack row {line_number} cần đúng 4 cells có nội dung"
+            )
+        stack.append(
+            {
+                "layer": cells[0],
+                "technology": cells[1],
+                "responsibility": cells[2],
+                "delivery": cells[3],
+            }
+        )
+
+    layers = [item["layer"] for item in stack]
+    if len(layers) != len(set(layers)):
+        raise ValueError(f"{MASTER_PLAN}: trùng tech-stack layers")
+    return stack
 
 
 def parse_registry() -> tuple[list[PhaseConfig], int]:
@@ -386,27 +477,41 @@ def source_hash(phases: list[dict[str, object]]) -> str:
     return hashlib.sha256(canonical).hexdigest()[:16]
 
 
-def data_block(phases: list[dict[str, object]], indent: str) -> str:
-    payload = json.dumps(phases, ensure_ascii=False, indent=2)
+def javascript_payload(value: object, indent: str) -> str:
+    payload = json.dumps(value, ensure_ascii=False, indent=2)
     # Keep the generated JavaScript safe even if a future Markdown title contains HTML.
     payload = payload.replace("<", r"\u003c")
-    payload = payload.replace("\n", "\n" + indent)
+    return payload.replace("\n", "\n" + indent)
+
+
+def data_block(
+    phases: list[dict[str, object]],
+    tech_stack: list[dict[str, str]],
+    indent: str,
+) -> str:
+    phase_payload = javascript_payload(phases, indent)
+    stack_payload = javascript_payload(tech_stack, indent)
     return (
         f"{indent}/* ROADMAP_DATA_START */\n"
         f'{indent}const ROADMAP_SOURCE_HASH = "{source_hash(phases)}";\n'
-        f"{indent}const phases = {payload};\n"
+        f"{indent}const phases = {phase_payload};\n"
+        f"{indent}const techStack = {stack_payload};\n"
         f"{indent}/* ROADMAP_DATA_END */"
     )
 
 
-def render(current: str, phases: list[dict[str, object]]) -> str:
+def render(
+    current: str,
+    phases: list[dict[str, object]],
+    tech_stack: list[dict[str, str]],
+) -> str:
     matches = list(DATA_PATTERN.finditer(current))
     if len(matches) != 1:
         raise ValueError(
             f"{ROADMAP}: cần đúng một roadmap data block, có {len(matches)}"
         )
     match = matches[0]
-    block = data_block(phases, match.group("indent"))
+    block = data_block(phases, tech_stack, match.group("indent"))
     return current[: match.start()] + block + current[match.end() :]
 
 
@@ -454,9 +559,11 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        master_markdown = MASTER_PLAN.read_text(encoding="utf-8")
         phases = load_phases()
+        tech_stack = parse_tech_stack(master_markdown)
         current = ROADMAP.read_text(encoding="utf-8")
-        generated = render(current, phases)
+        generated = render(current, phases, tech_stack)
     except (OSError, ValueError) as error:
         print(f"roadmap build error: {error}", file=sys.stderr)
         return 1

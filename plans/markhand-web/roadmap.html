@@ -256,9 +256,165 @@
     .button.danger:hover { color: #fecdd3; border-color: var(--blocked); }
     .button svg { width: 16px; height: 16px; }
 
+    [hidden] { display: none !important; }
+
+    .content-tabs {
+      display: flex;
+      gap: 6px;
+      max-width: 1460px;
+      margin: 0 auto 22px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      width: fit-content;
+      margin-left: max(0px, calc((100% - 1460px) / 2));
+    }
+
+    .content-tab {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text-muted);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: color 180ms ease, background 180ms ease, border-color 180ms ease;
+    }
+
+    .content-tab svg { width: 17px; height: 17px; }
+    .content-tab:hover { color: var(--text); background: var(--surface-raised); }
+    .content-tab[aria-selected="true"] {
+      border-color: var(--brand-ring);
+      background: var(--brand-soft);
+      color: var(--brand);
+    }
+
     .dashboard {
       max-width: 1460px;
       margin: 0 auto;
+    }
+
+    .tech-stack-view {
+      max-width: 1460px;
+      margin: 0 auto;
+    }
+
+    .stack-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(260px, .6fr);
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+
+    .stack-hero, .stack-source {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface);
+    }
+
+    .stack-hero { padding: clamp(22px, 4vw, 38px); }
+    .stack-kicker {
+      margin: 0 0 9px;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .stack-hero h2 { margin: 0; font-size: clamp(24px, 3vw, 38px); letter-spacing: -.04em; }
+    .stack-hero p {
+      max-width: 720px;
+      margin: 12px 0 0;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    .stack-source {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 22px;
+    }
+    .stack-source-label {
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .stack-source strong { display: block; margin: 8px 0; font-size: 15px; }
+    .stack-source p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
+    .stack-source a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      margin-top: 15px;
+      color: var(--brand);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .stack-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stack-card {
+      position: relative;
+      min-height: 190px;
+      padding: 22px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--surface);
+    }
+    .stack-card::after {
+      position: absolute;
+      right: -34px;
+      bottom: -48px;
+      width: 120px;
+      height: 120px;
+      border: 1px solid var(--brand-ring);
+      border-radius: 50%;
+      content: "";
+      opacity: .36;
+    }
+    .stack-layer {
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .stack-card h3 { max-width: 88%; margin: 12px 0 9px; font-size: 18px; line-height: 1.3; }
+    .stack-card p {
+      position: relative;
+      z-index: 1;
+      margin: 0 0 18px;
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .stack-delivery {
+      display: inline-flex;
+      align-items: center;
+      min-height: 27px;
+      padding: 0 9px;
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      color: var(--text-dim);
+      background: var(--surface-raised);
+      font-size: 11px;
+      font-weight: 700;
     }
 
     .stats {
@@ -535,6 +691,7 @@
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .toolbar { grid-template-columns: 1fr 1fr; }
       .result-count { text-align: left; }
+      .stack-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
 
     @media (max-width: 760px) {
@@ -558,8 +715,11 @@
       input, select { font-size: 16px; }
       .topbar { display: block; }
       .actions { justify-content: flex-start; margin-top: 18px; }
+      .content-tabs { width: 100%; margin: 0 0 18px; }
+      .content-tab { flex: 1; }
       .toolbar { grid-template-columns: 1fr; }
       .stats { grid-template-columns: 1fr 1fr; }
+      .stack-intro, .stack-grid { grid-template-columns: 1fr; }
       .issue {
         grid-template-columns: 72px minmax(0, 1fr) 44px;
         gap: 8px;
@@ -619,7 +779,7 @@
             <span id="issueCountLead">—</span> issues và các gate từ engineering
             foundation đến production go-live.</p>
         </div>
-        <div class="actions" aria-label="Thao tác dữ liệu">
+        <div class="actions" id="roadmapActions" aria-label="Thao tác dữ liệu">
           <button class="button" id="exportButton" type="button" aria-label="Export trạng thái roadmap ra JSON">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>
@@ -642,7 +802,26 @@
         </div>
       </header>
 
-      <div class="dashboard">
+      <div class="content-tabs" role="tablist" aria-label="Nội dung kế hoạch">
+        <button class="content-tab" id="roadmapTab" type="button" role="tab"
+          aria-selected="true" aria-controls="roadmapView" data-content-tab="roadmap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M4 19V5M4 7h6v5H4m6-3h5v8h-5m5-6h5v4h-5"/>
+          </svg>
+          Roadmap
+        </button>
+        <button class="content-tab" id="techStackTab" type="button" role="tab"
+          aria-selected="false" aria-controls="techStackView" data-content-tab="tech-stack"
+          tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="m12 3 8 4-8 4-8-4 8-4Z"/>
+            <path d="m4 12 8 4 8-4M4 17l8 4 8-4"/>
+          </svg>
+          Tech stack
+        </button>
+      </div>
+
+      <section class="dashboard" id="roadmapView" role="tabpanel" aria-labelledby="roadmapTab">
         <section class="stats" aria-label="Tổng quan tiến độ">
           <article class="stat">
             <div class="stat-label">Tổng issues</div>
@@ -701,7 +880,29 @@
           <strong>Không tìm thấy issue phù hợp.</strong><br>
           Thử đổi từ khóa hoặc bộ lọc.
         </div>
-      </div>
+      </section>
+
+      <section class="tech-stack-view" id="techStackView" role="tabpanel"
+        aria-labelledby="techStackTab" tabindex="-1" hidden>
+        <div class="stack-intro">
+          <div class="stack-hero">
+            <p class="stack-kicker">Target architecture</p>
+            <h2>Tech stack theo từng lớp hệ thống</h2>
+            <p>Stack phục vụ document conversion, hybrid retrieval và grounded Q&amp;A
+              trong môi trường on-prem, với tenant isolation và khả năng vận hành production.</p>
+          </div>
+          <aside class="stack-source">
+            <div>
+              <span class="stack-source-label">Single source of truth</span>
+              <strong>Được tạo từ plan tổng</strong>
+              <p>Mỗi card bên dưới được generator đọc trực tiếp từ bảng Technology stack
+                trong Markdown, không duy trì bản sao thủ công trong HTML.</p>
+            </div>
+            <a href="README.md">Mở Markhand Web plan →</a>
+          </aside>
+        </div>
+        <div class="stack-grid" id="techStackGrid"></div>
+      </section>
     </main>
   </div>
 
@@ -1366,11 +1567,86 @@
         ]
       }
     ];
+    const techStack = [
+      {
+        "layer": "Web client",
+        "technology": "React + Vite + TypeScript",
+        "responsibility": "SPA cho library, upload, search, Q&A và admin",
+        "delivery": "Phase 2"
+      },
+      {
+        "layer": "API",
+        "technology": "Rust + axum + OpenAPI",
+        "responsibility": "REST API, SSE progress, auth middleware và OrgContext",
+        "delivery": "Phase 1B"
+      },
+      {
+        "layer": "Shared knowledge",
+        "technology": "Rust crate knowledge",
+        "responsibility": "Hybrid rank/merge, grounding, citation và index signature",
+        "delivery": "Phase 1A"
+      },
+      {
+        "layer": "Document engine",
+        "technology": "fileconv-core",
+        "responsibility": "Convert, OCR, chunk và deterministic intelligence",
+        "delivery": "Existing core"
+      },
+      {
+        "layer": "System of record",
+        "technology": "PostgreSQL + FTS",
+        "responsibility": "Metadata, ACL, auth, jobs, quota, audit và lexical search",
+        "delivery": "Phase 1B"
+      },
+      {
+        "layer": "Vector retrieval",
+        "technology": "Qdrant",
+        "responsibility": "Vector candidates; kết quả luôn được hydrate và kiểm ACL lại",
+        "delivery": "Phase 1B"
+      },
+      {
+        "layer": "Object storage",
+        "technology": "MinIO",
+        "responsibility": "File gốc, quarantine, Markdown và derived artifacts",
+        "delivery": "Phase 1B"
+      },
+      {
+        "layer": "Embeddings",
+        "technology": "vLLM GPU endpoint",
+        "responsibility": "Batch embedding với model/dimension/normalize được pin",
+        "delivery": "Phase 0 → 1B"
+      },
+      {
+        "layer": "Chat and extraction",
+        "technology": "GLM via LLM client",
+        "responsibility": "Grounded Q&A, summarize và structured extraction theo policy",
+        "delivery": "Phase 1B → 3"
+      },
+      {
+        "layer": "Identity",
+        "technology": "JWT + rotating refresh + OIDC",
+        "responsibility": "Session cho POC; SSO/OIDC và key rotation cho production",
+        "delivery": "Phase 1B → 4"
+      },
+      {
+        "layer": "Observability",
+        "technology": "OpenTelemetry + structured logs",
+        "responsibility": "Trace, metrics, audit correlation và redacted diagnostics",
+        "delivery": "Phase F → 4"
+      },
+      {
+        "layer": "Runtime",
+        "technology": "Docker Compose → production orchestrator",
+        "responsibility": "Local/POC reproducible; Kubernetes hoặc nền tảng on-prem tương đương được chốt ở Phase 4",
+        "delivery": "Phase F → 4"
+      }
+    ];
     /* ROADMAP_DATA_END */
 
     const STORAGE_KEY = `markhand-roadmap-status-v1-${ROADMAP_SOURCE_HASH}`;
     let saved = loadSaved();
     let phaseScope = "all";
+    let activeContent = location.hash === "#tech-stack" ? "tech-stack" : "roadmap";
     let toastTimer;
 
     const elements = {
@@ -1392,7 +1668,12 @@
       blockedStat: document.querySelector("#blockedStat"),
       overallProgress: document.querySelector("#overallProgress"),
       toast: document.querySelector("#toast"),
-      importFile: document.querySelector("#importFile")
+      importFile: document.querySelector("#importFile"),
+      roadmapActions: document.querySelector("#roadmapActions"),
+      roadmapView: document.querySelector("#roadmapView"),
+      techStackView: document.querySelector("#techStackView"),
+      techStackGrid: document.querySelector("#techStackGrid"),
+      contentTabs: [...document.querySelectorAll("[data-content-tab]")]
     };
 
     function loadSaved() {
@@ -1422,6 +1703,44 @@
 
     function slugText(value) {
       return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+    }
+
+    function renderTechStack() {
+      elements.techStackGrid.innerHTML = techStack.map(item => `
+        <article class="stack-card">
+          <div class="stack-layer">${escapeHtml(item.layer)}</div>
+          <h3>${escapeHtml(item.technology)}</h3>
+          <p>${escapeHtml(item.responsibility)}</p>
+          <span class="stack-delivery">${escapeHtml(item.delivery)}</span>
+        </article>
+      `).join("");
+    }
+
+    function activateContentTab(name, updateHash = true) {
+      const activeName = name === "tech-stack" ? "tech-stack" : "roadmap";
+      const showRoadmap = activeName === "roadmap";
+      const focusWouldHide = showRoadmap
+        ? elements.techStackView.contains(document.activeElement)
+        : elements.roadmapView.contains(document.activeElement)
+          || elements.roadmapActions.contains(document.activeElement);
+      const focusedTabChanges = elements.contentTabs.includes(document.activeElement)
+        && document.activeElement.dataset.contentTab !== activeName;
+      elements.roadmapView.hidden = !showRoadmap;
+      elements.techStackView.hidden = showRoadmap;
+      elements.roadmapActions.hidden = !showRoadmap;
+      elements.contentTabs.forEach(tab => {
+        const selected = tab.dataset.contentTab === activeName;
+        tab.setAttribute("aria-selected", String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+      });
+      const changed = activeContent !== activeName;
+      activeContent = activeName;
+      if (updateHash && changed) history.pushState(null, "", `#${activeName}`);
+      if (focusWouldHide || focusedTabChanges) {
+        requestAnimationFrame(() => {
+          elements.contentTabs.find(tab => tab.dataset.contentTab === activeName)?.focus();
+        });
+      }
     }
 
     function renderNavigation() {
@@ -1679,7 +1998,30 @@
 
     document.addEventListener("click", event => {
       const phaseButton = event.target.closest("[data-phase]");
-      if (phaseButton) setPhase(phaseButton.dataset.phase, phaseButton.classList.contains("phase-mini") ? "strip" : "nav");
+      if (phaseButton) {
+        activateContentTab("roadmap");
+        setPhase(phaseButton.dataset.phase, phaseButton.classList.contains("phase-mini") ? "strip" : "nav");
+      }
+    });
+
+    elements.contentTabs.forEach(tab => {
+      tab.addEventListener("click", () => activateContentTab(tab.dataset.contentTab));
+      tab.addEventListener("keydown", event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const current = elements.contentTabs.indexOf(event.currentTarget);
+        const next = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? elements.contentTabs.length - 1
+            : (current + (event.key === "ArrowRight" ? 1 : -1) + elements.contentTabs.length)
+              % elements.contentTabs.length;
+        elements.contentTabs[next].focus();
+        activateContentTab(elements.contentTabs[next].dataset.contentTab);
+      });
+    });
+    window.addEventListener("hashchange", () => {
+      activateContentTab(location.hash === "#tech-stack" ? "tech-stack" : "roadmap", false);
     });
 
     elements.searchInput.addEventListener("input", renderRoadmap);
@@ -1699,6 +2041,8 @@
     });
 
     render();
+    renderTechStack();
+    activateContentTab(location.hash === "#tech-stack" ? "tech-stack" : "roadmap", false);
   </script>
 </body>
 </html>

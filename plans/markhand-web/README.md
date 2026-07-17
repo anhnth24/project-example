@@ -23,8 +23,9 @@ export/import JSON.
 
 File HTML nằm ngay trong repo. Generator bắt đầu từ phase registry ở bảng trên,
 theo link tới từng phase plan và issue catalog, rồi đọc tiêu đề/`**Status:**` của
-từng issue. Chạy các lệnh sau từ repository root sau khi đổi registry, tiêu đề hoặc
-trạng thái issue:
+từng issue. Generator cũng đọc bảng **Technology stack** để dựng tab cùng tên.
+Chạy các lệnh sau từ repository root sau khi đổi registry, stack, tiêu đề hoặc trạng
+thái issue:
 
 ```bash
 python3 scripts/build-roadmap.py
@@ -84,6 +85,28 @@ crates/core: convert, chunk, deterministic intelligence, LLM/embedding clients
 
 PostgreSQL luôn là nguồn sự thật. Qdrant có thể rebuild từ chunk trong PostgreSQL;
 MinIO cần backup riêng vì file gốc không thể tái tạo từ index.
+
+## Technology stack
+
+Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
+[`roadmap.html`](roadmap.html).
+
+<!-- roadmap-tech-stack-start -->
+| Lớp | Công nghệ | Trách nhiệm | Delivery |
+|---|---|---|---|
+| Web client | React + Vite + TypeScript | SPA cho library, upload, search, Q&A và admin | Phase 2 |
+| API | Rust + axum + OpenAPI | REST API, SSE progress, auth middleware và OrgContext | Phase 1B |
+| Shared knowledge | Rust crate knowledge | Hybrid rank/merge, grounding, citation và index signature | Phase 1A |
+| Document engine | fileconv-core | Convert, OCR, chunk và deterministic intelligence | Existing core |
+| System of record | PostgreSQL + FTS | Metadata, ACL, auth, jobs, quota, audit và lexical search | Phase 1B |
+| Vector retrieval | Qdrant | Vector candidates; kết quả luôn được hydrate và kiểm ACL lại | Phase 1B |
+| Object storage | MinIO | File gốc, quarantine, Markdown và derived artifacts | Phase 1B |
+| Embeddings | vLLM GPU endpoint | Batch embedding với model/dimension/normalize được pin | Phase 0 → 1B |
+| Chat and extraction | GLM via LLM client | Grounded Q&A, summarize và structured extraction theo policy | Phase 1B → 3 |
+| Identity | JWT + rotating refresh + OIDC | Session cho POC; SSO/OIDC và key rotation cho production | Phase 1B → 4 |
+| Observability | OpenTelemetry + structured logs | Trace, metrics, audit correlation và redacted diagnostics | Phase F → 4 |
+| Runtime | Docker Compose → production orchestrator | Local/POC reproducible; Kubernetes hoặc nền tảng on-prem tương đương được chốt ở Phase 4 | Phase F → 4 |
+<!-- roadmap-tech-stack-end -->
 
 ## Invariant xuyên suốt
 
