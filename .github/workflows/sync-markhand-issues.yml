@@ -5,6 +5,8 @@ on:
     branches: [master]
     paths:
       - "plans/markhand-web/backlog/**"
+      - "scripts/sync-github-issues.py"
+      - ".github/workflows/sync-markhand-issues.yml"
   workflow_dispatch:
 
 permissions:
