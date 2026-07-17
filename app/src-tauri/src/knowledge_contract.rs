@@ -2,7 +2,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::knowledge::{
+use fileconv_knowledge::types::{
     GroundedAnswer, HybridAskRequest, HybridSearchRequest, HybridSearchResponse, IndexBuildResult,
     IndexRequest, IndexStats,
 };

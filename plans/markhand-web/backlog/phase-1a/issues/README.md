@@ -48,7 +48,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-03 — Shared DTO và serde contract
 
-- **Status:** Ready — P1A-01/02 baseline và feature boundary đã đạt.
+- **Status:** In progress — shared DTO đã chuyển, đang xác nhận desktop parity.
 - **Objective:** Di chuyển index/search/ask types mà không đổi JSON.
 - **Plan:** Index request/result/stats, hit/anchor/grounded answer/metadata; serde
   fixtures; temporary desktop re-export.

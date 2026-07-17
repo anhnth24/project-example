@@ -1578,6 +1578,7 @@ name = "fileconv-desktop"
 version = "0.1.0"
 dependencies = [
  "fileconv-core",
+ "fileconv-knowledge",
  "hnsw_rs",
  "notify",
  "rusqlite",
@@ -1599,6 +1600,8 @@ dependencies = [
  "fileconv-core",
  "hnsw_rs",
  "rusqlite",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
