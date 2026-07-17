@@ -9,6 +9,13 @@ permissions:
   contents: read
 
 jobs:
+  roadmap:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check generated roadmap
+        run: python3 scripts/build-roadmap.py --check
+
   rust:
     runs-on: ubuntu-22.04
     steps:
