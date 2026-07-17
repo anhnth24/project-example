@@ -998,8 +998,15 @@ fn ocr_page_images(
 /// Render cả trang ở OCR_DPI rồi OCR (qua image_ocr có tiền xử lý).
 fn rendered_page_is_blank(image: &image::DynamicImage) -> bool {
     let grayscale = image.to_luma8();
-    let dark_pixels = grayscale.pixels().filter(|pixel| pixel[0] < 200).count();
+    let mut dark_pixels = 0usize;
+    let mut max_row_dark = 0usize;
+    for row in grayscale.rows() {
+        let row_dark = row.filter(|pixel| pixel[0] < 200).count();
+        dark_pixels += row_dark;
+        max_row_dark = max_row_dark.max(row_dark);
+    }
     dark_pixels.saturating_mul(1000) < grayscale.len()
+        && max_row_dark < (grayscale.width() as usize / 200).max(8)
 }
 
 fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<PageOcr, ConvertError> {
@@ -1011,14 +1018,13 @@ fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<PageOcr, ConvertError> {
     let img = bitmap
         .as_image()
         .map_err(|e| fail(format!("as_image: {e}")))?;
-    if rendered_page_is_blank(&img) {
-        return Ok(PageOcr::Blank);
-    }
     let text = image_ocr::ocr_dynimage(&img, langs).map_err(fail)?;
-    if text.trim().is_empty() {
-        Err(fail("Tesseract không trả nội dung cho trang có nét chữ"))
-    } else {
+    if !text.trim().is_empty() {
         Ok(PageOcr::Text(text))
+    } else if rendered_page_is_blank(&img) {
+        Ok(PageOcr::Blank)
+    } else {
+        Err(fail("Tesseract không trả nội dung cho trang có nét chữ"))
     }
 }
 
@@ -1167,7 +1173,7 @@ mod tests {
     fn distinguishes_blank_scan_noise_from_content() {
         let mut blank = image::GrayImage::from_pixel(1000, 1000, image::Luma([255]));
         for index in 0..500 {
-            blank.put_pixel(index % 1000, index / 1000, image::Luma([0]));
+            blank.put_pixel((index * 37) % 1000, (index * 53) % 1000, image::Luma([0]));
         }
         assert!(rendered_page_is_blank(&image::DynamicImage::ImageLuma8(
             blank
@@ -1181,6 +1187,14 @@ mod tests {
         }
         assert!(!rendered_page_is_blank(&image::DynamicImage::ImageLuma8(
             content
+        )));
+
+        let mut sparse_line = image::GrayImage::from_pixel(1000, 1000, image::Luma([255]));
+        for x in 450..550 {
+            sparse_line.put_pixel(x, 500, image::Luma([0]));
+        }
+        assert!(!rendered_page_is_blank(&image::DynamicImage::ImageLuma8(
+            sparse_line
         )));
     }
 
