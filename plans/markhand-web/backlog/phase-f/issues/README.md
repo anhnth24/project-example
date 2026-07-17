@@ -189,7 +189,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-11 — Observability/audit conventions
 
-- **Status:** Blocked bởi F-01/F-06/F-07/F-09.
+- **Status:** Done — merged to `master` via PR #179.
 - **Objective:** Correlation/metrics/log/audit schema ổn định trước business services.
 - **Implementation plan:** Field names; request/job/version/signature propagation;
   metric units/cardinality; log allowlist/redaction; audit envelope; sample middleware.
