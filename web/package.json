@@ -9,7 +9,9 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"*.{ts,json}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{ts,json}\""
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"*.{ts,json}\"",
+    "api:generate": "openapi-typescript ../crates/server/openapi/openapi.yaml -o src/api/generated/contract.ts",
+    "api:check": "pnpm api:generate && git diff --exit-code -- src/api/generated/contract.ts"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -27,6 +29,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
     "jsdom": "^29.1.1",
+    "openapi-typescript": "^7.13.0",
     "prettier": "^3.9.5",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.64.0",

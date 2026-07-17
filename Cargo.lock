@@ -1618,6 +1618,8 @@ version = "0.1.0"
 dependencies = [
  "fileconv-core",
  "fileconv-knowledge",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

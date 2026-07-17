@@ -1,0 +1,8 @@
+{
+  "code": "validation_failed",
+  "message": "cursor must be an opaque token",
+  "requestId": "a1010000-0000-4000-8000-000000000001",
+  "details": {
+    "field": "cursor"
+  }
+}
