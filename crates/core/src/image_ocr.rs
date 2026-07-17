@@ -11,7 +11,7 @@
 //!   - Ảnh quá lớn (cạnh dài > 2400px) → thu xuống (giữ tốc độ).
 //!   - Còn lại (trang giấy tờ đủ nét) → GIỮ NGUYÊN.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -42,6 +42,7 @@ impl OcrEngine {
 
 thread_local! {
     static OCR_ENGINE: Cell<OcrEngine> = const { Cell::new(OcrEngine::Tesseract) };
+    static LAST_OCR_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T {
@@ -56,6 +57,18 @@ pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T
         let _reset = Reset(active, previous);
         operation()
     })
+}
+
+pub(crate) fn clear_last_ocr_error() {
+    LAST_OCR_ERROR.with(|error| *error.borrow_mut() = None);
+}
+
+pub(crate) fn record_ocr_error(error: impl std::fmt::Display) {
+    LAST_OCR_ERROR.with(|last| *last.borrow_mut() = Some(error.to_string()));
+}
+
+pub(crate) fn take_last_ocr_error() -> Option<String> {
+    LAST_OCR_ERROR.with(|error| error.borrow_mut().take())
 }
 
 fn active_engine() -> OcrEngine {
@@ -100,6 +113,9 @@ pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
         }
     };
     let _ = std::fs::remove_file(&tmp);
+    if let Err(error) = &text {
+        record_ocr_error(error);
+    }
     text
 }
 

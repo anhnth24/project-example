@@ -62,6 +62,7 @@ pub fn to_markdown(
     ocr_images: bool,
     pages: Option<&[u32]>,
 ) -> Result<String, ConvertError> {
+    image_ocr::clear_last_ocr_error();
     let bytes = std::fs::read(path).map_err(fail)?;
 
     // Page-filtered requests are common in the desktop/MCP token-saving flow.
@@ -105,20 +106,31 @@ pub fn to_markdown(
     match extract_with_pdf_extract(&bytes) {
         Ok(text) if !text.trim().is_empty() => Ok(text),
         Err(error) => Err(error),
-        Ok(_) if !ocr_enabled => Err(fail(
-            "PDF không có text layer; hãy bật OCR trang scan trong Settings",
-        )),
-        Ok(_) if !pdfium_available() => Err(fail(
-            "PDF là bản scan nhưng không tìm thấy PDFium để render trang; \
-             hãy cài lại Markhand Desktop hoặc đặt FILECONV_PDFIUM_LIB",
-        )),
-        Ok(_) if !image_ocr::tesseract_available() => Err(fail(
-            "PDF là bản scan nhưng không tìm thấy Tesseract OCR; \
-             hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
-        )),
-        Ok(_) => Err(fail(
-            "PDF không có text layer và OCR không nhận được nội dung",
-        )),
+        Ok(_) => {
+            if !ocr_enabled {
+                return Err(fail(
+                    "PDF không có text layer; hãy bật OCR trang scan trong Settings",
+                ));
+            }
+            if !pdfium_available() {
+                return Err(fail(
+                    "PDF là bản scan nhưng không tìm thấy PDFium để render trang; \
+                     hãy cài lại Markhand Desktop hoặc đặt FILECONV_PDFIUM_LIB",
+                ));
+            }
+            if !image_ocr::tesseract_available() {
+                return Err(fail(
+                    "PDF là bản scan nhưng không tìm thấy Tesseract OCR; \
+                     hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
+                ));
+            }
+            if let Some(error) = image_ocr::take_last_ocr_error() {
+                return Err(fail(format!("OCR trang PDF thất bại: {error}")));
+            }
+            Err(fail(
+                "PDF không có text layer và OCR không nhận được nội dung",
+            ))
+        }
     }
 }
 
@@ -524,9 +536,14 @@ fn via_pdf_inspector(
 /// Render + OCR một trang theo chỉ số 0-based.
 fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String> {
     let page = doc.pages().get(page_0idx as i32).ok()?;
-    ocr_full_page(&page, langs)
-        .ok()
-        .filter(|t| !t.trim().is_empty())
+    match ocr_full_page(&page, langs) {
+        Ok(text) if !text.trim().is_empty() => Some(text),
+        Ok(_) => None,
+        Err(error) => {
+            image_ocr::record_ocr_error(error);
+            None
+        }
+    }
 }
 
 /// Extract the page's native text layer through PDFium.
@@ -908,12 +925,17 @@ fn via_pdfium(
                     }
                 }
             } else if ocr_enabled {
-                if let Ok(ocr) = ocr_full_page(&page, ocr_langs) {
-                    let ocr = ocr.trim();
-                    if !ocr.is_empty() {
-                        out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
-                        out.push_str(ocr);
-                        out.push_str("\n\n");
+                match ocr_full_page(&page, ocr_langs) {
+                    Ok(ocr) => {
+                        let ocr = ocr.trim();
+                        if !ocr.is_empty() {
+                            out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
+                            out.push_str(ocr);
+                            out.push_str("\n\n");
+                        }
+                    }
+                    Err(error) => {
+                        image_ocr::record_ocr_error(error);
                     }
                 }
             }

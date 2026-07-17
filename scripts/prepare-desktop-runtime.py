@@ -46,6 +46,14 @@ def run(*args: str, capture: bool = False) -> str:
     return result.stdout.strip() if capture else ""
 
 
+def validate_tesseract_version(version: str, default_pattern: str) -> None:
+    expected = os.environ.get("FILECONV_TESSERACT_VERSION")
+    pattern = re.escape(expected) if expected else default_pattern
+    if not re.search(pattern, version):
+        requirement = expected or default_pattern
+        raise RuntimeError(f"expected Tesseract {requirement}, got {version}")
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as source:
@@ -198,8 +206,7 @@ def prepare_linux_tesseract() -> str:
         json.dumps(sorted(packages), indent=2) + "\n"
     )
     version = run(str(bundled), "--version", capture=True).splitlines()[0]
-    if not re.search(r"\b5\.", version):
-        raise RuntimeError(f"expected Tesseract 5.x, got {version}")
+    validate_tesseract_version(version, r"\b[45]\.")
     return version
 
 
@@ -228,16 +235,16 @@ def prepare_windows_tesseract() -> str:
             )
     executable = DEST / "ocr/bin/tesseract.exe"
     version = run(str(executable), "--version", capture=True).splitlines()[0]
-    if "5.5.0" not in version:
-        raise RuntimeError(
-            f"expected Windows Tesseract {TESSERACT_WINDOWS_VERSION}, got {version}"
-        )
+    windows_semver = ".".join(TESSERACT_WINDOWS_VERSION.split(".")[:3])
+    validate_tesseract_version(version, rf"\b{re.escape(windows_semver)}\b")
     return version
 
 
 def prepare_macos_tesseract() -> str:
     prefix = Path(run("brew", "--prefix", "tesseract", capture=True))
     source = prefix / "bin/tesseract"
+    version = run(str(source), "--version", capture=True).splitlines()[0]
+    validate_tesseract_version(version, r"\b5\.")
     bundled = DEST / "ocr/bin/tesseract"
     shutil.copy2(source, bundled)
     run(
@@ -292,9 +299,6 @@ def prepare_macos_tesseract() -> str:
         for path in sorted(frameworks)
     ]
     config_path.write_text(json.dumps(config, indent=2) + "\n")
-    version = run(str(bundled), "--version", capture=True).splitlines()[0]
-    if not re.search(r"\b5\.", version):
-        raise RuntimeError(f"expected Tesseract 5.x, got {version}")
     return version
 
 
