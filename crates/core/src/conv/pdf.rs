@@ -55,6 +55,11 @@ const PARALLEL_MAX_PAGES: u32 = 200;
 const PARALLEL_MAX_PDF_BYTES: usize = 32 * 1024 * 1024;
 const PARALLEL_MIN_CPUS: usize = 5;
 
+enum PageOcr {
+    Text(String),
+    Blank,
+}
+
 pub fn to_markdown(
     path: &Path,
     ocr_langs: &str,
@@ -540,8 +545,8 @@ fn via_pdf_inspector(
 fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String> {
     let page = doc.pages().get(page_0idx as i32).ok()?;
     match ocr_full_page(&page, langs) {
-        Ok(text) if !text.trim().is_empty() => Some(text),
-        Ok(_) => None,
+        Ok(PageOcr::Text(text)) => Some(text),
+        Ok(PageOcr::Blank) => Some(String::new()),
         Err(error) => {
             image_ocr::record_ocr_error(format!("trang {}: {error}", page_0idx + 1));
             None
@@ -930,20 +935,13 @@ fn via_pdfium(
                 }
             } else if ocr_enabled {
                 match ocr_full_page(&page, ocr_langs) {
-                    Ok(ocr) => {
+                    Ok(PageOcr::Text(ocr)) => {
                         let ocr = ocr.trim();
-                        if !ocr.is_empty() {
-                            out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
-                            out.push_str(ocr);
-                            out.push_str("\n\n");
-                        } else {
-                            unresolved_pages.push(i + 1);
-                            image_ocr::record_ocr_error(format!(
-                                "trang {}: Tesseract không trả nội dung",
-                                i + 1
-                            ));
-                        }
+                        out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
+                        out.push_str(ocr);
+                        out.push_str("\n\n");
                     }
+                    Ok(PageOcr::Blank) => {}
                     Err(error) => {
                         unresolved_pages.push(i + 1);
                         image_ocr::record_ocr_error(format!("trang {}: {error}", i + 1));
@@ -998,7 +996,13 @@ fn ocr_page_images(
 }
 
 /// Render cả trang ở OCR_DPI rồi OCR (qua image_ocr có tiền xử lý).
-fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<String, ConvertError> {
+fn rendered_page_is_blank(image: &image::DynamicImage) -> bool {
+    let grayscale = image.to_luma8();
+    let dark_pixels = grayscale.pixels().filter(|pixel| pixel[0] < 200).count();
+    dark_pixels.saturating_mul(1000) < grayscale.len()
+}
+
+fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<PageOcr, ConvertError> {
     let w = (((page.width().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 5000);
     let h = (((page.height().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 7000);
     let bitmap = page
@@ -1007,7 +1011,15 @@ fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<String, ConvertError> {
     let img = bitmap
         .as_image()
         .map_err(|e| fail(format!("as_image: {e}")))?;
-    image_ocr::ocr_dynimage(&img, langs).map_err(fail)
+    if rendered_page_is_blank(&img) {
+        return Ok(PageOcr::Blank);
+    }
+    let text = image_ocr::ocr_dynimage(&img, langs).map_err(fail)?;
+    if text.trim().is_empty() {
+        Err(fail("Tesseract không trả nội dung cho trang có nét chữ"))
+    } else {
+        Ok(PageOcr::Text(text))
+    }
 }
 
 /// Bind libpdfium (nếu có).
@@ -1085,7 +1097,7 @@ mod tests {
     use super::{
         load_pdfium, markdown_has_malformed_table, native_text_covers_markdown,
         native_text_for_pages, native_text_is_high_confidence, native_text_is_trustworthy,
-        parse_marked_pages, strip_repeated_marginal_lines,
+        parse_marked_pages, rendered_page_is_blank, strip_repeated_marginal_lines,
     };
 
     /// PDF một trang tối giản, tự tính offset xref để PDFium load được thật.
@@ -1149,6 +1161,27 @@ mod tests {
         let printable_gid_noise = "bcdfg hjklm npqrs tvwxyz BCDFG HJKLM NPQRS TVWXYZ ".repeat(20);
         assert!(native_text_is_trustworthy(&printable_gid_noise));
         assert!(!native_text_is_high_confidence(&printable_gid_noise));
+    }
+
+    #[test]
+    fn distinguishes_blank_scan_noise_from_content() {
+        let mut blank = image::GrayImage::from_pixel(1000, 1000, image::Luma([255]));
+        for index in 0..500 {
+            blank.put_pixel(index % 1000, index / 1000, image::Luma([0]));
+        }
+        assert!(rendered_page_is_blank(&image::DynamicImage::ImageLuma8(
+            blank
+        )));
+
+        let mut content = image::GrayImage::from_pixel(1000, 1000, image::Luma([255]));
+        for y in 100..900 {
+            for x in (100..900).step_by(20) {
+                content.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        assert!(!rendered_page_is_blank(&image::DynamicImage::ImageLuma8(
+            content
+        )));
     }
 
     #[test]
