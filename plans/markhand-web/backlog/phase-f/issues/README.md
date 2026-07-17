@@ -107,7 +107,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-06 — REST/OpenAPI/SSE/error conventions
 
-- **Status:** In progress — PR #165 đang chờ CI hoàn tất.
+- **Status:** Done — merged to `master` via PR #165.
 - **Objective:** Contract thống nhất để backend/web không drift.
 - **Implementation plan:** `/api/v1`; resources/pagination/idempotency; canonical error;
   date/UUID/enum/null; OpenAPI authority; SSE envelope/version/sequence/reconnect;
