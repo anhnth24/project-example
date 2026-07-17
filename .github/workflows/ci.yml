@@ -27,6 +27,15 @@ jobs:
       - name: Test migration manifest fixtures
         run: python3 scripts/check-migration-manifest.py --self-test
 
+  fixtures:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shared fixture manifest
+        run: python3 scripts/check-fixtures.py
+      - name: Test fixture validator denials
+        run: python3 scripts/check-fixtures.py --self-test
+
   roadmap:
     runs-on: ubuntu-22.04
     steps:
