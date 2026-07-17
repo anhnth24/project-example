@@ -16,8 +16,14 @@ if [[ "$pnpm_version" != "$required_pnpm_version" ]]; then
   exit 1
 fi
 
-if [[ ! -f docker-compose.yml && ! -f compose.yml && ! -f compose.yaml ]]; then
-  echo "Compose stack is intentionally deferred to F-08"
+test -f deploy/dev/compose.yml || {
+  echo "missing deploy/dev/compose.yml" >&2
+  exit 1
+}
+if command -v docker >/dev/null; then
+  docker compose version
+else
+  echo "Docker Compose is required for dev-* targets (not installed in this shell)"
 fi
 
 echo "web toolchain: node $(node --version), pnpm ${pnpm_version}"
