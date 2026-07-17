@@ -63,7 +63,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-04 — Durable identities và index signatures
 
-- **Status:** Ready — shared metadata contract đã chuyển sang knowledge crate.
+- **Status:** In progress — versioned SHA-256 identities/signatures đang được khóa.
 - **Objective:** Deterministic server identities, desktop compatibility.
 - **Plan:** Versioned length-delimited encoding; BLAKE3/SHA-256 document/chunk/index;
   signature model/revision/dim/normalize/chunk/text version; fixed vectors; legacy

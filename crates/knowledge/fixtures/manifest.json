@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "knowledge.identity.v1",
+      "path": "identity-v1.json",
+      "sha256": "219d822496ffdfebeeecafde9db22d0e8279a794d068ad1c7355a971048a0f09",
+      "kind": "identity-vector",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    }
+  ]
+}
