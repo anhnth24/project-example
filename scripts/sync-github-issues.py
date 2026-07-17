@@ -71,6 +71,16 @@ SECTION_ALIASES = {
 
 
 @dataclass(frozen=True)
+class MilestoneDefinition:
+    code: str
+    title: str
+    description: str
+    plan_path: str
+    catalog_path: str
+    issue_count: int
+
+
+@dataclass(frozen=True)
 class CatalogIssue:
     phase_code: str
     issue_id: str
@@ -157,6 +167,34 @@ def parse_section_fields(section: str) -> dict[str, str]:
             current_lines.append(stripped)
     flush()
     return fields
+
+
+def load_milestones() -> list[MilestoneDefinition]:
+    configs, _ = roadmap.parse_registry()
+    return [
+        MilestoneDefinition(
+            code=config.code,
+            title=PHASE_LABELS[config.code][1],
+            description=config.description,
+            plan_path=config.html_plan,
+            catalog_path=config.html_catalog,
+            issue_count=config.expected_issues,
+        )
+        for config in configs
+    ]
+
+
+def milestone_description(definition: MilestoneDefinition) -> str:
+    return textwrap.dedent(
+        f"""
+        Markhand Web phase `{definition.code}`.
+
+        **Outcome:** {definition.description}
+        **Issues:** {definition.issue_count}
+        **Phase plan:** `{definition.plan_path}`
+        **Issue catalog:** `{definition.catalog_path}`
+        """
+    ).strip()
 
 
 def load_catalog_issues() -> list[CatalogIssue]:
@@ -276,12 +314,32 @@ def ensure_labels() -> None:
 
 
 def ensure_milestones() -> dict[str, int]:
-    existing = gh_json(["api", "repos/anhnth24/project-example/milestones?state=all&per_page=100"])
-    by_title = {item["title"]: item["number"] for item in existing or []}  # type: ignore[union-attr]
+    existing_items = gh_json(
+        ["api", "repos/anhnth24/project-example/milestones?state=all&per_page=100"]
+    )
+    by_title = {
+        item["title"]: item
+        for item in existing_items or []  # type: ignore[union-attr]
+    }
     milestone_ids: dict[str, int] = {}
-    for code, (_, title) in PHASE_LABELS.items():
-        if title in by_title:
-            milestone_ids[code] = by_title[title]
+    for definition in load_milestones():
+        description = milestone_description(definition)
+        current = by_title.get(definition.title)
+        if current:
+            milestone_ids[definition.code] = current["number"]
+            if current.get("state") != "open" or current.get("description") != description:
+                gh_json(
+                    [
+                        "api",
+                        "-X",
+                        "PATCH",
+                        f"repos/anhnth24/project-example/milestones/{current['number']}",
+                        "-f",
+                        "state=open",
+                        "-f",
+                        f"description={description}",
+                    ]
+                )
             continue
         created = gh_json(
             [
@@ -290,12 +348,15 @@ def ensure_milestones() -> dict[str, int]:
                 "POST",
                 "repos/anhnth24/project-example/milestones",
                 "-f",
-                f"title={title}",
+                f"title={definition.title}",
+                "-f",
+                f"description={description}",
                 "-f",
                 "state=open",
             ]
         )
-        milestone_ids[code] = created["number"]  # type: ignore[index]
+        milestone_ids[definition.code] = created["number"]  # type: ignore[index]
+        print(f"milestone created: {definition.title} (#{created['number']})")  # type: ignore[index]
     return milestone_ids
 
 
@@ -307,31 +368,46 @@ def export_shell(issues: list[CatalogIssue], path: Path) -> None:
         "",
         "ensure_milestone() {",
         "  local title=\"$1\"",
-        "  gh api \"repos/${REPO}/milestones?state=all&per_page=100\" --jq \".[] | select(.title==\\\"$title\\\") | .number\" | head -n1 || true",
+        "  local description=\"$2\"",
+        "  local number",
+        "  number=$(gh api \"repos/${REPO}/milestones?state=all&per_page=100\" \\",
+        "    --jq \".[] | select(.title==\\\"$title\\\") | .number\" | head -n1 || true)",
+        "  if [ -z \"${number:-}\" ]; then",
+        "    gh api --method POST \"repos/${REPO}/milestones\" \\",
+        "      -f title=\"$title\" \\",
+        "      -f description=\"$description\" \\",
+        "      -f state=open >/dev/null",
+        "    echo \"milestone created: $title\"",
+        "    return 0",
+        "  fi",
+        "  gh api --method PATCH \"repos/${REPO}/milestones/${number}\" \\",
+        "    -f state=open \\",
+        "    -f description=\"$description\" >/dev/null",
+        "  echo \"milestone updated: $title (#${number})\"",
         "}",
         "",
         "create_if_missing() {",
         "  local title=\"$1\"",
         "  if gh issue list --repo \"$REPO\" --state all --search \"in:title \\\"$title\\\"\" --json number --jq 'length' | grep -qv '^0$'; then",
-        "    echo \"skip existing: $title\"",
+        "    echo \"skip existing issue: $title\"",
         "    return 0",
         "  fi",
         "  shift",
         "  gh issue create --repo \"$REPO\" \"$@\"",
+        "  echo \"issue created: $title\"",
         "}",
         "",
+        "echo \"Ensuring Markhand Web milestones...\"",
+        "",
     ]
-    seen_milestones: set[str] = set()
-    for issue in issues:
-        milestone = PHASE_LABELS[issue.phase_code][1]
-        if milestone not in seen_milestones:
-            seen_milestones.add(milestone)
-            lines.extend(
-                [
-                    f"gh api --method POST repos/${{REPO}}/milestones -f title={shlex.quote(milestone)} -f state=open >/dev/null 2>&1 || true",
-                    "",
-                ]
-            )
+    for definition in load_milestones():
+        lines.extend(
+            [
+                f"ensure_milestone {shlex.quote(definition.title)} {shlex.quote(milestone_description(definition))}",
+                "",
+            ]
+        )
+    lines.extend(['echo "Ensuring Markhand Web issues..."', ""])
     for issue in issues:
         milestone = PHASE_LABELS[issue.phase_code][1]
         labels = ",".join(issue_labels(issue))
@@ -350,19 +426,32 @@ def export_shell(issues: list[CatalogIssue], path: Path) -> None:
 
 
 def export_json(issues: list[CatalogIssue], path: Path) -> None:
-    payload = [
-        {
-            "phase": issue.phase_code,
-            "id": issue.issue_id,
-            "title": issue.github_title,
-            "status": issue.status,
-            "milestone": PHASE_LABELS[issue.phase_code][1],
-            "labels": issue_labels(issue),
-            "body": render_body(issue),
-            "catalog": issue.catalog_path,
-        }
-        for issue in issues
-    ]
+    payload = {
+        "milestones": [
+            {
+                "code": definition.code,
+                "title": definition.title,
+                "description": milestone_description(definition),
+                "plan": definition.plan_path,
+                "catalog": definition.catalog_path,
+                "issue_count": definition.issue_count,
+            }
+            for definition in load_milestones()
+        ],
+        "issues": [
+            {
+                "phase": issue.phase_code,
+                "id": issue.issue_id,
+                "title": issue.github_title,
+                "status": issue.status,
+                "milestone": PHASE_LABELS[issue.phase_code][1],
+                "labels": issue_labels(issue),
+                "body": render_body(issue),
+                "catalog": issue.catalog_path,
+            }
+            for issue in issues
+        ],
+    }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -457,6 +546,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Sync Markhand Web backlog to GitHub issues.")
     parser.add_argument("--dry-run", action="store_true", help="Print actions only.")
     parser.add_argument("--create", action="store_true", help="Create missing issues.")
+    parser.add_argument(
+        "--milestones-only",
+        action="store_true",
+        help="Create or update phase milestones only.",
+    )
     parser.add_argument("--update", action="store_true", help="Update existing issue bodies.")
     parser.add_argument(
         "--export-shell",
@@ -470,7 +564,14 @@ def main() -> int:
     )
     args = parser.parse_args()
     if not any(
-        [args.dry_run, args.create, args.update, args.export_shell, args.export_json]
+        [
+            args.dry_run,
+            args.create,
+            args.milestones_only,
+            args.update,
+            args.export_shell,
+            args.export_json,
+        ]
     ):
         parser.error("Specify an action flag")
 
@@ -478,6 +579,11 @@ def main() -> int:
     print(f"Loaded {len(issues)} catalog issues")
 
     if args.dry_run:
+        for definition in load_milestones():
+            print(
+                f"[milestone {definition.code}] {definition.title} "
+                f"({definition.issue_count} issues)"
+            )
         for issue in issues:
             print(f"[{issue.phase_code}] {issue.github_title} ({issue.status})")
         return 0
@@ -490,6 +596,10 @@ def main() -> int:
         print(f"exported json: {args.export_json}")
     if args.export_shell or args.export_json:
         if not (args.create or args.update):
+            return 0
+
+    if args.export_shell or args.export_json:
+        if not (args.create or args.update or args.milestones_only):
             return 0
 
     try:
@@ -506,6 +616,16 @@ def main() -> int:
             )
             return 1
         raise
+
+    if args.milestones_only:
+        print(f"milestones ready: {len(milestone_ids)}")
+        for code, number in milestone_ids.items():
+            print(f"  [{code}] #{number} {PHASE_LABELS[code][1]}")
+        return 0
+
+    if not args.create and not args.update:
+        return 0
+
     existing = existing_issues_by_title()
     created = updated = skipped = 0
 

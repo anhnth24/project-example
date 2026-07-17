@@ -4,34 +4,94 @@ REPO='anhnth24/project-example'
 
 ensure_milestone() {
   local title="$1"
-  gh api "repos/${REPO}/milestones?state=all&per_page=100" --jq ".[] | select(.title==\"$title\") | .number" | head -n1 || true
+  local description="$2"
+  local number
+  number=$(gh api "repos/${REPO}/milestones?state=all&per_page=100" \
+    --jq ".[] | select(.title==\"$title\") | .number" | head -n1 || true)
+  if [ -z "${number:-}" ]; then
+    gh api --method POST "repos/${REPO}/milestones" \
+      -f title="$title" \
+      -f description="$description" \
+      -f state=open >/dev/null
+    echo "milestone created: $title"
+    return 0
+  fi
+  gh api --method PATCH "repos/${REPO}/milestones/${number}" \
+    -f state=open \
+    -f description="$description" >/dev/null
+  echo "milestone updated: $title (#${number})"
 }
 
 create_if_missing() {
   local title="$1"
   if gh issue list --repo "$REPO" --state all --search "in:title \"$title\"" --json number --jq 'length' | grep -qv '^0$'; then
-    echo "skip existing: $title"
+    echo "skip existing issue: $title"
     return 0
   fi
   shift
   gh issue create --repo "$REPO" "$@"
+  echo "issue created: $title"
 }
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase F — Engineering foundation' -f state=open >/dev/null 2>&1 || true
+echo "Ensuring Markhand Web milestones..."
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 0 — Discovery & Gates' -f state=open >/dev/null 2>&1 || true
+ensure_milestone 'Phase F — Engineering foundation' 'Markhand Web phase `F`.
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 1A — Knowledge Extraction' -f state=open >/dev/null 2>&1 || true
+**Outcome:** Engineering rules, skeleton, local dev environment và CI foundation
+**Issues:** 12
+**Phase plan:** `phase-f-engineering-foundation.md`
+**Issue catalog:** `backlog/phase-f/issues/README.md`'
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 1B — Single-org POC' -f state=open >/dev/null 2>&1 || true
+ensure_milestone 'Phase 0 — Discovery & Gates' 'Markhand Web phase `0`.
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 1C — Multi-org Security' -f state=open >/dev/null 2>&1 || true
+**Outcome:** Chốt bằng số liệu: scale, retrieval, bảo mật upload, SLA/RPO/RTO
+**Issues:** 10
+**Phase plan:** `phase-0-discovery-and-gates.md`
+**Issue catalog:** `backlog/phase-0/issues/README.md`'
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 2 — Web SPA MVP' -f state=open >/dev/null 2>&1 || true
+ensure_milestone 'Phase 1A — Knowledge Extraction' 'Markhand Web phase `1A`.
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 3 — Document Intelligence' -f state=open >/dev/null 2>&1 || true
+**Outcome:** Tách logic RAG dùng chung thành crates/knowledge, desktop không đổi hành vi
+**Issues:** 10
+**Phase plan:** `phase-1a-knowledge-extraction.md`
+**Issue catalog:** `backlog/phase-1a/issues/README.md`'
 
-gh api --method POST repos/${REPO}/milestones -f title='Phase 4 — Production Hardening' -f state=open >/dev/null 2>&1 || true
+ensure_milestone 'Phase 1B — Single-org POC' 'Markhand Web phase `1B`.
+
+**Outcome:** POC single-org hoàn chỉnh: upload → convert → index → Q&A citation
+**Issues:** 24
+**Phase plan:** `phase-1b-single-org-poc.md`
+**Issue catalog:** `backlog/phase-1b/issues/README.md`'
+
+ensure_milestone 'Phase 1C — Multi-org Security' 'Markhand Web phase `1C`.
+
+**Outcome:** Multi-org, RBAC/ACL, quota atomic và denial test
+**Issues:** 13
+**Phase plan:** `phase-1c-multi-org-security.md`
+**Issue catalog:** `backlog/phase-1c/issues/README.md`'
+
+ensure_milestone 'Phase 2 — Web SPA MVP' 'Markhand Web phase `2`.
+
+**Outcome:** Web SPA MVP: login, library, Q&A, admin tối thiểu
+**Issues:** 16
+**Phase plan:** `phase-2-web-spa.md`
+**Issue catalog:** `backlog/phase-2/issues/README.md`'
+
+ensure_milestone 'Phase 3 — Document Intelligence' 'Markhand Web phase `3`.
+
+**Outcome:** Port intelligence: BRD/PRD, quality, PII, bảng, version, export
+**Issues:** 14
+**Phase plan:** `phase-3-intelligence.md`
+**Issue catalog:** `backlog/phase-3/issues/README.md`'
+
+ensure_milestone 'Phase 4 — Production Hardening' 'Markhand Web phase `4`.
+
+**Outcome:** OIDC/SSO, hardening production, DR và onboarding/help
+**Issues:** 14
+**Phase plan:** `phase-4-production-hardening.md`
+**Issue catalog:** `backlog/phase-4/issues/README.md`'
+
+echo "Ensuring Markhand Web issues..."
 
 create_if_missing "F-01 \u2014 Architecture boundaries v\u00e0 dependency rules" \
   --title "F-01 \u2014 Architecture boundaries v\u00e0 dependency rules" \

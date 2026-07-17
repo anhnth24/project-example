@@ -106,10 +106,11 @@ Mỗi catalog issue được map thành GitHub issue với:
 # xem trước 113 issue
 python3 scripts/sync-github-issues.py --dry-run
 
-# tạo trực tiếp (cần gh auth có quyền issues)
+# tạo milestone trước, rồi issue
+python3 scripts/sync-github-issues.py --milestones-only
 python3 scripts/sync-github-issues.py --create
 
-# hoặc export script rồi chạy trên máy có quyền
+# hoặc export script rồi chạy trên máy có quyền (tạo cả milestone + issue)
 python3 scripts/sync-github-issues.py --export-shell plans/markhand-web/backlog/create-github-issues.sh
 bash plans/markhand-web/backlog/create-github-issues.sh
 ```
