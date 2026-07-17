@@ -449,7 +449,8 @@ fn apply_ocr_runtime_env(command: &mut Command) {
     let _ = runtime_lib;
 }
 
-pub(crate) fn tesseract_available() -> bool {
+/// Kiểm tra Tesseract hệ thống hoặc runtime desktop đi kèm có sẵn không.
+pub fn tesseract_available() -> bool {
     *TESSERACT_AVAILABLE.get_or_init(|| {
         let binary = tesseract_binary();
         let mut command = Command::new(binary);
@@ -503,15 +504,6 @@ fn ocr_text_score(text: &str) -> i64 {
         .map(|length| (length - 18) as i64)
         .sum();
     letters * 3 + words * 4 - replacements * 30 - glued_penalty * 2
-}
-
-/// Kiểm tra tesseract có sẵn không.
-pub fn tesseract_available() -> bool {
-    crate::proc::background_command("tesseract")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
