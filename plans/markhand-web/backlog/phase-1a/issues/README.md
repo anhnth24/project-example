@@ -63,7 +63,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-04 — Durable identities và index signatures
 
-- **Status:** In progress — versioned SHA-256 identities/signatures đang được khóa.
+- **Status:** Done — merged to `master` via PR #189.
 - **Objective:** Deterministic server identities, desktop compatibility.
 - **Plan:** Versioned length-delimited encoding; BLAKE3/SHA-256 document/chunk/index;
   signature model/revision/dim/normalize/chunk/text version; fixed vectors; legacy
