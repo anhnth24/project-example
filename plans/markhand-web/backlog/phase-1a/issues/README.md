@@ -17,7 +17,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-01 — Freeze desktop RAG và IPC contracts
 
-- **Status:** In progress — canonical desktop RAG/IPC fixtures đang được khóa.
+- **Status:** Done — merged to `master` via PR #184.
 - **Objective:** Baseline parity trước khi move code.
 - **Plan:** Inventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/
   incremental; canonical JSON cho 4 hybrid commands; offline + mock-provider flows.
@@ -32,7 +32,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-02 — Populate knowledge skeleton và enforce dependency boundaries
 
-- **Status:** Blocked bởi P1A-01.
+- **Status:** Ready — P1A-01 contract baseline đã khóa.
 - **Objective:** Hoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable
   crate có typed errors và optional desktop features.
 - **Plan:** Populate modules types/embedding/query/rank/citation/ask; features
