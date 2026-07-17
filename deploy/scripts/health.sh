@@ -20,17 +20,17 @@ wait_http() {
 }
 
 for _ in $(seq 1 60); do
-  if "${COMPOSE[@]}" exec -T postgres pg_isready \
-    -U "${MARKHAND_POSTGRES_USER:-markhand}" \
-    -d "${MARKHAND_POSTGRES_DB:-markhand}" >/dev/null 2>&1; then
+  postgres_id="$("${COMPOSE[@]}" ps -q postgres)"
+  if [[ -n "$postgres_id" ]] &&
+    [[ "$(docker inspect --format '{{.State.Health.Status}}' "$postgres_id")" == "healthy" ]]; then
     echo "healthy: postgres"
     break
   fi
   sleep 1
 done
-if ! "${COMPOSE[@]}" exec -T postgres pg_isready \
-  -U "${MARKHAND_POSTGRES_USER:-markhand}" \
-  -d "${MARKHAND_POSTGRES_DB:-markhand}" >/dev/null 2>&1; then
+postgres_id="$("${COMPOSE[@]}" ps -q postgres)"
+if [[ -z "$postgres_id" ]] ||
+  [[ "$(docker inspect --format '{{.State.Health.Status}}' "$postgres_id")" != "healthy" ]]; then
   echo "unhealthy: postgres" >&2
   exit 1
 fi
