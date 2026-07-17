@@ -2,7 +2,8 @@
 
 F-08 provides a CPU-only stack for development, not benchmark or production evidence.
 It starts PostgreSQL, Qdrant, MinIO, OpenTelemetry Collector and a deterministic mock
-embedding endpoint. All ports bind to `127.0.0.1`; named volumes retain data until reset.
+embedding endpoint. Services share an isolated user-defined bridge; all published ports
+bind to `127.0.0.1`, and named volumes retain data until reset.
 
 ## Prerequisites
 

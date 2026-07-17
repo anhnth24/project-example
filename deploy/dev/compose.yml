@@ -21,6 +21,8 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.18.2
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
     ports:
       - "127.0.0.1:${MARKHAND_QDRANT_HTTP_PORT:-6333}:6333"
       - "127.0.0.1:${MARKHAND_QDRANT_GRPC_PORT:-6334}:6334"
@@ -95,7 +97,7 @@ services:
 
 networks:
   private:
-    internal: true
+    driver: bridge
 
 volumes:
   postgres_data:
