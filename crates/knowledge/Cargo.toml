@@ -6,5 +6,13 @@ license.workspace = true
 authors.workspace = true
 description = "Pure knowledge retrieval, grounding and citation contracts for Markhand"
 
+[features]
+default = []
+desktop-sqlite = ["dep:rusqlite"]
+desktop-hnsw = ["dep:hnsw_rs"]
+
 [dependencies]
 fileconv-core = { path = "../core" }
+thiserror.workspace = true
+rusqlite = { version = "0.37.0", features = ["bundled"], default-features = false, optional = true }
+hnsw_rs = { version = "0.3.4", optional = true }

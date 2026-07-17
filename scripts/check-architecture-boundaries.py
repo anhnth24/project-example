@@ -24,7 +24,10 @@ FORBIDDEN_CORE = {
     "s3",
     "minio",
 }
-FORBIDDEN_KNOWLEDGE = FORBIDDEN_CORE | {"fileconv-desktop", "fileconv-server"}
+FORBIDDEN_KNOWLEDGE = (FORBIDDEN_CORE - {"rusqlite"}) | {
+    "fileconv-desktop",
+    "fileconv-server",
+}
 FORBIDDEN_WEB_PATTERNS = (
     r"""from\s+["']@tauri-apps/""",
     r"""require\(\s*["']@tauri-apps/""",
@@ -74,6 +77,19 @@ def validate(root: Path, *, cargo_dependencies=direct_dependencies) -> list[str]
             failures.append(
                 f"crates/{crate} có forbidden direct dependencies: {', '.join(sorted(found))}"
             )
+
+    knowledge_manifest = root / "crates/knowledge/Cargo.toml"
+    if knowledge_manifest.is_file():
+        content = knowledge_manifest.read_text(encoding="utf-8")
+        for dependency in ("rusqlite", "hnsw_rs"):
+            declaration = next(
+                (line for line in content.splitlines() if line.startswith(f"{dependency} =")),
+                "",
+            )
+            if declaration and "optional = true" not in declaration:
+                failures.append(
+                    f"crates/knowledge desktop dependency must be optional: {dependency}"
+                )
 
     server_manifest = root / "crates/server/Cargo.toml"
     if server_manifest.is_file() and "fileconv-desktop" in cargo_dependencies(server_manifest):
@@ -127,6 +143,19 @@ class BoundaryCheckTests(unittest.TestCase):
             source.write_text('import { invoke } from "@tauri-apps/api/core";\n')
             failures = validate(root, cargo_dependencies=lambda _: set())
             self.assertTrue(any("import Tauri" in failure for failure in failures))
+
+    def test_rejects_non_optional_desktop_dependency_in_knowledge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Cargo.toml").write_text('[workspace]\nexclude = ["vendor/markitdown-rs"]\n')
+            manifest = root / "crates/knowledge/Cargo.toml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                '[package]\nname = "fileconv-knowledge"\nversion = "0.1.0"\n'
+                '[dependencies]\nrusqlite = "0.37"\n'
+            )
+            failures = validate(root, cargo_dependencies=lambda _: {"rusqlite"})
+            self.assertTrue(any("must be optional" in failure for failure in failures))
 
 
 def main() -> int:
