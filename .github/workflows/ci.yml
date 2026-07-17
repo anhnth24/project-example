@@ -104,6 +104,17 @@ jobs:
       - run: pnpm --filter markhand-web api:check
       - run: pnpm --filter markhand-web build
 
+  dev-stack:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and smoke-test local services
+        run: |
+          docker compose -f deploy/dev/compose.yml config >/dev/null
+          deploy/scripts/up.sh
+          deploy/scripts/health.sh
+          deploy/scripts/down.sh
+
   linux-bundle:
     runs-on: ubuntu-22.04
     steps:
