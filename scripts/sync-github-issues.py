@@ -455,8 +455,8 @@ def export_json(issues: list[CatalogIssue], path: Path) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def existing_issues_by_title() -> dict[str, int]:
-    items: dict[str, int] = {}
+def existing_issues_by_title() -> dict[str, tuple[int, str]]:
+    items: dict[str, tuple[int, str]] = {}
     for page in range(1, 11):
         batch = gh_json(
             [
@@ -469,7 +469,7 @@ def existing_issues_by_title() -> dict[str, int]:
         for item in batch:  # type: ignore[union-attr]
             if "pull_request" in item:
                 continue
-            items[item["title"]] = item["number"]
+            items[item["title"]] = (item["number"], item["state"])
         if len(batch) < 100:  # type: ignore[arg-type]
             break
     return items
@@ -542,6 +542,23 @@ def update_issue(number: int, issue: CatalogIssue) -> None:
         Path(body_path).unlink(missing_ok=True)
 
 
+def close_issue(number: int) -> None:
+    gh_json(
+        [
+            "api",
+            "-X",
+            "PATCH",
+            f"repos/anhnth24/project-example/issues/{number}",
+            "-f",
+            "state=closed",
+        ]
+    )
+
+
+def should_close(issue: CatalogIssue, tracker_state: str) -> bool:
+    return issue.status == "done" and tracker_state == "open"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync Markhand Web backlog to GitHub issues.")
     parser.add_argument("--dry-run", action="store_true", help="Print actions only.")
@@ -552,6 +569,11 @@ def main() -> int:
         help="Create or update phase milestones only.",
     )
     parser.add_argument("--update", action="store_true", help="Update existing issue bodies.")
+    parser.add_argument(
+        "--sync-status",
+        action="store_true",
+        help="Close open GitHub issues whose Markdown status is Done; never auto-reopen.",
+    )
     parser.add_argument(
         "--export-shell",
         type=Path,
@@ -569,6 +591,7 @@ def main() -> int:
             args.create,
             args.milestones_only,
             args.update,
+            args.sync_status,
             args.export_shell,
             args.export_json,
         ]
@@ -586,6 +609,8 @@ def main() -> int:
             )
         for issue in issues:
             print(f"[{issue.phase_code}] {issue.github_title} ({issue.status})")
+            if args.sync_status and issue.status == "done":
+                print(f"  → close tracker issue when it is open")
         return 0
 
     if args.export_shell:
@@ -595,11 +620,11 @@ def main() -> int:
         export_json(issues, args.export_json)
         print(f"exported json: {args.export_json}")
     if args.export_shell or args.export_json:
-        if not (args.create or args.update):
+        if not (args.create or args.update or args.sync_status):
             return 0
 
     if args.export_shell or args.export_json:
-        if not (args.create or args.update or args.milestones_only):
+        if not (args.create or args.update or args.milestones_only or args.sync_status):
             return 0
 
     try:
@@ -623,19 +648,26 @@ def main() -> int:
             print(f"  [{code}] #{number} {PHASE_LABELS[code][1]}")
         return 0
 
-    if not args.create and not args.update:
+    if not args.create and not args.update and not args.sync_status:
         return 0
 
     existing = existing_issues_by_title()
-    created = updated = skipped = 0
+    created = updated = closed = skipped = 0
 
     for issue in issues:
         if issue.github_title in existing:
+            number, state = existing[issue.github_title]
             if args.update:
-                update_issue(existing[issue.github_title], issue)
+                update_issue(number, issue)
                 updated += 1
-                print(f"updated #{existing[issue.github_title]} {issue.github_title}")
-            else:
+                print(f"updated #{number} {issue.github_title}")
+            if args.sync_status and should_close(issue, state):
+                close_issue(number)
+                closed += 1
+                print(f"closed #{number} {issue.github_title}")
+            if not args.update and not (
+                args.sync_status and should_close(issue, state)
+            ):
                 skipped += 1
             continue
         if not args.create:
@@ -644,9 +676,13 @@ def main() -> int:
         number = create_issue(issue, milestone_ids[issue.phase_code])
         created += 1
         print(f"created #{number} {issue.github_title}")
+        if args.sync_status and should_close(issue, "open"):
+            close_issue(number)
+            closed += 1
+            print(f"closed #{number} {issue.github_title}")
 
     print(
-        f"done: created={created}, updated={updated}, skipped={skipped}, "
+        f"done: created={created}, updated={updated}, closed={closed}, skipped={skipped}, "
         f"milestones={len(milestone_ids)}"
     )
     return 0
