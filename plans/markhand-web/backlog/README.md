@@ -91,3 +91,26 @@ chạy song song sau foundation gate.
 - Benchmark PR phải commit harness/config/report schema; raw data lớn lưu artifact.
 - Không đưa credential, model binary, corpus nhạy cảm hoặc benchmark hostname vào Git.
 - Mọi PR server phải giữ desktop CI xanh.
+
+## Đồng bộ lên GitHub Issues
+
+Script: [`../../scripts/sync-github-issues.py`](../../scripts/sync-github-issues.py)
+
+Mỗi catalog issue được map thành GitHub issue với:
+
+- **Title:** `<MÃ> — <tiêu đề>` (ví dụ `F-01 — Architecture boundaries và dependency rules`)
+- **Milestone:** theo phase (`Phase F`, `Phase 0`, `Phase 1A`, …)
+- **Labels:** `markhand-web`, `docs`, `web-p0`/`web-p1b`/…, và trạng thái (`ready`/`blocked`/`backlog`)
+
+```bash
+# xem trước 113 issue
+python3 scripts/sync-github-issues.py --dry-run
+
+# tạo milestone trước, rồi issue
+python3 scripts/sync-github-issues.py --milestones-only
+python3 scripts/sync-github-issues.py --create
+
+# hoặc export script rồi chạy trên máy có quyền (tạo cả milestone + issue)
+python3 scripts/sync-github-issues.py --export-shell plans/markhand-web/backlog/create-github-issues.sh
+bash plans/markhand-web/backlog/create-github-issues.sh
+```
