@@ -541,7 +541,10 @@ def update_issue(number: int, issue: CatalogIssue) -> None:
                 PHASE_LABELS[issue.phase_code][1],
             ]
         )
-        gh_run(["issue", "edit", str(number), "--add-label", *labels])
+        label_command = ["issue", "edit", str(number)]
+        for label in labels:
+            label_command.extend(["--add-label", label])
+        gh_run(label_command)
     finally:
         Path(body_path).unlink(missing_ok=True)
 
