@@ -101,6 +101,7 @@ jobs:
       - run: pnpm --filter markhand-web format:check
       - run: pnpm --filter markhand-web lint
       - run: pnpm --filter markhand-web test
+      - run: pnpm --filter markhand-web api:check
       - run: pnpm --filter markhand-web build
 
   linux-bundle:
