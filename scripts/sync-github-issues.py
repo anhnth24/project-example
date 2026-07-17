@@ -96,7 +96,9 @@ class CatalogIssue:
 
 
 def gh_json(args: list[str]) -> object:
-    command = ["gh", *args, "--repo", REPO]
+    command = ["gh", *args]
+    if args[0] != "api":
+        command.extend(["--repo", REPO])
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
@@ -106,7 +108,9 @@ def gh_json(args: list[str]) -> object:
 
 
 def gh_run(args: list[str]) -> None:
-    command = ["gh", *args, "--repo", REPO]
+    command = ["gh", *args]
+    if args[0] != "api":
+        command.extend(["--repo", REPO])
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
