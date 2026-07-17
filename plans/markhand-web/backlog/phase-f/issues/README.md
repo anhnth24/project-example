@@ -155,7 +155,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-09 — Root task runner, quality tools và CI baseline
 
-- **Status:** Blocked bởi F-03…F-08 và F-10.
+- **Status:** Done — merged to `master` via PR #177.
 - **Objective:** Cùng command local/CI cho format/lint/test/build/dev/migrate.
 - **Implementation plan:** Add `just`/equivalent root tasks theo test conventions
   F-10; Rust/TS/SQL checks; dependency/license/security baseline cho cả `app/` và
@@ -173,7 +173,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-10 — Test pyramid, fixtures và golden-data conventions
 
-- **Status:** Blocked bởi F-03…F-08.
+- **Status:** Done — merged to `master` via PR #175.
 - **Objective:** Chuẩn test/evidence dùng chung trước Phase 0/1A.
 - **Implementation plan:** Define unit/integration/contract/denial/E2E/benchmark/
   migration/restore layers; fixture IDs/time/checksum/license; CI artifact retention.
