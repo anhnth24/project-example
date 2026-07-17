@@ -18,6 +18,15 @@ jobs:
       - name: Test boundary checker fixtures
         run: python3 scripts/check-architecture-boundaries.py --self-test
 
+  migrations:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check immutable migration manifest
+        run: python3 scripts/check-migration-manifest.py --check
+      - name: Test migration manifest fixtures
+        run: python3 scripts/check-migration-manifest.py --self-test
+
   roadmap:
     runs-on: ubuntu-22.04
     steps:
