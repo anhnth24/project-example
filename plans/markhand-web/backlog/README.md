@@ -101,6 +101,8 @@ Mỗi catalog issue được map thành GitHub issue với:
 - **Title:** `<MÃ> — <tiêu đề>` (ví dụ `F-01 — Architecture boundaries và dependency rules`)
 - **Milestone:** theo phase (`Phase F`, `Phase 0`, `Phase 1A`, …)
 - **Labels:** `markhand-web`, `docs`, `web-p0`/`web-p1b`/…, và trạng thái (`ready`/`blocked`/`backlog`)
+- **Milestone progress:** status Markdown `Done` → GitHub issue `closed`; GitHub tự tăng
+  closed count/progress của milestone. Sync không tự reopen issue đã đóng.
 
 ```bash
 # xem trước 113 issue
@@ -108,9 +110,12 @@ python3 scripts/sync-github-issues.py --dry-run
 
 # tạo milestone trước, rồi issue
 python3 scripts/sync-github-issues.py --milestones-only
-python3 scripts/sync-github-issues.py --create
+python3 scripts/sync-github-issues.py --create --update --sync-status
 
 # hoặc export script rồi chạy trên máy có quyền (tạo cả milestone + issue)
 python3 scripts/sync-github-issues.py --export-shell plans/markhand-web/backlog/create-github-issues.sh
 bash plans/markhand-web/backlog/create-github-issues.sh
 ```
+
+Workflow **Sync Markhand Web issues** cũng chạy tự động khi catalog backlog thay đổi
+trên `master`; workflow tạo/update issue và đóng các issue đã `Done`.

@@ -1,6 +1,10 @@
 name: Sync Markhand Web issues
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "plans/markhand-web/backlog/**"
   workflow_dispatch:
 
 permissions:
@@ -21,7 +25,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/sync-github-issues.py --milestones-only
-      - name: Sync backlog issues to GitHub
+      - name: Sync backlog issues and completion state to GitHub
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/sync-github-issues.py --create
+        run: python3 scripts/sync-github-issues.py --create --update --sync-status
