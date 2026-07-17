@@ -17,6 +17,8 @@
 !CLAUDE.md
 pdfium/
 /tessdata_best/
+/app/src-tauri/native-runtime/*
+!/app/src-tauri/native-runtime/README.md
 /bench/corpus_xl/
 /bench/edge/
 /bench/sample10/

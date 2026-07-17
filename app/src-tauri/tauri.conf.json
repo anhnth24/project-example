@@ -43,6 +43,9 @@
     "shortDescription": "Local-first document conversion and intelligence workbench",
     "longDescription": "Markhand converts PDF, Office, image and audio files into reviewable Markdown, then provides cited search, BRD/PRD handoff generation and privacy tools with offline fallbacks.",
     "copyright": "Copyright © 2026 anhnth24",
+    "resources": {
+      "native-runtime/": "native-runtime/"
+    },
     "linux": {
       "appimage": {
         "bundleMediaFramework": true

@@ -14,11 +14,14 @@
 use std::cell::Cell;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use image::{imageops, DynamicImage, GrayImage};
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+static TESSERACT_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OcrEngine {
@@ -395,7 +398,9 @@ fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
 }
 
 fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
-    let mut cmd = crate::proc::background_command("tesseract");
+    let binary = tesseract_binary();
+    let mut cmd = crate::proc::background_command(&binary);
+    apply_ocr_runtime_env(&mut cmd);
     cmd.arg(path)
         .arg("stdout")
         .arg("-l")
@@ -417,6 +422,44 @@ fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn tesseract_binary() -> PathBuf {
+    std::env::var_os("FILECONV_TESSERACT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("tesseract"))
+}
+
+fn apply_ocr_runtime_env(command: &mut Command) {
+    let Some(runtime_lib) = std::env::var_os("FILECONV_OCR_LIB_DIR") else {
+        return;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let mut paths = vec![PathBuf::from(runtime_lib)];
+        if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        if let Ok(value) = std::env::join_paths(paths) {
+            command.env("LD_LIBRARY_PATH", value);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = runtime_lib;
+}
+
+/// Kiểm tra Tesseract hệ thống hoặc runtime desktop đi kèm có sẵn không.
+pub fn tesseract_available() -> bool {
+    *TESSERACT_AVAILABLE.get_or_init(|| {
+        let binary = tesseract_binary();
+        let mut command = Command::new(binary);
+        apply_ocr_runtime_env(&mut command);
+        command
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    })
 }
 
 fn should_retry_layout(text: &str) -> bool {
@@ -461,15 +504,6 @@ fn ocr_text_score(text: &str) -> i64 {
         .map(|length| (length - 18) as i64)
         .sum();
     letters * 3 + words * 4 - replacements * 30 - glued_penalty * 2
-}
-
-/// Kiểm tra tesseract có sẵn không.
-pub fn tesseract_available() -> bool {
-    crate::proc::background_command("tesseract")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

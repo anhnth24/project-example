@@ -997,6 +997,49 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
 
 // ───────────────────────────── Bootstrap ─────────────────────────────
 
+fn configure_bundled_document_runtime(resource_dir: &Path) {
+    let runtime = resource_dir.join("native-runtime");
+
+    if std::env::var_os("FILECONV_PDFIUM_LIB").is_none() {
+        let pdfium = if cfg!(target_os = "windows") {
+            runtime.join("pdfium/bin/pdfium.dll")
+        } else if cfg!(target_os = "macos") {
+            runtime.join("pdfium/lib/libpdfium.dylib")
+        } else {
+            runtime.join("pdfium/lib/libpdfium.so")
+        };
+        if pdfium.is_file() {
+            std::env::set_var("FILECONV_PDFIUM_LIB", pdfium);
+        }
+    }
+
+    if std::env::var_os("FILECONV_TESSERACT").is_none() {
+        let executable = if cfg!(target_os = "windows") {
+            runtime.join("ocr/bin/tesseract.exe")
+        } else {
+            runtime.join("ocr/bin/tesseract")
+        };
+        if executable.is_file() {
+            std::env::set_var("FILECONV_TESSERACT", executable);
+        }
+    }
+
+    if std::env::var_os("FILECONV_TESSDATA").is_none() {
+        let tessdata = runtime.join("ocr/tessdata");
+        if tessdata.join("vie.traineddata").is_file() && tessdata.join("eng.traineddata").is_file()
+        {
+            std::env::set_var("FILECONV_TESSDATA", tessdata);
+        }
+    }
+
+    if std::env::var_os("FILECONV_OCR_LIB_DIR").is_none() {
+        let libraries = runtime.join("ocr/lib");
+        if libraries.is_dir() {
+            std::env::set_var("FILECONV_OCR_LIB_DIR", libraries);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1005,6 +1048,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            configure_bundled_document_runtime(&app.path().resource_dir()?);
             let config_dir = app.path().app_config_dir()?;
             fs::create_dir_all(&config_dir).ok();
 
