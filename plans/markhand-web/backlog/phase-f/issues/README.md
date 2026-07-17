@@ -21,7 +21,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-01 — Architecture boundaries và dependency rules
 
-- **Status:** Ready.
+- **Status:** Done — merged to `master` via PR #160.
 - **Objective:** Khóa dependency direction và module responsibilities trước scaffold.
 - **Implementation plan:** Viết architecture boundary ADR; define allowed/forbidden
   dependencies; route→service→repository; tenant context rule; browser/Tauri split;
@@ -41,7 +41,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-02 — Workspace và folder skeleton
 
-- **Status:** Blocked bởi F-01.
+- **Status:** Done — merged to `master` via PR #160.
 - **Objective:** Tạo khung compile được cho knowledge/server/web/deploy/docs/bench.
 - **Implementation plan:** Add workspace members với minimal libraries/binaries; module
   READMEs/ownership; Vite web shell; deploy/dev placeholders; không copy business
@@ -60,7 +60,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-03 — Rust coding và crate conventions
 
-- **Status:** Blocked bởi F-02.
+- **Status:** Done — merged to `master` via PR #160.
 - **Objective:** Một chuẩn Rust bắt buộc cho core/knowledge/server/workers.
 - **Implementation plan:** Rustfmt/clippy policy; error/context; async vs blocking;
   cancellation/timeouts; panic/unwrap/unsafe/public docs; naming/module visibility.
@@ -76,7 +76,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-04 — TypeScript/React conventions
 
-- **Status:** Blocked bởi F-02.
+- **Status:** Done — merged to `master` via PR #160.
 - **Objective:** Chuẩn strict TS, component/hook/state và accessibility cho web.
 - **Implementation plan:** TS strict policy; generated API immutable; naming/import
   boundaries; state ownership; loading/error/empty; abort cleanup; a11y checklist.
@@ -91,7 +91,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-05 — SQL/data/migration conventions
 
-- **Status:** Blocked bởi F-01/F-02.
+- **Status:** Done — merged to `master` via PR #164.
 - **Objective:** Ngăn schema/tenant/migration conventions bị phát minh theo từng PR.
 - **Implementation plan:** Naming/types/time/UUID/FK/check/index; `org_id`; transaction/
   locking/idempotency; immutable migration; expand/backfill/cutover/contract; rollback.
@@ -107,7 +107,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-06 — REST/OpenAPI/SSE/error conventions
 
-- **Status:** Blocked bởi F-01/F-02.
+- **Status:** Done — merged to `master` via PR #165.
 - **Objective:** Contract thống nhất để backend/web không drift.
 - **Implementation plan:** `/api/v1`; resources/pagination/idempotency; canonical error;
   date/UUID/enum/null; OpenAPI authority; SSE envelope/version/sequence/reconnect;
