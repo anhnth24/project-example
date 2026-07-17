@@ -26,6 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - run: make check-fixtures
+      - run: make check-markhand-gates
 
   dependencies:
     runs-on: ubuntu-22.04

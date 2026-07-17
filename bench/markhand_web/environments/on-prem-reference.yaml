@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "environmentId": "on-prem-reference",
+  "role": "benchmark-target",
+  "status": "proposed",
+  "approver": "infrastructure-owner",
+  "cpu": {
+    "vendor": null,
+    "model": null,
+    "cores": null,
+    "threads": null
+  },
+  "ramGb": null,
+  "disk": {
+    "type": "nvme",
+    "capacityGb": null,
+    "iopsNote": null
+  },
+  "gpu": {
+    "model": null,
+    "vramGb": null,
+    "count": null
+  },
+  "network": {
+    "bandwidthGbps": null,
+    "latencyMsAssumed": null
+  },
+  "os": {
+    "distro": "ubuntu-22.04",
+    "arch": "x86_64"
+  },
+  "fingerprintRequiredFields": [
+    "gitCommit",
+    "workloadProfileId",
+    "composeFileSha256",
+    "imageDigests",
+    "serviceVersions",
+    "fixtureManifestSha256"
+  ],
+  "notes": "Synthetic labels only; no customer name, credential or internal hostname."
+}

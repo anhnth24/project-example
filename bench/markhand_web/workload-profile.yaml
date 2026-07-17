@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "profileId": "on-prem-reference-v1",
+  "status": "proposed",
+  "approver": "product-owner",
+  "approvedAt": null,
+  "openDecisions": [
+    {
+      "id": "OD-SCALE",
+      "question": "Chốt org, document, page và aggregate vector scale.",
+      "owner": "product-owner",
+      "status": "open",
+      "blocks": ["P0-07"]
+    },
+    {
+      "id": "OD-HARDWARE",
+      "question": "Chốt CPU, RAM, disk, GPU/VRAM và network benchmark target.",
+      "owner": "infrastructure-owner",
+      "status": "open",
+      "blocks": ["P0-04", "P0-05", "P0-08"]
+    },
+    {
+      "id": "OD-LOAD",
+      "question": "Chốt normal/peak query, ingest, delete và recovery concurrency.",
+      "owner": "product-owner",
+      "status": "open",
+      "blocks": ["P0-07", "P0-08"]
+    }
+  ],
+  "scale": {
+    "orgCount": null,
+    "collectionsPerOrg": null,
+    "documentsPerCollection": null,
+    "averageDocumentPages": null,
+    "vectorsPerOrgMax": null,
+    "aggregateVectors": null
+  },
+  "loads": {
+    "normal": {
+      "concurrentQueries": null,
+      "ingestDocumentsPerHour": null,
+      "deleteOperationsPerHour": null
+    },
+    "peak": {
+      "concurrentQueries": null,
+      "ingestDocumentsPerHour": null,
+      "deleteOperationsPerHour": null
+    },
+    "recovery": {
+      "loadMultiplier": 2.0,
+      "durationMinutes": null
+    },
+    "aggregate": {
+      "concurrentQueries": null,
+      "concurrentIngest": null,
+      "tenantDistribution": null
+    }
+  },
+  "workloads": {
+    "ingest": {
+      "formats": [
+        "pdf_native",
+        "pdf_scan",
+        "docx",
+        "pptx",
+        "xlsx",
+        "csv",
+        "html",
+        "image_ocr",
+        "audio",
+        "text_legacy"
+      ]
+    },
+    "query": {
+      "filterPatterns": ["single_collection", "narrow_acl_set", "wide_acl_set"]
+    },
+    "recovery": {
+      "scenario": "post-outage catch-up",
+      "loadRef": "loads.recovery"
+    }
+  },
+  "hardware": {
+    "environmentId": "on-prem-reference",
+    "headroomPercent": {
+      "cpu": 30,
+      "ram": 30,
+      "disk": 30
+    }
+  },
+  "references": {
+    "phase": "0",
+    "issue": "P0-01"
+  }
+}
