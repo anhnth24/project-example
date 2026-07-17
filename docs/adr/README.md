@@ -19,3 +19,8 @@ native, security/egress và migration strategy.
 | ADR | Status | Decision |
 |---|---|---|
 | [0001](0001-web-boundaries.md) | Accepted | Dependency boundaries của Markhand Web |
+
+Phase 0 numeric/benchmark decisions use the machine-readable
+[`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.
+Approved gate evidence may result in an ADR, but threshold values are not duplicated
+inside this index.

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "version", "reportId", "gateId", "generatedAt", "git", "command",
+    "workloadProfileId", "environment", "fixtures", "result"
+  ],
+  "properties": {
+    "version": {"const": 1},
+    "git": {
+      "type": "object",
+      "required": ["commit", "dirty"]
+    },
+    "environment": {
+      "type": "object",
+      "required": ["environmentId", "fingerprint"]
+    },
+    "result": {
+      "type": "object",
+      "required": ["metric", "value", "pass"]
+    }
+  }
+}

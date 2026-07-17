@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "registryStatus", "gates"],
+  "properties": {
+    "version": {"const": 1},
+    "registryStatus": {"enum": ["proposed", "approved", "closed"]},
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id", "externalGate", "metric", "workload", "threshold", "command",
+          "environmentId", "owner", "approver", "status", "failureDisposition"
+        ]
+      }
+    }
+  }
+}

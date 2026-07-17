@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 .PHONY: install check-toolchain check-static check-boundaries check-migrations \
-	check-fixtures check-roadmap check-dependencies check-rust check-rust-tests \
+	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-web check-desktop check-foundation bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
@@ -25,6 +25,10 @@ check-fixtures:
 	python3 scripts/check-fixtures.py
 	python3 scripts/check-fixtures.py --self-test
 
+check-markhand-gates:
+	python3 scripts/check-markhand-gates.py
+	python3 scripts/check-markhand-gates.py --self-test
+
 check-roadmap:
 	python3 scripts/build-roadmap.py --check
 
@@ -32,7 +36,7 @@ check-dependencies:
 	python3 scripts/check-dependency-policy.py
 	python3 scripts/check-dependency-policy.py --self-test
 
-check-static: check-boundaries check-migrations check-fixtures check-roadmap check-dependencies
+check-static: check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies
 
 check-rust:
 	bash scripts/check-rust-quality.sh
