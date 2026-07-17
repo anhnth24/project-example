@@ -48,7 +48,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-03 — Shared DTO và serde contract
 
-- **Status:** In progress — shared DTO đã chuyển, đang xác nhận desktop parity.
+- **Status:** Done — merged to `master` via PR #188.
 - **Objective:** Di chuyển index/search/ask types mà không đổi JSON.
 - **Plan:** Index request/result/stats, hit/anchor/grounded answer/metadata; serde
   fixtures; temporary desktop re-export.
@@ -63,7 +63,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-04 — Durable identities và index signatures
 
-- **Status:** Blocked bởi P1A-03.
+- **Status:** Ready — shared metadata contract đã chuyển sang knowledge crate.
 - **Objective:** Deterministic server identities, desktop compatibility.
 - **Plan:** Versioned length-delimited encoding; BLAKE3/SHA-256 document/chunk/index;
   signature model/revision/dim/normalize/chunk/text version; fixed vectors; legacy
@@ -78,7 +78,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-05 — Query, local vectors và embedding plan
 
-- **Status:** Blocked bởi P1A-03; tích hợp signature phụ thuộc P1A-04.
+- **Status:** Ready — shared DTO đã đạt; tích hợp signature vẫn phụ thuộc P1A-04.
 - **Objective:** Tách pure query/embedding preparation.
 - **Plan:** Normalization, feature hash/vector norm, provider plan, dimension check,
   FTS escape; HTTP client vẫn ở core; giữ local fallback semantics.
