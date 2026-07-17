@@ -956,15 +956,16 @@ fn get_live_watch_status(state: State<AppState>) -> watch::WatchStatus {
     state.watch_service.status()
 }
 
+fn bundled_ocr_langs_are_valid(langs: &str) -> bool {
+    !langs.trim().is_empty() && langs.split('+').all(|lang| matches!(lang, "vie" | "eng"))
+}
+
 #[tauri::command]
 fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
-    let valid_ocr = !settings.ocr_langs.trim().is_empty()
-        && settings
-            .ocr_langs
-            .split('+')
-            .all(|lang| lang.len() == 3 && lang.bytes().all(|byte| byte.is_ascii_alphabetic()));
-    if !valid_ocr {
-        return Err("ngôn ngữ OCR cần có dạng vie hoặc vie+eng".into());
+    if !bundled_ocr_langs_are_valid(&settings.ocr_langs) {
+        return Err(
+            "bản desktop đi kèm model OCR vie và eng; hãy chọn vie, eng hoặc vie+eng".into(),
+        );
     }
     if !matches!(
         settings.ocr_engine.as_str(),
@@ -1004,7 +1005,10 @@ fn configure_bundled_document_runtime(resource_dir: &Path) {
         let pdfium = if cfg!(target_os = "windows") {
             runtime.join("pdfium/bin/pdfium.dll")
         } else if cfg!(target_os = "macos") {
-            runtime.join("pdfium/lib/libpdfium.dylib")
+            resource_dir
+                .parent()
+                .unwrap_or(resource_dir)
+                .join("Frameworks/libpdfium.dylib")
         } else {
             runtime.join("pdfium/lib/libpdfium.so")
         };
@@ -1016,6 +1020,11 @@ fn configure_bundled_document_runtime(resource_dir: &Path) {
     if std::env::var_os("FILECONV_TESSERACT").is_none() {
         let executable = if cfg!(target_os = "windows") {
             runtime.join("ocr/bin/tesseract.exe")
+        } else if cfg!(target_os = "macos") {
+            resource_dir
+                .parent()
+                .unwrap_or(resource_dir)
+                .join("MacOS/tesseract")
         } else {
             runtime.join("ocr/bin/tesseract")
         };
@@ -1060,10 +1069,21 @@ pub fn run() {
             };
             fs::create_dir_all(&root).ok();
 
-            let settings = fs::read_to_string(settings_file(&config_dir))
+            let mut settings = fs::read_to_string(settings_file(&config_dir))
                 .ok()
                 .and_then(|s| serde_json::from_str::<Settings>(&s).ok())
                 .unwrap_or_default();
+            if !bundled_ocr_langs_are_valid(&settings.ocr_langs) {
+                eprintln!(
+                    "Markhand: OCR language '{}' không có trong runtime đi kèm; \
+                     chuyển về vie+eng",
+                    settings.ocr_langs
+                );
+                settings.ocr_langs = "vie+eng".into();
+                if let Ok(serialized) = serde_json::to_string_pretty(&settings) {
+                    let _ = fs::write(settings_file(&config_dir), serialized);
+                }
+            }
 
             let watch_service = watch::WatchService::new(app.handle().clone());
             watch_service

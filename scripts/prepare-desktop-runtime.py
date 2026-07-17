@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -23,6 +24,16 @@ PDFIUM_VERSION = "152.0.7947.0"
 TESSDATA_COMMIT = "e12c65a915945e4c28e237a9b52bc4a8f39a0cec"
 TESSERACT_WINDOWS_VERSION = "5.5.0.20241111"
 MODELS = ("vie", "eng")
+DOWNLOAD_SHA256 = {
+    "pdfium-linux-x64.tgz": "f73d69d309fe1f33cc7269dcc99be31ec44e1cf608e31d7e2fcc6545fc2f9323",
+    "pdfium-win-x64.tgz": "75df6802fc090ad7c76ccc29ed80c3fcb1a375c775bbf8e522189174647b101f",
+    "pdfium-mac-arm64.tgz": "aa9739354fc7bc8f200f3f3c9532bd5233298203051e094820272ccd9c997a77",
+    "pdfium-mac-x64.tgz": "16d7a263b9e2f550d230ce81637697381b0ce898f2e3a22c7316594b15199d87",
+    "eng.traineddata": "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba",
+    "vie.traineddata": "b6b49293d95d0b6dbd8780174627e82c75be957b6f4ed9862155540d6b00bb45",
+    "tessdata-LICENSE": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+    "tesseract-LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+}
 
 
 def run(*args: str, capture: bool = False) -> str:
@@ -35,10 +46,33 @@ def run(*args: str, capture: bool = False) -> str:
     return result.stdout.strip() if capture else ""
 
 
-def download(url: str, target: Path) -> None:
+def validate_tesseract_version(version: str, default_pattern: str) -> None:
+    expected = os.environ.get("FILECONV_TESSERACT_VERSION")
+    pattern = re.escape(expected) if expected else default_pattern
+    if not re.search(pattern, version):
+        requirement = expected or default_pattern
+        raise RuntimeError(f"expected Tesseract {requirement}, got {version}")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def download(url: str, target: Path, lock_name: str) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "markhand-build"})
     with urllib.request.urlopen(request, timeout=180) as response, target.open("wb") as out:
         shutil.copyfileobj(response, out)
+    actual = file_sha256(target)
+    expected = DOWNLOAD_SHA256[lock_name]
+    if actual != expected:
+        target.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"checksum mismatch for {lock_name}: expected {expected}, got {actual}"
+        )
 
 
 def reset_destination() -> None:
@@ -72,7 +106,7 @@ def prepare_pdfium(system: str, architecture: str) -> None:
     )
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / asset
-        download(url, archive)
+        download(url, archive, asset)
         with tarfile.open(archive, "r:gz") as package:
             package.extractall(DEST / "pdfium", filter="data")
     version_text = (DEST / "pdfium/VERSION").read_text().strip()
@@ -90,11 +124,24 @@ def prepare_pdfium(system: str, architecture: str) -> None:
 
 def prepare_models() -> None:
     for language in MODELS:
+        filename = f"{language}.traineddata"
         download(
             "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/"
-            f"{TESSDATA_COMMIT}/{language}.traineddata",
-            DEST / f"ocr/tessdata/{language}.traineddata",
+            f"{TESSDATA_COMMIT}/{filename}",
+            DEST / f"ocr/tessdata/{filename}",
+            filename,
         )
+    download(
+        "https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/"
+        f"{TESSDATA_COMMIT}/LICENSE",
+        DEST / "licenses/tessdata-LICENSE",
+        "tessdata-LICENSE",
+    )
+    download(
+        "https://raw.githubusercontent.com/tesseract-ocr/tesseract/5.5.2/LICENSE",
+        DEST / "licenses/Tesseract-LICENSE",
+        "tesseract-LICENSE",
+    )
 
 
 def linux_library_dependencies(binary: Path) -> list[tuple[str, Path]]:
@@ -124,6 +171,7 @@ def prepare_linux_tesseract() -> str:
     }
     pending = [bundled]
     visited: set[str] = set()
+    packages: set[str] = {"tesseract-ocr"}
     while pending:
         current = pending.pop()
         for soname, source in linux_library_dependencies(current):
@@ -133,6 +181,14 @@ def prepare_linux_tesseract() -> str:
             target = DEST / "ocr/lib" / soname
             shutil.copy2(source.resolve(), target)
             pending.append(target)
+            owner = subprocess.run(
+                ("dpkg-query", "-S", str(source.resolve())),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if owner.returncode == 0:
+                packages.add(owner.stdout.split(":", 1)[0])
 
     run("patchelf", "--set-rpath", "$ORIGIN/../lib", str(bundled))
     for library in (DEST / "ocr/lib").iterdir():
@@ -141,7 +197,17 @@ def prepare_linux_tesseract() -> str:
     copyright = Path("/usr/share/doc/tesseract-ocr/copyright")
     if copyright.is_file():
         shutil.copy2(copyright, DEST / "licenses/Tesseract-COPYRIGHT")
-    return run(str(bundled), "--version", capture=True).splitlines()[0]
+    for package in sorted(packages):
+        notice = Path("/usr/share/doc") / package / "copyright"
+        if notice.is_file():
+            safe_name = package.replace(":", "_")
+            shutil.copy2(notice, DEST / "licenses" / f"linux-{safe_name}-copyright")
+    (DEST / "licenses/linux-packages.json").write_text(
+        json.dumps(sorted(packages), indent=2) + "\n"
+    )
+    version = run(str(bundled), "--version", capture=True).splitlines()[0]
+    validate_tesseract_version(version, r"\b[45]\.")
+    return version
 
 
 def prepare_windows_tesseract() -> str:
@@ -168,12 +234,17 @@ def prepare_windows_tesseract() -> str:
                 license_path, DEST / "licenses" / f"Tesseract-{license_name}"
             )
     executable = DEST / "ocr/bin/tesseract.exe"
-    return run(str(executable), "--version", capture=True).splitlines()[0]
+    version = run(str(executable), "--version", capture=True).splitlines()[0]
+    windows_semver = ".".join(TESSERACT_WINDOWS_VERSION.split(".")[:3])
+    validate_tesseract_version(version, rf"\b{re.escape(windows_semver)}\b")
+    return version
 
 
 def prepare_macos_tesseract() -> str:
     prefix = Path(run("brew", "--prefix", "tesseract", capture=True))
     source = prefix / "bin/tesseract"
+    version = run(str(source), "--version", capture=True).splitlines()[0]
+    validate_tesseract_version(version, r"\b5\.")
     bundled = DEST / "ocr/bin/tesseract"
     shutil.copy2(source, bundled)
     run(
@@ -185,7 +256,7 @@ def prepare_macos_tesseract() -> str:
         "-d",
         str(DEST / "ocr/lib"),
         "-p",
-        "@executable_path/../lib",
+        "@executable_path/../Frameworks",
     )
     for license_name in ("LICENSE", "COPYING"):
         license_path = prefix / license_name
@@ -193,7 +264,42 @@ def prepare_macos_tesseract() -> str:
             shutil.copy2(
                 license_path, DEST / "licenses" / f"Tesseract-{license_name}"
             )
-    return run(str(bundled), "--version", capture=True).splitlines()[0]
+    dependencies = run("brew", "deps", "--include-build", "tesseract", capture=True).split()
+    formulae = sorted(set(["tesseract", *dependencies]))
+    brew_inventory = run("brew", "info", "--json=v2", *formulae, capture=True)
+    (DEST / "licenses/macos-homebrew-formulae.json").write_text(
+        json.dumps(json.loads(brew_inventory), indent=2) + "\n"
+    )
+    architecture = platform.machine().lower()
+    triple = (
+        "aarch64-apple-darwin"
+        if architecture in {"arm64", "aarch64"}
+        else "x86_64-apple-darwin"
+    )
+    sidecar = DEST / "sidecars" / f"tesseract-{triple}"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(bundled, sidecar)
+
+    config_path = ROOT / "app/src-tauri/tauri.macos.conf.json"
+    config = json.loads(config_path.read_text())
+    bundle = config.setdefault("bundle", {})
+    bundle["externalBin"] = ["native-runtime/sidecars/tesseract"]
+    bundle["resources"] = {
+        "native-runtime/ocr/tessdata/": "native-runtime/ocr/tessdata/",
+        "native-runtime/licenses/": "native-runtime/licenses/",
+        "native-runtime/runtime-manifest.json": "native-runtime/runtime-manifest.json",
+    }
+    macos = bundle.setdefault("macOS", {})
+    frameworks = [DEST / "pdfium/lib/libpdfium.dylib"]
+    frameworks.extend(
+        path for path in (DEST / "ocr/lib").iterdir() if path.suffix == ".dylib"
+    )
+    macos["frameworks"] = [
+        path.relative_to(ROOT / "app/src-tauri").as_posix()
+        for path in sorted(frameworks)
+    ]
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    return version
 
 
 def main() -> int:
@@ -227,6 +333,11 @@ def main() -> int:
         "tesseract": tesseract_version,
         "tessdata_commit": TESSDATA_COMMIT,
         "languages": list(MODELS),
+    }
+    manifest["files"] = {
+        path.relative_to(DEST).as_posix(): file_sha256(path)
+        for path in sorted(DEST.rglob("*"))
+        if path.is_file() and path.name not in {"README.md", "runtime-manifest.json"}
     }
     (DEST / "runtime-manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"

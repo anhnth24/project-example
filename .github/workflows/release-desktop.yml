@@ -45,18 +45,22 @@ jobs:
           - os: ubuntu-22.04
             bundles: deb,appimage
             artifact: linux
+            tesseract_version: 4.1.1
           - os: windows-latest
             bundles: msi,nsis
             artifact: windows
+            tesseract_version: 5.5.0
           - os: macos-latest
             bundles: dmg
             artifact: macos
+            tesseract_version: 5.5.2
     runs-on: ${{ matrix.os }}
     env:
       # Ký updater artifact (minisign) khi có secret; thiếu thì `createUpdaterArtifacts`
       # tự bỏ qua bước ký (không fail build .deb/.msi/.dmg thường).
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      FILECONV_TESSERACT_VERSION: ${{ matrix.tesseract_version }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux bundle dependencies
@@ -136,15 +140,16 @@ jobs:
               --tessdata-dir app/src-tauri/native-runtime/ocr/tessdata \
               --list-langs | grep -E '^(eng|vie)$'
             test -f app/src-tauri/native-runtime/pdfium/bin/pdfium.dll
-          else
+          elif [ "${{ runner.os }}" = "Linux" ]; then
             app/src-tauri/native-runtime/ocr/bin/tesseract \
               --tessdata-dir app/src-tauri/native-runtime/ocr/tessdata \
               --list-langs | grep -E '^(eng|vie)$'
-            if [ "${{ runner.os }}" = "macOS" ]; then
-              test -f app/src-tauri/native-runtime/pdfium/lib/libpdfium.dylib
-            else
-              test -f app/src-tauri/native-runtime/pdfium/lib/libpdfium.so
-            fi
+            test -f app/src-tauri/native-runtime/pdfium/lib/libpdfium.so
+          else
+            test -f app/src-tauri/native-runtime/pdfium/lib/libpdfium.dylib
+            sidecar=$(find app/src-tauri/native-runtime/sidecars -type f -name 'tesseract-*' -print -quit)
+            test -n "$sidecar"
+            ! otool -L "$sidecar" | grep -E '/(opt/homebrew|usr/local)/'
           fi
 
       # Secret trống (chưa cấu hình TAURI_SIGNING_PRIVATE_KEY) vẫn được GitHub Actions
@@ -209,6 +214,17 @@ jobs:
           fi
           pnpm tauri build --bundles ${{ matrix.bundles }} --ci
         working-directory: app
+
+      - name: Verify packaged macOS OCR runtime
+        if: runner.os == 'macOS'
+        run: |
+          APP=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$APP"
+          "$APP/Contents/MacOS/tesseract" \
+            --tessdata-dir "$APP/Contents/Resources/native-runtime/ocr/tessdata" \
+            --list-langs | grep -E '^(eng|vie)$'
+          test -f "$APP/Contents/Frameworks/libpdfium.dylib"
+          ! otool -L "$APP/Contents/MacOS/tesseract" | grep -E '/(opt/homebrew|usr/local)/'
 
       - name: Verify Windows Authenticode
         if: runner.os == 'Windows' && vars.WINDOWS_SIGNING_ENABLED == 'true'

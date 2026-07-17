@@ -1,5 +1,8 @@
 {
   "bundle": {
+    "resources": {
+      "native-runtime/": "native-runtime/"
+    },
     "windows": {
       "digestAlgorithm": "sha256",
       "timestampUrl": "http://timestamp.digicert.com",

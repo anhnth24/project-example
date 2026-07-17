@@ -1,5 +1,10 @@
 {
   "bundle": {
+    "resources": {
+      "native-runtime/ocr/tessdata/": "native-runtime/ocr/tessdata/",
+      "native-runtime/licenses/": "native-runtime/licenses/",
+      "native-runtime/runtime-manifest.json": "native-runtime/runtime-manifest.json"
+    },
     "macOS": {
       "entitlements": "./Entitlements.plist",
       "minimumSystemVersion": "11.0",
