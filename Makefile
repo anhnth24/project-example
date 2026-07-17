@@ -24,6 +24,7 @@ check-migrations:
 check-fixtures:
 	python3 scripts/check-fixtures.py
 	python3 scripts/check-fixtures.py --root app/src-tauri/fixtures/knowledge/v1
+	python3 scripts/check-fixtures.py --root crates/knowledge/fixtures
 	python3 scripts/check-fixtures.py --self-test
 
 check-markhand-gates:

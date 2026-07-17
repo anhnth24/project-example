@@ -7,6 +7,7 @@ pub mod ask;
 pub mod citation;
 pub mod embedding;
 pub mod error;
+pub mod identity;
 pub mod query;
 pub mod rank;
 pub mod types;
