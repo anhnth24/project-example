@@ -1,0 +1,23 @@
+[package]
+name = "fileconv-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Markhand Web server and worker skeleton"
+default-run = "fileconv-server"
+
+[lib]
+name = "fileconv_server"
+
+[[bin]]
+name = "fileconv-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "fileconv-worker"
+path = "src/bin/worker.rs"
+
+[dependencies]
+fileconv-core = { path = "../core" }
+fileconv-knowledge = { path = "../knowledge" }

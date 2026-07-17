@@ -1593,6 +1593,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fileconv-knowledge"
+version = "0.1.0"
+dependencies = [
+ "fileconv-core",
+]
+
+[[package]]
 name = "fileconv-mcp"
 version = "0.1.0"
 dependencies = [
@@ -1603,6 +1610,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "fileconv-server"
+version = "0.1.0"
+dependencies = [
+ "fileconv-core",
+ "fileconv-knowledge",
 ]
 
 [[package]]
