@@ -32,7 +32,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-02 — Populate knowledge skeleton và enforce dependency boundaries
 
-- **Status:** Ready — P1A-01 contract baseline đã khóa.
+- **Status:** In progress — reusable module/feature boundary matrix đang được hoàn thiện.
 - **Objective:** Hoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable
   crate có typed errors và optional desktop features.
 - **Plan:** Populate modules types/embedding/query/rank/citation/ask; features
