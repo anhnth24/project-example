@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  architecture-boundaries:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check dependency boundaries
+        run: python3 scripts/check-architecture-boundaries.py
+      - name: Test boundary checker fixtures
+        run: python3 scripts/check-architecture-boundaries.py --self-test
+
   roadmap:
     runs-on: ubuntu-22.04
     steps:

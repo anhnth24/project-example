@@ -1,0 +1,10 @@
+# Default review owner while the project is maintained by one team.
+* @anhnth24
+
+# Security-sensitive areas require explicit owner review.
+/crates/core/src/conv/pdf.rs @anhnth24
+/crates/core/src/image_ocr.rs @anhnth24
+/app/src-tauri/ @anhnth24
+/deploy/ @anhnth24
+/.github/ @anhnth24
+/docs/adr/ @anhnth24
