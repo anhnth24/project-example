@@ -32,7 +32,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-02 — Populate knowledge skeleton và enforce dependency boundaries
 
-- **Status:** In progress — reusable module/feature boundary matrix đang được hoàn thiện.
+- **Status:** Done — merged to `master` via PR #186.
 - **Objective:** Hoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable
   crate có typed errors và optional desktop features.
 - **Plan:** Populate modules types/embedding/query/rank/citation/ask; features
@@ -48,7 +48,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-03 — Shared DTO và serde contract
 
-- **Status:** Blocked bởi P1A-01/02.
+- **Status:** Ready — P1A-01/02 baseline và feature boundary đã đạt.
 - **Objective:** Di chuyển index/search/ask types mà không đổi JSON.
 - **Plan:** Index request/result/stats, hit/anchor/grounded answer/metadata; serde
   fixtures; temporary desktop re-export.
