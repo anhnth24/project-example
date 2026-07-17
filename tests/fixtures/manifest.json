@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "shared.synthetic.document.vi.v1",
+      "path": "sample/document.txt",
+      "sha256": "686562777c1d70470a92d583d52212b7c98f61123b094689e7a7925dcf9072c9",
+      "kind": "text",
+      "owner": "markhand-core",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    }
+  ]
+}
