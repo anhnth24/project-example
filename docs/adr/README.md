@@ -6,8 +6,8 @@ native, security/egress và migration strategy.
 
 ## Quy trình
 
-1. Tạo `NNNN-slug.md` từ các section của ADR 0001: Context, Decision, Consequences,
-   Alternatives, Verification, Owners/Approver.
+1. Tạo `NNNN-slug.md` từ [`TEMPLATE.md`](TEMPLATE.md): Context, Decision,
+   Consequences, Alternatives, Verification, Owners/Approver.
 2. Giữ trạng thái `Proposed` cho tới khi owner/approver review evidence.
 3. Đổi sang `Accepted`, `Rejected`, hoặc `Superseded by ADR NNNN`; không sửa lại
    history để làm mất lý do cũ.
