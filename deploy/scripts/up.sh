@@ -24,7 +24,13 @@ done
 
 [[ "${init_status:-}" == "exited" ]] || {
   echo "timed out waiting for minio-init" >&2
+  docker compose ps >&2 || true
+  docker compose logs >&2 || true
   exit 1
 }
-"$ROOT/deploy/scripts/health.sh"
+if ! "$ROOT/deploy/scripts/health.sh"; then
+  docker compose ps >&2 || true
+  docker compose logs >&2 || true
+  exit 1
+fi
 "$ROOT/deploy/scripts/seed.sh"
