@@ -140,7 +140,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-08 — Reproducible local development environment
 
-- **Status:** Blocked bởi F-02/F-07.
+- **Status:** Done — merged to `master` via PR #173.
 - **Objective:** One-command CPU-only dev stack, optional GPU profile.
 - **Implementation plan:** Pin PG/Qdrant/MinIO/OTel; init buckets/extensions; health/
   seed/reset; named volumes/private network; mock embedding; optional vLLM profile.
