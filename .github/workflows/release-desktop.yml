@@ -65,10 +65,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf
+            librsvg2-dev patchelf tesseract-ocr
+      - name: Install Windows OCR build runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install tesseract --version 5.5.0.20241111 --yes --no-progress
+      - name: Install macOS OCR build runtime
+        if: runner.os == 'macOS'
+        run: brew install tesseract dylibbundler
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.88.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
@@ -113,6 +123,29 @@ jobs:
             -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
+
+      - name: Prepare bundled PDFium and OCR runtime
+        run: python3 scripts/prepare-desktop-runtime.py --platform ${{ matrix.artifact }}
+
+      - name: Verify bundled OCR runtime
+        shell: bash
+        run: |
+          test -f app/src-tauri/native-runtime/runtime-manifest.json
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            app/src-tauri/native-runtime/ocr/bin/tesseract.exe \
+              --tessdata-dir app/src-tauri/native-runtime/ocr/tessdata \
+              --list-langs | grep -E '^(eng|vie)$'
+            test -f app/src-tauri/native-runtime/pdfium/bin/pdfium.dll
+          else
+            app/src-tauri/native-runtime/ocr/bin/tesseract \
+              --tessdata-dir app/src-tauri/native-runtime/ocr/tessdata \
+              --list-langs | grep -E '^(eng|vie)$'
+            if [ "${{ runner.os }}" = "macOS" ]; then
+              test -f app/src-tauri/native-runtime/pdfium/lib/libpdfium.dylib
+            else
+              test -f app/src-tauri/native-runtime/pdfium/lib/libpdfium.so
+            fi
+          fi
 
       # Secret trống (chưa cấu hình TAURI_SIGNING_PRIVATE_KEY) vẫn được GitHub Actions
       # export thành biến RỖNG (không phải absent) → Tauri CLI hiểu nhầm là "có key

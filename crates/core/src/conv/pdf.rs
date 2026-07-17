@@ -102,7 +102,25 @@ pub fn to_markdown(
             "không thể trích đúng các trang đã chọn (pdf-inspector/PDFium thất bại)",
         ));
     }
-    extract_with_pdf_extract(&bytes)
+    match extract_with_pdf_extract(&bytes) {
+        Ok(text) if !text.trim().is_empty() => Ok(text),
+        _result if ocr_enabled && !pdfium_available() => Err(fail(
+            "PDF là bản scan nhưng không tìm thấy PDFium để render trang; \
+             hãy cài lại Markhand Desktop hoặc đặt FILECONV_PDFIUM_LIB",
+        )),
+        _result if ocr_enabled && !image_ocr::tesseract_available() => Err(fail(
+            "PDF là bản scan nhưng không tìm thấy Tesseract OCR; \
+             hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
+        )),
+        Ok(_) => Err(fail(
+            "PDF không có text layer và OCR không nhận được nội dung",
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+fn pdfium_available() -> bool {
+    PDFIUM.with(|pdfium| pdfium.is_some())
 }
 
 fn parse_marked_pages(markdown: &str) -> HashMap<u32, String> {
