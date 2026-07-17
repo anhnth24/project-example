@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod config;
+pub mod telemetry;
 
 /// Validates the minimum non-secret server configuration contract.
 pub fn validate_configuration() -> Result<(), String> {
