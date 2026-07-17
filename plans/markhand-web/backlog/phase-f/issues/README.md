@@ -125,7 +125,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 
 ## F-07 — Configuration, secrets và environment profiles
 
-- **Status:** Blocked bởi F-02.
+- **Status:** Done — merged to `master` via PR #171.
 - **Objective:** Typed, fail-fast, secret-safe config cho local/test/prod.
 - **Implementation plan:** Define precedence; profile schema; mounted secret/env
   references; validation/redacted Debug; `.env.example`; unsafe dev defaults isolated.
