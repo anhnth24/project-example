@@ -962,9 +962,11 @@ fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String
         && settings
             .ocr_langs
             .split('+')
-            .all(|lang| lang.len() == 3 && lang.bytes().all(|byte| byte.is_ascii_alphabetic()));
+            .all(|lang| matches!(lang, "vie" | "eng"));
     if !valid_ocr {
-        return Err("ngôn ngữ OCR cần có dạng vie hoặc vie+eng".into());
+        return Err(
+            "bản desktop đi kèm model OCR vie và eng; hãy chọn vie, eng hoặc vie+eng".into(),
+        );
     }
     if !matches!(
         settings.ocr_engine.as_str(),
@@ -1004,7 +1006,10 @@ fn configure_bundled_document_runtime(resource_dir: &Path) {
         let pdfium = if cfg!(target_os = "windows") {
             runtime.join("pdfium/bin/pdfium.dll")
         } else if cfg!(target_os = "macos") {
-            runtime.join("pdfium/lib/libpdfium.dylib")
+            resource_dir
+                .parent()
+                .unwrap_or(resource_dir)
+                .join("Frameworks/libpdfium.dylib")
         } else {
             runtime.join("pdfium/lib/libpdfium.so")
         };
@@ -1016,6 +1021,11 @@ fn configure_bundled_document_runtime(resource_dir: &Path) {
     if std::env::var_os("FILECONV_TESSERACT").is_none() {
         let executable = if cfg!(target_os = "windows") {
             runtime.join("ocr/bin/tesseract.exe")
+        } else if cfg!(target_os = "macos") {
+            resource_dir
+                .parent()
+                .unwrap_or(resource_dir)
+                .join("MacOS/tesseract")
         } else {
             runtime.join("ocr/bin/tesseract")
         };

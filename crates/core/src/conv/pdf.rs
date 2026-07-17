@@ -104,18 +104,21 @@ pub fn to_markdown(
     }
     match extract_with_pdf_extract(&bytes) {
         Ok(text) if !text.trim().is_empty() => Ok(text),
-        _result if ocr_enabled && !pdfium_available() => Err(fail(
+        Err(error) => Err(error),
+        Ok(_) if !ocr_enabled => Err(fail(
+            "PDF không có text layer; hãy bật OCR trang scan trong Settings",
+        )),
+        Ok(_) if !pdfium_available() => Err(fail(
             "PDF là bản scan nhưng không tìm thấy PDFium để render trang; \
              hãy cài lại Markhand Desktop hoặc đặt FILECONV_PDFIUM_LIB",
         )),
-        _result if ocr_enabled && !image_ocr::tesseract_available() => Err(fail(
+        Ok(_) if !image_ocr::tesseract_available() => Err(fail(
             "PDF là bản scan nhưng không tìm thấy Tesseract OCR; \
              hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
         )),
         Ok(_) => Err(fail(
             "PDF không có text layer và OCR không nhận được nội dung",
         )),
-        Err(error) => Err(error),
     }
 }
 
