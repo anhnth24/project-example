@@ -25,3 +25,7 @@ fs2 = { version = "0.4.3", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
+
+[[example]]
+name = "p0_desktop_baseline"
+required-features = ["desktop-sqlite", "desktop-hnsw"]
