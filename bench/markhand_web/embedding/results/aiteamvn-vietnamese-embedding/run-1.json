@@ -1,0 +1,152 @@
+{
+  "modelId": "aiteamvn-vietnamese-embedding",
+  "role": "best-candidate",
+  "family": "bge-m3-vietnamese-ft",
+  "hubId": "AITeamVN/Vietnamese_Embedding",
+  "revisionRequested": "main",
+  "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+  "dimensions": 1024,
+  "maxSeqLength": 2048,
+  "wordSegment": false,
+  "normalize": "l2",
+  "chunkingVersion": "heading-chunks-2000-v1",
+  "runIndex": 1,
+  "summary": {
+    "queries": 238,
+    "noAnswerQueries": 30,
+    "recallAt5": 0.917367,
+    "recallAt10": 0.960084,
+    "hitAt5": 0.941176,
+    "mrr": 0.812975,
+    "ndcgAt10": 0.801701
+  },
+  "byCategory": {
+    "abbreviation": {
+      "queries": 25,
+      "recallAt5": 0.92,
+      "hitAt5": 0.92,
+      "mrr": 0.768214,
+      "ndcgAt10": 0.74711
+    },
+    "conflict_acl_denied": {
+      "queries": 2,
+      "recallAt5": 0.5,
+      "hitAt5": 0.5,
+      "mrr": 0.267857,
+      "ndcgAt10": 0.315465
+    },
+    "conflict_as_of": {
+      "queries": 2,
+      "recallAt5": 0.75,
+      "hitAt5": 1.0,
+      "mrr": 1.0,
+      "ndcgAt10": 0.875638
+    },
+    "conflict_current": {
+      "queries": 2,
+      "recallAt5": 0.75,
+      "hitAt5": 1.0,
+      "mrr": 0.75,
+      "ndcgAt10": 0.618599
+    },
+    "conflict_history": {
+      "queries": 2,
+      "recallAt5": 0.75,
+      "hitAt5": 1.0,
+      "mrr": 1.0,
+      "ndcgAt10": 0.809787
+    },
+    "diacritic_variant": {
+      "queries": 75,
+      "recallAt5": 1.0,
+      "hitAt5": 1.0,
+      "mrr": 0.880444,
+      "ndcgAt10": 0.832922
+    },
+    "long_context": {
+      "queries": 25,
+      "recallAt5": 1.0,
+      "hitAt5": 1.0,
+      "mrr": 0.953333,
+      "ndcgAt10": 0.973363
+    },
+    "multi_doc": {
+      "queries": 20,
+      "recallAt5": 0.741667,
+      "hitAt5": 0.95,
+      "mrr": 0.780833,
+      "ndcgAt10": 0.751926
+    },
+    "named_entity": {
+      "queries": 50,
+      "recallAt5": 0.92,
+      "hitAt5": 0.92,
+      "mrr": 0.806395,
+      "ndcgAt10": 0.820505
+    },
+    "no_answer": {
+      "queries": 0
+    },
+    "numeric_fact": {
+      "queries": 19,
+      "recallAt5": 0.842105,
+      "hitAt5": 0.842105,
+      "mrr": 0.660965,
+      "ndcgAt10": 0.688956
+    },
+    "prompt_injection_query": {
+      "queries": 0
+    },
+    "table_numeric": {
+      "queries": 6,
+      "recallAt5": 0.666667,
+      "hitAt5": 0.666667,
+      "mrr": 0.71131,
+      "ndcgAt10": 0.729369
+    },
+    "temporal_as_of": {
+      "queries": 3,
+      "recallAt5": 1.0,
+      "hitAt5": 1.0,
+      "mrr": 0.583333,
+      "ndcgAt10": 0.688626
+    },
+    "temporal_current": {
+      "queries": 3,
+      "recallAt5": 0.666667,
+      "hitAt5": 0.666667,
+      "mrr": 0.289272,
+      "ndcgAt10": 0.408303
+    },
+    "version_compare": {
+      "queries": 3,
+      "recallAt5": 1.0,
+      "hitAt5": 1.0,
+      "mrr": 0.833333,
+      "ndcgAt10": 0.85688
+    },
+    "version_history": {
+      "queries": 1,
+      "recallAt5": 1.0,
+      "hitAt5": 1.0,
+      "mrr": 0.5,
+      "ndcgAt10": 0.693426
+    }
+  },
+  "capacity": {
+    "device": "cpu",
+    "loadMs": 12725.33,
+    "embedChunksMs": 1150.35,
+    "embedQueriesMs": 2746.58,
+    "vectorsPerSecond": 76.214,
+    "vramGb": null,
+    "note": "quality-track; VRAM not measured on CPU smoke"
+  },
+  "gates": {
+    "G0-RET-RECALL-AT-5": {
+      "metric": 0.917367,
+      "threshold": 0.85,
+      "pass": true
+    }
+  }
+}

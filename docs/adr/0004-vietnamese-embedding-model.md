@@ -23,16 +23,21 @@ Accuracy@5 >= 0.85 on Zalo Legal.
 
 **Draft (quality-track only, not Accepted):**
 
-1. Best candidate: `AITeamVN/Vietnamese_Embedding` (1024-d, L2, max_seq=2048)
-2. Min candidate: `bkai-foundation-models/vietnamese-bi-encoder`
-   (768-d, L2, max_seq=256, mandatory `pyvi` word segmentation)
+1. Best / selected draft: `AITeamVN/Vietnamese_Embedding`
+   @ `dea33aa1ab339f38d66ae0a40e6c40e0a9249568`
+   (1024-d, L2, max_seq=2048) — measured Recall@5 **0.9174** on golden corpus.
+2. Min comparator measured: `bkai-foundation-models/vietnamese-bi-encoder`
+   @ `84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0`
+   (768-d, L2, max_seq=256, mandatory `pyvi` word segmentation) — measured
+   Recall@5 **0.7997** (**below** 0.85). Not selectable.
 
 Chunking pinned to `heading-chunks-2000-v1`. Ranking for this eval is dense
 max-pool chunk cosine aggregated to documents.
 
 This ADR stays `Proposed` until:
 
-- quality gates pass on golden corpus with >=3 runs;
+- a second family also clears the quality gate (or product accepts single-family
+  selection with documented comparator failure);
 - capacity/VRAM/saturation evidence exists on `on-prem-reference` GPU;
 - license review completes before any runtime bundle;
 - approvers sign off.
