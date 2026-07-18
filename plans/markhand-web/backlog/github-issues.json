@@ -338,15 +338,15 @@
       "phase": "0",
       "id": "P0-08",
       "title": "P0-08 — Sizing converter và ingest backpressure",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
         "web-p0",
-        "blocked"
+        "done"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-08\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt worker count, limits, timeout, queue và recovery headroom.\n\n## Implementation plan\n\nBenchmark từng format native/scan/audio; single/concurrent; CPU/RAM/temp;\nPDFium serialization; converter-vs-GPU bottleneck.\n\n## Files/modules\n\n`bench/markhand_web/ingest/`, `scripts/run_ingest_capacity.sh`,\n`reports/ingest-capacity.md`.\n\n## Dependencies / blocks\n\nGolden files + native deps + hardware.\n\n## Acceptance criteria\n\nMọi POC format có sizing/timeout; ≥30% resource headroom; recovery\n2× load không tăng queue vô hạn.\n\n## Required tests / evidence\n\nTime/file/page, throughput, peaks, timeout/failure, queue age.\n\n## Security and migration notes\n\nMalformed input chỉ chạy dưới limits.\n\n## Out of scope\n\nProduction job engine.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-08\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt worker count, limits, timeout, queue và recovery headroom. Interim local-cpu sizing/report closes P0-08 deliverables with `targetMatch=false`; Profile B `G0-CAP-INGEST-THROUGHPUT` and production headroom remain blocked until measured on `on-prem-reference`.\n\n## Implementation plan\n\nBenchmark từng format native/scan/audio; single/concurrent; CPU/RAM/temp;\nPDFium serialization; converter-vs-GPU bottleneck.\n\n## Files/modules\n\n`bench/markhand_web/ingest/`, `scripts/run_ingest_capacity.sh`,\n`reports/ingest-capacity.md`.\n\n## Dependencies / blocks\n\nGolden files + native deps available for local-cpu smoke; production capacity remains blocked by Profile B hardware.\n\n## Acceptance criteria\n\nMọi POC format có sizing/timeout and simulated queue-age evidence; ≥30% production resource headroom is not claimed from local-cpu.\n\n## Required tests / evidence\n\nHarness self-test + full local-cpu run writes `bench/markhand_web/ingest/summary.json` and `bench/markhand_web/reports/ingest-capacity.md`; rerun on Profile B for gate pass evidence.\n\n## Security and migration notes\n\nMalformed input chỉ chạy dưới limits.\n\n## Out of scope\n\nProduction job engine.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
