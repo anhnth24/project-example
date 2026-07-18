@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generator": "python3 bench/markhand_web/scripts/generate_corpus.py",
+  "generator": "python3 bench/markhand_web/scripts/generate_corpus.py + generate_expected_chunks.py + fill_citation_chunk_ids.py",
   "files": [
     {
       "path": "adversarial/files/actually-html.pdf",

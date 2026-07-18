@@ -19,8 +19,10 @@ python3 bench/markhand_web/scripts/fill_citation_chunk_ids.py
 python3 scripts/validate_corpus.py --reproducible
 ```
 
-Canonical reproducibility (`--reproducible`) runs generate → expected-chunks →
-chunkId fill → lock rewrite in a temp tree and compares `manifest.lock.json`.
+`fill_citation_chunk_ids.py` rewrites `manifest.lock.json` after annotation so
+in-place regeneration stays checksum-valid. Canonical reproducibility
+(`validate_corpus.py --reproducible`) runs the same pipeline in a temp tree and
+compares `manifest.lock.json`.
 
 The generator requires the exact package and DejaVu font fingerprints in
 `generator-environment.lock.json`. Query adjudication is content-bound through

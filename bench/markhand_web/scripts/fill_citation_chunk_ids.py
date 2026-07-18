@@ -14,6 +14,8 @@ import json
 import sys
 from pathlib import Path
 
+import blake3
+
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CORPUS = ROOT / "bench/markhand_web"
 CORPUS = DEFAULT_CORPUS
@@ -240,6 +242,42 @@ def refresh_review_and_adjudication(
     )
 
 
+def rewrite_manifest_lock() -> Path:
+    """Refresh manifest.lock.json after mechanical chunkId annotation."""
+    golden = CORPUS / "golden"
+    adversarial = CORPUS / "adversarial"
+    managed = sorted([*golden.rglob("*"), *adversarial.rglob("*")])
+    lock_entries = []
+    for path in managed:
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        lock_entries.append(
+            {
+                "path": path.relative_to(CORPUS).as_posix(),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "blake3": blake3.blake3(data).hexdigest(),
+            }
+        )
+    lock_path = CORPUS / "manifest.lock.json"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "generator": (
+                    "python3 bench/markhand_web/scripts/generate_corpus.py + "
+                    "generate_expected_chunks.py + fill_citation_chunk_ids.py"
+                ),
+                "files": lock_entries,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return lock_path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
@@ -271,9 +309,10 @@ def main() -> int:
     fieldnames, query_rows, query_changed = fill_queries(catalog)
     conflict_changed = fill_conflicts(catalog)
     refresh_review_and_adjudication(fieldnames, query_rows)
+    lock_path = rewrite_manifest_lock()
     print(
         f"filled chunkIds: queries_changed={query_changed} "
-        f"conflicts_changed={conflict_changed}"
+        f"conflicts_changed={conflict_changed}; refreshed {lock_path}"
     )
     return 0
 
