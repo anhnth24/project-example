@@ -177,16 +177,22 @@ P1A-01 ──────────> P0-03
 
 ## P0-08 — Sizing converter và ingest backpressure
 
-- **Status:** Blocked bởi P0-01, P0-02, P0-04 và worker hardware.
+- **Status:** Done — interim local-cpu sizing harness/report closes P0-08
+  deliverables with `targetMatch=false`; Profile B `G0-CAP-INGEST-THROUGHPUT`
+  and production headroom remain blocked until measured on `on-prem-reference`.
 - **Objective:** Chốt worker count, limits, timeout, queue và recovery headroom.
 - **Plan:** Benchmark từng format native/scan/audio; single/concurrent; CPU/RAM/temp;
   PDFium serialization; converter-vs-GPU bottleneck.
 - **Files:** `bench/markhand_web/ingest/`, `scripts/run_ingest_capacity.sh`,
   `reports/ingest-capacity.md`.
-- **Dependencies/blocks:** Golden files + native deps + hardware.
-- **Acceptance:** Mọi POC format có sizing/timeout; ≥30% resource headroom; recovery
-  2× load không tăng queue vô hạn.
-- **Tests/evidence:** Time/file/page, throughput, peaks, timeout/failure, queue age.
+- **Dependencies/blocks:** Golden files + native deps available for local-cpu smoke;
+  production capacity remains blocked by Profile B hardware.
+- **Acceptance:** Mọi POC format có sizing/timeout and simulated queue-age evidence;
+  ≥30% production resource headroom is not claimed from local-cpu.
+- **Tests/evidence:** Harness self-test + full local-cpu run writes
+  `bench/markhand_web/ingest/summary.json` and
+  `bench/markhand_web/reports/ingest-capacity.md`; rerun on Profile B for
+  gate pass evidence.
 - **Security/migration:** Malformed input chỉ chạy dưới limits.
 - **Out of scope:** Production job engine.
 

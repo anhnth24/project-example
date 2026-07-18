@@ -259,10 +259,11 @@
       "approver": "infrastructure-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
+      "evidence": "bench/markhand_web/ingest/summary.json",
       "blocksIssues": [
         "P0-08"
-      ]
+      ],
+      "notes": "P0-08 interim harness/report is local-cpu smoke evidence with targetMatch=false and productionCapacityBlocked=true. Profile B on-prem-reference measurement is still required for a real G0-CAP pass."
     },
     {
       "id": "G0-SLO-QUERY-P95",
