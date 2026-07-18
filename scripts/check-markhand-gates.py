@@ -42,6 +42,10 @@ LOAD_FIELDS = {
 SERVICE_TARGET_FIELDS = (
     "bestModelNdcgGapMax",
     "filteredQueryP99Ms",
+    "temporalAccuracyMin",
+    "changeAccuracyMin",
+    "versionCitationPrecisionMin",
+    "versionCitationRecallMin",
     "rpoMinutes",
     "queryReadyRtoMinutes",
     "fullVectorRtoMinutes",
@@ -224,6 +228,14 @@ def validate(root: Path) -> list[str]:
         for field in SERVICE_TARGET_FIELDS:
             if not positive_number(service_targets.get(field)):
                 errors.append(f"workload: approved serviceTargets.{field} must be positive")
+        for field in (
+            "temporalAccuracyMin",
+            "changeAccuracyMin",
+            "versionCitationPrecisionMin",
+            "versionCitationRecallMin",
+        ):
+            if numeric(service_targets.get(field)) and service_targets[field] > 1:
+                errors.append(f"workload: approved serviceTargets.{field} must be <=1")
         headroom = workload.get("hardware", {}).get("headroomPercent", {})
         for resource in ("cpu", "ram", "disk"):
             value = headroom.get(resource)
@@ -377,6 +389,24 @@ def validate(root: Path) -> list[str]:
             "G0-SLO-QUERY-P99": (
                 "<=",
                 workload.get("serviceTargets", {}).get("filteredQueryP99Ms"),
+            ),
+            "G0-RET-TEMPORAL-ACCURACY": (
+                ">=",
+                workload.get("serviceTargets", {}).get("temporalAccuracyMin"),
+            ),
+            "G0-RET-CHANGE-ACCURACY": (
+                ">=",
+                workload.get("serviceTargets", {}).get("changeAccuracyMin"),
+            ),
+            "G0-RET-VERSION-CITATION-PRECISION": (
+                ">=",
+                workload.get("serviceTargets", {}).get(
+                    "versionCitationPrecisionMin"
+                ),
+            ),
+            "G0-RET-VERSION-CITATION-RECALL": (
+                ">=",
+                workload.get("serviceTargets", {}).get("versionCitationRecallMin"),
             ),
             "G0-DR-RPO": (
                 "<=",

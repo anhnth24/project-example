@@ -15,9 +15,10 @@ Tạo `bench/markhand_web/`:
 
 - `golden/documents/`: tài liệu tiếng Việt đại diện cho PDF native/scan, DOCX,
   PPTX, XLSX, CSV, HTML, ảnh OCR, audio và TXT legacy.
-- `golden/queries.tsv`: 200–500 câu hỏi đã adjudicate, gồm expected document,
-  stable source span/citation và relevance grade. Expected chunk ID chỉ được sinh
-  sau khi chốt chunking và phải mang chunking-version.
+- `golden/queries.tsv`: 200–500 câu hỏi đã adjudicate, gồm expected logical document,
+  immutable version, stable source span/citation và relevance grade. Phủ
+  multi-document và `current`/`as_of`/`compare`/`history`; expected chunk ID chỉ được
+  sinh sau khi chốt chunking và phải mang chunking/version identity.
 - Phủ biến thể dấu tiếng Việt, từ viết tắt, tên riêng, bảng, truy vấn dài và câu
   hỏi không có đáp án.
 - `adversarial/`: extension giả, MIME mismatch, archive bomb, PDF/page bomb,
@@ -52,6 +53,10 @@ So sánh ít nhất `bge-m3` và một model multilingual-e5 phù hợp VRAM:
 - dimension, normalization, batch size, token truncation;
 - throughput, VRAM, queue saturation;
 - hybrid PG FTS + vector so với từng leg riêng.
+- current-version accuracy, temporal/as-of accuracy, change accuracy và
+  version-citation precision/recall.
+- cross-document claim/conflict precision/recall, unresolved-current warning accuracy
+  và resolved-history accuracy trên BA/design/dev version pairs.
 
 Kết quả chốt:
 

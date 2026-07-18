@@ -47,12 +47,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-F03 — Multi-org-ready schema và immutable migrations
 
-- **Plan:** Migrations org/auth/RBAC/groups/collections, versions/artifacts, chunks/
-  FTS, jobs/outbox, quota/audit/index; seed POC riêng.
+- **Plan:** Migrations org/auth/RBAC/groups/collections, immutable versions/artifacts,
+  atomic current-published pointer, parent/version/effective lineage, chunks/FTS,
+  normalized claims, conflict/evidence lifecycle, jobs/outbox, quota/audit/index;
+  seed POC riêng.
 - **Files:** `crates/server/migrations/000*.sql`, `src/db/models.rs`.
 - **Depends:** F01 + G0-ARCH.
-- **Acceptance/tests:** Mọi business row có org; immutable versions; checks/indexes;
-  fresh + supported-upgrade migration/schema introspection.
+- **Acceptance/tests:** Mọi business row có org; immutable versions; exactly one
+  current effective published version/logical document; concurrent publish/as-of/
+  lineage checks; fresh + supported-upgrade migration/schema introspection.
 - **Security/migration:** Files immutable sau merge; RLS theo ADR. **Out:** custom role UI.
 
 ### P1B-F04 — OrgContext, repositories và state machine
@@ -138,7 +141,8 @@ ghi trong issue đã `Done`.
 ### P1B-I05 — Idempotent conversion promotion saga
 
 - **Plan:** Checkpoint download/convert/stage/promote/DB/cleanup; immutable version;
-  index outbox; compensation/refund.
+  publish/current pointer riêng với draft/latest upload; index outbox;
+  compensation/refund.
 - **Files:** `workers/convert.rs`, `services/{conversion,promotion,artifacts}.rs`,
   `db/document_versions.rs`.
 - **Depends:** I01–I04/F06/G1A.
@@ -148,8 +152,10 @@ ghi trong issue đã `Done`.
 
 ### P1B-I06 — Chunk/embedding/index worker
 
-- **Plan:** Core chunking + knowledge identity/signature; PG chunks/FTS; separate
-  embedding batches; blocking client off async executor; deterministic Qdrant upsert.
+- **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
+  chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
+  extract typed claim key/value/unit/scope; incremental conflict candidate outbox;
+  blocking client off async executor; deterministic upsert.
 - **Files:** `workers/{index,embedding}.rs`, `services/{chunking,embedding,indexing}.rs`.
 - **Depends:** I03/I05/F06 + G0-RET/G0-CAP/G1A.
 - **Acceptance/tests:** Approved signature; ≤1 replay batch; no duplicate; mismatch
@@ -171,38 +177,48 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
-- **Plan:** Resolve scope; query embed; parallel Qdrant/FTS; knowledge merge/rerank;
-  PG hydration/recheck state/ACL.
+- **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
+  Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
+  state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
 - **Files:** `services/retrieval/{vector,fts,hydrate}.rs`, `db/search.rs`.
 - **Depends:** F04/F06/I06 + G0-RET/G1A.
-- **Acceptance/tests:** Empty scope deny; stale vector no text; golden quality/
-  cross-scope/deleted/one-leg outage/latency tests.
+- **Acceptance/tests:** Empty scope deny; stale vector no text; current không trả
+  superseded version; as-of resolve đúng effective version; compare/history cùng
+  lineage; golden quality/cross-scope/deleted/one-leg outage/latency tests.
 - **Security/migration:** Text only after authorized hydration. **Out:** new reranker.
 
 ### P1B-R02 — Citation, preview và download authorization
 
-- **Plan:** Stable anchors/version; fresh auth per resolve; trusted Markdown fetch;
-  short single-purpose download capability.
+- **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
+  effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
+  single-purpose download capability.
 - **Files:** `services/{citation,preview,download}.rs`, document routes.
 - **Depends:** F05/F06/R01.
-- **Acceptance/tests:** Source/version/anchor valid; delete/suspend/removal deny;
-  IDOR, expiry/replay, PDF/PPTX/XLSX anchor tests.
+- **Acceptance/tests:** Quote/hash/version/anchor valid; historical permission + fresh
+  ACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,
+  PDF/PPTX/XLSX anchor tests.
 - **Security/migration:** No raw bucket credential/key. **Out:** rich rendering.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
-- **Plan:** Policy-separated prompt, untrusted passage framing, GLM, citation
-  validation, token stream, deterministic extractive fallback.
+- **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
+  citation validation, current answer + history/change note, token stream,
+  current unresolved-conflict warnings + resolved-history note, token stream,
+  deterministic extractive fallback.
 - **Files:** `services/qa/{prompt,provider,grounding,stream}.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
-- **Acceptance/tests:** Citation subset only; injection không tool/scope change;
-  provider outage fallback; fabricated citation, timeout, delete-during-stream tests.
+- **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
+  compare cite old+new và đúng delta; injection không tool/scope change; provider
+  outage fallback; BA/design numeric conflict warning và v2 resolution; false-positive/
+  accepted-exception; fabricated/version-mix/conflict citation, timeout,
+  delete-during-stream tests.
 - **Security/migration:** Audit metadata only. **Out:** agents/memory/web browse.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; job status;
-  pagination/idempotency/error schema.
+- **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
+  version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
+  job status; pagination/idempotency/error schema.
 - **Files:** `routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`.
 - **Depends:** F04/F05/I01/I03/I07/R02.
 - **Acceptance/tests:** Org context + permissions; stable errors; idempotent reindex;

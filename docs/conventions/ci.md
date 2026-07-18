@@ -42,6 +42,8 @@ validation uses `make bundle-linux`.
 - Linux bundle smoke (including native-runtime preparation) runs only for
   packaging/runtime configuration changes; the full Linux/Windows/macOS installer
   matrix remains release-only.
+- Phase 0 corpus changes run a dedicated Python job that installs the pinned generator
+  requirements, regenerates artifacts and enforces strict dual-review adjudication.
 - A CI/Makefile/classifier/toolchain change deliberately activates every group.
 - A new commit on the same PR cancels the older in-progress run. `master` runs are not
   grouped or canceled because each run classifies a different push delta.

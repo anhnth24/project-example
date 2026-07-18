@@ -36,6 +36,10 @@
 | Query latency P95 | ≤ 500 ms |
 | Filtered query latency P99 | ≤ 1,000 ms |
 | Best-model nDCG gap | ≤ 0.02 |
+| Temporal/as-of answer accuracy | ≥ 0.95 |
+| Version-change answer accuracy | ≥ 0.95 |
+| Immutable-version citation precision | 1.00 |
+| Immutable-version citation recall | 1.00 |
 | Recovery point objective | ≤ 15 minutes |
 | Query-ready recovery time | ≤ 60 minutes |
 | Full-vector recovery time | ≤ 240 minutes |

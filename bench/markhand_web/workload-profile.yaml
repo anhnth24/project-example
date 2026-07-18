@@ -52,6 +52,14 @@
       "status": "resolved",
       "resolution": "RPO <=15 minutes, query-ready RTO <=60 minutes and full-vector RTO <=240 minutes.",
       "blocks": ["P0-10"]
+    },
+    {
+      "id": "OD-VERSION-CITATION",
+      "question": "Chốt temporal/change accuracy và version-citation precision/recall.",
+      "owner": "product-owner",
+      "status": "resolved",
+      "resolution": "Temporal and change accuracy >=0.95; immutable-version citation precision and recall must both equal 1.0.",
+      "blocks": ["P0-06", "P0-10"]
     }
   ],
   "scale": {
@@ -109,6 +117,10 @@
   "serviceTargets": {
     "bestModelNdcgGapMax": 0.02,
     "filteredQueryP99Ms": 1000,
+    "temporalAccuracyMin": 0.95,
+    "changeAccuracyMin": 0.95,
+    "versionCitationPrecisionMin": 1.0,
+    "versionCitationRecallMin": 1.0,
     "rpoMinutes": 15,
     "queryReadyRtoMinutes": 60,
     "fullVectorRtoMinutes": 240
