@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "gitCommit": "06c13f250cc2212f1748c9bb8ae7ecae6a9edb83",
+  "gitDirty": false,
+  "workloadProfileId": "on-prem-reference-v1",
+  "environmentRole": "reduced-smoke",
+  "hardware": {
+    "cpu": {
+      "vendor": "GenuineIntel",
+      "model": "Intel(R) Xeon(R) Processor",
+      "cores": 8,
+      "threads": 8
+    },
+    "ramGb": 47.07,
+    "disk": {
+      "type": "overlay-or-local",
+      "capacityGb": 251.86,
+      "iopsNote": "not measured in desktop baseline"
+    },
+    "gpu": {
+      "model": "none",
+      "vramGb": 0,
+      "count": 0
+    },
+    "network": {
+      "bandwidthGbps": 0,
+      "latencyMsAssumed": 0
+    },
+    "os": {
+      "distro": "Linux-6.12.94+-x86_64-with-glibc2.39",
+      "arch": "x86_64"
+    }
+  },
+  "command": "make p0-desktop-baseline",
+  "composeFileSha256": "f9ba037539d4d5179cc91ad2f00997d7960c5a2f2eefdbf7356d9b825e116aed",
+  "serviceVersions": {
+    "fileconvCore": "0.1.0",
+    "fileconvKnowledge": "0.1.0"
+  },
+  "imageDigests": {
+    "notUsed": "local-process-baseline"
+  },
+  "nativeRuntime": {
+    "pdfium": {
+      "present": true,
+      "sha256": "61c9f745c6296a1050599a99a1ed985036411b591a11bd2a41bafe530ecb4f33"
+    },
+    "tesseract": {
+      "present": true,
+      "version": "tesseract 5.3.4",
+      "languageModelSha256": {
+        "vie": "79df64caf7bcfb2a27df5042ecb6121e196eada34da774956995747636d5bfa1",
+        "eng": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+      }
+    },
+    "whisperModelConfigured": false
+  },
+  "fixtureManifestSha256": "56fed3294614f66b00df92f12ec4d26c698e2764dbf3ee50be9b814938c455c6",
+  "converterSha256": "21d4455990583b6419f6c39541775e1d6b2f95132ec60dcc035b2e239660b7dc",
+  "retrievalRankingSha256": "c8c5cb76795d837439515d9f38cdac8b4f377c927f7fc9db56ae24e3ed042304",
+  "rawRetrievalSha256": "680823e1f66cb73ce373eab2537d5b15227f1081f601562e008739630109885d",
+  "retrievalDeterministic": true,
+  "conversionRerunSha256": "9f97441988a33a0887bc571da609bf582cf88b990e361e71966fced1036a6bd2",
+  "conversionDeterministic": true
+}
