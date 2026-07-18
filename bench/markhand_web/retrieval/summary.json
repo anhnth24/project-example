@@ -2,15 +2,15 @@
   "version": 2,
   "issue": "P0-06",
   "track": "retrieval-neural-hybrid",
-  "generatedAt": "2026-07-18T18:26:33.854613+00:00",
+  "generatedAt": "2026-07-18T18:33:11.852920+00:00",
   "git": {
-    "commit": "1f9d06f667b3bee7283a10d549b4cbbfa6e70746",
+    "commit": "7e750f794941a0936127a2fb2d4db01c7e2b659e",
     "dirty": false,
     "dirtyPaths": []
   },
   "chunkingVersion": "heading-chunks-2000-v1",
-  "indexSignature": "b5e58653f6666837e3da8f2fb25f7ae36bee6bc96cab9f282ad791c9e40061cb",
-  "runtimePath": "provider-cloud",
+  "indexSignature": "b9550f095d036343f719a1deca99c8c2bcd52e7cee7156ba900ddf789866c146",
+  "runtimePath": "local-neural",
   "embeddingRuntime": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
   "dimensions": 1024,
   "rrf": {
@@ -23,18 +23,42 @@
     "baselineVectorWeight": 0.55,
     "observationTuneWeight": 0.65,
     "observationTuneImprovedHoldout": true,
-    "note": "Gating uses frozen desktop VECTOR_WEIGHT=0.55 for production parity; Python lexical is token-overlap approximation of FTS5."
+    "note": "Gating uses frozen desktop VECTOR_WEIGHT=0.55 for production parity; lexical leg uses SQLite FTS5 unicode61 remove_diacritics 2."
   },
   "measuredEnvironmentId": "local-cpu-quality",
+  "hardware": {
+    "cpuThreads": 8,
+    "ramGb": 47.07,
+    "diskGb": 251.86,
+    "gpuCount": 0,
+    "embeddingDevice": "cpu"
+  },
+  "fingerprint": {
+    "gitCommit": "7e750f794941a0936127a2fb2d4db01c7e2b659e",
+    "workloadProfileId": "on-prem-reference-v1",
+    "embeddingProvider": "sentence-transformers",
+    "embeddingModel": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
+    "embeddingDimensions": 1024,
+    "fixtureManifestSha256": "fe539fda04af3a765beb15179a0fcdaafde5440b1dd6401ca1a1117ea8c98b2a",
+    "hardware": {
+      "cpuThreads": 8,
+      "ramGb": 47.07,
+      "diskGb": 251.86,
+      "gpuCount": 0,
+      "embeddingDevice": "cpu"
+    },
+    "runtimePath": "local-neural",
+    "chunkingVersion": "heading-chunks-2000-v1"
+  },
   "legs": {
     "lexical": {
       "queries": 238,
       "noAnswerQueries": 30,
-      "recallAt5": 0.980392,
+      "recallAt5": 0.990196,
       "recallAt10": 0.99895,
-      "hitAt5": 0.995798,
-      "mrr": 0.892122,
-      "ndcgAt10": 0.892977
+      "hitAt5": 1.0,
+      "mrr": 0.871849,
+      "ndcgAt10": 0.882898
     },
     "vector_neural": {
       "queries": 238,
@@ -48,26 +72,26 @@
     "hybrid": {
       "queries": 238,
       "noAnswerQueries": 30,
-      "recallAt5": 0.987745,
+      "recallAt5": 0.984944,
       "recallAt10": 1.0,
       "hitAt5": 0.991597,
-      "mrr": 0.910381,
-      "ndcgAt10": 0.898734
+      "mrr": 0.919788,
+      "ndcgAt10": 0.907895
     }
   },
   "versionCitation": {
     "citations": 305,
     "citationsWithChunkId": 305,
-    "versionCitationPrecision": 1.0,
-    "versionCitationRecall": 1.0,
+    "versionCitationPrecision": 0.931034,
+    "versionCitationRecall": 0.9,
     "citationCounts": {
-      "tp": 292,
-      "fp": 0,
-      "fn": 0
+      "tp": 27,
+      "fp": 2,
+      "fn": 3
     },
-    "temporalAnswerAccuracy": 1.0,
+    "temporalAnswerAccuracy": 0.833333,
     "temporalQueries": 6,
-    "currentVersionAccuracy": 1.0,
+    "currentVersionAccuracy": 0.333333,
     "currentQueries": 3,
     "versionChangeAccuracy": 1.0,
     "changeQueries": 4,
@@ -85,7 +109,7 @@
   },
   "gates": {
     "G0-RET-RECALL-AT-5": {
-      "metric": 0.987745,
+      "metric": 0.984944,
       "threshold": 0.85,
       "operator": ">=",
       "pass": true,
@@ -95,10 +119,10 @@
       "environmentMatch": true
     },
     "G0-RET-TEMPORAL-ACCURACY": {
-      "metric": 1.0,
+      "metric": 0.833333,
       "threshold": 0.95,
       "operator": ">=",
-      "pass": true,
+      "pass": false,
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
@@ -115,20 +139,20 @@
       "environmentMatch": true
     },
     "G0-RET-VERSION-CITATION-PRECISION": {
-      "metric": 1.0,
+      "metric": 0.931034,
       "threshold": 1.0,
       "operator": ">=",
-      "pass": true,
+      "pass": false,
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
       "environmentMatch": true
     },
     "G0-RET-VERSION-CITATION-RECALL": {
-      "metric": 1.0,
+      "metric": 0.9,
       "threshold": 1.0,
       "operator": ">=",
-      "pass": true,
+      "pass": false,
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
@@ -143,8 +167,10 @@
     "resolvedHistoryAccuracy": 1.0,
     "pass": true
   },
-  "p0_06_closed": true,
+  "p0_06_closed": false,
   "reasons": [
-    "All P0-06 retrieval/version/conflict gates passed with neural hybrid."
+    "G0-RET-TEMPORAL-ACCURACY failed: 0.833333 >= 0.95",
+    "G0-RET-VERSION-CITATION-PRECISION failed: 0.931034 >= 1.0",
+    "G0-RET-VERSION-CITATION-RECALL failed: 0.9 >= 1.0"
   ]
 }
