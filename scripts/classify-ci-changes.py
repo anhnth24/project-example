@@ -95,6 +95,18 @@ GROUPS = {
         "scripts/check-web-toolchain.sh",
         "docs/runbooks/contributor-setup.md",
     ),
+    "corpus": SHARED
+    + (
+        "bench/markhand_web/CORPUS.md",
+        "bench/markhand_web/generator-environment.lock.json",
+        "bench/markhand_web/requirements-corpus.txt",
+        "bench/markhand_web/golden/**",
+        "bench/markhand_web/adversarial/**",
+        "bench/markhand_web/licenses/**",
+        "bench/markhand_web/manifest.lock.json",
+        "bench/markhand_web/scripts/generate_corpus.py",
+        "scripts/validate_corpus.py",
+    ),
 }
 
 
@@ -131,6 +143,7 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result["dev_stack"])
         self.assertFalse(result["bundle"])
         self.assertFalse(result["toolchain"])
+        self.assertFalse(result["corpus"])
 
     def test_deploy_change_activates_only_dev_stack(self) -> None:
         result = classify(["deploy/dev/compose.yml"])
@@ -170,6 +183,11 @@ class ClassifierTests(unittest.TestCase):
         rust_toolchain = classify(["rust-toolchain.toml"])
         self.assertTrue(rust_toolchain["rust"])
         self.assertTrue(rust_toolchain["toolchain"])
+
+    def test_corpus_change_activates_strict_corpus_job(self) -> None:
+        result = classify(["bench/markhand_web/golden/queries.tsv"])
+        self.assertTrue(result["corpus"])
+        self.assertFalse(result["rust"])
 
 
 def main() -> int:
