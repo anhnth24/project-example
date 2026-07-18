@@ -151,7 +151,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-10 — CI parity và extraction gate
 
-- **Status:** In progress — wiring the final feature, consumer and compatibility gate.
+- **Status:** Review — full local extraction gate passed; hosted CI awaits billing restore.
 - **Objective:** Chứng minh desktop equivalence và server usability.
 - **Plan:** Full feature/contract/golden matrix; no-feature server consumer test;
   dependency deny-list; docs compatibility; file perf/concurrency defects riêng.
