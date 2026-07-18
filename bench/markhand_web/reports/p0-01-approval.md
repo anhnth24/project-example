@@ -14,6 +14,8 @@
 - Peak load: 80 concurrent queries, 1,200 ingested documents/hour, 120 deletes/hour.
 - Recovery: 2× load for 120 minutes; aggregate concurrent ingest target 8.
 - Tenant distribution: Zipfian 80/20.
+- Selected-model quality gap: at most 0.02 absolute nDCG below the best evaluated
+  candidate.
 
 ## Reference hardware
 
@@ -32,6 +34,11 @@
 | Blocked adversarial upload fixtures | 1.00 |
 | Peak ingest throughput | ≥ 1,200 documents/hour |
 | Query latency P95 | ≤ 500 ms |
+| Filtered query latency P99 | ≤ 1,000 ms |
+| Best-model nDCG gap | ≤ 0.02 |
+| Recovery point objective | ≤ 15 minutes |
+| Query-ready recovery time | ≤ 60 minutes |
+| Full-vector recovery time | ≤ 240 minutes |
 | Approved runtime licenses | 1.00 |
 
 All failures block Phase 1B. Gate approval fixes the target; it does not claim a

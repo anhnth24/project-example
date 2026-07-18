@@ -36,7 +36,8 @@
     "composeFileSha256",
     "imageDigests",
     "serviceVersions",
-    "fixtureManifestSha256"
+    "fixtureManifestSha256",
+    "hardware"
   ],
   "notes": "Synthetic labels only; no customer name, credential or internal hostname."
 }

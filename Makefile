@@ -34,6 +34,8 @@ check-fixtures:
 check-markhand-gates:
 	python3 scripts/check-markhand-gates.py
 	python3 scripts/check-markhand-gates.py --self-test
+	python3 scripts/check-phase0-decisions.py --self-test
+	python3 scripts/check-runtime-license-inventory.py --self-test
 
 check-roadmap:
 	python3 scripts/build-roadmap.py --check

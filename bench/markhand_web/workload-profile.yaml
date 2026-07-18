@@ -18,7 +18,7 @@
       "question": "Chốt CPU, RAM, disk, GPU/VRAM và network benchmark target.",
       "owner": "infrastructure-owner",
       "status": "resolved",
-      "resolution": "Reference target: 32 cores/64 threads, 256GB RAM, 4TB NVMe, one 24GB accelerator and 10Gbps network.",
+      "resolution": "Reference target: 32 cores/64 threads, 256GB RAM, 4TB NVMe with >=100k random-read IOPS, one 24GB accelerator and 10Gbps network at 1ms assumed local latency.",
       "blocks": ["P0-04", "P0-05", "P0-08"]
     },
     {
@@ -26,8 +26,32 @@
       "question": "Chốt normal/peak query, ingest, delete và recovery concurrency.",
       "owner": "product-owner",
       "status": "resolved",
-      "resolution": "Normal 20 queries/300 ingest per hour; peak 80 queries/1200 ingest per hour; two-hour recovery at 2x load.",
+      "resolution": "Normal 20 queries, 300 ingest and 30 deletes/hour; peak 80 queries, 1200 ingest and 120 deletes/hour; aggregate ingest concurrency 8; Zipfian 80/20 tenants; two-hour recovery at 2x normal load.",
       "blocks": ["P0-07", "P0-08"]
+    },
+    {
+      "id": "OD-QUALITY-MARGIN",
+      "question": "Chốt biên chất lượng tối đa giữa model được chọn và model tốt nhất.",
+      "owner": "product-owner",
+      "status": "resolved",
+      "resolution": "Selected model nDCG may trail the best evaluated model by at most 0.02 absolute.",
+      "blocks": ["P0-05"]
+    },
+    {
+      "id": "OD-TAIL-LATENCY",
+      "question": "Chốt filtered retrieval P99.",
+      "owner": "product-owner",
+      "status": "resolved",
+      "resolution": "Filtered query P99 must be <=1000ms.",
+      "blocks": ["P0-07", "P0-10"]
+    },
+    {
+      "id": "OD-DR",
+      "question": "Chốt RPO và hai mốc RTO.",
+      "owner": "product-owner",
+      "status": "resolved",
+      "resolution": "RPO <=15 minutes, query-ready RTO <=60 minutes and full-vector RTO <=240 minutes.",
+      "blocks": ["P0-10"]
     }
   ],
   "scale": {
@@ -79,8 +103,15 @@
     },
     "recovery": {
       "scenario": "post-outage catch-up",
-      "loadRef": "loads.recovery"
+      "loadRef": "loads.normal"
     }
+  },
+  "serviceTargets": {
+    "bestModelNdcgGapMax": 0.02,
+    "filteredQueryP99Ms": 1000,
+    "rpoMinutes": 15,
+    "queryReadyRtoMinutes": 60,
+    "fullVectorRtoMinutes": 240
   },
   "hardware": {
     "environmentId": "on-prem-reference",
