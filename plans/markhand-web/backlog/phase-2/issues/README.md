@@ -74,7 +74,8 @@ P2-15 + Phase 1C gate → P2-16
 ## P2-07 — Library/list/sanitized preview
 
 - **Plan/files:** Adapt browser-safe LibraryView; collection navigation, filter/page,
-  status, preview states + SafeMarkdown.
+  status, preview states + SafeMarkdown; unresolved conflict badge/count, side-by-side
+  cited BA/design/dev claims và resolved-history link.
 - **Depends:** P2-02/03/05/06. **Acceptance/tests:** Stable URL/pagination; API-only
   preview; unsafe markdown, 403/404, switch-race tests.
 - **Security:** No local path/public key. **Out:** desktop editor/compare.
@@ -98,10 +99,12 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
   readiness, stream reducer, fallback + version-change notes, citation deep-link with
-  version badge/effective date, abort scope change.
+  version badge/effective date, current conflict warning + resolved conflict note,
+  abort scope change.
 - **Depends:** P2-04…07 + backend ACL. **Acceptance/tests:** `aria-live`; current source
   citation; multi-document citations; old/new amount example labels v1/v2 and delta;
-  as-of/history/deep-link/sequence/fallback/no-answer/revoke/switch-mid-answer tests.
+  BA 10m vs design 15m warning then v2 resolved; as-of/history/deep-link/sequence/
+  fallback/no-answer/revoke/switch-mid-answer tests.
 - **Security:** Sanitized Markdown/server route IDs. **Out:** intelligence/conversation memory.
 
 ## P2-11 — Member/role admin

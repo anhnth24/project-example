@@ -104,6 +104,9 @@ Không gửi tài liệu có classification cấm ra GLM cloud.
   và citation deep-link cho từng immutable version.
 - Intelligence artifact ghi exact source version IDs; summary/handoff compare nhiều
   version phải cite old+new, không silently refresh sang current.
+- Cross-document conflict triage nhóm typed claims BA/design/dev theo scope/effective
+  time; current unresolved warnings, accepted-exception/false-positive disposition và
+  resolved history đều giữ cited evidence.
 
 Các tính năng schema/table/version/export là scope desktop intelligence đã có trong
 `plans/260710-document-intelligence-suite.md`; Phase 3 port tương thích, không mở

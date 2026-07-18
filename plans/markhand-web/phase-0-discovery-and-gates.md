@@ -55,6 +55,8 @@ So sánh ít nhất `bge-m3` và một model multilingual-e5 phù hợp VRAM:
 - hybrid PG FTS + vector so với từng leg riêng.
 - current-version accuracy, temporal/as-of accuracy, change accuracy và
   version-citation precision/recall.
+- cross-document claim/conflict precision/recall, unresolved-current warning accuracy
+  và resolved-history accuracy trên BA/design/dev version pairs.
 
 Kết quả chốt:
 
