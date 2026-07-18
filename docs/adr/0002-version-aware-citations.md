@@ -1,6 +1,6 @@
 # ADR 0002: Version-aware retrieval and citations
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-18
 - Decision key: `document-artifact-model`
 - Owners: `architecture-owner`, `retrieval-owner`

@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "reportId": "p0-10-query-load-smoke",
+  "gateIds": [
+    "G0-SLO-QUERY-P95",
+    "G0-SLO-QUERY-P99"
+  ],
+  "generatedAt": "2026-07-18T19:37:30.692264Z",
+  "command": "python3 bench/markhand_web/scripts/run_query_load.py",
+  "mode": "offline-synthetic-query-load-smoke",
+  "seed": 20260718,
+  "git": {
+    "commit": "eabb2e18cceb8cac925a6f4b4d7ab8e3c650a5d8",
+    "branch": "cursor/p0-10-phase0-gate-9f2f",
+    "dirty": true,
+    "dirtyPaths": [
+      "docs/adr/0002-version-aware-citations.md",
+      "docs/adr/README.md",
+      "plans/markhand-web/backlog/github-issues.json",
+      "bench/markhand_web/reports/restore-drill.md",
+      "bench/markhand_web/restore/",
+      "bench/markhand_web/scripts/run_phase0_gate.py",
+      "bench/markhand_web/scripts/run_query_load.py",
+      "bench/markhand_web/scripts/run_restore_drill.py",
+      "docs/adr/0007-tenant-isolation-rls.md",
+      "docs/adr/0010-auth-session-lifecycle.md",
+      "docs/adr/0011-model-index-migration.md",
+      "docs/adr/0012-backup-recovery-order.md",
+      "docs/adr/phase0-decisions.json",
+      "docs/markhand-web-risk-register.md",
+      "docs/markhand-web-sla-targets.md"
+    ]
+  },
+  "environment": {
+    "environmentId": "current-runner-offline-synthetic",
+    "targetEnvironmentId": "on-prem-reference",
+    "targetMatch": false
+  },
+  "implementationSha256": "4e429ed7c288d8fab3401943abe9096128101bc40e8d7f7693deaae7af6a8e57",
+  "workloadProfile": {
+    "profileId": "on-prem-reference-v1",
+    "normal": {
+      "concurrentQueries": 20,
+      "ingestDocumentsPerHour": 300,
+      "deleteOperationsPerHour": 30
+    },
+    "peak": {
+      "concurrentQueries": 80,
+      "ingestDocumentsPerHour": 1200,
+      "deleteOperationsPerHour": 120
+    },
+    "targetFilteredQueryP99Ms": 1000
+  },
+  "metrics": {
+    "queryLatencyP95MsSynthetic": 296.008,
+    "filteredQueryLatencyP99MsSynthetic": 820.854,
+    "targetQueryP95Ms": 500,
+    "targetFilteredQueryP99Ms": 1000,
+    "syntheticWithinTargets": {
+      "queryP95": true,
+      "filteredQueryP99": true
+    }
+  },
+  "targetMatch": false,
+  "profileBSloGatePassed": false,
+  "targetResultsValidForGate": false,
+  "productionSloBlocked": true,
+  "closure": {
+    "stubExecuted": true,
+    "smokeMetricsEmitted": true,
+    "honestFlagsSet": true,
+    "profileBRequirementDocumented": true
+  },
+  "p0_10_query_load_smoke_closed": true,
+  "doesNotClaim": [
+    "G0-SLO-QUERY-P95 pass",
+    "G0-SLO-QUERY-P99 pass",
+    "20M live mixed-load evidence",
+    "Profile B latency evidence"
+  ],
+  "notes": [
+    "This stub exists so gate commands are runnable before Profile B is available.",
+    "Gate-valid query SLO evidence requires live Postgres/Qdrant with targetMatch=true.",
+    "does NOT claim G0-SLO-QUERY-P95 or G0-SLO-QUERY-P99 pass evidence"
+  ]
+}
