@@ -21,14 +21,16 @@ Synthetic/de-identified golden corpus only.
 
 ## Dense Recall@5 (desktop-parity re-run)
 
-| Model | Dims | Recall@5 | Gate ≥0.85 |
-|---|---:|---:|---|
-| `text-embedding-3-large` | 3072 | 0.7010 | FAIL |
-| `text-embedding-3-large` | 1536 | 0.6982 | FAIL |
-| `text-embedding-3-small` | 1536 | 0.7710 | FAIL |
-| `text-embedding-ada-002` | 1536 | **0.7752** | FAIL |
+Threshold observations only (non-gating track — not formal PASS/FAIL):
 
-No OpenAI catalog model meets `G0-RET-RECALL-AT-5`. This track is
+| Model | Dims | Recall@5 | Meets ≥0.85 |
+|---|---:|---:|---|
+| `text-embedding-3-large` | 3072 | 0.7010 | no |
+| `text-embedding-3-large` | 1536 | 0.6982 | no |
+| `text-embedding-3-small` | 1536 | 0.7710 | no |
+| `text-embedding-ada-002` | 1536 | **0.7752** | no |
+
+No OpenAI catalog model meets the Recall@5 ≥ 0.85 threshold. This track is
 `openai-cloud-reject` (non-gating / not a selection draft).
 
 See also `summary.json` and `bench/markhand_web/reports/openai-embedding-rejection.md`.
