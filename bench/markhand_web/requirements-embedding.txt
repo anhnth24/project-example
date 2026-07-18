@@ -1,0 +1,8 @@
+# P0-05 embedding evaluation (CPU-capable quality track).
+# Pin versions used for committed evidence; bump deliberately with a re-run.
+sentence-transformers==5.6.0
+torch==2.13.0
+numpy==2.4.4
+pyvi==0.1.1
+huggingface-hub==1.24.0
+PyYAML==6.0.3

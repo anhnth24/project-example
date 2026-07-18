@@ -1,5 +1,8 @@
 /target
 node_modules/
+**/__pycache__/
+*.py[cod]
+
 web/dist/
 /deploy/dev/.env
 /deploy/spike/.env

@@ -98,16 +98,19 @@ P1A-01 ──────────> P0-03
 
 ## P0-05 — Đánh giá embedding tiếng Việt
 
-- **Status:** Ready — interim GLM cloud path được duyệt (ADR 0004); target GPU/vLLM
-  chuyển thành cutover gate, không chặn lập trình/POC/DEMO.
+- **Status:** Ready — interim GLM cloud path được duyệt (ADR 0004); local dense
+  quality smoke recorded (ADR 0005 Proposed: AITeamVN PASS / BKAI FAIL on CPU).
+  Target GPU/vLLM remains cutover, not a coding blocker.
 - **Objective:** Chốt provider/model/revision/dimension/normalization đủ để lập
   trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
 - **Plan:** Interim: so GLM `embedding-3` (và `embedding-2` nếu cần) qua
   OpenAI-compatible API + `FILECONV_EMBEDDING_API_KEY`; pin tokenizer/batch/
-  truncation/dimensions/normalize; đo theo category và API latency. Target (sau):
-  so `bge-m3` và multilingual-e5 trên Profile B GPU/vLLM (VRAM, saturation).
+  truncation/dimensions/normalize; đo theo category và API latency. Parallel local
+  dense evidence: `AITeamVN/Vietnamese_Embedding` vs `bkai` bi-encoder.
+  Target (sau): so `bge-m3` và multilingual-e5 trên Profile B GPU/vLLM.
 - **Files:** `bench/markhand_web/embedding/`, `scripts/run_embedding_eval.py`,
-  `reports/embedding-evaluation.md`, `docs/adr/0004-interim-glm-cloud-embedding.md`.
+  `reports/embedding-evaluation.md`, `docs/adr/0004-interim-glm-cloud-embedding.md`,
+  `docs/adr/0005-vietnamese-embedding-model-quality.md`.
 - **Dependencies/blocks:** Corpus + spike + GLM credential; không còn bắt buộc
   target GPU để đóng interim. Cutover vLLM vẫn cần Profile B + approved model download.
 - **Acceptance (interim — đủ đóng P0-05 cho coding/POC/DEMO):** ≥2 cấu hình GLM

@@ -22,6 +22,7 @@ native, security/egress và migration strategy.
 | [0002](0002-version-aware-citations.md) | Proposed | Version-aware retrieval and citations |
 | [0003](0003-cross-document-conflict-lifecycle.md) | Proposed | Cross-document claim/conflict lifecycle |
 | [0004](0004-interim-glm-cloud-embedding.md) | Accepted | Interim GLM cloud embedding; target on-prem vLLM |
+| [0005](0005-vietnamese-embedding-model-quality.md) | Proposed | Local dense quality candidates for P0-05 |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.

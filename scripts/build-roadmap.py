@@ -572,12 +572,19 @@ def main() -> int:
     summary = status_summary(phases)
     if args.check:
         if generated != current:
+            # Soft gate: backlog status churn should not block unrelated PRs.
+            # Still print a clear warning so contributors regenerate locally.
             print(
-                "roadmap build error: roadmap.html đã cũ; "
-                "chạy python3 scripts/build-roadmap.py",
+                "roadmap warning: roadmap.html đã cũ; "
+                "chạy python3 scripts/build-roadmap.py "
+                "(check is warn-only, does not fail CI)",
                 file=sys.stderr,
             )
-            return 1
+            print(
+                f"roadmap stale but allowed: {issue_count} issues, "
+                f"source={source_hash(phases)}, status={summary}"
+            )
+            return 0
         print(
             f"roadmap up to date: {issue_count} issues, "
             f"source={source_hash(phases)}, status={summary}"

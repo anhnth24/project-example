@@ -1,0 +1,1220 @@
+{
+  "version": 1,
+  "issue": "P0-05",
+  "track": "quality-cpu-smoke",
+  "catalogPath": "bench/markhand_web/embedding/models.yaml",
+  "generatedAt": "2026-07-18T17:29:28.584328+00:00",
+  "git": {
+    "commit": "cf14d8f52290110540618aa9059642b45f8bfad1",
+    "dirty": false,
+    "dirtyPaths": []
+  },
+  "hardware": {
+    "cpu": {
+      "vendor": "GenuineIntel",
+      "model": "Intel(R) Xeon(R) Processor",
+      "cores": 8,
+      "threads": 8
+    },
+    "ramGb": 47.07,
+    "gpu": {
+      "model": "none",
+      "vramGb": 0,
+      "count": 0
+    },
+    "os": {
+      "distro": "Linux-6.12.94+-x86_64-with-glibc2.39",
+      "arch": "x86_64"
+    },
+    "role": "reduced-smoke-cpu"
+  },
+  "device": "cpu",
+  "chunkingVersion": "heading-chunks-2000-v1",
+  "payloadFormat": "{heading}\\n{text}",
+  "runsPerModel": 3,
+  "fixtureManifestSha256": "cf413fafabb136fe43d534b9a4a377a0dd4727613f30abe7176f70c5ed152da7",
+  "fixtureValidation": {
+    "manifestLockSha256": "cf413fafabb136fe43d534b9a4a377a0dd4727613f30abe7176f70c5ed152da7",
+    "checkedFiles": 32,
+    "queriesPath": "golden/queries.tsv",
+    "markdownFiles": 31
+  },
+  "chunkCount": 29,
+  "queryCount": 268,
+  "models": [
+    {
+      "modelId": "aiteamvn-vietnamese-embedding",
+      "role": "best-candidate",
+      "family": "bge-m3-vietnamese-ft",
+      "provider": "sentence-transformers",
+      "hubId": "AITeamVN/Vietnamese_Embedding",
+      "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+      "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+      "modelMutability": "immutable-sha",
+      "observedAt": "2026-07-18T17:29:18.601624+00:00",
+      "dimensions": 1024,
+      "dimensionsRequest": null,
+      "maxSeqLength": 2048,
+      "batchSize": 16,
+      "deviceResolved": "cpu",
+      "wordSegment": false,
+      "wordSegmenter": null,
+      "aggregate": {
+        "runs": 3,
+        "recallAt5": 0.92612,
+        "recallAt5Mean": 0.92612,
+        "recallAt10": 0.960784,
+        "hitAt5": 0.953782,
+        "mrr": 0.806749,
+        "ndcgAt10": 0.79918,
+        "ndcgAt10Mean": 0.79918,
+        "recallAt5Stdev": 0.0,
+        "rankingSha256Set": [
+          "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3"
+        ],
+        "independentLoads": true,
+        "gates": {
+          "G0-RET-RECALL-AT-5": {
+            "metric": 0.92612,
+            "threshold": 0.85,
+            "statistic": "min",
+            "meetsThreshold": true,
+            "pass": true
+          }
+        }
+      },
+      "gates": {
+        "G0-RET-RECALL-AT-5": {
+          "metric": 0.92612,
+          "threshold": 0.85,
+          "statistic": "min",
+          "meetsThreshold": true,
+          "pass": true
+        },
+        "G0-RET-BEST-MODEL-GAP": {
+          "metric": 0.0,
+          "threshold": 0.02,
+          "statistic": "max",
+          "meetsThreshold": true,
+          "pass": true,
+          "bestNdcgAt10": 0.79918,
+          "perRunGaps": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "runDetails": [
+        {
+          "modelId": "aiteamvn-vietnamese-embedding",
+          "role": "best-candidate",
+          "family": "bge-m3-vietnamese-ft",
+          "provider": "sentence-transformers",
+          "hubId": "AITeamVN/Vietnamese_Embedding",
+          "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+          "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+          "modelMutability": "immutable-sha",
+          "observedAt": "2026-07-18T17:29:05.123233+00:00",
+          "dimensions": 1024,
+          "dimensionsRequest": null,
+          "maxSeqLength": 2048,
+          "batchSize": 16,
+          "device": "cpu",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 1,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.92612,
+            "recallAt10": 0.960784,
+            "hitAt5": 0.953782,
+            "mrr": 0.806749,
+            "ndcgAt10": 0.79918
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.72419,
+              "ndcgAt10": 0.716154
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267242,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.875638
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.618599
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.625,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.803805
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.873333,
+              "ndcgAt10": 0.83079
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.953333,
+              "ndcgAt10": 0.974007
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.708333,
+              "hitAt5": 0.95,
+              "mrr": 0.780238,
+              "ndcgAt10": 0.757166
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.821676,
+              "ndcgAt10": 0.830171
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.894737,
+              "hitAt5": 0.894737,
+              "mrr": 0.605326,
+              "ndcgAt10": 0.657138
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.746032,
+              "ndcgAt10": 0.75393
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.754797
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.289272,
+              "ndcgAt10": 0.408303
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.85688
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.5,
+              "ndcgAt10": 0.693426
+            }
+          },
+          "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
+          "capacity": {
+            "device": "cpu",
+            "loadMs": 1560.65,
+            "embedChunksMs": 1078.54,
+            "embedQueriesMs": 2930.38,
+            "vectorsPerSecond": 74.085,
+            "vramGb": null,
+            "note": "quality-track; VRAM not measured on CPU smoke"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.92612,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        },
+        {
+          "modelId": "aiteamvn-vietnamese-embedding",
+          "role": "best-candidate",
+          "family": "bge-m3-vietnamese-ft",
+          "provider": "sentence-transformers",
+          "hubId": "AITeamVN/Vietnamese_Embedding",
+          "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+          "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+          "modelMutability": "immutable-sha",
+          "observedAt": "2026-07-18T17:29:12.897334+00:00",
+          "dimensions": 1024,
+          "dimensionsRequest": null,
+          "maxSeqLength": 2048,
+          "batchSize": 16,
+          "device": "cpu",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 2,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.92612,
+            "recallAt10": 0.960784,
+            "hitAt5": 0.953782,
+            "mrr": 0.806749,
+            "ndcgAt10": 0.79918
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.72419,
+              "ndcgAt10": 0.716154
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267242,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.875638
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.618599
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.625,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.803805
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.873333,
+              "ndcgAt10": 0.83079
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.953333,
+              "ndcgAt10": 0.974007
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.708333,
+              "hitAt5": 0.95,
+              "mrr": 0.780238,
+              "ndcgAt10": 0.757166
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.821676,
+              "ndcgAt10": 0.830171
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.894737,
+              "hitAt5": 0.894737,
+              "mrr": 0.605326,
+              "ndcgAt10": 0.657138
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.746032,
+              "ndcgAt10": 0.75393
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.754797
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.289272,
+              "ndcgAt10": 0.408303
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.85688
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.5,
+              "ndcgAt10": 0.693426
+            }
+          },
+          "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
+          "capacity": {
+            "device": "cpu",
+            "loadMs": 1795.17,
+            "embedChunksMs": 1086.12,
+            "embedQueriesMs": 2746.29,
+            "vectorsPerSecond": 77.497,
+            "vramGb": null,
+            "note": "quality-track; VRAM not measured on CPU smoke"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.92612,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        },
+        {
+          "modelId": "aiteamvn-vietnamese-embedding",
+          "role": "best-candidate",
+          "family": "bge-m3-vietnamese-ft",
+          "provider": "sentence-transformers",
+          "hubId": "AITeamVN/Vietnamese_Embedding",
+          "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+          "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+          "modelMutability": "immutable-sha",
+          "observedAt": "2026-07-18T17:29:18.601624+00:00",
+          "dimensions": 1024,
+          "dimensionsRequest": null,
+          "maxSeqLength": 2048,
+          "batchSize": 16,
+          "device": "cpu",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 3,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.92612,
+            "recallAt10": 0.960784,
+            "hitAt5": 0.953782,
+            "mrr": 0.806749,
+            "ndcgAt10": 0.79918
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.72419,
+              "ndcgAt10": 0.716154
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267242,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.875638
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.618599
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.625,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.803805
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.873333,
+              "ndcgAt10": 0.83079
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.953333,
+              "ndcgAt10": 0.974007
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.708333,
+              "hitAt5": 0.95,
+              "mrr": 0.780238,
+              "ndcgAt10": 0.757166
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.821676,
+              "ndcgAt10": 0.830171
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.894737,
+              "hitAt5": 0.894737,
+              "mrr": 0.605326,
+              "ndcgAt10": 0.657138
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.746032,
+              "ndcgAt10": 0.75393
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.754797
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.289272,
+              "ndcgAt10": 0.408303
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.85688
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.5,
+              "ndcgAt10": 0.693426
+            }
+          },
+          "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
+          "capacity": {
+            "device": "cpu",
+            "loadMs": 1594.36,
+            "embedChunksMs": 1054.14,
+            "embedQueriesMs": 2746.48,
+            "vectorsPerSecond": 78.145,
+            "vramGb": null,
+            "note": "quality-track; VRAM not measured on CPU smoke"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.92612,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "modelId": "bkai-vietnamese-bi-encoder",
+      "role": "min-candidate",
+      "family": "phobert-bi-encoder",
+      "provider": "sentence-transformers",
+      "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
+      "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+      "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+      "modelMutability": "immutable-sha",
+      "observedAt": "2026-07-18T17:29:27.076235+00:00",
+      "dimensions": 768,
+      "dimensionsRequest": null,
+      "maxSeqLength": 256,
+      "batchSize": 32,
+      "deviceResolved": "cpu",
+      "wordSegment": true,
+      "wordSegmenter": "pyvi",
+      "aggregate": {
+        "runs": 3,
+        "recallAt5": 0.796218,
+        "recallAt5Mean": 0.796218,
+        "recallAt10": 0.87465,
+        "hitAt5": 0.815126,
+        "mrr": 0.650795,
+        "ndcgAt10": 0.669962,
+        "ndcgAt10Mean": 0.669962,
+        "recallAt5Stdev": 0.0,
+        "rankingSha256Set": [
+          "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39"
+        ],
+        "independentLoads": true,
+        "gates": {
+          "G0-RET-RECALL-AT-5": {
+            "metric": 0.796218,
+            "threshold": 0.85,
+            "statistic": "min",
+            "meetsThreshold": false,
+            "pass": false
+          }
+        }
+      },
+      "gates": {
+        "G0-RET-RECALL-AT-5": {
+          "metric": 0.796218,
+          "threshold": 0.85,
+          "statistic": "min",
+          "meetsThreshold": false,
+          "pass": false
+        },
+        "G0-RET-BEST-MODEL-GAP": {
+          "metric": 0.129218,
+          "threshold": 0.02,
+          "statistic": "max",
+          "meetsThreshold": false,
+          "pass": false,
+          "bestNdcgAt10": 0.79918,
+          "perRunGaps": [
+            0.129218,
+            0.129218,
+            0.129218
+          ]
+        }
+      },
+      "runDetails": [
+        {
+          "modelId": "bkai-vietnamese-bi-encoder",
+          "role": "min-candidate",
+          "family": "phobert-bi-encoder",
+          "provider": "sentence-transformers",
+          "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
+          "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+          "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+          "modelMutability": "immutable-sha",
+          "observedAt": "2026-07-18T17:29:24.070899+00:00",
+          "dimensions": 768,
+          "dimensionsRequest": null,
+          "maxSeqLength": 256,
+          "batchSize": 32,
+          "device": "cpu",
+          "wordSegment": true,
+          "wordSegmenter": "pyvi",
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 1,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.796218,
+            "recallAt10": 0.87465,
+            "hitAt5": 0.815126,
+            "mrr": 0.650795,
+            "ndcgAt10": 0.669962
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.88,
+              "hitAt5": 0.88,
+              "mrr": 0.650303,
+              "ndcgAt10": 0.641958
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.57846
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.745575
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.520833,
+              "ndcgAt10": 0.5
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.773333,
+              "hitAt5": 0.773333,
+              "mrr": 0.583358,
+              "ndcgAt10": 0.60491
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.913333,
+              "ndcgAt10": 0.938461
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.725,
+              "hitAt5": 0.9,
+              "mrr": 0.812462,
+              "ndcgAt10": 0.766712
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.82,
+              "hitAt5": 0.82,
+              "mrr": 0.719948,
+              "ndcgAt10": 0.74129
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.578947,
+              "hitAt5": 0.578947,
+              "mrr": 0.294742,
+              "ndcgAt10": 0.38784
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.332265,
+              "ndcgAt10": 0.41931
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.881429
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.431818,
+              "ndcgAt10": 0.481921
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.97324
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
+          "capacity": {
+            "device": "cpu",
+            "loadMs": 357.62,
+            "embedChunksMs": 252.66,
+            "embedQueriesMs": 739.76,
+            "vectorsPerSecond": 299.269,
+            "vramGb": null,
+            "note": "quality-track; VRAM not measured on CPU smoke"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.796218,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": false
+            }
+          }
+        },
+        {
+          "modelId": "bkai-vietnamese-bi-encoder",
+          "role": "min-candidate",
+          "family": "phobert-bi-encoder",
+          "provider": "sentence-transformers",
+          "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
+          "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+          "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+          "modelMutability": "immutable-sha",
+          "observedAt": "2026-07-18T17:29:25.556682+00:00",
+          "dimensions": 768,
+          "dimensionsRequest": null,
+          "maxSeqLength": 256,
+          "batchSize": 32,
+          "device": "cpu",
+          "wordSegment": true,
+          "wordSegmenter": "pyvi",
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 2,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.796218,
+            "recallAt10": 0.87465,
+            "hitAt5": 0.815126,
+            "mrr": 0.650795,
+            "ndcgAt10": 0.669962
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.88,
+              "hitAt5": 0.88,
+              "mrr": 0.650303,
+              "ndcgAt10": 0.641958
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.57846
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.745575
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.520833,
+              "ndcgAt10": 0.5
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.773333,
+              "hitAt5": 0.773333,
+              "mrr": 0.583358,
+              "ndcgAt10": 0.60491
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.913333,
+              "ndcgAt10": 0.938461
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.725,
+              "hitAt5": 0.9,
+              "mrr": 0.812462,
+              "ndcgAt10": 0.766712
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.82,
+              "hitAt5": 0.82,
+              "mrr": 0.719948,
+              "ndcgAt10": 0.74129
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.578947,
+              "hitAt5": 0.578947,
+              "mrr": 0.294742,
+              "ndcgAt10": 0.38784
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.332265,
+              "ndcgAt10": 0.41931
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.881429
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.431818,
+              "ndcgAt10": 0.481921
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.97324
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
+          "capacity": {
+            "device": "cpu",
+            "loadMs": 340.06,
+            "embedChunksMs": 266.73,
+            "embedQueriesMs": 801.96,
+            "vectorsPerSecond": 277.911,
+            "vramGb": null,
+            "note": "quality-track; VRAM not measured on CPU smoke"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.796218,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": false
+            }
+          }
+        },
+        {
+          "modelId": "bkai-vietnamese-bi-encoder",
+          "role": "min-candidate",
+          "family": "phobert-bi-encoder",
+          "provider": "sentence-transformers",
+          "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
+          "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+          "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+          "modelMutability": "immutable-sha",
+          "observedAt": "2026-07-18T17:29:27.076235+00:00",
+          "dimensions": 768,
+          "dimensionsRequest": null,
+          "maxSeqLength": 256,
+          "batchSize": 32,
+          "device": "cpu",
+          "wordSegment": true,
+          "wordSegmenter": "pyvi",
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 3,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.796218,
+            "recallAt10": 0.87465,
+            "hitAt5": 0.815126,
+            "mrr": 0.650795,
+            "ndcgAt10": 0.669962
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.88,
+              "hitAt5": 0.88,
+              "mrr": 0.650303,
+              "ndcgAt10": 0.641958
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.57846
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.745575
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.520833,
+              "ndcgAt10": 0.5
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.773333,
+              "hitAt5": 0.773333,
+              "mrr": 0.583358,
+              "ndcgAt10": 0.60491
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.913333,
+              "ndcgAt10": 0.938461
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.725,
+              "hitAt5": 0.9,
+              "mrr": 0.812462,
+              "ndcgAt10": 0.766712
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.82,
+              "hitAt5": 0.82,
+              "mrr": 0.719948,
+              "ndcgAt10": 0.74129
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.578947,
+              "hitAt5": 0.578947,
+              "mrr": 0.294742,
+              "ndcgAt10": 0.38784
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.332265,
+              "ndcgAt10": 0.41931
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.881429
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.431818,
+              "ndcgAt10": 0.481921
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.97324
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
+          "capacity": {
+            "device": "cpu",
+            "loadMs": 362.44,
+            "embedChunksMs": 242.7,
+            "embedQueriesMs": 791.1,
+            "vectorsPerSecond": 287.292,
+            "vramGb": null,
+            "note": "quality-track; VRAM not measured on CPU smoke"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.796218,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": false
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "immutableConfig": {
+    "chunkingVersion": "heading-chunks-2000-v1",
+    "normalize": "l2",
+    "ranking": "max-pool-chunk-cosine -> document",
+    "payloadFormat": "{heading}\\n{text}",
+    "gates": {
+      "G0-RET-RECALL-AT-5": {
+        "threshold": 0.85,
+        "statistic": "min"
+      },
+      "G0-RET-BEST-MODEL-GAP": {
+        "threshold": 0.02,
+        "statistic": "max"
+      }
+    },
+    "models": [
+      {
+        "id": "aiteamvn-vietnamese-embedding",
+        "hubId": "AITeamVN/Vietnamese_Embedding",
+        "provider": "sentence-transformers",
+        "revision": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+        "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+        "modelMutability": "immutable-sha",
+        "observedAt": "2026-07-18T17:29:18.601624+00:00",
+        "dimensions": 1024,
+        "maxSeqLength": 2048,
+        "batchSize": 16,
+        "device": "cpu",
+        "wordSegment": false,
+        "wordSegmenter": null,
+        "normalize": "l2"
+      },
+      {
+        "id": "bkai-vietnamese-bi-encoder",
+        "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
+        "provider": "sentence-transformers",
+        "revision": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+        "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+        "modelMutability": "immutable-sha",
+        "observedAt": "2026-07-18T17:29:27.076235+00:00",
+        "dimensions": 768,
+        "maxSeqLength": 256,
+        "batchSize": 32,
+        "device": "cpu",
+        "wordSegment": true,
+        "wordSegmenter": "pyvi",
+        "normalize": "l2"
+      }
+    ]
+  },
+  "verdict": {
+    "gatingProtocol": true,
+    "familyCount": 2,
+    "anyRecallGatePass": true,
+    "anyMeetsRecallThreshold": true,
+    "selectedPassesBothGates": true,
+    "selectedDraft": "AITeamVN/Vietnamese_Embedding",
+    "bestObservedModel": "AITeamVN/Vietnamese_Embedding",
+    "p0_05_closed": false,
+    "reasons": [
+      "Quality track executed with independent model loads per run.",
+      "Gate thresholds/statistics loaded from catalog YAML.",
+      "Selection requires both Recall@5 and best-model-gap gates under gating protocol.",
+      "Per-query rankings retained in run-*.json with rankingSha256 fingerprints.",
+      "Golden markdown/queries validated against manifest.lock.json.",
+      "Capacity evidence (VRAM, saturation, queue depth, target GPU) still required.",
+      "ADR remains Proposed until capacity + approver sign-off.",
+      "Restricted corpus must not leave to cloud providers; local/self-host only."
+    ]
+  }
+}
