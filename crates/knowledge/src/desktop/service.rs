@@ -166,6 +166,10 @@ fn rebuild_once(
         || hnsw::clear(&paths.ann_root),
     )?;
     let mut warnings = Vec::new();
+    if stored.replaced_incompatible_index {
+        warnings
+            .push("Embedding signature thay đổi; đã rebuild knowledge index tương thích.".into());
+    }
     if stored.indexed > 0
         || !hnsw::is_available(
             &paths.ann_root,

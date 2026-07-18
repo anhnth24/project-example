@@ -91,6 +91,43 @@ def validate(root: Path, *, cargo_dependencies=direct_dependencies) -> list[str]
                     f"crates/knowledge desktop dependency must be optional: {dependency}"
                 )
 
+    desktop_knowledge = root / "app/src-tauri/src/knowledge.rs"
+    if desktop_knowledge.is_file():
+        content = desktop_knowledge.read_text(encoding="utf-8")
+        for forbidden in (
+            "rusqlite::",
+            "hnsw_rs::",
+            "fn cosine(",
+            "fn hybrid_rerank_score(",
+            "fn extractive_answer(",
+            "fn answer_is_grounded(",
+            "CREATE TABLE",
+            "chunks_fts MATCH",
+        ):
+            if forbidden in content:
+                failures.append(
+                    f"desktop knowledge adapter contains extracted implementation: {forbidden}"
+                )
+        for required in (
+            "service::rebuild_index",
+            "service::hybrid_search",
+            "service::index_stats",
+            "service::grounded_answer",
+        ):
+            if required not in content:
+                failures.append(f"desktop knowledge adapter does not delegate {required}")
+        if (root / "app/src-tauri/src/vector_index.rs").exists():
+            failures.append("legacy desktop vector_index.rs must remain extracted")
+
+    knowledge_service = root / "crates/knowledge/src/desktop/service.rs"
+    if knowledge_service.is_file():
+        content = knowledge_service.read_text(encoding="utf-8")
+        for forbidden in ("tauri::", "AppState", "data_root", "resolve_within", "Settings"):
+            if forbidden in content:
+                failures.append(
+                    f"knowledge desktop service imports app boundary: {forbidden}"
+                )
+
     server_manifest = root / "crates/server/Cargo.toml"
     if server_manifest.is_file() and "fileconv-desktop" in cargo_dependencies(server_manifest):
         failures.append("crates/server không được depend ngược vào fileconv-desktop")
@@ -156,6 +193,17 @@ class BoundaryCheckTests(unittest.TestCase):
             )
             failures = validate(root, cargo_dependencies=lambda _: {"rusqlite"})
             self.assertTrue(any("must be optional" in failure for failure in failures))
+
+    def test_rejects_fat_desktop_knowledge_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Cargo.toml").write_text("[workspace]\n")
+            adapter = root / "app/src-tauri/src/knowledge.rs"
+            adapter.parent.mkdir(parents=True)
+            adapter.write_text("fn cosine() {} // rusqlite::Connection\n")
+            failures = validate(root, cargo_dependencies=lambda _: set())
+            self.assertTrue(any("extracted implementation" in failure for failure in failures))
+            self.assertTrue(any("does not delegate" in failure for failure in failures))
 
 
 def main() -> int:
