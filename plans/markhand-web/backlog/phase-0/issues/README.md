@@ -41,13 +41,16 @@ P1A-01 ──────────> P0-03
 - **Status:** Blocked bởi P0-01.
 - **Objective:** Dataset tái lập cho conversion, retrieval, citation và upload attack.
 - **Plan:** Thêm mọi format; 200–500 query với expected document/source span/
-  relevance/no-answer; sample spoof/bomb/malformed/traversal/prompt injection; pin
-  checksum và provenance/license.
+  relevance/no-answer; multi-document và immutable multi-version citations
+  (`current`/`as_of`/`compare`/`history`); sample spoof/bomb/malformed/traversal/
+  prompt injection; pin checksum và provenance/license.
 - **Files:** `bench/markhand_web/golden/`, `adversarial/`,
   `manifest.lock.json`, `scripts/validate_corpus.py`.
 - **Dependencies/blocks:** P0-01; fixture phải redistributable.
-- **Acceptance:** Coverage đủ category; source span ổn định; validator bắt checksum,
-  duplicate ID, invalid span và missing license; mỗi attack có expected disposition.
+- **Acceptance:** Coverage đủ category; source/version span ổn định; current fact không
+  trỏ version cũ; compare/history cite đủ old+new và delta; validator bắt checksum,
+  duplicate ID, invalid span/version lineage và missing license; mỗi attack có expected
+  disposition.
 - **Tests/evidence:** Clean-checkout reproducibility; dual review + adjudication.
 - **Security/migration:** Synthetic/de-identified; bomb fixture chỉ chạy trong limits.
 - **Out of scope:** Customer data và expected chunk ID trước khi chốt chunking.
@@ -110,12 +113,14 @@ P1A-01 ──────────> P0-03
 - **Status:** Blocked bởi P0-03, P0-05.
 - **Objective:** Chốt chunking/hybrid parameters và canonical signature.
 - **Plan:** So chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited
-  signature gồm model/revision/dim/normalize/chunk/text-normalization version.
+  signature gồm model/revision/dim/normalize/chunk/text-normalization version;
+  version-aware identity và query modes current/as-of/compare/history.
 - **Files:** `bench/markhand_web/retrieval/`, `expected-chunks.tsv`,
   `reports/retrieval-evaluation.md`, ADR index signature.
 - **Dependencies/blocks:** Desktop baseline + embedding result.
 - **Acceptance:** So sánh identical candidates; source span vẫn resolve; signature
-  test vector ổn định; chunk ID có version.
+  test vector ổn định; chunk ID có document-version; temporal/current accuracy và
+  version-citation precision/recall đạt gate.
 - **Tests/evidence:** Recall/MRR/nDCG/citation/no-answer + variance; cross-run signature.
 - **Security/migration:** Signature đổi tạo index generation mới, không trộn vector.
 - **Out of scope:** Server adapters/ACL.

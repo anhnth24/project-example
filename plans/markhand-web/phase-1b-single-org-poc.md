@@ -80,7 +80,10 @@ indexed/deleted → tombstoned → purged
 ```
 
 Version là immutable; original, Markdown và artifact dùng opaque key có
-org/document-version identity.
+org/document-version identity. `documents.current_version_id` chỉ trỏ phiên bản đã
+publish và đang hiệu lực, không mặc định là upload/draft mới nhất. Version giữ
+`parent_version_id`, `version_number`, content hash, effective interval và deterministic
+change summary.
 
 ## P1B.3 — Auth/session POC
 
@@ -187,21 +190,28 @@ Index:
 - chunk heading-aware từ `fileconv-core`;
 - batch embedding qua vLLM;
 - pin index signature;
+- chunk/point identity luôn chứa immutable `version_id`; Qdrant payload có logical
+  document, version number, effective time và `is_current`;
 - ghi chunk/FTS vào PG và vector vào Qdrant idempotently.
 
 Query:
 
-1. Resolve org và allowed collections.
+1. Resolve org, allowed collections và version mode: current mặc định, hoặc
+   `as_of`/`compare`/`history` khi caller có quyền.
 2. Embed query.
 3. Chạy Qdrant và PG FTS song song.
 4. Merge/rerank bằng `fileconv-knowledge`.
 5. Hydrate text từ PG, kiểm lại state/ACL.
-6. Tạo citation.
+6. Tạo citation pin logical document + immutable version/hash/span.
 7. GLM trả lời chỉ trên retrieved passages.
 8. Provider lỗi → extractive answer.
 
 Citation endpoint luôn authorize lại. Prompt injection trong tài liệu không được
 gọi tool, thay system policy hoặc mở rộng scope.
+
+Current answer không được cite version cũ trừ khi kèm version note. Câu hỏi thay đổi/
+lịch sử phải cite cả old+new và trả delta, effective dates, current version; không trộn
+claim giữa version mà thiếu nhãn.
 
 ## P1B.9 — API và SSE
 
@@ -215,6 +225,7 @@ API tối thiểu:
 - `POST /api/v1/search`;
 - `POST /api/v1/ask`;
 - `POST /api/v1/ask/stream`;
+- document version list/diff và citation resolve theo `version_id`;
 - health/readiness.
 
 SSE event có version và sequence; reconnect dùng last-event ID hoặc snapshot +

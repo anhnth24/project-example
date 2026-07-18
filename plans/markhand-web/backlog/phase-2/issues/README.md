@@ -96,10 +96,12 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-10 — Streaming search/Q&A/citations
 
-- **Plan/files:** Search/ask panel, index readiness, stream reducer, fallback warnings,
-  citation deep-link, abort scope change.
+- **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
+  readiness, stream reducer, fallback + version-change notes, citation deep-link with
+  version badge/effective date, abort scope change.
 - **Depends:** P2-04…07 + backend ACL. **Acceptance/tests:** `aria-live`; current source
-  citation; sequence/fallback/no-answer/revoke/switch-mid-answer tests.
+  citation; multi-document citations; old/new amount example labels v1/v2 and delta;
+  as-of/history/deep-link/sequence/fallback/no-answer/revoke/switch-mid-answer tests.
 - **Security:** Sanitized Markdown/server route IDs. **Out:** intelligence/conversation memory.
 
 ## P2-11 — Member/role admin
