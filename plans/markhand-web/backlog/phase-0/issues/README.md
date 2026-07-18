@@ -73,8 +73,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-04 — Spike infrastructure tái lập
 
-- **Status:** Blocked bởi P0-01; chỉ ghi research note ngoài issue trước khi unblock,
-  không bắt đầu implementation.
+- **Status:** Review — isolated CPU smoke, three-store lifecycle and bound evidence
+  passed; Profile B GPU/IOPS target run remains external.
 - **Objective:** Stack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.
 - **Plan:** Tái dùng compose/services/scripts base từ F-08; thêm benchmark-specific
   override với isolated volumes/data, vLLM/GPU profile, workload sizing, image digest
