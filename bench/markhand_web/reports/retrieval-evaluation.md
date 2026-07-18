@@ -1,12 +1,12 @@
 # P0-06 retrieval evaluation
 
-- Generated: `2026-07-18T18:35:53.499630+00:00`
-- Git commit: `ce56f674cf28b75dac8db8a94a16dcade934d95c`
+- Generated: `2026-07-18T18:49:07.671941+00:00`
+- Git commit: `6b600bf583e17d8f931a84a27b84b8cfc265585b`
 - Dirty: `False`
 - Chunking: `heading-chunks-2000-v1`
 - Embedding runtime: `sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33`
 - Runtime path: `local-neural`
-- Index signature: `b9550f095d036343f719a1deca99c8c2bcd52e7cee7156ba900ddf789866c146`
+- Index signature: `d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835`
 - RRF vectorWeight: `0.55` (tuned=False)
 
 ## Legs (document-level)

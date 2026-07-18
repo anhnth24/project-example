@@ -2,17 +2,21 @@
   "version": 2,
   "issue": "P0-06",
   "track": "retrieval-neural-hybrid",
-  "generatedAt": "2026-07-18T18:35:53.499630+00:00",
+  "generatedAt": "2026-07-18T18:49:07.671941+00:00",
   "git": {
-    "commit": "ce56f674cf28b75dac8db8a94a16dcade934d95c",
+    "commit": "6b600bf583e17d8f931a84a27b84b8cfc265585b",
     "dirty": false,
     "dirtyPaths": []
   },
   "chunkingVersion": "heading-chunks-2000-v1",
-  "indexSignature": "b9550f095d036343f719a1deca99c8c2bcd52e7cee7156ba900ddf789866c146",
+  "indexSignature": "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835",
   "runtimePath": "local-neural",
   "embeddingRuntime": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
+  "embeddingFamily": "sentence-transformers/AITeamVN/Vietnamese_Embedding/local-cpu",
+  "embeddingRevision": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+  "citationTopK": 10,
   "dimensions": 1024,
+  "environmentHardwareMatch": true,
   "rrf": {
     "k": 60.0,
     "rerankScale": 30.0,
@@ -34,7 +38,7 @@
     "embeddingDevice": "cpu"
   },
   "fingerprint": {
-    "gitCommit": "ce56f674cf28b75dac8db8a94a16dcade934d95c",
+    "gitCommit": "6b600bf583e17d8f931a84a27b84b8cfc265585b",
     "workloadProfileId": "on-prem-reference-v1",
     "embeddingProvider": "sentence-transformers",
     "embeddingModel": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
@@ -116,7 +120,8 @@
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
-      "environmentMatch": true
+      "environmentMatch": true,
+      "hardwareMatch": true
     },
     "G0-RET-TEMPORAL-ACCURACY": {
       "metric": 1.0,
@@ -126,7 +131,8 @@
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
-      "environmentMatch": true
+      "environmentMatch": true,
+      "hardwareMatch": true
     },
     "G0-RET-CHANGE-ACCURACY": {
       "metric": 1.0,
@@ -136,7 +142,8 @@
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
-      "environmentMatch": true
+      "environmentMatch": true,
+      "hardwareMatch": true
     },
     "G0-RET-VERSION-CITATION-PRECISION": {
       "metric": 1.0,
@@ -146,7 +153,8 @@
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
-      "environmentMatch": true
+      "environmentMatch": true,
+      "hardwareMatch": true
     },
     "G0-RET-VERSION-CITATION-RECALL": {
       "metric": 1.0,
@@ -156,7 +164,8 @@
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
-      "environmentMatch": true
+      "environmentMatch": true,
+      "hardwareMatch": true
     }
   },
   "conflictGates": {
