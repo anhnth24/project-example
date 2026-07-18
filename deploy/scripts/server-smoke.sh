@@ -15,6 +15,8 @@ set -a
 source "$ENV_FILE"
 set +a
 
+"$ROOT/deploy/scripts/bootstrap-server-role.sh"
+
 log_file="$(mktemp)"
 cargo run -p fileconv-server >"$log_file" 2>&1 &
 server_pid=$!
