@@ -24,7 +24,6 @@ mod knowledge;
 #[cfg(test)]
 mod knowledge_contract;
 mod projects;
-mod vector_index;
 mod watch;
 
 // ───────────────────────────── Kiểu dữ liệu ─────────────────────────────

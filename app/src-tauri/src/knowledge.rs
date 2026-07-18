@@ -1,26 +1,19 @@
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use std::collections::HashSet;
+
 use fileconv_core::llm::EmbeddingConfig;
-use fileconv_knowledge::ask::{
-    extractive_answer, grounded_user_prompt, retrieval_context, valid_citation_ids,
-    GROUNDED_SYSTEM_PROMPT,
-};
-use fileconv_knowledge::citation::{
-    extract_snippet as snippet, validate_grounded_answer as answer_is_grounded,
-};
-use fileconv_knowledge::desktop::sqlite::{SqliteKnowledgeStore, StoredChunk};
+use fileconv_knowledge::ask::AnswerMode;
+use fileconv_knowledge::desktop::service::{self, DesktopEmbeddingPlan, KnowledgePaths};
+#[cfg(test)]
 use fileconv_knowledge::embedding::{
-    local_vector as shared_local_vector, EmbeddingPlan as SharedEmbeddingPlan, ProviderDeployment,
-    LOCAL_EMBEDDING_MODE, LOCAL_VECTOR_DIMENSIONS, PROVIDER_EMBEDDING_MODE,
-};
-use fileconv_knowledge::query::{fts5_prefix_query, normalized_tokens};
-use fileconv_knowledge::rank::{
-    cosine_similarity as cosine, hybrid_rerank_score, sort_hybrid_hits,
+    local_vector as shared_local_vector, LOCAL_EMBEDDING_MODE, LOCAL_VECTOR_DIMENSIONS,
+    PROVIDER_EMBEDDING_MODE,
 };
 pub use fileconv_knowledge::types::{
     GroundedAnswer, HybridAskRequest, HybridSearchHit, HybridSearchRequest, HybridSearchResponse,
-    IndexBuildResult, IndexMetadata, IndexRequest, IndexStats, SourceAnchor,
+    IndexBuildResult, IndexRequest, IndexStats,
 };
 use tauri::State;
 
@@ -29,8 +22,7 @@ use super::{data_root, es, resolve_within, AppState};
 #[derive(Debug, Clone)]
 struct EmbeddingPlan {
     config: Option<EmbeddingConfig>,
-    metadata: IndexMetadata,
-    shared: Option<SharedEmbeddingPlan>,
+    shared: DesktopEmbeddingPlan,
 }
 
 fn index_path(root: &Path) -> Result<PathBuf, String> {
@@ -38,6 +30,11 @@ fn index_path(root: &Path) -> Result<PathBuf, String> {
     Ok(markhand.join("knowledge.sqlite"))
 }
 
+fn knowledge_paths(root: &Path) -> Result<KnowledgePaths, String> {
+    Ok(KnowledgePaths::new(index_path(root)?, root))
+}
+
+#[cfg(test)]
 fn local_vector(text: &str) -> Vec<f32> {
     shared_local_vector(text).into_values()
 }
@@ -51,128 +48,23 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
         Some(config) => {
             let provider = provider_name(config.provider);
             let model = config.model.clone();
-            let deployment = ProviderDeployment::from_base_url(config.base_url.as_deref())
-                .or_else(|_| ProviderDeployment::from_base_url(None))
-                .expect("default deployment identity is valid");
-            let shared = SharedEmbeddingPlan::provider(
+            let shared = DesktopEmbeddingPlan::provider(
                 provider.clone(),
                 model.clone(),
-                model.clone(),
-                deployment,
+                config.base_url.as_deref(),
                 config.dimensions,
             )
             .expect("validated desktop embedding configuration");
-            let signature = shared.provisional_signature();
             EmbeddingPlan {
-                metadata: IndexMetadata {
-                    mode: PROVIDER_EMBEDDING_MODE.into(),
-                    provider,
-                    model,
-                    dimensions: config.dimensions.unwrap_or_default(),
-                    signature,
-                },
                 config: Some(config),
-                shared: Some(shared),
+                shared,
             }
         }
         None => EmbeddingPlan {
             config: None,
-            metadata: IndexMetadata {
-                mode: LOCAL_EMBEDDING_MODE.into(),
-                provider: "local".into(),
-                model: LOCAL_EMBEDDING_MODE.into(),
-                dimensions: LOCAL_VECTOR_DIMENSIONS,
-                signature: LOCAL_EMBEDDING_MODE.into(),
-            },
-            // Existing desktop indexes retain their legacy signature. New server
-            // consumers use the durable signature exposed by the shared plan.
-            shared: None,
+            shared: DesktopEmbeddingPlan::local(),
         },
     }
-}
-
-fn finalize_provider_signature(plan: &mut EmbeddingPlan) -> Result<(), String> {
-    if let Some(shared) = plan.shared.as_ref() {
-        plan.metadata.signature = shared
-            .signature(plan.metadata.dimensions)
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn provider_config_matches(config: &EmbeddingConfig, metadata: &IndexMetadata) -> bool {
-    let mut plan = embedding_plan(Some(config.clone()));
-    if plan.metadata.dimensions == 0 && metadata.dimensions > 0 {
-        plan.metadata.dimensions = metadata.dimensions;
-    }
-    (plan.metadata.dimensions == 0 || finalize_provider_signature(&mut plan).is_ok())
-        && plan.metadata.signature == metadata.signature
-}
-
-fn index_documents_with_plan(
-    root: &Path,
-    source_rels: &[String],
-    plan: EmbeddingPlan,
-) -> fileconv_knowledge::Result<IndexBuildResult> {
-    let documents = super::intelligence::load_documents(root, source_rels)
-        .map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)?;
-    let path = index_path(root).map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)?;
-    let mut store = SqliteKnowledgeStore::open(path)?;
-    let config = plan.config;
-    let result = store.index_documents(
-        &documents,
-        plan.metadata,
-        plan.shared.as_ref(),
-        |inputs| {
-            if let Some(config) = config.as_ref() {
-                fileconv_core::llm::embed_batch(config, inputs)
-                    .map_err(|_| fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
-            } else {
-                Ok(inputs.iter().map(|input| local_vector(input)).collect())
-            }
-        },
-        || {
-            super::vector_index::clear(root)
-                .map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)
-        },
-    )?;
-    let mut warnings = Vec::new();
-    if result.indexed > 0
-        || !super::vector_index::is_available(
-            root,
-            &result.metadata.signature,
-            result.metadata.dimensions,
-        )
-    {
-        match store
-            .load_vector_points(result.metadata.dimensions)
-            .map_err(|error| error.to_string())
-            .and_then(|points| {
-                super::vector_index::rebuild(
-                    root,
-                    &result.metadata.signature,
-                    result.metadata.dimensions,
-                    &points,
-                )
-                .map(|_| ())
-            }) {
-            Ok(()) => {}
-            Err(error) => warnings.push(format!(
-                "HNSW cache build lỗi ({error}); search sẽ dùng exact cosine."
-            )),
-        }
-    }
-    Ok(IndexBuildResult {
-        documents: result.documents,
-        chunks: result.chunks,
-        indexed: result.indexed,
-        skipped: result.skipped,
-        embedding_mode: result.metadata.mode,
-        embedding_provider: result.metadata.provider,
-        embedding_model: result.metadata.model,
-        vector_dimensions: result.metadata.dimensions,
-        warnings,
-    })
 }
 
 fn index_documents_inner(
@@ -181,21 +73,19 @@ fn index_documents_inner(
     config: Option<EmbeddingConfig>,
     fallback_local: bool,
 ) -> Result<IndexBuildResult, String> {
-    let provider_requested = config.is_some();
-    match index_documents_with_plan(root, source_rels, embedding_plan(config)) {
-        Ok(result) => Ok(result),
-        Err(fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
-            if provider_requested && fallback_local =>
-        {
-            let mut result = index_documents_with_plan(root, source_rels, embedding_plan(None))
-                .map_err(|error| error.to_string())?;
-            result.warnings.push(
-                "embedding provider lỗi; đã rebuild toàn bộ scope bằng local hash offline.".into(),
-            );
-            Ok(result)
-        }
-        Err(error) => Err(error.to_string()),
-    }
+    let documents = super::intelligence::load_documents(root, source_rels)?;
+    let paths = knowledge_paths(root)?;
+    let plan = embedding_plan(config.clone());
+    service::rebuild_index(&paths, &documents, &plan.shared, fallback_local, |inputs| {
+        config
+            .as_ref()
+            .ok_or(fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
+            .and_then(|config| {
+                fileconv_core::llm::embed_batch(config, inputs)
+                    .map_err(|_| fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
+            })
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn hybrid_search_inner(
@@ -206,158 +96,41 @@ fn hybrid_search_inner(
     config: Option<EmbeddingConfig>,
     fallback_local: bool,
 ) -> Result<HybridSearchResponse, String> {
-    if query.trim().is_empty() {
-        return Ok(HybridSearchResponse {
-            hits: Vec::new(),
-            warnings: Vec::new(),
-            embedding_mode: LOCAL_EMBEDDING_MODE.into(),
-        });
-    }
-    if !source_rels.is_empty() {
-        index_documents_inner(root, source_rels, config.clone(), fallback_local)?;
-    }
-    let store = SqliteKnowledgeStore::open(index_path(root)?).map_err(|error| error.to_string())?;
-    let metadata = store.metadata().map_err(|error| error.to_string())?;
-    let scope: HashSet<String> = source_rels.iter().cloned().collect();
-    let query_tokens = normalized_tokens(query);
-    let fts = fts5_prefix_query(query);
-    let lexical_rank = store
-        .lexical_ranks(&fts, &scope, 250)
-        .map_err(|error| error.to_string())?;
-    let chunks = store
-        .load_chunks(&scope, metadata.dimensions)
-        .map_err(|error| error.to_string())?;
-    let mut warnings = Vec::new();
-    let query_vector = if metadata.mode == PROVIDER_EMBEDDING_MODE {
-        match config {
-            Some(config) if provider_config_matches(&config, &metadata) => {
-                match fileconv_core::llm::embed_query(&config, query) {
-                    Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
-                    Ok(vector) => {
-                        warnings.push(format!(
-                            "Query embedding {}D không khớp index {}D; chỉ dùng FTS.",
-                            vector.len(),
-                            metadata.dimensions
-                        ));
-                        None
-                    }
-                    Err(_) => {
-                        warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".to_string());
-                        None
-                    }
-                }
-            }
-            _ => {
-                warnings.push(
-                    "Cấu hình embedding không khớp index; hãy rebuild. Tạm chỉ dùng FTS.".into(),
-                );
-                None
-            }
-        }
-    } else {
-        Some(local_vector(query))
-    };
-    let scoped_ids: HashSet<&str> = chunks.iter().map(|chunk| chunk.id.as_str()).collect();
-    let mut vector_order: Vec<(String, f32)> = if let Some(query_vector) = query_vector.as_ref() {
-        if chunks.len() > 1_000 {
-            match super::vector_index::search(
-                root,
-                &metadata.signature,
-                metadata.dimensions,
-                query_vector,
-                (chunks.len() * 4).clamp(500, 5_000),
-            ) {
-                Ok(candidates) => {
-                    let scoped: Vec<_> = candidates
-                        .into_iter()
-                        .filter(|(id, _)| scoped_ids.contains(id.as_str()))
-                        .collect();
-                    if scoped.len() >= 20.min(chunks.len()) {
-                        scoped
-                    } else {
-                        warnings.push(
-                            "HNSW trả quá ít candidate trong scope; dùng exact cosine.".into(),
-                        );
-                        chunks
-                            .iter()
-                            .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
-                            .collect()
-                    }
-                }
-                Err(error) => {
-                    warnings.push(format!("HNSW chưa dùng được ({error}); dùng exact cosine."));
-                    chunks
-                        .iter()
-                        .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
-                        .collect()
-                }
-            }
-        } else {
-            chunks
-                .iter()
-                .map(|chunk| (chunk.id.clone(), cosine(query_vector, &chunk.vector)))
-                .collect()
-        }
-    } else {
+    let documents = if source_rels.is_empty() {
         Vec::new()
+    } else {
+        super::intelligence::load_documents(root, source_rels)?
     };
-    vector_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    let vector_rank: HashMap<String, (usize, f32)> = vector_order
-        .into_iter()
-        .take(500)
-        .enumerate()
-        .map(|(rank, (id, score))| (id, (rank, score)))
-        .collect();
-
-    let by_id: HashMap<&str, &StoredChunk> = chunks
-        .iter()
-        .map(|chunk| (chunk.id.as_str(), chunk))
-        .collect();
-    let candidate_ids: HashSet<String> = lexical_rank
-        .keys()
-        .chain(vector_rank.keys())
-        .cloned()
-        .collect();
-    let mut results = Vec::new();
-    for id in candidate_ids {
-        let Some(chunk) = by_id.get(id.as_str()) else {
-            continue;
-        };
-        let (lex_rank, lex_score) = lexical_rank.get(&id).copied().unwrap_or((usize::MAX, 0.0));
-        let (vec_rank, vec_score) = vector_rank.get(&id).copied().unwrap_or((usize::MAX, 0.0));
-        let rerank_score = hybrid_rerank_score(
-            (lex_rank != usize::MAX).then_some(lex_rank),
-            (vec_rank != usize::MAX).then_some(vec_rank),
-            vec_score,
-            &query_tokens,
-            &chunk.heading,
-            &chunk.body,
-        );
-        results.push(HybridSearchHit {
-            chunk_id: chunk.id.clone(),
-            source_rel: chunk.source_rel.clone(),
-            md_rel: chunk.md_rel.clone(),
-            heading: chunk.heading.clone(),
-            snippet: snippet(&chunk.body, &query_tokens),
-            lexical_score: lex_score,
-            vector_score: vec_score,
-            rerank_score,
-            anchor: SourceAnchor {
-                page: chunk.page,
-                slide: chunk.slide,
-                sheet: chunk.sheet.clone(),
-                start: chunk.start,
-                end: chunk.end,
-            },
-        });
-    }
-    sort_hybrid_hits(&mut results);
-    results.truncate(limit.max(1));
-    Ok(HybridSearchResponse {
-        hits: results,
-        warnings,
-        embedding_mode: metadata.mode,
-    })
+    let paths = knowledge_paths(root)?;
+    let plan = embedding_plan(config.clone());
+    service::hybrid_search(
+        &paths,
+        &documents,
+        source_rels,
+        query,
+        limit,
+        &plan.shared,
+        fallback_local,
+        |inputs| {
+            config
+                .as_ref()
+                .ok_or(fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
+                .and_then(|config| {
+                    fileconv_core::llm::embed_batch(config, inputs)
+                        .map_err(|_| fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
+                })
+        },
+        |query| {
+            config
+                .as_ref()
+                .ok_or(fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
+                .and_then(|config| {
+                    fileconv_core::llm::embed_query(config, query)
+                        .map_err(|_| fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
+                })
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -393,27 +166,7 @@ pub async fn rebuild_knowledge_index(
 #[tauri::command]
 pub fn knowledge_index_stats(state: State<AppState>) -> Result<IndexStats, String> {
     let root = data_root(&state);
-    let store =
-        SqliteKnowledgeStore::open(index_path(&root)?).map_err(|error| error.to_string())?;
-    let documents = store.document_count().map_err(|error| error.to_string())?;
-    let chunks = store.chunk_count().map_err(|error| error.to_string())?;
-    let database_bytes = store.database_bytes();
-    let metadata = store.metadata().map_err(|error| error.to_string())?;
-    Ok(IndexStats {
-        documents,
-        chunks,
-        database_bytes,
-        vector_dimensions: metadata.dimensions,
-        embedding_mode: metadata.mode,
-        embedding_provider: metadata.provider,
-        embedding_model: metadata.model,
-        ann_available: super::vector_index::is_available(
-            &root,
-            &metadata.signature,
-            metadata.dimensions,
-        ),
-        ann_threshold: 1_000,
-    })
+    service::index_stats(&knowledge_paths(&root)?).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -462,108 +215,44 @@ fn hybrid_ask_inner(
         &req.source_rels,
         &req.question,
         req.top_k.unwrap_or(8),
-        embedding_config,
+        embedding_config.clone(),
         embedding_fallback_local,
     )?;
-    let hits = search.hits;
-    let mut retrieval_warnings = search.warnings;
-    if let Some(warning) = embedding_warning {
-        retrieval_warnings.push(format!(
-            "Cấu hình embedding chưa dùng được ({warning}); đã dùng local hash."
-        ));
-    }
-    let fallback = extractive_answer(&req.question, &hits);
-    if !req.use_llm.unwrap_or(false) {
-        return Ok(GroundedAnswer {
-            answer: fallback,
-            citations: hits,
-            mode: "offline_extractive".into(),
-            grounded: true,
-            warnings: retrieval_warnings,
-        });
-    }
-    let Some(config) = llm_config else {
-        let warning = config_warning
-            .map(|error| {
-                format!("Cấu hình LLM chưa dùng được ({error}); đã fallback extractive local.")
-            })
-            .unwrap_or_else(|| {
-                "Chưa cấu hình LLM provider; đã dùng câu trả lời extractive local.".into()
-            });
-        return Ok(GroundedAnswer {
-            answer: fallback,
-            citations: hits,
-            mode: "fallback_extractive".into(),
-            grounded: true,
-            warnings: {
-                retrieval_warnings.push(warning);
-                retrieval_warnings
-            },
-        });
-    };
-    if hits.is_empty() {
-        return Ok(GroundedAnswer {
-            answer: fallback,
-            citations: hits,
-            mode: "fallback_extractive".into(),
-            grounded: true,
-            warnings: {
-                retrieval_warnings.push("Không đủ nguồn để gọi LLM.".into());
-                retrieval_warnings
-            },
-        });
-    }
-    let context = retrieval_context(&hits);
-    let prompt = grounded_user_prompt(&req.question, &context);
-    let llm_answer = match fileconv_core::llm::chat(&config, GROUNDED_SYSTEM_PROMPT, &prompt) {
-        Ok(answer) => answer,
-        Err(error) => {
-            return Ok(GroundedAnswer {
-                answer: fallback,
-                citations: hits,
-                mode: "fallback_extractive".into(),
-                grounded: true,
-                warnings: {
-                    retrieval_warnings.push(format!(
-                        "LLM provider lỗi ({error}); đã fallback extractive local."
-                    ));
-                    retrieval_warnings
-                },
-            });
+    let llm_mode = llm_config.as_ref().map(|config| {
+        if config.is_subscription_cli() {
+            AnswerMode::SubscriptionCli
+        } else if config
+            .base_url
+            .as_deref()
+            .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"))
+        {
+            AnswerMode::LocalLlm
+        } else {
+            AnswerMode::CloudLlm
         }
-    };
-    let valid_ids = valid_citation_ids(hits.len());
-    match answer_is_grounded(&llm_answer, &valid_ids) {
-        Ok(()) => {
-            let local = config
-                .base_url
-                .as_deref()
-                .is_some_and(|url| url.contains("127.0.0.1") || url.contains("localhost"));
-            Ok(GroundedAnswer {
-                answer: llm_answer,
-                citations: hits,
-                mode: if config.is_subscription_cli() {
-                    "subscription_cli".into()
-                } else if local {
-                    "local_llm".into()
-                } else {
-                    "cloud_llm".into()
-                },
-                grounded: true,
-                warnings: retrieval_warnings,
-            })
-        }
-        Err(mut warnings) => Ok(GroundedAnswer {
-            answer: fallback,
-            citations: hits,
-            mode: "fallback_extractive".into(),
-            grounded: true,
-            warnings: {
-                retrieval_warnings.append(&mut warnings);
-                retrieval_warnings
-            },
-        }),
-    }
+    });
+    service::grounded_answer(
+        &req,
+        search,
+        llm_mode,
+        config_warning,
+        embedding_warning,
+        |system, prompt| {
+            llm_config
+                .as_ref()
+                .ok_or(fileconv_knowledge::KnowledgeError::AdapterUnavailable(
+                    "LLM configuration is unavailable",
+                ))
+                .and_then(|config| {
+                    fileconv_core::llm::chat(config, system, prompt).map_err(|_| {
+                        fileconv_knowledge::KnowledgeError::AdapterUnavailable(
+                            "LLM provider failed",
+                        )
+                    })
+                })
+        },
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -604,6 +293,9 @@ pub async fn hybrid_ask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fileconv_knowledge::ask::extractive_answer;
+    use fileconv_knowledge::citation::validate_grounded_answer as answer_is_grounded;
+    use fileconv_knowledge::desktop::sqlite::SqliteKnowledgeStore;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -955,9 +647,21 @@ mod tests {
             Some(768),
         )
         .unwrap();
-        let first_signature = embedding_plan(Some(first)).metadata.signature;
-        let same_signature = embedding_plan(Some(same_deployment)).metadata.signature;
-        let other_signature = embedding_plan(Some(other_deployment)).metadata.signature;
+        let first_signature = embedding_plan(Some(first))
+            .shared
+            .metadata()
+            .signature
+            .clone();
+        let same_signature = embedding_plan(Some(same_deployment))
+            .shared
+            .metadata()
+            .signature
+            .clone();
+        let other_signature = embedding_plan(Some(other_deployment))
+            .shared
+            .metadata()
+            .signature
+            .clone();
         assert_eq!(first_signature, same_signature);
         assert_ne!(first_signature, other_signature);
         assert!(!first_signature.contains("password"));
