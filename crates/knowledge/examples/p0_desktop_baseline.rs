@@ -24,6 +24,7 @@ struct Query {
     query_id: String,
     text: String,
     answer_mode: String,
+    source_scope: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -39,6 +40,7 @@ struct Output {
 struct Scenarios {
     provider_fallback: fileconv_knowledge::types::IndexBuildResult,
     signature_mismatch: fileconv_knowledge::types::IndexBuildResult,
+    query_signature_mismatch: fileconv_knowledge::types::HybridSearchResponse,
     restore_local: fileconv_knowledge::types::IndexBuildResult,
 }
 
@@ -69,7 +71,7 @@ fn run(input: Input) -> Result<Output> {
         let search = hybrid_search(
             &paths,
             &[],
-            &[],
+            &query.source_scope,
             &query.text,
             10,
             &plan,
@@ -78,7 +80,7 @@ fn run(input: Input) -> Result<Output> {
             |_| unavailable(),
         )?;
         let request = HybridAskRequest {
-            source_rels: Vec::new(),
+            source_rels: query.source_scope,
             question: query.text,
             top_k: Some(10),
             use_llm: Some(false),
@@ -111,6 +113,17 @@ fn run(input: Input) -> Result<Output> {
             .map(|input| local_vector(input).into_values())
             .collect())
     })?;
+    let query_signature_mismatch = hybrid_search(
+        &paths,
+        &[],
+        &[],
+        "đối soát",
+        5,
+        &plan,
+        false,
+        |_| unavailable(),
+        |_| unavailable(),
+    )?;
     let restore_local = rebuild_index(&paths, &input.documents, &plan, false, |_| unavailable())?;
     Ok(Output {
         index,
@@ -118,6 +131,7 @@ fn run(input: Input) -> Result<Output> {
         scenarios: Scenarios {
             provider_fallback,
             signature_mismatch,
+            query_signature_mismatch,
             restore_local,
         },
     })

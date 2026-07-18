@@ -261,6 +261,9 @@ def write_retrieval_input(
                         "queryId": query["query_id"],
                         "text": query["query"],
                         "answerMode": query["answer_mode"],
+                        "sourceScope": [query["expected_doc"]]
+                        if query["category"] == "conflict_acl_denied"
+                        else [],
                     }
                     for query in queries
                 ],
@@ -286,13 +289,21 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
         expected_citations = json.loads(query["citations"])
         ranked_chunks = [hit["sourceRel"] for hit in actual["hits"]]
         ranked = list(dict.fromkeys(ranked_chunks))
-        first_hit_by_document = {}
-        for hit in actual["hits"]:
-            first_hit_by_document.setdefault(hit["sourceRel"], hit)
         expected_citation_docs = {
             citation["documentId"] for citation in expected_citations
         }
-        actual_citation_docs = set(ranked)
+        citation_tokens = [
+            int(value)
+            for value in re.findall(r"\[CITE-(\d{4})\]", actual["answer"])
+        ]
+        valid_citation_tokens = [
+            value for value in citation_tokens if 1 <= value <= len(actual["hits"])
+        ]
+        emitted_hits = [actual["hits"][value - 1] for value in valid_citation_tokens]
+        actual_citation_docs = {hit["sourceRel"] for hit in emitted_hits}
+        emitted_by_document = {}
+        for hit in emitted_hits:
+            emitted_by_document.setdefault(hit["sourceRel"], hit)
         citation_precision = (
             len(expected_citation_docs.intersection(actual_citation_docs))
             / len(actual_citation_docs)
@@ -308,23 +319,26 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
         matched_citations = [
             citation
             for citation in expected_citations
-            if citation["documentId"] in first_hit_by_document
+            if citation["documentId"] in emitted_by_document
+        ]
+        paged_citations = [
+            citation for citation in matched_citations if citation["page"] is not None
         ]
         page_accuracy = (
             sum(
-                first_hit_by_document[citation["documentId"]]["anchor"]["page"]
+                emitted_by_document[citation["documentId"]]["anchor"]["page"]
                 == citation["page"]
-                for citation in matched_citations
+                for citation in paged_citations
             )
-            / len(matched_citations)
-            if matched_citations
-            else 0.0
+            / len(paged_citations)
+            if paged_citations
+            else None
         )
         span_accuracy = (
             sum(
-                first_hit_by_document[citation["documentId"]]["anchor"]["start"]
+                emitted_by_document[citation["documentId"]]["anchor"]["start"]
                 == citation["start"]
-                and first_hit_by_document[citation["documentId"]]["anchor"]["end"]
+                and emitted_by_document[citation["documentId"]]["anchor"]["end"]
                 == citation["end"]
                 for citation in matched_citations
             )
@@ -370,10 +384,17 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
             "hasRelevant": bool(relevant),
             "citationDocumentPrecision": round(citation_precision, 6),
             "citationDocumentRecall": round(citation_recall, 6),
-            "citationPageAccuracy": round(page_accuracy, 6),
+            "citationPageAccuracy": round(page_accuracy, 6)
+            if page_accuracy is not None
+            else None,
             "citationSpanExactAccuracy": round(span_accuracy, 6),
+            "citationTokenValidity": round(
+                len(valid_citation_tokens) / max(1, len(citation_tokens)), 6
+            ),
             "answerExact": normalize(actual["answer"])
             == normalize(query["expected_answer"]),
+            "answerContainsExpected": bool(query["expected_answer"])
+            and normalize(query["expected_answer"]) in normalize(actual["answer"]),
             "returnedHitCount": len(ranked_chunks),
             "uniqueDocumentCount": len(ranked),
         }
@@ -402,10 +423,14 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
         row
         for row in ranked_rows
         if row["versionMode"] != "current"
-        or row["category"] == "temporal_current"
+        or row["category"] in {"temporal_current", "conflict_current"}
     ]
     current_temporal = [
         row for row in temporal if row["category"] == "temporal_current"
+        or row["category"] == "conflict_current"
+    ]
+    paged_rows = [
+        row for row in ranked_rows if row["citationPageAccuracy"] is not None
     ]
     return {
         "summary": aggregate(ranked_rows),
@@ -421,8 +446,8 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
                 6,
             ),
             "pageAccuracy": round(
-                sum(row["citationPageAccuracy"] for row in ranked_rows)
-                / max(1, len(ranked_rows)),
+                sum(row["citationPageAccuracy"] for row in paged_rows)
+                / max(1, len(paged_rows)),
                 6,
             ),
             "spanExactAccuracy": round(
@@ -432,6 +457,16 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
             ),
             "answerExactAccuracy": round(
                 sum(row["answerExact"] for row in rows) / max(1, len(rows)),
+                6,
+            ),
+            "answerContainsExpectedAccuracy": round(
+                sum(row["answerContainsExpected"] for row in rows)
+                / max(1, len(rows)),
+                6,
+            ),
+            "tokenValidity": round(
+                sum(row["citationTokenValidity"] for row in rows)
+                / max(1, len(rows)),
                 6,
             ),
         },
@@ -478,6 +513,7 @@ def markdown_report(
         f"- RAM: {hardware['ramGb']} GB",
         f"- GPU: {hardware['gpu']['model']} × {hardware['gpu']['count']}",
         "- Environment role: reduced smoke, not approved Profile B target.",
+        "- Conversion and retrieval were independently rerun for deterministic fingerprints.",
         "",
         "## Conversion",
         "",
@@ -534,7 +570,10 @@ def markdown_report(
             f"- No-answer accuracy: {retrieval['noAnswerSummary']['accuracy']:.4f}",
             f"- Citation document precision: {retrieval['citationSummary']['documentPrecision']:.4f}",
             f"- Citation document recall: {retrieval['citationSummary']['documentRecall']:.4f}",
+            f"- Citation page accuracy (paged sources only): {retrieval['citationSummary']['pageAccuracy']:.4f}",
             f"- Citation exact-span accuracy: {retrieval['citationSummary']['spanExactAccuracy']:.4f}",
+            f"- Citation token validity: {retrieval['citationSummary']['tokenValidity']:.4f}",
+            f"- Answer contains expected text: {retrieval['citationSummary']['answerContainsExpectedAccuracy']:.4f}",
             "- Version-citation precision/recall: 0.0 baseline (payload not implemented).",
             "",
             "## Interpretation",
@@ -558,6 +597,34 @@ def run(output: Path, converter: Path) -> None:
     with (CORPUS / "golden/queries.tsv").open(encoding="utf-8", newline="") as source:
         queries = list(csv.DictReader(source, delimiter="\t"))
     conversions, documents = conversion_baseline(converter, output, manifest)
+    conversion_rerun_dir = output / "conversion-rerun"
+    rerun_conversions, _ = conversion_baseline(
+        converter, conversion_rerun_dir, manifest
+    )
+    conversion_projection = [
+        [
+            item["documentId"],
+            item["status"],
+            item["exitCode"],
+            item["actualChars"],
+            item["actualSha256"],
+        ]
+        for item in conversions
+    ]
+    rerun_conversion_projection = [
+        [
+            item["documentId"],
+            item["status"],
+            item["exitCode"],
+            item["actualChars"],
+            item["actualSha256"],
+        ]
+        for item in rerun_conversions
+    ]
+    conversion_deterministic = conversion_projection == rerun_conversion_projection
+    conversion_fingerprint = hashlib.sha256(
+        json.dumps(conversion_projection, separators=(",", ":")).encode()
+    ).hexdigest()
     retrieval_input = write_retrieval_input(output, documents, queries)
     retrieval_raw = output / "retrieval-raw.json"
     subprocess.run(
@@ -652,6 +719,8 @@ def run(output: Path, converter: Path) -> None:
         "retrievalRankingSha256": ranking_fingerprint,
         "rawRetrievalSha256": raw_fingerprint,
         "retrievalDeterministic": retrieval_deterministic,
+        "conversionRerunSha256": conversion_fingerprint,
+        "conversionDeterministic": conversion_deterministic,
     }
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     report = markdown_report(commit, hardware, conversions, retrieval)
@@ -659,6 +728,7 @@ def run(output: Path, converter: Path) -> None:
     (CORPUS / "reports/desktop-baseline.md").write_text(report, encoding="utf-8")
     shutil.rmtree(output / "runtime", ignore_errors=True)
     shutil.rmtree(output / "runtime-rerun", ignore_errors=True)
+    shutil.rmtree(conversion_rerun_dir, ignore_errors=True)
     rerun_raw.unlink(missing_ok=True)
     print(f"wrote desktop baseline to {output}")
 

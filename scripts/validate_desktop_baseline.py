@@ -7,9 +7,11 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
 import tempfile
 import unittest
+import unicodedata
 from pathlib import Path
 
 
@@ -44,6 +46,31 @@ def ranking_sha(rows: list[dict]) -> str:
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
+
+
+def normalize(value: str) -> str:
+    cleaned = []
+    for line in unicodedata.normalize("NFC", value).splitlines():
+        stripped = line.strip()
+        if stripped and all(character in "|-: " for character in stripped):
+            continue
+        cleaned.append(line.replace("|", " "))
+    return " ".join(
+        token
+        for token in " ".join(cleaned).split()
+        if not all(character == "#" or character == "-" for character in token)
+    )
+
+
+def discounted_gain(grades: list[int]) -> float:
+    return sum(
+        (2**grade - 1) / math.log2(index + 2)
+        for index, grade in enumerate(grades)
+    )
+
+
+def close(actual: object, expected: float) -> bool:
+    return isinstance(actual, (int, float)) and abs(actual - expected) <= 1e-6
 
 
 def validate(path: Path) -> list[str]:
@@ -95,6 +122,7 @@ def validate(path: Path) -> list[str]:
             errors.append(f"conversion {item.get('documentId')}: raw Markdown missing")
 
     expected_queries = {row["query_id"] for row in queries}
+    query_by_id = {row["query_id"]: row for row in queries}
     result_rows = retrieval.get("queries", [])
     raw_rows = raw.get("queries", [])
     scenarios = raw.get("scenarios", {})
@@ -102,8 +130,158 @@ def validate(path: Path) -> list[str]:
         errors.append("retrieval results do not cover every query")
     if {row.get("queryId") for row in raw_rows} != expected_queries:
         errors.append("raw retrieval output does not cover every query")
+    raw_by_id = {row["queryId"]: row for row in raw_rows}
+    recomputed_rows = []
+    for row in result_rows:
+        query_id = row.get("queryId")
+        query = query_by_id.get(query_id)
+        raw_row = raw_by_id.get(query_id)
+        if query is None or raw_row is None:
+            continue
+        judgments = json.loads(query["judgments"])
+        relevant = {doc for doc, grade in judgments.items() if grade >= 2}
+        raw_ranked = list(
+            dict.fromkeys(hit["sourceRel"] for hit in raw_row.get("hits", []))
+        )
+        ranked = row.get("rankedDocuments", [])
+        if ranked != raw_ranked:
+            errors.append(f"{query_id}: derived ranking differs from raw hits")
+        recall5 = (
+            len(relevant.intersection(ranked[:5])) / len(relevant)
+            if relevant
+            else 0.0
+        )
+        recall10 = (
+            len(relevant.intersection(ranked[:10])) / len(relevant)
+            if relevant
+            else 0.0
+        )
+        hit5 = 1.0 if relevant and relevant.intersection(ranked[:5]) else 0.0
+        reciprocal = next(
+            (
+                1 / (index + 1)
+                for index, document in enumerate(ranked)
+                if document in relevant
+            ),
+            0.0,
+        )
+        actual_grades = [judgments.get(document, 0) for document in ranked[:10]]
+        ideal_grades = sorted(judgments.values(), reverse=True)[:10]
+        ideal = discounted_gain(ideal_grades)
+        ndcg = discounted_gain(actual_grades) / ideal if ideal else 1.0
+        for field, value in (
+            ("recallAt5", recall5),
+            ("recallAt10", recall10),
+            ("hitAt5", hit5),
+            ("reciprocalRank", reciprocal),
+            ("ndcgAt10", ndcg),
+        ):
+            if not close(row.get(field), value):
+                errors.append(f"{query_id}: {field} is miscomputed")
+        citation_tokens = [
+            int(value)
+            for value in re.findall(
+                r"\[CITE-(\d{4})\]", raw_row.get("answer", "")
+            )
+        ]
+        valid_tokens = [
+            value
+            for value in citation_tokens
+            if 1 <= value <= len(raw_row.get("hits", []))
+        ]
+        emitted_hits = [raw_row["hits"][value - 1] for value in valid_tokens]
+        actual_citation_docs = {hit["sourceRel"] for hit in emitted_hits}
+        expected_citations = json.loads(query["citations"])
+        expected_citation_docs = {
+            citation["documentId"] for citation in expected_citations
+        }
+        precision = (
+            len(actual_citation_docs & expected_citation_docs)
+            / len(actual_citation_docs)
+            if actual_citation_docs
+            else 1.0 if not expected_citation_docs else 0.0
+        )
+        recall = (
+            len(actual_citation_docs & expected_citation_docs)
+            / len(expected_citation_docs)
+            if expected_citation_docs
+            else 1.0 if not actual_citation_docs else 0.0
+        )
+        if not close(row.get("citationDocumentPrecision"), precision):
+            errors.append(f"{query_id}: citation precision is miscomputed")
+        if not close(row.get("citationDocumentRecall"), recall):
+            errors.append(f"{query_id}: citation recall is miscomputed")
+        emitted_by_document = {}
+        for hit in emitted_hits:
+            emitted_by_document.setdefault(hit["sourceRel"], hit)
+        matched = [
+            citation
+            for citation in expected_citations
+            if citation["documentId"] in emitted_by_document
+        ]
+        paged = [citation for citation in matched if citation["page"] is not None]
+        page_accuracy = (
+            sum(
+                emitted_by_document[citation["documentId"]]["anchor"]["page"]
+                == citation["page"]
+                for citation in paged
+            )
+            / len(paged)
+            if paged
+            else None
+        )
+        span_accuracy = (
+            sum(
+                emitted_by_document[citation["documentId"]]["anchor"]["start"]
+                == citation["start"]
+                and emitted_by_document[citation["documentId"]]["anchor"]["end"]
+                == citation["end"]
+                for citation in matched
+            )
+            / len(matched)
+            if matched
+            else 0.0
+        )
+        if page_accuracy is None:
+            if row.get("citationPageAccuracy") is not None:
+                errors.append(f"{query_id}: citation page accuracy is miscomputed")
+        elif not close(row.get("citationPageAccuracy"), page_accuracy):
+            errors.append(f"{query_id}: citation page accuracy is miscomputed")
+        if not close(row.get("citationSpanExactAccuracy"), span_accuracy):
+            errors.append(f"{query_id}: citation span accuracy is miscomputed")
+        token_validity = len(valid_tokens) / max(1, len(citation_tokens))
+        if not close(row.get("citationTokenValidity"), token_validity):
+            errors.append(f"{query_id}: citation token validity is miscomputed")
+        answer_exact = normalize(raw_row.get("answer", "")) == normalize(
+            query["expected_answer"]
+        )
+        answer_contains = bool(query["expected_answer"]) and normalize(
+            query["expected_answer"]
+        ) in normalize(raw_row.get("answer", ""))
+        if row.get("answerExact") is not answer_exact:
+            errors.append(f"{query_id}: answerExact is miscomputed")
+        if row.get("answerContainsExpected") is not answer_contains:
+            errors.append(f"{query_id}: answerContainsExpected is miscomputed")
+        recomputed_rows.append(
+            {
+                "hasRelevant": bool(relevant),
+                "recallAt5": recall5,
+                "recallAt10": recall10,
+                "hitAt5": hit5,
+                "mrr": reciprocal,
+                "ndcg": ndcg,
+                "citationPrecision": precision,
+                "citationRecall": recall,
+                "pageAccuracy": page_accuracy,
+                "spanAccuracy": span_accuracy,
+                "tokenValidity": token_validity,
+                "answerExact": answer_exact,
+                "answerContains": answer_contains,
+            }
+        )
     fallback = scenarios.get("providerFallback", {})
     mismatch = scenarios.get("signatureMismatch", {})
+    query_mismatch = scenarios.get("querySignatureMismatch", {})
     restore = scenarios.get("restoreLocal", {})
     if fallback.get("embeddingMode") != "local_hash_v1" or not any(
         "rebuild" in warning for warning in fallback.get("warnings", [])
@@ -113,14 +291,71 @@ def validate(path: Path) -> list[str]:
         "signature" in warning.lower() for warning in mismatch.get("warnings", [])
     ):
         errors.append("signature mismatch scenario is not frozen")
+    if query_mismatch.get("embeddingMode") != "provider_v1" or not any(
+        "không khớp index" in warning
+        for warning in query_mismatch.get("warnings", [])
+    ):
+        errors.append("query-time signature mismatch fallback is not frozen")
     if restore.get("embeddingMode") != "local_hash_v1":
         errors.append("local restore scenario is not frozen")
     judged_count = sum(bool(json.loads(row["judgments"])) for row in queries)
     no_answer_count = len(queries) - judged_count
     if retrieval.get("summary", {}).get("queries") != judged_count:
         errors.append("retrieval summary query count mismatch")
+    judged_rows = [row for row in recomputed_rows if row["hasRelevant"]]
+    summary = retrieval.get("summary", {})
+    for field, key in (
+        ("recallAt5", "recallAt5"),
+        ("recallAt10", "recallAt10"),
+        ("hitAt5", "hitAt5"),
+        ("mrr", "mrr"),
+        ("ndcgAt10", "ndcg"),
+    ):
+        expected_value = sum(row[key] for row in judged_rows) / max(
+            1, len(judged_rows)
+        )
+        if not close(summary.get(field), expected_value):
+            errors.append(f"retrieval summary {field} is miscomputed")
+    citation_summary = retrieval.get("citationSummary", {})
+    paged_rows = [
+        row for row in judged_rows if row["pageAccuracy"] is not None
+    ]
+    citation_expectations = {
+        "documentPrecision": sum(row["citationPrecision"] for row in recomputed_rows)
+        / max(1, len(recomputed_rows)),
+        "documentRecall": sum(row["citationRecall"] for row in recomputed_rows)
+        / max(1, len(recomputed_rows)),
+        "pageAccuracy": sum(row["pageAccuracy"] for row in paged_rows)
+        / max(1, len(paged_rows)),
+        "spanExactAccuracy": sum(row["spanAccuracy"] for row in judged_rows)
+        / max(1, len(judged_rows)),
+        "tokenValidity": sum(row["tokenValidity"] for row in recomputed_rows)
+        / max(1, len(recomputed_rows)),
+        "answerExactAccuracy": sum(row["answerExact"] for row in recomputed_rows)
+        / max(1, len(recomputed_rows)),
+        "answerContainsExpectedAccuracy": sum(
+            row["answerContains"] for row in recomputed_rows
+        )
+        / max(1, len(recomputed_rows)),
+    }
+    for field, value in citation_expectations.items():
+        if not close(citation_summary.get(field), value):
+            errors.append(f"citation summary {field} is miscomputed")
     if retrieval.get("noAnswerSummary", {}).get("queries") != no_answer_count:
         errors.append("no-answer summary query count mismatch")
+    raw_no_answer = [
+        raw_by_id[row["query_id"]]
+        for row in queries
+        if not json.loads(row["judgments"])
+    ]
+    no_answer_accuracy = sum(not row.get("hits") for row in raw_no_answer) / max(
+        1, len(raw_no_answer)
+    )
+    if not close(
+        retrieval.get("noAnswerSummary", {}).get("accuracy"),
+        no_answer_accuracy,
+    ):
+        errors.append("no-answer accuracy is miscomputed")
     temporal = retrieval.get("temporalSummary", {})
     if temporal.get("versionCitationPrecision") != 0.0 or temporal.get(
         "versionCitationRecall"
@@ -140,6 +375,23 @@ def validate(path: Path) -> list[str]:
         errors.append("raw retrieval fingerprint mismatch")
     if metadata.get("retrievalDeterministic") is not True:
         errors.append("independent retrieval rerun was not deterministic")
+    conversion_projection = [
+        [
+            item["documentId"],
+            item["status"],
+            item["exitCode"],
+            item["actualChars"],
+            item["actualSha256"],
+        ]
+        for item in conversions
+    ]
+    conversion_fingerprint = hashlib.sha256(
+        json.dumps(conversion_projection, separators=(",", ":")).encode()
+    ).hexdigest()
+    if metadata.get("conversionRerunSha256") != conversion_fingerprint:
+        errors.append("conversion rerun fingerprint mismatch")
+    if metadata.get("conversionDeterministic") is not True:
+        errors.append("independent conversion rerun was not deterministic")
     if not re.fullmatch(r"[0-9a-f]{40}", str(metadata.get("gitCommit", ""))):
         errors.append("metadata gitCommit is invalid")
     if metadata.get("gitDirty") is not False:
@@ -149,6 +401,7 @@ def validate(path: Path) -> list[str]:
         "converterSha256",
         "retrievalRankingSha256",
         "rawRetrievalSha256",
+        "conversionRerunSha256",
         "composeFileSha256",
     ):
         if not SHA256.fullmatch(str(metadata.get(field, ""))):
