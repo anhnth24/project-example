@@ -3,21 +3,143 @@
   "type": "object",
   "required": [
     "version", "reportId", "gateId", "generatedAt", "git", "command",
-    "workloadProfileId", "environment", "fixtures", "result"
+    "workloadProfileId", "environment", "fixtures", "result", "profiles",
+    "targetMatch", "fixtureManifestPath", "implementationSha256", "lifecycle"
   ],
   "properties": {
     "version": {"const": 1},
+    "reportId": {"type": "string", "minLength": 1},
+    "gateId": {"type": "string", "minLength": 1},
+    "generatedAt": {"type": "string", "minLength": 1},
+    "command": {"type": "string", "minLength": 1},
+    "workloadProfileId": {"type": "string", "minLength": 1},
+    "profiles": {"type": "array", "minItems": 1},
+    "targetMatch": {"type": "boolean"},
+    "fixtureManifestPath": {"type": "string", "minLength": 1},
+    "implementationSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "lifecycle": {
+      "type": "object",
+      "required": ["restartPersistence", "resetDeletion", "stores", "verifiedAt"],
+      "properties": {
+        "restartPersistence": {"type": "boolean"},
+        "resetDeletion": {"type": "boolean"},
+        "stores": {"type": "array", "minItems": 3},
+        "verifiedAt": {"type": ["string", "null"]}
+      }
+    },
     "git": {
       "type": "object",
-      "required": ["commit", "dirty"]
+      "required": ["commit", "dirty"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "dirty": {"type": "boolean"}
+      }
     },
     "environment": {
       "type": "object",
-      "required": ["environmentId", "fingerprint"]
+      "required": ["environmentId", "fingerprint"],
+      "properties": {
+        "environmentId": {"type": "string", "minLength": 1},
+        "fingerprint": {
+          "type": "object",
+          "required": [
+            "gitCommit", "workloadProfileId", "composeFileSha256",
+            "imageDigests", "serviceVersions", "fixtureManifestSha256", "hardware"
+          ],
+          "properties": {
+            "gitCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "workloadProfileId": {"type": "string", "minLength": 1},
+            "composeFileSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "imageDigests": {"type": "object", "minProperties": 1},
+            "serviceVersions": {"type": "object", "minProperties": 1},
+            "fixtureManifestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "hardware": {
+              "type": "object",
+              "required": ["cpu", "ramGb", "disk", "gpu", "network", "os"],
+              "properties": {
+                "cpu": {
+                  "type": "object",
+                  "required": ["vendor", "model", "cores", "threads", "physicalCoresMeasured"],
+                  "properties": {
+                    "vendor": {"type": "string", "minLength": 1},
+                    "model": {"type": "string", "minLength": 1},
+                    "cores": {"type": "integer", "exclusiveMinimum": 0},
+                    "threads": {"type": "integer", "exclusiveMinimum": 0},
+                    "physicalCoresMeasured": {"type": "boolean"}
+                  }
+                },
+                "ramGb": {"type": "number", "exclusiveMinimum": 0},
+                "disk": {
+                  "type": "object",
+                  "required": [
+                    "type", "capacityGb", "iopsNote", "iopsMeasured", "iopsVerified",
+                    "iopsEvidenceSha256", "storagePathSha256", "backingSource"
+                  ],
+                  "properties": {
+                    "type": {"type": "string", "minLength": 1},
+                    "capacityGb": {"type": "number", "exclusiveMinimum": 0},
+                    "iopsNote": {"type": "string", "minLength": 1},
+                    "iopsMeasured": {"type": "integer", "minimum": 0},
+                    "iopsVerified": {"type": "boolean"},
+                    "iopsEvidenceSha256": {
+                      "type": ["string", "null"],
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "storagePathSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "backingSource": {"type": "string", "minLength": 1}
+                  }
+                },
+                "gpu": {
+                  "type": "object",
+                  "required": ["model", "vramGb", "count"],
+                  "properties": {
+                    "model": {"type": "string", "minLength": 1},
+                    "vramGb": {"type": "number", "minimum": 0},
+                    "count": {"type": "integer", "minimum": 0}
+                  }
+                },
+                "network": {
+                  "type": "object",
+                  "required": [
+                    "bandwidthGbps", "bandwidthMeasured", "interface",
+                    "latencyMsAssumed"
+                  ],
+                  "properties": {
+                    "bandwidthGbps": {"type": "number", "minimum": 0},
+                    "bandwidthMeasured": {"type": "boolean"},
+                    "interface": {"type": "string", "minLength": 1},
+                    "latencyMsAssumed": {"type": "number", "minimum": 0}
+                  }
+                },
+                "os": {
+                  "type": "object",
+                  "required": ["distro", "arch"],
+                  "properties": {
+                    "distro": {"type": "string", "minLength": 1},
+                    "arch": {"type": "string", "minLength": 1}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "fixtures": {
+      "type": "object",
+      "required": ["manifestSha256"],
+      "properties": {
+        "manifestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
     },
     "result": {
       "type": "object",
-      "required": ["metric", "value", "pass"]
+      "required": ["metric", "value", "pass"],
+      "properties": {
+        "metric": {"type": "string", "minLength": 1},
+        "value": {"type": "number"},
+        "pass": {"type": "boolean"}
+      }
     }
   }
 }

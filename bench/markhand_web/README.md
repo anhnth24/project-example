@@ -16,12 +16,16 @@ not: approval means product/hardware owners supplied numeric values and approver
 make check-markhand-gates
 ```
 
-## Open decisions
+## Approved reference profile
 
-The authoritative decision list lives in `workload-profile.yaml`; this README indexes
-it rather than duplicating values. Current owners must resolve organization/document/
-vector scale, query/ingest concurrency, target hardware and recovery duration before
-P0-01 can be marked Done. No benchmark may claim SLA against a proposed profile.
+The authoritative decisions live in `workload-profile.yaml`. Product and
+infrastructure owners approved the Profile B scale/load/hardware envelope and numeric
+gate thresholds on 2026-07-18. Resolved decision records remain in the profile for
+traceability.
+
+`on-prem-reference` is a benchmark target, not a claim about the current runner.
+Every measured report must include its actual environment fingerprint; smoke results
+from smaller hardware cannot satisfy target-scale gates.
 
 Fixtures/corpus must be synthetic or de-identified, versioned and license-reviewed.
 Large raw benchmark output remains a CI artifact; committed reports contain environment

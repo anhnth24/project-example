@@ -2,28 +2,29 @@
   "version": 1,
   "environmentId": "on-prem-reference",
   "role": "benchmark-target",
-  "status": "proposed",
+  "status": "approved",
   "approver": "infrastructure-owner",
+  "approvedAt": "2026-07-18T07:37:00Z",
   "cpu": {
-    "vendor": null,
-    "model": null,
-    "cores": null,
-    "threads": null
+    "vendor": "reference",
+    "model": "server-class-x86_64",
+    "cores": 32,
+    "threads": 64
   },
-  "ramGb": null,
+  "ramGb": 256,
   "disk": {
     "type": "nvme",
-    "capacityGb": null,
-    "iopsNote": null
+    "capacityGb": 4096,
+    "iopsNote": ">=100k random-read IOPS"
   },
   "gpu": {
-    "model": null,
-    "vramGb": null,
-    "count": null
+    "model": "accelerator-class-24gb",
+    "vramGb": 24,
+    "count": 1
   },
   "network": {
-    "bandwidthGbps": null,
-    "latencyMsAssumed": null
+    "bandwidthGbps": 10,
+    "latencyMsAssumed": 1
   },
   "os": {
     "distro": "ubuntu-22.04",
@@ -35,7 +36,8 @@
     "composeFileSha256",
     "imageDigests",
     "serviceVersions",
-    "fixtureManifestSha256"
+    "fixtureManifestSha256",
+    "hardware"
   ],
   "notes": "Synthetic labels only; no customer name, credential or internal hostname."
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["version", "profileId", "status", "approver", "openDecisions", "scale", "loads", "workloads", "hardware"],
+  "required": ["version", "profileId", "status", "approver", "openDecisions", "scale", "loads", "workloads", "serviceTargets", "hardware"],
   "properties": {
     "version": {"const": 1},
     "profileId": {"type": "string", "minLength": 1},
@@ -17,6 +17,13 @@
     "workloads": {
       "type": "object",
       "required": ["ingest", "query", "recovery"]
+    },
+    "serviceTargets": {
+      "type": "object",
+      "required": [
+        "bestModelNdcgGapMax", "filteredQueryP99Ms", "rpoMinutes",
+        "queryReadyRtoMinutes", "fullVectorRtoMinutes"
+      ]
     },
     "hardware": {
       "type": "object",
