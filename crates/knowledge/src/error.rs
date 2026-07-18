@@ -4,6 +4,10 @@ pub enum KnowledgeError {
     InvalidInput(&'static str),
     #[error("knowledge index is incompatible: {0}")]
     IncompatibleIndex(&'static str),
+    #[error("embedding count mismatch: expected {expected}, received {actual}")]
+    EmbeddingCountMismatch { expected: usize, actual: usize },
+    #[error("embedding dimension mismatch: expected {expected}, received {actual}")]
+    EmbeddingDimensionMismatch { expected: usize, actual: usize },
     #[error("knowledge adapter is unavailable: {0}")]
     AdapterUnavailable(&'static str),
 }

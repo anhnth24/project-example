@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 
 use fileconv_core::intelligence::{self, CorpusDocument};
 use fileconv_core::llm::EmbeddingConfig;
+use fileconv_knowledge::embedding::{
+    local_vector as shared_local_vector, validate_embedding_batch,
+    EmbeddingPlan as SharedEmbeddingPlan, EmbeddingVector, ProviderDeployment,
+    LOCAL_EMBEDDING_MODE, LOCAL_VECTOR_DIMENSIONS, PROVIDER_EMBEDDING_MODE,
+};
+use fileconv_knowledge::query::{fts5_prefix_query, normalized_tokens};
 pub use fileconv_knowledge::types::{
     GroundedAnswer, HybridAskRequest, HybridSearchHit, HybridSearchRequest, HybridSearchResponse,
     IndexBuildResult, IndexMetadata, IndexRequest, IndexStats, SourceAnchor,
@@ -13,10 +19,7 @@ use tauri::State;
 
 use super::{data_root, es, resolve_within, AppState};
 
-const LOCAL_VECTOR_DIMENSIONS: usize = 256;
 const MAX_VECTOR_CANDIDATES: usize = 100_000;
-const LOCAL_EMBEDDING_MODE: &str = "local_hash_v1";
-const PROVIDER_EMBEDDING_MODE: &str = "provider_v1";
 
 #[derive(Debug, Clone)]
 struct IndexedChunk {
@@ -38,6 +41,7 @@ struct IndexedChunk {
 struct EmbeddingPlan {
     config: Option<EmbeddingConfig>,
     metadata: IndexMetadata,
+    shared: Option<SharedEmbeddingPlan>,
 }
 
 fn stable_hash(value: &str) -> String {
@@ -141,54 +145,8 @@ fn open_index(root: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
-fn normalized_tokens(text: &str) -> Vec<String> {
-    intelligence::normalize_search_text(text)
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|token| token.chars().count() >= 2)
-        .map(str::to_string)
-        .collect()
-}
-
-fn hash_index(value: &str) -> (usize, f32) {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    let hash = hasher.finish();
-    let index = (hash as usize) % LOCAL_VECTOR_DIMENSIONS;
-    let sign = if hash & (1 << 63) == 0 { 1.0 } else { -1.0 };
-    (index, sign)
-}
-
-/// Fully local feature-hashing vector. It is always available and provides a
-/// deterministic vector fallback when no embedding provider is configured.
 fn local_vector(text: &str) -> Vec<f32> {
-    let folded = intelligence::normalize_search_text(text);
-    let mut vector = vec![0.0_f32; LOCAL_VECTOR_DIMENSIONS];
-    let words = normalized_tokens(&folded);
-    for token in &words {
-        let (index, sign) = hash_index(token);
-        vector[index] += sign;
-    }
-    for pair in words.windows(2) {
-        let bigram = format!("{}:{}", pair[0], pair[1]);
-        let (index, sign) = hash_index(&bigram);
-        vector[index] += sign * 0.65;
-    }
-    let compact: Vec<char> = folded
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect();
-    for trigram in compact.windows(3) {
-        let feature: String = trigram.iter().collect();
-        let (index, sign) = hash_index(&feature);
-        vector[index] += sign * 0.15;
-    }
-    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for value in &mut vector {
-            *value /= norm;
-        }
-    }
-    vector
+    shared_local_vector(text).into_values()
 }
 
 fn vector_bytes(vector: &[f32]) -> Vec<u8> {
@@ -251,14 +209,18 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
         Some(config) => {
             let provider = provider_name(config.provider);
             let model = config.model.clone();
-            let signature = stable_hash(&format!(
-                "{PROVIDER_EMBEDDING_MODE}|{provider}|{model}|{}|{}",
-                config.base_url.as_deref().unwrap_or_default(),
-                config
-                    .dimensions
-                    .map(|value| value.to_string())
-                    .unwrap_or_default()
-            ));
+            let deployment = ProviderDeployment::from_base_url(config.base_url.as_deref())
+                .or_else(|_| ProviderDeployment::from_base_url(None))
+                .expect("default deployment identity is valid");
+            let shared = SharedEmbeddingPlan::provider(
+                provider.clone(),
+                model.clone(),
+                model.clone(),
+                deployment,
+                config.dimensions,
+            )
+            .expect("validated desktop embedding configuration");
+            let signature = shared.provisional_signature();
             EmbeddingPlan {
                 metadata: IndexMetadata {
                     mode: PROVIDER_EMBEDDING_MODE.into(),
@@ -268,6 +230,7 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
                     signature,
                 },
                 config: Some(config),
+                shared: Some(shared),
             }
         }
         None => EmbeddingPlan {
@@ -279,8 +242,29 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
                 dimensions: LOCAL_VECTOR_DIMENSIONS,
                 signature: LOCAL_EMBEDDING_MODE.into(),
             },
+            // Existing desktop indexes retain their legacy signature. New server
+            // consumers use the durable signature exposed by the shared plan.
+            shared: None,
         },
     }
+}
+
+fn finalize_provider_signature(plan: &mut EmbeddingPlan) -> Result<(), String> {
+    if let Some(shared) = plan.shared.as_ref() {
+        plan.metadata.signature = shared
+            .signature(plan.metadata.dimensions)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn provider_config_matches(config: &EmbeddingConfig, metadata: &IndexMetadata) -> bool {
+    let mut plan = embedding_plan(Some(config.clone()));
+    if plan.metadata.dimensions == 0 && metadata.dimensions > 0 {
+        plan.metadata.dimensions = metadata.dimensions;
+    }
+    (plan.metadata.dimensions == 0 || finalize_provider_signature(&mut plan).is_ok())
+        && plan.metadata.signature == metadata.signature
 }
 
 fn read_metadata(connection: &Connection) -> Result<IndexMetadata, String> {
@@ -379,13 +363,19 @@ fn index_documents_with_plan(
         .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
         .map_err(es)?;
     let current_metadata = read_metadata(&connection)?;
-    if indexed_documents > 0 && current_metadata.signature != plan.metadata.signature {
-        clear_index(root, &mut connection)?;
-    } else if indexed_documents > 0
-        && current_metadata.signature == plan.metadata.signature
+    if indexed_documents > 0
         && plan.metadata.dimensions == 0
+        && current_metadata.mode == plan.metadata.mode
+        && current_metadata.provider == plan.metadata.provider
+        && current_metadata.model == plan.metadata.model
     {
         plan.metadata.dimensions = current_metadata.dimensions;
+        if plan.metadata.dimensions > 0 {
+            finalize_provider_signature(&mut plan)?;
+        }
+    }
+    if indexed_documents > 0 && current_metadata.signature != plan.metadata.signature {
+        clear_index(root, &mut connection)?;
     }
     let mut indexed = 0usize;
     let mut skipped = 0usize;
@@ -424,29 +414,27 @@ fn index_documents_with_plan(
             .collect();
         let vectors = if let Some(config) = plan.config.as_ref() {
             fileconv_core::llm::embed_batch(config, &embedding_inputs)
-                .map_err(|error| format!("embedding provider lỗi: {error}"))?
+                .map_err(|_| "embedding provider lỗi; không thể tạo vector".to_string())?
         } else {
             embedding_inputs
                 .iter()
                 .map(|input| local_vector(input))
                 .collect()
         };
-        if vectors.len() != chunks.len() {
-            return Err("số vector không khớp số chunk".into());
-        }
-        if let Some(vector) = vectors.first() {
-            if vector.is_empty() || vectors.iter().any(|item| item.len() != vector.len()) {
-                return Err("embedding index có vector khác số chiều".into());
-            }
-            if plan.metadata.dimensions == 0 {
-                plan.metadata.dimensions = vector.len();
-            } else if plan.metadata.dimensions != vector.len() {
-                return Err(format!(
-                    "embedding trả {} chiều, index yêu cầu {}",
-                    vector.len(),
-                    plan.metadata.dimensions
-                ));
-            }
+        let checked_vectors = vectors
+            .iter()
+            .cloned()
+            .map(EmbeddingVector::new)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        let expected_dimensions =
+            (plan.metadata.dimensions > 0).then_some(plan.metadata.dimensions);
+        let dimensions =
+            validate_embedding_batch(&checked_vectors, chunks.len(), expected_dimensions)
+                .map_err(|error| error.to_string())?;
+        if dimensions > 0 && plan.metadata.dimensions == 0 {
+            plan.metadata.dimensions = dimensions;
+            finalize_provider_signature(&mut plan)?;
         }
         let transaction = connection.transaction().map_err(es)?;
         transaction
@@ -643,14 +631,6 @@ fn load_all_chunks(
     Ok(chunks)
 }
 
-fn fts_query(query: &str) -> String {
-    normalized_tokens(query)
-        .into_iter()
-        .map(|token| format!("\"{}\"*", token.replace('"', "")))
-        .collect::<Vec<_>>()
-        .join(" OR ")
-}
-
 fn snippet(body: &str, query_tokens: &[String]) -> String {
     let words: Vec<&str> = body.split_whitespace().collect();
     let folded_words: Vec<String> = words
@@ -688,7 +668,7 @@ fn hybrid_search_inner(
     let metadata = read_metadata(&connection)?;
     let scope: HashSet<String> = source_rels.iter().cloned().collect();
     let query_tokens = normalized_tokens(query);
-    let fts = fts_query(query);
+    let fts = fts5_prefix_query(query);
     let mut lexical_rank: HashMap<String, (usize, f32)> = HashMap::new();
     if !fts.is_empty() {
         let mut statement = connection
@@ -722,10 +702,7 @@ fn hybrid_search_inner(
     let mut warnings = Vec::new();
     let query_vector = if metadata.mode == PROVIDER_EMBEDDING_MODE {
         match config {
-            Some(config)
-                if embedding_plan(Some(config.clone())).metadata.signature
-                    == metadata.signature =>
-            {
+            Some(config) if provider_config_matches(&config, &metadata) => {
                 match fileconv_core::llm::embed_query(&config, query) {
                     Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
                     Ok(vector) => {
@@ -736,10 +713,8 @@ fn hybrid_search_inner(
                         ));
                         None
                     }
-                    Err(error) => {
-                        warnings.push(format!(
-                            "Embedding provider lỗi ({error}); chỉ dùng FTS lexical."
-                        ));
+                    Err(_) => {
+                        warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".to_string());
                         None
                     }
                 }
@@ -1506,9 +1481,9 @@ mod tests {
         let sources = seed(&root);
         let config = EmbeddingConfig::new(
             fileconv_core::llm::Provider::OpenAiCompatible,
-            "",
+            "provider-secret",
             "missing-model",
-            Some("http://127.0.0.1:1".into()),
+            Some("http://user:password@127.0.0.1:1?token=hidden".into()),
             None,
         )
         .unwrap();
@@ -1517,6 +1492,9 @@ mod tests {
         assert_eq!(result.vector_dimensions, LOCAL_VECTOR_DIMENSIONS);
         assert_eq!(result.indexed, 2);
         assert!(result.warnings[0].contains("rebuild"));
+        assert!(!result.warnings[0].contains("password"));
+        assert!(!result.warnings[0].contains("hidden"));
+        assert!(!result.warnings[0].contains("provider-secret"));
         let metadata = read_metadata(&open_index(&root).unwrap()).unwrap();
         assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
         std::fs::remove_dir_all(root).ok();
@@ -1538,6 +1516,63 @@ mod tests {
             .unwrap();
         let error = hybrid_search_inner(&root, &sources, "giao dịch", 5, None, true).unwrap_err();
         assert!(error.contains("không nhất quán"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn provider_signature_excludes_transport_url_and_credentials() {
+        let first = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "first-secret",
+            "mock-embedding",
+            Some("https://user:password@embedding.example/v1?token=hidden".into()),
+            Some(768),
+        )
+        .unwrap();
+        let same_deployment = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "second-secret",
+            "mock-embedding",
+            Some("https://embedding.example/v1".into()),
+            Some(768),
+        )
+        .unwrap();
+        let other_deployment = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "second-secret",
+            "mock-embedding",
+            Some("https://embedding-two.example/v1".into()),
+            Some(768),
+        )
+        .unwrap();
+        let first_signature = embedding_plan(Some(first)).metadata.signature;
+        let same_signature = embedding_plan(Some(same_deployment)).metadata.signature;
+        let other_signature = embedding_plan(Some(other_deployment)).metadata.signature;
+        assert_eq!(first_signature, same_signature);
+        assert_ne!(first_signature, other_signature);
+        assert!(!first_signature.contains("password"));
+        assert!(!first_signature.contains("hidden"));
+    }
+
+    #[test]
+    fn unknown_provider_dimensions_remain_recoverable_for_empty_documents() {
+        let root = temp_root();
+        std::fs::write(root.join("empty.txt"), b"").unwrap();
+        std::fs::write(root.join("empty.txt.md"), b"").unwrap();
+        let config = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "",
+            "mock-embedding",
+            Some("http://127.0.0.1:1".into()),
+            None,
+        )
+        .unwrap();
+        let sources = vec!["empty.txt".to_string()];
+        let first = index_documents_inner(&root, &sources, Some(config.clone()), false).unwrap();
+        let second = index_documents_inner(&root, &sources, Some(config), false).unwrap();
+        assert_eq!(first.vector_dimensions, 0);
+        assert_eq!(first.chunks, 0);
+        assert_eq!(second.skipped, 1);
         std::fs::remove_dir_all(root).ok();
     }
 

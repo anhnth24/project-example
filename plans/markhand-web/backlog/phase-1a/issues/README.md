@@ -78,7 +78,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-05 — Query, local vectors và embedding plan
 
-- **Status:** Ready — shared DTO đã đạt; tích hợp signature vẫn phụ thuộc P1A-04.
+- **Status:** Review — triển khai và kiểm thử hoàn tất trong PR #190; chờ merge.
 - **Objective:** Tách pure query/embedding preparation.
 - **Plan:** Normalization, feature hash/vector norm, provider plan, dimension check,
   FTS escape; HTTP client vẫn ở core; giữ local fallback semantics.
