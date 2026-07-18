@@ -3,7 +3,8 @@ SHELL := /bin/bash
 .PHONY: install check-toolchain check-static check-ci check-boundaries check-migrations \
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
-	check-web check-desktop check-foundation bundle-linux dev-up dev-health dev-down dev-reset
+	check-web check-desktop check-foundation check-spike spike-up spike-health \
+	spike-down spike-reset spike-lifecycle bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
 	pnpm install --frozen-lockfile
@@ -44,7 +45,7 @@ check-dependencies:
 	python3 scripts/check-dependency-policy.py
 	python3 scripts/check-dependency-policy.py --self-test
 
-check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies
+check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-spike
 
 check-rust:
 	bash scripts/check-rust-quality.sh
@@ -75,6 +76,25 @@ check-web:
 check-desktop:
 	pnpm --filter markhand-desktop test
 	pnpm --filter markhand-desktop build
+
+check-spike:
+	python3 scripts/validate_spike.py
+	python3 scripts/validate_spike.py --self-test
+
+spike-up:
+	deploy/spike/up.sh
+
+spike-health:
+	deploy/spike/health.sh
+
+spike-down:
+	deploy/spike/down.sh
+
+spike-reset:
+	deploy/spike/reset.sh
+
+spike-lifecycle:
+	deploy/spike/verify-lifecycle.sh
 
 check-foundation: check-toolchain check-static check-rust check-knowledge-extraction check-web
 
