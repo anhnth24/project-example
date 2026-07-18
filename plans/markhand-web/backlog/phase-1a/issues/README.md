@@ -92,7 +92,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-06 — Rank, citation và grounded answer
 
-- **Status:** In progress — extracting rank, citation, snippet and grounding logic.
+- **Status:** Review — extraction and parity/security gates passed; awaiting merge.
 - **Objective:** Reusable hybrid merge, anchors và grounding.
 - **Plan:** Cosine/RRF/rerank/sort; snippet/page-slide-sheet anchor; extractive answer;
   citation validator; separate LLM calls.
