@@ -996,13 +996,26 @@ def self_test() -> None:
     assert unstable["steadyStateStable"] is False
     assert unstable["finalQueueDocuments"] == 600.0
     assert unstable["oldestQueueAgeMinutesAtWindowEnd"] == 60.0
-    headroom = headroom_estimate(1800, 1800, True)
-    assert headroom["meetsHeadroomTargetOnThisRunner"] is True
-    invalid_headroom = headroom_estimate(1800, 0, False)
-    assert invalid_headroom["meetsHeadroomTargetOnThisRunner"] is False
-    queue = queue_simulations(profile, 300, 300, True)
+    local_headroom = headroom_estimate(
+        1800, all_succeeded=True, target_match=False
+    )
+    assert local_headroom["meetsLocalObservationHeadroom"] is True
+    assert local_headroom["capacityValidForGate"] is False
+    assert local_headroom["effectiveCapacityDocsPerHourForGate"] == 0.0
+    gate_headroom = headroom_estimate(1800, all_succeeded=True, target_match=True)
+    assert gate_headroom["capacityValidForGate"] is True
+    assert gate_headroom["effectiveCapacityDocsPerHourForGate"] == 1800.0
+    invalid_headroom = headroom_estimate(1800, all_succeeded=False, target_match=False)
+    assert invalid_headroom["meetsLocalObservationHeadroom"] is False
+    queue = queue_simulations(
+        profile, 300, all_succeeded=True, target_match=False
+    )
+    assert queue["capacityValidForGate"] is False
+    assert queue["effectiveServiceDocsPerHourForGate"] == 0.0
     assert queue["recovery2xNormal"]["unboundedIfSustained"] is True
-    invalid_queue = queue_simulations(profile, 1800, 0, False)
+    invalid_queue = queue_simulations(
+        profile, 1800, all_succeeded=False, target_match=False
+    )
     assert invalid_queue["normal1x"]["finalQueueDocuments"] == 600.0
     manifest = {
         "documents": [
