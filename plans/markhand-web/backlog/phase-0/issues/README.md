@@ -221,9 +221,9 @@ P1A-01 ──────────> P0-03
 
 ## P0-10 — ADR, SLO/RPO/RTO và Phase 0 gate
 
-- **Status:** Done (decision/smoke track) — seven architecture decisions Accepted
+- **Status:** Done — decision/smoke track only; seven architecture decisions Accepted
   (`phase0-decisions.json`); SLA/risk register + restore/query-load smoke recorded.
-  **Not** a production Phase 0 numeric exit: Profile B gates (query P95/P99, ingest
+  Not a production Phase 0 numeric exit: Profile B gates (query P95/P99, ingest
   capacity, DR RPO/RTO, vLLM cutover) remain open (`productionPhase0ExitBlocked=true`).
 - **Objective:** Chuyển evidence thành quyết định và restore/query-load smoke proof.
 - **Plan:** ADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,

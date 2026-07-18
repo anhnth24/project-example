@@ -365,15 +365,14 @@
       "phase": "0",
       "id": "P0-10",
       "title": "P0-10 — ADR, SLO/RPO/RTO và Phase 0 gate",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p0",
-        "blocked"
+        "web-p0"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-10\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChuyển evidence thành quyết định và restore/query-load smoke proof.\n\n## Implementation plan\n\nADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,\nindex migration, backup order; chốt SLO; offline restore smoke; close decision\nregistry with Profile B blockers listed.\n\n## Files/modules\n\n`docs/adr/`, `docs/markhand-web-{sla-targets,risk-register}.md`,\n`bench/markhand_web/reports/restore-drill.md`, `phase0/summary.json`.\n\n## Dependencies / blocks\n\nP0-01…P0-09 + approvers.\n\n## Required tests / evidence\n\n`check-phase0-decisions.py`; phase0 gate harness; offline\nrestore/query-load smoke; Profile B component-loss restore remaining.\n\n## Security and migration notes\n\nPG authority; MinIO originals không reconstruct được;\nmigration expand/cutover/contract.\n\n## Out of scope\n\nProduction HA và user onboarding.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-10\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChuyển evidence thành quyết định và restore/query-load smoke proof.\n\n## Implementation plan\n\nADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,\nindex migration, backup order; chốt SLO; offline restore smoke; close decision\nregistry with Profile B blockers listed.\n\n## Files/modules\n\n`docs/adr/`, `docs/markhand-web-{sla-targets,risk-register}.md`,\n`bench/markhand_web/reports/restore-drill.md`, `phase0/summary.json`.\n\n## Dependencies / blocks\n\nP0-01…P0-09 + approvers.\n\n## Required tests / evidence\n\n`check-phase0-decisions.py`; phase0 gate harness; offline\nrestore/query-load smoke; Profile B component-loss restore remaining.\n\n## Security and migration notes\n\nPG authority; MinIO originals không reconstruct được;\nmigration expand/cutover/contract.\n\n## Out of scope\n\nProduction HA và user onboarding.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
