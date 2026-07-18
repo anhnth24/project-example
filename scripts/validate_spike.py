@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import math
@@ -173,6 +174,11 @@ def expected_target_match(hardware: dict, profiles: list[str]) -> bool:
             str(hardware.get("disk", {}).get("iopsEvidenceSha256", ""))
         )
         is not None
+        and isinstance(hardware.get("disk", {}).get("iopsEvidence"), dict)
+        and hardware["disk"]["iopsEvidence"].get("storageIdentitySha256")
+        == hardware["disk"]["storageIdentitySha256"]
+        and hardware["disk"]["iopsEvidence"].get("randomReadIops", 0)
+        == hardware["disk"]["iopsMeasured"]
         and hardware.get("gpu", {}).get("count", 0) >= target["gpu"]["count"]
         and hardware.get("gpu", {}).get("vramGb", 0) >= target["gpu"]["vramGb"]
         and hardware.get("network", {}).get("bandwidthGbps", 0)
@@ -437,6 +443,54 @@ def validate_report(
         or not isinstance(hardware.get("disk", {}).get("backingSource"), str)
     ):
         errors.append("spike report hardware is incomplete")
+    disk = hardware.get("disk", {})
+    if disk.get("iopsVerified"):
+        evidence = disk.get("iopsEvidence")
+        try:
+            measured_at = dt.datetime.fromisoformat(
+                str(evidence.get("measuredAt", "")).replace("Z", "+00:00")
+            )
+            generated_at = dt.datetime.fromisoformat(
+                str(payload.get("generatedAt", "")).replace("Z", "+00:00")
+            )
+            evidence_age = generated_at - measured_at
+        except (AttributeError, ValueError):
+            evidence_age = dt.timedelta(days=999)
+        evidence_hash = (
+            hashlib.sha256(
+                json.dumps(
+                    evidence,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            if isinstance(evidence, dict)
+            else None
+        )
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("storageIdentitySha256")
+            != disk.get("storageIdentitySha256")
+            or evidence.get("randomReadIops") != disk.get("iopsMeasured")
+            or evidence.get("readOnly") is not True
+            or evidence.get("blockSizeBytes") != 4096
+            or not isinstance(evidence.get("durationSeconds"), int)
+            or evidence["durationSeconds"] < 30
+            or not isinstance(evidence.get("tool"), str)
+            or not evidence["tool"].strip()
+            or not dt.timedelta(0)
+            <= evidence_age
+            <= dt.timedelta(hours=24)
+            or evidence_hash != disk.get("iopsEvidenceSha256")
+            or not SHA256.fullmatch(str(disk.get("iopsEvidenceSha256", "")))
+        ):
+            errors.append("spike report IOPS evidence is not storage-bound")
+    elif (
+        disk.get("iopsMeasured") != 0
+        or disk.get("iopsEvidence") is not None
+        or disk.get("iopsEvidenceSha256") is not None
+    ):
+        errors.append("spike report has unverified IOPS evidence")
     result = payload.get("result", {})
     if result.get("metric") != "healthy_spike_services" or result.get("value") != len(
         expected_runtime

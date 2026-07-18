@@ -73,7 +73,8 @@
                   "type": "object",
                   "required": [
                     "type", "capacityGb", "iopsNote", "iopsMeasured", "iopsVerified",
-                    "iopsEvidenceSha256", "storagePathSha256", "backingSource"
+                    "iopsEvidenceSha256", "iopsEvidence", "storagePathSha256",
+                    "storageIdentitySha256", "backingSource"
                   ],
                   "properties": {
                     "type": {"type": "string", "minLength": 1},
@@ -85,7 +86,24 @@
                       "type": ["string", "null"],
                       "pattern": "^[0-9a-f]{64}$"
                     },
+                    "iopsEvidence": {
+                      "type": ["object", "null"],
+                      "required": [
+                        "storageIdentitySha256", "randomReadIops", "readOnly",
+                        "blockSizeBytes", "durationSeconds", "tool", "measuredAt"
+                      ],
+                      "properties": {
+                        "storageIdentitySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "randomReadIops": {"type": "integer", "minimum": 0},
+                        "readOnly": {"type": "boolean"},
+                        "blockSizeBytes": {"type": "integer", "exclusiveMinimum": 0},
+                        "durationSeconds": {"type": "integer", "exclusiveMinimum": 0},
+                        "tool": {"type": "string", "minLength": 1},
+                        "measuredAt": {"type": "string", "minLength": 1}
+                      }
+                    },
                     "storagePathSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "storageIdentitySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
                     "backingSource": {"type": "string", "minLength": 1}
                   }
                 },
