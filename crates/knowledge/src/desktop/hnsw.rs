@@ -4,9 +4,13 @@
 //! authoritative and desktop search falls back to exact cosine.
 
 use std::collections::HashSet;
+use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use fs2::FileExt;
 use hnsw_rs::api::AnnT;
 use hnsw_rs::prelude::{DistCosine, Hnsw, HnswIo};
 use serde::{Deserialize, Serialize};
@@ -18,6 +22,11 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const MIN_HNSW_POINTS: usize = 128;
 pub const MAX_HNSW_POINTS: usize = 100_000;
 const MAX_VECTOR_DIMENSIONS: usize = 4_096;
+const MAX_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_SIGNATURE_BYTES: usize = 1_024;
+const MAX_CHUNK_ID_BYTES: usize = 4_096;
+const MAX_BASENAME_BYTES: usize = 128;
+static TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,6 +40,107 @@ struct Manifest {
 
 fn failure(message: impl Into<String>) -> KnowledgeError {
     KnowledgeError::AdapterFailure(message.into())
+}
+
+fn lock_file(root: &Path) -> Result<File> {
+    let markhand = root.join(".markhand");
+    std::fs::create_dir_all(&markhand)
+        .map_err(|error| failure(format!("cannot create HNSW lock directory: {error}")))?;
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(markhand.join("vector-index.lock"))
+        .map_err(|error| failure(format!("cannot open HNSW cache lock: {error}")))
+}
+
+fn with_cache_lock<T>(
+    root: &Path,
+    exclusive: bool,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let file = lock_file(root)?;
+    if exclusive {
+        FileExt::lock_exclusive(&file)
+    } else {
+        FileExt::lock_shared(&file)
+    }
+    .map_err(|error| failure(format!("cannot lock HNSW cache: {error}")))?;
+    if exclusive {
+        if let Err(error) = recover_interrupted_replacement(root) {
+            let _ = FileExt::unlock(&file);
+            return Err(error);
+        }
+    }
+    let result = operation();
+    let unlock = FileExt::unlock(&file)
+        .map_err(|error| failure(format!("cannot unlock HNSW cache: {error}")));
+    match (result, unlock) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    }
+}
+
+fn recover_interrupted_replacement(root: &Path) -> Result<()> {
+    let parent = root.join(".markhand/vector-index");
+    let entries = match std::fs::read_dir(&parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(failure(format!(
+                "cannot inspect HNSW recovery state: {error}"
+            )))
+        }
+    };
+    let mut paths = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') && name.ends_with(".tmp") {
+            std::fs::remove_dir_all(&path)
+                .map_err(|error| failure(format!("cannot remove stale HNSW staging: {error}")))?;
+            continue;
+        }
+        let Some(rest) = name
+            .strip_prefix('.')
+            .and_then(|name| name.strip_suffix(".old"))
+        else {
+            continue;
+        };
+        let Some(partition) = rest.split('.').next() else {
+            continue;
+        };
+        if !valid_partition_name(partition) {
+            continue;
+        }
+        let active = parent.join(partition);
+        if active.exists() {
+            std::fs::remove_dir_all(&path)
+                .map_err(|error| failure(format!("cannot remove stale HNSW backup: {error}")))?;
+        } else {
+            std::fs::rename(&path, &active)
+                .map_err(|error| failure(format!("cannot recover HNSW backup: {error}")))?;
+        }
+    }
+    Ok(())
+}
+
+fn valid_partition_name(value: &str) -> bool {
+    let Some((hash, dimensions)) = value.split_once('-') else {
+        return false;
+    };
+    hash.len() == 16
+        && hash.chars().all(|character| character.is_ascii_hexdigit())
+        && !dimensions.is_empty()
+        && dimensions
+            .chars()
+            .all(|character| character.is_ascii_digit())
 }
 
 fn partition_name(signature: &str, dimensions: usize) -> String {
@@ -72,7 +182,11 @@ fn validate_manifest(manifest: &Manifest, signature: &str, dimensions: usize) ->
             "HNSW manifest point count is out of bounds",
         ));
     }
-    if manifest.chunk_ids.iter().any(|id| id.is_empty())
+    if manifest.signature.len() > MAX_SIGNATURE_BYTES
+        || manifest
+            .chunk_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > MAX_CHUNK_ID_BYTES)
         || manifest.chunk_ids.iter().collect::<HashSet<_>>().len() != manifest.chunk_ids.len()
     {
         return Err(KnowledgeError::IncompatibleIndex(
@@ -80,6 +194,7 @@ fn validate_manifest(manifest: &Manifest, signature: &str, dimensions: usize) ->
         ));
     }
     if manifest.basename.is_empty()
+        || manifest.basename.len() > MAX_BASENAME_BYTES
         || manifest
             .basename
             .chars()
@@ -94,7 +209,15 @@ fn validate_manifest(manifest: &Manifest, signature: &str, dimensions: usize) ->
 
 fn read_manifest(directory: &Path, signature: &str, dimensions: usize) -> Result<Manifest> {
     validate_dimensions(dimensions)?;
-    let bytes = std::fs::read(manifest_path(directory))
+    let path = manifest_path(directory);
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| failure(format!("cannot inspect HNSW manifest: {error}")))?;
+    if metadata.len() > MAX_MANIFEST_BYTES {
+        return Err(KnowledgeError::IncompatibleIndex(
+            "HNSW manifest exceeds size limit",
+        ));
+    }
+    let bytes = std::fs::read(path)
         .map_err(|error| failure(format!("cannot read HNSW manifest: {error}")))?;
     let manifest: Manifest = serde_json::from_slice(&bytes)
         .map_err(|_| KnowledgeError::IncompatibleIndex("HNSW manifest is corrupt"))?;
@@ -102,21 +225,59 @@ fn read_manifest(directory: &Path, signature: &str, dimensions: usize) -> Result
     Ok(manifest)
 }
 
+fn validate_index_files(directory: &Path, manifest: &Manifest, dimensions: usize) -> Result<()> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let mut loader = HnswIo::new(directory, &manifest.basename);
+        let hnsw: Hnsw<f32, DistCosine> = loader
+            .load_hnsw()
+            .map_err(|error| failure(format!("cannot load HNSW cache: {error}")))?;
+        if hnsw.get_nb_point() != manifest.chunk_ids.len() {
+            return Err(KnowledgeError::IncompatibleIndex(
+                "HNSW point count does not match manifest",
+            ));
+        }
+        if hnsw.get_point_indexation().get_data_dimension() != dimensions {
+            return Err(KnowledgeError::IncompatibleIndex(
+                "HNSW data dimensions do not match manifest",
+            ));
+        }
+        Ok(())
+    }))
+    .map_err(|_| KnowledgeError::IncompatibleIndex("HNSW cache panicked while loading"))?
+}
+
 pub fn clear(root: &Path) -> Result<()> {
-    let path = root.join(".markhand/vector-index");
-    match std::fs::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(failure(format!("cannot clear HNSW cache: {error}"))),
-    }
+    with_cache_lock(root, true, || {
+        let path = root.join(".markhand/vector-index");
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(failure(format!("cannot clear HNSW cache: {error}"))),
+        }
+    })
 }
 
 pub fn is_available(root: &Path, signature: &str, dimensions: usize) -> bool {
-    let directory = index_directory(root, signature, dimensions);
-    read_manifest(&directory, signature, dimensions).is_ok()
+    with_cache_lock(root, true, || {
+        let directory = index_directory(root, signature, dimensions);
+        let manifest = read_manifest(&directory, signature, dimensions)?;
+        validate_index_files(&directory, &manifest, dimensions)
+    })
+    .is_ok()
 }
 
 pub fn rebuild(
+    root: &Path,
+    signature: &str,
+    dimensions: usize,
+    points: &[(String, Vec<f32>)],
+) -> Result<bool> {
+    with_cache_lock(root, true, || {
+        rebuild_locked(root, signature, dimensions, points)
+    })
+}
+
+fn rebuild_locked(
     root: &Path,
     signature: &str,
     dimensions: usize,
@@ -137,10 +298,9 @@ pub fn rebuild(
             "HNSW point count exceeds 100000",
         ));
     }
-    if points
-        .iter()
-        .any(|(id, vector)| id.is_empty() || vector.len() != dimensions)
-    {
+    if points.iter().any(|(id, vector)| {
+        id.is_empty() || vector.len() != dimensions || vector.iter().any(|value| !value.is_finite())
+    }) {
         return Err(KnowledgeError::InvalidInput(
             "HNSW point identifier or dimensions are invalid",
         ));
@@ -156,6 +316,18 @@ pub fn rebuild(
             "HNSW point identifiers must be unique",
         ));
     }
+    let worst_case_manifest_bytes = points
+        .iter()
+        .try_fold(
+            signature.len().saturating_mul(6) + 1_024,
+            |total, (id, _)| total.checked_add(id.len().saturating_mul(6) + 8),
+        )
+        .ok_or(KnowledgeError::InvalidInput("HNSW manifest size overflow"))?;
+    if worst_case_manifest_bytes > MAX_MANIFEST_BYTES as usize {
+        return Err(KnowledgeError::InvalidInput(
+            "HNSW manifest would exceed size limit",
+        ));
+    }
 
     let parent = directory
         .parent()
@@ -165,7 +337,8 @@ pub fn rebuild(
     std::fs::create_dir_all(parent)
         .map_err(|error| failure(format!("cannot create HNSW parent: {error}")))?;
     let partition = partition_name(signature, dimensions);
-    let temporary = parent.join(format!(".{partition}.{}.tmp", std::process::id()));
+    let nonce = TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".{partition}.{}.{nonce}.tmp", std::process::id()));
     match std::fs::remove_dir_all(&temporary) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -178,13 +351,22 @@ pub fn rebuild(
     std::fs::create_dir_all(&temporary)
         .map_err(|error| failure(format!("cannot create temporary HNSW cache: {error}")))?;
 
-    let hnsw = Hnsw::<f32, DistCosine>::new(16, points.len(), 16, 200, DistCosine {});
-    for (index, (_, vector)) in points.iter().enumerate() {
-        hnsw.insert((vector.as_slice(), index));
-    }
-    let basename = hnsw
-        .file_dump(&temporary, "index")
-        .map_err(|error| failure(format!("cannot dump HNSW cache: {error}")))?;
+    let build = catch_unwind(AssertUnwindSafe(|| {
+        let hnsw = Hnsw::<f32, DistCosine>::new(16, points.len(), 16, 200, DistCosine {});
+        for (index, (_, vector)) in points.iter().enumerate() {
+            hnsw.insert((vector.as_slice(), index));
+        }
+        hnsw.file_dump(&temporary, "index")
+            .map_err(|error| failure(format!("cannot dump HNSW cache: {error}")))
+    }))
+    .map_err(|_| KnowledgeError::AdapterUnavailable("HNSW cache panicked while rebuilding"));
+    let basename = match build {
+        Ok(Ok(basename)) => basename,
+        Ok(Err(error)) | Err(error) => {
+            let _ = std::fs::remove_dir_all(&temporary);
+            return Err(error);
+        }
+    };
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
         signature: signature.into(),
@@ -192,15 +374,29 @@ pub fn rebuild(
         chunk_ids: points.iter().map(|(id, _)| id.clone()).collect(),
         basename,
     };
-    validate_manifest(&manifest, signature, dimensions)?;
-    std::fs::write(
-        manifest_path(&temporary),
-        serde_json::to_vec_pretty(&manifest)
-            .map_err(|error| failure(format!("cannot encode HNSW manifest: {error}")))?,
-    )
-    .map_err(|error| failure(format!("cannot write HNSW manifest: {error}")))?;
+    if let Err(error) = validate_manifest(&manifest, signature, dimensions) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(error);
+    }
+    let manifest_bytes = match serde_json::to_vec_pretty(&manifest) {
+        Ok(bytes) if bytes.len() <= MAX_MANIFEST_BYTES as usize => bytes,
+        Ok(_) => {
+            let _ = std::fs::remove_dir_all(&temporary);
+            return Err(KnowledgeError::InvalidInput(
+                "HNSW manifest exceeds size limit",
+            ));
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&temporary);
+            return Err(failure(format!("cannot encode HNSW manifest: {error}")));
+        }
+    };
+    if let Err(error) = std::fs::write(manifest_path(&temporary), manifest_bytes) {
+        let _ = std::fs::remove_dir_all(&temporary);
+        return Err(failure(format!("cannot write HNSW manifest: {error}")));
+    }
 
-    let backup = parent.join(format!(".{partition}.{}.old", std::process::id()));
+    let backup = parent.join(format!(".{partition}.{}.{nonce}.old", std::process::id()));
     match std::fs::remove_dir_all(&backup) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -212,7 +408,11 @@ pub fn rebuild(
     }
     if let Err(error) = std::fs::rename(&temporary, &directory) {
         if backup.exists() {
-            let _ = std::fs::rename(&backup, &directory);
+            std::fs::rename(&backup, &directory).map_err(|rollback| {
+                failure(format!(
+                    "cannot activate HNSW cache ({error}); rollback also failed: {rollback}"
+                ))
+            })?;
         }
         return Err(failure(format!("cannot activate HNSW cache: {error}")));
     }
@@ -221,6 +421,18 @@ pub fn rebuild(
 }
 
 pub fn search(
+    root: &Path,
+    signature: &str,
+    dimensions: usize,
+    query: &[f32],
+    limit: usize,
+) -> Result<Vec<(String, f32)>> {
+    with_cache_lock(root, false, || {
+        search_locked(root, signature, dimensions, query, limit)
+    })
+}
+
+fn search_locked(
     root: &Path,
     signature: &str,
     dimensions: usize,
@@ -239,30 +451,39 @@ pub fn search(
     }
     let directory = index_directory(root, signature, dimensions);
     let manifest = read_manifest(&directory, signature, dimensions)?;
-    let mut loader = HnswIo::new(&directory, &manifest.basename);
-    let hnsw: Hnsw<f32, DistCosine> = loader
-        .load_hnsw()
-        .map_err(|error| failure(format!("cannot load HNSW cache: {error}")))?;
-    if hnsw.get_nb_point() != manifest.chunk_ids.len() {
-        return Err(KnowledgeError::IncompatibleIndex(
-            "HNSW point count does not match manifest",
-        ));
-    }
-    let neighbours = hnsw.search(query, limit.min(manifest.chunk_ids.len()), 96);
-    Ok(neighbours
-        .into_iter()
-        .filter_map(|neighbour| {
-            manifest
-                .chunk_ids
-                .get(neighbour.d_id)
-                .map(|id| (id.clone(), (1.0 - neighbour.distance).clamp(-1.0, 1.0)))
-        })
-        .collect())
+    catch_unwind(AssertUnwindSafe(|| {
+        let mut loader = HnswIo::new(&directory, &manifest.basename);
+        let hnsw: Hnsw<f32, DistCosine> = loader
+            .load_hnsw()
+            .map_err(|error| failure(format!("cannot load HNSW cache: {error}")))?;
+        if hnsw.get_nb_point() != manifest.chunk_ids.len() {
+            return Err(KnowledgeError::IncompatibleIndex(
+                "HNSW point count does not match manifest",
+            ));
+        }
+        if hnsw.get_point_indexation().get_data_dimension() != dimensions {
+            return Err(KnowledgeError::IncompatibleIndex(
+                "HNSW data dimensions do not match manifest",
+            ));
+        }
+        let neighbours = hnsw.search(query, limit.min(manifest.chunk_ids.len()), 96);
+        Ok(neighbours
+            .into_iter()
+            .filter_map(|neighbour| {
+                manifest
+                    .chunk_ids
+                    .get(neighbour.d_id)
+                    .map(|id| (id.clone(), (1.0 - neighbour.distance).clamp(-1.0, 1.0)))
+            })
+            .collect())
+    }))
+    .map_err(|_| KnowledgeError::IncompatibleIndex("HNSW cache panicked while loading"))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
 
     fn temp_root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -314,6 +535,18 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_vectors_are_rejected_before_hnsw() {
+        let root = temp_root("non_finite");
+        let mut points = points();
+        points[0].1[0] = f32::NAN;
+        assert!(matches!(
+            rebuild(&root, "test-signature", 16, &points),
+            Err(KnowledgeError::InvalidInput(_))
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn corrupt_mismatch_and_count_do_not_become_available() {
         let root = temp_root("corrupt");
         let directory = index_directory(&root, "test-signature", 16);
@@ -336,6 +569,78 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_index_files_return_error_instead_of_panicking() {
+        let root = temp_root("corrupt_index");
+        let points = points();
+        rebuild(&root, "test-signature", 16, &points).unwrap();
+        let directory = index_directory(&root, "test-signature", 16);
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.file_name().and_then(|name| name.to_str()) != Some("manifest.json") {
+                std::fs::write(path, b"corrupt-index").unwrap();
+            }
+        }
+        assert!(!is_available(&root, "test-signature", 16));
+        assert!(search(&root, "test-signature", 16, &points[0].1, 1).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_rebuilds_use_distinct_staging_directories() {
+        let root = Arc::new(temp_root("concurrent"));
+        let points = Arc::new(points());
+        let barrier = Arc::new(Barrier::new(3));
+        let handles = (0..2)
+            .map(|_| {
+                let root = Arc::clone(&root);
+                let points = Arc::clone(&points);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    rebuild(&root, "test-signature", 16, &points)
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        for handle in handles {
+            assert!(handle.join().unwrap().unwrap());
+        }
+        let result = search(&root, "test-signature", 16, &points[173].1, 1).unwrap();
+        assert_eq!(result[0].0, "chunk-173");
+        let _ = std::fs::remove_dir_all(root.as_ref());
+    }
+
+    #[test]
+    fn interrupted_replacement_restores_backup_on_next_exclusive_lock() {
+        let root = temp_root("recovery");
+        let points = points();
+        rebuild(&root, "test-signature", 16, &points).unwrap();
+        let directory = index_directory(&root, "test-signature", 16);
+        let partition = partition_name("test-signature", 16);
+        let backup = directory
+            .parent()
+            .unwrap()
+            .join(format!(".{partition}.999.1.old"));
+        std::fs::rename(&directory, &backup).unwrap();
+        assert!(!directory.exists());
+        assert!(is_available(&root, "test-signature", 16));
+        assert!(directory.exists());
+        assert!(!backup.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn oversized_manifest_is_rejected_before_reading() {
+        let root = temp_root("oversized");
+        let directory = index_directory(&root, "test-signature", 16);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = File::create(manifest_path(&directory)).unwrap();
+        file.set_len(MAX_MANIFEST_BYTES + 1).unwrap();
+        assert!(!is_available(&root, "test-signature", 16));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn legacy_partition_hash_is_stable() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../fixtures/legacy-hnsw-v1.json")).unwrap();
@@ -345,5 +650,24 @@ mod tests {
             partition_name(signature, dimensions),
             fixture["partition"].as_str().unwrap()
         );
+    }
+
+    #[test]
+    fn legacy_binary_fixture_opens_and_searches() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures/legacy-hnsw-index-v1/.markhand/vector-index")
+            .join(partition_name("local_hash_v1", 256));
+        let root = temp_root("legacy_fixture");
+        let target = index_directory(&root, "local_hash_v1", 256);
+        std::fs::create_dir_all(&target).unwrap();
+        for name in ["manifest.json", "index.hnsw.data", "index.hnsw.graph"] {
+            std::fs::copy(fixture.join(name), target.join(name)).unwrap();
+        }
+        let mut query = vec![0.0; 256];
+        query[0] = 1.0;
+        assert!(is_available(&root, "local_hash_v1", 256));
+        let result = search(&root, "local_hash_v1", 256, &query, 3).unwrap();
+        assert_eq!(result[0].0, "legacy-chunk-000");
+        let _ = std::fs::remove_dir_all(root);
     }
 }

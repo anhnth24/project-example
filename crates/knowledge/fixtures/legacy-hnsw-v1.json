@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "signature": "local_hash_v1",
   "dimensions": 256,
-  "partition": "PENDING",
+  "partition": "768583ce5f3014be-256",
   "layout": ".markhand/vector-index/{partition}",
   "source": "synthetic legacy desktop compatibility vector"
 }

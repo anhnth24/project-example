@@ -10,6 +10,46 @@
       "source": "synthetic",
       "license": "CC0-1.0",
       "sensitive": false
+    },
+    {
+      "id": "knowledge.legacy-hnsw.v1",
+      "path": "legacy-hnsw-v1.json",
+      "sha256": "aca437c59a3349de941a32ae24208fa44985b3122031d0aa6af7faac96d57707",
+      "kind": "hnsw-manifest-vector",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "knowledge.legacy-hnsw-index.v1.manifest",
+      "path": "legacy-hnsw-index-v1/.markhand/vector-index/768583ce5f3014be-256/manifest.json",
+      "sha256": "d99ad93794315894fa057dfaec6b2a82fefed33c29bf3910719bfefeec29d47c",
+      "kind": "hnsw-manifest",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "knowledge.legacy-hnsw-index.v1.data",
+      "path": "legacy-hnsw-index-v1/.markhand/vector-index/768583ce5f3014be-256/index.hnsw.data",
+      "sha256": "246643485c0c94b85bc83352b1150578a4a67194d543e2e91843de5012583885",
+      "kind": "hnsw-data",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
+      "id": "knowledge.legacy-hnsw-index.v1.graph",
+      "path": "legacy-hnsw-index-v1/.markhand/vector-index/768583ce5f3014be-256/index.hnsw.graph",
+      "sha256": "e6184de45d28ec4b97ab874936b46d7155d097938134f8fc9a7c6501441bd718",
+      "kind": "hnsw-graph",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
     }
   ]
 }
