@@ -1068,7 +1068,9 @@ mod tests {
         assert_eq!(glm.default_model, "embedding-3");
         assert!(glm.requires_api_key);
         assert!(!glm.local);
-        assert!(presets.iter().any(|preset| preset.id == "vllm" && preset.local));
+        assert!(presets
+            .iter()
+            .any(|preset| preset.id == "vllm" && preset.local));
     }
 
     #[test]
