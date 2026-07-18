@@ -13,6 +13,10 @@ permissions:
   issues: write
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -21,8 +25,8 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - name: Install GitHub CLI
-        run: sudo apt-get update && sudo apt-get install -y gh
+      - name: Verify preinstalled GitHub CLI
+        run: gh --version
       - name: Ensure phase milestones
         env:
           GH_TOKEN: ${{ github.token }}

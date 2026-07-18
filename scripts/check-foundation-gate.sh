@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+static_only=false
+if [[ "${1:-}" == "--static-only" ]]; then
+  static_only=true
+elif [[ $# -ne 0 ]]; then
+  echo "usage: $0 [--static-only]" >&2
+  exit 2
+fi
+
 required_files=(
   CONTRIBUTING.md
   Makefile
@@ -26,9 +34,12 @@ for path in "${required_files[@]}"; do
   }
 done
 
-make check-toolchain
 make check-static
 cargo metadata --locked --no-deps --format-version 1 >/dev/null
-pnpm list --recursive --depth -1 >/dev/null
+
+if [[ "$static_only" == false ]]; then
+  make check-toolchain
+  pnpm list --recursive --depth -1 >/dev/null
+fi
 
 echo "Phase F foundation files, toolchain and static gates are ready"

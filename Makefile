@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: install check-toolchain check-static check-boundaries check-migrations \
+.PHONY: install check-toolchain check-static check-ci check-boundaries check-migrations \
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-web check-desktop check-foundation bundle-linux dev-up dev-health dev-down dev-reset
@@ -13,6 +13,9 @@ check-toolchain:
 	rustc --version | grep -q '^rustc 1\.88\.'
 	cargo --version
 	python3 --version
+
+check-ci:
+	python3 scripts/classify-ci-changes.py --self-test
 
 check-boundaries:
 	python3 scripts/check-architecture-boundaries.py
@@ -39,7 +42,7 @@ check-dependencies:
 	python3 scripts/check-dependency-policy.py
 	python3 scripts/check-dependency-policy.py --self-test
 
-check-static: check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies
+check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies
 
 check-rust:
 	bash scripts/check-rust-quality.sh
