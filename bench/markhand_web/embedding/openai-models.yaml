@@ -1,0 +1,71 @@
+version: 1
+issue: P0-05
+track: openai-cloud-reject
+chunkingVersion: heading-chunks-2000-v1
+payloadFormat: "{heading}\\n{text}"
+normalize: l2
+ranking: "max-pool-chunk-cosine -> document"
+provider: openai-compatible
+baseUrl: https://api.openai.com
+apiKeyEnv: FILECONV_EMBEDDING_API_KEY
+gates:
+  recallAt5:
+    operator: ">="
+    value: 0.85
+    gateId: G0-RET-RECALL-AT-5
+    statistic: min
+  bestModelNdcgGap:
+    operator: "<="
+    value: 0.02
+    gateId: G0-RET-BEST-MODEL-GAP
+    statistic: max
+models:
+  - id: text-embedding-3-large-full
+    role: rejected-comparator
+    family: openai-3-large
+    provider: openai-compatible
+    model: text-embedding-3-large
+    # OpenAI model ids are mutable aliases; this is an observation date, not a SHA.
+    revision: openai-alias-observed-2026-07-18
+    dimensions: 3072
+    dimensionsRequest: null
+    maxSeqLength: 8191
+    wordSegment: false
+    batchSize: 64
+    notes: Full 3072-d OpenAI 3-large on golden corpus (desktop payload parity).
+  - id: text-embedding-3-large-d1536
+    role: rejected-comparator
+    family: openai-3-large-matryoshka
+    provider: openai-compatible
+    model: text-embedding-3-large
+    revision: openai-alias-observed-2026-07-18
+    dimensions: 1536
+    dimensionsRequest: 1536
+    maxSeqLength: 8191
+    wordSegment: false
+    batchSize: 64
+    notes: Matryoshka 1536-d truncate of OpenAI 3-large.
+  - id: text-embedding-3-small-full
+    role: rejected-comparator
+    family: openai-3-small
+    provider: openai-compatible
+    model: text-embedding-3-small
+    revision: openai-alias-observed-2026-07-18
+    dimensions: 1536
+    dimensionsRequest: null
+    maxSeqLength: 8191
+    wordSegment: false
+    batchSize: 64
+    notes: Full OpenAI 3-small.
+  - id: text-embedding-ada-002
+    role: rejected-comparator
+    family: openai-ada-002
+    provider: openai-compatible
+    model: text-embedding-ada-002
+    revision: openai-alias-observed-2026-07-18
+    dimensions: 1536
+    dimensionsRequest: null
+    maxSeqLength: 8191
+    wordSegment: false
+    batchSize: 64
+    notes: Legacy ada-002 catalog completeness.

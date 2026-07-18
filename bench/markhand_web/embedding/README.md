@@ -19,10 +19,15 @@ python3 bench/markhand_web/scripts/run_embedding_eval.py --self-test
 python3 bench/markhand_web/scripts/run_embedding_eval.py --runs 3
 ```
 
-Each `--runs` iteration **reloads** the model (independent loads). Gate statistics:
+Each `--runs` iteration **reloads** the model (independent loads). Gate statistics
+come from `models.yaml` (authoritative):
 
 - Recall@5 → **min** across runs
 - best-model nDCG gap → **max** across per-run gaps
+
+Gating protocol requires ≥2 model families and ≥3 runs (otherwise pass
+`--allow-nongating` and the comparative verdict is disabled). Fixtures are
+validated against `manifest.lock.json`.
 
 Outputs:
 
@@ -30,8 +35,15 @@ Outputs:
 - `bench/markhand_web/reports/embedding-evaluation.md`
 - `bench/markhand_web/embedding/results/summary.json`
 
-OpenAI cloud rejection evidence (dense max-pool on the same corpus):  
-`embedding/results/openai-rejected/`.
+OpenAI cloud rejection (same harness, `FILECONV_EMBEDDING_API_KEY`):
 
-CPU is enough for quality. Capacity/VRAM evidence still requires a NVIDIA GPU
-environment (`on-prem-reference`) and is out of scope for this smoke track.
+```bash
+python3 bench/markhand_web/scripts/run_embedding_eval.py \
+  --catalog bench/markhand_web/embedding/openai-models.yaml
+```
+
+Outputs under `embedding/results/openai-rejected/` (per-model `run-*.json` with
+rows + ranking fingerprints).
+
+CPU is enough for local quality. Capacity/VRAM evidence still requires a NVIDIA
+GPU environment (`on-prem-reference`) and is out of scope for this smoke track.

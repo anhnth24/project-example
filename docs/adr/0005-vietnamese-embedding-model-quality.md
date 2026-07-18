@@ -10,13 +10,14 @@
 ## Context
 
 Phase 0 gate `G0-RET-RECALL-AT-5` requires Recall@5 >= 0.85 on the Vietnamese
-golden corpus. OpenAI cloud embeddings failed the dense quality gate on this
-corpus: best observed Recall@5 was **0.7794** (`text-embedding-ada-002`,
-1536-d) under the same dense max-pool protocol — see committed evidence in
-`bench/markhand_web/embedding/results/openai-rejected/` (catalog verdict +
-per-model JSON). P0-05 also requires comparing at least two model families on
-the same corpus/hardware with immutable config evidence, plus capacity
-measurements on target GPU.
+golden corpus. OpenAI cloud embeddings were re-measured with the same harness
+protocol as local models (desktop `{heading}\n{text}` payload, fixture lock,
+per-query rows + `rankingSha256`) via `FILECONV_EMBEDDING_API_KEY` →
+`api.openai.com`. Best dense Recall@5 was **0.7752** (`text-embedding-ada-002`,
+1536-d) — see `bench/markhand_web/embedding/results/openai-rejected/`. The
+track is non-gating reject evidence (not a selection draft). P0-05 also requires
+comparing at least two local model families on the same corpus/hardware with
+immutable config evidence, plus capacity measurements on target GPU.
 
 Public Vietnamese evidence points to a BGE-M3 fine-tune as the strongest dense
 candidate and a lighter PhoBERT bi-encoder as the smallest model still reporting
@@ -56,9 +57,11 @@ This ADR stays `Proposed` until:
 
 ## Alternatives considered
 
-- OpenAI `text-embedding-3-*` / `ada-002`: measured dense Recall@5 < 0.85 on
-  Markhand golden (ada-002 best at 0.7794); rejected for selection. Evidence:
-  `bench/markhand_web/embedding/results/openai-rejected/`.
+- OpenAI `text-embedding-3-*` / `ada-002`: harness re-run reports dense
+  Recall@5 < 0.85 (ada-002 best 0.7752); rejected for selection. Auditable
+  reject pack:
+  `bench/markhand_web/embedding/results/openai-rejected/`
+  (`openai-models.yaml` + `run-*.json` rows/fingerprints).
 - Base `BAAI/bge-m3` dense-only: public Zalo Acc@5 ~0.838 (below margin); keep as
   backbone reference, not draft selected model.
 - `intfloat/multilingual-e5-large`: strong hybrid partner in multi-domain studies;
@@ -74,9 +77,12 @@ python3 bench/markhand_web/scripts/run_embedding_eval.py --runs 3
 
 Harness notes (Sol review fixes):
 
-- embedding payload = desktop `{heading}\n{text}` (not markdown `# heading`)
+- embedding payload = desktop `{heading}\n{text}` (including empty heading)
 - each run reloads the model; Recall@5 gate uses **min**, nDCG gap uses **max**
-- selection requires both quality gates; per-query `rows` kept in `run-*.json`
+- selection requires both quality gates under gating protocol (≥2 families, ≥3 runs)
+- catalog `models.yaml` gates/chunking/normalize/ranking are authoritative
+- revisions must be full 40-hex SHAs; fixtures checked vs `manifest.lock.json`
+- per-query `rows` kept in `run-*.json`; dirty paths recorded at eval start
 
 Inspect `bench/markhand_web/reports/embedding-evaluation.md` and
 `bench/markhand_web/embedding/results/summary.json`.
