@@ -2,14 +2,24 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use fileconv_core::intelligence::{self, CorpusDocument};
+use fileconv_core::intelligence;
 use fileconv_core::llm::EmbeddingConfig;
+use fileconv_knowledge::ask::{
+    extractive_answer, grounded_user_prompt, retrieval_context, valid_citation_ids,
+    GROUNDED_SYSTEM_PROMPT,
+};
+use fileconv_knowledge::citation::{
+    extract_snippet as snippet, infer_source_anchor, validate_grounded_answer as answer_is_grounded,
+};
 use fileconv_knowledge::embedding::{
     local_vector as shared_local_vector, validate_embedding_batch,
     EmbeddingPlan as SharedEmbeddingPlan, EmbeddingVector, ProviderDeployment,
     LOCAL_EMBEDDING_MODE, LOCAL_VECTOR_DIMENSIONS, PROVIDER_EMBEDDING_MODE,
 };
 use fileconv_knowledge::query::{fts5_prefix_query, normalized_tokens};
+use fileconv_knowledge::rank::{
+    cosine_similarity as cosine, hybrid_rerank_score, sort_hybrid_hits,
+};
 pub use fileconv_knowledge::types::{
     GroundedAnswer, HybridAskRequest, HybridSearchHit, HybridSearchRequest, HybridSearchResponse,
     IndexBuildResult, IndexMetadata, IndexRequest, IndexStats, SourceAnchor,
@@ -193,13 +203,6 @@ fn load_vector_points(
     Ok(points)
 }
 
-fn cosine(left: &[f32], right: &[f32]) -> f32 {
-    if left.len() != right.len() || left.is_empty() {
-        return 0.0;
-    }
-    left.iter().zip(right).map(|(a, b)| a * b).sum()
-}
-
 fn provider_name(provider: fileconv_core::llm::Provider) -> String {
     format!("{provider:?}").to_ascii_lowercase()
 }
@@ -333,25 +336,6 @@ fn clear_index(root: &Path, connection: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn infer_anchor(document: &CorpusDocument, chunk: &intelligence::CorpusChunk) -> SourceAnchor {
-    let folded = intelligence::normalize_search_text(&chunk.heading);
-    let slide = folded
-        .split("slide ")
-        .nth(1)
-        .and_then(|value| value.split_whitespace().next())
-        .and_then(|value| value.parse().ok());
-    let sheet = (document.format == "xlsx")
-        .then(|| chunk.heading.split(" > ").last().unwrap_or("").to_string())
-        .filter(|value| !value.is_empty());
-    SourceAnchor {
-        page: chunk.page,
-        slide,
-        sheet,
-        start: chunk.start,
-        end: chunk.end,
-    }
-}
-
 fn index_documents_with_plan(
     root: &Path,
     source_rels: &[String],
@@ -450,7 +434,13 @@ fn index_documents_with_plan(
             )
             .map_err(es)?;
         for (chunk, vector) in chunks.iter().zip(vectors.iter()) {
-            let anchor = infer_anchor(document, chunk);
+            let anchor = infer_source_anchor(
+                &document.format,
+                &chunk.heading,
+                chunk.page,
+                chunk.start,
+                chunk.end,
+            );
             transaction
                 .execute(
                     "INSERT INTO chunks (
@@ -631,21 +621,6 @@ fn load_all_chunks(
     Ok(chunks)
 }
 
-fn snippet(body: &str, query_tokens: &[String]) -> String {
-    let words: Vec<&str> = body.split_whitespace().collect();
-    let folded_words: Vec<String> = words
-        .iter()
-        .map(|word| intelligence::normalize_search_text(word))
-        .collect();
-    let match_index = folded_words
-        .iter()
-        .position(|word| query_tokens.iter().any(|token| word.contains(token)))
-        .unwrap_or(0);
-    let start = match_index.saturating_sub(12);
-    let end = (start + 56).min(words.len());
-    words[start..end].join(" ")
-}
-
 fn hybrid_search_inner(
     root: &Path,
     source_rels: &[String],
@@ -797,26 +772,14 @@ fn hybrid_search_inner(
         };
         let (lex_rank, lex_score) = lexical_rank.get(&id).copied().unwrap_or((usize::MAX, 0.0));
         let (vec_rank, vec_score) = vector_rank.get(&id).copied().unwrap_or((usize::MAX, 0.0));
-        let mut rrf = 0.0_f32;
-        if lex_rank != usize::MAX {
-            rrf += 1.0 / (60.0 + lex_rank as f32);
-        }
-        if vec_rank != usize::MAX {
-            rrf += 1.0 / (60.0 + vec_rank as f32);
-        }
-        let folded_heading = intelligence::normalize_search_text(&chunk.heading);
-        let heading_hits = query_tokens
-            .iter()
-            .filter(|token| folded_heading.contains(*token))
-            .count() as f32;
-        let body_tokens: HashSet<String> = normalized_tokens(&chunk.body).into_iter().collect();
-        let overlap = query_tokens
-            .iter()
-            .filter(|token| body_tokens.contains(*token))
-            .count() as f32
-            / query_tokens.len().max(1) as f32;
-        let rerank_score =
-            rrf * 30.0 + vec_score.max(0.0) * 0.55 + overlap * 0.35 + heading_hits * 0.1;
+        let rerank_score = hybrid_rerank_score(
+            (lex_rank != usize::MAX).then_some(lex_rank),
+            (vec_rank != usize::MAX).then_some(vec_rank),
+            vec_score,
+            &query_tokens,
+            &chunk.heading,
+            &chunk.body,
+        );
         results.push(HybridSearchHit {
             chunk_id: chunk.id.clone(),
             source_rel: chunk.source_rel.clone(),
@@ -835,69 +798,13 @@ fn hybrid_search_inner(
             },
         });
     }
-    results.sort_by(|a, b| {
-        b.rerank_score
-            .partial_cmp(&a.rerank_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sort_hybrid_hits(&mut results);
     results.truncate(limit.max(1));
     Ok(HybridSearchResponse {
         hits: results,
         warnings,
         embedding_mode: metadata.mode,
     })
-}
-
-fn extractive_answer(question: &str, hits: &[HybridSearchHit]) -> String {
-    if hits.is_empty() {
-        return "Không tìm thấy bằng chứng phù hợp trong kho tri thức.".into();
-    }
-    let mut answer = format!(
-        "## Trả lời trích xuất\n\nCâu hỏi: **{}**\n\n",
-        question.trim()
-    );
-    for (index, hit) in hits.iter().enumerate() {
-        answer.push_str(&format!(
-            "{}. {} [CITE-{:04}]\n\n",
-            index + 1,
-            hit.snippet,
-            index + 1
-        ));
-    }
-    answer
-}
-
-fn answer_is_grounded(answer: &str, valid_ids: &HashSet<String>) -> Result<(), Vec<String>> {
-    let mut warnings = Vec::new();
-    let cited: HashSet<String> = answer
-        .split(|character: char| {
-            character.is_whitespace() || matches!(character, '[' | ']' | '(' | ')' | ',' | '.')
-        })
-        .filter(|part| part.starts_with("CITE-"))
-        .map(str::to_string)
-        .collect();
-    if cited.is_empty() {
-        warnings.push("LLM không trả citation; đã fallback extractive.".into());
-    }
-    for citation in cited {
-        if !valid_ids.contains(&citation) {
-            warnings.push(format!("LLM dùng citation không tồn tại: {citation}"));
-        }
-    }
-    for paragraph in answer.split("\n\n") {
-        let factual = paragraph.chars().count() >= 60
-            && !paragraph.starts_with('#')
-            && !paragraph.starts_with("Câu hỏi:");
-        if factual && !paragraph.contains("[CITE-") {
-            warnings.push("Có đoạn trả lời dài không gắn citation.".into());
-            break;
-        }
-    }
-    if warnings.is_empty() {
-        Ok(())
-    } else {
-        Err(warnings)
-    }
 }
 
 #[tauri::command]
@@ -1060,31 +967,9 @@ fn hybrid_ask_inner(
             },
         });
     }
-    let context = hits
-        .iter()
-        .enumerate()
-        .map(|(index, hit)| {
-            format!(
-                "[CITE-{:04}] {} > {}\n{}",
-                index + 1,
-                hit.source_rel,
-                hit.heading,
-                hit.snippet
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let prompt = format!(
-        "Câu hỏi: {}\n\nNguồn:\n{}\n\n\
-         Chỉ trả lời từ nguồn. Mỗi đoạn factual phải kết thúc bằng [CITE-xxxx]. \
-         Nếu nguồn thiếu, nói rõ không đủ dữ liệu.",
-        req.question, context
-    );
-    let llm_answer = match fileconv_core::llm::chat(
-        &config,
-        "Bạn là trợ lý kho tri thức trung thực. Không bịa và luôn trích citation.",
-        &prompt,
-    ) {
+    let context = retrieval_context(&hits);
+    let prompt = grounded_user_prompt(&req.question, &context);
+    let llm_answer = match fileconv_core::llm::chat(&config, GROUNDED_SYSTEM_PROMPT, &prompt) {
         Ok(answer) => answer,
         Err(error) => {
             return Ok(GroundedAnswer {
@@ -1101,9 +986,7 @@ fn hybrid_ask_inner(
             });
         }
     };
-    let valid_ids: HashSet<String> = (0..hits.len())
-        .map(|index| format!("CITE-{:04}", index + 1))
-        .collect();
+    let valid_ids = valid_citation_ids(hits.len());
     match answer_is_grounded(&llm_answer, &valid_ids) {
         Ok(()) => {
             let local = config
