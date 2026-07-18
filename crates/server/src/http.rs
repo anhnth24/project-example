@@ -17,11 +17,17 @@ use crate::config::RuntimeEndpoints;
 use crate::database;
 
 const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
+const READINESS_CACHE_TTL: Duration = Duration::from_secs(1);
 
-#[derive(Clone)]
 pub struct AppState {
     endpoints: RuntimeEndpoints,
     http_client: reqwest::Client,
+    readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
+}
+
+struct CachedReadiness {
+    checked_at: tokio::time::Instant,
+    result: Result<(), ()>,
 }
 
 impl AppState {
@@ -33,6 +39,7 @@ impl AppState {
         Ok(Self {
             endpoints,
             http_client,
+            readiness: tokio::sync::Mutex::new(None),
         })
     }
 }
@@ -56,11 +63,31 @@ async fn liveness() -> Json<Health> {
 }
 
 async fn readiness(State(state): State<Arc<AppState>>) -> Result<Json<Health>, ReadinessError> {
-    check_dependencies(state).await.map_err(ReadinessError)?;
+    check_dependencies(state).await?;
     Ok(Json(healthy()))
 }
 
-async fn check_dependencies(state: Arc<AppState>) -> Result<(), String> {
+async fn check_dependencies(state: Arc<AppState>) -> Result<(), ReadinessError> {
+    let mut cached = state.readiness.lock().await;
+    if let Some(previous) = cached.as_ref() {
+        if previous.checked_at.elapsed() < READINESS_CACHE_TTL {
+            return previous
+                .result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|_| ReadinessError);
+        }
+    }
+
+    let result = check_dependencies_uncached(&state).await;
+    *cached = Some(CachedReadiness {
+        checked_at: tokio::time::Instant::now(),
+        result: result.as_ref().map(|_| ()).map_err(|_| ()),
+    });
+    result.map_err(|_| ReadinessError)
+}
+
+async fn check_dependencies_uncached(state: &AppState) -> Result<(), String> {
     let database = timeout(
         DEPENDENCY_TIMEOUT,
         database::check_connection(state.endpoints.database_url.expose()),
@@ -99,7 +126,7 @@ fn healthy() -> Health {
     }
 }
 
-struct ReadinessError(String);
+struct ReadinessError;
 
 impl IntoResponse for ReadinessError {
     fn into_response(self) -> Response {

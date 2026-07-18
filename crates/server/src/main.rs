@@ -10,10 +10,13 @@ async fn main() {
     }
     match fileconv_server::config::ServerConfig::from_env() {
         Ok(config) if args.iter().any(|argument| argument == "--check-config") => {
-            println!(
-                "configuration valid: profile={:?}, bind={}",
-                config.profile, config.bind_addr
-            );
+            match config.runtime_endpoints() {
+                Ok(_) => println!(
+                    "configuration valid: profile={:?}, bind={}",
+                    config.profile, config.bind_addr
+                ),
+                Err(error) => exit_with_error(format!("invalid server configuration: {error}")),
+            }
         }
         Ok(config) => {
             let endpoints = match config.runtime_endpoints() {
@@ -48,7 +51,28 @@ async fn main() {
 }
 
 async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    {
+        let terminate = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(error) => {
+                    eprintln!("fileconv-server: cannot register SIGTERM handler: {error}");
+                }
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = terminate => {}
+        }
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await;
 }
 
 fn exit_with_error(error: String) -> ! {

@@ -139,13 +139,10 @@ impl ServerConfig {
         if self.bind_addr.ip().is_loopback() || self.bind_addr.ip().is_unspecified() {
             return Err("prod profile requires a non-loopback explicit bind address".into());
         }
-        let Some(database_url) = self.database_url.as_ref() else {
-            return Err("prod profile requires MARKHAND_DATABASE_URL".into());
-        };
-        let value = database_url.expose().to_ascii_lowercase();
-        if value.contains("localhost") || value.contains("postgres:postgres") {
-            return Err("prod profile cannot use a development database URL".into());
-        }
+        let endpoints = self.runtime_endpoints()?;
+        validate_production_database_url(endpoints.database_url.expose())?;
+        require_https(&endpoints.qdrant_url, "MARKHAND_QDRANT_URL")?;
+        require_https(&endpoints.minio_url, "MARKHAND_MINIO_URL")?;
         Ok(())
     }
 }
@@ -177,6 +174,43 @@ fn required_url(value: Option<&str>, name: &str) -> Result<String, String> {
         return Err(format!("{name} must use http or https"));
     }
     Ok(value.trim_end_matches('/').to_string())
+}
+
+fn validate_production_database_url(value: &str) -> Result<(), String> {
+    let parsed =
+        reqwest::Url::parse(value).map_err(|_| "MARKHAND_DATABASE_URL must be an absolute URL")?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") {
+        return Err("MARKHAND_DATABASE_URL must use postgres or postgresql".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "MARKHAND_DATABASE_URL must include a host".to_string())?;
+    if host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || parsed.username() == "markhand"
+        || parsed.password() == Some("markhand_dev_only")
+    {
+        return Err("prod profile cannot use a development database URL".into());
+    }
+    let sslmode = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == "sslmode").then_some(value));
+    if !matches!(sslmode.as_deref(), Some("verify-ca" | "verify-full")) {
+        return Err("prod MARKHAND_DATABASE_URL requires sslmode=verify-ca or verify-full".into());
+    }
+    Ok(())
+}
+
+fn require_https(value: &str, name: &str) -> Result<(), String> {
+    if reqwest::Url::parse(value)
+        .ok()
+        .is_some_and(|parsed| parsed.scheme() == "https")
+    {
+        Ok(())
+    } else {
+        Err(format!("prod {name} must use https"))
+    }
 }
 
 fn load_file(path: &Path) -> Result<ConfigFile, String> {
@@ -253,6 +287,27 @@ mod tests {
         assert_eq!(
             config.runtime_endpoints().unwrap_err(),
             "server requires MARKHAND_QDRANT_URL"
+        );
+    }
+
+    #[test]
+    fn production_requires_verified_dependency_transport() {
+        let env = BTreeMap::from([
+            ("MARKHAND_PROFILE".into(), "prod".into()),
+            ("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into()),
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://app:secret@postgres.internal/markhand?sslmode=verify-full".into(),
+            ),
+            (
+                "MARKHAND_QDRANT_URL".into(),
+                "https://qdrant.internal".into(),
+            ),
+            ("MARKHAND_MINIO_URL".into(), "http://minio.internal".into()),
+        ]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &env).unwrap_err(),
+            "prod MARKHAND_MINIO_URL must use https"
         );
     }
 }

@@ -15,10 +15,11 @@ make dev-up
 set -a && source deploy/dev/.env && set +a
 cargo run -p fileconv-server
 curl --fail http://127.0.0.1:8787/api/v1/health/ready
+deploy/scripts/seed-poc-org.sh
 ```
 
 The process applies migrations before listening. Seed the local POC organization only
-after that first startup with `deploy/scripts/seed.sh`.
+after that first startup with `deploy/scripts/seed-poc-org.sh`.
 
 Later code follows `route → service → repository/adapter`; business operations require
 an explicit `OrgContext`.

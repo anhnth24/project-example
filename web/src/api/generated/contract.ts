@@ -36,22 +36,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/jobs/{jobId}/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["jobEvents"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -73,15 +57,6 @@ export interface components {
             nextCursor?: string | null;
             hasMore: boolean;
         };
-        SseEnvelope: {
-            /** @constant */
-            version: 1;
-            sequence: number;
-            event: string;
-            /** Format: uuid */
-            requestId: string;
-            data: unknown;
-        };
     };
     responses: {
         /** @description Canonical API error */
@@ -94,10 +69,7 @@ export interface components {
             };
         };
     };
-    parameters: {
-        JobId: string;
-        LastEventId: string;
-    };
+    parameters: never;
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -143,31 +115,6 @@ export interface operations {
                 };
             };
             503: components["responses"]["ApiError"];
-        };
-    };
-    jobEvents: {
-        parameters: {
-            query?: never;
-            header?: {
-                "Last-Event-ID"?: components["parameters"]["LastEventId"];
-            };
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Sequenced job events */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": components["schemas"]["SseEnvelope"];
-                };
-            };
-            401: components["responses"]["ApiError"];
         };
     };
 }

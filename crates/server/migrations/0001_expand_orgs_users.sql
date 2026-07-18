@@ -1,4 +1,9 @@
--- Phase 1B foundation: every business object added later is scoped by org_id.
+-- Phase: 1B
+-- Owner: storage-owner, security-owner
+-- Change: expand
+-- Lock/data risk: creates empty tables and one non-concurrent index during POC bootstrap.
+-- Rollback compatibility: no released application version depends on these new tables.
+-- Every business object added later is scoped by org_id.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE orgs (

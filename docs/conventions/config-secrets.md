@@ -11,6 +11,12 @@ safe defaults < MARKHAND_CONFIG_FILE JSON < MARKHAND_* environment
 non-development database URL. Invalid profile, address or production configuration
 fails before server/worker work begins.
 
+The running server additionally requires `MARKHAND_DATABASE_URL`,
+`MARKHAND_QDRANT_URL`, and `MARKHAND_MINIO_URL`; `--check-config` validates these
+runtime endpoints too. Production requires `sslmode=verify-ca` or `verify-full` for
+PostgreSQL and HTTPS endpoints for Qdrant and MinIO. Local development may use the
+plain HTTP and PostgreSQL endpoints in `deploy/dev/.env.example`.
+
 ## Secrets
 
 - Never commit `.env`, API keys, database credentials, token signing keys, signed URLs

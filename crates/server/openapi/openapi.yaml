@@ -28,36 +28,7 @@ paths:
                 $ref: "#/components/schemas/Health"
         "503":
           $ref: "#/components/responses/ApiError"
-  /jobs/{jobId}/events:
-    get:
-      operationId: jobEvents
-      parameters:
-        - $ref: "#/components/parameters/JobId"
-        - $ref: "#/components/parameters/LastEventId"
-      responses:
-        "200":
-          description: Sequenced job events
-          content:
-            text/event-stream:
-              schema:
-                $ref: "#/components/schemas/SseEnvelope"
-        "401":
-          $ref: "#/components/responses/ApiError"
 components:
-  parameters:
-    JobId:
-      name: jobId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    LastEventId:
-      name: Last-Event-ID
-      in: header
-      required: false
-      schema:
-        type: string
   responses:
     ApiError:
       description: Canonical API error
@@ -96,19 +67,3 @@ components:
           type: [string, "null"]
         hasMore:
           type: boolean
-    SseEnvelope:
-      type: object
-      required: [version, sequence, event, requestId, data]
-      properties:
-        version:
-          type: integer
-          const: 1
-        sequence:
-          type: integer
-          minimum: 1
-        event:
-          type: string
-        requestId:
-          type: string
-          format: uuid
-        data: {}
