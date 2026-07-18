@@ -98,19 +98,34 @@ P1A-01 ──────────> P0-03
 
 ## P0-05 — Đánh giá embedding tiếng Việt
 
-- **Status:** In progress — quality-track harness started on CPU smoke; still blocked for capacity/VRAM on target GPU.
-- **Objective:** Chọn model/revision/dimension/normalization theo quality + capacity.
-- **Plan:** So `bge-m3` và multilingual-e5; pin tokenizer/batch/truncation; đo theo
-  category, queue depth, cold/warm.
+- **Status:** Ready — interim GLM cloud path được duyệt (ADR 0004); local dense
+  quality smoke recorded (ADR 0005 Proposed: AITeamVN PASS / BKAI FAIL on CPU).
+  Target GPU/vLLM remains cutover, not a coding blocker.
+- **Objective:** Chốt provider/model/revision/dimension/normalization đủ để lập
+  trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
+- **Plan:** Interim: so GLM `embedding-3` (và `embedding-2` nếu cần) qua
+  OpenAI-compatible API + `FILECONV_EMBEDDING_API_KEY`; pin tokenizer/batch/
+  truncation/dimensions/normalize; đo theo category và API latency. Parallel local
+  dense evidence: `AITeamVN/Vietnamese_Embedding` vs `bkai` bi-encoder.
+  Target (sau): so `bge-m3` và multilingual-e5 trên Profile B GPU/vLLM.
 - **Files:** `bench/markhand_web/embedding/`, `scripts/run_embedding_eval.py`,
-  `reports/embedding-evaluation.md`, ADR model.
-- **Dependencies/blocks:** Corpus, spike, GPU, approved model download.
-- **Acceptance:** ≥2 model family cùng corpus/hardware; model chọn đạt gate và không
-  kém best vượt margin đã duyệt; config immutable trong report.
-- **Tests/evidence:** Recall/MRR/nDCG, P50/P95/P99, vectors/s, VRAM, saturation,
-  failure rate; ≥3 runs.
-- **Security/migration:** Restricted corpus không ra cloud; license trước bundle.
-- **Out of scope:** Autoscaling và đổi desktop embedding.
+  `reports/embedding-evaluation.md`, `docs/adr/0004-interim-glm-cloud-embedding.md`,
+  `docs/adr/0005-vietnamese-embedding-model-quality.md`.
+- **Dependencies/blocks:** Corpus + spike + GLM credential; không còn bắt buộc
+  target GPU để đóng interim. Cutover vLLM vẫn cần Profile B + approved model download.
+- **Acceptance (interim — đủ đóng P0-05 cho coding/POC/DEMO):** ≥2 cấu hình GLM
+  (model hoặc dimension) cùng golden corpus; cấu hình chọn đạt gate quality và không
+  kém best vượt margin đã duyệt; config/signature immutable trong report; ghi rõ
+  runtime=`glm-cloud-interim`.
+- **Acceptance (target — deferred cutover, không chặn Phase 1B):** ≥2 model family
+  local trên cùng Profile B hardware; có VRAM/throughput/saturation.
+- **Tests/evidence:** Interim: Recall/MRR/nDCG, API P50/P95/P99, vectors/s ước lượng,
+  failure rate; ≥2 runs. Target: thêm VRAM/saturation/cold-warm ≥3 runs.
+- **Security/migration:** Chỉ synthetic/de-identified corpus lên GLM; customer/
+  restricted data không ra cloud. Index signature phân biệt `glm-cloud` vs
+  `vllm-local`; cắt sang vLLM = rebuild generation mới. License trước khi bundle
+  local weights.
+- **Out of scope:** Autoscaling; đổi desktop local-hash fallback mặc định.
 
 ## P0-06 — Chunking, hybrid tuning và index signature
 

@@ -27,6 +27,14 @@ traceability.
 Every measured report must include its actual environment fingerprint; smoke results
 from smaller hardware cannot satisfy target-scale gates.
 
+### Interim embedding runtime
+
+ADR 0004 allows **GLM cloud embeddings** on environment `glm-cloud-interim` for
+coding, POC and DEMO (Phase 0→1B). Credentials come from
+`FILECONV_EMBEDDING_API_KEY`. Only synthetic/de-identified golden corpus may be
+sent. On-prem vLLM on Profile B remains the production cutover
+(`G0-RET-VLLM-CUTOVER`).
+
 Fixtures/corpus must be synthetic or de-identified, versioned and license-reviewed.
 Large raw benchmark output remains a CI artifact; committed reports contain environment
 fingerprint and checksums only.

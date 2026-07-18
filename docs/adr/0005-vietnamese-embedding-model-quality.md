@@ -1,11 +1,11 @@
-# ADR 0004: Vietnamese embedding model selection (P0-05)
+# ADR 0005: Vietnamese embedding dense quality candidates (P0-05)
 
 - Status: Proposed
 - Date: 2026-07-18
 - Owners: retrieval-owner
 - Approver: product-owner
 - Supersedes: N/A
-- Related issues/PRs: P0-05
+- Related issues/PRs: P0-05; complements ADR 0004 interim GLM path
 
 ## Context
 

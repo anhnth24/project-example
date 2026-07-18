@@ -117,8 +117,22 @@ embeddings riêng với chat provider:
 
 - Local: Ollama (`nomic-embed-text`, `mxbai-embed-large`, `bge-m3`), LM Studio,
   vLLM.
-- Cloud: OpenAI (`text-embedding-3-*`) hoặc Gemini
+- Cloud interim (POC/DEMO): GLM/Zhipu (`embedding-3`, `embedding-2`) qua
+  OpenAI-compatible API — xem ADR 0004.
+- Cloud khác: OpenAI (`text-embedding-3-*`) hoặc Gemini
   (`gemini-embedding-001`).
+
+### GLM cloud interim (Markhand Web Phase 0→1B)
+
+```bash
+export FILECONV_EMBEDDING_API_KEY=...   # Cursor secret / env; không commit
+# Preset desktop: "GLM embeddings (Zhipu cloud)"
+# Base URL mặc định: https://open.bigmodel.cn/api/paas/v4
+# Model: embedding-3 (so sánh thêm embedding-2 nếu cần)
+```
+
+Chỉ gửi synthetic/de-identified corpus. Target production vẫn là on-prem vLLM
+(`BAAI/bge-m3` / multilingual-e5); cắt sang vLLM phải rebuild index generation.
 
 Index lưu mode/provider/model/dimensions/signature. Đổi model hoặc số chiều sẽ
 rebuild; mixed dimensions bị từ chối. Provider lỗi có thể rebuild toàn scope

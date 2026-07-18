@@ -188,7 +188,7 @@ Consistency:
 Index:
 
 - chunk heading-aware từ `fileconv-core`;
-- batch embedding qua vLLM;
+- batch embedding qua GLM cloud interim (ADR 0004) hoặc vLLM khi đã cutover;
 - pin index signature;
 - chunk/point identity luôn chứa immutable `version_id`; Qdrant payload có logical
   document, version number, effective time và `is_current`;
