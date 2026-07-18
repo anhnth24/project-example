@@ -8,12 +8,13 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
-import statistics
+import shutil
+import sqlite3
 import subprocess
 import sys
 import unicodedata
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from knowledge_identity import (  # noqa: E402
     DEFAULT_CHUNKING_VERSION,
     RUNTIME_LOCAL_HASH,
-    RUNTIME_PROVIDER_CLOUD,
+    RUNTIME_LOCAL_NEURAL,
     index_signature,
 )
 from version_conflict_rules import (  # noqa: E402
@@ -86,8 +87,46 @@ def tokens(text: str) -> list[str]:
     return [
         part
         for part in re.split(r"[^\w]+", normalize_search_text(text), flags=re.UNICODE)
-        if part
+        if len(part) >= 2
     ]
+
+
+def fts5_prefix_query(text: str) -> str:
+    """Mirror crates/knowledge PreparedQuery::fts5."""
+    return " OR ".join(f'"{token}"*' for token in tokens(text))
+
+
+def build_fts_index(chunks: list[dict]) -> sqlite3.Connection:
+    """Desktop-parity FTS5 index (unicode61 remove_diacritics 2)."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE chunks_fts USING fts5(
+            chunk_id UNINDEXED,
+            doc_id UNINDEXED,
+            body,
+            tokenize='unicode61 remove_diacritics 2'
+        )
+        """
+    )
+    for chunk in chunks:
+        conn.execute(
+            "INSERT INTO chunks_fts(chunk_id, doc_id, body) VALUES (?, ?, ?)",
+            (chunk["chunkId"], chunk["docId"], chunk["payload"]),
+        )
+    return conn
+
+
+def hardware_fingerprint() -> dict:
+    ram_gb = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024**3), 2)
+    disk_gb = round(shutil.disk_usage("/").total / (1024**3), 2)
+    return {
+        "cpuThreads": os.cpu_count() or 0,
+        "ramGb": ram_gb,
+        "diskGb": disk_gb,
+        "gpuCount": 0,
+        "embeddingDevice": "cpu",
+    }
 
 
 def cosine(left: list[float], right: list[float]) -> float:
@@ -192,15 +231,45 @@ def discounted_gain(grades: list[int]) -> float:
     return sum((2**grade - 1) / math.log2(index + 2) for index, grade in enumerate(grades))
 
 
-def score_chunks_lexical(query: str, chunks: list[dict]) -> list[tuple[float, dict]]:
-    q_tokens = tokens(query)
+def score_chunks_lexical(
+    query: str,
+    chunks: list[dict],
+    fts_conn: sqlite3.Connection | None = None,
+) -> list[tuple[float, dict]]:
+    if fts_conn is None:
+        # Fallback overlap scorer for --self-test without FTS bootstrap.
+        q_tokens = tokens(query)
+        scored = []
+        for chunk in chunks:
+            body_set = set(tokens(chunk["body"]))
+            heading_set = set(tokens(chunk["headingPath"]))
+            overlap = sum(1 for token in q_tokens if token in body_set)
+            heading = sum(1 for token in q_tokens if token in heading_set)
+            scored.append((float(overlap + 0.5 * heading), chunk))
+        scored.sort(key=lambda item: (-item[0], item[1]["chunkId"]))
+        return scored
+    match = fts5_prefix_query(query)
+    by_id = {chunk["chunkId"]: chunk for chunk in chunks}
+    if not match:
+        return [(float("-inf"), chunk) for chunk in chunks]
+    rows = fts_conn.execute(
+        """
+        SELECT chunk_id, bm25(chunks_fts) AS rank
+        FROM chunks_fts
+        WHERE chunks_fts MATCH ?1
+        ORDER BY rank
+        """,
+        (match,),
+    ).fetchall()
     scored = []
+    seen = set()
+    for chunk_id, rank in rows:
+        # bm25() is lower-is-better; negate for higher-is-better RRF input.
+        scored.append((-float(rank), by_id[chunk_id]))
+        seen.add(chunk_id)
     for chunk in chunks:
-        body_set = set(tokens(chunk["body"]))
-        heading_set = set(tokens(chunk["headingPath"]))
-        overlap = sum(1 for token in q_tokens if token in body_set)
-        heading = sum(1 for token in q_tokens if token in heading_set)
-        scored.append((float(overlap + 0.5 * heading), chunk))
+        if chunk["chunkId"] not in seen:
+            scored.append((float("-inf"), chunk))
     scored.sort(key=lambda item: (-item[0], item[1]["chunkId"]))
     return scored
 
@@ -229,8 +298,9 @@ def score_chunks_hybrid(
     chunks: list[dict],
     *,
     vector_weight: float = VECTOR_WEIGHT,
+    fts_conn: sqlite3.Connection | None = None,
 ) -> list[tuple[float, dict]]:
-    lexical = score_chunks_lexical(query, chunks)
+    lexical = score_chunks_lexical(query, chunks, fts_conn=fts_conn)
     vector = score_chunks_vector(query_vec, chunks)
     lex_rank = {chunk["chunkId"]: index for index, (_, chunk) in enumerate(lexical)}
     vec_rank = {chunk["chunkId"]: index for index, (_, chunk) in enumerate(vector)}
@@ -352,6 +422,7 @@ def version_and_conflict_metrics(
     query_vectors: dict[str, list[float]],
     *,
     vector_weight: float,
+    fts_conn: sqlite3.Connection | None = None,
 ) -> dict:
     versions = load_versions()
     grouped = versions_by_logical(versions)
@@ -376,59 +447,67 @@ def version_and_conflict_metrics(
 
         mode = query.get("version_mode") or "current"
         version_context = json.loads(query.get("version_context") or "{}")
-        logical_id = version_context.get("logicalDocumentId")
-        predicted_versions = predict_version_ids(
-            mode=mode,
-            logical_id=logical_id,
-            as_of=query.get("as_of") or None,
-            query_time=query.get("query_time") or "",
-            grouped=grouped,
-        )
         expected_versions = list(version_context.get("citedVersionIds") or [])
-        allowed = set(predicted_versions)
-
-        # Version-citation gate: resolve immutable versions for the query topic.
-        # Topic logical IDs are request inputs (version_context / conflict auth scope /
-        # top hybrid hit when unspecified) — never gold citation IDs.
         q_vec = query_vectors[query["query_id"]]
         ranked_docs = aggregate_docs(
             score_chunks_hybrid(
-                query["query"], q_vec, chunks, vector_weight=vector_weight
+                query["query"],
+                q_vec,
+                chunks,
+                vector_weight=vector_weight,
+                fts_conn=fts_conn,
             )
         )
         by_doc = {record.document_id: record for record in versions.values()}
-        topic_logicals: set[str] = set()
-        if logical_id:
-            topic_logicals.add(logical_id)
-        conflict_context = json.loads(query.get("conflict_context") or "{}")
-        for item in conflict_context.get("authorizedLogicalDocumentIds") or []:
-            topic_logicals.add(item)
-        for item in version_context.get("logicalDocumentIds") or []:
-            topic_logicals.add(item)
-        if not topic_logicals and ranked_docs:
-            top = by_doc.get(ranked_docs[0])
-            if top is not None:
-                topic_logicals.add(top.logical_document_id)
-        predicted_cites = predict_version_citations_for_logicals(
-            query=query,
-            logical_ids=topic_logicals,
-            versions=versions,
-            grouped=grouped,
-        )
-        gold_cites = {
-            (cite["documentId"], cite["versionId"])
-            for cite in cites
-            if cite.get("documentId") and cite.get("versionId")
+        # Topic logicals come only from retrieval hits (not gold version_context).
+        topic_logicals = {
+            by_doc[doc_id].logical_document_id
+            for doc_id in ranked_docs[:5]
+            if doc_id in by_doc
         }
-        if gold_cites:
-            citation_tp += len(predicted_cites & gold_cites)
-            citation_fp += len(predicted_cites - gold_cites)
-            citation_fn += len(gold_cites - predicted_cites)
+        conflict_context = json.loads(query.get("conflict_context") or "{}")
+        # Authorization scope is a request input; intersect when present.
+        authorized = set(conflict_context.get("authorizedLogicalDocumentIds") or [])
+        if authorized:
+            topic_logicals &= authorized
+        top_logical = None
+        if ranked_docs and ranked_docs[0] in by_doc:
+            top_logical = by_doc[ranked_docs[0]].logical_document_id
+        category = query.get("category") or ""
+        version_aware = category.startswith(
+            ("temporal_", "version_", "conflict_")
+        ) or mode in {"as_of", "compare", "history"}
+        if version_aware:
+            cite_logicals = set(topic_logicals)
+            if not authorized and top_logical:
+                cite_logicals = {top_logical}
+            predicted_cites = predict_version_citations_for_logicals(
+                query=query,
+                logical_ids=cite_logicals,
+                versions=versions,
+                grouped=grouped,
+            )
+            gold_cites = {
+                (cite["documentId"], cite["versionId"])
+                for cite in cites
+                if cite.get("documentId") and cite.get("versionId")
+            }
+            if gold_cites:
+                citation_tp += len(predicted_cites & gold_cites)
+                citation_fp += len(predicted_cites - gold_cites)
+                citation_fn += len(gold_cites - predicted_cites)
 
-        if query.get("category") in {"temporal_current", "temporal_as_of"} and logical_id:
+        if query.get("category") in {"temporal_current", "temporal_as_of"} and top_logical:
             temporal_n += 1
+            predicted_versions = predict_version_ids(
+                mode=mode,
+                logical_id=top_logical,
+                as_of=query.get("as_of") or None,
+                query_time=query.get("query_time") or "",
+                grouped=grouped,
+            )
             predicted_value = temporal_answer_value(
-                logical_id,
+                top_logical,
                 grouped,
                 claims,
                 query.get("as_of") or None if mode == "as_of" else None,
@@ -446,20 +525,24 @@ def version_and_conflict_metrics(
                 if predicted_versions == expected_versions:
                     current_ok += 1
 
-        if query.get("category") in {"version_compare", "version_history"} and logical_id:
+        if query.get("category") in {"version_compare", "version_history"} and top_logical:
             change_n += 1
-            # Labels only: expected versions/note from gold; prediction from manifest.
-            note = predict_change_note(logical_id, grouped)
+            predicted_versions = predict_version_ids(
+                mode=mode,
+                logical_id=top_logical,
+                as_of=query.get("as_of") or None,
+                query_time=query.get("query_time") or "",
+                grouped=grouped,
+            )
+            note = predict_change_note(top_logical, grouped)
             expected_note = version_context.get("changeNote") or ""
             if set(predicted_versions) == set(expected_versions) and note == expected_note:
                 change_ok += 1
 
         if str(query.get("answer_mode", "")).startswith("conflict_"):
             conflict_n += 1
-            conflict_context = json.loads(query.get("conflict_context") or "{}")
             expected_status = conflict_context.get("expectedStatus")
             # Authorization scope is request context (inputs), not an expected label.
-            authorized = set(conflict_context.get("authorizedLogicalDocumentIds") or [])
             as_of = parse_ts(query.get("as_of") or None)
             query_time = parse_ts(query.get("query_time") or "") or datetime.now(
                 timezone.utc
@@ -482,15 +565,29 @@ def version_and_conflict_metrics(
                 if predicted_status == expected_status:
                     history_ok += 1
 
-    # Set-based conflict detection vs gold open pair at as-of before resolution.
-    as_of_open = parse_ts("2026-03-01T00:00:00Z")
-    as_of_resolved = parse_ts("2026-07-18T00:00:00Z")
+    # Set-based conflict detection vs gold lifecycle anchors from conflicts.json.
+    gold_conflict = json.loads((CORPUS / "golden/conflicts.json").read_text(encoding="utf-8"))[
+        "conflicts"
+    ][0]
+    gold_open = {
+        (
+            gold_conflict["detected"]["left"]["citation"]["versionId"],
+            gold_conflict["detected"]["right"]["citation"]["versionId"],
+        )
+    }
+    gold_resolved = {
+        (
+            gold_conflict["resolution"]["leftCurrent"]["citation"]["versionId"],
+            gold_conflict["resolution"]["rightCurrent"]["citation"]["versionId"],
+        )
+    }
+    as_of_open = parse_ts(gold_conflict["validFrom"])
+    as_of_resolved = parse_ts(gold_conflict["resolvedAt"])
     assert as_of_open and as_of_resolved
-    predicted_open = detect_conflicts_at(claims, instant=as_of_open)
-    predicted_resolved = detect_conflicts_at(claims, instant=as_of_resolved)
-    gold_open = {("version-budget-v1", "version-design-v1")}
-    gold_resolved: set[tuple[str, str]] = set()
-    # Also include generation-level detector pairs for numeric mismatch inventory.
+    # Open window: midpoint between validFrom and resolvedAt.
+    open_instant = as_of_open + (as_of_resolved - as_of_open) / 2
+    predicted_open = detect_conflicts_at(claims, instant=open_instant)
+    predicted_at_resolved = detect_conflicts_at(claims, instant=as_of_resolved)
     detected_pairs = {
         (item["left"].version_id, item["right"].version_id)
         for item in detect_numeric_conflicts(claims)
@@ -498,14 +595,18 @@ def version_and_conflict_metrics(
     open_tp = len(predicted_open & gold_open)
     open_fp = len(predicted_open - gold_open)
     open_fn = len(gold_open - predicted_open)
-    # Resolved instant must not report an open conflict.
-    if predicted_resolved:
-        open_fp += len(predicted_resolved)
-    conflict_precision = open_tp / max(1, open_tp + open_fp)
+    # At/after resolution, detector must not keep the open pair; aligned currents are not conflicts.
+    resolved_fp = len(predicted_at_resolved)
+    # Gold resolved pair is the aligned current versions (not a conflict pair).
+    resolved_ok = gold_resolved.isdisjoint(predicted_at_resolved) and resolved_fp == 0
+    conflict_precision = open_tp / max(1, open_tp + open_fp + resolved_fp)
     conflict_recall = open_tp / max(1, open_tp + open_fn)
+    if not resolved_ok:
+        conflict_precision = min(conflict_precision, 0.0)
 
     def ratio(ok: int, total: int) -> float:
-        return round(ok / total, 6) if total else 1.0
+        # Fail-closed: zero-sample metrics do not count as perfect.
+        return round(ok / total, 6) if total else 0.0
 
     precision = citation_tp / max(1, citation_tp + citation_fp)
     recall = citation_tp / max(1, citation_tp + citation_fn)
@@ -543,8 +644,9 @@ def tune_vector_weight(
     queries: list[dict],
     chunks: list[dict],
     query_vectors: dict[str, list[float]],
+    fts_conn: sqlite3.Connection | None = None,
 ) -> tuple[float, bool]:
-    """Light grid search on odd queries; score on even queries."""
+    """Light grid search on odd queries; score on even queries (observation only)."""
     candidates = [0.45, 0.55, 0.65]
     best_weight = VECTOR_WEIGHT
     best_score = -1.0
@@ -562,6 +664,7 @@ def tune_vector_weight(
                 query_vectors[query["query_id"]],
                 chunks,
                 vector_weight=weight,
+                fts_conn=fts_conn,
             )
             rows.append(evaluate_docs(aggregate_docs(scored), judgments))
         summary = summarize(rows)
@@ -569,7 +672,7 @@ def tune_vector_weight(
         if score > best_score:
             best_score = score
             best_weight = weight
-    # Evaluate holdout with selected weight vs default.
+
     def hold_recall(weight: float) -> float:
         rows = []
         for query in hold:
@@ -582,6 +685,7 @@ def tune_vector_weight(
                 query_vectors[query["query_id"]],
                 chunks,
                 vector_weight=weight,
+                fts_conn=fts_conn,
             )
             rows.append(evaluate_docs(aggregate_docs(scored), judgments))
         return summarize(rows)["recallAt5"]
@@ -658,7 +762,7 @@ def self_test() -> int:
         query["query_id"]: l2_normalize(chunks[0]["vector"][:]) for query in queries
     }
     metrics = version_and_conflict_metrics(
-        queries, chunks, query_vectors, vector_weight=VECTOR_WEIGHT
+        queries, chunks, query_vectors, vector_weight=VECTOR_WEIGHT, fts_conn=None
     )
     if metrics["citationsWithChunkId"] != metrics["citations"]:
         print(f"chunkId incomplete: {metrics}", file=sys.stderr)
@@ -714,13 +818,17 @@ def main() -> int:
         neural = False
     else:
         query_vectors, runtime, dimensions = embed_neural(chunks, queries)
-        runtime_path = RUNTIME_PROVIDER_CLOUD
+        runtime_path = RUNTIME_LOCAL_NEURAL
         neural = True
 
+    fts_conn = build_fts_index(chunks)
     # Keep desktop/production VECTOR_WEIGHT=0.55. Optional tune is observation only.
-    _obs_weight, _obs_tuned = tune_vector_weight(queries, chunks, query_vectors)
+    _obs_weight, _obs_tuned = tune_vector_weight(
+        queries, chunks, query_vectors, fts_conn=fts_conn
+    )
     vector_weight = VECTOR_WEIGHT
     tuned = False
+    hardware = hardware_fingerprint()
 
     legs = {"lexical": {}, "vector_neural": {}, "hybrid": {}}
     leg_rows: dict[str, list[dict]] = {name: [] for name in legs}
@@ -731,11 +839,17 @@ def main() -> int:
         }
         scoped = chunks
         q_vec = query_vectors[query["query_id"]]
-        lexical_docs = aggregate_docs(score_chunks_lexical(query["query"], scoped))
+        lexical_docs = aggregate_docs(
+            score_chunks_lexical(query["query"], scoped, fts_conn=fts_conn)
+        )
         vector_docs = aggregate_docs(score_chunks_vector(q_vec, scoped))
         hybrid_docs = aggregate_docs(
             score_chunks_hybrid(
-                query["query"], q_vec, scoped, vector_weight=vector_weight
+                query["query"],
+                q_vec,
+                scoped,
+                vector_weight=vector_weight,
+                fts_conn=fts_conn,
             )
         )
         for name, ranked in (
@@ -755,7 +869,11 @@ def main() -> int:
 
     leg_summaries = {name: summarize(rows) for name, rows in leg_rows.items()}
     correctness = version_and_conflict_metrics(
-        queries, chunks, query_vectors, vector_weight=vector_weight
+        queries,
+        chunks,
+        query_vectors,
+        vector_weight=vector_weight,
+        fts_conn=fts_conn,
     )
     signature = index_signature(
         runtime_path=runtime_path,
@@ -856,10 +974,24 @@ def main() -> int:
             "observationTuneImprovedHoldout": _obs_tuned,
             "note": (
                 "Gating uses frozen desktop VECTOR_WEIGHT=0.55 for production parity; "
-                "Python lexical is token-overlap approximation of FTS5."
+                "lexical leg uses SQLite FTS5 unicode61 remove_diacritics 2."
             ),
         },
         "measuredEnvironmentId": MEASURED_ENVIRONMENT_ID,
+        "hardware": hardware,
+        "fingerprint": {
+            "gitCommit": status["commit"],
+            "workloadProfileId": "on-prem-reference-v1",
+            "embeddingProvider": "sentence-transformers",
+            "embeddingModel": runtime,
+            "embeddingDimensions": dimensions,
+            "fixtureManifestSha256": hashlib.sha256(
+                (CORPUS / "manifest.lock.json").read_bytes()
+            ).hexdigest(),
+            "hardware": hardware,
+            "runtimePath": runtime_path,
+            "chunkingVersion": DEFAULT_CHUNKING_VERSION,
+        },
         "legs": leg_summaries,
         "versionCitation": correctness,
         "gates": gates,

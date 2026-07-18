@@ -52,12 +52,14 @@ pub struct LlmProviderPreset {
 
 /// Canonical embedding runtime paths for index signature (ADR 0006).
 pub const EMBEDDING_RUNTIME_LOCAL_HASH: &str = "local-hash";
+pub const EMBEDDING_RUNTIME_LOCAL_NEURAL: &str = "local-neural";
 pub const EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM: &str = "glm-cloud-interim";
 pub const EMBEDDING_RUNTIME_VLLM_LOCAL: &str = "vllm-local";
 pub const EMBEDDING_RUNTIME_PROVIDER_CLOUD: &str = "provider-cloud";
 
 const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
     EMBEDDING_RUNTIME_LOCAL_HASH,
+    EMBEDDING_RUNTIME_LOCAL_NEURAL,
     EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM,
     EMBEDDING_RUNTIME_VLLM_LOCAL,
     EMBEDDING_RUNTIME_PROVIDER_CLOUD,
