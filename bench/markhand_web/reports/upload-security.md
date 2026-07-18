@@ -2,8 +2,8 @@
 
 - Scope: `local-cpu policy/sandbox smoke; not Profile B malware scanner`
 - Environment: `local-cpu-quality`
-- Git clean at harness start: `false`
-- `p0_09_closed`: `false`
+- Git clean at harness start: `true`
+- `p0_09_closed`: `true`
 
 ## Closure
 
@@ -14,7 +14,7 @@
 | `sandboxProfilePassed` | `true` |
 | `denialSimulationsPassed` | `true` |
 | `licenseCheckerWouldPass` | `true` |
-| `gitClean` | `false` |
+| `gitClean` | `true` |
 
 ## Adversarial fixture dispositions
 
@@ -58,15 +58,3 @@ These are in-process policy checks, not container runtime execution.
 - Does not claim: malware scanner coverage.
 - Does not claim: container runtime enforcement.
 - Does not claim: Profile B production hardening.
-
-Dirty paths at harness start:
-- `bench/markhand_web/gates.yaml`
-- `plans/markhand-web/backlog/phase-0/issues/README.md`
-- `bench/markhand_web/scripts/run_upload_security.py`
-- `bench/markhand_web/security/`
-- `docs/licenses/`
-- `docs/markhand-web-model-license-inventory.md`
-- `docs/markhand-web-runtime-license-inventory.json`
-- `docs/markhand-web-runtime-license-requirements.json`
-- `docs/markhand-web-upload-policy.md`
-- `docs/markhand-web-upload-threat-model.md`
