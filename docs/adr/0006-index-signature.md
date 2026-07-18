@@ -1,6 +1,6 @@
 # ADR 0006: Canonical index signature and chunk identity (P0-06)
 
-- Status: Accepted
+- Status: Proposed
 - Date: 2026-07-18
 - Owners: retrieval-owner, architecture-owner
 - Approver: Phase 0 architecture gate
@@ -64,9 +64,11 @@ and query accent-fold into one `text_version` while the fixture still said
 
 ```bash
 cargo test -p fileconv-knowledge --lib identity::tests
-python3 bench/markhand_web/scripts/generate_expected_chunks.py
+python3 bench/markhand_web/scripts/generate_expected_chunks.py --check
+python3 bench/markhand_web/scripts/fill_citation_chunk_ids.py --check
 python3 bench/markhand_web/scripts/run_retrieval_eval.py --self-test
+python3 bench/markhand_web/scripts/run_retrieval_eval.py
 ```
 
 Inspect `crates/knowledge/fixtures/identity-v2.json` (schema v2 payload) and
-`bench/markhand_web/reports/retrieval-evaluation.md`.
+`bench/markhand_web/reports/retrieval-evaluation.md` (`p0_06_closed`).
