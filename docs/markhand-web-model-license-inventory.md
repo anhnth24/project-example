@@ -6,7 +6,7 @@ Status: P0-09 local close evidence.
 
 | id | kind | license | bundled | disposition | redistribution | evidence |
 |---|---|---|---|---|---|---|
-| `pdfium-linux-x64` | native-library | Apache-2.0 | true | approved | allowed | `docs/licenses/pdfium-runtime-evidence.md` |
+| `pdfium-linux-x64` | native-library | MIT (+ third-party notices) | true | approved | source-offer-required | `docs/licenses/pdfium-runtime-evidence.md` |
 | `tesseract-ocr-system` | native-library | Apache-2.0 | false | approved | allowed | `docs/licenses/tesseract-runtime-evidence.md` |
 | `ggml-whisper-tiny` | model | MIT | false | approved | allowed | `docs/licenses/whisper-tiny-runtime-evidence.md` |
 | `aiteamvn-vietnamese-embedding` | model | Apache-2.0 | false | approved | allowed | `docs/licenses/aiteamvn-vietnamese-embedding-evidence.md` |
