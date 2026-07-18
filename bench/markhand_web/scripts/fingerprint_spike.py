@@ -85,7 +85,13 @@ def hardware(storage_path: Path) -> dict:
         if devices:
             gpu_count = len(devices)
             gpu_name = devices[0].split(",", 1)[0].strip()
-            gpu_vram = round(float(devices[0].split(",", 1)[1]) / 1024, 2)
+            gpu_vram = round(
+                float(devices[0].split(",", 1)[1])
+                * 1024
+                * 1024
+                / 1_000_000_000,
+                2,
+            )
     default_route = subprocess.run(
         ["ip", "route", "show", "default"],
         capture_output=True,
@@ -117,13 +123,23 @@ def hardware(storage_path: Path) -> dict:
             if "=" in line:
                 key, value = line.split("=", 1)
                 os_release[key] = value.strip('"')
-    mount = subprocess.run(
-        ["findmnt", "-T", str(storage_path), "-n", "-o", "SOURCE,FSTYPE"],
+    mount_result = subprocess.run(
+        [
+            "findmnt",
+            "-J",
+            "-T",
+            str(storage_path),
+            "-o",
+            "SOURCE,FSTYPE,UUID,MAJ:MIN",
+        ],
         capture_output=True,
         text=True,
         check=False,
-    ).stdout.strip()
-    backing_source, _, filesystem = mount.partition(" ")
+    )
+    mount_payload = json.loads(mount_result.stdout or '{"filesystems":[]}')
+    mount = (mount_payload.get("filesystems") or [{}])[0]
+    backing_source = str(mount.get("source") or "unknown")
+    filesystem = str(mount.get("fstype") or "unknown")
     disk_type = filesystem or "unknown"
     if backing_source.startswith("/dev/"):
         topology = subprocess.run(
@@ -135,14 +151,45 @@ def hardware(storage_path: Path) -> dict:
         if "nvme" in topology:
             disk_type = "nvme"
     storage_hash = hashlib.sha256(str(storage_path.resolve()).encode()).hexdigest()
+    storage_identity = hashlib.sha256(
+        json.dumps(
+            {
+                "source": backing_source,
+                "filesystem": filesystem,
+                "uuid": mount.get("uuid"),
+                "majorMinor": mount.get("maj:min"),
+                "storagePathSha256": storage_hash,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     measured_iops = 0
     iops_evidence_sha256 = None
+    iops_evidence = None
     iops_report_path = os.environ.get("MARKHAND_SPIKE_IOPS_REPORT")
     if iops_report_path and Path(iops_report_path).is_file():
         report_path = Path(iops_report_path)
         report = json.loads(report_path.read_text())
-        if report.get("storagePathSha256") == storage_hash:
+        measured_at = report.get("measuredAt")
+        try:
+            measured_time = dt.datetime.fromisoformat(
+                str(measured_at).replace("Z", "+00:00")
+            )
+        except ValueError:
+            measured_time = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+        age = dt.datetime.now(dt.timezone.utc) - measured_time
+        if (
+            report.get("storageIdentitySha256") == storage_identity
+            and report.get("readOnly") is True
+            and report.get("blockSizeBytes") == 4096
+            and int(report.get("durationSeconds", 0)) >= 30
+            and isinstance(report.get("tool"), str)
+            and report["tool"].strip()
+            and dt.timedelta(0) <= age <= dt.timedelta(hours=24)
+        ):
             measured_iops = int(report.get("randomReadIops", 0))
+            iops_evidence = report
             iops_evidence_sha256 = hashlib.sha256(
                 report_path.read_bytes()
             ).hexdigest()
@@ -154,15 +201,19 @@ def hardware(storage_path: Path) -> dict:
             "threads": os.cpu_count() or 1,
             "physicalCoresMeasured": bool(physical_cores),
         },
-        "ramGb": round(int(memory.group(1)) / 1024 / 1024, 2) if memory else 0.01,
+        "ramGb": round(int(memory.group(1)) * 1024 / 1_000_000_000, 2)
+        if memory
+        else 0.01,
         "disk": {
             "type": disk_type,
-            "capacityGb": round(disk.total / 1024**3, 2),
+            "capacityGb": round(disk.total / 1_000_000_000, 2),
             "iopsNote": f"measured random-read IOPS: {measured_iops}",
             "iopsMeasured": measured_iops,
             "iopsVerified": measured_iops >= 100_000,
             "iopsEvidenceSha256": iops_evidence_sha256,
+            "iopsEvidence": iops_evidence,
             "storagePathSha256": storage_hash,
+            "storageIdentitySha256": storage_identity,
             "backingSource": Path(backing_source).name or filesystem or "unknown",
         },
         "gpu": {"model": gpu_name, "vramGb": gpu_vram, "count": gpu_count},
