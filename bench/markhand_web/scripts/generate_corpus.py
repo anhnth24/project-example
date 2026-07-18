@@ -233,6 +233,7 @@ def record(index: int, format_name: str) -> dict:
         "effectiveAt": "2026-01-01T00:00:00Z",
         "isCurrent": True,
         "changeSummary": "Phiên bản đầu tiên.",
+        "documentRole": "reference",
     }
 
 
@@ -245,6 +246,7 @@ def version_records() -> list[dict]:
         "conversionOnly": False,
         "versionFixture": True,
         "logicalDocumentId": logical_id,
+        "documentRole": "business-analysis",
     }
     versions = []
     for version, amount, effective, current in (
@@ -303,6 +305,72 @@ def version_records() -> list[dict]:
     return versions
 
 
+def design_version_records() -> list[dict]:
+    common = {
+        "format": "docx",
+        "topic": "quy định kinh phí",
+        "unitCode": "TTDL",
+        "conversionOnly": False,
+        "versionFixture": True,
+        "logicalDocumentId": "logical-budget-design",
+        "documentRole": "technical-design",
+    }
+    versions = []
+    for version, effective, current in (
+        (1, "2026-01-01T00:00:00Z", False),
+        (2, "2026-07-01T00:00:00Z", True),
+    ):
+        versions.append(
+            {
+                **common,
+                "id": f"gold-design-v{version}",
+                "title": f"Thiết kế phân bổ kinh phí — phiên bản {version}",
+                "versionId": f"version-design-v{version}",
+                "versionNumber": version,
+                "parentVersionId": None if version == 1 else "version-design-v1",
+                "effectiveAt": effective,
+                "isCurrent": current,
+                "changeSummary": (
+                    "Phiên bản đầu tiên thiết kế theo mức 15 triệu đồng."
+                    if version == 1
+                    else "Phiên bản 2 xác nhận thiết kế khớp BA ở mức 15 triệu đồng."
+                ),
+                "facts": [
+                    {
+                        "key": "code",
+                        "text": "Mã tài liệu thiết kế là TK-KP-2026.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "budget",
+                        "text": "Thiết kế phân bổ kinh phí 15 triệu đồng.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "effective",
+                        "text": f"Phiên bản thiết kế {version} có hiệu lực từ ngày {effective[8:10]} tháng {effective[5:7]} năm 2026.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "source",
+                        "text": "Tài liệu thiết kế triển khai yêu cầu kinh phí của BA.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "change",
+                        "text": (
+                            "Thiết kế phiên bản 1 cao hơn yêu cầu BA phiên bản 1 là 5 triệu đồng."
+                            if version == 1
+                            else "Thiết kế phiên bản 2 đã khớp yêu cầu BA phiên bản 2."
+                        ),
+                        "queries": [],
+                    },
+                ],
+            }
+        )
+    return versions
+
+
 def canonical_markdown(item: dict) -> str:
     if item["format"] == "audio":
         return ""
@@ -342,6 +410,95 @@ def encoded(value: object) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def conflict_gold(items: list[dict], markdown_by_id: dict[str, str]) -> dict:
+    by_id = {item["id"]: item for item in items}
+    ba_v1 = by_id["gold-budget-v1"]
+    ba_v2 = by_id["gold-budget-v2"]
+    design_v1 = by_id["gold-design-v1"]
+    design_v2 = by_id["gold-design-v2"]
+    detected = [
+        citation(ba_v1, markdown_by_id[ba_v1["id"]], fact_by_key(ba_v1, "budget"), 1),
+        citation(
+            design_v1,
+            markdown_by_id[design_v1["id"]],
+            fact_by_key(design_v1, "budget"),
+            2,
+        ),
+    ]
+    resolved = [
+        citation(ba_v2, markdown_by_id[ba_v2["id"]], fact_by_key(ba_v2, "budget"), 1),
+        citation(
+            design_v2,
+            markdown_by_id[design_v2["id"]],
+            fact_by_key(design_v2, "budget"),
+            2,
+        ),
+    ]
+    return {
+        "version": 1,
+        "conflicts": [
+            {
+                "id": "conflict-budget-001",
+                "claimKey": "approved_budget_vnd",
+                "type": "numeric_mismatch",
+                "severity": "warning",
+                "status": "resolved",
+                "validFrom": "2026-01-01T00:00:00Z",
+                "resolvedAt": "2026-07-01T00:00:00Z",
+                "detected": {
+                    "left": {"value": 10, "unit": "million_vnd", "citation": detected[0]},
+                    "right": {"value": 15, "unit": "million_vnd", "citation": detected[1]},
+                    "supporting": [
+                        citation(
+                            design_v1,
+                            markdown_by_id[design_v1["id"]],
+                            fact_by_key(design_v1, "change"),
+                            3,
+                        )
+                    ],
+                },
+                "resolution": {
+                    "leftCurrent": {"value": 15, "unit": "million_vnd", "citation": resolved[0]},
+                    "rightCurrent": {"value": 15, "unit": "million_vnd", "citation": resolved[1]},
+                    "supporting": [
+                        citation(
+                            design_v2,
+                            markdown_by_id[design_v2["id"]],
+                            fact_by_key(design_v2, "change"),
+                            3,
+                        )
+                    ],
+                    "note": "BA version 2 increased from 10 to 15 million VND, matching design version 2.",
+                },
+                "authorizationCases": [
+                    {
+                        "scope": "both_sources",
+                        "authorizedLogicalDocumentIds": [
+                            "logical-budget-policy",
+                            "logical-budget-design",
+                        ],
+                        "expectedVisibility": "full",
+                    },
+                    {
+                        "scope": "ba_only",
+                        "authorizedLogicalDocumentIds": [
+                            "logical-budget-policy"
+                        ],
+                        "expectedVisibility": "hidden",
+                    },
+                    {
+                        "scope": "design_only",
+                        "authorizedLogicalDocumentIds": [
+                            "logical-budget-design"
+                        ],
+                        "expectedVisibility": "hidden",
+                    },
+                ],
+            }
+        ],
+    }
 
 
 def write_docx(path: Path, item: dict) -> None:
@@ -731,7 +888,11 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
         query_number += 1
 
     version_items = sorted(
-        [item for item in items if item["versionFixture"]],
+        [
+            item
+            for item in items
+            if item["logicalDocumentId"] == "logical-budget-policy"
+        ],
         key=lambda item: item["versionNumber"],
     )
     v1, v2 = version_items
@@ -904,6 +1065,196 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
         "2026-01-01T00:00:00Z",
     )
 
+    by_id = {item["id"]: item for item in items}
+    ba_v1, ba_v2 = by_id["gold-budget-v1"], by_id["gold-budget-v2"]
+    design_v1, design_v2 = by_id["gold-design-v1"], by_id["gold-design-v2"]
+
+    def add_conflict_query(
+        query: str,
+        category: str,
+        answer: str,
+        cited: list[tuple[dict, str]],
+        expected_status: str,
+        as_of: str,
+    ) -> None:
+        nonlocal query_number
+        anchors = [
+            citation(
+                item,
+                markdown_by_id[item["id"]],
+                fact_by_key(item, fact_key),
+                index + 1,
+            )
+            for index, (item, fact_key) in enumerate(cited)
+        ]
+        current_items = [ba_v2, design_v2]
+        rows.append(
+            {
+                "query_id": f"q-{query_number:04}",
+                "query": query,
+                "category": category,
+                "expected_doc": cited[0][0]["id"],
+                "relevance": "3",
+                "answer_mode": "conflict_warning"
+                if expected_status == "open_as_of"
+                else "conflict_status",
+                "span_start": "",
+                "span_end": "",
+                "page": "",
+                "answer_text": "",
+                "expected_answer": answer,
+                "citations": encoded(anchors),
+                "version_mode": {
+                    "conflict_as_of": "as_of",
+                    "conflict_current": "current",
+                    "conflict_history": "history",
+                }[category],
+                "query_time": QUERY_TIME,
+                "as_of": as_of,
+                "version_context": encoded(
+                    {
+                        "logicalDocumentIds": [
+                            "logical-budget-policy",
+                            "logical-budget-design",
+                        ],
+                        "currentVersionIds": [
+                            item["versionId"] for item in current_items
+                        ],
+                        "citedVersionIds": list(
+                            dict.fromkeys(anchor["versionId"] for anchor in anchors)
+                        ),
+                        "changeNote": (
+                            "BA version 2 increased from 10 to 15 million VND and now matches design version 2."
+                            if expected_status == "resolved_current"
+                            else ""
+                        ),
+                    }
+                ),
+                "conflict_context": encoded(
+                    {
+                        "conflictId": "conflict-budget-001",
+                        "claimKey": "approved_budget_vnd",
+                        "severity": "warning",
+                        "expectedStatus": expected_status,
+                        "difference": 5 if expected_status == "open_as_of" else 0,
+                        "unit": "million_vnd",
+                        "authorizedLogicalDocumentIds": [
+                            "logical-budget-policy",
+                            "logical-budget-design",
+                        ],
+                        "expectedVisibility": "full",
+                    }
+                ),
+                "judgments": encoded(
+                    {item["id"]: 3 for item, _ in cited}
+                ),
+            }
+        )
+        query_number += 1
+
+    open_answer = (
+        "Có conflict ở phiên bản 1: BA phê duyệt 10 triệu đồng nhưng thiết kế "
+        "phân bổ 15 triệu đồng, chênh lệch 5 triệu đồng."
+    )
+    resolved_answer = (
+        "Hiện tại conflict đã được giải quyết: BA phiên bản 2 và thiết kế phiên bản 2 "
+        "đều sử dụng mức 15 triệu đồng."
+    )
+    history_answer = (
+        "Conflict xuất hiện ở phiên bản 1 do BA ghi 10 triệu đồng còn thiết kế ghi "
+        "15 triệu đồng; đến phiên bản 2 BA nâng lên 15 triệu đồng nên hai tài liệu đã khớp."
+    )
+    for query in (
+        "Ở phiên bản 1, tài liệu BA và thiết kế có mâu thuẫn kinh phí không?",
+        "Tại ngày 01/03/2026 có conflict nào giữa yêu cầu và thiết kế?",
+    ):
+        add_conflict_query(
+            query,
+            "conflict_as_of",
+            open_answer,
+            [(ba_v1, "budget"), (design_v1, "budget"), (design_v1, "change")],
+            "open_as_of",
+            "2026-03-01T00:00:00Z",
+        )
+    for query in (
+        "Hiện tại tài liệu BA và thiết kế còn conflict kinh phí không?",
+        "Hai tài liệu hiện hành đã thống nhất mức kinh phí chưa?",
+    ):
+        add_conflict_query(
+            query,
+            "conflict_current",
+            resolved_answer,
+            [(ba_v2, "budget"), (design_v2, "budget"), (design_v2, "change")],
+            "resolved_current",
+            "",
+        )
+    for query in (
+        "Lịch sử conflict kinh phí giữa BA và thiết kế thay đổi thế nào?",
+        "Conflict 10 triệu và 15 triệu đã được giải quyết ở version nào?",
+    ):
+        add_conflict_query(
+            query,
+            "conflict_history",
+            history_answer,
+            [
+                (ba_v1, "budget"),
+                (design_v1, "budget"),
+                (ba_v2, "budget"),
+                (design_v2, "budget"),
+            ],
+            "resolved_current",
+            "",
+        )
+    for query, authorized_item in (
+        (
+            "Khi chỉ được xem tài liệu BA, hệ thống có được tiết lộ conflict với thiết kế không?",
+            ba_v2,
+        ),
+        (
+            "Khi chỉ được xem tài liệu thiết kế, hệ thống có được tiết lộ yêu cầu BA không?",
+            design_v2,
+        ),
+    ):
+        rows.append(
+            {
+                "query_id": f"q-{query_number:04}",
+                "query": query,
+                "category": "conflict_acl_denied",
+                "expected_doc": authorized_item["id"],
+                "relevance": "3",
+                "answer_mode": "conflict_hidden",
+                "span_start": "",
+                "span_end": "",
+                "page": "",
+                "answer_text": "",
+                "expected_answer": "Không đủ nguồn được cấp quyền để đánh giá xung đột.",
+                "citations": "[]",
+                "version_mode": "current",
+                "query_time": QUERY_TIME,
+                "as_of": "",
+                "version_context": encoded(
+                    {
+                        "logicalDocumentId": authorized_item["logicalDocumentId"],
+                        "currentVersionId": authorized_item["versionId"],
+                        "citedVersionIds": [],
+                        "changeNote": "",
+                    }
+                ),
+                "conflict_context": encoded(
+                    {
+                        "conflictId": "conflict-budget-001",
+                        "expectedStatus": "hidden",
+                        "authorizedLogicalDocumentIds": [
+                            authorized_item["logicalDocumentId"]
+                        ],
+                        "expectedVisibility": "hidden",
+                    }
+                ),
+                "judgments": encoded({authorized_item["id"]: 3}),
+            }
+        )
+        query_number += 1
+
     no_answer_templates = (
         "Mức phụ cấp ăn trưa tháng {n} là bao nhiêu?",
         "Địa chỉ chi nhánh tại quận {n} ở đâu?",
@@ -975,8 +1326,8 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
             }
         )
         query_number += 1
-    if len(rows) != 260:
-        raise AssertionError(f"expected 260 queries, generated {len(rows)}")
+    if len(rows) != 268:
+        raise AssertionError(f"expected 268 queries, generated {len(rows)}")
     return rows
 
 
@@ -998,8 +1349,11 @@ def write_queries(path: Path, rows: list[dict]) -> None:
         "query_time",
         "as_of",
         "version_context",
+        "conflict_context",
         "judgments",
     ]
+    for row in rows:
+        row.setdefault("conflict_context", "{}")
     with path.open("w", encoding="utf-8", newline="") as output:
         writer = csv.DictWriter(output, fields, delimiter="\t", lineterminator="\n")
         writer.writeheader()
@@ -1024,6 +1378,7 @@ def write_review_packet(golden: Path, rows: list[dict], existing: dict | None = 
         10,
     )
     take(lambda row: row["category"] == "multi_doc", 5)
+    take(lambda row: row["category"].startswith("conflict_"), 8)
     take(lambda row: row["category"] == "no_answer", 5)
     take(lambda row: row["category"] == "prompt_injection_query", 5)
     for category in (
@@ -1228,6 +1583,7 @@ def generate(output: Path) -> None:
     items = [
         *[record(index, format_name) for index, format_name in enumerate(FORMATS)],
         *version_records(),
+        *design_version_records(),
     ]
     manifest_entries: list[dict] = []
     markdown_by_id: dict[str, str] = {}
@@ -1254,6 +1610,7 @@ def generate(output: Path) -> None:
                 "effectiveAt": item["effectiveAt"],
                 "isCurrent": item["isCurrent"],
                 "changeSummary": item["changeSummary"],
+                "documentRole": item["documentRole"],
                 "expectedBehavior": "empty_transcript"
                 if item["format"] == "audio"
                 else "content_preserved",
@@ -1287,6 +1644,15 @@ def generate(output: Path) -> None:
     }
     (golden / "manifest.json").write_text(
         json.dumps(golden_manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (golden / "conflicts.json").write_text(
+        json.dumps(
+            conflict_gold(items, markdown_by_id),
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     queries = query_rows(items, markdown_by_id)

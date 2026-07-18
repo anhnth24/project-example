@@ -51,7 +51,7 @@ Migration đầu tạo:
 - `collections` với `owner_user_id`, `collection_access` với principal
   user/group/role rõ ràng;
 - `documents`, `document_versions`, `derived_artifacts`;
-- `chunks` + FTS;
+- `chunks` + FTS; normalized `claims`, `conflicts`, `conflict_evidence`;
 - `jobs`, `outbox_events`;
 - `org_quotas`, `usage_counters`, `quota_reservations`;
 - `audit_log`, `index_metadata`.
@@ -213,6 +213,11 @@ Current answer không được cite version cũ trừ khi kèm version note. Câ
 lịch sử phải cite cả old+new và trả delta, effective dates, current version; không trộn
 claim giữa version mà thiếu nhãn.
 
+Claim/conflict detection chỉ phát warning khi hai typed claims overlap về key, scope và
+effective interval nhưng có value/rule không tương thích. Current query chỉ hiện conflict
+chưa giải quyết; history giữ conflict cũ và cite resolution versions. LLM chỉ đề xuất
+candidate, deterministic validator + cited evidence mới được publish warning.
+
 ## P1B.9 — API và SSE
 
 API tối thiểu:
@@ -226,6 +231,7 @@ API tối thiểu:
 - `POST /api/v1/ask`;
 - `POST /api/v1/ask/stream`;
 - document version list/diff và citation resolve theo `version_id`;
+- conflict list/detail/triage và cited resolution history;
 - health/readiness.
 
 SSE event có version và sequence; reconnect dùng last-event ID hoặc snapshot +

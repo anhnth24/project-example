@@ -189,6 +189,12 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
             formats.add(format_name)
         if item.get("source") != "generated" or item.get("license") != "CC0-1.0":
             errors.append(f"{label}: source/license must be generated/CC0-1.0")
+        if item.get("documentRole") not in {
+            "reference",
+            "business-analysis",
+            "technical-design",
+        }:
+            errors.append(f"{label}: invalid document role")
         if not isinstance(item.get("owner"), str) or not item["owner"].strip():
             errors.append(f"{label}: owner must be non-empty")
         if any(dependency not in dependency_ids for dependency in item.get("dependencies", [])):
@@ -240,6 +246,164 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         if effective != sorted(effective):
             errors.append(f"logical document {logical_id}: effectiveAt is not monotonic")
 
+    conflict_path = golden / "conflicts.json"
+    managed.add(conflict_path.relative_to(root).as_posix())
+    try:
+        conflict_payload = load_json(conflict_path)
+    except (OSError, json.JSONDecodeError) as error:
+        errors.append(f"conflict gold unreadable: {error}")
+        conflict_payload = {}
+    conflicts: dict[str, dict] = {}
+
+    def conflict_anchor_errors(
+        anchor: object, label: str, expected_citation_id: str
+    ) -> list[str]:
+        anchor_errors: list[str] = []
+        if not isinstance(anchor, dict):
+            return [f"{label}: citation must be an object"]
+        item = documents.get(anchor.get("documentId"))
+        if item is None:
+            return [f"{label}: citation document missing"]
+        if anchor.get("versionId") != item.get("versionId"):
+            anchor_errors.append(f"{label}: citation version mismatch")
+        for field in (
+            "logicalDocumentId",
+            "versionNumber",
+            "effectiveAt",
+            "isCurrent",
+        ):
+            if anchor.get(field) != item.get(field):
+                anchor_errors.append(f"{label}: citation {field} mismatch")
+        if anchor.get("citationId") != expected_citation_id:
+            anchor_errors.append(f"{label}: citation ID mismatch")
+        if anchor.get("contentSha256") != item.get("markdownSha256"):
+            anchor_errors.append(f"{label}: citation hash mismatch")
+        if anchor.get("chunkId") is not None:
+            anchor_errors.append(f"{label}: chunkId must remain null before P0-06")
+        expected_page = 1 if item["format"].startswith("pdf") else None
+        if anchor.get("page") != expected_page:
+            anchor_errors.append(f"{label}: citation page mismatch")
+        markdown = safe_path(golden, item["markdownPath"]).read_bytes()
+        start, end = anchor.get("start"), anchor.get("end")
+        if (
+            not isinstance(start, int)
+            or isinstance(start, bool)
+            or not isinstance(end, int)
+            or isinstance(end, bool)
+            or not 0 <= start < end <= len(markdown)
+        ):
+            anchor_errors.append(f"{label}: citation span invalid")
+        else:
+            try:
+                quote = markdown[start:end].decode("utf-8")
+            except UnicodeDecodeError:
+                quote = None
+            if quote != anchor.get("quote"):
+                anchor_errors.append(f"{label}: citation quote mismatch")
+        return anchor_errors
+
+    for conflict in conflict_payload.get("conflicts", []):
+        conflict_id = conflict.get("id")
+        label = f"conflict {conflict_id}"
+        if not isinstance(conflict_id, str) or not conflict_id or conflict_id in conflicts:
+            errors.append(f"{label}: duplicate or missing ID")
+            continue
+        conflicts[conflict_id] = conflict
+        if (
+            conflict.get("type") != "numeric_mismatch"
+            or conflict.get("severity") not in {"info", "warning", "error"}
+            or conflict.get("status") != "resolved"
+            or timestamp(conflict.get("validFrom")) is None
+            or timestamp(conflict.get("resolvedAt")) is None
+            or timestamp(conflict["validFrom"]) >= timestamp(conflict["resolvedAt"])
+        ):
+            errors.append(f"{label}: invalid lifecycle")
+        detected = conflict.get("detected", {})
+        resolution = conflict.get("resolution", {})
+        left, right = detected.get("left", {}), detected.get("right", {})
+        current_left = resolution.get("leftCurrent", {})
+        current_right = resolution.get("rightCurrent", {})
+        if left.get("unit") != right.get("unit") or left.get("value") == right.get("value"):
+            errors.append(f"{label}: detected claims are not conflicting")
+        if (
+            current_left.get("unit") != current_right.get("unit")
+            or current_left.get("value") != current_right.get("value")
+        ):
+            errors.append(f"{label}: resolution claims are not aligned")
+        expected_resolution_note = (
+            f"BA version 2 increased from {left.get('value')} to "
+            f"{current_left.get('value')} million VND, matching design version 2."
+        )
+        if resolution.get("note") != expected_resolution_note:
+            errors.append(f"{label}: resolution note is incorrect")
+        for name, claim, citation_id in (
+            ("left", left, "CITE-0001"),
+            ("right", right, "CITE-0002"),
+            ("leftCurrent", current_left, "CITE-0001"),
+            ("rightCurrent", current_right, "CITE-0002"),
+        ):
+            errors.extend(
+                conflict_anchor_errors(
+                    claim.get("citation"), f"{label}.{name}", citation_id
+                )
+            )
+            quote = str(claim.get("citation", {}).get("quote", ""))
+            numbers = re.findall(r"\b(\d+)\s+triệu\b", quote)
+            if claim.get("unit") != "million_vnd" or not numbers:
+                errors.append(f"{label}.{name}: claim unit/value is not evidenced")
+            elif int(numbers[0]) != claim.get("value"):
+                errors.append(f"{label}.{name}: claim value differs from citation")
+        resolution_times = [
+            timestamp(current_left.get("citation", {}).get("effectiveAt")),
+            timestamp(current_right.get("citation", {}).get("effectiveAt")),
+        ]
+        resolution_effective = (
+            max(resolution_times) if all(resolution_times) else None
+        )
+        if (
+            resolution_effective is None
+            or timestamp(conflict.get("resolvedAt")) != resolution_effective
+        ):
+            errors.append(f"{label}: resolvedAt must match resolution evidence")
+        for section_name, section in (
+            ("detected", detected),
+            ("resolution", resolution),
+        ):
+            supporting = section.get("supporting", [])
+            if not isinstance(supporting, list) or len(supporting) != 1:
+                errors.append(f"{label}.{section_name}: supporting citation required")
+            else:
+                errors.extend(
+                    conflict_anchor_errors(
+                        supporting[0],
+                        f"{label}.{section_name}.supporting",
+                        "CITE-0003",
+                    )
+                )
+        authorization_cases = conflict.get("authorizationCases", [])
+        actual_authorization = {
+            case.get("scope"): (
+                tuple(sorted(case.get("authorizedLogicalDocumentIds", []))),
+                case.get("expectedVisibility"),
+            )
+            for case in authorization_cases
+            if isinstance(case, dict)
+        }
+        expected_authorization = {
+            "both_sources": (
+                ("logical-budget-design", "logical-budget-policy"),
+                "full",
+            ),
+            "ba_only": (("logical-budget-policy",), "hidden"),
+            "design_only": (("logical-budget-design",), "hidden"),
+        }
+        if (
+            len(authorization_cases) != 3
+            or len(actual_authorization) != 3
+            or actual_authorization != expected_authorization
+        ):
+            errors.append(f"{label}: authorization visibility cases are incomplete")
+
     query_path = golden / "queries.tsv"
     managed.add(query_path.relative_to(root).as_posix())
     query_ids: set[str] = set()
@@ -279,14 +443,23 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                 try:
                     citations = json.loads(row.get("citations", ""))
                     version_context = json.loads(row.get("version_context", ""))
+                    conflict_context = json.loads(row.get("conflict_context", ""))
                 except json.JSONDecodeError:
-                    errors.append(f"query {query_id}: citations/version_context must be JSON")
+                    errors.append(
+                        f"query {query_id}: citations/version/conflict context must be JSON"
+                    )
                     citations = []
                     version_context = {}
-                if not isinstance(citations, list) or not isinstance(version_context, dict):
-                    errors.append(f"query {query_id}: invalid citations/version_context shape")
+                    conflict_context = {}
+                if (
+                    not isinstance(citations, list)
+                    or not isinstance(version_context, dict)
+                    or not isinstance(conflict_context, dict)
+                ):
+                    errors.append(f"query {query_id}: invalid citation/context shape")
                     citations = []
                     version_context = {}
+                    conflict_context = {}
                 cited_versions: list[str] = []
                 for index, anchor in enumerate(citations):
                     if not isinstance(anchor, dict):
@@ -346,6 +519,7 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                         or row.get("expected_answer")
                         or judgments
                         or citations
+                        or conflict_context
                     ):
                         errors.append(f"query {query_id}: no-answer row has expected content")
                     continue
@@ -360,13 +534,20 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     relevance = -1
                 if judgments.get(document_id) != relevance:
                     errors.append(f"query {query_id}: expected relevance differs from judgments")
-                if not row.get("expected_answer") or not citations:
+                if not row.get("expected_answer") or (
+                    not citations and row.get("answer_mode") != "conflict_hidden"
+                ):
                     errors.append(f"query {query_id}: answer and citations are required")
                 context_versions = version_context.get("citedVersionIds", [])
                 if context_versions != list(dict.fromkeys(cited_versions)):
                     errors.append(f"query {query_id}: version context differs from citations")
                 version_mode = row.get("version_mode")
-                if version_mode not in {"current", "as_of", "compare", "history"}:
+                if version_mode not in {
+                    "current",
+                    "as_of",
+                    "compare",
+                    "history",
+                }:
                     errors.append(f"query {query_id}: invalid version mode")
                 query_time = row.get("query_time", "")
                 query_instant = timestamp(query_time)
@@ -386,7 +567,9 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                         errors.append(
                             f"query {query_id}: current answer cites historical/future version"
                         )
-                if version_mode == "as_of":
+                if version_mode == "as_of" and not row.get(
+                    "answer_mode", ""
+                ).startswith("conflict_"):
                     as_of = row.get("as_of", "")
                     as_of_instant = timestamp(as_of)
                     expected_version = item.get("versionId")
@@ -419,7 +602,9 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                         if version_id in versions
                     ):
                         errors.append(f"query {query_id}: as_of cites future/unrelated version")
-                if version_mode in {"compare", "history"}:
+                if version_mode in {"compare", "history"} and not row.get(
+                    "answer_mode", ""
+                ).startswith("conflict_"):
                     logical_ids = {
                         versions[version_id]["logicalDocumentId"]
                         for version_id in cited_versions
@@ -427,7 +612,12 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     }
                     if len(set(cited_versions)) < 2 or len(logical_ids) != 1:
                         errors.append(f"query {query_id}: comparison requires one version lineage")
-                if row.get("answer_mode") != "document_list":
+                if row.get("answer_mode") not in {
+                    "document_list",
+                    "conflict_warning",
+                    "conflict_status",
+                    "conflict_hidden",
+                }:
                     if (
                         version_context.get("logicalDocumentId")
                         != item.get("logicalDocumentId")
@@ -456,6 +646,206 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     )
                     if version_context.get("changeNote") != expected_change_note:
                         errors.append(f"query {query_id}: changeNote is incorrect")
+                if row.get("answer_mode", "").startswith("conflict_"):
+                    conflict = conflicts.get(conflict_context.get("conflictId"))
+                    if conflict is None:
+                        errors.append(f"query {query_id}: conflict ID is unknown")
+                    else:
+                        expected_status = conflict_context.get("expectedStatus")
+                        if expected_status == "hidden":
+                            authorized = conflict_context.get(
+                                "authorizedLogicalDocumentIds", []
+                            )
+                            allowed_conflict_keys = {
+                                "conflictId",
+                                "expectedStatus",
+                                "authorizedLogicalDocumentIds",
+                                "expectedVisibility",
+                            }
+                            allowed_version_keys = {
+                                "logicalDocumentId",
+                                "currentVersionId",
+                                "citedVersionIds",
+                                "changeNote",
+                            }
+                            if (
+                                conflict_context.get("expectedVisibility") != "hidden"
+                                or authorized != [item.get("logicalDocumentId")]
+                                or citations
+                                or set(conflict_context) != allowed_conflict_keys
+                                or set(version_context) != allowed_version_keys
+                                or version_context.get("logicalDocumentId")
+                                != item.get("logicalDocumentId")
+                                or version_context.get("currentVersionId")
+                                != item.get("versionId")
+                                or version_context.get("citedVersionIds") != []
+                                or version_context.get("changeNote") != ""
+                                or row.get("expected_answer")
+                                != "Không đủ nguồn được cấp quyền để đánh giá xung đột."
+                                or judgments != {item["id"]: 3}
+                            ):
+                                errors.append(
+                                    f"query {query_id}: hidden conflict leaks cross-source metadata"
+                                )
+                            if (
+                                row.get("span_start")
+                                or row.get("span_end")
+                                or row.get("answer_text")
+                            ):
+                                errors.append(
+                                    f"query {query_id}: hidden conflict must not contain span"
+                                )
+                            continue
+                        if (
+                            conflict_context.get("claimKey")
+                            != conflict.get("claimKey")
+                            or conflict_context.get("severity")
+                            != conflict.get("severity")
+                        ):
+                            errors.append(
+                                f"query {query_id}: conflict context metadata mismatch"
+                            )
+                        if expected_status not in {"open_as_of", "resolved_current"}:
+                            errors.append(
+                                f"query {query_id}: conflict expected status is invalid"
+                            )
+                        detected_difference = abs(
+                            conflict["detected"]["left"]["value"]
+                            - conflict["detected"]["right"]["value"]
+                        )
+                        resolved_difference = abs(
+                            conflict["resolution"]["leftCurrent"]["value"]
+                            - conflict["resolution"]["rightCurrent"]["value"]
+                        )
+                        expected_unit = conflict["detected"]["left"]["unit"]
+                        if expected_status == "open_as_of":
+                            as_of = timestamp(row.get("as_of"))
+                            if (
+                                as_of is None
+                                or not timestamp(conflict["validFrom"])
+                                <= as_of
+                                < timestamp(conflict["resolvedAt"])
+                                or conflict_context.get("difference")
+                                != detected_difference
+                                or conflict_context.get("unit") != expected_unit
+                            ):
+                                errors.append(
+                                    f"query {query_id}: conflict as-of lifecycle mismatch"
+                                )
+                            if any(
+                                timestamp(versions[version_id]["effectiveAt"]) > as_of
+                                for version_id in cited_versions
+                                if version_id in versions and as_of is not None
+                            ):
+                                errors.append(
+                                    f"query {query_id}: conflict as-of cites future version"
+                                )
+                            expected_versions = {
+                                conflict["detected"]["left"]["citation"]["versionId"],
+                                conflict["detected"]["right"]["citation"]["versionId"],
+                            }
+                            expected_evidence = [
+                                conflict["detected"]["left"]["citation"],
+                                conflict["detected"]["right"]["citation"],
+                                *conflict["detected"]["supporting"],
+                            ]
+                        else:
+                            expected_versions = {
+                                conflict["resolution"]["leftCurrent"]["citation"][
+                                    "versionId"
+                                ],
+                                conflict["resolution"]["rightCurrent"]["citation"][
+                                    "versionId"
+                                ],
+                            }
+                            if row.get("category") == "conflict_history":
+                                expected_versions.update(
+                                    {
+                                        conflict["detected"]["left"]["citation"][
+                                            "versionId"
+                                        ],
+                                        conflict["detected"]["right"]["citation"][
+                                            "versionId"
+                                        ],
+                                    }
+                                )
+                                expected_evidence = [
+                                    conflict["detected"]["left"]["citation"],
+                                    conflict["detected"]["right"]["citation"],
+                                    conflict["resolution"]["leftCurrent"]["citation"],
+                                    conflict["resolution"]["rightCurrent"]["citation"],
+                                ]
+                            else:
+                                expected_evidence = [
+                                    conflict["resolution"]["leftCurrent"]["citation"],
+                                    conflict["resolution"]["rightCurrent"]["citation"],
+                                    *conflict["resolution"]["supporting"],
+                                ]
+                            if (
+                                conflict_context.get("difference")
+                                != resolved_difference
+                                or conflict_context.get("unit") != expected_unit
+                            ):
+                                errors.append(
+                                    f"query {query_id}: resolved conflict difference must be zero"
+                                )
+                            if (
+                                query_instant is None
+                                or query_instant
+                                < timestamp(conflict.get("resolvedAt"))
+                            ):
+                                errors.append(
+                                    f"query {query_id}: conflict is not resolved at query time"
+                                )
+                        if not expected_versions.issubset(set(cited_versions)):
+                            errors.append(
+                                f"query {query_id}: conflict citations are incomplete"
+                            )
+                        normalized_expected_evidence = []
+                        for index, anchor in enumerate(expected_evidence):
+                            normalized = dict(anchor)
+                            normalized["citationId"] = f"CITE-{index + 1:04}"
+                            normalized_expected_evidence.append(normalized)
+                        if citations != normalized_expected_evidence:
+                            errors.append(
+                                f"query {query_id}: conflict evidence set is not exact"
+                            )
+                        expected_current = {
+                            conflict["resolution"]["leftCurrent"]["citation"][
+                                "versionId"
+                            ],
+                            conflict["resolution"]["rightCurrent"]["citation"][
+                                "versionId"
+                            ],
+                        }
+                        if set(version_context.get("currentVersionIds", [])) != expected_current:
+                            errors.append(
+                                f"query {query_id}: conflict current versions are incorrect"
+                            )
+                        expected_logical = {
+                            conflict["detected"]["left"]["citation"][
+                                "logicalDocumentId"
+                            ],
+                            conflict["detected"]["right"]["citation"][
+                                "logicalDocumentId"
+                            ],
+                        }
+                        if set(version_context.get("logicalDocumentIds", [])) != expected_logical:
+                            errors.append(
+                                f"query {query_id}: conflict logical documents are incorrect"
+                            )
+                        if (
+                            set(
+                                conflict_context.get(
+                                    "authorizedLogicalDocumentIds", []
+                                )
+                            )
+                            != expected_logical
+                            or conflict_context.get("expectedVisibility") != "full"
+                        ):
+                            errors.append(
+                                f"query {query_id}: conflict authorization context is incomplete"
+                            )
                 if row.get("answer_mode") == "document_list":
                     if row.get("span_start") or row.get("span_end") or row.get("answer_text"):
                         errors.append(f"query {query_id}: document-list row must not contain span")
@@ -474,24 +864,29 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     "versioned_answer",
                     "version_compare",
                     "version_history",
+                    "conflict_warning",
+                    "conflict_status",
                 }:
                     if row.get("span_start") or row.get("span_end") or row.get("answer_text"):
                         errors.append(f"query {query_id}: synthesized version answer must not contain span")
-                    expected_history = [
-                        {
-                            "versionId": version["versionId"],
-                            "versionNumber": version["versionNumber"],
-                            "effectiveAt": version["effectiveAt"],
-                            "isCurrent": version["isCurrent"],
-                            "changeSummary": version["changeSummary"],
-                        }
-                        for version in sorted(
-                            logical_versions.get(item["logicalDocumentId"], []),
-                            key=lambda version: version["versionNumber"],
-                        )
-                    ]
-                    if version_context.get("history") != expected_history:
-                        errors.append(f"query {query_id}: version history context is incomplete")
+                    if not row.get("answer_mode", "").startswith("conflict_"):
+                        expected_history = [
+                            {
+                                "versionId": version["versionId"],
+                                "versionNumber": version["versionNumber"],
+                                "effectiveAt": version["effectiveAt"],
+                                "isCurrent": version["isCurrent"],
+                                "changeSummary": version["changeSummary"],
+                            }
+                            for version in sorted(
+                                logical_versions.get(item["logicalDocumentId"], []),
+                                key=lambda version: version["versionNumber"],
+                            )
+                        ]
+                        if version_context.get("history") != expected_history:
+                            errors.append(
+                                f"query {query_id}: version history context is incomplete"
+                            )
                     continue
                 markdown_path = safe_path(golden, item["markdownPath"])
                 markdown_bytes = markdown_path.read_bytes()
@@ -539,6 +934,10 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         "temporal_as_of",
         "version_compare",
         "version_history",
+        "conflict_as_of",
+        "conflict_current",
+        "conflict_history",
+        "conflict_acl_denied",
         "no_answer",
         "prompt_injection_query",
     ):
@@ -748,6 +1147,56 @@ class CorpusValidatorTests(unittest.TestCase):
             compare_context["logicalDocumentId"] = "wrong-lineage"
             compare_context["changeNote"] = "wrong change"
             compare["version_context"] = json.dumps(compare_context, separators=(",", ":"))
+            conflict_row = next(
+                row for row in rows if row["category"] == "conflict_as_of"
+            )
+            conflict_current = next(
+                row for row in rows if row["category"] == "conflict_current"
+            )
+            corrupted_conflict_citations = json.loads(conflict_row["citations"])[1:]
+            corrupted_conflict_citations.append(
+                json.loads(conflict_current["citations"])[0]
+            )
+            conflict_row["citations"] = json.dumps(
+                corrupted_conflict_citations,
+                separators=(",", ":"),
+            )
+            conflict_version_context = json.loads(conflict_row["version_context"])
+            conflict_version_context["citedVersionIds"] = list(
+                dict.fromkeys(
+                    citation["versionId"]
+                    for citation in corrupted_conflict_citations
+                )
+            )
+            conflict_row["version_context"] = json.dumps(
+                conflict_version_context, separators=(",", ":")
+            )
+            conflict_context = json.loads(conflict_row["conflict_context"])
+            conflict_row["conflict_context"] = json.dumps(
+                conflict_context, separators=(",", ":")
+            )
+            invalid_status = next(
+                row for row in rows if row["category"] == "conflict_history"
+            )
+            invalid_context = json.loads(invalid_status["conflict_context"])
+            invalid_context["expectedStatus"] = "invalid"
+            invalid_status["conflict_context"] = json.dumps(
+                invalid_context, separators=(",", ":")
+            )
+            hidden = next(
+                row for row in rows if row["category"] == "conflict_acl_denied"
+            )
+            hidden_context = json.loads(hidden["conflict_context"])
+            hidden_context["claimKey"] = "leaked"
+            hidden["conflict_context"] = json.dumps(
+                hidden_context, separators=(",", ":")
+            )
+            hidden["expected_answer"] = "Conflict thật có giá trị 10 và 15 triệu."
+            hidden_version_context = json.loads(hidden["version_context"])
+            hidden_version_context["history"] = [{"versionId": "unauthorized"}]
+            hidden["version_context"] = json.dumps(
+                hidden_version_context, separators=(",", ":")
+            )
             current["query_time"] = "zzzz"
             current_rows[1]["query_time"] = "2026-01-01T00:00:00Z"
             with query_path.open("w", encoding="utf-8", newline="") as output:
@@ -756,6 +1205,44 @@ class CorpusValidatorTests(unittest.TestCase):
                 )
                 writer.writeheader()
                 writer.writerows(rows)
+            conflicts_path = root / "golden/conflicts.json"
+            conflicts = load_json(conflicts_path)
+            conflicts["conflicts"][0]["resolution"]["rightCurrent"]["value"] = 14
+            conflicts["conflicts"][0]["detected"]["left"]["value"] = 9
+            conflicts["conflicts"][0]["detected"]["left"]["unit"] = "usd"
+            conflicts["conflicts"][0]["resolution"]["note"] = ""
+            corrupted_anchor = conflicts["conflicts"][0]["detected"]["left"][
+                "citation"
+            ]
+            corrupted_anchor.update(
+                {
+                    "logicalDocumentId": "wrong-logical",
+                    "versionId": "wrong-version",
+                    "versionNumber": 99,
+                    "effectiveAt": "2099-01-01T00:00:00Z",
+                    "isCurrent": True,
+                    "citationId": "CITE-9999",
+                    "contentSha256": "0" * 64,
+                    "chunkId": "premature-chunk",
+                    "page": 99,
+                }
+            )
+            corrupted_right = conflicts["conflicts"][0]["detected"]["right"][
+                "citation"
+            ]
+            corrupted_right["start"] = -1
+            corrupted_right["end"] = 0
+            conflicts["conflicts"][0]["detected"]["supporting"][0][
+                "documentId"
+            ] = "missing-document"
+            conflicts["conflicts"][0]["resolution"]["supporting"][0][
+                "quote"
+            ] = "wrong quote"
+            conflicts["conflicts"][0]["resolvedAt"] = "2026-08-01T00:00:00Z"
+            conflicts["conflicts"][0]["authorizationCases"].append(
+                conflicts["conflicts"][0]["authorizationCases"][0]
+            )
+            conflicts_path.write_text(json.dumps(conflicts))
             errors = validate(root, require_adjudicated=False)
             self.assertTrue(any("as_of cites future" in error for error in errors))
             self.assertTrue(any("document-list citations are incomplete" in error for error in errors))
@@ -764,6 +1251,30 @@ class CorpusValidatorTests(unittest.TestCase):
             self.assertTrue(any("current answer cites historical/future" in error for error in errors))
             self.assertTrue(any("logical document mismatch" in error for error in errors))
             self.assertTrue(any("changeNote is incorrect" in error for error in errors))
+            self.assertTrue(any("resolution claims are not aligned" in error for error in errors))
+            self.assertTrue(any("claim value differs" in error for error in errors))
+            self.assertTrue(any("claim unit/value" in error for error in errors))
+            self.assertTrue(any("resolution note is incorrect" in error for error in errors))
+            self.assertTrue(any("citation versionNumber mismatch" in error for error in errors))
+            self.assertTrue(any("citation logicalDocumentId mismatch" in error for error in errors))
+            self.assertTrue(any("citation version mismatch" in error for error in errors))
+            self.assertTrue(any("citation effectiveAt mismatch" in error for error in errors))
+            self.assertTrue(any("citation isCurrent mismatch" in error for error in errors))
+            self.assertTrue(any("citation ID mismatch" in error for error in errors))
+            self.assertTrue(any("citation hash mismatch" in error for error in errors))
+            self.assertTrue(any("chunkId must remain null" in error for error in errors))
+            self.assertTrue(any("citation page mismatch" in error for error in errors))
+            self.assertTrue(any("citation quote mismatch" in error for error in errors))
+            self.assertTrue(any("citation document missing" in error for error in errors))
+            self.assertTrue(any("citation span invalid" in error for error in errors))
+            self.assertTrue(any("resolvedAt must match" in error for error in errors))
+            self.assertTrue(any("not resolved at query time" in error for error in errors))
+            self.assertTrue(any("conflict expected status is invalid" in error for error in errors))
+            self.assertTrue(any("conflict citations are incomplete" in error for error in errors))
+            self.assertTrue(any("conflict as-of cites future version" in error for error in errors))
+            self.assertTrue(any("hidden conflict leaks" in error for error in errors))
+            self.assertTrue(any("authorization visibility cases" in error for error in errors))
+            self.assertTrue(any("conflict evidence set is not exact" in error for error in errors))
             self.assertTrue(any("review sample diverges" in error for error in errors))
 
 

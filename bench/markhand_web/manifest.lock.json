@@ -59,8 +59,13 @@
     },
     {
       "path": "golden/adjudication.json",
-      "sha256": "6db287db951f41c140cce59b56113ff6ea4c3714f3200ad95d8d8416d178d7de",
-      "blake3": "fc580e931c2302a9859ac77cc14982e9d1ea37c414746e6fce95a75b195def6f"
+      "sha256": "5814a66e7bb8f9621de7389da98201c0375411b8b256e4fb18f81a9652267194",
+      "blake3": "991a17a68ea795ad7f45468194addabb6e80d32e90d815ad3bbdbab96da45681"
+    },
+    {
+      "path": "golden/conflicts.json",
+      "sha256": "d158cc3a29abe8492d0e0676239b041153d2db2af83e7a4043b9261a0eeaa8e3",
+      "blake3": "061802c8e993b403df8df41a06c4b2fb4dbc523ccb660777be6bfd9c7b1b1f2e"
     },
     {
       "path": "golden/documents/gold-001.pdf",
@@ -208,9 +213,19 @@
       "blake3": "37c6dbfd6554e7f1897209cdd6ac52d51ba367174a79a04d036a207ad4ef1661"
     },
     {
+      "path": "golden/documents/gold-design-v1.docx",
+      "sha256": "a610de7213e38060909909c388bce557a619887206e12391f6cb52df83a666bc",
+      "blake3": "910f69af9abd68388f14601d2ef6820415d3e7f1c4dd9a16c06dbd7fcf1c8c1a"
+    },
+    {
+      "path": "golden/documents/gold-design-v2.docx",
+      "sha256": "eedade0e06e138229a621009cb9c81bc2fc31d6a8856866269055611c0da542a",
+      "blake3": "8693124fd9d3b72b9d530eec669e7816399572ecb1a458e47614684edd3a1ee9"
+    },
+    {
       "path": "golden/manifest.json",
-      "sha256": "1052fd1f67838365d60f7d5f9cecda408c0cb50414e890a693c74e0576737b8e",
-      "blake3": "5bbfab8684bbb87e215eb8430a9f569fb4080cfc546cbb00263c71b177d71ad4"
+      "sha256": "eeeb51ad733d8e573a6661b30e13d2b9cc8897ec4e522b3e5f0d1194355f5a36",
+      "blake3": "c3abcbdb6cb53ce9fe7580a5a70bf8f014ea3c1b07c0b37686b8d56b26a24cc3"
     },
     {
       "path": "golden/markdown/gold-001.md",
@@ -358,14 +373,24 @@
       "blake3": "284b8a9652b281d710a2918253622e2b3671ca73b8051e34bbfc74f9e9d13f79"
     },
     {
+      "path": "golden/markdown/gold-design-v1.md",
+      "sha256": "4831ea41d5e6f20b68feaef6a4200c8b3b33004909f329d7f05d59416888eece",
+      "blake3": "bd84afb0f9a5e22b10b184ce1b0dbac4112836ab114b6ad1524e569d091bb11d"
+    },
+    {
+      "path": "golden/markdown/gold-design-v2.md",
+      "sha256": "60248905154694610a197a5d38e5e59f0cf143dced1b34ebc6053e77bb9bbd12",
+      "blake3": "22a4747b059124a5367f42232c17a1b27e9fdc3d6c0124f54d21ad6b5192fca8"
+    },
+    {
       "path": "golden/queries.tsv",
-      "sha256": "574f0a32a88d7f87c2bc6048f6cc6baf30ea4295d1dcc657c59d25fb6b29be3b",
-      "blake3": "dfca16c1a04cf5337432372b6669f3e2bc6351619d4fe9438745406c34de6051"
+      "sha256": "5a4617e8a1bde9426c0d14b4a101b69e831cd9450e7078404bd0f1e7c4473b04",
+      "blake3": "8d5aec9f267eb4c2d0dfe4dfa4bfee7fdc612a3e267aefe42033ea0e7a3d66a0"
     },
     {
       "path": "golden/review-sample.tsv",
-      "sha256": "52cf13639fedb58006e35c3bb606475591e1b75f2a6254918724593bb034df3a",
-      "blake3": "8ed4cbab4b34993992f95d5c64cb83fbc8f6c776825cb4d79e55dd9451402570"
+      "sha256": "aafab0a11b3318531639ab2a5bd28476dd02e8c9b6d0e21f03e3444cface63c6",
+      "blake3": "7b6518b1a062e377a9ac16f15541fafb924289a5ca792dcee6a57f73c5cf1415"
     }
   ]
 }

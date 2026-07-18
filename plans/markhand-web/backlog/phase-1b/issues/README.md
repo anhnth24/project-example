@@ -49,7 +49,8 @@ ghi trong issue đã `Done`.
 
 - **Plan:** Migrations org/auth/RBAC/groups/collections, immutable versions/artifacts,
   atomic current-published pointer, parent/version/effective lineage, chunks/FTS,
-  jobs/outbox, quota/audit/index; seed POC riêng.
+  normalized claims, conflict/evidence lifecycle, jobs/outbox, quota/audit/index;
+  seed POC riêng.
 - **Files:** `crates/server/migrations/000*.sql`, `src/db/models.rs`.
 - **Depends:** F01 + G0-ARCH.
 - **Acceptance/tests:** Mọi business row có org; immutable versions; exactly one
@@ -153,6 +154,7 @@ ghi trong issue đã `Done`.
 
 - **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
   chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
+  extract typed claim key/value/unit/scope; incremental conflict candidate outbox;
   blocking client off async executor; deterministic upsert.
 - **Files:** `workers/{index,embedding}.rs`, `services/{chunking,embedding,indexing}.rs`.
 - **Depends:** I03/I05/F06 + G0-RET/G0-CAP/G1A.
@@ -177,7 +179,7 @@ ghi trong issue đã `Done`.
 
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
-  state/ACL/version.
+  state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
 - **Files:** `services/retrieval/{vector,fts,hydrate}.rs`, `db/search.rs`.
 - **Depends:** F04/F06/I06 + G0-RET/G1A.
 - **Acceptance/tests:** Empty scope deny; stale vector no text; current không trả
@@ -201,18 +203,22 @@ ghi trong issue đã `Done`.
 
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
+  current unresolved-conflict warnings + resolved-history note, token stream,
   deterministic extractive fallback.
 - **Files:** `services/qa/{prompt,provider,grounding,stream}.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
 - **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
   compare cite old+new và đúng delta; injection không tool/scope change; provider
-  outage fallback; fabricated/version-mix citation, timeout, delete-during-stream tests.
+  outage fallback; BA/design numeric conflict warning và v2 resolution; false-positive/
+  accepted-exception; fabricated/version-mix/conflict citation, timeout,
+  delete-during-stream tests.
 - **Security/migration:** Audit metadata only. **Out:** agents/memory/web browse.
 
 ### P1B-R04 — Collection/document/job REST API
 
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
-  version list/get/diff/current publish; job status; pagination/idempotency/error schema.
+  version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
+  job status; pagination/idempotency/error schema.
 - **Files:** `routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`.
 - **Depends:** F04/F05/I01/I03/I07/R02.
 - **Acceptance/tests:** Org context + permissions; stable errors; idempotent reindex;
