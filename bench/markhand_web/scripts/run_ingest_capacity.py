@@ -754,6 +754,9 @@ def build_payload(args: argparse.Namespace) -> dict:
         "reportWritten": True,
         "gitClean": not status["dirty"],
         "honestFlagsSet": bool(honest_flags_set),
+        # Local-cpu close still requires every selected format/document to convert.
+        # Profile B headroom remains separately blocked.
+        "allDocumentsSucceeded": all_succeeded,
     }
     p0_08_closed = all(closure.values())
     return {
