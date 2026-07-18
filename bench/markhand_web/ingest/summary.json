@@ -2,22 +2,24 @@
   "version": 1,
   "reportId": "p0-08-ingest-capacity",
   "gateId": "G0-CAP-INGEST-THROUGHPUT",
-  "generatedAt": "2026-07-18T19:20:55.784593Z",
+  "generatedAt": "2026-07-18T19:21:13.957260Z",
   "command": "bash bench/markhand_web/scripts/run_ingest_capacity.sh",
   "mode": "local-cpu-converter-smoke",
   "measurementScope": "local-cpu; not Profile B",
   "git": {
-    "commit": "69aa81c8cc4149829988fc575cadeb833369579f",
+    "commit": "04a37b1270b4aab91e38e336f66c38b789713b25",
     "branch": "cursor/p0-08-ingest-capacity-9f2f",
-    "dirty": false,
-    "dirtyPaths": []
+    "dirty": true,
+    "dirtyPaths": [
+      "bench/markhand_web/scripts/run_ingest_capacity.py"
+    ]
   },
   "environment": {
     "environmentId": "current-runner-local-cpu",
     "targetEnvironmentId": "on-prem-reference",
     "targetMatch": false,
     "fingerprint": {
-      "gitCommit": "69aa81c8cc4149829988fc575cadeb833369579f",
+      "gitCommit": "04a37b1270b4aab91e38e336f66c38b789713b25",
       "workloadProfileId": "on-prem-reference-v1",
       "hardware": {
         "cpu": {
@@ -50,7 +52,7 @@
       }
     }
   },
-  "implementationSha256": "4ade9d5c4d1b03c21e805b85cfb5d7da09d0e8ff52299efe99abf25bebdf0b6c",
+  "implementationSha256": "546b9756181edc3a68c2027255af8e0985ac0783068e6a23916bef9d190f86cd",
   "converter": {
     "available": true,
     "path": "/workspace/target/release/fileconv",
@@ -125,168 +127,168 @@
       "documentsAttempted": 31,
       "documentsSucceeded": 31,
       "documentsFailed": 0,
-      "wallSeconds": 5.288,
-      "docsPerHour": 21103.327,
+      "wallSeconds": 5.35,
+      "docsPerHour": 20859.956,
       "estimatedPagesSucceeded": 29,
-      "pagesPerHour": 19741.822,
+      "pagesPerHour": 19514.153,
       "durationMs": {
-        "min": 20.596,
-        "mean": 170.481,
-        "p50": 20.911,
-        "p95": 875.894,
-        "max": 954.602
+        "min": 20.683,
+        "mean": 172.474,
+        "p50": 20.897,
+        "p95": 885.675,
+        "max": 995.954
       },
-      "peakRssMb": 223.277,
+      "peakRssMb": 219.023,
       "rssMeasured": true,
       "perFormat": {
         "audio": {
           "documents": 2,
           "successes": 2,
           "failures": 0,
-          "docsPerHourFromFileDurations": 3811.191,
+          "docsPerHourFromFileDurations": 3690.217,
           "durationMs": {
-            "min": 934.571,
-            "mean": 944.587,
-            "p50": 944.587,
-            "p95": 953.6,
-            "max": 954.602
+            "min": 955.151,
+            "mean": 975.553,
+            "p50": 975.553,
+            "p95": 993.914,
+            "max": 995.954
           },
-          "peakRssMb": 217.441,
+          "peakRssMb": 217.516,
           "pagesEstimated": 0
         },
         "csv": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 174317.257,
+          "docsPerHourFromFileDurations": 172496.406,
           "durationMs": {
-            "min": 20.596,
-            "mean": 20.652,
-            "p50": 20.672,
-            "p95": 20.686,
-            "max": 20.688
+            "min": 20.711,
+            "mean": 20.87,
+            "p50": 20.913,
+            "p95": 20.979,
+            "max": 20.986
           },
-          "peakRssMb": 0.422,
+          "peakRssMb": 1.508,
           "pagesEstimated": 3
         },
         "docx": {
           "documents": 7,
           "successes": 7,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172391.383,
+          "docsPerHourFromFileDurations": 172650.041,
           "durationMs": {
-            "min": 20.682,
-            "mean": 20.883,
-            "p50": 20.943,
-            "p95": 21.01,
-            "max": 21.03
+            "min": 20.706,
+            "mean": 20.851,
+            "p50": 20.861,
+            "p95": 20.914,
+            "max": 20.923
           },
-          "peakRssMb": 1.586,
+          "peakRssMb": 1.59,
           "pagesEstimated": 7
         },
         "html": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172606.681,
+          "docsPerHourFromFileDurations": 172869.148,
           "durationMs": {
-            "min": 20.835,
-            "mean": 20.857,
-            "p50": 20.863,
-            "p95": 20.871,
-            "max": 20.872
+            "min": 20.683,
+            "mean": 20.825,
+            "p50": 20.842,
+            "p95": 20.939,
+            "max": 20.95
           },
-          "peakRssMb": 1.668,
+          "peakRssMb": 1.648,
           "pagesEstimated": 3
         },
         "image_ocr": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 8422.32,
+          "docsPerHourFromFileDurations": 8420.829,
           "durationMs": {
-            "min": 427.374,
-            "mean": 427.436,
-            "p50": 427.439,
-            "p95": 427.489,
-            "max": 427.494
+            "min": 427.441,
+            "mean": 427.511,
+            "p50": 427.507,
+            "p95": 427.578,
+            "max": 427.586
           },
-          "peakRssMb": 106.297,
+          "peakRssMb": 106.512,
           "pagesEstimated": 3
         },
         "pdf_native": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172700.524,
+          "docsPerHourFromFileDurations": 172603.922,
           "durationMs": {
-            "min": 20.656,
-            "mean": 20.845,
-            "p50": 20.912,
-            "p95": 20.962,
-            "max": 20.968
+            "min": 20.77,
+            "mean": 20.857,
+            "p50": 20.898,
+            "p95": 20.902,
+            "max": 20.903
           },
-          "peakRssMb": 1.445,
+          "peakRssMb": 1.395,
           "pagesEstimated": 3
         },
         "pdf_scan": {
           "documents": 2,
           "successes": 2,
           "failures": 0,
-          "docsPerHourFromFileDurations": 4463.068,
+          "docsPerHourFromFileDurations": 4465.343,
           "durationMs": {
-            "min": 796.022,
-            "mean": 806.62,
-            "p50": 806.62,
-            "p95": 816.158,
-            "max": 817.218
+            "min": 796.219,
+            "mean": 806.209,
+            "p50": 806.209,
+            "p95": 815.2,
+            "max": 816.199
           },
-          "peakRssMb": 223.277,
+          "peakRssMb": 219.023,
           "pagesEstimated": 2
         },
         "pptx": {
           "documents": 2,
           "successes": 2,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172182.896,
+          "docsPerHourFromFileDurations": 172265.289,
           "durationMs": {
-            "min": 20.905,
-            "mean": 20.908,
-            "p50": 20.908,
-            "p95": 20.911,
-            "max": 20.911
+            "min": 20.853,
+            "mean": 20.898,
+            "p50": 20.898,
+            "p95": 20.939,
+            "max": 20.943
           },
-          "peakRssMb": 1.477,
+          "peakRssMb": 1.613,
           "pagesEstimated": 2
         },
         "text_legacy": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172648.07,
+          "docsPerHourFromFileDurations": 171936.193,
           "durationMs": {
-            "min": 20.735,
-            "mean": 20.852,
-            "p50": 20.833,
-            "p95": 20.972,
-            "max": 20.987
+            "min": 20.867,
+            "mean": 20.938,
+            "p50": 20.89,
+            "p95": 21.04,
+            "max": 21.057
           },
-          "peakRssMb": 1.27,
+          "peakRssMb": 0.895,
           "pagesEstimated": 3
         },
         "xlsx": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172548.769,
+          "docsPerHourFromFileDurations": 173071.376,
           "durationMs": {
-            "min": 20.824,
-            "mean": 20.864,
-            "p50": 20.846,
-            "p95": 20.913,
-            "max": 20.921
+            "min": 20.702,
+            "mean": 20.801,
+            "p50": 20.803,
+            "p95": 20.888,
+            "max": 20.897
           },
-          "peakRssMb": 1.605,
+          "peakRssMb": 1.418,
           "pagesEstimated": 3
         }
       },
@@ -298,168 +300,168 @@
       "documentsAttempted": 31,
       "documentsSucceeded": 31,
       "documentsFailed": 0,
-      "wallSeconds": 2.809,
-      "docsPerHour": 39723.706,
+      "wallSeconds": 2.932,
+      "docsPerHour": 38061.558,
       "estimatedPagesSucceeded": 29,
-      "pagesPerHour": 37160.886,
+      "pagesPerHour": 35605.973,
       "durationMs": {
-        "min": 20.648,
-        "mean": 169.266,
-        "p50": 21.039,
-        "p95": 847.929,
-        "max": 963.959
+        "min": 20.587,
+        "mean": 180.493,
+        "p50": 21.268,
+        "p95": 905.833,
+        "max": 984.12
       },
-      "peakRssMb": 218.512,
+      "peakRssMb": 218.891,
       "rssMeasured": true,
       "perFormat": {
         "audio": {
           "documents": 2,
           "successes": 2,
           "failures": 0,
-          "docsPerHourFromFileDurations": 3889.398,
+          "docsPerHourFromFileDurations": 3735.06,
           "durationMs": {
-            "min": 887.227,
-            "mean": 925.593,
-            "p50": 925.593,
-            "p95": 960.122,
-            "max": 963.959
+            "min": 943.56,
+            "mean": 963.84,
+            "p50": 963.84,
+            "p95": 982.092,
+            "max": 984.12
           },
-          "peakRssMb": 217.359,
+          "peakRssMb": 217.527,
           "pagesEstimated": 0
         },
         "csv": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172728.145,
+          "docsPerHourFromFileDurations": 169728.591,
           "durationMs": {
-            "min": 20.717,
-            "mean": 20.842,
-            "p50": 20.748,
-            "p95": 21.03,
-            "max": 21.061
+            "min": 20.95,
+            "mean": 21.21,
+            "p50": 21.268,
+            "p95": 21.398,
+            "max": 21.413
           },
-          "peakRssMb": 0.645,
+          "peakRssMb": 2.062,
           "pagesEstimated": 3
         },
         "docx": {
           "documents": 7,
           "successes": 7,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172438.569,
+          "docsPerHourFromFileDurations": 170286.378,
           "durationMs": {
-            "min": 20.648,
-            "mean": 20.877,
-            "p50": 20.862,
-            "p95": 21.086,
-            "max": 21.097
+            "min": 20.587,
+            "mean": 21.141,
+            "p50": 20.835,
+            "p95": 22.087,
+            "max": 22.12
           },
-          "peakRssMb": 1.535,
+          "peakRssMb": 3.777,
           "pagesEstimated": 7
         },
         "html": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 171845.911,
+          "docsPerHourFromFileDurations": 168014.935,
           "durationMs": {
-            "min": 20.677,
-            "mean": 20.949,
-            "p50": 21.039,
-            "p95": 21.122,
-            "max": 21.131
+            "min": 20.87,
+            "mean": 21.427,
+            "p50": 21.634,
+            "p95": 21.762,
+            "max": 21.776
           },
-          "peakRssMb": 1.262,
+          "peakRssMb": 3.73,
           "pagesEstimated": 3
         },
         "image_ocr": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 8328.25,
+          "docsPerHourFromFileDurations": 7478.339,
           "durationMs": {
-            "min": 431.061,
-            "mean": 432.264,
-            "p50": 432.011,
-            "p95": 433.548,
-            "max": 433.719
+            "min": 450.441,
+            "mean": 481.39,
+            "p50": 494.123,
+            "p95": 499.059,
+            "max": 499.607
           },
-          "peakRssMb": 106.516,
+          "peakRssMb": 108.707,
           "pagesEstimated": 3
         },
         "pdf_native": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 171034.92,
+          "docsPerHourFromFileDurations": 167167.136,
           "durationMs": {
-            "min": 20.712,
-            "mean": 21.048,
-            "p50": 21.108,
-            "p95": 21.303,
-            "max": 21.325
+            "min": 21.033,
+            "mean": 21.535,
+            "p50": 21.279,
+            "p95": 22.192,
+            "max": 22.294
           },
-          "peakRssMb": 1.914,
+          "peakRssMb": 1.406,
           "pagesEstimated": 3
         },
         "pdf_scan": {
           "documents": 2,
           "successes": 2,
           "failures": 0,
-          "docsPerHourFromFileDurations": 4506.723,
+          "docsPerHourFromFileDurations": 4198.478,
           "durationMs": {
-            "min": 788.982,
-            "mean": 798.806,
-            "p50": 798.806,
-            "p95": 807.649,
-            "max": 808.631
+            "min": 846.8,
+            "mean": 857.453,
+            "p50": 857.453,
+            "p95": 867.042,
+            "max": 868.107
           },
-          "peakRssMb": 218.512,
+          "peakRssMb": 218.891,
           "pagesEstimated": 2
         },
         "pptx": {
           "documents": 2,
           "successes": 2,
           "failures": 0,
-          "docsPerHourFromFileDurations": 173235.167,
+          "docsPerHourFromFileDurations": 168255.749,
           "durationMs": {
-            "min": 20.745,
-            "mean": 20.781,
-            "p50": 20.781,
-            "p95": 20.813,
-            "max": 20.817
+            "min": 21.18,
+            "mean": 21.396,
+            "p50": 21.396,
+            "p95": 21.59,
+            "max": 21.612
           },
-          "peakRssMb": 0.914,
+          "peakRssMb": 1.754,
           "pagesEstimated": 2
         },
         "text_legacy": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172306.514,
+          "docsPerHourFromFileDurations": 173335.259,
           "durationMs": {
-            "min": 20.703,
-            "mean": 20.893,
-            "p50": 20.859,
-            "p95": 21.091,
-            "max": 21.117
+            "min": 20.699,
+            "mean": 20.769,
+            "p50": 20.786,
+            "p95": 20.818,
+            "max": 20.822
           },
-          "peakRssMb": 0.828,
+          "peakRssMb": 0.703,
           "pagesEstimated": 3
         },
         "xlsx": {
           "documents": 3,
           "successes": 3,
           "failures": 0,
-          "docsPerHourFromFileDurations": 172117.04,
+          "docsPerHourFromFileDurations": 171660.176,
           "durationMs": {
-            "min": 20.693,
-            "mean": 20.916,
-            "p50": 20.879,
-            "p95": 21.146,
-            "max": 21.176
+            "min": 20.907,
+            "mean": 20.972,
+            "p50": 20.999,
+            "p95": 21.008,
+            "max": 21.009
           },
-          "peakRssMb": 1.309,
+          "peakRssMb": 1.613,
           "pagesEstimated": 3
         }
       },
@@ -476,16 +478,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.968,
+        "durationMs": 20.898,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 1.445,
+        "peakRssMb": 1.031,
         "rssMeasured": true,
         "stdoutBytes": 242,
         "stdoutSha256": "d8ea19d7bcbdf5f71409c51185ad1fd13a667bd0cdc061bd68c77a4352ed20eb",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:47.686807Z"
+        "startedAt": "2026-07-18T19:21:05.675040Z"
       },
       {
         "run": "singleWorker",
@@ -495,16 +497,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.912,
+        "durationMs": 20.903,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 0.973,
+        "peakRssMb": 1.395,
         "rssMeasured": true,
         "stdoutBytes": 252,
         "stdoutSha256": "50558bf14ed09bb5e85ec48c0ad8703c14fb3827b4a136b2338e321b691a5c9a",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:47.707970Z"
+        "startedAt": "2026-07-18T19:21:05.696125Z"
       },
       {
         "run": "singleWorker",
@@ -514,16 +516,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.656,
+        "durationMs": 20.77,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 0.633,
+        "peakRssMb": 0.645,
         "rssMeasured": true,
         "stdoutBytes": 243,
         "stdoutSha256": "dd40ae1ee53cdac36c649a4a517085b70fb28aca4ed6cbd978ae693f7eb049fd",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:47.729062Z"
+        "startedAt": "2026-07-18T19:21:05.717191Z"
       },
       {
         "run": "singleWorker",
@@ -533,16 +535,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 817.218,
+        "durationMs": 816.199,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 218.562,
+        "peakRssMb": 218.969,
         "rssMeasured": true,
         "stdoutBytes": 292,
         "stdoutSha256": "43f3b52be4ead5a7b5082e682753ca2124a00969cdba952452f449a10cdd3942",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:47.749909Z"
+        "startedAt": "2026-07-18T19:21:05.738137Z"
       },
       {
         "run": "singleWorker",
@@ -552,16 +554,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 796.022,
+        "durationMs": 796.219,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 223.277,
+        "peakRssMb": 219.023,
         "rssMeasured": true,
         "stdoutBytes": 298,
         "stdoutSha256": "fa25ba284e55cfef154cd79fbdb5d48814a41223dbf79dc4a6045aab395ce11c",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:48.567356Z"
+        "startedAt": "2026-07-18T19:21:06.554531Z"
       },
       {
         "run": "singleWorker",
@@ -571,16 +573,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.964,
+        "durationMs": 20.888,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.398,
+        "peakRssMb": 1.129,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "f71de097961d65793077d9b1c62d560fce6a9f92cee06850ecc94bb306047112",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.363426Z"
+        "startedAt": "2026-07-18T19:21:07.350797Z"
       },
       {
         "run": "singleWorker",
@@ -590,16 +592,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.948,
+        "durationMs": 20.861,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.953,
+        "peakRssMb": 1.367,
         "rssMeasured": true,
         "stdoutBytes": 279,
         "stdoutSha256": "174439602011027b1a1252bd57dd036941238a081758c67d86e0fc373e7459a8",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.384428Z"
+        "startedAt": "2026-07-18T19:21:07.371723Z"
       },
       {
         "run": "singleWorker",
@@ -609,16 +611,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.682,
+        "durationMs": 20.923,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.383,
+        "peakRssMb": 1.578,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "b03b8043fa2e5470f60e998a963ff27a9bad96ba774472a79de145dda5feb664",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.405413Z"
+        "startedAt": "2026-07-18T19:21:07.392621Z"
       },
       {
         "run": "singleWorker",
@@ -628,16 +630,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.905,
+        "durationMs": 20.943,
         "pages": 1,
         "pageEstimateSource": "pptx_slide_count",
-        "peakRssMb": 0.977,
+        "peakRssMb": 1.613,
         "rssMeasured": true,
         "stdoutBytes": 251,
         "stdoutSha256": "2532da3ac9b34b8493ff006ab1fdc91d9cf4e8a85002d87ef07ddfc67341366b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.426792Z"
+        "startedAt": "2026-07-18T19:21:07.414248Z"
       },
       {
         "run": "singleWorker",
@@ -647,16 +649,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.911,
+        "durationMs": 20.853,
         "pages": 1,
         "pageEstimateSource": "pptx_slide_count",
-        "peakRssMb": 1.477,
+        "peakRssMb": 1.293,
         "rssMeasured": true,
         "stdoutBytes": 254,
         "stdoutSha256": "424181a9947c646f025eff4d93663a025a5d8ab3acb2b5e48d00f07ad5b7f858",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.447942Z"
+        "startedAt": "2026-07-18T19:21:07.435412Z"
       },
       {
         "run": "singleWorker",
@@ -666,16 +668,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.846,
+        "durationMs": 20.897,
         "pages": 1,
         "pageEstimateSource": "xlsx_sheet_count",
-        "peakRssMb": 1.332,
+        "peakRssMb": 1.316,
         "rssMeasured": true,
         "stdoutBytes": 300,
         "stdoutSha256": "e31be1e7ab1dda554999aa777345e8ac831bebe42c8b87ce3848b2227d0b61ba",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.469062Z"
+        "startedAt": "2026-07-18T19:21:07.456487Z"
       },
       {
         "run": "singleWorker",
@@ -685,16 +687,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.921,
+        "durationMs": 20.702,
         "pages": 1,
         "pageEstimateSource": "xlsx_sheet_count",
-        "peakRssMb": 1.605,
+        "peakRssMb": 0.406,
         "rssMeasured": true,
         "stdoutBytes": 307,
         "stdoutSha256": "3ab340ded9550dc7b5c83d016e07c30ec56af4609d20ffe13f941b420ec84cec",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.490074Z"
+        "startedAt": "2026-07-18T19:21:07.477552Z"
       },
       {
         "run": "singleWorker",
@@ -704,16 +706,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.824,
+        "durationMs": 20.803,
         "pages": 1,
         "pageEstimateSource": "xlsx_sheet_count",
-        "peakRssMb": 1.277,
+        "peakRssMb": 1.418,
         "rssMeasured": true,
         "stdoutBytes": 299,
         "stdoutSha256": "2edd267907ddc0038b55723d4c3e0ff655069138d8aba91207603b592237aa80",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.511137Z"
+        "startedAt": "2026-07-18T19:21:07.498400Z"
       },
       {
         "run": "singleWorker",
@@ -723,16 +725,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.672,
+        "durationMs": 20.986,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.406,
+        "peakRssMb": 1.508,
         "rssMeasured": true,
         "stdoutBytes": 289,
         "stdoutSha256": "7763a7f46be2adc83fc824111657a291093772b2c65086b9dee9c47b5158afb3",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.531998Z"
+        "startedAt": "2026-07-18T19:21:07.519240Z"
       },
       {
         "run": "singleWorker",
@@ -742,16 +744,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.596,
+        "durationMs": 20.913,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.422,
+        "peakRssMb": 1.348,
         "rssMeasured": true,
         "stdoutBytes": 291,
         "stdoutSha256": "f22a5a25032f331a25beaf37b03fff0ac0b233ec262b173de304bf497e06b546",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.552714Z"
+        "startedAt": "2026-07-18T19:21:07.540264Z"
       },
       {
         "run": "singleWorker",
@@ -761,16 +763,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.688,
+        "durationMs": 20.711,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.375,
+        "peakRssMb": 0.418,
         "rssMeasured": true,
         "stdoutBytes": 284,
         "stdoutSha256": "eaee331bbe3c7d9890523167df45183d43a862c0089dc6adb1bdbb338fac5611",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.573346Z"
+        "startedAt": "2026-07-18T19:21:07.561219Z"
       },
       {
         "run": "singleWorker",
@@ -780,16 +782,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.863,
+        "durationMs": 20.683,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.668,
+        "peakRssMb": 0.371,
         "rssMeasured": true,
         "stdoutBytes": 326,
         "stdoutSha256": "ae9145c00e53f373eb396c792213d4b0c4d95ba9e60c63c2266c772380c8eec5",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.594077Z"
+        "startedAt": "2026-07-18T19:21:07.581967Z"
       },
       {
         "run": "singleWorker",
@@ -799,16 +801,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.872,
+        "durationMs": 20.842,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.32,
+        "peakRssMb": 1.293,
         "rssMeasured": true,
         "stdoutBytes": 308,
         "stdoutSha256": "29b0e759ca09044407796e81cf09ae43bbb0b2b8afb11b41f2dd4b11c890d877",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.614982Z"
+        "startedAt": "2026-07-18T19:21:07.602687Z"
       },
       {
         "run": "singleWorker",
@@ -818,16 +820,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.835,
+        "durationMs": 20.95,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.117,
+        "peakRssMb": 1.648,
         "rssMeasured": true,
         "stdoutBytes": 316,
         "stdoutSha256": "7f152ed216cf11a6299be44ee1543e25ec30f13be4626dea4b6e6df416a2db87",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.635891Z"
+        "startedAt": "2026-07-18T19:21:07.623566Z"
       },
       {
         "run": "singleWorker",
@@ -837,16 +839,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 427.374,
+        "durationMs": 427.586,
         "pages": 1,
         "pageEstimateSource": "single_image",
-        "peakRssMb": 106.059,
+        "peakRssMb": 106.438,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "3c58dc41e14a2e8cbdbcb03f3a39b5f22357ef91ed1780e455acbdb4909dd80b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:49.656763Z"
+        "startedAt": "2026-07-18T19:21:07.644552Z"
       },
       {
         "run": "singleWorker",
@@ -856,16 +858,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 427.439,
+        "durationMs": 427.507,
         "pages": 1,
         "pageEstimateSource": "single_image",
-        "peakRssMb": 106.203,
+        "peakRssMb": 106.512,
         "rssMeasured": true,
         "stdoutBytes": 266,
         "stdoutSha256": "fd43baf5bcf60faaa8bd9a3d3220cbee535988578e0dab345a7f36b3f671b468",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:50.084177Z"
+        "startedAt": "2026-07-18T19:21:08.072179Z"
       },
       {
         "run": "singleWorker",
@@ -875,16 +877,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 427.494,
+        "durationMs": 427.441,
         "pages": 1,
         "pageEstimateSource": "single_image",
-        "peakRssMb": 106.297,
+        "peakRssMb": 105.879,
         "rssMeasured": true,
         "stdoutBytes": 271,
         "stdoutSha256": "5352ae99b307cc358cd47d251718461fdde79752279690bd92bc758fdb258015",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:50.511659Z"
+        "startedAt": "2026-07-18T19:21:08.499725Z"
       },
       {
         "run": "singleWorker",
@@ -894,16 +896,16 @@
         "selectionReason": "included_conversionOnly_because_format_has_no_other_fixture",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 954.602,
+        "durationMs": 955.151,
         "pages": null,
         "pageEstimateSource": "not_applicable_audio",
-        "peakRssMb": 217.441,
+        "peakRssMb": 217.516,
         "rssMeasured": true,
         "stdoutBytes": 1,
         "stdoutSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:50.939195Z"
+        "startedAt": "2026-07-18T19:21:08.927206Z"
       },
       {
         "run": "singleWorker",
@@ -913,16 +915,16 @@
         "selectionReason": "included_conversionOnly_because_format_has_no_other_fixture",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 934.571,
+        "durationMs": 995.954,
         "pages": null,
         "pageEstimateSource": "not_applicable_audio",
-        "peakRssMb": 216.949,
+        "peakRssMb": 216.84,
         "rssMeasured": true,
         "stdoutBytes": 1,
         "stdoutSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:51.893853Z"
+        "startedAt": "2026-07-18T19:21:09.882425Z"
       },
       {
         "run": "singleWorker",
@@ -932,16 +934,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.987,
+        "durationMs": 21.057,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.867,
+        "peakRssMb": 0.895,
         "rssMeasured": true,
         "stdoutBytes": 278,
         "stdoutSha256": "bd6e0a247746d12eb9424777eecaa3100f7e036ba6f435b34ebd8b68ceadab52",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.828481Z"
+        "startedAt": "2026-07-18T19:21:10.878443Z"
       },
       {
         "run": "singleWorker",
@@ -951,16 +953,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.735,
+        "durationMs": 20.89,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.371,
+        "peakRssMb": 0.891,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "c0f11977677bfe88f84fb3edc935b63654a5d36ec6da07fa9cea4f998cbd119a",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.849516Z"
+        "startedAt": "2026-07-18T19:21:10.899542Z"
       },
       {
         "run": "singleWorker",
@@ -970,16 +972,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.833,
+        "durationMs": 20.867,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.27,
+        "peakRssMb": 0.883,
         "rssMeasured": true,
         "stdoutBytes": 279,
         "stdoutSha256": "d6041a1717d13ee56f3c0b5b2b3e7ce05f51f49f3dbf13353f3d0a1f21f1b33c",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.870287Z"
+        "startedAt": "2026-07-18T19:21:10.920473Z"
       },
       {
         "run": "singleWorker",
@@ -989,16 +991,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.878,
+        "durationMs": 20.706,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.348,
+        "peakRssMb": 0.359,
         "rssMeasured": true,
         "stdoutBytes": 365,
         "stdoutSha256": "2a7e2e42fe9b8f84659b70a85b36fa0572d9e52f225e463dca2b49017163cd1f",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.891159Z"
+        "startedAt": "2026-07-18T19:21:10.941379Z"
       },
       {
         "run": "singleWorker",
@@ -1008,16 +1010,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.734,
+        "durationMs": 20.828,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.414,
+        "peakRssMb": 0.41,
         "rssMeasured": true,
         "stdoutBytes": 376,
         "stdoutSha256": "8bd06f40957ede9184220098814f319a01086f6d86e7eafe5e6482fcb7953516",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.912075Z"
+        "startedAt": "2026-07-18T19:21:10.962125Z"
       },
       {
         "run": "singleWorker",
@@ -1027,16 +1029,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.943,
+        "durationMs": 20.894,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.477,
+        "peakRssMb": 0.867,
         "rssMeasured": true,
         "stdoutBytes": 432,
         "stdoutSha256": "37941b3ff248ea6012aed9aabfaaf8e79f621fd12a3577faebe13eb79c7d4e11",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.932847Z"
+        "startedAt": "2026-07-18T19:21:10.983002Z"
       },
       {
         "run": "singleWorker",
@@ -1046,16 +1048,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.03,
+        "durationMs": 20.86,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.586,
+        "peakRssMb": 1.59,
         "rssMeasured": true,
         "stdoutBytes": 413,
         "stdoutSha256": "cd1b389937765455855d33fdcddc963deebb8d6a553bda4f87ffad582c491877",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.953828Z"
+        "startedAt": "2026-07-18T19:21:11.003936Z"
       }
     ],
     "concurrent2": [
@@ -1067,16 +1069,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.325,
+        "durationMs": 22.294,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 1.727,
+        "peakRssMb": 0.328,
         "rssMeasured": true,
         "stdoutBytes": 242,
         "stdoutSha256": "d8ea19d7bcbdf5f71409c51185ad1fd13a667bd0cdc061bd68c77a4352ed20eb",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.976335Z"
+        "startedAt": "2026-07-18T19:21:11.026462Z"
       },
       {
         "run": "concurrent2",
@@ -1086,16 +1088,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.712,
+        "durationMs": 21.279,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 0.418,
+        "peakRssMb": 1.148,
         "rssMeasured": true,
         "stdoutBytes": 252,
         "stdoutSha256": "50558bf14ed09bb5e85ec48c0ad8703c14fb3827b4a136b2338e321b691a5c9a",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.977640Z"
+        "startedAt": "2026-07-18T19:21:11.027790Z"
       },
       {
         "run": "concurrent2",
@@ -1105,16 +1107,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.108,
+        "durationMs": 21.033,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 1.914,
+        "peakRssMb": 1.406,
         "rssMeasured": true,
         "stdoutBytes": 243,
         "stdoutSha256": "dd40ae1ee53cdac36c649a4a517085b70fb28aca4ed6cbd978ae693f7eb049fd",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.997855Z"
+        "startedAt": "2026-07-18T19:21:11.049278Z"
       },
       {
         "run": "concurrent2",
@@ -1124,16 +1126,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 788.982,
+        "durationMs": 846.8,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 218.512,
+        "peakRssMb": 218.891,
         "rssMeasured": true,
         "stdoutBytes": 292,
         "stdoutSha256": "43f3b52be4ead5a7b5082e682753ca2124a00969cdba952452f449a10cdd3942",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:52.999021Z"
+        "startedAt": "2026-07-18T19:21:11.049575Z"
       },
       {
         "run": "concurrent2",
@@ -1143,16 +1145,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 808.631,
+        "durationMs": 868.107,
         "pages": 1,
         "pageEstimateSource": "pdf_page_tokens",
-        "peakRssMb": 218.473,
+        "peakRssMb": 218.879,
         "rssMeasured": true,
         "stdoutBytes": 298,
         "stdoutSha256": "fa25ba284e55cfef154cd79fbdb5d48814a41223dbf79dc4a6045aab395ce11c",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.019452Z"
+        "startedAt": "2026-07-18T19:21:11.070536Z"
       },
       {
         "run": "concurrent2",
@@ -1162,16 +1164,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.06,
+        "durationMs": 22.12,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.828,
+        "peakRssMb": 1.891,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "f71de097961d65793077d9b1c62d560fce6a9f92cee06850ecc94bb306047112",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.788088Z"
+        "startedAt": "2026-07-18T19:21:11.896481Z"
       },
       {
         "run": "concurrent2",
@@ -1181,16 +1183,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.78,
+        "durationMs": 20.818,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.418,
+        "peakRssMb": 0.715,
         "rssMeasured": true,
         "stdoutBytes": 279,
         "stdoutSha256": "174439602011027b1a1252bd57dd036941238a081758c67d86e0fc373e7459a8",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.809203Z"
+        "startedAt": "2026-07-18T19:21:11.918670Z"
       },
       {
         "run": "concurrent2",
@@ -1200,16 +1202,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.097,
+        "durationMs": 22.01,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.535,
+        "peakRssMb": 3.777,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "b03b8043fa2e5470f60e998a963ff27a9bad96ba774472a79de145dda5feb664",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.828136Z"
+        "startedAt": "2026-07-18T19:21:11.938704Z"
       },
       {
         "run": "concurrent2",
@@ -1219,16 +1221,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.817,
+        "durationMs": 21.612,
         "pages": 1,
         "pageEstimateSource": "pptx_slide_count",
-        "peakRssMb": 0.914,
+        "peakRssMb": 1.277,
         "rssMeasured": true,
         "stdoutBytes": 251,
         "stdoutSha256": "2532da3ac9b34b8493ff006ab1fdc91d9cf4e8a85002d87ef07ddfc67341366b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.830260Z"
+        "startedAt": "2026-07-18T19:21:11.939779Z"
       },
       {
         "run": "concurrent2",
@@ -1238,16 +1240,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.745,
+        "durationMs": 21.18,
         "pages": 1,
         "pageEstimateSource": "pptx_slide_count",
-        "peakRssMb": 0.379,
+        "peakRssMb": 1.754,
         "rssMeasured": true,
         "stdoutBytes": 254,
         "stdoutSha256": "424181a9947c646f025eff4d93663a025a5d8ab3acb2b5e48d00f07ad5b7f858",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.849464Z"
+        "startedAt": "2026-07-18T19:21:11.960976Z"
       },
       {
         "run": "concurrent2",
@@ -1257,16 +1259,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.176,
+        "durationMs": 20.907,
         "pages": 1,
         "pageEstimateSource": "xlsx_sheet_count",
-        "peakRssMb": 0.98,
+        "peakRssMb": 0.363,
         "rssMeasured": true,
         "stdoutBytes": 300,
         "stdoutSha256": "e31be1e7ab1dda554999aa777345e8ac831bebe42c8b87ce3848b2227d0b61ba",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.851245Z"
+        "startedAt": "2026-07-18T19:21:11.961731Z"
       },
       {
         "run": "concurrent2",
@@ -1276,16 +1278,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.879,
+        "durationMs": 20.999,
         "pages": 1,
         "pageEstimateSource": "xlsx_sheet_count",
-        "peakRssMb": 1.309,
+        "peakRssMb": 1.613,
         "rssMeasured": true,
         "stdoutBytes": 307,
         "stdoutSha256": "3ab340ded9550dc7b5c83d016e07c30ec56af4609d20ffe13f941b420ec84cec",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.870773Z"
+        "startedAt": "2026-07-18T19:21:11.982335Z"
       },
       {
         "run": "concurrent2",
@@ -1295,16 +1297,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.693,
+        "durationMs": 21.009,
         "pages": 1,
         "pageEstimateSource": "xlsx_sheet_count",
-        "peakRssMb": 0.383,
+        "peakRssMb": 1.477,
         "rssMeasured": true,
         "stdoutBytes": 299,
         "stdoutSha256": "2edd267907ddc0038b55723d4c3e0ff655069138d8aba91207603b592237aa80",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.872621Z"
+        "startedAt": "2026-07-18T19:21:11.982891Z"
       },
       {
         "run": "concurrent2",
@@ -1314,16 +1316,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.061,
+        "durationMs": 21.413,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.645,
+        "peakRssMb": 2.062,
         "rssMeasured": true,
         "stdoutBytes": 289,
         "stdoutSha256": "7763a7f46be2adc83fc824111657a291093772b2c65086b9dee9c47b5158afb3",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.891711Z"
+        "startedAt": "2026-07-18T19:21:12.003385Z"
       },
       {
         "run": "concurrent2",
@@ -1333,16 +1335,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.717,
+        "durationMs": 21.268,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.406,
+        "peakRssMb": 1.215,
         "rssMeasured": true,
         "stdoutBytes": 291,
         "stdoutSha256": "f22a5a25032f331a25beaf37b03fff0ac0b233ec262b173de304bf497e06b546",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.893364Z"
+        "startedAt": "2026-07-18T19:21:12.003949Z"
       },
       {
         "run": "concurrent2",
@@ -1352,16 +1354,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.748,
+        "durationMs": 20.95,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.406,
+        "peakRssMb": 0.875,
         "rssMeasured": true,
         "stdoutBytes": 284,
         "stdoutSha256": "eaee331bbe3c7d9890523167df45183d43a862c0089dc6adb1bdbb338fac5611",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.912822Z"
+        "startedAt": "2026-07-18T19:21:12.024851Z"
       },
       {
         "run": "concurrent2",
@@ -1371,16 +1373,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.039,
+        "durationMs": 20.87,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.109,
+        "peakRssMb": 0.418,
         "rssMeasured": true,
         "stdoutBytes": 326,
         "stdoutSha256": "ae9145c00e53f373eb396c792213d4b0c4d95ba9e60c63c2266c772380c8eec5",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.914152Z"
+        "startedAt": "2026-07-18T19:21:12.025275Z"
       },
       {
         "run": "concurrent2",
@@ -1390,16 +1392,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.677,
+        "durationMs": 21.634,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.375,
+        "peakRssMb": 3.73,
         "rssMeasured": true,
         "stdoutBytes": 308,
         "stdoutSha256": "29b0e759ca09044407796e81cf09ae43bbb0b2b8afb11b41f2dd4b11c890d877",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.933621Z"
+        "startedAt": "2026-07-18T19:21:12.045853Z"
       },
       {
         "run": "concurrent2",
@@ -1409,16 +1411,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.131,
+        "durationMs": 21.776,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.262,
+        "peakRssMb": 1.98,
         "rssMeasured": true,
         "stdoutBytes": 316,
         "stdoutSha256": "7f152ed216cf11a6299be44ee1543e25ec30f13be4626dea4b6e6df416a2db87",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.935239Z"
+        "startedAt": "2026-07-18T19:21:12.046205Z"
       },
       {
         "run": "concurrent2",
@@ -1428,16 +1430,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 433.719,
+        "durationMs": 499.607,
         "pages": 1,
         "pageEstimateSource": "single_image",
-        "peakRssMb": 106.043,
+        "peakRssMb": 106.551,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "3c58dc41e14a2e8cbdbcb03f3a39b5f22357ef91ed1780e455acbdb4909dd80b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.954346Z"
+        "startedAt": "2026-07-18T19:21:12.067538Z"
       },
       {
         "run": "concurrent2",
@@ -1447,16 +1449,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 431.061,
+        "durationMs": 494.123,
         "pages": 1,
         "pageEstimateSource": "single_image",
-        "peakRssMb": 106.516,
+        "peakRssMb": 108.707,
         "rssMeasured": true,
         "stdoutBytes": 266,
         "stdoutSha256": "fd43baf5bcf60faaa8bd9a3d3220cbee535988578e0dab345a7f36b3f671b468",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:53.956418Z"
+        "startedAt": "2026-07-18T19:21:12.068027Z"
       },
       {
         "run": "concurrent2",
@@ -1466,16 +1468,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 432.011,
+        "durationMs": 450.441,
         "pages": 1,
         "pageEstimateSource": "single_image",
-        "peakRssMb": 106.086,
+        "peakRssMb": 107.844,
         "rssMeasured": true,
         "stdoutBytes": 271,
         "stdoutSha256": "5352ae99b307cc358cd47d251718461fdde79752279690bd92bc758fdb258015",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:54.387543Z"
+        "startedAt": "2026-07-18T19:21:12.562253Z"
       },
       {
         "run": "concurrent2",
@@ -1485,16 +1487,16 @@
         "selectionReason": "included_conversionOnly_because_format_has_no_other_fixture",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 887.227,
+        "durationMs": 984.12,
         "pages": null,
         "pageEstimateSource": "not_applicable_audio",
-        "peakRssMb": 217.359,
+        "peakRssMb": 217.527,
         "rssMeasured": true,
         "stdoutBytes": 1,
         "stdoutSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:54.388123Z"
+        "startedAt": "2026-07-18T19:21:12.567217Z"
       },
       {
         "run": "concurrent2",
@@ -1504,16 +1506,16 @@
         "selectionReason": "included_conversionOnly_because_format_has_no_other_fixture",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 963.959,
+        "durationMs": 943.56,
         "pages": null,
         "pageEstimateSource": "not_applicable_audio",
-        "peakRssMb": 216.945,
+        "peakRssMb": 217.047,
         "rssMeasured": true,
         "stdoutBytes": 1,
         "stdoutSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:54.819630Z"
+        "startedAt": "2026-07-18T19:21:13.012772Z"
       },
       {
         "run": "concurrent2",
@@ -1523,16 +1525,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 21.117,
+        "durationMs": 20.822,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.438,
+        "peakRssMb": 0.367,
         "rssMeasured": true,
         "stdoutBytes": 278,
         "stdoutSha256": "bd6e0a247746d12eb9424777eecaa3100f7e036ba6f435b34ebd8b68ceadab52",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.275426Z"
+        "startedAt": "2026-07-18T19:21:13.551425Z"
       },
       {
         "run": "concurrent2",
@@ -1542,16 +1544,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.859,
+        "durationMs": 20.699,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.828,
+        "peakRssMb": 0.301,
         "rssMeasured": true,
         "stdoutBytes": 277,
         "stdoutSha256": "c0f11977677bfe88f84fb3edc935b63654a5d36ec6da07fa9cea4f998cbd119a",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.296590Z"
+        "startedAt": "2026-07-18T19:21:13.572307Z"
       },
       {
         "run": "concurrent2",
@@ -1561,16 +1563,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.703,
+        "durationMs": 20.786,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.359,
+        "peakRssMb": 0.703,
         "rssMeasured": true,
         "stdoutBytes": 279,
         "stdoutSha256": "d6041a1717d13ee56f3c0b5b2b3e7ce05f51f49f3dbf13353f3d0a1f21f1b33c",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.317498Z"
+        "startedAt": "2026-07-18T19:21:13.593063Z"
       },
       {
         "run": "concurrent2",
@@ -1580,16 +1582,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.862,
+        "durationMs": 20.587,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.453,
+        "peakRssMb": 0.418,
         "rssMeasured": true,
         "stdoutBytes": 365,
         "stdoutSha256": "2a7e2e42fe9b8f84659b70a85b36fa0572d9e52f225e463dca2b49017163cd1f",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.338245Z"
+        "startedAt": "2026-07-18T19:21:13.613898Z"
       },
       {
         "run": "concurrent2",
@@ -1599,16 +1601,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.885,
+        "durationMs": 20.842,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 1.527,
+        "peakRssMb": 0.91,
         "rssMeasured": true,
         "stdoutBytes": 376,
         "stdoutSha256": "8bd06f40957ede9184220098814f319a01086f6d86e7eafe5e6482fcb7953516",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.359151Z"
+        "startedAt": "2026-07-18T19:21:13.634530Z"
       },
       {
         "run": "concurrent2",
@@ -1618,16 +1620,16 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.648,
+        "durationMs": 20.774,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.352,
+        "peakRssMb": 0.891,
         "rssMeasured": true,
         "stdoutBytes": 432,
         "stdoutSha256": "37941b3ff248ea6012aed9aabfaaf8e79f621fd12a3577faebe13eb79c7d4e11",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.380080Z"
+        "startedAt": "2026-07-18T19:21:13.655424Z"
       },
       {
         "run": "concurrent2",
@@ -1637,169 +1639,169 @@
         "selectionReason": "manifest_workload_document",
         "status": "ok",
         "exitCode": 0,
-        "durationMs": 20.807,
+        "durationMs": 20.835,
         "pages": 1,
         "pageEstimateSource": "single_fixture_estimate",
-        "peakRssMb": 0.348,
+        "peakRssMb": 0.625,
         "rssMeasured": true,
         "stdoutBytes": 413,
         "stdoutSha256": "cd1b389937765455855d33fdcddc963deebb8d6a553bda4f87ffad582c491877",
         "stderrTail": "",
         "timedOut": false,
-        "startedAt": "2026-07-18T19:20:55.400772Z"
+        "startedAt": "2026-07-18T19:21:13.676242Z"
       }
     ]
   },
-  "docsPerHour": 39723.706,
+  "docsPerHour": 38061.558,
   "perFormat": {
     "audio": {
       "documents": 2,
       "successes": 2,
       "failures": 0,
-      "docsPerHourFromFileDurations": 3889.398,
+      "docsPerHourFromFileDurations": 3735.06,
       "durationMs": {
-        "min": 887.227,
-        "mean": 925.593,
-        "p50": 925.593,
-        "p95": 960.122,
-        "max": 963.959
+        "min": 943.56,
+        "mean": 963.84,
+        "p50": 963.84,
+        "p95": 982.092,
+        "max": 984.12
       },
-      "peakRssMb": 217.359,
+      "peakRssMb": 217.527,
       "pagesEstimated": 0
     },
     "csv": {
       "documents": 3,
       "successes": 3,
       "failures": 0,
-      "docsPerHourFromFileDurations": 172728.145,
+      "docsPerHourFromFileDurations": 169728.591,
       "durationMs": {
-        "min": 20.717,
-        "mean": 20.842,
-        "p50": 20.748,
-        "p95": 21.03,
-        "max": 21.061
+        "min": 20.95,
+        "mean": 21.21,
+        "p50": 21.268,
+        "p95": 21.398,
+        "max": 21.413
       },
-      "peakRssMb": 0.645,
+      "peakRssMb": 2.062,
       "pagesEstimated": 3
     },
     "docx": {
       "documents": 7,
       "successes": 7,
       "failures": 0,
-      "docsPerHourFromFileDurations": 172438.569,
+      "docsPerHourFromFileDurations": 170286.378,
       "durationMs": {
-        "min": 20.648,
-        "mean": 20.877,
-        "p50": 20.862,
-        "p95": 21.086,
-        "max": 21.097
+        "min": 20.587,
+        "mean": 21.141,
+        "p50": 20.835,
+        "p95": 22.087,
+        "max": 22.12
       },
-      "peakRssMb": 1.535,
+      "peakRssMb": 3.777,
       "pagesEstimated": 7
     },
     "html": {
       "documents": 3,
       "successes": 3,
       "failures": 0,
-      "docsPerHourFromFileDurations": 171845.911,
+      "docsPerHourFromFileDurations": 168014.935,
       "durationMs": {
-        "min": 20.677,
-        "mean": 20.949,
-        "p50": 21.039,
-        "p95": 21.122,
-        "max": 21.131
+        "min": 20.87,
+        "mean": 21.427,
+        "p50": 21.634,
+        "p95": 21.762,
+        "max": 21.776
       },
-      "peakRssMb": 1.262,
+      "peakRssMb": 3.73,
       "pagesEstimated": 3
     },
     "image_ocr": {
       "documents": 3,
       "successes": 3,
       "failures": 0,
-      "docsPerHourFromFileDurations": 8328.25,
+      "docsPerHourFromFileDurations": 7478.339,
       "durationMs": {
-        "min": 431.061,
-        "mean": 432.264,
-        "p50": 432.011,
-        "p95": 433.548,
-        "max": 433.719
+        "min": 450.441,
+        "mean": 481.39,
+        "p50": 494.123,
+        "p95": 499.059,
+        "max": 499.607
       },
-      "peakRssMb": 106.516,
+      "peakRssMb": 108.707,
       "pagesEstimated": 3
     },
     "pdf_native": {
       "documents": 3,
       "successes": 3,
       "failures": 0,
-      "docsPerHourFromFileDurations": 171034.92,
+      "docsPerHourFromFileDurations": 167167.136,
       "durationMs": {
-        "min": 20.712,
-        "mean": 21.048,
-        "p50": 21.108,
-        "p95": 21.303,
-        "max": 21.325
+        "min": 21.033,
+        "mean": 21.535,
+        "p50": 21.279,
+        "p95": 22.192,
+        "max": 22.294
       },
-      "peakRssMb": 1.914,
+      "peakRssMb": 1.406,
       "pagesEstimated": 3
     },
     "pdf_scan": {
       "documents": 2,
       "successes": 2,
       "failures": 0,
-      "docsPerHourFromFileDurations": 4506.723,
+      "docsPerHourFromFileDurations": 4198.478,
       "durationMs": {
-        "min": 788.982,
-        "mean": 798.806,
-        "p50": 798.806,
-        "p95": 807.649,
-        "max": 808.631
+        "min": 846.8,
+        "mean": 857.453,
+        "p50": 857.453,
+        "p95": 867.042,
+        "max": 868.107
       },
-      "peakRssMb": 218.512,
+      "peakRssMb": 218.891,
       "pagesEstimated": 2
     },
     "pptx": {
       "documents": 2,
       "successes": 2,
       "failures": 0,
-      "docsPerHourFromFileDurations": 173235.167,
+      "docsPerHourFromFileDurations": 168255.749,
       "durationMs": {
-        "min": 20.745,
-        "mean": 20.781,
-        "p50": 20.781,
-        "p95": 20.813,
-        "max": 20.817
+        "min": 21.18,
+        "mean": 21.396,
+        "p50": 21.396,
+        "p95": 21.59,
+        "max": 21.612
       },
-      "peakRssMb": 0.914,
+      "peakRssMb": 1.754,
       "pagesEstimated": 2
     },
     "text_legacy": {
       "documents": 3,
       "successes": 3,
       "failures": 0,
-      "docsPerHourFromFileDurations": 172306.514,
+      "docsPerHourFromFileDurations": 173335.259,
       "durationMs": {
-        "min": 20.703,
-        "mean": 20.893,
-        "p50": 20.859,
-        "p95": 21.091,
-        "max": 21.117
+        "min": 20.699,
+        "mean": 20.769,
+        "p50": 20.786,
+        "p95": 20.818,
+        "max": 20.822
       },
-      "peakRssMb": 0.828,
+      "peakRssMb": 0.703,
       "pagesEstimated": 3
     },
     "xlsx": {
       "documents": 3,
       "successes": 3,
       "failures": 0,
-      "docsPerHourFromFileDurations": 172117.04,
+      "docsPerHourFromFileDurations": 171660.176,
       "durationMs": {
-        "min": 20.693,
-        "mean": 20.916,
-        "p50": 20.879,
-        "p95": 21.146,
-        "max": 21.176
+        "min": 20.907,
+        "mean": 20.972,
+        "p50": 20.999,
+        "p95": 21.008,
+        "max": 21.009
       },
-      "peakRssMb": 1.309,
+      "peakRssMb": 1.613,
       "pagesEstimated": 3
     }
   },
@@ -1808,8 +1810,8 @@
     "targetDocsPerHour": 1200.0,
     "targetHeadroomPercent": 30.0,
     "requiredDocsPerHourForTargetHeadroom": 1714.286,
-    "measuredSuccessfulDocsPerHour": 39723.706,
-    "localObservationHeadroomPercent": 96.979,
+    "measuredSuccessfulDocsPerHour": 38061.558,
+    "localObservationHeadroomPercent": 96.847,
     "meetsLocalObservationHeadroom": true,
     "effectiveCapacityDocsPerHourForGate": 0.0,
     "capacityValidForGate": false,
@@ -1818,18 +1820,18 @@
   },
   "queueAgeSimulation": {
     "label": "simulation_from_measured_local_cpu_rate",
-    "measuredServiceDocsPerHour": 39723.706,
-    "localSimulationServiceDocsPerHour": 39723.706,
+    "measuredServiceDocsPerHour": 38061.558,
+    "localSimulationServiceDocsPerHour": 38061.558,
     "effectiveServiceDocsPerHourForGate": 0.0,
     "capacityValidForGate": false,
     "effectiveRateNote": "local queue simulation uses measured converter rate; gate-valid rate requires targetMatch=true on Profile B",
     "normal1x": {
       "type": "deterministic_fluid_queue_simulation",
       "arrivalDocsPerHour": 300.0,
-      "serviceDocsPerHour": 39723.706,
+      "serviceDocsPerHour": 38061.558,
       "durationMinutes": 120.0,
       "arrivals": 600.0,
-      "serviceCapacity": 79447.412,
+      "serviceCapacity": 76123.116,
       "finalQueueDocuments": 0.0,
       "oldestQueueAgeMinutesAtWindowEnd": 0.0,
       "steadyStateStable": true,
@@ -1838,10 +1840,10 @@
     "recovery2xNormal": {
       "type": "deterministic_fluid_queue_simulation",
       "arrivalDocsPerHour": 600.0,
-      "serviceDocsPerHour": 39723.706,
+      "serviceDocsPerHour": 38061.558,
       "durationMinutes": 120.0,
       "arrivals": 1200.0,
-      "serviceCapacity": 79447.412,
+      "serviceCapacity": 76123.116,
       "finalQueueDocuments": 0.0,
       "oldestQueueAgeMinutesAtWindowEnd": 0.0,
       "steadyStateStable": true,
@@ -1850,10 +1852,10 @@
     "peakGateLoad": {
       "type": "deterministic_fluid_queue_simulation",
       "arrivalDocsPerHour": 1200.0,
-      "serviceDocsPerHour": 39723.706,
+      "serviceDocsPerHour": 38061.558,
       "durationMinutes": 120.0,
       "arrivals": 2400.0,
-      "serviceCapacity": 79447.412,
+      "serviceCapacity": 76123.116,
       "finalQueueDocuments": 0.0,
       "oldestQueueAgeMinutesAtWindowEnd": 0.0,
       "steadyStateStable": true,
@@ -1867,11 +1869,11 @@
   "closure": {
     "harnessCompleted": true,
     "reportWritten": true,
-    "gitClean": true,
+    "gitClean": false,
     "honestFlagsSet": true,
     "allDocumentsSucceeded": true
   },
-  "p0_08_closed": true,
+  "p0_08_closed": false,
   "doesNotClaim": [
     "Profile B evidence",
     "G0-CAP-INGEST-THROUGHPUT pass",
