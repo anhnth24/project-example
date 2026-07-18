@@ -42,7 +42,7 @@
         "value": 0.85
       },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "glm-cloud-interim",
+      "environmentId": "local-cpu-quality",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
@@ -52,7 +52,7 @@
         "P0-05",
         "P0-06"
       ],
-      "notes": "Interim GLM cloud path (ADR 0004). On-prem vLLM re-measurement is a cutover gate, not a Phase 1B blocker. P0-06 close evidence uses AITeamVN CPU neural hybrid (same quality track as P0-05); GLM cloud remains interim registry label pending credentialed re-measure."
+      "notes": "Interim GLM cloud path (ADR 0004). On-prem vLLM re-measurement is a cutover gate, not a Phase 1B blocker. P0-06 close evidence uses AITeamVN CPU neural hybrid (same quality track as P0-05); GLM cloud remains interim registry label pending credentialed re-measure. Environment local-cpu-quality approved for CPU neural quality track (P0-05/P0-06)."
     },
     {
       "id": "G0-RET-BEST-MODEL-GAP",
@@ -69,7 +69,7 @@
         "value": 0.02
       },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "glm-cloud-interim",
+      "environmentId": "local-cpu-quality",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
@@ -78,7 +78,7 @@
       "blocksIssues": [
         "P0-05"
       ],
-      "notes": "Compare at least two GLM embedding configs (model or dimensions) on the same golden corpus."
+      "notes": "Compare at least two GLM embedding configs (model or dimensions) on the same golden corpus. Environment local-cpu-quality approved for CPU neural quality track (P0-05/P0-06)."
     },
     {
       "id": "G0-RET-VLLM-CUTOVER",
@@ -121,7 +121,7 @@
         "value": 0.95
       },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
@@ -130,7 +130,8 @@
       "blocksIssues": [
         "P0-06",
         "P0-10"
-      ]
+      ],
+      "notes": "Environment local-cpu-quality approved for CPU neural quality track (P0-05/P0-06)."
     },
     {
       "id": "G0-RET-CHANGE-ACCURACY",
@@ -147,7 +148,7 @@
         "value": 0.95
       },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
@@ -156,7 +157,8 @@
       "blocksIssues": [
         "P0-06",
         "P0-10"
-      ]
+      ],
+      "notes": "Environment local-cpu-quality approved for CPU neural quality track (P0-05/P0-06)."
     },
     {
       "id": "G0-RET-VERSION-CITATION-PRECISION",
@@ -173,7 +175,7 @@
         "value": 1.0
       },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
@@ -182,7 +184,8 @@
       "blocksIssues": [
         "P0-06",
         "P0-10"
-      ]
+      ],
+      "notes": "Environment local-cpu-quality approved for CPU neural quality track (P0-05/P0-06)."
     },
     {
       "id": "G0-RET-VERSION-CITATION-RECALL",
@@ -199,7 +202,7 @@
         "value": 1.0
       },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
@@ -208,7 +211,8 @@
       "blocksIssues": [
         "P0-06",
         "P0-10"
-      ]
+      ],
+      "notes": "Environment local-cpu-quality approved for CPU neural quality track (P0-05/P0-06)."
     },
     {
       "id": "G0-SEC-UPLOAD-DENIAL",

@@ -44,8 +44,8 @@ and query accent-fold into one `text_version` while the fixture still said
    live digests / tests use `identity-v2.json`.
 6. Golden evaluation pins chunk catalog in
    `bench/markhand_web/retrieval/expected-chunks.tsv` generated from the same
-   chunking version. Filling `chunkId` into every query citation may follow in a
-   later P0-06 PR once span→chunk resolution is green.
+   chunking version. Query/conflict citation `chunkId` fields are filled from
+   that catalog (`fill_citation_chunk_ids.py`).
 
 ## Consequences
 

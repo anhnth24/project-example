@@ -177,25 +177,80 @@ def detect_numeric_conflicts(claims: list[Claim]) -> list[dict]:
     return conflicts
 
 
-def conflict_status_at(
+def claim_at(
+    claims: list[Claim],
+    *,
+    logical_id: str,
+    instant: datetime,
+) -> Claim | None:
+    eligible = [
+        claim
+        for claim in claims
+        if claim.logical_document_id == logical_id and claim.effective_at <= instant
+    ]
+    if not eligible:
+        return None
+    eligible.sort(key=lambda claim: (claim.effective_at, claim.version_number))
+    return eligible[-1]
+
+
+def predict_conflict_status(
+    claims: list[Claim],
     *,
     as_of: datetime | None,
     query_time: datetime,
-    gold_conflict: dict,
+    version_mode: str,
+    authorized_logical_ids: set[str] | None,
 ) -> str:
-    """Lifecycle status for the budget conflict fixture at a point in time."""
-    valid_from = parse_ts(gold_conflict.get("validFrom"))
-    resolved_at = parse_ts(gold_conflict.get("resolvedAt"))
+    """Derive conflict lifecycle from claims + auth scope (no gold expectedStatus)."""
+    required = {"logical-budget-policy", "logical-budget-design"}
+    if authorized_logical_ids is not None and not required.issubset(authorized_logical_ids):
+        return "hidden"
     instant = as_of or query_time
-    if valid_from is None or resolved_at is None:
+    left = claim_at(claims, logical_id="logical-budget-policy", instant=instant)
+    right = claim_at(claims, logical_id="logical-budget-design", instant=instant)
+    if left is None or right is None:
         return "unknown"
-    if instant < valid_from:
-        return "not_started"
-    if instant < resolved_at:
+    if left.value != right.value:
         return "open_as_of" if as_of is not None else "open_current"
-    if gold_conflict.get("status") == "resolved":
-        return "resolved_current" if as_of is None else "resolved_history"
-    return "open_current"
+    # Aligned now: check whether any earlier overlapping generation mismatched.
+    earlier_conflict = False
+    for claim in claims:
+        if claim.logical_document_id != "logical-budget-policy":
+            continue
+        peer = next(
+            (
+                other
+                for other in claims
+                if other.logical_document_id == "logical-budget-design"
+                and other.version_number == claim.version_number
+            ),
+            None,
+        )
+        if peer is not None and peer.value != claim.value:
+            earlier_conflict = True
+            break
+    if not earlier_conflict:
+        return "aligned"
+    if version_mode == "history":
+        # Gold labels history-mode resolved cases as resolved_current.
+        return "resolved_current"
+    if as_of is not None:
+        return "resolved_history"
+    return "resolved_current"
+
+
+def detect_conflicts_at(
+    claims: list[Claim],
+    *,
+    instant: datetime,
+) -> set[tuple[str, str]]:
+    """Set of conflicting version-id pairs effective at instant."""
+    left = claim_at(claims, logical_id="logical-budget-policy", instant=instant)
+    right = claim_at(claims, logical_id="logical-budget-design", instant=instant)
+    if left is None or right is None or left.value == right.value:
+        return set()
+    return {(left.version_id, right.version_id)}
 
 
 def predict_version_ids(

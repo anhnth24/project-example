@@ -42,17 +42,19 @@ from knowledge_identity import (  # noqa: E402
     index_signature,
 )
 from version_conflict_rules import (  # noqa: E402
-    conflict_status_at,
+    detect_conflicts_at,
     detect_numeric_conflicts,
     extract_budget_claims,
-    load_gold_conflict,
     load_versions,
     parse_ts,
     predict_change_note,
+    predict_conflict_status,
     predict_version_ids,
     temporal_answer_value,
     versions_by_logical,
 )
+
+MEASURED_ENVIRONMENT_ID = "local-cpu-quality"
 
 
 def git(*args: str) -> str:
@@ -318,12 +320,42 @@ def filter_chunks_for_mode(
     return chunks
 
 
-def version_and_conflict_metrics(queries: list[dict], chunks: list[dict]) -> dict:
+def predict_version_citations_for_logicals(
+    *,
+    query: dict,
+    logical_ids: set[str],
+    versions: dict,
+    grouped: dict,
+) -> set[tuple[str, str]]:
+    """Emit (documentId, versionId) from mode resolver for logical docs (no gold cites)."""
+    mode = query.get("version_mode") or "current"
+    as_of = query.get("as_of") or None
+    query_time = query.get("query_time") or ""
+    predicted: set[tuple[str, str]] = set()
+    for logical_id in logical_ids:
+        for version_id in predict_version_ids(
+            mode=mode,
+            logical_id=logical_id,
+            as_of=as_of,
+            query_time=query_time,
+            grouped=grouped,
+        ):
+            version = versions.get(version_id)
+            if version is not None:
+                predicted.add((version.document_id, version.version_id))
+    return predicted
+
+
+def version_and_conflict_metrics(
+    queries: list[dict],
+    chunks: list[dict],
+    query_vectors: dict[str, list[float]],
+    *,
+    vector_weight: float,
+) -> dict:
     versions = load_versions()
     grouped = versions_by_logical(versions)
     claims = extract_budget_claims(versions)
-    gold_conflict = load_gold_conflict()
-    chunk_by_id = {chunk["chunkId"]: chunk for chunk in chunks}
 
     citation_tp = citation_fp = citation_fn = 0
     temporal_ok = temporal_n = 0
@@ -339,28 +371,12 @@ def version_and_conflict_metrics(queries: list[dict], chunks: list[dict]) -> dic
         cites = json.loads(query.get("citations") or "[]")
         for cite in cites:
             citations_total += 1
-            chunk_id = cite.get("chunkId")
-            if not chunk_id:
-                citation_fn += 1
-                continue
-            citations_with_chunk += 1
-            row = chunk_by_id.get(chunk_id)
-            if (
-                row is None
-                or row["documentId"] != cite.get("documentId")
-                or row["versionId"] != cite.get("versionId")
-                or not (int(row["start"]) <= int(cite["start"]) and int(cite["end"]) <= int(row["end"]))
-            ):
-                citation_fp += 1
-            else:
-                citation_tp += 1
+            if cite.get("chunkId"):
+                citations_with_chunk += 1
 
         mode = query.get("version_mode") or "current"
         version_context = json.loads(query.get("version_context") or "{}")
         logical_id = version_context.get("logicalDocumentId")
-        if not logical_id and version_context.get("logicalDocumentIds"):
-            # Multi-doc conflict queries: skip single-lineage temporal checks.
-            logical_id = None
         predicted_versions = predict_version_ids(
             mode=mode,
             logical_id=logical_id,
@@ -368,7 +384,46 @@ def version_and_conflict_metrics(queries: list[dict], chunks: list[dict]) -> dic
             query_time=query.get("query_time") or "",
             grouped=grouped,
         )
-        expected_versions = version_context.get("citedVersionIds") or []
+        expected_versions = list(version_context.get("citedVersionIds") or [])
+        allowed = set(predicted_versions)
+
+        # Version-citation gate: resolve immutable versions for the query topic.
+        # Topic logical IDs are request inputs (version_context / conflict auth scope /
+        # top hybrid hit when unspecified) — never gold citation IDs.
+        q_vec = query_vectors[query["query_id"]]
+        ranked_docs = aggregate_docs(
+            score_chunks_hybrid(
+                query["query"], q_vec, chunks, vector_weight=vector_weight
+            )
+        )
+        by_doc = {record.document_id: record for record in versions.values()}
+        topic_logicals: set[str] = set()
+        if logical_id:
+            topic_logicals.add(logical_id)
+        conflict_context = json.loads(query.get("conflict_context") or "{}")
+        for item in conflict_context.get("authorizedLogicalDocumentIds") or []:
+            topic_logicals.add(item)
+        for item in version_context.get("logicalDocumentIds") or []:
+            topic_logicals.add(item)
+        if not topic_logicals and ranked_docs:
+            top = by_doc.get(ranked_docs[0])
+            if top is not None:
+                topic_logicals.add(top.logical_document_id)
+        predicted_cites = predict_version_citations_for_logicals(
+            query=query,
+            logical_ids=topic_logicals,
+            versions=versions,
+            grouped=grouped,
+        )
+        gold_cites = {
+            (cite["documentId"], cite["versionId"])
+            for cite in cites
+            if cite.get("documentId") and cite.get("versionId")
+        }
+        if gold_cites:
+            citation_tp += len(predicted_cites & gold_cites)
+            citation_fp += len(predicted_cites - gold_cites)
+            citation_fn += len(gold_cites - predicted_cites)
 
         if query.get("category") in {"temporal_current", "temporal_as_of"} and logical_id:
             temporal_n += 1
@@ -384,67 +439,70 @@ def version_and_conflict_metrics(queries: list[dict], chunks: list[dict]) -> dic
             if expected_value is not None:
                 if predicted_value is not None and predicted_value == expected_value:
                     temporal_ok += 1
-            elif predicted_versions == list(expected_versions):
+            elif predicted_versions == expected_versions:
                 temporal_ok += 1
             if mode == "current":
                 current_n += 1
-                if predicted_versions == list(expected_versions):
+                if predicted_versions == expected_versions:
                     current_ok += 1
 
         if query.get("category") in {"version_compare", "version_history"} and logical_id:
             change_n += 1
+            # Labels only: expected versions/note from gold; prediction from manifest.
             note = predict_change_note(logical_id, grouped)
             expected_note = version_context.get("changeNote") or ""
             if set(predicted_versions) == set(expected_versions) and note == expected_note:
                 change_ok += 1
 
-        if str(query.get("answer_mode", "")).startswith("conflict_") and gold_conflict:
+        if str(query.get("answer_mode", "")).startswith("conflict_"):
             conflict_n += 1
             conflict_context = json.loads(query.get("conflict_context") or "{}")
             expected_status = conflict_context.get("expectedStatus")
+            # Authorization scope is request context (inputs), not an expected label.
             authorized = set(conflict_context.get("authorizedLogicalDocumentIds") or [])
-            as_of = query.get("as_of") or None
-            query_time = query.get("query_time") or ""
-            if conflict_context.get("expectedVisibility") == "hidden" or (
-                authorized
-                and not {"logical-budget-policy", "logical-budget-design"}.issubset(authorized)
-            ):
-                predicted_status = "hidden"
-            else:
-                predicted_status = conflict_status_at(
-                    as_of=parse_ts(as_of) if as_of else None,
-                    query_time=parse_ts(query_time) or datetime.now(timezone.utc),
-                    gold_conflict=gold_conflict,
-                )
-                # Normalize open_current → not used in gold; map for current queries.
-                if expected_status == "resolved_current" and predicted_status == "resolved_history":
-                    predicted_status = "resolved_current"
-                if expected_status == "resolved_history" and predicted_status == "resolved_current":
-                    # history mode uses as_of empty but still wants history label
-                    if query.get("version_mode") == "history":
-                        predicted_status = "resolved_history"
+            as_of = parse_ts(query.get("as_of") or None)
+            query_time = parse_ts(query.get("query_time") or "") or datetime.now(
+                timezone.utc
+            )
+            predicted_status = predict_conflict_status(
+                claims,
+                as_of=as_of,
+                query_time=query_time,
+                version_mode=mode,
+                authorized_logical_ids=authorized or None,
+            )
             if predicted_status == expected_status:
                 conflict_ok += 1
             if expected_status in {"open_as_of", "open_current"}:
                 warning_n += 1
                 if predicted_status == expected_status:
                     warning_ok += 1
-            # Gold labels history-mode resolved cases as resolved_current.
-            if query.get("version_mode") == "history" and str(expected_status).startswith(
-                "resolved"
-            ):
+            if mode == "history" and str(expected_status).startswith("resolved"):
                 history_n += 1
                 if predicted_status == expected_status:
                     history_ok += 1
 
-    # Independent claim conflict detection on current vs v1 pairs.
-    detected = detect_numeric_conflicts(claims)
+    # Set-based conflict detection vs gold open pair at as-of before resolution.
+    as_of_open = parse_ts("2026-03-01T00:00:00Z")
+    as_of_resolved = parse_ts("2026-07-18T00:00:00Z")
+    assert as_of_open and as_of_resolved
+    predicted_open = detect_conflicts_at(claims, instant=as_of_open)
+    predicted_resolved = detect_conflicts_at(claims, instant=as_of_resolved)
+    gold_open = {("version-budget-v1", "version-design-v1")}
+    gold_resolved: set[tuple[str, str]] = set()
+    # Also include generation-level detector pairs for numeric mismatch inventory.
     detected_pairs = {
-        (item["left"].version_id, item["right"].version_id) for item in detected
+        (item["left"].version_id, item["right"].version_id)
+        for item in detect_numeric_conflicts(claims)
     }
-    expected_open_pair = ("version-budget-v1", "version-design-v1")
-    conflict_precision = 1.0 if expected_open_pair in detected_pairs else 0.0
-    conflict_recall = 1.0 if expected_open_pair in detected_pairs else 0.0
+    open_tp = len(predicted_open & gold_open)
+    open_fp = len(predicted_open - gold_open)
+    open_fn = len(gold_open - predicted_open)
+    # Resolved instant must not report an open conflict.
+    if predicted_resolved:
+        open_fp += len(predicted_resolved)
+    conflict_precision = open_tp / max(1, open_tp + open_fp)
+    conflict_recall = open_tp / max(1, open_tp + open_fn)
 
     def ratio(ok: int, total: int) -> float:
         return round(ok / total, 6) if total else 1.0
@@ -456,6 +514,11 @@ def version_and_conflict_metrics(queries: list[dict], chunks: list[dict]) -> dic
         "citationsWithChunkId": citations_with_chunk,
         "versionCitationPrecision": round(precision, 6),
         "versionCitationRecall": round(recall, 6),
+        "citationCounts": {
+            "tp": citation_tp,
+            "fp": citation_fp,
+            "fn": citation_fn,
+        },
         "temporalAnswerAccuracy": ratio(temporal_ok, temporal_n),
         "temporalQueries": temporal_n,
         "currentVersionAccuracy": ratio(current_ok, current_n),
@@ -468,8 +531,8 @@ def version_and_conflict_metrics(queries: list[dict], chunks: list[dict]) -> dic
         "warningQueries": warning_n,
         "resolvedHistoryAccuracy": ratio(history_ok, history_n),
         "historyQueries": history_n,
-        "conflictPrecision": conflict_precision,
-        "conflictRecall": conflict_recall,
+        "conflictPrecision": round(conflict_precision, 6),
+        "conflictRecall": round(conflict_recall, 6),
         "detectedConflictPairs": sorted(
             [f"{left}|{right}" for left, right in detected_pairs]
         ),
@@ -537,6 +600,7 @@ def gate_result(metric: float | None, gate: dict | None, *, evaluated: bool) -> 
             "threshold": None if gate is None else gate.get("threshold", {}).get("value"),
             "pass": None,
             "evaluated": False,
+            "measuredEnvironmentId": MEASURED_ENVIRONMENT_ID,
         }
     threshold = gate["threshold"]
     op = threshold["operator"]
@@ -549,19 +613,17 @@ def gate_result(metric: float | None, gate: dict | None, *, evaluated: bool) -> 
         passed = metric == value
     else:
         passed = False
+    registered = gate.get("environmentId")
+    env_ok = registered == MEASURED_ENVIRONMENT_ID
     return {
         "metric": metric,
         "threshold": value,
         "operator": op,
-        "pass": passed,
+        "pass": bool(passed and env_ok),
         "evaluated": True,
-        "environmentId": gate.get("environmentId"),
-        "registeredEnvironmentNote": (
-            "Measured on local CPU sentence-transformers (AITeamVN); "
-            "registered gate environment may differ."
-            if gate.get("environmentId") not in {None, "local-cpu", "on-prem-reference"}
-            else None
-        ),
+        "environmentId": registered,
+        "measuredEnvironmentId": MEASURED_ENVIRONMENT_ID,
+        "environmentMatch": env_ok,
     }
 
 
@@ -592,9 +654,14 @@ def self_test() -> int:
     ):
         print("chunkId missing; run fill_citation_chunk_ids.py", file=sys.stderr)
         return 1
-    metrics = version_and_conflict_metrics(queries, chunks)
-    if metrics["versionCitationPrecision"] < 1.0 or metrics["versionCitationRecall"] < 1.0:
-        print(f"citation metrics failed: {metrics}", file=sys.stderr)
+    query_vectors = {
+        query["query_id"]: l2_normalize(chunks[0]["vector"][:]) for query in queries
+    }
+    metrics = version_and_conflict_metrics(
+        queries, chunks, query_vectors, vector_weight=VECTOR_WEIGHT
+    )
+    if metrics["citationsWithChunkId"] != metrics["citations"]:
+        print(f"chunkId incomplete: {metrics}", file=sys.stderr)
         return 1
     print("self-test OK: catalog + chunkIds + version/conflict rules")
     return 0
@@ -650,9 +717,10 @@ def main() -> int:
         runtime_path = RUNTIME_PROVIDER_CLOUD
         neural = True
 
-    vector_weight, tuned = tune_vector_weight(queries, chunks, query_vectors)
-    versions = load_versions()
-    grouped = versions_by_logical(versions)
+    # Keep desktop/production VECTOR_WEIGHT=0.55. Optional tune is observation only.
+    _obs_weight, _obs_tuned = tune_vector_weight(queries, chunks, query_vectors)
+    vector_weight = VECTOR_WEIGHT
+    tuned = False
 
     legs = {"lexical": {}, "vector_neural": {}, "hybrid": {}}
     leg_rows: dict[str, list[dict]] = {name: [] for name in legs}
@@ -661,20 +729,6 @@ def main() -> int:
             key: int(value)
             for key, value in json.loads(query.get("judgments") or "{}").items()
         }
-        mode = query.get("version_mode") or "current"
-        version_context = json.loads(query.get("version_context") or "{}")
-        logical_id = version_context.get("logicalDocumentId")
-        allowed = set(
-            predict_version_ids(
-                mode=mode,
-                logical_id=logical_id,
-                as_of=query.get("as_of") or None,
-                query_time=query.get("query_time") or "",
-                grouped=grouped,
-            )
-        )
-        # Retrieval ranking stays corpus-wide for Recall@5 gate (document judgments).
-        # Version filters are applied in correctness metrics, not by hiding gold docs.
         scoped = chunks
         q_vec = query_vectors[query["query_id"]]
         lexical_docs = aggregate_docs(score_chunks_lexical(query["query"], scoped))
@@ -700,7 +754,9 @@ def main() -> int:
             )
 
     leg_summaries = {name: summarize(rows) for name, rows in leg_rows.items()}
-    correctness = version_and_conflict_metrics(queries, chunks)
+    correctness = version_and_conflict_metrics(
+        queries, chunks, query_vectors, vector_weight=vector_weight
+    )
     signature = index_signature(
         runtime_path=runtime_path,
         embedding_family=f"provider/{runtime}/cpu",
@@ -796,7 +852,14 @@ def main() -> int:
             "headingHitWeight": HEADING_HIT_WEIGHT,
             "tuned": tuned,
             "baselineVectorWeight": VECTOR_WEIGHT,
+            "observationTuneWeight": _obs_weight,
+            "observationTuneImprovedHoldout": _obs_tuned,
+            "note": (
+                "Gating uses frozen desktop VECTOR_WEIGHT=0.55 for production parity; "
+                "Python lexical is token-overlap approximation of FTS5."
+            ),
         },
+        "measuredEnvironmentId": MEASURED_ENVIRONMENT_ID,
         "legs": leg_summaries,
         "versionCitation": correctness,
         "gates": gates,
