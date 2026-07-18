@@ -49,3 +49,8 @@ post-extraction backlog and do not change Phase 1A contracts.
 make check-knowledge-extraction
 make check-desktop
 ```
+
+For the Phase 1A closeout, these gates were run successfully on the Cloud Agent
+Linux environment. GitHub-hosted jobs were denied before their first step by the
+repository billing/spending limit; they did not report a code or test failure. Rerun
+the existing CI workflow when hosted runners are restored to attach remote evidence.
