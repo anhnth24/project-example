@@ -13,8 +13,8 @@ use crate::citation::{extract_snippet, validate_grounded_answer};
 use crate::desktop::hnsw;
 use crate::desktop::sqlite::{SqliteKnowledgeStore, StoredChunk};
 use crate::embedding::{
-    local_vector, EmbeddingPlan, ProviderDeployment, LOCAL_EMBEDDING_MODE, LOCAL_VECTOR_DIMENSIONS,
-    PROVIDER_EMBEDDING_MODE,
+    infer_runtime_path, local_vector, EmbeddingPlan, ProviderDeployment, LOCAL_EMBEDDING_MODE,
+    LOCAL_VECTOR_DIMENSIONS, PROVIDER_EMBEDDING_MODE,
 };
 use crate::query::{fts5_prefix_query, normalized_tokens};
 use crate::rank::{cosine_similarity, hybrid_rerank_score, sort_hybrid_hits};
@@ -47,16 +47,20 @@ pub struct DesktopEmbeddingPlan {
 
 impl DesktopEmbeddingPlan {
     pub fn local() -> Self {
+        let signature_plan = EmbeddingPlan::local_hash_v1();
+        let signature = signature_plan
+            .signature(LOCAL_VECTOR_DIMENSIONS)
+            .expect("local hash plan has fixed dimensions");
         Self {
             metadata: IndexMetadata {
                 mode: LOCAL_EMBEDDING_MODE.into(),
                 provider: "local".into(),
                 model: LOCAL_EMBEDDING_MODE.into(),
                 dimensions: LOCAL_VECTOR_DIMENSIONS,
-                signature: LOCAL_EMBEDDING_MODE.into(),
+                signature,
             },
-            // Existing desktop indexes retain their legacy signature.
-            signature_plan: None,
+            // Schema-v2 canonical plan; legacy `"local_hash_v1"` string signatures rebuild.
+            signature_plan: Some(signature_plan),
         }
     }
 
@@ -66,8 +70,21 @@ impl DesktopEmbeddingPlan {
         base_url: Option<&str>,
         dimensions: Option<usize>,
     ) -> Result<Self> {
+        Self::provider_with_runtime(provider, model, base_url, dimensions, None)
+    }
+
+    pub fn provider_with_runtime(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        base_url: Option<&str>,
+        dimensions: Option<usize>,
+        runtime_path: Option<&str>,
+    ) -> Result<Self> {
         let provider = provider.into();
         let model = model.into();
+        let runtime = runtime_path
+            .unwrap_or_else(|| infer_runtime_path(base_url, &model))
+            .to_string();
         let deployment = ProviderDeployment::from_base_url(base_url)
             .or_else(|_| ProviderDeployment::from_base_url(None))?;
         let signature_plan = EmbeddingPlan::provider(
@@ -76,6 +93,7 @@ impl DesktopEmbeddingPlan {
             model.clone(),
             deployment,
             dimensions,
+            runtime,
         )?;
         Ok(Self {
             metadata: IndexMetadata {
@@ -94,7 +112,7 @@ impl DesktopEmbeddingPlan {
     }
 
     pub fn is_provider(&self) -> bool {
-        self.signature_plan.is_some()
+        self.metadata.mode == PROVIDER_EMBEDDING_MODE
     }
 
     fn matches(&self, stored: &IndexMetadata) -> bool {
@@ -563,5 +581,31 @@ mod tests {
             .iter()
             .any(|warning| warning.contains("Embedding signature thay đổi")));
         let _ = std::fs::remove_dir_all(paths.ann_root);
+    }
+
+    #[test]
+    fn legacy_local_hash_string_signature_forces_rebuild() {
+        let local = DesktopEmbeddingPlan::local();
+        assert!(local.signature_plan.is_some());
+        assert_ne!(local.metadata().signature, LOCAL_EMBEDDING_MODE);
+        // Simulate a pre-schema-v2 store that only stored the mode string.
+        let mut legacy = local.metadata().clone();
+        legacy.signature = LOCAL_EMBEDDING_MODE.into();
+        assert!(!local.matches(&legacy));
+    }
+
+    #[test]
+    fn glm_cloud_runtime_is_inferred_from_endpoint_not_provider_enum() {
+        let plan = DesktopEmbeddingPlan::provider(
+            "openaicompatible",
+            "embedding-3",
+            Some("https://open.bigmodel.cn/api/paas/v4"),
+            Some(1024),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.signature_plan.as_ref().unwrap().runtime_path(),
+            crate::identity::RUNTIME_GLM_CLOUD_INTERIM
+        );
     }
 }

@@ -59,11 +59,11 @@ def tokens(text: str) -> list[str]:
 
 
 def local_vector(text: str) -> list[float]:
-    """Desktop local_hash_v1 feature hashing (SipHash13 zero-key via Python fallback).
+    """Synthetic deterministic vectors for scaffold ranking only.
 
-    Exact SipHash parity is validated in Rust; for this scaffold we use a stable
-    Python blake2b mix that is *deterministic* and sufficient for hybrid ranking
-    experiments. Signature still records runtime=local-hash.
+    NOT Rust `local_hash_v1` (SipHash-1-3). Do not use these metrics for official
+    G0-RET gate closure. Official dense/hybrid evidence comes from Rust desktop
+    baseline or neural embedding eval.
     """
     toks = tokens(text)
     vector = [0.0] * LOCAL_DIMS
@@ -338,21 +338,23 @@ def main() -> int:
             "G0-RET-RECALL-AT-5": {
                 "metric": leg_summaries["hybrid"]["recallAt5"],
                 "threshold": 0.85,
-                "pass": leg_summaries["hybrid"]["recallAt5"] >= 0.85,
-                "note": "local-hash scaffold; neural hybrid may differ",
+                "pass": None,
+                "evaluated": False,
+                "note": "scaffold vectors are synthetic blake2b, not Rust local_hash_v1; official gate not evaluated",
             },
             "G0-RET-VERSION-CITATION-PRECISION": {
                 "metric": citation["versionCitationPrecision"],
                 "threshold": 1.0,
-                "pass": False,
+                "pass": None,
+                "evaluated": False,
                 "note": citation["note"],
             },
         },
         "p0_06_closed": False,
         "reasons": [
             "Expected chunks pinned for heading-chunks-2000-v1 with span resolve.",
-            "Hybrid scaffold uses frozen RRF weights + local-hash vectors.",
-            "Version-citation gates remain red until chunkId is filled into gold.",
+            "Hybrid scaffold uses frozen RRF weights + synthetic blake2b vectors (not official gate evidence).",
+            "Version-citation gates remain unevaluated until chunkId is filled into gold.",
             "Neural embedding hybrid + claim/conflict metrics deferred.",
         ],
     }
@@ -369,7 +371,7 @@ def main() -> int:
         f"- Index signature: `{payload['indexSignature']}`",
         f"- RRF tuned: `{payload['rrf']['tuned']}`",
         "",
-        "## Legs (document-level, local-hash scaffold)",
+        "## Legs (document-level, synthetic blake2b scaffold — not official G0-RET)",
         "",
         "| Leg | Recall@5 | Recall@10 | Hit@5 | MRR | nDCG@10 |",
         "|---|---:|---:|---:|---:|---:|",

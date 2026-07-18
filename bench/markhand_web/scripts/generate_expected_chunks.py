@@ -240,13 +240,17 @@ def main() -> int:
         "citationSpansResolved": True,
     }
     if args.check:
-        if not OUT_TSV.is_file():
-            print("missing expected-chunks.tsv", file=sys.stderr)
+        if not OUT_TSV.is_file() or not OUT_META.is_file():
+            print("missing expected-chunks.tsv or .meta.json", file=sys.stderr)
             return 1
         if OUT_TSV.read_text(encoding="utf-8") != text:
             print("expected-chunks.tsv is stale; regenerate", file=sys.stderr)
             return 1
-        print("expected-chunks.tsv up to date")
+        current_meta = json.loads(OUT_META.read_text(encoding="utf-8"))
+        if current_meta.get("sha256") != meta["sha256"] or current_meta.get("chunks") != meta["chunks"]:
+            print("expected-chunks.meta.json is stale; regenerate", file=sys.stderr)
+            return 1
+        print("expected-chunks.tsv + meta up to date")
         return 0
     OUT_TSV.parent.mkdir(parents=True, exist_ok=True)
     OUT_TSV.write_text(text, encoding="utf-8")

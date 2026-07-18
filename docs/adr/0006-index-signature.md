@@ -23,7 +23,10 @@ and query accent-fold into one `text_version` while the fixture still said
    `body_text_version` (`nfc-v1`). Versions never share chunk IDs.
 3. **Index signature** is the length-delimited SHA-256 of:
    - `runtime_path`: `local-hash` | `glm-cloud-interim` | `vllm-local` |
-     `provider-cloud`
+     `provider-cloud` — **explicit field** on `EmbeddingPlan` (not inferred from
+     the coarse `Provider` enum). Desktop may default via
+     `infer_runtime_path(base_url, model)` using host/model cues (e.g.
+     `open.bigmodel.cn` → `glm-cloud-interim`).
    - `embedding_family` (provider/model/deployment digest)
    - `embedding_revision`
    - `dimensions` (u64 BE)
@@ -33,8 +36,11 @@ and query accent-fold into one `text_version` while the fixture still said
    - `query_normalization_version` (`accent-fold-v1`)
 4. Changing any signature field creates a **new index generation**. Mixing
    vectors across generations is forbidden; desktop rebuilds on signature
-   mismatch.
-5. Golden evaluation pins chunk catalog in
+   mismatch. Legacy desktop stores that persisted the bare string
+   `local_hash_v1` as signature must rebuild under the schema-v2 digest.
+5. Historical fixture `identity-v1.json` remains frozen for checksum continuity;
+   live digests / tests use `identity-v2.json`.
+6. Golden evaluation pins chunk catalog in
    `bench/markhand_web/retrieval/expected-chunks.tsv` generated from the same
    chunking version. Filling `chunkId` into every query citation may follow in a
    later P0-06 PR once span→chunk resolution is green.

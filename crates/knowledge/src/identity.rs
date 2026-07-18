@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn unicode_order_and_version_are_stable() {
         let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../fixtures/identity-v1.json")).unwrap();
+            serde_json::from_str(include_str!("../fixtures/identity-v2.json")).unwrap();
         assert_eq!(fixture["version"].as_u64().unwrap(), 2);
         let document = document_identity(
             fixture["document"]["sourceRel"].as_str().unwrap(),
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn index_signature_covers_every_compatibility_dimension() {
         let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../fixtures/identity-v1.json")).unwrap();
+            serde_json::from_str(include_str!("../fixtures/identity-v2.json")).unwrap();
         let signature = IndexSignature {
             runtime_path: fixture["index"]["runtimePath"].as_str().unwrap(),
             embedding_family: fixture["index"]["embeddingFamily"].as_str().unwrap(),
