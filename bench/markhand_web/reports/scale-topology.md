@@ -1,10 +1,10 @@
 # P0-07 scale topology offline report
 
-- Generated: `2026-07-18T19:07:41.458289Z`
+- Generated: `2026-07-18T19:07:42.467503Z`
 - Mode: `offline-synthetic-in-process`
 - Seed: `20260718`
 - Workload profile: `on-prem-reference-v1`
-- Git commit: `df3771eb823ea11586afb70b1019e7e30502a9b5`
+- Git commit: `091bd07379df25be649d40785a05d27baca918c7`
 - Dirty at harness start: `False`
 - `targetMatch`: `false`
 - `productionScaleBlocked`: `true`

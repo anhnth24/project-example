@@ -2,19 +2,19 @@
   "version": 1,
   "reportId": "p0-07-scale-topology",
   "gateId": "P0-07-SCALE-TOPOLOGY",
-  "generatedAt": "2026-07-18T19:07:41.458289Z",
+  "generatedAt": "2026-07-18T19:07:42.467503Z",
   "command": "python3 bench/markhand_web/scripts/run_scale_topology.py",
   "mode": "offline-synthetic-in-process",
   "seed": 20260718,
   "git": {
-    "commit": "df3771eb823ea11586afb70b1019e7e30502a9b5",
+    "commit": "091bd07379df25be649d40785a05d27baca918c7",
     "dirty": false,
     "dirtyPaths": []
   },
   "environment": {
     "environmentId": "current-runner-offline-synthetic",
     "fingerprint": {
-      "gitCommit": "df3771eb823ea11586afb70b1019e7e30502a9b5",
+      "gitCommit": "091bd07379df25be649d40785a05d27baca918c7",
       "workloadProfileId": "on-prem-reference-v1",
       "hardware": {
         "cpu": {
