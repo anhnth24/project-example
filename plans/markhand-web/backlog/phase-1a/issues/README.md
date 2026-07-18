@@ -121,7 +121,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-08 — Persistent HNSW desktop feature
 
-- **Status:** In progress — moving the persistent ANN cache behind `desktop-hnsw`.
+- **Status:** Review — shared adapter, legacy binary fixture and hardening gates passed.
 - **Objective:** Move optional ANN cache, SQLite vẫn authority.
 - **Plan:** Manifest/partition/rebuild/search/clear; legacy signature compatibility;
   corrupt/mismatch fallback exact cosine.
