@@ -56,3 +56,7 @@ The following targets block production Phase 0 exit and any Phase 1B scale claim
 3. `G0-DR-RPO`, `G0-DR-QUERY-READY-RTO` and `G0-DR-FULL-VECTOR-RTO` component-loss
    restore drill with real PostgreSQL, MinIO and Qdrant artifacts.
 4. On-prem vLLM cutover evidence for production embedding runtime.
+5. TTFT P95 (`SLA-TTFT-P95`) under normal answer load on Profile B.
+6. Monthly query-path availability (`SLA-AVAILABILITY`) measurement.
+7. Authz-safe degraded-mode proof (`SLA-DEGRADED-MODE`) when the vector index is
+   unavailable.

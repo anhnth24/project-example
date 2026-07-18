@@ -66,6 +66,21 @@ PROFILE_B_BLOCKERS = [
         "owner": "retrieval-owner",
         "reason": "Production embedding cutover requires on-prem vLLM evidence.",
     },
+    {
+        "id": "SLA-TTFT-P95",
+        "owner": "operations-owner",
+        "reason": "Time-to-first-token P95 under normal load is not measured on Profile B.",
+    },
+    {
+        "id": "SLA-AVAILABILITY",
+        "owner": "operations-owner",
+        "reason": "Monthly query-path availability is not measured on Profile B.",
+    },
+    {
+        "id": "SLA-DEGRADED-MODE",
+        "owner": "operations-owner",
+        "reason": "Authz-safe FTS/text fallback under vector outage is not Profile B proven.",
+    },
 ]
 
 
