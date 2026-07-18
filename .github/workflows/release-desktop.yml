@@ -3,16 +3,14 @@ name: Build desktop installers
 on:
   workflow_dispatch:
   push:
-    branches:
-      - master
     tags:
       - "markhand-v*"
 
 permissions:
   contents: read
 
-# Mỗi push master build lại từ đầu; hủy run cũ đang chạy của cùng ref để khỏi
-# đốt runner macOS (giá 10×) cho commit đã bị vượt qua.
+# Installer chỉ build khi phát hành tag hoặc chạy manual. Hủy run cũ cùng ref để
+# không đốt runner macOS (giá cao hơn Linux) cho bản đã bị vượt qua.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
