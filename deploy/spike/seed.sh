@@ -19,10 +19,13 @@ VALUES
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 SQL
 
-curl --fail --silent --show-error \
-  -X PUT "http://127.0.0.1:${MARKHAND_SPIKE_QDRANT_HTTP_PORT}/collections/markhand_spike_smoke" \
-  -H "content-type: application/json" \
-  --data "{\"vectors\":{\"size\":${MARKHAND_SPIKE_MOCK_DIMENSIONS},\"distance\":\"Cosine\"}}" \
-  >/dev/null
+collection_url="http://127.0.0.1:${MARKHAND_SPIKE_QDRANT_HTTP_PORT}/collections/markhand_spike_smoke"
+if ! curl --fail --silent "$collection_url" >/dev/null; then
+  curl --fail --silent --show-error \
+    -X PUT "$collection_url" \
+    -H "content-type: application/json" \
+    --data "{\"vectors\":{\"size\":${MARKHAND_SPIKE_MOCK_DIMENSIONS},\"distance\":\"Cosine\"}}" \
+    >/dev/null
+fi
 
 echo "seeded benchmark spike metadata and Qdrant smoke collection"

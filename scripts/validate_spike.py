@@ -98,11 +98,24 @@ def validate_report(path: Path = REPORT) -> list[str]:
     hardware = fingerprint.get("hardware", {})
     if not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("git", {}).get("commit", ""))):
         errors.append("spike report git commit is invalid")
+    if payload.get("git", {}).get("dirty") is not False:
+        errors.append("spike report must be captured from a clean tracked tree")
     for field in ("composeFileSha256", "fixtureManifestSha256"):
         if not SHA256.fullmatch(str(fingerprint.get(field, ""))):
             errors.append(f"spike report {field} is invalid")
     if set(fingerprint.get("imageDigests", {})) != SERVICES:
         errors.append("spike report image digests are incomplete")
+    else:
+        for service, encoded in fingerprint["imageDigests"].items():
+            try:
+                digests = json.loads(encoded)
+            except (TypeError, json.JSONDecodeError):
+                digests = []
+            if not digests or not all(
+                re.search(r"@sha256:[0-9a-f]{64}$", digest)
+                for digest in digests
+            ):
+                errors.append(f"spike report image digest is invalid: {service}")
     if set(fingerprint.get("serviceVersions", {})) != SERVICES:
         errors.append("spike report service versions are incomplete")
     if (

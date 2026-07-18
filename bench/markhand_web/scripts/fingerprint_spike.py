@@ -158,9 +158,10 @@ def fingerprint(env_file: Path) -> dict:
         )
         images[service] = repo_digests
         versions[service] = image_ref
-    fixture_hash = hashlib.sha256(
-        (ROOT / "bench/markhand_web/manifest.lock.json").read_bytes()
-    ).hexdigest()
+    fixture_manifest = ROOT / "bench/markhand_web/manifest.lock.json"
+    if not fixture_manifest.is_file():
+        fixture_manifest = ROOT / "tests/fixtures/manifest.json"
+    fixture_hash = hashlib.sha256(fixture_manifest.read_bytes()).hexdigest()
     git_commit = run("git", "rev-parse", "HEAD")
     git_dirty = bool(run("git", "status", "--porcelain", "--untracked-files=no"))
     actual_hardware = hardware()
@@ -185,6 +186,7 @@ def fingerprint(env_file: Path) -> dict:
             },
         },
         "fixtures": {"manifestSha256": fixture_hash},
+        "fixtureManifestPath": fixture_manifest.relative_to(ROOT).as_posix(),
         "result": {
             "metric": "healthy_spike_services",
             "value": len(services),
