@@ -166,6 +166,17 @@ cd app && pnpm test && pnpm build
 - Desktop index hiện hữu mở được hoặc migration/rebuild được thông báo rõ.
 - Server có thể gọi pure rank/citation API mà không kéo SQLite/HNSW.
 
+## Completion evidence
+
+- P1A-01…P1A-10 đã merge vào `master`.
+- `make check-knowledge-extraction` pass: core/LLM/CLI, default server consumer,
+  knowledge feature matrix, desktop backend, IPC production wrappers, frontend
+  test/build, fixtures, boundaries và roadmap.
+- Legacy SQLite và HNSW binary fixtures mở/search được; provider signature mismatch
+  phát warning rebuild rõ ràng.
+- GitHub-hosted jobs hiện bị từ chối trước bước đầu do billing/spending limit. Đây
+  không phải test failure; rerun workflow khi hosted runner được khôi phục.
+
 ## Không thuộc phase
 
 - PG/Qdrant/MinIO adapters.
