@@ -1,7 +1,7 @@
 # P0-10 Phase 0 gate
 
-- Generated: `2026-07-18T19:38:50.804213Z`
-- Git commit: `574fd65c8d3dcfd2c28014a45b515a7f92be36b6`
+- Generated: `2026-07-18T19:41:59.696230Z`
+- Git commit: `276c58568dab013aa353be12711c709f5a6ab758`
 - Git clean at harness start: `true`
 - `p0_10_closed`: `true`
 - `productionPhase0ExitBlocked`: `true`
@@ -31,6 +31,7 @@
 | `runtimeLicenseInventoryPassed` | `true` |
 | `securitySmokeClosed` | `true` |
 | `restoreSmokeClosed` | `true` |
+| `queryLoadSmokeClosed` | `true` |
 | `gitClean` | `true` |
 | `p0_10_closed` | `true` |
 | `productionPhase0ExitBlocked` | `true` |
