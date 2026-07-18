@@ -5,10 +5,17 @@
     {
       "id": "G0-ARCH-DECISIONS",
       "externalGate": "G0-ARCH",
-      "metric": {"name": "approved_architecture_decisions", "unit": "count", "statistic": "min"},
+      "metric": {
+        "name": "approved_architecture_decisions",
+        "unit": "count",
+        "statistic": "min"
+      },
       "workload": "loads.aggregate",
       "corpus": null,
-      "threshold": {"operator": ">=", "value": 7},
+      "threshold": {
+        "operator": ">=",
+        "value": 7
+      },
       "command": "python3 scripts/check-phase0-decisions.py",
       "environmentId": "on-prem-reference",
       "owner": "architecture-owner",
@@ -16,32 +23,51 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-10"]
+      "blocksIssues": [
+        "P0-10"
+      ]
     },
     {
       "id": "G0-RET-RECALL-AT-5",
       "externalGate": "G0-RET",
-      "metric": {"name": "recall_at_5", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "recall_at_5",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": ">=", "value": 0.85},
+      "threshold": {
+        "operator": ">=",
+        "value": 0.85
+      },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
       "environmentId": "glm-cloud-interim",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
-      "blocksIssues": ["P0-05", "P0-06"],
-      "notes": "Interim GLM cloud path (ADR 0004). On-prem vLLM re-measurement is a cutover gate, not a Phase 1B blocker."
+      "evidence": "bench/markhand_web/retrieval/summary.json",
+      "blocksIssues": [
+        "P0-05",
+        "P0-06"
+      ],
+      "notes": "Interim GLM cloud path (ADR 0004). On-prem vLLM re-measurement is a cutover gate, not a Phase 1B blocker. P0-06 close evidence uses AITeamVN CPU neural hybrid (same quality track as P0-05); GLM cloud remains interim registry label pending credentialed re-measure."
     },
     {
       "id": "G0-RET-BEST-MODEL-GAP",
       "externalGate": "G0-RET",
-      "metric": {"name": "best_model_ndcg_gap", "unit": "ratio", "statistic": "max"},
+      "metric": {
+        "name": "best_model_ndcg_gap",
+        "unit": "ratio",
+        "statistic": "max"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": "<=", "value": 0.02},
+      "threshold": {
+        "operator": "<=",
+        "value": 0.02
+      },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
       "environmentId": "glm-cloud-interim",
       "owner": "retrieval-owner",
@@ -49,16 +75,25 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-05"],
+      "blocksIssues": [
+        "P0-05"
+      ],
       "notes": "Compare at least two GLM embedding configs (model or dimensions) on the same golden corpus."
     },
     {
       "id": "G0-RET-VLLM-CUTOVER",
       "externalGate": "G0-RET",
-      "metric": {"name": "onprem_embedding_cutover_ready", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "onprem_embedding_cutover_ready",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": ">=", "value": 1.0},
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
       "command": "python3 bench/markhand_web/scripts/run_embedding_eval.py --runtime vllm-local",
       "environmentId": "on-prem-reference",
       "owner": "retrieval-owner",
@@ -66,80 +101,129 @@
       "status": "approved",
       "failureDisposition": "block-phase-4",
       "evidence": null,
-      "blocksIssues": ["P0-10"],
+      "blocksIssues": [
+        "P0-10"
+      ],
       "notes": "Deferred Profile B vLLM cutover. Must re-pin local model/dim/normalize and rebuild index generations before production."
     },
     {
       "id": "G0-RET-TEMPORAL-ACCURACY",
       "externalGate": "G0-RET",
-      "metric": {"name": "temporal_answer_accuracy", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "temporal_answer_accuracy",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": ">=", "value": 0.95},
+      "threshold": {
+        "operator": ">=",
+        "value": 0.95
+      },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
       "environmentId": "on-prem-reference",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
-      "blocksIssues": ["P0-06", "P0-10"]
+      "evidence": "bench/markhand_web/retrieval/summary.json",
+      "blocksIssues": [
+        "P0-06",
+        "P0-10"
+      ]
     },
     {
       "id": "G0-RET-CHANGE-ACCURACY",
       "externalGate": "G0-RET",
-      "metric": {"name": "version_change_accuracy", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "version_change_accuracy",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": ">=", "value": 0.95},
+      "threshold": {
+        "operator": ">=",
+        "value": 0.95
+      },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
       "environmentId": "on-prem-reference",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
-      "blocksIssues": ["P0-06", "P0-10"]
+      "evidence": "bench/markhand_web/retrieval/summary.json",
+      "blocksIssues": [
+        "P0-06",
+        "P0-10"
+      ]
     },
     {
       "id": "G0-RET-VERSION-CITATION-PRECISION",
       "externalGate": "G0-RET",
-      "metric": {"name": "version_citation_precision", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "version_citation_precision",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": ">=", "value": 1.0},
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
       "environmentId": "on-prem-reference",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
-      "blocksIssues": ["P0-06", "P0-10"]
+      "evidence": "bench/markhand_web/retrieval/summary.json",
+      "blocksIssues": [
+        "P0-06",
+        "P0-10"
+      ]
     },
     {
       "id": "G0-RET-VERSION-CITATION-RECALL",
       "externalGate": "G0-RET",
-      "metric": {"name": "version_citation_recall", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "version_citation_recall",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": ">=", "value": 1.0},
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
       "environmentId": "on-prem-reference",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
-      "blocksIssues": ["P0-06", "P0-10"]
+      "evidence": "bench/markhand_web/retrieval/summary.json",
+      "blocksIssues": [
+        "P0-06",
+        "P0-10"
+      ]
     },
     {
       "id": "G0-SEC-UPLOAD-DENIAL",
       "externalGate": "G0-SEC",
-      "metric": {"name": "blocked_attack_fixtures", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "blocked_attack_fixtures",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "workloads.ingest",
       "corpus": "adversarial/manifest.json",
-      "threshold": {"operator": ">=", "value": 1.0},
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
       "command": "python3 bench/markhand_web/scripts/run_upload_security.py",
       "environmentId": "on-prem-reference",
       "owner": "security-owner",
@@ -147,15 +231,24 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-09"]
+      "blocksIssues": [
+        "P0-09"
+      ]
     },
     {
       "id": "G0-CAP-INGEST-THROUGHPUT",
       "externalGate": "G0-CAP",
-      "metric": {"name": "ingest_documents_per_hour", "unit": "count_per_hour", "statistic": "min"},
+      "metric": {
+        "name": "ingest_documents_per_hour",
+        "unit": "count_per_hour",
+        "statistic": "min"
+      },
       "workload": "loads.peak",
       "corpus": "golden/manifest.json",
-      "threshold": {"operator": ">=", "value": 1200},
+      "threshold": {
+        "operator": ">=",
+        "value": 1200
+      },
       "command": "bash bench/markhand_web/scripts/run_ingest_capacity.sh",
       "environmentId": "on-prem-reference",
       "owner": "worker-owner",
@@ -163,15 +256,24 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-08"]
+      "blocksIssues": [
+        "P0-08"
+      ]
     },
     {
       "id": "G0-SLO-QUERY-P95",
       "externalGate": "G0-SLO",
-      "metric": {"name": "query_latency", "unit": "milliseconds", "statistic": "p95"},
+      "metric": {
+        "name": "query_latency",
+        "unit": "milliseconds",
+        "statistic": "p95"
+      },
       "workload": "loads.normal",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": "<=", "value": 500},
+      "threshold": {
+        "operator": "<=",
+        "value": 500
+      },
       "command": "python3 bench/markhand_web/scripts/run_query_load.py",
       "environmentId": "on-prem-reference",
       "owner": "operations-owner",
@@ -179,15 +281,24 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-10"]
+      "blocksIssues": [
+        "P0-10"
+      ]
     },
     {
       "id": "G0-SLO-QUERY-P99",
       "externalGate": "G0-SLO",
-      "metric": {"name": "filtered_query_latency", "unit": "milliseconds", "statistic": "p99"},
+      "metric": {
+        "name": "filtered_query_latency",
+        "unit": "milliseconds",
+        "statistic": "p99"
+      },
       "workload": "loads.peak",
       "corpus": "golden/queries.tsv",
-      "threshold": {"operator": "<=", "value": 1000},
+      "threshold": {
+        "operator": "<=",
+        "value": 1000
+      },
       "command": "python3 bench/markhand_web/scripts/run_query_load.py",
       "environmentId": "on-prem-reference",
       "owner": "operations-owner",
@@ -195,15 +306,25 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-07", "P0-10"]
+      "blocksIssues": [
+        "P0-07",
+        "P0-10"
+      ]
     },
     {
       "id": "G0-DR-RPO",
       "externalGate": "G0-SLO",
-      "metric": {"name": "recovery_point", "unit": "minutes", "statistic": "max"},
+      "metric": {
+        "name": "recovery_point",
+        "unit": "minutes",
+        "statistic": "max"
+      },
       "workload": "workloads.recovery",
       "corpus": null,
-      "threshold": {"operator": "<=", "value": 15},
+      "threshold": {
+        "operator": "<=",
+        "value": 15
+      },
       "command": "python3 bench/markhand_web/scripts/run_restore_drill.py",
       "environmentId": "on-prem-reference",
       "owner": "operations-owner",
@@ -211,15 +332,24 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-10"]
+      "blocksIssues": [
+        "P0-10"
+      ]
     },
     {
       "id": "G0-DR-QUERY-READY-RTO",
       "externalGate": "G0-SLO",
-      "metric": {"name": "query_ready_recovery_time", "unit": "minutes", "statistic": "max"},
+      "metric": {
+        "name": "query_ready_recovery_time",
+        "unit": "minutes",
+        "statistic": "max"
+      },
       "workload": "workloads.recovery",
       "corpus": null,
-      "threshold": {"operator": "<=", "value": 60},
+      "threshold": {
+        "operator": "<=",
+        "value": 60
+      },
       "command": "python3 bench/markhand_web/scripts/run_restore_drill.py",
       "environmentId": "on-prem-reference",
       "owner": "operations-owner",
@@ -227,15 +357,24 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-10"]
+      "blocksIssues": [
+        "P0-10"
+      ]
     },
     {
       "id": "G0-DR-FULL-VECTOR-RTO",
       "externalGate": "G0-SLO",
-      "metric": {"name": "full_vector_recovery_time", "unit": "minutes", "statistic": "max"},
+      "metric": {
+        "name": "full_vector_recovery_time",
+        "unit": "minutes",
+        "statistic": "max"
+      },
       "workload": "workloads.recovery",
       "corpus": null,
-      "threshold": {"operator": "<=", "value": 240},
+      "threshold": {
+        "operator": "<=",
+        "value": 240
+      },
       "command": "python3 bench/markhand_web/scripts/run_restore_drill.py",
       "environmentId": "on-prem-reference",
       "owner": "operations-owner",
@@ -243,15 +382,24 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-10"]
+      "blocksIssues": [
+        "P0-10"
+      ]
     },
     {
       "id": "G0-LIC-INVENTORY",
       "externalGate": "G0-LIC",
-      "metric": {"name": "approved_runtime_licenses", "unit": "ratio", "statistic": "min"},
+      "metric": {
+        "name": "approved_runtime_licenses",
+        "unit": "ratio",
+        "statistic": "min"
+      },
       "workload": "workloads.ingest",
       "corpus": null,
-      "threshold": {"operator": "==", "value": 1.0},
+      "threshold": {
+        "operator": "==",
+        "value": 1.0
+      },
       "command": "python3 scripts/check-runtime-license-inventory.py",
       "environmentId": "on-prem-reference",
       "owner": "release-owner",
@@ -259,7 +407,9 @@
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-10"]
+      "blocksIssues": [
+        "P0-10"
+      ]
     }
   ]
 }
