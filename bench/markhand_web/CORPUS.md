@@ -21,4 +21,6 @@ The generator requires the exact package and DejaVu font fingerprints in
 `generator-environment.lock.json`. Query adjudication is content-bound through the
 `review-sample.tsv` SHA-256; changing the sample invalidates approval.
 
-Expected chunk IDs are intentionally absent until P0-06 fixes chunking version.
+Chunk catalog for `heading-chunks-2000-v1` is pinned in
+`retrieval/expected-chunks.tsv` (P0-06). Query citation `chunkId` fields remain
+null until a follow-up wires spans → chunk IDs into the golden TSV.

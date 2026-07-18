@@ -23,6 +23,7 @@ native, security/egress và migration strategy.
 | [0003](0003-cross-document-conflict-lifecycle.md) | Proposed | Cross-document claim/conflict lifecycle |
 | [0004](0004-interim-glm-cloud-embedding.md) | Accepted | Interim GLM cloud embedding; target on-prem vLLM |
 | [0005](0005-vietnamese-embedding-model-quality.md) | Proposed | Local dense quality candidates for P0-05 |
+| [0006](0006-index-signature.md) | Proposed | Canonical index signature and chunk identity (P0-06) |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.

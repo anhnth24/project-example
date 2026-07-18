@@ -279,7 +279,12 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         if anchor.get("contentSha256") != item.get("markdownSha256"):
             anchor_errors.append(f"{label}: citation hash mismatch")
         if anchor.get("chunkId") is not None:
-            anchor_errors.append(f"{label}: chunkId must remain null before P0-06")
+            # Allowed once P0-06 expected-chunks exists; must be a 64-hex digest.
+            chunk_id = anchor.get("chunkId")
+            if not (isinstance(chunk_id, str) and SHA256.match(chunk_id)):
+                anchor_errors.append(
+                    f"{label}: chunkId must be null or a 64-hex canonical digest"
+                )
         expected_page = 1 if item["format"].startswith("pdf") else None
         if anchor.get("page") != expected_page:
             anchor_errors.append(f"{label}: citation page mismatch")
@@ -485,7 +490,11 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     if anchor.get("contentSha256") != cited_item.get("markdownSha256"):
                         errors.append(f"query {query_id}: citation content hash mismatch")
                     if anchor.get("chunkId") is not None:
-                        errors.append(f"query {query_id}: chunkId must remain null before P0-06")
+                        chunk_id = anchor.get("chunkId")
+                        if not (isinstance(chunk_id, str) and SHA256.match(chunk_id)):
+                            errors.append(
+                                f"query {query_id}: chunkId must be null or a 64-hex digest"
+                            )
                     markdown_bytes = safe_path(
                         golden, cited_item["markdownPath"]
                     ).read_bytes()
@@ -1262,7 +1271,9 @@ class CorpusValidatorTests(unittest.TestCase):
             self.assertTrue(any("citation isCurrent mismatch" in error for error in errors))
             self.assertTrue(any("citation ID mismatch" in error for error in errors))
             self.assertTrue(any("citation hash mismatch" in error for error in errors))
-            self.assertTrue(any("chunkId must remain null" in error for error in errors))
+            self.assertTrue(
+                any("chunkId must be null or a 64-hex" in error for error in errors)
+            )
             self.assertTrue(any("citation page mismatch" in error for error in errors))
             self.assertTrue(any("citation quote mismatch" in error for error in errors))
             self.assertTrue(any("citation document missing" in error for error in errors))

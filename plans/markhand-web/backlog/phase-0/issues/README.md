@@ -129,7 +129,9 @@ P1A-01 ──────────> P0-03
 
 ## P0-06 — Chunking, hybrid tuning và index signature
 
-- **Status:** Blocked bởi P0-03, P0-05.
+- **Status:** In progress — P0-03 done; P0-05 interim merged. First slice:
+  identity schema v2 + expected-chunks + retrieval scaffold (local-hash).
+  Still open: neural hybrid tune, fill `chunkId` into gold, temporal/conflict gates.
 - **Objective:** Chốt chunking/hybrid parameters và canonical signature.
 - **Plan:** So chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited
   signature gồm model/revision/dim/normalize/chunk/text-normalization version;

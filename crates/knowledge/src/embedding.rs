@@ -3,15 +3,22 @@ use std::hash::{Hash, Hasher};
 use sha2::{Digest, Sha256};
 use siphasher::sip::SipHasher13;
 
-use crate::identity::IndexSignature;
+use crate::identity::{
+    IndexSignature, BODY_TEXT_VERSION, DEFAULT_CHUNKING_VERSION, QUERY_NORMALIZATION_VERSION,
+    RUNTIME_GLM_CLOUD_INTERIM, RUNTIME_LOCAL_HASH, RUNTIME_PROVIDER_CLOUD, RUNTIME_VLLM_LOCAL,
+};
 use crate::query::PreparedQuery;
 use crate::{KnowledgeError, Result};
 
 pub const LOCAL_VECTOR_DIMENSIONS: usize = 256;
 pub const LOCAL_EMBEDDING_MODE: &str = "local_hash_v1";
 pub const PROVIDER_EMBEDDING_MODE: &str = "provider_v1";
-pub const DEFAULT_CHUNKING_VERSION: &str = "heading-chunks-2000-v1";
-pub const QUERY_NORMALIZATION_VERSION: &str = "accent-fold-v1";
+// Re-export pinned versions for callers that historically imported them here.
+pub use crate::identity::{
+    BODY_TEXT_VERSION as EMBEDDING_BODY_TEXT_VERSION,
+    DEFAULT_CHUNKING_VERSION as EMBEDDING_CHUNKING_VERSION,
+    QUERY_NORMALIZATION_VERSION as EMBEDDING_QUERY_NORMALIZATION_VERSION,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingVector {
@@ -196,18 +203,34 @@ impl EmbeddingPlan {
         self.signature_with_dimensions(self.expected_dimensions.unwrap_or(0))
     }
 
+    fn runtime_path(&self) -> &'static str {
+        if self.mode == LOCAL_EMBEDDING_MODE {
+            return RUNTIME_LOCAL_HASH;
+        }
+        let provider = self.provider.to_ascii_lowercase();
+        if provider.contains("glm") || provider.contains("zhipu") {
+            RUNTIME_GLM_CLOUD_INTERIM
+        } else if provider.contains("vllm") {
+            RUNTIME_VLLM_LOCAL
+        } else {
+            RUNTIME_PROVIDER_CLOUD
+        }
+    }
+
     fn signature_with_dimensions(&self, dimensions: usize) -> String {
         let family = format!(
             "{}/{}/{}",
             self.provider, self.model, self.deployment.digest
         );
         IndexSignature {
+            runtime_path: self.runtime_path(),
             embedding_family: &family,
             embedding_revision: &self.revision,
             dimensions,
             normalized: self.normalized,
             chunking_version: DEFAULT_CHUNKING_VERSION,
-            text_version: QUERY_NORMALIZATION_VERSION,
+            body_text_version: BODY_TEXT_VERSION,
+            query_normalization_version: QUERY_NORMALIZATION_VERSION,
         }
         .digest()
     }

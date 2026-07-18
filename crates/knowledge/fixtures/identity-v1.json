@@ -1,24 +1,27 @@
 {
-  "version": 1,
+  "version": 2,
   "document": {
     "sourceRel": "pháp-luật/tài-liệu.pdf",
     "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "identity": "1c151dd7d6d8945f0316d6f772bea4893fd4126dea377434c96c7cf258344c10"
+    "identity": "5698378011e28aaf25f784a0593806d4d234e7447535b70ecfb51955a439d757"
   },
   "chunk": {
+    "versionId": "version-gold-001-v1",
     "ordinal": 7,
     "headingPath": "Chương I > Điều 2",
     "body": "Nội dung tiếng Việt",
-    "textVersion": "nfc-v1",
-    "identity": "53461f68e90a7dba6f36a0ff523519739ff5beac01a7503a0d7ba9ac40cee88f"
+    "bodyTextVersion": "nfc-v1",
+    "identity": "f80f2b912fb8abdeb1780abd07ebee297765ede476972e9bcf1fae7792745a1b"
   },
   "index": {
+    "runtimePath": "local-hash",
     "embeddingFamily": "embedding-family",
     "embeddingRevision": "revision-1",
     "dimensions": 1024,
     "normalized": true,
-    "chunkingVersion": "heading-v1",
-    "textVersion": "nfc-v1",
-    "signature": "54e805534b95787c376466a3d806665b9b3cacd852b39ddb38acf70b345e16e8"
+    "chunkingVersion": "heading-chunks-2000-v1",
+    "bodyTextVersion": "nfc-v1",
+    "queryNormalizationVersion": "accent-fold-v1",
+    "signature": "5f43b9c0a0ec9ad068c9a55b6a774c97ea3bd781949a261f89f522944b029efe"
   }
 }
