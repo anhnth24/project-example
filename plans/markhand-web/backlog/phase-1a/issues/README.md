@@ -78,7 +78,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-05 — Query, local vectors và embedding plan
 
-- **Status:** Review — triển khai và kiểm thử hoàn tất trong PR #190; chờ merge.
+- **Status:** Done — merged to `master` after local parity and security gates passed.
 - **Objective:** Tách pure query/embedding preparation.
 - **Plan:** Normalization, feature hash/vector norm, provider plan, dimension check,
   FTS escape; HTTP client vẫn ở core; giữ local fallback semantics.
@@ -92,7 +92,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-06 — Rank, citation và grounded answer
 
-- **Status:** Blocked bởi P1A-03/05.
+- **Status:** In progress — extracting rank, citation, snippet and grounding logic.
 - **Objective:** Reusable hybrid merge, anchors và grounding.
 - **Plan:** Cosine/RRF/rerank/sort; snippet/page-slide-sheet anchor; extractive answer;
   citation validator; separate LLM calls.
