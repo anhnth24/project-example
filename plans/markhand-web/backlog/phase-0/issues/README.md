@@ -20,7 +20,7 @@ P1A-01 ──────────> P0-03
 
 ## P0-01 — Khóa workload, hardware và gate registry
 
-- **Status:** In progress — registry/schema đã triển khai; chờ phê duyệt workload và hardware.
+- **Status:** Review — Profile B, supplemental targets and fail-closed validators passed.
 - **Objective:** Thay giả định scale/SLA bằng workload envelope, hardware profile và
   gate schema được duyệt.
 - **Plan:** Ghi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/
