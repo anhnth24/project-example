@@ -1,10 +1,10 @@
 # ADR 0006: Canonical index signature and chunk identity (P0-06)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-18
 - Owners: retrieval-owner, architecture-owner
 - Approver: Phase 0 architecture gate
-- Related issues/PRs: P0-06; ADR 0002, 0004, 0005
+- Related issues/PRs: P0-06; ADR 0002, 0004, 0005; PR #209
 
 ## Context
 

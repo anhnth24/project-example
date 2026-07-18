@@ -1360,6 +1360,39 @@ def write_queries(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def _null_chunk_ids(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: (None if key == "chunkId" else _null_chunk_ids(child))
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_null_chunk_ids(item) for item in value]
+    return value
+
+
+def _semantic_review_bytes(rows: list[dict], fieldnames: list[str]) -> bytes:
+    """Canonical review packet with citation chunkIds nulled (adjudication pin)."""
+    lines = ["\t".join(fieldnames)]
+    for row in rows:
+        values = []
+        for name in fieldnames:
+            value = row.get(name, "")
+            if name in {"citations", "version_context", "conflict_context", "judgments"}:
+                parsed = json.loads(value) if value else (
+                    [] if name == "citations" else {}
+                )
+                value = json.dumps(
+                    _null_chunk_ids(parsed),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            values.append(value)
+        lines.append("\t".join(values))
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def write_review_packet(golden: Path, rows: list[dict], existing: dict | None = None) -> None:
     sample: list[dict] = []
     selected: set[str] = set()
@@ -1403,18 +1436,36 @@ def write_review_packet(golden: Path, rows: list[dict], existing: dict | None = 
     write_queries(sample_path, sample)
     sample_sha256 = hashlib.sha256(sample_path.read_bytes()).hexdigest()
     sample_ids = [row["query_id"] for row in sample]
+    # Use on-disk column order from write_queries so the pin matches fill/validate.
+    with sample_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        fieldnames = list(reader.fieldnames or [])
+        written_rows = list(reader)
+    semantic_sha256 = hashlib.sha256(
+        _semantic_review_bytes(written_rows, fieldnames)
+    ).hexdigest()
+    # Preserve approved adjudication when the full packet hash matches, or when
+    # only mechanical chunkId annotation differs (sampleSemanticSha256 pin).
     if (
         existing
         and existing.get("sampleQueryIds") == sample_ids
-        and existing.get("sampleSha256") == sample_sha256
+        and (
+            existing.get("sampleSha256") == sample_sha256
+            or existing.get("sampleSemanticSha256") == semantic_sha256
+        )
     ):
-        adjudication = existing
+        adjudication = dict(existing)
+        adjudication["sampleSha256"] = sample_sha256
+        adjudication["sampleSemanticSha256"] = (
+            existing.get("sampleSemanticSha256") or semantic_sha256
+        )
     else:
         adjudication = {
             "version": 1,
             "status": "pending",
             "sampleQueryIds": sample_ids,
             "sampleSha256": sample_sha256,
+            "sampleSemanticSha256": semantic_sha256,
             "requiredRoles": ["domain-reviewer", "retrieval-reviewer"],
             "reviews": [],
         }

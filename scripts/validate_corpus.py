@@ -1185,36 +1185,95 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
     return errors
 
 
+def _rewrite_manifest_lock(corpus: Path) -> None:
+    golden = corpus / "golden"
+    adversarial = corpus / "adversarial"
+    managed = sorted([*golden.rglob("*"), *adversarial.rglob("*")])
+    lock_entries = [
+        {
+            "path": path.relative_to(corpus).as_posix(),
+            **checksum(path),
+        }
+        for path in managed
+        if path.is_file()
+    ]
+    (corpus / "manifest.lock.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "generator": (
+                    "python3 bench/markhand_web/scripts/generate_corpus.py + "
+                    "generate_expected_chunks.py + fill_citation_chunk_ids.py"
+                ),
+                "files": lock_entries,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def reproducibility_errors(root: Path) -> list[str]:
+    """Full canonical pipeline: generate → expected-chunks → fill chunkIds → lock."""
+    scripts = root / "scripts"
     with tempfile.TemporaryDirectory() as temporary:
         output = Path(temporary) / "markhand_web"
-        command = [
-            sys.executable,
-            str(root / "scripts/generate_corpus.py"),
-            "--output",
-            str(output),
+        # Seed adjudication so generate can preserve approval via sampleSemanticSha256.
+        (output / "golden").mkdir(parents=True)
+        seed = root / "golden" / "adjudication.json"
+        if seed.is_file():
+            shutil.copy2(seed, output / "golden" / "adjudication.json")
+        steps = [
+            [
+                sys.executable,
+                str(scripts / "generate_corpus.py"),
+                "--output",
+                str(output),
+            ],
+            [
+                sys.executable,
+                str(scripts / "generate_expected_chunks.py"),
+                "--corpus",
+                str(output),
+            ],
+            [
+                sys.executable,
+                str(scripts / "fill_citation_chunk_ids.py"),
+                "--corpus",
+                str(output),
+            ],
         ]
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
-        if completed.returncode != 0:
-            return [f"reproducibility generator failed: {completed.stderr}"]
+        for command in steps:
+            completed = subprocess.run(
+                command, capture_output=True, text=True, check=False
+            )
+            if completed.returncode != 0:
+                label = Path(command[1]).name
+                detail = (completed.stderr or completed.stdout or "").strip()
+                return [f"reproducibility {label} failed: {detail}"]
+        _rewrite_manifest_lock(output)
         expected = load_json(root / "manifest.lock.json")
         actual = load_json(output / "manifest.lock.json")
-        excluded = {"golden/adjudication.json"}
+        # Adjudication may include mechanicalAnnotations timestamps; compare via
+        # semantic pin in validate_adjudication. Lock still includes the file.
         expected_files = {
-            item["path"]: item
-            for item in expected.get("files", [])
-            if item.get("path") not in excluded
+            item["path"]: item for item in expected.get("files", [])
         }
         actual_files = {
-            item["path"]: item
-            for item in actual.get("files", [])
-            if item.get("path") not in excluded
+            item["path"]: item for item in actual.get("files", [])
         }
-        return (
-            []
-            if expected_files == actual_files
-            else ["reproducibility lock differs after regeneration"]
+        if expected_files == actual_files:
+            return []
+        drifted = sorted(
+            path
+            for path in set(expected_files) | set(actual_files)
+            if expected_files.get(path) != actual_files.get(path)
         )
+        return [
+            "reproducibility lock differs after regeneration: "
+            + ", ".join(drifted[:12])
+        ]
 
 
 class CorpusValidatorTests(unittest.TestCase):

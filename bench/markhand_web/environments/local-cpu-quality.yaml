@@ -18,9 +18,9 @@
     "iopsNote": "cloud-runner disk; not Profile B IOPS evidence"
   },
   "gpu": {
-    "model": "cpu-sentence-transformers-placeholder",
-    "vramGb": 1,
-    "count": 1
+    "model": "none",
+    "vramGb": 0,
+    "count": 0
   },
   "network": {
     "bandwidthGbps": 1,
@@ -39,5 +39,5 @@
     "fixtureManifestSha256",
     "hardware"
   ],
-  "notes": "CPU-only quality track for P0-05/P0-06 neural embedding and hybrid retrieval (sentence-transformers / AITeamVN). gpu.* is a schema placeholder for the neural runtime, not a physical accelerator. Not Profile B capacity evidence and not glm-cloud-interim API evidence."
+  "notes": "CPU-only quality track for P0-05/P0-06 neural embedding and hybrid retrieval (sentence-transformers / AITeamVN). gpu.count=0 matches measured hardware (no accelerator). Not Profile B capacity evidence and not glm-cloud-interim API evidence."
 }

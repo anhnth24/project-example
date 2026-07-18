@@ -130,8 +130,11 @@ P1A-01 ──────────> P0-03
 ## P0-06 — Chunking, hybrid tuning và index signature
 
 - **Status:** Done — identity schema v2 + expected-chunks + golden `chunkId` fill;
-  neural hybrid (AITeamVN CPU) with light RRF tune; temporal/change/version-citation
-  and numeric conflict gates evaluated by deterministic offline rules.
+  neural hybrid (AITeamVN CPU / `local-neural`) on `local-cpu-quality`; frozen RRF
+  `VECTOR_WEIGHT=0.55`; version-citation P/R scored as top-k `(doc,version,chunkId)`;
+  temporal/change/conflict gates via deterministic offline rules. Closes on P0-05
+  CPU quality evidence (ADR 0005 may remain Proposed until product model acceptance);
+  does not require Profile B / vLLM cutover.
 - **Objective:** Chốt chunking/hybrid parameters và canonical signature.
 - **Plan:** So chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited
   signature gồm model/revision/dim/normalize/chunk/text-normalization version;

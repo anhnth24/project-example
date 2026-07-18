@@ -15,12 +15,23 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-CORPUS = ROOT / "bench/markhand_web"
+DEFAULT_CORPUS = ROOT / "bench/markhand_web"
+CORPUS = DEFAULT_CORPUS
 EXPECTED = CORPUS / "retrieval/expected-chunks.tsv"
 QUERIES = CORPUS / "golden/queries.tsv"
 CONFLICTS = CORPUS / "golden/conflicts.json"
 REVIEW = CORPUS / "golden/review-sample.tsv"
 ADJUDICATION = CORPUS / "golden/adjudication.json"
+
+
+def configure_corpus(corpus: Path) -> None:
+    global CORPUS, EXPECTED, QUERIES, CONFLICTS, REVIEW, ADJUDICATION
+    CORPUS = corpus.resolve()
+    EXPECTED = CORPUS / "retrieval/expected-chunks.tsv"
+    QUERIES = CORPUS / "golden/queries.tsv"
+    CONFLICTS = CORPUS / "golden/conflicts.json"
+    REVIEW = CORPUS / "golden/review-sample.tsv"
+    ADJUDICATION = CORPUS / "golden/adjudication.json"
 
 
 def load_catalog() -> dict[str, list[dict]]:
@@ -232,7 +243,14 @@ def refresh_review_and_adjudication(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=DEFAULT_CORPUS,
+        help="Corpus root (default: bench/markhand_web)",
+    )
     args = parser.parse_args()
+    configure_corpus(args.corpus)
     catalog = load_catalog()
 
     if args.check:

@@ -34,6 +34,9 @@ RRF_RERANK_SCALE = 30.0
 VECTOR_WEIGHT = 0.55
 BODY_OVERLAP_WEIGHT = 0.35
 HEADING_HIT_WEIGHT = 0.1
+# Version-citation evidence window (chunk-level top-k, not full corpus scan).
+CITATION_TOP_K = 10
+ENV_PATH = CORPUS / "environments/local-cpu-quality.yaml"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from knowledge_identity import (  # noqa: E402
@@ -179,8 +182,14 @@ def load_queries() -> list[dict]:
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
-def embed_neural(chunks: list[dict], queries: list[dict]) -> tuple[dict, str, int]:
-    """Embed with pinned AITeamVN model (CPU). Returns vectors + runtime metadata."""
+def embed_neural(
+    chunks: list[dict], queries: list[dict]
+) -> tuple[dict, str, int, str, str]:
+    """Embed with pinned AITeamVN model (CPU).
+
+    Returns query vectors, display runtime, dimensions, embedding family, and
+    full catalog revision (signature input — not truncated).
+    """
     try:
         import yaml
         from sentence_transformers import SentenceTransformer
@@ -195,9 +204,10 @@ def embed_neural(chunks: list[dict], queries: list[dict]) -> tuple[dict, str, in
         for model in catalog["models"]
         if model["id"] == "aiteamvn-vietnamese-embedding"
     )
+    revision = str(model_cfg["revision"])
     model = SentenceTransformer(
         model_cfg["hubId"],
-        revision=model_cfg["revision"],
+        revision=revision,
         device="cpu",
     )
     chunk_texts = [chunk["payload"] for chunk in chunks]
@@ -220,11 +230,9 @@ def embed_neural(chunks: list[dict], queries: list[dict]) -> tuple[dict, str, in
         query["query_id"]: [float(value) for value in vector]
         for query, vector in zip(queries, query_vecs)
     }
-    runtime = (
-        f"sentence-transformers:{model_cfg['hubId']}@"
-        f"{model_cfg['revision'][:12]}"
-    )
-    return query_vectors, runtime, int(model_cfg["dimensions"])
+    runtime = f"sentence-transformers:{model_cfg['hubId']}@{revision[:12]}"
+    family = f"sentence-transformers/{model_cfg['hubId']}/local-cpu"
+    return query_vectors, runtime, int(model_cfg["dimensions"]), family, revision
 
 
 def discounted_gain(grades: list[int]) -> float:
@@ -396,12 +404,13 @@ def predict_version_citations_for_logicals(
     logical_ids: set[str],
     versions: dict,
     grouped: dict,
-) -> set[tuple[str, str]]:
-    """Emit (documentId, versionId) from mode resolver for logical docs (no gold cites)."""
+    top_chunks: list[dict],
+) -> set[tuple[str, str, str]]:
+    """Emit (documentId, versionId, chunkId) from resolver ∩ top-k retrieval chunks."""
     mode = query.get("version_mode") or "current"
     as_of = query.get("as_of") or None
     query_time = query.get("query_time") or ""
-    predicted: set[tuple[str, str]] = set()
+    predicted_versions: set[tuple[str, str]] = set()
     for logical_id in logical_ids:
         for version_id in predict_version_ids(
             mode=mode,
@@ -412,7 +421,12 @@ def predict_version_citations_for_logicals(
         ):
             version = versions.get(version_id)
             if version is not None:
-                predicted.add((version.document_id, version.version_id))
+                predicted_versions.add((version.document_id, version.version_id))
+    predicted: set[tuple[str, str, str]] = set()
+    for chunk in top_chunks:
+        key = (chunk["docId"], chunk["versionId"])
+        if key in predicted_versions:
+            predicted.add((chunk["docId"], chunk["versionId"], chunk["chunkId"]))
     return predicted
 
 
@@ -449,15 +463,15 @@ def version_and_conflict_metrics(
         version_context = json.loads(query.get("version_context") or "{}")
         expected_versions = list(version_context.get("citedVersionIds") or [])
         q_vec = query_vectors[query["query_id"]]
-        ranked_docs = aggregate_docs(
-            score_chunks_hybrid(
-                query["query"],
-                q_vec,
-                chunks,
-                vector_weight=vector_weight,
-                fts_conn=fts_conn,
-            )
+        scored = score_chunks_hybrid(
+            query["query"],
+            q_vec,
+            chunks,
+            vector_weight=vector_weight,
+            fts_conn=fts_conn,
         )
+        top_chunks = [chunk for _, chunk in scored[:CITATION_TOP_K]]
+        ranked_docs = aggregate_docs([(1.0, chunk) for chunk in top_chunks])
         by_doc = {record.document_id: record for record in versions.values()}
         conflict_context = json.loads(query.get("conflict_context") or "{}")
         # Authorization scope is a request input.
@@ -486,7 +500,7 @@ def version_and_conflict_metrics(
         ) or mode in {"as_of", "compare", "history"}
         if version_aware:
             if authorized:
-                # One best hit per authorized logical across the full ranking.
+                # Authorized logicals that appear in the citation top-k window.
                 cite_logicals = {
                     logical
                     for logical in authorized
@@ -503,18 +517,21 @@ def version_and_conflict_metrics(
                     )
                 )
             ):
-                predicted_cites: set[tuple[str, str]] = set()
+                predicted_cites: set[tuple[str, str, str]] = set()
             else:
                 predicted_cites = predict_version_citations_for_logicals(
                     query=query,
                     logical_ids=cite_logicals,
                     versions=versions,
                     grouped=grouped,
+                    top_chunks=top_chunks,
                 )
             gold_cites = {
-                (cite["documentId"], cite["versionId"])
+                (cite["documentId"], cite["versionId"], cite["chunkId"])
                 for cite in cites
-                if cite.get("documentId") and cite.get("versionId")
+                if cite.get("documentId")
+                and cite.get("versionId")
+                and cite.get("chunkId")
             }
             # Always score version-aware rows, including empty hidden citations.
             citation_tp += len(predicted_cites & gold_cites)
@@ -721,7 +738,48 @@ def tune_vector_weight(
     return VECTOR_WEIGHT, False
 
 
-def gate_result(metric: float | None, gate: dict | None, *, evaluated: bool) -> dict:
+def load_measured_environment() -> dict:
+    try:
+        import yaml
+    except ImportError as error:  # pragma: no cover
+        raise SystemExit("PyYAML required to load environment profile") from error
+    if not ENV_PATH.is_file():
+        raise SystemExit(f"missing environment profile: {ENV_PATH}")
+    payload = yaml.safe_load(ENV_PATH.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SystemExit(f"invalid environment profile: {ENV_PATH}")
+    return payload
+
+
+def environment_hardware_match(env: dict, hardware: dict) -> bool:
+    """Fail-closed: registered env must describe measured CPU-only hardware."""
+    if env.get("environmentId") != MEASURED_ENVIRONMENT_ID:
+        return False
+    gpu = env.get("gpu") or {}
+    cpu = env.get("cpu") or {}
+    try:
+        env_gpu_count = int(gpu.get("count"))
+        env_threads = int(cpu.get("threads"))
+        env_ram = float(env.get("ramGb"))
+    except (TypeError, ValueError):
+        return False
+    if env_gpu_count != int(hardware.get("gpuCount", -1)):
+        return False
+    if env_threads != int(hardware.get("cpuThreads", -1)):
+        return False
+    # Allow small RAM reporting drift between /proc and profile rounding.
+    if abs(env_ram - float(hardware.get("ramGb", -1))) > 1.5:
+        return False
+    return True
+
+
+def gate_result(
+    metric: float | None,
+    gate: dict | None,
+    *,
+    evaluated: bool,
+    hardware_ok: bool,
+) -> dict:
     if not evaluated or gate is None or metric is None:
         return {
             "metric": metric,
@@ -742,7 +800,7 @@ def gate_result(metric: float | None, gate: dict | None, *, evaluated: bool) -> 
     else:
         passed = False
     registered = gate.get("environmentId")
-    env_ok = registered == MEASURED_ENVIRONMENT_ID
+    env_ok = registered == MEASURED_ENVIRONMENT_ID and hardware_ok
     return {
         "metric": metric,
         "threshold": value,
@@ -752,6 +810,7 @@ def gate_result(metric: float | None, gate: dict | None, *, evaluated: bool) -> 
         "environmentId": registered,
         "measuredEnvironmentId": MEASURED_ENVIRONMENT_ID,
         "environmentMatch": env_ok,
+        "hardwareMatch": hardware_ok,
     }
 
 
@@ -839,9 +898,17 @@ def main() -> int:
         runtime = "synthetic-sha256-smoke"
         dimensions = 256
         runtime_path = RUNTIME_LOCAL_HASH
+        embedding_family = "synthetic/sha256/local-cpu"
+        embedding_revision = "smoke"
         neural = False
     else:
-        query_vectors, runtime, dimensions = embed_neural(chunks, queries)
+        (
+            query_vectors,
+            runtime,
+            dimensions,
+            embedding_family,
+            embedding_revision,
+        ) = embed_neural(chunks, queries)
         runtime_path = RUNTIME_LOCAL_NEURAL
         neural = True
 
@@ -853,6 +920,8 @@ def main() -> int:
     vector_weight = VECTOR_WEIGHT
     tuned = False
     hardware = hardware_fingerprint()
+    measured_env = load_measured_environment()
+    hardware_ok = environment_hardware_match(measured_env, hardware)
 
     legs = {"lexical": {}, "vector_neural": {}, "hybrid": {}}
     leg_rows: dict[str, list[dict]] = {name: [] for name in legs}
@@ -901,8 +970,8 @@ def main() -> int:
     )
     signature = index_signature(
         runtime_path=runtime_path,
-        embedding_family=f"provider/{runtime}/cpu",
-        embedding_revision="1",
+        embedding_family=embedding_family,
+        embedding_revision=embedding_revision,
         dimensions=dimensions,
         normalized=True,
     )
@@ -912,26 +981,31 @@ def main() -> int:
             leg_summaries["hybrid"]["recallAt5"],
             gate_defs.get("G0-RET-RECALL-AT-5"),
             evaluated=neural,
+            hardware_ok=hardware_ok,
         ),
         "G0-RET-TEMPORAL-ACCURACY": gate_result(
             correctness["temporalAnswerAccuracy"],
             gate_defs.get("G0-RET-TEMPORAL-ACCURACY"),
             evaluated=True,
+            hardware_ok=hardware_ok,
         ),
         "G0-RET-CHANGE-ACCURACY": gate_result(
             correctness["versionChangeAccuracy"],
             gate_defs.get("G0-RET-CHANGE-ACCURACY"),
             evaluated=True,
+            hardware_ok=hardware_ok,
         ),
         "G0-RET-VERSION-CITATION-PRECISION": gate_result(
             correctness["versionCitationPrecision"],
             gate_defs.get("G0-RET-VERSION-CITATION-PRECISION"),
             evaluated=True,
+            hardware_ok=hardware_ok,
         ),
         "G0-RET-VERSION-CITATION-RECALL": gate_result(
             correctness["versionCitationRecall"],
             gate_defs.get("G0-RET-VERSION-CITATION-RECALL"),
             evaluated=True,
+            hardware_ok=hardware_ok,
         ),
     }
     required_pass = all(
@@ -949,6 +1023,7 @@ def main() -> int:
         and conflict_pass
         and correctness["citationsWithChunkId"] == correctness["citations"]
         and neural
+        and hardware_ok
         and not status["dirty"]
     )
     reasons = []
@@ -957,6 +1032,10 @@ def main() -> int:
     else:
         if not neural:
             reasons.append("Neural embedding leg was skipped.")
+        if not hardware_ok:
+            reasons.append(
+                "Measured hardware does not match local-cpu-quality environment profile."
+            )
         if status["dirty"]:
             reasons.append(f"Git worktree dirty: {status['dirtyPaths'][:8]}")
         for gate_id, result in gates.items():
@@ -985,7 +1064,11 @@ def main() -> int:
         "indexSignature": signature,
         "runtimePath": runtime_path,
         "embeddingRuntime": runtime,
+        "embeddingFamily": embedding_family,
+        "embeddingRevision": embedding_revision,
+        "citationTopK": CITATION_TOP_K,
         "dimensions": dimensions,
+        "environmentHardwareMatch": hardware_ok,
         "rrf": {
             "k": RRF_K,
             "rerankScale": RRF_RERANK_SCALE,

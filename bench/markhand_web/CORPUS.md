@@ -14,16 +14,20 @@ Regenerate and validate:
 ```bash
 python3 -m pip install --user -r bench/markhand_web/requirements-corpus.txt
 python3 bench/markhand_web/scripts/generate_corpus.py
+python3 bench/markhand_web/scripts/generate_expected_chunks.py
+python3 bench/markhand_web/scripts/fill_citation_chunk_ids.py
 python3 scripts/validate_corpus.py --reproducible
 ```
 
+Canonical reproducibility (`--reproducible`) runs generate → expected-chunks →
+chunkId fill → lock rewrite in a temp tree and compares `manifest.lock.json`.
+
 The generator requires the exact package and DejaVu font fingerprints in
-`generator-environment.lock.json`. Query adjudication is content-bound through the
-`review-sample.tsv` SHA-256; changing the sample invalidates approval.
+`generator-environment.lock.json`. Query adjudication is content-bound through
+`sampleSemanticSha256` (chunkId-null review packet); mechanical `chunkId` fill may
+change `sampleSha256` without re-adjudication.
 
 Chunk catalog for `heading-chunks-2000-v1` is pinned in
 `retrieval/expected-chunks.tsv` (P0-06). Query and conflict citation `chunkId`
 fields are filled from that catalog via
-`bench/markhand_web/scripts/fill_citation_chunk_ids.py` (mechanical span→chunk
-annotation; adjudication keeps `sampleSemanticSha256` for the chunkId-null
-packet).
+`bench/markhand_web/scripts/fill_citation_chunk_ids.py`.
