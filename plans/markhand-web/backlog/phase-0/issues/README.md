@@ -38,7 +38,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-02 — Golden corpus tiếng Việt và adversarial corpus
 
-- **Status:** Blocked bởi P0-01.
+- **Status:** Review — corpus, dual adjudication, reproducibility and version-aware
+  citation gates passed; stacked on P0-01.
 - **Objective:** Dataset tái lập cho conversion, retrieval, citation và upload attack.
 - **Plan:** Thêm mọi format; 200–500 query với expected document/source span/
   relevance/no-answer; multi-document và immutable multi-version citations
