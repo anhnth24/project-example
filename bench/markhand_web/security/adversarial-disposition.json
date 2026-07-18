@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "manifest": "bench/markhand_web/adversarial/manifest.json",
+  "policy": "docs/markhand-web-upload-policy.md",
+  "attacks": {
+    "adv-spoof-pdf": {
+      "disposition": "reject",
+      "controls": [
+        "allowlist",
+        "magic-byte canonicalization",
+        "extension spoof denial"
+      ],
+      "reason": "Plain text bytes are not accepted as canonical PDF input."
+    },
+    "adv-html-pdf": {
+      "disposition": "reject",
+      "controls": [
+        "allowlist",
+        "MIME mismatch denial",
+        "HTML sanitizer boundary"
+      ],
+      "reason": "HTML content named as PDF is rejected before parser dispatch."
+    },
+    "adv-corrupt-pdf": {
+      "disposition": "reject",
+      "controls": [
+        "parser preflight",
+        "fail-closed parser errors",
+        "sandboxed native parser"
+      ],
+      "reason": "Corrupt PDF cannot pass PDF parser preflight."
+    },
+    "adv-prompt-html": {
+      "disposition": "quarantine",
+      "controls": [
+        "prompt-injection quarantine",
+        "untrusted passage framing",
+        "no tool or secret exposure"
+      ],
+      "reason": "Prompt injection content is preserved for review and not indexed."
+    },
+    "adv-formula-csv": {
+      "disposition": "quarantine",
+      "controls": [
+        "CSV formula detection",
+        "review-before-index",
+        "display/export escaping"
+      ],
+      "reason": "Formula-leading CSV cells require quarantine or escaping policy before use."
+    },
+    "adv-malformed-docx": {
+      "disposition": "reject",
+      "controls": [
+        "OOXML preflight",
+        "parser exception fail-closed",
+        "sandbox resource limits"
+      ],
+      "reason": "Malformed OOXML is rejected before trusted conversion output exists."
+    },
+    "adv-traversal-docx": {
+      "disposition": "reject",
+      "controls": [
+        "archive path traversal denial",
+        "server-generated output keys",
+        "no host path mounts"
+      ],
+      "reason": "Archive members with absolute paths or parent traversal are rejected."
+    },
+    "adv-zip-bomb": {
+      "disposition": "reject",
+      "controls": [
+        "archive entry limit",
+        "uncompressed byte limit",
+        "compression ratio limit"
+      ],
+      "reason": "Archive bomb violates pre-parser archive limits."
+    },
+    "adv-page-bomb": {
+      "disposition": "reject",
+      "controls": [
+        "PDF page limit",
+        "CPU limit",
+        "wall-clock timeout"
+      ],
+      "reason": "PDF page count exceeds policy and is denied before expensive conversion."
+    },
+    "adv-long-audio": {
+      "disposition": "quarantine",
+      "controls": [
+        "audio duration limit",
+        "quota reservation",
+        "review-before-index"
+      ],
+      "reason": "Excessive audio duration is preserved for review and not indexed."
+    }
+  }
+}

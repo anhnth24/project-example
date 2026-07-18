@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "pdfium-linux-x64",
+      "kind": "native-library",
+      "version": "pdfium-binaries linux-x64 local artifact",
+      "source": "bench/download_pdfium.sh -> bblanchon/pdfium-binaries",
+      "license": "Apache-2.0",
+      "artifactSha256": "61c9f745c6296a1050599a99a1ed985036411b591a11bd2a41bafe530ecb4f33",
+      "redistribution": "allowed",
+      "disposition": "approved",
+      "bundled": true,
+      "evidence": "docs/licenses/pdfium-runtime-evidence.md"
+    },
+    {
+      "id": "tesseract-ocr-system",
+      "kind": "native-library",
+      "version": "5.3.4-1build5",
+      "source": "Ubuntu tesseract-ocr package",
+      "license": "Apache-2.0",
+      "artifactSha256": "9f831cab7525c3dab04af41bda35182af7ea1df9dceeaaa2f3bf207ac45c06a5",
+      "redistribution": "allowed",
+      "disposition": "approved",
+      "bundled": false,
+      "evidence": "docs/licenses/tesseract-runtime-evidence.md"
+    },
+    {
+      "id": "ggml-whisper-tiny",
+      "kind": "model",
+      "version": "whisper.cpp ggml-tiny.bin local artifact",
+      "source": "bench/download_models.sh -> ggerganov/whisper.cpp",
+      "license": "MIT",
+      "artifactSha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+      "redistribution": "allowed",
+      "disposition": "approved",
+      "bundled": false,
+      "evidence": "docs/licenses/whisper-tiny-runtime-evidence.md"
+    },
+    {
+      "id": "aiteamvn-vietnamese-embedding",
+      "kind": "model",
+      "version": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+      "source": "Hugging Face AITeamVN/Vietnamese_Embedding",
+      "license": "Apache-2.0",
+      "artifactSha256": "4b5cafd7829a88484155b4a643ec654b3cf4d8c99ef10a649d8295e2a024f6c3",
+      "redistribution": "allowed",
+      "disposition": "approved",
+      "bundled": false,
+      "evidence": "docs/licenses/aiteamvn-vietnamese-embedding-evidence.md"
+    },
+    {
+      "id": "phowhisper-ggml",
+      "kind": "model",
+      "version": "ggml-PhoWhisper-small unresolved redistribution",
+      "source": "bench/download_models.sh -> dongxiat/ggml-PhoWhisper-small",
+      "license": "LicenseRef-Unresolved-Exclude",
+      "artifactSha256": "9a820da888b93d22ff8a850440667f9c4362894aaf99e857d8447651c7bc376b",
+      "redistribution": "forbidden",
+      "disposition": "excluded",
+      "bundled": false,
+      "evidence": "docs/licenses/phowhisper-excluded-evidence.md"
+    }
+  ]
+}
