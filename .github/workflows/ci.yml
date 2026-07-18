@@ -128,11 +128,17 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate and smoke-test local services
         run: |
+          trap 'make dev-down || true; make spike-down || true' EXIT
           docker compose -f deploy/dev/compose.yml config >/dev/null
           python3 scripts/validate_spike.py --config-only
           make dev-up
           make dev-health
           make dev-down
+          make spike-up
+          make spike-reset
+          make spike-health
+          make check-spike
+          make spike-down
 
   linux-bundle:
     needs: changes-and-static

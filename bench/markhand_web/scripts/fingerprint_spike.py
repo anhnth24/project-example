@@ -67,30 +67,63 @@ def hardware() -> dict:
             bandwidth = max(1.0, int(speed_path.read_text().strip()) / 1000)
         except ValueError:
             pass
+    physical_cores = {
+        (physical, core)
+        for physical, core in re.findall(
+            r"physical id\s*:\s*(\d+).*?core id\s*:\s*(\d+)",
+            cpuinfo,
+            re.DOTALL,
+        )
+    }
+    os_release = {}
+    release_path = Path("/etc/os-release")
+    if release_path.is_file():
+        for line in release_path.read_text().splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                os_release[key] = value.strip('"')
+    disk_type = "local-or-overlay"
+    if any(Path("/sys/block").glob("nvme*")):
+        disk_type = "nvme"
     return {
         "cpu": {
             "vendor": vendor.group(1).strip() if vendor else "unknown",
             "model": model.group(1).strip() if model else "unknown",
-            "cores": os.cpu_count() or 1,
+            "cores": len(physical_cores) or (os.cpu_count() or 1),
             "threads": os.cpu_count() or 1,
         },
         "ramGb": round(int(memory.group(1)) / 1024 / 1024, 2) if memory else 0.01,
         "disk": {
-            "type": "local-or-overlay",
+            "type": disk_type,
             "capacityGb": round(disk.total / 1024**3, 2),
             "iopsNote": "not measured by P0-04 smoke",
+            "iopsVerified": os.environ.get(
+                "MARKHAND_SPIKE_IOPS_VERIFIED", "0"
+            )
+            == "1",
         },
         "gpu": {"model": gpu_name, "vramGb": gpu_vram, "count": gpu_count},
         "network": {
             "bandwidthGbps": bandwidth,
             "latencyMsAssumed": 1,
         },
-        "os": {"distro": platform.platform(), "arch": platform.machine()},
+        "os": {
+            "distro": (
+                f"{os_release.get('ID', platform.system())}-"
+                f"{os_release.get('VERSION_ID', platform.release())}"
+            ),
+            "arch": platform.machine(),
+        },
     }
 
 
-def compose(env_file: Path, project: str) -> list[str]:
-    return [
+def compose(
+    env_file: Path,
+    project: str,
+    gpu_enabled: bool,
+    nested_enabled: bool,
+) -> list[str]:
+    command = [
         "docker",
         "compose",
         "--env-file",
@@ -102,6 +135,13 @@ def compose(env_file: Path, project: str) -> list[str]:
         "-f",
         str(ROOT / "deploy/compose.spike.yml"),
     ]
+    if nested_enabled:
+        command.extend(
+            ["-f", str(ROOT / "deploy/spike/compose.nested.yml")]
+        )
+    if gpu_enabled:
+        command.extend(["--profile", "gpu"])
+    return command
 
 
 def meets_reference_target(actual: dict) -> bool:
@@ -116,28 +156,38 @@ def meets_reference_target(actual: dict) -> bool:
         and actual["cpu"]["threads"] >= target["cpu"]["threads"]
         and actual["ramGb"] >= target["ramGb"]
         and actual["disk"]["capacityGb"] >= target["disk"]["capacityGb"]
+        and actual["disk"]["type"] == target["disk"]["type"]
+        and actual["disk"]["iopsVerified"]
         and actual["gpu"]["count"] >= target["gpu"]["count"]
         and actual["gpu"]["vramGb"] >= target["gpu"]["vramGb"]
         and actual["network"]["bandwidthGbps"]
         >= target["network"]["bandwidthGbps"]
+        and actual["os"]["arch"] == target["os"]["arch"]
+        and actual["os"]["distro"] == target["os"]["distro"]
     )
 
 
 def fingerprint(env_file: Path) -> dict:
-    environment = os.environ.copy()
-    environment.update(load_env(env_file))
+    environment = load_env(env_file)
+    environment.update(os.environ)
     project = environment.get("MARKHAND_COMPOSE_PROJECT", "markhand-spike")
-    command = compose(env_file, project)
+    gpu_enabled = environment.get("SPIKE_GPU", "0") == "1"
+    nested_enabled = environment.get("MARKHAND_SPIKE_NESTED", "0") == "1"
+    command = compose(env_file, project, gpu_enabled, nested_enabled)
     rendered = subprocess.check_output(
         [*command, "config"],
         cwd=ROOT,
         env=environment,
     )
-    services = ("postgres", "qdrant", "minio", "otel", "mock-embedding")
+    runtime_services = ["postgres", "qdrant", "minio", "otel", "mock-embedding"]
+    image_services = [*runtime_services, "minio-init"]
+    if gpu_enabled:
+        runtime_services.append("vllm")
+        image_services.append("vllm")
     images: dict[str, str] = {}
     versions: dict[str, str] = {}
-    for service in services:
-        container_id = run(*command, "ps", "-q", service)
+    for service in image_services:
+        container_id = run(*command, "ps", "--all", "-q", service)
         if not container_id:
             raise RuntimeError(f"spike service is not running: {service}")
         image_id = run("docker", "inspect", "--format", "{{.Image}}", container_id)
@@ -189,9 +239,17 @@ def fingerprint(env_file: Path) -> dict:
         "fixtureManifestPath": fixture_manifest.relative_to(ROOT).as_posix(),
         "result": {
             "metric": "healthy_spike_services",
-            "value": len(services),
+            "value": len(runtime_services),
             "pass": True,
         },
+        "profiles": [
+            "gpu" if gpu_enabled else "cpu-smoke",
+            *(
+                ["nested-network-workaround"]
+                if nested_enabled
+                else []
+            ),
+        ],
         "targetMatch": meets_reference_target(actual_hardware),
         "notes": "IOPS must be independently verified; target Profile B gates require targetMatch=true.",
     }

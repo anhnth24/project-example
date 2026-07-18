@@ -20,12 +20,6 @@ services:
     labels:
       markhand.environment: benchmark-spike
 
-  minio-init:
-    network_mode: host
-    networks: !reset []
-    environment:
-      MC_HOST_local: http://${MARKHAND_MINIO_USER:-markhand}:${MARKHAND_MINIO_PASSWORD:-markhand_spike_only}@127.0.0.1:${MARKHAND_SPIKE_MINIO_API_PORT:-19000}
-
   otel:
     ports: !override
       - "127.0.0.1:${MARKHAND_SPIKE_OTEL_HEALTH_PORT:-13143}:13133"
