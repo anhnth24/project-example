@@ -14,7 +14,7 @@
   "ramGb": 256,
   "disk": {
     "type": "nvme",
-    "capacityGb": 4096,
+    "capacityGb": 4000,
     "iopsNote": ">=100k random-read IOPS"
   },
   "gpu": {
@@ -39,5 +39,5 @@
     "fixtureManifestSha256",
     "hardware"
   ],
-  "notes": "Synthetic labels only; no customer name, credential or internal hostname."
+  "notes": "Capacity fields use decimal GB (10^9 bytes). Synthetic labels only; no customer name, credential or internal hostname."
 }
