@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 import tempfile
 import unittest
 import unicodedata
@@ -27,6 +28,9 @@ UNSAFE = (
     re.compile(r"\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"\bpostgres(?:ql)?://[^/\s:@]+:[^@\s/]+@"),
+    re.compile(r"\bFILECONV_(?:LLM|EMBEDDING)_API_KEY\s*=\s*\S+"),
+    re.compile(r"\bAuthorization\s*:\s*Bearer\s+\S+", re.IGNORECASE),
+    re.compile(r'"(?:apiKey|api_key|token)"\s*:\s*"[^"]{8,}"'),
 )
 
 
@@ -59,6 +63,37 @@ def normalize(value: str) -> str:
         token
         for token in " ".join(cleaned).split()
         if not all(character == "#" or character == "-" for character in token)
+    )
+
+
+def distance(left: list[str], right: list[str]) -> int:
+    if len(left) > len(right):
+        left, right = right, left
+    previous = list(range(len(left) + 1))
+    for row, right_item in enumerate(right, 1):
+        current = [row]
+        for column, left_item in enumerate(left, 1):
+            current.append(
+                min(
+                    current[-1] + 1,
+                    previous[column] + 1,
+                    previous[column - 1] + (left_item != right_item),
+                )
+            )
+        previous = current
+    return previous[-1]
+
+
+def error_rates(expected: str, actual: str) -> tuple[float, float]:
+    expected_normal = normalize(expected)
+    actual_normal = normalize(actual)
+    expected_chars = list(expected_normal)
+    actual_chars = list(actual_normal)
+    expected_words = expected_normal.split()
+    actual_words = actual_normal.split()
+    return (
+        distance(expected_chars, actual_chars) / max(1, len(expected_chars)),
+        distance(expected_words, actual_words) / max(1, len(expected_words)),
     )
 
 
@@ -100,7 +135,8 @@ def validate(path: Path) -> list[str]:
     with (CORPUS / "golden/queries.tsv").open(encoding="utf-8", newline="") as source:
         queries = list(csv.DictReader(source, delimiter="\t"))
 
-    expected_documents = {item["id"] for item in manifest["documents"]}
+    manifest_by_id = {item["id"]: item for item in manifest["documents"]}
+    expected_documents = set(manifest_by_id)
     actual_documents = {item.get("documentId") for item in conversions}
     if actual_documents != expected_documents or len(conversions) != len(expected_documents):
         errors.append("conversion evidence does not cover every corpus document")
@@ -120,6 +156,26 @@ def validate(path: Path) -> list[str]:
         raw_path = path / "raw" / f"{item.get('documentId')}.md"
         if not raw_path.is_file():
             errors.append(f"conversion {item.get('documentId')}: raw Markdown missing")
+            continue
+        actual = raw_path.read_text(encoding="utf-8")
+        corpus_item = manifest_by_id.get(item.get("documentId"))
+        if corpus_item is None:
+            continue
+        expected = (
+            CORPUS / "golden" / corpus_item["markdownPath"]
+        ).read_text(encoding="utf-8")
+        if item.get("actualChars") != len(actual):
+            errors.append(f"conversion {item.get('documentId')}: actualChars mismatch")
+        if item.get("expectedChars") != len(expected):
+            errors.append(f"conversion {item.get('documentId')}: expectedChars mismatch")
+        if item.get("actualSha256") != hashlib.sha256(actual.encode()).hexdigest():
+            errors.append(f"conversion {item.get('documentId')}: raw hash mismatch")
+        if item.get("status") == "ok":
+            cer, wer = error_rates(expected, actual)
+            if not close(item.get("cer"), cer):
+                errors.append(f"conversion {item.get('documentId')}: CER mismatch")
+            if not close(item.get("wer"), wer):
+                errors.append(f"conversion {item.get('documentId')}: WER mismatch")
 
     expected_queries = {row["query_id"] for row in queries}
     query_by_id = {row["query_id"]: row for row in queries}
@@ -264,6 +320,11 @@ def validate(path: Path) -> list[str]:
             errors.append(f"{query_id}: answerContainsExpected is miscomputed")
         recomputed_rows.append(
             {
+                "queryId": query_id,
+                "category": query["category"],
+                "versionMode": query["version_mode"],
+                "topDocument": ranked[0] if ranked else None,
+                "expectedDocument": query["expected_doc"] or None,
                 "hasRelevant": bool(relevant),
                 "recallAt5": recall5,
                 "recallAt10": recall10,
@@ -300,6 +361,22 @@ def validate(path: Path) -> list[str]:
         errors.append("local restore scenario is not frozen")
     judged_count = sum(bool(json.loads(row["judgments"])) for row in queries)
     no_answer_count = len(queries) - judged_count
+
+    def aggregate(items: list[dict]) -> dict:
+        relevant = [row for row in items if row["hasRelevant"]]
+        return {
+            "queries": len(relevant),
+            "recallAt5": sum(row["recallAt5"] for row in relevant)
+            / max(1, len(relevant)),
+            "recallAt10": sum(row["recallAt10"] for row in relevant)
+            / max(1, len(relevant)),
+            "hitAt5": sum(row["hitAt5"] for row in relevant)
+            / max(1, len(relevant)),
+            "mrr": sum(row["mrr"] for row in relevant) / max(1, len(relevant)),
+            "ndcgAt10": sum(row["ndcg"] for row in relevant)
+            / max(1, len(relevant)),
+        }
+
     if retrieval.get("summary", {}).get("queries") != judged_count:
         errors.append("retrieval summary query count mismatch")
     judged_rows = [row for row in recomputed_rows if row["hasRelevant"]]
@@ -316,6 +393,20 @@ def validate(path: Path) -> list[str]:
         )
         if not close(summary.get(field), expected_value):
             errors.append(f"retrieval summary {field} is miscomputed")
+    categories = {}
+    for row in recomputed_rows:
+        categories.setdefault(row["category"], []).append(row)
+    if set(retrieval.get("categories", {})) != set(categories):
+        errors.append("retrieval category set is incomplete")
+    for category, items in categories.items():
+        expected_category = aggregate(items)
+        actual_category = retrieval.get("categories", {}).get(category, {})
+        for field, value in expected_category.items():
+            if field == "queries":
+                if actual_category.get(field) != value:
+                    errors.append(f"category {category} query count is incorrect")
+            elif not close(actual_category.get(field), value):
+                errors.append(f"category {category} {field} is miscomputed")
     citation_summary = retrieval.get("citationSummary", {})
     paged_rows = [
         row for row in judged_rows if row["pageAccuracy"] is not None
@@ -357,6 +448,30 @@ def validate(path: Path) -> list[str]:
     ):
         errors.append("no-answer accuracy is miscomputed")
     temporal = retrieval.get("temporalSummary", {})
+    temporal_rows = [
+        row
+        for row in judged_rows
+        if row["versionMode"] != "current"
+        or row["category"] in {"temporal_current", "conflict_current"}
+    ]
+    expected_temporal = aggregate(temporal_rows)
+    for field, value in expected_temporal.items():
+        if field == "queries":
+            if temporal.get(field) != value:
+                errors.append("temporal summary query count is incorrect")
+        elif not close(temporal.get(field), value):
+            errors.append(f"temporal summary {field} is miscomputed")
+    current_temporal = [
+        row
+        for row in temporal_rows
+        if row["category"] in {"temporal_current", "conflict_current"}
+    ]
+    current_accuracy = sum(
+        row["topDocument"] == row["expectedDocument"]
+        for row in current_temporal
+    ) / max(1, len(current_temporal))
+    if not close(temporal.get("currentVersionTop1Accuracy"), current_accuracy):
+        errors.append("current-version Top-1 accuracy is miscomputed")
     if temporal.get("versionCitationPrecision") != 0.0 or temporal.get(
         "versionCitationRecall"
     ) != 0.0:
@@ -444,6 +559,38 @@ class BaselineValidatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             errors = validate(Path(temporary))
             self.assertTrue(any("missing" in error for error in errors))
+
+    def test_detects_raw_metric_and_secret_mutation(self) -> None:
+        self.assertTrue(DEFAULT_BASELINE.is_dir())
+        with tempfile.TemporaryDirectory() as temporary:
+            baseline = Path(temporary) / "desktop-v1"
+            shutil.copytree(DEFAULT_BASELINE, baseline)
+            conversions = load(baseline / "conversion-results.json")
+            successful = next(
+                item
+                for item in conversions["documents"]
+                if item["status"] == "ok"
+            )
+            successful["cer"] = 0.999
+            (baseline / "conversion-results.json").write_text(
+                json.dumps(conversions)
+            )
+            raw_markdown = baseline / "raw" / f"{successful['documentId']}.md"
+            raw_markdown.write_text(raw_markdown.read_text() + " mutated")
+            retrieval = load(baseline / "retrieval-results.json")
+            first_category = next(iter(retrieval["categories"].values()))
+            first_category["recallAt5"] = 0.999
+            (baseline / "retrieval-results.json").write_text(
+                json.dumps(retrieval)
+            )
+            metadata = load(baseline / "metadata.json")
+            metadata["leak"] = "FILECONV_LLM_API_KEY=synthetic-secret-value"
+            (baseline / "metadata.json").write_text(json.dumps(metadata))
+            errors = validate(baseline)
+            self.assertTrue(any("CER mismatch" in error for error in errors))
+            self.assertTrue(any("raw hash mismatch" in error for error in errors))
+            self.assertTrue(any("category" in error and "miscomputed" in error for error in errors))
+            self.assertTrue(any("unsafe path/secret" in error for error in errors))
 
 
 def main() -> int:
