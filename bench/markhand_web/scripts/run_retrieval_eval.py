@@ -468,9 +468,14 @@ def version_and_conflict_metrics(
             if record is not None and record.logical_document_id not in retrieved_logicals:
                 retrieved_logicals.append(record.logical_document_id)
         # Prefer BA policy lineage for budget/version wording when present in hits.
-        query_l = (query.get("query") or "").casefold()
+        # Match on accent-folded text so ASCII-folded queries (e.g. "kinh phi") still
+        # select policy over design when both appear in the ranking.
+        query_l = normalize_search_text(query.get("query") or "")
         top_logical = retrieved_logicals[0] if retrieved_logicals else None
-        if any(token in query_l for token in ("kinh phí", "phiên bản", "hiệu lực")):
+        if any(
+            token in query_l
+            for token in ("kinh phi", "phien ban", "hieu luc")
+        ):
             for logical in retrieved_logicals[:8]:
                 if logical == "logical-budget-policy":
                     top_logical = logical
