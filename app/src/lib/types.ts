@@ -118,6 +118,7 @@ export interface EmbeddingProviderPreset {
   local: boolean;
   requiresApiKey: boolean;
   defaultDimensions: number | null;
+  runtimePath: string;
   description: string;
 }
 

@@ -107,6 +107,12 @@ impl DesktopEmbeddingPlan {
         })
     }
 
+    pub fn runtime_path(&self) -> Option<&str> {
+        self.signature_plan
+            .as_ref()
+            .map(EmbeddingPlan::runtime_path)
+    }
+
     pub fn metadata(&self) -> &IndexMetadata {
         &self.metadata
     }
@@ -604,8 +610,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            plan.signature_plan.as_ref().unwrap().runtime_path(),
-            crate::identity::RUNTIME_GLM_CLOUD_INTERIM
+            plan.runtime_path(),
+            Some(crate::identity::RUNTIME_GLM_CLOUD_INTERIM)
+        );
+    }
+
+    #[test]
+    fn vllm_preset_values_need_explicit_runtime_path() {
+        // Real desktop preset: neither host nor model contains "vllm".
+        let inferred = DesktopEmbeddingPlan::provider(
+            "openaicompatible",
+            "BAAI/bge-m3",
+            Some("http://127.0.0.1:8000"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            inferred.runtime_path(),
+            Some(crate::identity::RUNTIME_PROVIDER_CLOUD)
+        );
+        let explicit = DesktopEmbeddingPlan::provider_with_runtime(
+            "openaicompatible",
+            "BAAI/bge-m3",
+            Some("http://127.0.0.1:8000"),
+            None,
+            Some(crate::identity::RUNTIME_VLLM_LOCAL),
+        )
+        .unwrap();
+        assert_eq!(
+            explicit.runtime_path(),
+            Some(crate::identity::RUNTIME_VLLM_LOCAL)
         );
     }
 }

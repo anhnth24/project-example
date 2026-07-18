@@ -23,10 +23,12 @@ and query accent-fold into one `text_version` while the fixture still said
    `body_text_version` (`nfc-v1`). Versions never share chunk IDs.
 3. **Index signature** is the length-delimited SHA-256 of:
    - `runtime_path`: `local-hash` | `glm-cloud-interim` | `vllm-local` |
-     `provider-cloud` — **explicit field** on `EmbeddingPlan` (not inferred from
-     the coarse `Provider` enum). Desktop may default via
-     `infer_runtime_path(base_url, model)` using host/model cues (e.g.
-     `open.bigmodel.cn` → `glm-cloud-interim`).
+     `provider-cloud` — **explicit field** on `EmbeddingPlan` and
+     `EmbeddingConfig` (not inferred from the coarse `Provider` enum). Desktop
+     presets pin this (e.g. vLLM `127.0.0.1:8000` + `BAAI/bge-m3` →
+     `vllm-local`, GLM → `glm-cloud-interim`). Host/model inference via
+     `infer_embedding_runtime_path` is only a fallback for unknown/custom
+     endpoints — real vLLM preset URLs do not contain the string `"vllm"`.
    - `embedding_family` (provider/model/deployment digest)
    - `embedding_revision`
    - `dimensions` (u64 BE)
@@ -66,5 +68,5 @@ python3 bench/markhand_web/scripts/generate_expected_chunks.py
 python3 bench/markhand_web/scripts/run_retrieval_eval.py --self-test
 ```
 
-Inspect `crates/knowledge/fixtures/identity-v1.json` (schema v2 payload) and
+Inspect `crates/knowledge/fixtures/identity-v2.json` (schema v2 payload) and
 `bench/markhand_web/reports/retrieval-evaluation.md`.

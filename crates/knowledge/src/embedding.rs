@@ -30,12 +30,14 @@ const ALLOWED_RUNTIME_PATHS: &[&str] = &[
 
 /// Map endpoint metadata to a canonical runtime path (ADR 0006).
 ///
-/// Prefer host/model cues over the coarse `Provider` enum: desktop presets collapse
-/// GLM/vLLM/Ollama into `OpenAiCompatible`.
+/// Fallback only — desktop presets carry an explicit `runtime_path` on
+/// `EmbeddingConfig` because real vLLM hosts (`127.0.0.1:8000` + `BAAI/bge-m3`)
+/// do not contain the string `"vllm"`. Kept here (not behind core `llm`) so the
+/// knowledge crate stays usable without the HTTP client feature.
 pub fn infer_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
     let host = base_url
         .and_then(|value| url::Url::parse(value).ok())
-        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
         .unwrap_or_default();
     let model = model.to_ascii_lowercase();
     let blob = format!("{host} {model}");

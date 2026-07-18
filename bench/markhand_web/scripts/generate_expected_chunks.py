@@ -247,8 +247,21 @@ def main() -> int:
             print("expected-chunks.tsv is stale; regenerate", file=sys.stderr)
             return 1
         current_meta = json.loads(OUT_META.read_text(encoding="utf-8"))
-        if current_meta.get("sha256") != meta["sha256"] or current_meta.get("chunks") != meta["chunks"]:
+        if current_meta != meta:
             print("expected-chunks.meta.json is stale; regenerate", file=sys.stderr)
+            missing = sorted(set(meta) - set(current_meta))
+            extra = sorted(set(current_meta) - set(meta))
+            changed = sorted(
+                key
+                for key in set(meta) & set(current_meta)
+                if current_meta[key] != meta[key]
+            )
+            if missing:
+                print(f"  missing keys: {missing}", file=sys.stderr)
+            if extra:
+                print(f"  extra keys: {extra}", file=sys.stderr)
+            if changed:
+                print(f"  changed keys: {changed}", file=sys.stderr)
             return 1
         print("expected-chunks.tsv + meta up to date")
         return 0

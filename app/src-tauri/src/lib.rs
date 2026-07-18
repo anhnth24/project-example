@@ -200,12 +200,23 @@ impl Settings {
         }
         let base_url = (!self.embedding_base_url.trim().is_empty())
             .then(|| self.embedding_base_url.trim().to_string());
+        let runtime_path = preset
+            .as_ref()
+            .map(|preset| preset.runtime_path.clone())
+            .unwrap_or_else(|| {
+                fileconv_core::llm::infer_embedding_runtime_path(
+                    base_url.as_deref(),
+                    self.embedding_model.trim(),
+                )
+                .to_string()
+            });
         fileconv_core::llm::EmbeddingConfig::new(
             provider,
             api_key,
             self.embedding_model.trim(),
             base_url,
             self.embedding_dimensions,
+            runtime_path,
         )
         .map(Some)
         .map_err(|error| error.to_string())
@@ -1334,6 +1345,47 @@ mod tests {
         );
         assert_eq!(config.model, "nomic-embed-text");
         assert!(config.api_key.is_empty());
+        assert_eq!(
+            config.runtime_path,
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD
+        );
+    }
+
+    #[test]
+    fn vllm_embedding_settings_carry_explicit_runtime_path() {
+        let mut settings = Settings::default();
+        settings.embedding_enabled = true;
+        settings.embedding_provider = "vllm".into();
+        settings.embedding_base_url = "http://127.0.0.1:8000".into();
+        settings.embedding_model = "BAAI/bge-m3".into();
+        let config = settings.embedding_config().unwrap().unwrap();
+        assert_eq!(
+            config.runtime_path,
+            fileconv_core::llm::EMBEDDING_RUNTIME_VLLM_LOCAL
+        );
+        assert_eq!(
+            fileconv_core::llm::infer_embedding_runtime_path(
+                config.base_url.as_deref(),
+                &config.model
+            ),
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD
+        );
+    }
+
+    #[test]
+    fn glm_embedding_settings_carry_explicit_runtime_path() {
+        let mut settings = Settings::default();
+        settings.embedding_enabled = true;
+        settings.embedding_provider = "glm".into();
+        settings.embedding_base_url = "https://open.bigmodel.cn/api/paas/v4".into();
+        settings.embedding_model = "embedding-3".into();
+        settings.embedding_dimensions = Some(1024);
+        settings.embedding_api_key = Some("test-key".into());
+        let config = settings.embedding_config().unwrap().unwrap();
+        assert_eq!(
+            config.runtime_path,
+            fileconv_core::llm::EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM
+        );
     }
 
     #[test]
