@@ -92,7 +92,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-06 — Rank, citation và grounded answer
 
-- **Status:** Review — extraction and parity/security gates passed; awaiting merge.
+- **Status:** Done — merged to `master` after parity and prompt-injection gates passed.
 - **Objective:** Reusable hybrid merge, anchors và grounding.
 - **Plan:** Cosine/RRF/rerank/sort; snippet/page-slide-sheet anchor; extractive answer;
   citation validator; separate LLM calls.
@@ -106,7 +106,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-07 — SQLite desktop storage feature
 
-- **Status:** Blocked bởi P1A-03…06.
+- **Status:** Ready — shared rank/citation/ask APIs are merged.
 - **Objective:** Move SQLite persistence, bỏ reverse dependency vào Tauri.
 - **Plan:** Schema/metadata/vector/incremental/FTS/hydration; API nhận DB path +
   caller-supplied corpus; Tauri giữ path jail/load.
@@ -121,7 +121,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-08 — Persistent HNSW desktop feature
 
-- **Status:** Blocked bởi P1A-02/04/05.
+- **Status:** In progress — moving the persistent ANN cache behind `desktop-hnsw`.
 - **Objective:** Move optional ANN cache, SQLite vẫn authority.
 - **Plan:** Manifest/partition/rebuild/search/clear; legacy signature compatibility;
   corrupt/mismatch fallback exact cosine.
