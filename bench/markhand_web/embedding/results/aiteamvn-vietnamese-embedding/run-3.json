@@ -2,10 +2,14 @@
   "modelId": "aiteamvn-vietnamese-embedding",
   "role": "best-candidate",
   "family": "bge-m3-vietnamese-ft",
+  "provider": "sentence-transformers",
   "hubId": "AITeamVN/Vietnamese_Embedding",
   "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
   "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+  "modelMutability": "immutable-sha",
+  "observedAt": "2026-07-18T17:29:18.601624+00:00",
   "dimensions": 1024,
+  "dimensionsRequest": null,
   "maxSeqLength": 2048,
   "batchSize": 16,
   "device": "cpu",
@@ -140,19 +144,19 @@
   "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
   "capacity": {
     "device": "cpu",
-    "loadMs": 1716.8,
-    "embedChunksMs": 1088.05,
-    "embedQueriesMs": 2752.78,
-    "vectorsPerSecond": 77.327,
+    "loadMs": 1594.36,
+    "embedChunksMs": 1054.14,
+    "embedQueriesMs": 2746.48,
+    "vectorsPerSecond": 78.145,
     "vramGb": null,
     "note": "quality-track; VRAM not measured on CPU smoke"
   },
-  "gates": {
+  "thresholdObservations": {
     "G0-RET-RECALL-AT-5": {
       "metric": 0.92612,
       "threshold": 0.85,
       "statistic": "per-run",
-      "pass": true
+      "meetsThreshold": true
     }
   },
   "rows": [

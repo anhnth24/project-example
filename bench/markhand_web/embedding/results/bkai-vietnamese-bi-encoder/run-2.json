@@ -2,10 +2,14 @@
   "modelId": "bkai-vietnamese-bi-encoder",
   "role": "min-candidate",
   "family": "phobert-bi-encoder",
+  "provider": "sentence-transformers",
   "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
   "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
   "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+  "modelMutability": "immutable-sha",
+  "observedAt": "2026-07-18T17:29:25.556682+00:00",
   "dimensions": 768,
+  "dimensionsRequest": null,
   "maxSeqLength": 256,
   "batchSize": 32,
   "device": "cpu",
@@ -140,19 +144,19 @@
   "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
   "capacity": {
     "device": "cpu",
-    "loadMs": 399.95,
-    "embedChunksMs": 292.07,
-    "embedQueriesMs": 747.42,
-    "vectorsPerSecond": 285.715,
+    "loadMs": 340.06,
+    "embedChunksMs": 266.73,
+    "embedQueriesMs": 801.96,
+    "vectorsPerSecond": 277.911,
     "vramGb": null,
     "note": "quality-track; VRAM not measured on CPU smoke"
   },
-  "gates": {
+  "thresholdObservations": {
     "G0-RET-RECALL-AT-5": {
       "metric": 0.796218,
       "threshold": 0.85,
       "statistic": "per-run",
-      "pass": false
+      "meetsThreshold": false
     }
   },
   "rows": [
