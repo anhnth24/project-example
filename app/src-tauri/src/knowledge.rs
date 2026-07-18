@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use fileconv_core::intelligence::{self, CorpusDocument};
+use fileconv_core::intelligence;
 use fileconv_core::llm::EmbeddingConfig;
 use fileconv_knowledge::ask::{
     extractive_answer, grounded_user_prompt, retrieval_context, valid_citation_ids,

@@ -89,8 +89,29 @@ pub fn sort_hybrid_hits(hits: &mut [HybridSearchHit]) {
 mod tests {
     use super::{
         body_token_overlap, cosine_similarity, hybrid_rerank_score, reciprocal_rank_fusion,
-        stable_score_order, RankedCandidate,
+        sort_hybrid_hits, stable_score_order, RankedCandidate,
     };
+    use crate::types::{HybridSearchHit, SourceAnchor};
+
+    fn hit(id: &str, score: f32) -> HybridSearchHit {
+        HybridSearchHit {
+            chunk_id: id.into(),
+            source_rel: format!("{id}.pdf"),
+            md_rel: format!("{id}.pdf.md"),
+            heading: String::new(),
+            snippet: String::new(),
+            lexical_score: 0.0,
+            vector_score: 0.0,
+            rerank_score: score,
+            anchor: SourceAnchor {
+                page: None,
+                slide: None,
+                sheet: None,
+                start: 0,
+                end: 0,
+            },
+        }
+    }
 
     #[test]
     fn ties_use_stable_identifier_order() {
@@ -124,12 +145,10 @@ mod tests {
             0.75,
             &tokens,
             "Đối soát",
-            "Đối soát giao dịch theo ngày",
+            "Đối soát giao theo ngày",
         );
         assert!((reciprocal_rank_fusion(Some(0), Some(0)) - 2.0 / 60.0).abs() < f32::EPSILON);
-        assert!(
-            (body_token_overlap(&tokens, "Đối soát giao dịch theo ngày") - 0.75).abs() < 0.0001
-        );
+        assert!((body_token_overlap(&tokens, "Đối soát giao theo ngày") - 0.75).abs() < 0.0001);
         assert!((score - 1.875).abs() < 0.0001);
     }
 
@@ -138,5 +157,22 @@ mod tests {
         assert_eq!(body_token_overlap(&[], "nội dung"), 0.0);
         let score = hybrid_rerank_score(None, Some(0), -1.0, &[], "", "");
         assert!((score - 0.5).abs() < 0.0001);
+    }
+
+    #[test]
+    fn hybrid_hit_sort_preserves_frozen_tie_and_nan_order() {
+        let mut hits = vec![
+            hit("low", 0.5),
+            hit("tie-b", 1.0),
+            hit("tie-a", 1.0),
+            hit("nan", f32::NAN),
+        ];
+        sort_hybrid_hits(&mut hits);
+        assert_eq!(
+            hits.iter()
+                .map(|candidate| candidate.chunk_id.as_str())
+                .collect::<Vec<_>>(),
+            ["tie-b", "tie-a", "low", "nan"]
+        );
     }
 }
