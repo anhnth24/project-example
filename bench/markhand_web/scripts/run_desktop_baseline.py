@@ -22,7 +22,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 CORPUS = ROOT / "bench/markhand_web"
 DEFAULT_OUTPUT = CORPUS / "baselines/desktop-v1"
-MARKDOWN_SYMBOLS = re.compile(r"[#*_>`~|[\](){}]")
 
 
 def git(*args: str) -> str:
@@ -30,9 +29,17 @@ def git(*args: str) -> str:
 
 
 def normalize(value: str) -> str:
-    value = unicodedata.normalize("NFC", value).lower()
-    value = MARKDOWN_SYMBOLS.sub(" ", value)
-    return " ".join(value.split())
+    cleaned = []
+    for line in unicodedata.normalize("NFC", value).splitlines():
+        stripped = line.strip()
+        if stripped and all(character in "|-: " for character in stripped):
+            continue
+        cleaned.append(line.replace("|", " "))
+    return " ".join(
+        token
+        for token in " ".join(cleaned).split()
+        if not all(character == "#" or character == "-" for character in token)
+    )
 
 
 def distance(left: list[str], right: list[str]) -> int:
@@ -120,6 +127,57 @@ def hardware_fingerprint() -> dict:
     }
 
 
+def file_sha256(path: Path) -> str | None:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def native_fingerprint() -> dict:
+    pdfium_candidates = [
+        ROOT / "pdfium/lib/libpdfium.so",
+        ROOT / "pdfium/lib/pdfium.dll",
+        ROOT / "pdfium/lib/libpdfium.dylib",
+    ]
+    pdfium = next((path for path in pdfium_candidates if path.is_file()), None)
+    tesseract = shutil.which("tesseract")
+    tesseract_version = None
+    languages: dict[str, str] = {}
+    if tesseract:
+        version = subprocess.run(
+            [tesseract, "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        tesseract_version = version.stdout.splitlines()[0] if version.stdout else None
+        data_roots = [
+            ROOT / "tessdata_best",
+            Path("/usr/share/tesseract-ocr/5/tessdata"),
+        ]
+        for language in ("vie", "eng"):
+            model = next(
+                (
+                    root / f"{language}.traineddata"
+                    for root in data_roots
+                    if (root / f"{language}.traineddata").is_file()
+                ),
+                None,
+            )
+            if model:
+                languages[language] = file_sha256(model)
+    return {
+        "pdfium": {
+            "present": pdfium is not None,
+            "sha256": file_sha256(pdfium) if pdfium else None,
+        },
+        "tesseract": {
+            "present": tesseract is not None,
+            "version": tesseract_version,
+            "languageModelSha256": languages,
+        },
+        "whisperModelConfigured": False,
+    }
+
+
 def conversion_baseline(converter: Path, output: Path, manifest: dict) -> tuple[list[dict], list[dict]]:
     raw = output / "raw"
     raw.mkdir(parents=True, exist_ok=True)
@@ -181,8 +239,13 @@ def conversion_baseline(converter: Path, output: Path, manifest: dict) -> tuple[
     return results, retrieval_documents
 
 
-def write_retrieval_input(output: Path, documents: list[dict], queries: list[dict]) -> Path:
-    runtime = output / "runtime"
+def write_retrieval_input(
+    output: Path,
+    documents: list[dict],
+    queries: list[dict],
+    runtime_name: str = "runtime",
+) -> Path:
+    runtime = output / runtime_name
     if runtime.exists():
         shutil.rmtree(runtime)
     runtime.mkdir(parents=True)
@@ -220,9 +283,67 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
     for actual in output["queries"]:
         query = expected[actual["queryId"]]
         judgments = json.loads(query["judgments"])
-        ranked = [hit["sourceRel"] for hit in actual["hits"]]
+        expected_citations = json.loads(query["citations"])
+        ranked_chunks = [hit["sourceRel"] for hit in actual["hits"]]
+        ranked = list(dict.fromkeys(ranked_chunks))
+        first_hit_by_document = {}
+        for hit in actual["hits"]:
+            first_hit_by_document.setdefault(hit["sourceRel"], hit)
+        expected_citation_docs = {
+            citation["documentId"] for citation in expected_citations
+        }
+        actual_citation_docs = set(ranked)
+        citation_precision = (
+            len(expected_citation_docs.intersection(actual_citation_docs))
+            / len(actual_citation_docs)
+            if actual_citation_docs
+            else 1.0 if not expected_citation_docs else 0.0
+        )
+        citation_recall = (
+            len(expected_citation_docs.intersection(actual_citation_docs))
+            / len(expected_citation_docs)
+            if expected_citation_docs
+            else 1.0 if not actual_citation_docs else 0.0
+        )
+        matched_citations = [
+            citation
+            for citation in expected_citations
+            if citation["documentId"] in first_hit_by_document
+        ]
+        page_accuracy = (
+            sum(
+                first_hit_by_document[citation["documentId"]]["anchor"]["page"]
+                == citation["page"]
+                for citation in matched_citations
+            )
+            / len(matched_citations)
+            if matched_citations
+            else 0.0
+        )
+        span_accuracy = (
+            sum(
+                first_hit_by_document[citation["documentId"]]["anchor"]["start"]
+                == citation["start"]
+                and first_hit_by_document[citation["documentId"]]["anchor"]["end"]
+                == citation["end"]
+                for citation in matched_citations
+            )
+            / len(matched_citations)
+            if matched_citations
+            else 0.0
+        )
         relevant = {doc for doc, grade in judgments.items() if grade >= 2}
-        recall5 = 1.0 if relevant and any(doc in relevant for doc in ranked[:5]) else 0.0
+        recall5 = (
+            len(relevant.intersection(ranked[:5])) / len(relevant)
+            if relevant
+            else 0.0
+        )
+        recall10 = (
+            len(relevant.intersection(ranked[:10])) / len(relevant)
+            if relevant
+            else 0.0
+        )
+        hit5 = 1.0 if relevant and any(doc in relevant for doc in ranked[:5]) else 0.0
         reciprocal = next(
             (1 / (index + 1) for index, doc in enumerate(ranked) if doc in relevant),
             0.0,
@@ -239,23 +360,36 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
             "actualAnswerMode": actual["actualAnswerMode"],
             "rankedDocuments": ranked,
             "recallAt5": recall5,
+            "recallAt10": recall10,
+            "hitAt5": hit5,
             "reciprocalRank": round(reciprocal, 6),
             "ndcgAt10": round(ndcg, 6),
             "topDocument": ranked[0] if ranked else None,
             "expectedDocument": query["expected_doc"] or None,
             "versionAwareCitationAvailable": False,
-            "returnedHitCount": len(ranked),
+            "hasRelevant": bool(relevant),
+            "citationDocumentPrecision": round(citation_precision, 6),
+            "citationDocumentRecall": round(citation_recall, 6),
+            "citationPageAccuracy": round(page_accuracy, 6),
+            "citationSpanExactAccuracy": round(span_accuracy, 6),
+            "answerExact": normalize(actual["answer"])
+            == normalize(query["expected_answer"]),
+            "returnedHitCount": len(ranked_chunks),
+            "uniqueDocumentCount": len(ranked),
         }
         rows.append(row)
         by_category[query["category"]].append(row)
 
     def aggregate(items: list[dict]) -> dict:
-        count = len(items)
+        relevant_items = [item for item in items if item["hasRelevant"]]
+        count = len(relevant_items)
         return {
             "queries": count,
-            "recallAt5": round(sum(item["recallAt5"] for item in items) / max(1, count), 6),
-            "mrr": round(sum(item["reciprocalRank"] for item in items) / max(1, count), 6),
-            "ndcgAt10": round(sum(item["ndcgAt10"] for item in items) / max(1, count), 6),
+            "recallAt5": round(sum(item["recallAt5"] for item in relevant_items) / max(1, count), 6),
+            "recallAt10": round(sum(item["recallAt10"] for item in relevant_items) / max(1, count), 6),
+            "hitAt5": round(sum(item["hitAt5"] for item in relevant_items) / max(1, count), 6),
+            "mrr": round(sum(item["reciprocalRank"] for item in relevant_items) / max(1, count), 6),
+            "ndcgAt10": round(sum(item["ndcgAt10"] for item in relevant_items) / max(1, count), 6),
         }
 
     ranked_rows = [
@@ -275,6 +409,32 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
     ]
     return {
         "summary": aggregate(ranked_rows),
+        "citationSummary": {
+            "documentPrecision": round(
+                sum(row["citationDocumentPrecision"] for row in rows)
+                / max(1, len(rows)),
+                6,
+            ),
+            "documentRecall": round(
+                sum(row["citationDocumentRecall"] for row in rows)
+                / max(1, len(rows)),
+                6,
+            ),
+            "pageAccuracy": round(
+                sum(row["citationPageAccuracy"] for row in ranked_rows)
+                / max(1, len(ranked_rows)),
+                6,
+            ),
+            "spanExactAccuracy": round(
+                sum(row["citationSpanExactAccuracy"] for row in ranked_rows)
+                / max(1, len(ranked_rows)),
+                6,
+            ),
+            "answerExactAccuracy": round(
+                sum(row["answerExact"] for row in rows) / max(1, len(rows)),
+                6,
+            ),
+        },
         "noAnswerSummary": {
             "queries": len(no_answer),
             "accuracy": round(
@@ -346,6 +506,15 @@ def markdown_report(
                 sum(item["durationMs"] for item in items) / len(items),
             )
         )
+    audio_items = formats.get("audio", [])
+    if audio_items and not any(item["status"] == "ok" for item in audio_items):
+        lines.extend(
+            [
+                "",
+                "Audio rows failed dependency admission because no Whisper model was configured;",
+                "their durations are failure latency, not transcription performance.",
+            ]
+        )
     summary = retrieval["summary"]
     temporal = retrieval["temporalSummary"]
     lines.extend(
@@ -353,13 +522,19 @@ def markdown_report(
             "",
             "## Local desktop retrieval",
             "",
-            f"- Queries: {summary['queries']}",
+            f"- Ranked queries: {summary['queries']}",
+            f"- No-answer queries: {retrieval['noAnswerSummary']['queries']}",
             f"- Recall@5: {summary['recallAt5']:.4f}",
+            f"- Recall@10: {summary['recallAt10']:.4f}",
+            f"- Hit@5: {summary['hitAt5']:.4f}",
             f"- MRR: {summary['mrr']:.4f}",
             f"- nDCG@10: {summary['ndcgAt10']:.4f}",
             f"- Temporal Recall@5: {temporal['recallAt5']:.4f}",
             f"- Current-version Top-1 accuracy: {temporal['currentVersionTop1Accuracy']:.4f}",
             f"- No-answer accuracy: {retrieval['noAnswerSummary']['accuracy']:.4f}",
+            f"- Citation document precision: {retrieval['citationSummary']['documentPrecision']:.4f}",
+            f"- Citation document recall: {retrieval['citationSummary']['documentRecall']:.4f}",
+            f"- Citation exact-span accuracy: {retrieval['citationSummary']['spanExactAccuracy']:.4f}",
             "- Version-citation precision/recall: 0.0 baseline (payload not implemented).",
             "",
             "## Interpretation",
@@ -403,6 +578,29 @@ def run(output: Path, converter: Path) -> None:
         check=True,
     )
     raw = json.loads(retrieval_raw.read_text())
+    rerun_input = write_retrieval_input(
+        output, documents, queries, runtime_name="runtime-rerun"
+    )
+    rerun_raw = output / "retrieval-rerun.json"
+    subprocess.run(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "-p",
+            "fileconv-knowledge",
+            "--all-features",
+            "--example",
+            "p0_desktop_baseline",
+            "--",
+            str(rerun_input),
+            str(rerun_raw),
+        ],
+        cwd=ROOT,
+        check=True,
+    )
+    rerun = json.loads(rerun_raw.read_text())
+    retrieval_deterministic = raw == rerun
     retrieval = evaluate_retrieval(queries, raw)
     ranking_fingerprint = hashlib.sha256(
         json.dumps(
@@ -411,6 +609,14 @@ def run(output: Path, converter: Path) -> None:
                 for row in retrieval["queries"]
             ],
             ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    raw_fingerprint = hashlib.sha256(
+        json.dumps(
+            raw,
+            ensure_ascii=False,
+            sort_keys=True,
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
@@ -431,18 +637,29 @@ def run(output: Path, converter: Path) -> None:
         "workloadProfileId": "on-prem-reference-v1",
         "environmentRole": "reduced-smoke",
         "hardware": hardware,
+        "command": "make p0-desktop-baseline",
+        "composeFileSha256": file_sha256(ROOT / "deploy/dev/compose.yml"),
+        "serviceVersions": {
+            "fileconvCore": "0.1.0",
+            "fileconvKnowledge": "0.1.0",
+        },
+        "imageDigests": {"notUsed": "local-process-baseline"},
+        "nativeRuntime": native_fingerprint(),
         "fixtureManifestSha256": hashlib.sha256(
             (CORPUS / "manifest.lock.json").read_bytes()
         ).hexdigest(),
         "converterSha256": hashlib.sha256(converter.read_bytes()).hexdigest(),
         "retrievalRankingSha256": ranking_fingerprint,
+        "rawRetrievalSha256": raw_fingerprint,
+        "retrievalDeterministic": retrieval_deterministic,
     }
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    (output / "desktop-baseline.md").write_text(
-        markdown_report(commit, hardware, conversions, retrieval),
-        encoding="utf-8",
-    )
+    report = markdown_report(commit, hardware, conversions, retrieval)
+    (output / "desktop-baseline.md").write_text(report, encoding="utf-8")
+    (CORPUS / "reports/desktop-baseline.md").write_text(report, encoding="utf-8")
     shutil.rmtree(output / "runtime", ignore_errors=True)
+    shutil.rmtree(output / "runtime-rerun", ignore_errors=True)
+    rerun_raw.unlink(missing_ok=True)
     print(f"wrote desktop baseline to {output}")
 
 

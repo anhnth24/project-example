@@ -4,6 +4,7 @@ use fileconv_core::intelligence::CorpusDocument;
 use fileconv_knowledge::desktop::service::{
     grounded_answer, hybrid_search, rebuild_index, DesktopEmbeddingPlan, KnowledgePaths,
 };
+use fileconv_knowledge::embedding::{local_vector, LOCAL_VECTOR_DIMENSIONS};
 use fileconv_knowledge::types::{HybridAskRequest, HybridSearchHit};
 use fileconv_knowledge::{KnowledgeError, Result};
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,15 @@ struct Query {
 struct Output {
     index: fileconv_knowledge::types::IndexBuildResult,
     queries: Vec<QueryResult>,
+    scenarios: Scenarios,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Scenarios {
+    provider_fallback: fileconv_knowledge::types::IndexBuildResult,
+    signature_mismatch: fileconv_knowledge::types::IndexBuildResult,
+    restore_local: fileconv_knowledge::types::IndexBuildResult,
 }
 
 #[derive(Serialize)]
@@ -86,9 +96,30 @@ fn run(input: Input) -> Result<Output> {
             warnings: answer.warnings,
         });
     }
+    let provider = DesktopEmbeddingPlan::provider(
+        "baseline-provider",
+        "baseline-model",
+        Some("https://embedding.invalid/v1"),
+        Some(LOCAL_VECTOR_DIMENSIONS),
+    )?;
+    let provider_fallback = rebuild_index(&paths, &input.documents, &provider, true, |_| {
+        Err(KnowledgeError::EmbeddingProviderFailure)
+    })?;
+    let signature_mismatch = rebuild_index(&paths, &input.documents, &provider, false, |inputs| {
+        Ok(inputs
+            .iter()
+            .map(|input| local_vector(input).into_values())
+            .collect())
+    })?;
+    let restore_local = rebuild_index(&paths, &input.documents, &plan, false, |_| unavailable())?;
     Ok(Output {
         index,
         queries: query_results,
+        scenarios: Scenarios {
+            provider_fallback,
+            signature_mismatch,
+            restore_local,
+        },
     })
 }
 
