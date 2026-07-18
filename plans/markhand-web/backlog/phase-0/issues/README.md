@@ -98,7 +98,7 @@ P1A-01 ──────────> P0-03
 
 ## P0-05 — Đánh giá embedding tiếng Việt
 
-- **Status:** Blocked bởi P0-01, P0-02, P0-04 và target GPU.
+- **Status:** In progress — quality-track harness started on CPU smoke; still blocked for capacity/VRAM on target GPU.
 - **Objective:** Chọn model/revision/dimension/normalization theo quality + capacity.
 - **Plan:** So `bge-m3` và multilingual-e5; pin tokenizer/batch/truncation; đo theo
   category, queue depth, cold/warm.

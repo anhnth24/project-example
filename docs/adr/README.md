@@ -19,6 +19,7 @@ native, security/egress và migration strategy.
 | ADR | Status | Decision |
 |---|---|---|
 | [0001](0001-web-boundaries.md) | Accepted | Dependency boundaries của Markhand Web |
+| [0004](0004-vietnamese-embedding-model.md) | Proposed | P0-05 Vietnamese embedding draft candidates |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.
