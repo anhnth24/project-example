@@ -59,7 +59,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-03 — Mở rộng desktop baseline trên corpus Phase 0
 
-- **Status:** Blocked bởi P0-02 và P1A-01.
+- **Status:** Review — real release conversion/local-RAG baseline and independent
+  evidence validation passed on reduced runner; stacked on P0-02.
 - **Objective:** Mở rộng parity baseline P1A-01 lên corpus/metrics Phase 0; P1A-01 là
   baseline authoritative để việc extraction không phải đợi toàn bộ corpus.
 - **Plan:** Tái dùng fixtures/harness P1A-01; chạy release conversion; snapshot top-k,
