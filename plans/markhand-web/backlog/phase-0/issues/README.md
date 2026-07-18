@@ -221,10 +221,10 @@ P1A-01 ──────────> P0-03
 
 ## P0-10 — ADR, SLO/RPO/RTO và Phase 0 gate
 
-- **Status:** Done — seven architecture decisions Accepted (`phase0-decisions.json`);
-  SLA/risk register + restore/query-load smoke recorded. Profile B numeric exit
-  gates (query P95/P99, ingest capacity, DR RPO/RTO) still block production
-  Phase 0 exit (`productionPhase0ExitBlocked=true`).
+- **Status:** Done (decision/smoke track) — seven architecture decisions Accepted
+  (`phase0-decisions.json`); SLA/risk register + restore/query-load smoke recorded.
+  **Not** a production Phase 0 numeric exit: Profile B gates (query P95/P99, ingest
+  capacity, DR RPO/RTO, vLLM cutover) remain open (`productionPhase0ExitBlocked=true`).
 - **Objective:** Chuyển evidence thành quyết định và clean restore proof.
 - **Plan:** ADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,
   index migration, backup order; chốt SLO; backup/restore ba hệ; close registry.
@@ -241,6 +241,10 @@ P1A-01 ──────────> P0-03
 
 ## Exit gate
 
-P0-10 chỉ đóng khi quality, target-scale mixed load, capacity headroom, adversarial
-disposition, clean restore, architecture decisions và license inventory đều đạt
-numeric gate trong registry.
+P0-10 **decision/smoke track** closes when architecture decisions, license inventory,
+adversarial disposition, and offline restore/query-load smoke are accepted with
+honest `productionPhase0ExitBlocked` flags.
+
+**Production Phase 0 numeric exit** still requires Profile B evidence for
+target-scale mixed load, capacity headroom, clean restore RPO/RTO, and registry
+gates with `targetMatch=true` before claiming Phase 1B scale readiness.

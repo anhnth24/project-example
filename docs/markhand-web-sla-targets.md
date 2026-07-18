@@ -19,6 +19,9 @@ These targets apply to the Markhand Web Phase 1B service envelope:
 |---|---:|---:|---|---|---|
 | Retrieval latency | Query P95 | <= 500 ms | `G0-SLO-QUERY-P95` | No gate evidence yet; query load smoke only | Blocked |
 | Retrieval latency | Filtered query P99 | <= 1000 ms | `G0-SLO-QUERY-P99` | P0-07 topology smoke has `targetMatch=false`; not a pass | Blocked |
+| Answer streaming | Time-to-first-token (TTFT) P95 | <= 1500 ms under normal load | Operational SLA (Phase 1B answer path) | Not measured on Profile B; desktop/local smoke only | Blocked |
+| Availability | Service availability | >= 99.5% monthly for query path | Operational SLA | Not measured; spike lifecycle restart only | Blocked |
+| Degraded mode | Authz-safe FTS/text fallback when vector index unavailable | Required; no cross-tenant leakage | Operational SLA / ADR 0007+0012 | Documented in ADRs; not Profile B proven | Blocked |
 | Retrieval quality | Recall@5 | >= 0.85 | `G0-RET-RECALL-AT-5` | `bench/markhand_web/retrieval/summary.json` | Phase 1B quality track accepted |
 | Temporal answers | Temporal accuracy | >= 0.95 | `G0-RET-TEMPORAL-ACCURACY` | `bench/markhand_web/retrieval/summary.json` | Phase 1B quality track accepted |
 | Change answers | Change accuracy | >= 0.95 | `G0-RET-CHANGE-ACCURACY` | `bench/markhand_web/retrieval/summary.json` | Phase 1B quality track accepted |

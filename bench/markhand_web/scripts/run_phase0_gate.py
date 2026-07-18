@@ -190,6 +190,7 @@ def close_flags(
     command_results: dict[str, dict],
     security_smoke: dict,
     restore_smoke: dict,
+    query_load_smoke: dict,
     git: dict,
 ) -> dict:
     decisions = bool(command_results["phase0Decisions"]["pass"])
@@ -197,6 +198,7 @@ def close_flags(
     license_ok = bool(command_results["runtimeLicenseInventory"]["pass"])
     security_ok = bool(security_smoke["pass"])
     restore_ok = bool(restore_smoke["pass"])
+    query_load_ok = bool(query_load_smoke["pass"])
     git_clean = bool(git["clean"])
     return {
         "decisionsAccepted": decisions,
@@ -204,8 +206,19 @@ def close_flags(
         "runtimeLicenseInventoryPassed": license_ok,
         "securitySmokeClosed": security_ok,
         "restoreSmokeClosed": restore_ok,
+        "queryLoadSmokeClosed": query_load_ok,
         "gitClean": git_clean,
-        "p0_10_closed": all([decisions, gates, license_ok, security_ok, restore_ok, git_clean]),
+        "p0_10_closed": all(
+            [
+                decisions,
+                gates,
+                license_ok,
+                security_ok,
+                restore_ok,
+                query_load_ok,
+                git_clean,
+            ]
+        ),
         "productionPhase0ExitBlocked": bool(PROFILE_B_BLOCKERS),
     }
 
@@ -219,7 +232,7 @@ def build_payload() -> dict:
     security = security_smoke_status()
     restore = restore_smoke_status()
     query_load = query_load_smoke_status()
-    flags = close_flags(command_results, security, restore, git)
+    flags = close_flags(command_results, security, restore, query_load, git)
     return {
         "version": 1,
         "reportId": "p0-10-phase0-gate",
@@ -311,14 +324,46 @@ def self_test() -> None:
         name: {"pass": True}
         for name in ("phase0Decisions", "markhandGates", "runtimeLicenseInventory")
     }
-    flags = close_flags(ok_commands, {"pass": True}, {"pass": True}, {"clean": True})
+    flags = close_flags(
+        ok_commands,
+        {"pass": True},
+        {"pass": True},
+        {"pass": True},
+        {"clean": True},
+    )
     assert flags["p0_10_closed"] is True
+    assert flags["queryLoadSmokeClosed"] is True
     assert flags["productionPhase0ExitBlocked"] is True
-    dirty_flags = close_flags(ok_commands, {"pass": True}, {"pass": True}, {"clean": False})
+    dirty_flags = close_flags(
+        ok_commands,
+        {"pass": True},
+        {"pass": True},
+        {"pass": True},
+        {"clean": False},
+    )
     assert dirty_flags["p0_10_closed"] is False
     failed_license = dict(ok_commands)
     failed_license["runtimeLicenseInventory"] = {"pass": False}
-    assert close_flags(failed_license, {"pass": True}, {"pass": True}, {"clean": True})["p0_10_closed"] is False
+    assert (
+        close_flags(
+            failed_license,
+            {"pass": True},
+            {"pass": True},
+            {"pass": True},
+            {"clean": True},
+        )["p0_10_closed"]
+        is False
+    )
+    assert (
+        close_flags(
+            ok_commands,
+            {"pass": True},
+            {"pass": True},
+            {"pass": False},
+            {"clean": True},
+        )["p0_10_closed"]
+        is False
+    )
 
 
 def main() -> int:
