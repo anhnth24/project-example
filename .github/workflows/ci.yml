@@ -150,6 +150,7 @@ jobs:
           python3 scripts/validate_spike.py --config-only
           make dev-up
           make dev-health
+          make dev-server-smoke
           make dev-down
           make spike-up
           make spike-lifecycle

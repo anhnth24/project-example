@@ -5,7 +5,8 @@ SHELL := /bin/bash
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
 	check-spike spike-up spike-health spike-down spike-reset spike-lifecycle \
-	check-desktop-baseline p0-desktop-baseline bundle-linux dev-up dev-health dev-down dev-reset
+	check-desktop-baseline p0-desktop-baseline bundle-linux dev-up dev-health dev-down dev-reset \
+	dev-server-smoke
 
 install:
 	pnpm install --frozen-lockfile
@@ -123,6 +124,9 @@ dev-up:
 
 dev-health:
 	deploy/scripts/health.sh
+
+dev-server-smoke:
+	deploy/scripts/server-smoke.sh
 
 dev-down:
 	deploy/scripts/down.sh

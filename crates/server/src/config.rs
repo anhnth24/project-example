@@ -122,11 +122,7 @@ impl ServerConfig {
     /// Returns the service endpoints required to start the real POC server.
     pub fn runtime_endpoints(&self) -> Result<RuntimeEndpoints, String> {
         Ok(RuntimeEndpoints {
-            database_url: self
-                .database_url
-                .as_ref()
-                .ok_or_else(|| "server requires MARKHAND_DATABASE_URL".to_string())?
-                .clone(),
+            database_url: required_database_url(self.database_url.as_ref())?,
             qdrant_url: required_url(self.qdrant_url.as_deref(), "MARKHAND_QDRANT_URL")?,
             minio_url: required_url(self.minio_url.as_deref(), "MARKHAND_MINIO_URL")?,
         })
@@ -152,6 +148,16 @@ pub struct RuntimeEndpoints {
     pub database_url: SecretString,
     pub qdrant_url: String,
     pub minio_url: String,
+}
+
+fn required_database_url(value: Option<&SecretString>) -> Result<SecretString, String> {
+    let value = value.ok_or_else(|| "server requires MARKHAND_DATABASE_URL".to_string())?;
+    let parsed = reqwest::Url::parse(value.expose())
+        .map_err(|_| "MARKHAND_DATABASE_URL must be an absolute URL".to_string())?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
+        return Err("MARKHAND_DATABASE_URL must include a postgres host".into());
+    }
+    Ok(value.clone())
 }
 
 fn optional_value(
@@ -188,7 +194,8 @@ fn validate_production_database_url(value: &str) -> Result<(), String> {
     if host.eq_ignore_ascii_case("localhost")
         || host == "127.0.0.1"
         || host == "::1"
-        || parsed.username() == "markhand"
+        || (parsed.username() == "markhand" && parsed.password() == Some("markhand_dev_only"))
+        || (parsed.username() == "postgres" && parsed.password() == Some("postgres"))
         || parsed.password() == Some("markhand_dev_only")
     {
         return Err("prod profile cannot use a development database URL".into());
@@ -196,8 +203,8 @@ fn validate_production_database_url(value: &str) -> Result<(), String> {
     let sslmode = parsed
         .query_pairs()
         .find_map(|(key, value)| (key == "sslmode").then_some(value));
-    if !matches!(sslmode.as_deref(), Some("verify-ca" | "verify-full")) {
-        return Err("prod MARKHAND_DATABASE_URL requires sslmode=verify-ca or verify-full".into());
+    if sslmode.as_deref() != Some("require") {
+        return Err("prod MARKHAND_DATABASE_URL requires sslmode=require".into());
     }
     Ok(())
 }
@@ -297,7 +304,7 @@ mod tests {
             ("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into()),
             (
                 "MARKHAND_DATABASE_URL".into(),
-                "postgres://app:secret@postgres.internal/markhand?sslmode=verify-full".into(),
+                "postgres://app:secret@postgres.internal/markhand?sslmode=require".into(),
             ),
             (
                 "MARKHAND_QDRANT_URL".into(),

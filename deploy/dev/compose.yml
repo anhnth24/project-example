@@ -11,6 +11,7 @@ services:
       - "127.0.0.1:${MARKHAND_POSTGRES_PORT:-54329}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/10-markhand-app.sql:ro
     networks: [private]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]

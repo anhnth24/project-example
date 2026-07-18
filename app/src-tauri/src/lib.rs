@@ -1301,8 +1301,10 @@ mod tests {
 
     #[test]
     fn ollama_config_does_not_require_api_key() {
-        let mut settings = Settings::default();
-        settings.llm_enabled = true;
+        let settings = Settings {
+            llm_enabled: true,
+            ..Settings::default()
+        };
         let config = settings.llm_config().unwrap().unwrap();
         assert!(config.api_key.is_empty());
         assert_eq!(config.model, "qwen2.5:7b");
@@ -1310,11 +1312,13 @@ mod tests {
 
     #[test]
     fn cloud_provider_requires_api_key() {
-        let mut settings = Settings::default();
-        settings.llm_enabled = true;
-        settings.llm_provider = "openai".into();
-        settings.llm_base_url = "https://api.openai.com".into();
-        settings.llm_model = "gpt-4o-mini".into();
+        let mut settings = Settings {
+            llm_enabled: true,
+            llm_provider: "openai".into(),
+            llm_base_url: "https://api.openai.com".into(),
+            llm_model: "gpt-4o-mini".into(),
+            ..Settings::default()
+        };
         assert!(settings.llm_config().is_err());
         settings.llm_api_key = Some("secret".into());
         assert!(settings.llm_config().unwrap().is_some());
