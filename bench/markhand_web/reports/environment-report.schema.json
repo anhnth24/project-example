@@ -4,7 +4,7 @@
   "required": [
     "version", "reportId", "gateId", "generatedAt", "git", "command",
     "workloadProfileId", "environment", "fixtures", "result", "profiles",
-    "targetMatch", "fixtureManifestPath", "implementationSha256"
+    "targetMatch", "fixtureManifestPath", "implementationSha256", "lifecycle"
   ],
   "properties": {
     "version": {"const": 1},
@@ -17,6 +17,16 @@
     "targetMatch": {"type": "boolean"},
     "fixtureManifestPath": {"type": "string", "minLength": 1},
     "implementationSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "lifecycle": {
+      "type": "object",
+      "required": ["restartPersistence", "resetDeletion", "stores", "verifiedAt"],
+      "properties": {
+        "restartPersistence": {"type": "boolean"},
+        "resetDeletion": {"type": "boolean"},
+        "stores": {"type": "array", "minItems": 3},
+        "verifiedAt": {"type": ["string", "null"]}
+      }
+    },
     "git": {
       "type": "object",
       "required": ["commit", "dirty"],

@@ -442,6 +442,16 @@ def validate_report(
         expected_runtime
     ) or result.get("pass") is not True:
         errors.append("spike report health result is invalid")
+    lifecycle = payload.get("lifecycle", {})
+    if (
+        lifecycle.get("restartPersistence") is not True
+        or lifecycle.get("resetDeletion") is not True
+        or set(lifecycle.get("stores", []))
+        != {"postgres", "qdrant", "minio"}
+        or not isinstance(lifecycle.get("verifiedAt"), str)
+        or not lifecycle["verifiedAt"].endswith("Z")
+    ):
+        errors.append("spike report lifecycle evidence is incomplete")
     expected_match = expected_target_match(hardware, profiles)
     if not isinstance(payload.get("targetMatch"), bool) or payload.get(
         "targetMatch"

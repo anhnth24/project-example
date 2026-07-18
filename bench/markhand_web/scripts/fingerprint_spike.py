@@ -333,6 +333,12 @@ def fingerprint(env_file: Path) -> dict:
             gpu_enabled,
             nested_enabled,
         ),
+        "lifecycle": {
+            "restartPersistence": False,
+            "resetDeletion": False,
+            "stores": ["postgres", "qdrant", "minio"],
+            "verifiedAt": None,
+        },
         "notes": "IOPS must be independently verified; target Profile B gates require targetMatch=true.",
     }
 

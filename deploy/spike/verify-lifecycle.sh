@@ -64,4 +64,21 @@ if "${COMPOSE[@]}" run --rm --no-deps -T minio-init \
 fi
 
 "$SPIKE_DIR/seed.sh"
+report="${MARKHAND_SPIKE_REPORT:-$ROOT/bench/markhand_web/reports/spike-environment.json}"
+python3 - "$report" <<'PY'
+import datetime
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text())
+payload["lifecycle"] = {
+    "restartPersistence": True,
+    "resetDeletion": True,
+    "stores": ["postgres", "qdrant", "minio"],
+    "verifiedAt": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+path.write_text(json.dumps(payload, indent=2) + "\n")
+PY
 echo "spike lifecycle verified: restart preserves data, reset removes sentinels"
