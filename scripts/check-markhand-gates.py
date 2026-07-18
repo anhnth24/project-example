@@ -555,7 +555,12 @@ class GateValidatorTests(unittest.TestCase):
         self.assertTrue(any("hardware.cpu.cores" in error for error in hardware_errors))
         self.assertTrue(any("hardware.disk.type" in error for error in hardware_errors))
         self.assertTrue(any("hardware.gpu.model" in error for error in hardware_errors))
-        self.assertTrue(any("hardware.network.bandwidthGbps" in error for error in hardware_errors))
+        self.assertTrue(
+            any(
+                "hardware.network" in error and "bandwidthMeasured" in error
+                for error in hardware_errors
+            )
+        )
         self.assertTrue(any("hardware.os.arch" in error for error in hardware_errors))
 
     def test_approved_registry_rejects_unapproved_inputs_and_threshold_drift(self) -> None:
