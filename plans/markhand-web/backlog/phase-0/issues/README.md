@@ -221,7 +221,10 @@ P1A-01 ──────────> P0-03
 
 ## P0-10 — ADR, SLO/RPO/RTO và Phase 0 gate
 
-- **Status:** Blocked bởi P0-05…P0-09.
+- **Status:** Done — seven architecture decisions Accepted (`phase0-decisions.json`);
+  SLA/risk register + restore/query-load smoke recorded. Profile B numeric exit
+  gates (query P95/P99, ingest capacity, DR RPO/RTO) still block production
+  Phase 0 exit (`productionPhase0ExitBlocked=true`).
 - **Objective:** Chuyển evidence thành quyết định và clean restore proof.
 - **Plan:** ADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,
   index migration, backup order; chốt SLO; backup/restore ba hệ; close registry.
