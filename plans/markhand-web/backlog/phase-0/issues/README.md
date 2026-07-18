@@ -39,8 +39,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-02 — Golden corpus tiếng Việt và adversarial corpus
 
-- **Status:** In progress — version/conflict extension passed retrieval review;
-  domain re-adjudication pending; stacked on P0-01.
+- **Status:** Done — deterministic version/conflict corpus, dual adjudication and
+  strict reproducibility gates passed.
 - **Objective:** Dataset tái lập cho conversion, retrieval, citation và upload attack.
 - **Plan:** Thêm mọi format; 200–500 query với expected document/source span/
   relevance/no-answer; multi-document và immutable multi-version citations
@@ -60,8 +60,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-03 — Mở rộng desktop baseline trên corpus Phase 0
 
-- **Status:** Review — real release conversion/local-RAG baseline and independent
-  evidence validation passed on reduced runner; stacked on P0-02.
+- **Status:** Done — real release conversion/local-RAG baseline and independently
+  recomputed evidence accepted as the current-state reference.
 - **Objective:** Mở rộng parity baseline P1A-01 lên corpus/metrics Phase 0; P1A-01 là
   baseline authoritative để việc extraction không phải đợi toàn bộ corpus.
 - **Plan:** Tái dùng fixtures/harness P1A-01; chạy release conversion; snapshot top-k,
