@@ -106,7 +106,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-07 — SQLite desktop storage feature
 
-- **Status:** Review — atomic storage extraction, legacy fixture and parity gates passed.
+- **Status:** Done — merged to `master` with atomic storage and legacy DB gates.
 - **Objective:** Move SQLite persistence, bỏ reverse dependency vào Tauri.
 - **Plan:** Schema/metadata/vector/incremental/FTS/hydration; API nhận DB path +
   caller-supplied corpus; Tauri giữ path jail/load.
@@ -136,7 +136,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-09 — Thin Tauri adapters
 
-- **Status:** Blocked bởi P1A-06/07/08.
+- **Status:** In progress — commands now delegate shared desktop service orchestration.
 - **Objective:** Desktop commands delegate shared crate, IPC giữ nguyên.
 - **Plan:** Tauri giữ state/settings/path load/spawn_blocking/error mapping; delegate
   rebuild/stats/search/ask; retain legacy commands; remove duplicate only sau parity.
