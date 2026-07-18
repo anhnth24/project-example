@@ -36,9 +36,15 @@ validation uses `make bundle-linux`.
 ## CI behavior
 
 - Every PR and `master` push runs the consolidated static/foundation gate.
-- Heavy Rust, desktop frontend, web and dev-stack jobs run on PRs only when their
-  owned paths change. A CI/Makefile change deliberately activates every group.
-- A new commit on the same PR cancels the older in-progress run.
+- Heavy Rust, desktop frontend, web and dev-stack jobs run only when their owned paths
+  change, on both PR and `master`. This keeps direct pushes safe without running
+  unrelated product gates.
+- Linux bundle smoke (including native-runtime preparation) runs only for
+  packaging/runtime configuration changes; the full Linux/Windows/macOS installer
+  matrix remains release-only.
+- A CI/Makefile/classifier/toolchain change deliberately activates every group.
+- A new commit on the same PR cancels the older in-progress run. `master` runs are not
+  grouped or canceled because each run classifies a different push delta.
 - Installer matrices run only for `markhand-v*` tags or manual dispatch, never for an
   ordinary `master` push.
 - The issue-sync workflow remains path-filtered to backlog/sync changes.
