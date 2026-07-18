@@ -106,7 +106,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-07 — SQLite desktop storage feature
 
-- **Status:** Ready — shared rank/citation/ask APIs are merged.
+- **Status:** In progress — moving schema, incremental writes, FTS and hydration.
 - **Objective:** Move SQLite persistence, bỏ reverse dependency vào Tauri.
 - **Plan:** Schema/metadata/vector/incremental/FTS/hydration; API nhận DB path +
   caller-supplied corpus; Tauri giữ path jail/load.
@@ -121,7 +121,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-08 — Persistent HNSW desktop feature
 
-- **Status:** Review — shared adapter, legacy binary fixture and hardening gates passed.
+- **Status:** Done — merged to `master` with legacy binary and recovery gates.
 - **Objective:** Move optional ANN cache, SQLite vẫn authority.
 - **Plan:** Manifest/partition/rebuild/search/clear; legacy signature compatibility;
   corrupt/mismatch fallback exact cosine.
