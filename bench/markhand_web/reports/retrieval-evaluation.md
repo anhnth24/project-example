@@ -1,7 +1,7 @@
 # P0-06 retrieval evaluation
 
-- Generated: `2026-07-18T18:33:11.852920+00:00`
-- Git commit: `7e750f794941a0936127a2fb2d4db01c7e2b659e`
+- Generated: `2026-07-18T18:35:53.499630+00:00`
+- Git commit: `ce56f674cf28b75dac8db8a94a16dcade934d95c`
 - Dirty: `False`
 - Chunking: `heading-chunks-2000-v1`
 - Embedding runtime: `sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33`
@@ -20,8 +20,8 @@
 ## Version citation / temporal / conflict
 
 - Citations with chunkId: `305/305`
-- Version-citation P/R: `0.931034` / `0.9`
-- Temporal accuracy: `0.833333` (n=6)
+- Version-citation P/R: `1.0` / `1.0`
+- Temporal accuracy: `1.0` (n=6)
 - Change accuracy: `1.0` (n=4)
 - Conflict status accuracy: `1.0` (n=8)
 - Unresolved warning accuracy: `1.0`
@@ -31,15 +31,13 @@
 ## Gates
 
 - `G0-RET-RECALL-AT-5`: metric=0.984944 threshold=0.85 pass=True evaluated=True
-- `G0-RET-TEMPORAL-ACCURACY`: metric=0.833333 threshold=0.95 pass=False evaluated=True
+- `G0-RET-TEMPORAL-ACCURACY`: metric=1.0 threshold=0.95 pass=True evaluated=True
 - `G0-RET-CHANGE-ACCURACY`: metric=1.0 threshold=0.95 pass=True evaluated=True
-- `G0-RET-VERSION-CITATION-PRECISION`: metric=0.931034 threshold=1.0 pass=False evaluated=True
-- `G0-RET-VERSION-CITATION-RECALL`: metric=0.9 threshold=1.0 pass=False evaluated=True
+- `G0-RET-VERSION-CITATION-PRECISION`: metric=1.0 threshold=1.0 pass=True evaluated=True
+- `G0-RET-VERSION-CITATION-RECALL`: metric=1.0 threshold=1.0 pass=True evaluated=True
 
 ## Verdict
 
-- P0-06 closed: **NO**
+- P0-06 closed: **YES**
 
-- G0-RET-TEMPORAL-ACCURACY failed: 0.833333 >= 0.95
-- G0-RET-VERSION-CITATION-PRECISION failed: 0.931034 >= 1.0
-- G0-RET-VERSION-CITATION-RECALL failed: 0.9 >= 1.0
+- All P0-06 retrieval/version/conflict gates passed with neural hybrid.

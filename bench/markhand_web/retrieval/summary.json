@@ -2,9 +2,9 @@
   "version": 2,
   "issue": "P0-06",
   "track": "retrieval-neural-hybrid",
-  "generatedAt": "2026-07-18T18:33:11.852920+00:00",
+  "generatedAt": "2026-07-18T18:35:53.499630+00:00",
   "git": {
-    "commit": "7e750f794941a0936127a2fb2d4db01c7e2b659e",
+    "commit": "ce56f674cf28b75dac8db8a94a16dcade934d95c",
     "dirty": false,
     "dirtyPaths": []
   },
@@ -34,7 +34,7 @@
     "embeddingDevice": "cpu"
   },
   "fingerprint": {
-    "gitCommit": "7e750f794941a0936127a2fb2d4db01c7e2b659e",
+    "gitCommit": "ce56f674cf28b75dac8db8a94a16dcade934d95c",
     "workloadProfileId": "on-prem-reference-v1",
     "embeddingProvider": "sentence-transformers",
     "embeddingModel": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
@@ -82,16 +82,16 @@
   "versionCitation": {
     "citations": 305,
     "citationsWithChunkId": 305,
-    "versionCitationPrecision": 0.931034,
-    "versionCitationRecall": 0.9,
+    "versionCitationPrecision": 1.0,
+    "versionCitationRecall": 1.0,
     "citationCounts": {
-      "tp": 27,
-      "fp": 2,
-      "fn": 3
+      "tp": 30,
+      "fp": 0,
+      "fn": 0
     },
-    "temporalAnswerAccuracy": 0.833333,
+    "temporalAnswerAccuracy": 1.0,
     "temporalQueries": 6,
-    "currentVersionAccuracy": 0.333333,
+    "currentVersionAccuracy": 1.0,
     "currentQueries": 3,
     "versionChangeAccuracy": 1.0,
     "changeQueries": 4,
@@ -119,10 +119,10 @@
       "environmentMatch": true
     },
     "G0-RET-TEMPORAL-ACCURACY": {
-      "metric": 0.833333,
+      "metric": 1.0,
       "threshold": 0.95,
       "operator": ">=",
-      "pass": false,
+      "pass": true,
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
@@ -139,20 +139,20 @@
       "environmentMatch": true
     },
     "G0-RET-VERSION-CITATION-PRECISION": {
-      "metric": 0.931034,
+      "metric": 1.0,
       "threshold": 1.0,
       "operator": ">=",
-      "pass": false,
+      "pass": true,
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
       "environmentMatch": true
     },
     "G0-RET-VERSION-CITATION-RECALL": {
-      "metric": 0.9,
+      "metric": 1.0,
       "threshold": 1.0,
       "operator": ">=",
-      "pass": false,
+      "pass": true,
       "evaluated": true,
       "environmentId": "local-cpu-quality",
       "measuredEnvironmentId": "local-cpu-quality",
@@ -167,10 +167,8 @@
     "resolvedHistoryAccuracy": 1.0,
     "pass": true
   },
-  "p0_06_closed": false,
+  "p0_06_closed": true,
   "reasons": [
-    "G0-RET-TEMPORAL-ACCURACY failed: 0.833333 >= 0.95",
-    "G0-RET-VERSION-CITATION-PRECISION failed: 0.931034 >= 1.0",
-    "G0-RET-VERSION-CITATION-RECALL failed: 0.9 >= 1.0"
+    "All P0-06 retrieval/version/conflict gates passed with neural hybrid."
   ]
 }
