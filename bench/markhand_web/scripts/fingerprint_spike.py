@@ -191,7 +191,11 @@ def hardware(storage_path: Path) -> dict:
             measured_iops = int(report.get("randomReadIops", 0))
             iops_evidence = report
             iops_evidence_sha256 = hashlib.sha256(
-                report_path.read_bytes()
+                json.dumps(
+                    report,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
             ).hexdigest()
     return {
         "cpu": {
