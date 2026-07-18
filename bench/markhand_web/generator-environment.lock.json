@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "python": "3.12",
+  "packages": {
+    "blake3": "1.0.9",
+    "openpyxl": "3.1.5",
+    "Pillow": "12.3.0",
+    "python-docx": "1.2.0",
+    "python-pptx": "1.0.2",
+    "reportlab": "5.0.0"
+  },
+  "font": {
+    "fileName": "DejaVuSans.ttf",
+    "package": "fonts-dejavu-core",
+    "packageVersion": "2.37-8",
+    "sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
+    "license": "Bitstream-Vera",
+    "evidence": "bench/markhand_web/licenses/DejaVu-fonts.txt",
+    "evidenceSha256": "2e9fbdb4beb050cb2518d1de5878e102d95ad63b5e93f5cd676daa8b0901e351"
+  }
+}

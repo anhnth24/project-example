@@ -3,7 +3,8 @@ SHELL := /bin/bash
 .PHONY: install check-toolchain check-static check-ci check-boundaries check-migrations \
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
-	check-web check-desktop check-foundation bundle-linux dev-up dev-health dev-down dev-reset
+	check-corpus check-corpus-pending check-web check-desktop check-foundation \
+	bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
 	pnpm install --frozen-lockfile
@@ -36,6 +37,14 @@ check-markhand-gates:
 	python3 scripts/check-markhand-gates.py --self-test
 	python3 scripts/check-phase0-decisions.py --self-test
 	python3 scripts/check-runtime-license-inventory.py --self-test
+
+check-corpus:
+	python3 scripts/validate_corpus.py --reproducible
+	python3 scripts/validate_corpus.py --self-test
+
+check-corpus-pending:
+	python3 scripts/validate_corpus.py --allow-pending --reproducible
+	python3 scripts/validate_corpus.py --self-test
 
 check-roadmap:
 	python3 scripts/build-roadmap.py --check

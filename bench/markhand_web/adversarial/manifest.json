@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "generator": "python3 bench/markhand_web/scripts/generate_corpus.py",
+  "attacks": [
+    {
+      "id": "adv-spoof-pdf",
+      "path": "files/plain-text.pdf",
+      "threatClass": "extension_spoof",
+      "expectedDisposition": "reject",
+      "sha256": "07bcbca5e5cff5eadb6a3578850bb9413f9bfd2406d9210b0c25b7f78449889a",
+      "blake3": "d9c98d2def43803331b45754d72be528499fbb694b48dd20dceba6bab0c13699",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-html-pdf",
+      "path": "files/actually-html.pdf",
+      "threatClass": "mime_mismatch",
+      "expectedDisposition": "reject",
+      "sha256": "4791ce306a94620004cdd5509c4cea29572b5ec38f6a4e149944145e5716b1d6",
+      "blake3": "8e9d08f270b6d63d7544c75f636fc1f7ad26f0dd9ee1c9dac8b6c937525a23d7",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-corrupt-pdf",
+      "path": "files/corrupt.pdf",
+      "threatClass": "parser_corruption",
+      "expectedDisposition": "reject",
+      "sha256": "a035c0890ba0b8dec8d05c79571ed20b17eb10cf1ba141abd31c25fee6d6c96a",
+      "blake3": "1f41c9bb4e80d82bfa94d87276a176b451d85143764ba6f07c0ade881c915dfd",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-prompt-html",
+      "path": "files/prompt-injection.html",
+      "threatClass": "prompt_injection",
+      "expectedDisposition": "quarantine",
+      "sha256": "eba2b1038b6ce6050ac111a19c3f488fc47eb463632f5fc7186edcb95b514ba7",
+      "blake3": "f2d7e46f7386c9ad82c260cec4a0fce2931808a19781b456b30178890adf2a66",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-formula-csv",
+      "path": "files/formula.csv",
+      "threatClass": "csv_formula",
+      "expectedDisposition": "quarantine",
+      "sha256": "73dbce7e993e0215b88fb08b9e5b03312072dc4d228b83bba57f26a6e53f445a",
+      "blake3": "0cf410e086a9bc2a7339a550d018d367e2dcb81c2d66ba55d98ce5f4f3b04f41",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-malformed-docx",
+      "path": "files/malformed.docx",
+      "threatClass": "malformed_ooxml",
+      "expectedDisposition": "reject",
+      "sha256": "9b290921f2c3898ddef59771780e80cdf1838eb1f031f6597609a434acd24257",
+      "blake3": "00468203604b25a2283f79faccb0ca70bc8d98b84adb2aa66174437b511d1c20",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-traversal-docx",
+      "path": "files/traversal.docx",
+      "threatClass": "archive_path_traversal",
+      "expectedDisposition": "reject",
+      "sha256": "159fc32b8322c5e6d69501e3788427a9e7bf097252f0865e2eb3717b6924a376",
+      "blake3": "339dee3ba52672df5c92faa51a94836bcc38f271e250831103ba13a473be1702",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-zip-bomb",
+      "path": "files/compressed-bomb.docx",
+      "threatClass": "archive_bomb",
+      "expectedDisposition": "reject",
+      "sha256": "39ab1628a3d8bb2fc0ce8b5a877fa9d3f781db4fb565092af07cf91ecdb45f2d",
+      "blake3": "92f96864bea0bc8c4d3bf4f4930da1fe6ad79e0e06f77c9fa679fdc6783cdd62",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-page-bomb",
+      "path": "files/page-bomb.pdf",
+      "threatClass": "pdf_page_bomb",
+      "expectedDisposition": "reject",
+      "sha256": "275b22c3eb903205817611d11cc5b4c1b2353c6211d615b7c1b67bd2dce3a572",
+      "blake3": "4d4b61a3f709c4ce02a91ae5cef591b31db979cc931a4ee3a55272eace1ca228",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    },
+    {
+      "id": "adv-long-audio",
+      "path": "files/long-silence.wav",
+      "threatClass": "audio_duration_limit",
+      "expectedDisposition": "quarantine",
+      "sha256": "08900fdd647cc35f919085996f5575eff18a2fc3955ce3263491de713b5c70da",
+      "blake3": "78080dbe433a8a78196afb54056a4a81b3749599fc98633ba838bba6306f6fea",
+      "source": "generated",
+      "license": "CC0-1.0",
+      "owner": "phase0-security-owner",
+      "sensitive": false
+    }
+  ]
+}
