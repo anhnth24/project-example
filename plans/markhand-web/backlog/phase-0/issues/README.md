@@ -20,7 +20,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-01 — Khóa workload, hardware và gate registry
 
-- **Status:** Review — Profile B, supplemental targets and fail-closed validators passed.
+- **Status:** Done — approved Profile B, numeric targets and fail-closed validators
+  merged to `master`.
 - **Objective:** Thay giả định scale/SLA bằng workload envelope, hardware profile và
   gate schema được duyệt.
 - **Plan:** Ghi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/
@@ -79,8 +80,8 @@ P1A-01 ──────────> P0-03
 
 ## P0-04 — Spike infrastructure tái lập
 
-- **Status:** Review — isolated CPU smoke, three-store lifecycle and bound evidence
-  passed; Profile B GPU/IOPS target run remains external.
+- **Status:** Done — reproducible stack, pinned images, three-store lifecycle and bound
+  CPU-smoke evidence passed; Profile B GPU/IOPS measurements remain downstream gates.
 - **Objective:** Stack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.
 - **Plan:** Tái dùng compose/services/scripts base từ F-08; thêm benchmark-specific
   override với isolated volumes/data, vLLM/GPU profile, workload sizing, image digest
