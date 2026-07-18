@@ -154,16 +154,24 @@ P1A-01 ──────────> P0-03
 
 ## P0-07 — PG/Qdrant target-scale topology
 
-- **Status:** Blocked bởi P0-01, P0-04, P0-05 và target resources.
+- **Status:** Done — 1B POC topology selected by offline/synthetic harness:
+  Qdrant shared collection with mandatory `org_id` filter and PG no-partition
+  for the single-org POC. Profile B `G0-SLO-QUERY-P99` / 20M mixed-load
+  evidence still blocks production aggregate scale.
 - **Objective:** Chọn Qdrant topology và PG partition strategy bằng mixed-load evidence.
-- **Plan:** Generate realistic tenants; test max/org và aggregate production scale;
-  shared/cohort collection; PG no-partition/hash; query+ingest+delete+snapshot.
+- **Plan:** Generate realistic tenants; compare shared/cohort collection and
+  PG no-partition/bounded hash offline with query+ingest+delete+snapshot
+  markers. Re-run live on Profile B before production aggregate scale.
 - **Files:** `bench/markhand_web/scale/`, `reports/scale-topology.md`, ADR Qdrant/PG.
-- **Dependencies/blocks:** Hardware/storage scale thật; không chấp nhận extrapolation nhỏ.
-- **Acceptance:** Filtered P95/P99/recall đạt gate; ADR ghi measured limits; snapshot/
-  restore chạy được.
-- **Tests/evidence:** Latency, throughput, quantized recall, RAM/disk, compaction,
-  noisy-neighbor, FTS.
+- **Dependencies/blocks:** POC decision unblocked; production aggregate scale remains
+  blocked by hardware/storage scale thật. Không chấp nhận offline extrapolation as
+  Profile B evidence.
+- **Acceptance:** 1B POC recommendation recorded in ADR 0008/0009 and
+  `bench/markhand_web/scale/summary.json`; `productionScaleBlocked=true` until
+  Profile B validates filtered P95/P99/recall and restore behavior.
+- **Tests/evidence:** Offline harness self-test + full run. Deferred production
+  evidence: latency, throughput, quantized recall, RAM/disk, compaction,
+  noisy-neighbor, FTS on Profile B.
 - **Security/migration:** Synthetic tenant; mọi query vẫn có tenant filter.
 - **Out of scope:** Production RLS.
 

@@ -324,15 +324,14 @@
       "phase": "0",
       "id": "P0-07",
       "title": "P0-07 — PG/Qdrant target-scale topology",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p0",
-        "blocked"
+        "web-p0"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-07\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChọn Qdrant topology và PG partition strategy bằng mixed-load evidence.\n\n## Implementation plan\n\nGenerate realistic tenants; test max/org và aggregate production scale;\nshared/cohort collection; PG no-partition/hash; query+ingest+delete+snapshot.\n\n## Files/modules\n\n`bench/markhand_web/scale/`, `reports/scale-topology.md`, ADR Qdrant/PG.\n\n## Dependencies / blocks\n\nHardware/storage scale thật; không chấp nhận extrapolation nhỏ.\n\n## Acceptance criteria\n\nFiltered P95/P99/recall đạt gate; ADR ghi measured limits; snapshot/\nrestore chạy được.\n\n## Required tests / evidence\n\nLatency, throughput, quantized recall, RAM/disk, compaction,\nnoisy-neighbor, FTS.\n\n## Security and migration notes\n\nSynthetic tenant; mọi query vẫn có tenant filter.\n\n## Out of scope\n\nProduction RLS.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-07\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChọn Qdrant topology và PG partition strategy bằng mixed-load evidence.\n\n## Implementation plan\n\nGenerate realistic tenants; compare shared/cohort collection and\nPG no-partition/bounded hash offline with query+ingest+delete+snapshot\nmarkers. Re-run live on Profile B before production aggregate scale.\n\n## Files/modules\n\n`bench/markhand_web/scale/`, `reports/scale-topology.md`, ADR Qdrant/PG.\n\n## Dependencies / blocks\n\nPOC decision unblocked; production aggregate scale remains blocked by\nhardware/storage scale thật. Không chấp nhận offline extrapolation as Profile B\nevidence.\n\n## Acceptance criteria\n\n1B POC recommendation recorded in ADR 0008/0009 and\n`bench/markhand_web/scale/summary.json`; `productionScaleBlocked=true` until\nProfile B validates filtered P95/P99/recall and restore behavior.\n\n## Required tests / evidence\n\nOffline harness self-test + full run. Deferred production evidence: latency,\nthroughput, quantized recall, RAM/disk, compaction, noisy-neighbor, FTS on\nProfile B.\n\n## Security and migration notes\n\nSynthetic tenant; mọi query vẫn có tenant filter.\n\n## Out of scope\n\nProduction RLS.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {

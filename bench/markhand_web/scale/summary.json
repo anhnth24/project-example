@@ -1,0 +1,499 @@
+{
+  "version": 1,
+  "reportId": "p0-07-scale-topology",
+  "gateId": "P0-07-SCALE-TOPOLOGY",
+  "generatedAt": "2026-07-18T19:06:42.778095Z",
+  "command": "python3 bench/markhand_web/scripts/run_scale_topology.py",
+  "mode": "offline-synthetic-in-process",
+  "seed": 20260718,
+  "git": {
+    "commit": "de53675efc7c829e5c3ee5425fea771bfdbd2cc1",
+    "dirty": true,
+    "dirtyPaths": [
+      "docs/adr/README.md",
+      "plans/markhand-web/backlog/github-issues.json",
+      "plans/markhand-web/backlog/phase-0/issues/README.md",
+      "bench/markhand_web/reports/scale-topology.md",
+      "bench/markhand_web/scale/",
+      "bench/markhand_web/scripts/run_scale_topology.py",
+      "docs/adr/0008-pg-partition-strategy.md",
+      "docs/adr/0009-qdrant-topology.md"
+    ]
+  },
+  "environment": {
+    "environmentId": "current-runner-offline-synthetic",
+    "fingerprint": {
+      "gitCommit": "de53675efc7c829e5c3ee5425fea771bfdbd2cc1",
+      "workloadProfileId": "on-prem-reference-v1",
+      "hardware": {
+        "cpu": {
+          "vendor": "GenuineIntel",
+          "model": "Intel(R) Xeon(R) Processor",
+          "cores": 8,
+          "threads": 8,
+          "physicalCoresMeasured": true
+        },
+        "ramGb": 50.54,
+        "disk": {
+          "capacityGb": 270.44,
+          "storagePathSha256": "c52ddf65534b7b46035084358ab7902be4bfef220bdb503ac7039cc861905b05",
+          "type": "offline-local"
+        },
+        "gpu": {
+          "model": "none",
+          "vramGb": 0.0,
+          "count": 0
+        },
+        "network": {
+          "interface": "eth0",
+          "bandwidthGbps": 0.0,
+          "bandwidthMeasured": false
+        },
+        "os": {
+          "distro": "ubuntu-24.04",
+          "arch": "x86_64"
+        }
+      },
+      "spikeTargetMatch": false
+    }
+  },
+  "implementationSha256": "a6c150d54ce1cbad82a50beb369095be947e8153fe80d0df7a311a9fe8ef0721",
+  "workloadProfile": {
+    "profileId": "on-prem-reference-v1",
+    "scale": {
+      "orgCount": 20,
+      "collectionsPerOrg": 10,
+      "documentsPerCollection": 5000,
+      "averageDocumentPages": 10,
+      "vectorsPerOrgMax": 1000000,
+      "aggregateVectors": 20000000
+    },
+    "loads": {
+      "normal": {
+        "concurrentQueries": 20,
+        "ingestDocumentsPerHour": 300,
+        "deleteOperationsPerHour": 30
+      },
+      "peak": {
+        "concurrentQueries": 80,
+        "ingestDocumentsPerHour": 1200,
+        "deleteOperationsPerHour": 120
+      },
+      "recovery": {
+        "loadMultiplier": 2.0,
+        "durationMinutes": 120
+      },
+      "aggregate": {
+        "concurrentQueries": 80,
+        "concurrentIngest": 8,
+        "tenantDistribution": "zipfian-80-20"
+      }
+    }
+  },
+  "syntheticTenantDistribution": {
+    "strategy": "zipfian-80-20",
+    "seed": 20260718,
+    "orgCount": 20,
+    "topTenantCount": 4,
+    "topTenantLoadShare": 0.8,
+    "aggregateVectors": 20000000,
+    "vectorsPerOrgMax": 1000000,
+    "tenants": [
+      {
+        "orgId": "org-01",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.12498597193311647,
+        "qdrantCohort": "cohort-01",
+        "pgHashBucket": 4
+      },
+      {
+        "orgId": "org-02",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.19054439630838843,
+        "qdrantCohort": "cohort-01",
+        "pgHashBucket": 5
+      },
+      {
+        "orgId": "org-03",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.09266697488552061,
+        "qdrantCohort": "cohort-01",
+        "pgHashBucket": 3
+      },
+      {
+        "orgId": "org-04",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.3918026568729746,
+        "qdrantCohort": "cohort-01",
+        "pgHashBucket": 11
+      },
+      {
+        "orgId": "org-05",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.005643351352645425,
+        "qdrantCohort": "cohort-02",
+        "pgHashBucket": 12
+      },
+      {
+        "orgId": "org-06",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.004668620731261632,
+        "qdrantCohort": "cohort-02",
+        "pgHashBucket": 6
+      },
+      {
+        "orgId": "org-07",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.0062968722180118016,
+        "qdrantCohort": "cohort-02",
+        "pgHashBucket": 13
+      },
+      {
+        "orgId": "org-08",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.01463506646505419,
+        "qdrantCohort": "cohort-02",
+        "pgHashBucket": 0
+      },
+      {
+        "orgId": "org-09",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.00959974705044648,
+        "qdrantCohort": "cohort-03",
+        "pgHashBucket": 11
+      },
+      {
+        "orgId": "org-10",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.0037017081973320905,
+        "qdrantCohort": "cohort-03",
+        "pgHashBucket": 12
+      },
+      {
+        "orgId": "org-11",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.030093028373505477,
+        "qdrantCohort": "cohort-03",
+        "pgHashBucket": 2
+      },
+      {
+        "orgId": "org-12",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.007117434901471292,
+        "qdrantCohort": "cohort-03",
+        "pgHashBucket": 10
+      },
+      {
+        "orgId": "org-13",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.003461404134900463,
+        "qdrantCohort": "cohort-04",
+        "pgHashBucket": 11
+      },
+      {
+        "orgId": "org-14",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.004295720374923162,
+        "qdrantCohort": "cohort-04",
+        "pgHashBucket": 3
+      },
+      {
+        "orgId": "org-15",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.01973926534992964,
+        "qdrantCohort": "cohort-04",
+        "pgHashBucket": 11
+      },
+      {
+        "orgId": "org-16",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.008177774455931321,
+        "qdrantCohort": "cohort-04",
+        "pgHashBucket": 12
+      },
+      {
+        "orgId": "org-17",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.0039770763916917055,
+        "qdrantCohort": "cohort-05",
+        "pgHashBucket": 2
+      },
+      {
+        "orgId": "org-18",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.011604015108665955,
+        "qdrantCohort": "cohort-05",
+        "pgHashBucket": 4
+      },
+      {
+        "orgId": "org-19",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.005110797780720767,
+        "qdrantCohort": "cohort-05",
+        "pgHashBucket": 6
+      },
+      {
+        "orgId": "org-20",
+        "collections": 10,
+        "documents": 50000,
+        "averageDocumentPages": 10,
+        "vectors": 1000000,
+        "loadShare": 0.061878117113508595,
+        "qdrantCohort": "cohort-05",
+        "pgHashBucket": 3
+      }
+    ]
+  },
+  "mixedLoad": {
+    "profile": "peak",
+    "queryOperations": 1600,
+    "ingestOperations": 1200,
+    "deleteOperations": 120,
+    "totalOperations": 2920,
+    "orgIdFilterApplied": true,
+    "aggregateConcurrentQueries": 80,
+    "aggregateConcurrentIngest": 8
+  },
+  "topologyResults": {
+    "qdrant": {
+      "shared-collection": {
+        "operationCounts": {
+          "query": 1600,
+          "ingest": 1200,
+          "delete": 120
+        },
+        "orgIdFilterApplied": true,
+        "missingOrgIdFilterOperations": 0,
+        "touchedOrgs": 20,
+        "latencyMs": {
+          "mixedP50": 26.576,
+          "mixedP95": 55.24,
+          "mixedP99": 56.679,
+          "queryP50": 37.93,
+          "queryP95": 55.964,
+          "queryP99": 56.902,
+          "ingestP95": 24.835,
+          "deleteP95": 34.393
+        },
+        "syntheticThroughput": {
+          "queryOpsPerSecondPerWorker": 24.305,
+          "note": "Derived from synthetic latency only; not service throughput evidence."
+        },
+        "notes": [
+          "Offline in-process comparison, not measured Postgres/Qdrant latency.",
+          "does NOT claim G0-SLO-QUERY-P99 / 20M evidence"
+        ]
+      },
+      "cohort-collections": {
+        "operationCounts": {
+          "query": 1600,
+          "ingest": 1200,
+          "delete": 120
+        },
+        "orgIdFilterApplied": true,
+        "missingOrgIdFilterOperations": 0,
+        "touchedOrgs": 20,
+        "latencyMs": {
+          "mixedP50": 34.498,
+          "mixedP95": 71.233,
+          "mixedP99": 72.987,
+          "queryP50": 49.407,
+          "queryP95": 72.085,
+          "queryP99": 73.177,
+          "ingestP95": 33.546,
+          "deleteP95": 38.088
+        },
+        "syntheticThroughput": {
+          "queryOpsPerSecondPerWorker": 19.004,
+          "note": "Derived from synthetic latency only; not service throughput evidence."
+        },
+        "notes": [
+          "Offline in-process comparison, not measured Postgres/Qdrant latency.",
+          "does NOT claim G0-SLO-QUERY-P99 / 20M evidence"
+        ]
+      }
+    },
+    "pg": {
+      "no-partition": {
+        "operationCounts": {
+          "query": 1600,
+          "ingest": 1200,
+          "delete": 120
+        },
+        "orgIdFilterApplied": true,
+        "missingOrgIdFilterOperations": 0,
+        "touchedOrgs": 20,
+        "latencyMs": {
+          "mixedP50": 10.793,
+          "mixedP95": 16.79,
+          "mixedP99": 26.433,
+          "queryP50": 10.989,
+          "queryP95": 16.745,
+          "queryP99": 17.739,
+          "ingestP95": 15.627,
+          "deleteP95": 28.361
+        },
+        "syntheticThroughput": {
+          "queryOpsPerSecondPerWorker": 85.063,
+          "note": "Derived from synthetic latency only; not service throughput evidence."
+        },
+        "notes": [
+          "Offline in-process comparison, not measured Postgres/Qdrant latency.",
+          "does NOT claim G0-SLO-QUERY-P99 / 20M evidence"
+        ]
+      },
+      "bounded-hash-16": {
+        "operationCounts": {
+          "query": 1600,
+          "ingest": 1200,
+          "delete": 120
+        },
+        "orgIdFilterApplied": true,
+        "missingOrgIdFilterOperations": 0,
+        "touchedOrgs": 20,
+        "latencyMs": {
+          "mixedP50": 13.957,
+          "mixedP95": 21.375,
+          "mixedP99": 22.701,
+          "queryP50": 14.385,
+          "queryP95": 21.972,
+          "queryP99": 22.883,
+          "ingestP95": 19.403,
+          "deleteP95": 21.76
+        },
+        "syntheticThroughput": {
+          "queryOpsPerSecondPerWorker": 64.278,
+          "note": "Derived from synthetic latency only; not service throughput evidence."
+        },
+        "notes": [
+          "Offline in-process comparison, not measured Postgres/Qdrant latency.",
+          "does NOT claim G0-SLO-QUERY-P99 / 20M evidence"
+        ]
+      }
+    }
+  },
+  "snapshotRestore": {
+    "qdrant:shared-collection": {
+      "snapshotMarker": "synthetic-snapshot-0ff22532984e",
+      "restoreMarker": "synthetic-restore-f8ea5b745449",
+      "snapshotMsSynthetic": 880.884,
+      "restoreMsSynthetic": 1506.234,
+      "deterministicFromSeed": 20260718
+    },
+    "qdrant:cohort-collections": {
+      "snapshotMarker": "synthetic-snapshot-30ed1f95e6e6",
+      "restoreMarker": "synthetic-restore-b30812fa1931",
+      "snapshotMsSynthetic": 1108.169,
+      "restoreMsSynthetic": 2010.989,
+      "deterministicFromSeed": 20260718
+    },
+    "pg:no-partition": {
+      "snapshotMarker": "synthetic-snapshot-d1869dbfd34d",
+      "restoreMarker": "synthetic-restore-764f99ba4a66",
+      "snapshotMsSynthetic": 296.058,
+      "restoreMsSynthetic": 534.002,
+      "deterministicFromSeed": 20260718
+    },
+    "pg:bounded-hash-16": {
+      "snapshotMarker": "synthetic-snapshot-85fa157db5af",
+      "restoreMarker": "synthetic-restore-54c0a311008d",
+      "snapshotMsSynthetic": 302.926,
+      "restoreMsSynthetic": 591.702,
+      "deterministicFromSeed": 20260718
+    }
+  },
+  "recommendation": {
+    "phase1bPoc": {
+      "qdrant": "shared collection with mandatory org_id filter",
+      "pg": "no-partition for 1B single-org POC; bounded hash reserved for multi-tenant growth"
+    },
+    "production20M": "blocked pending Profile B",
+    "decisionKeys": {
+      "pg-partition-strategy": "no-partition-poc; bounded-hash-16-reserved-for-multi-tenant-growth",
+      "qdrant-topology": "shared-collection-with-mandatory-org-id-filter"
+    },
+    "selected": true
+  },
+  "adrs": {
+    "0008-pg-partition-strategy": true,
+    "0009-qdrant-topology": true
+  },
+  "closure": {
+    "adrsAccepted": true,
+    "harnessCompleted": true,
+    "recommendationRecorded": true,
+    "gitClean": false
+  },
+  "p0_07_closed": false,
+  "targetMatch": false,
+  "productionScaleBlocked": true,
+  "pocTopologySelected": true,
+  "doesNotClaim": [
+    "Profile B evidence",
+    "G0-SLO-QUERY-P99",
+    "20M live mixed-load evidence"
+  ],
+  "notes": [
+    "Offline/synthetic topology smoke only; no Docker or live services were used.",
+    "targetMatch is false on this runner; spike evidence targetMatch=false is preserved.",
+    "Production 20M aggregate scale is blocked pending Profile B mixed-load evidence.",
+    "does NOT claim G0-SLO-QUERY-P99 / 20M evidence"
+  ]
+}
