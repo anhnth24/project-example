@@ -17,6 +17,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_REPORT = ROOT / "bench/markhand_web/reports/spike-environment.json"
+IMPLEMENTATION_FILES = (
+    "deploy/dev/compose.yml",
+    "deploy/compose.spike.yml",
+    "deploy/spike/common.sh",
+    "deploy/spike/up.sh",
+    "deploy/spike/health.sh",
+    "deploy/spike/seed.sh",
+    "deploy/spike/down.sh",
+    "deploy/spike/reset.sh",
+    "deploy/spike/verify-lifecycle.sh",
+    "deploy/spike/images.lock.json",
+    "scripts/validate_spike.py",
+    "bench/markhand_web/scripts/fingerprint_spike.py",
+)
+
+
+def implementation_sha256() -> str:
+    digest = hashlib.sha256()
+    for relative in IMPLEMENTATION_FILES:
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update((ROOT / relative).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def run(*args: str) -> str:
@@ -60,12 +84,14 @@ def hardware(storage_path: Path) -> dict:
             gpu_count = len(devices)
             gpu_name = devices[0].split(",", 1)[0].strip()
             gpu_vram = round(float(devices[0].split(",", 1)[1]) / 1024, 2)
-    speed_path = Path("/sys/class/net/eth0/speed")
     bandwidth = 1.0
-    if speed_path.is_file():
+    for speed_path in Path("/sys/class/net").glob("*/speed"):
         try:
-            bandwidth = max(1.0, int(speed_path.read_text().strip()) / 1000)
-        except ValueError:
+            bandwidth = max(
+                bandwidth,
+                int(speed_path.read_text().strip()) / 1000,
+            )
+        except (OSError, ValueError):
             pass
     physical_cores = {
         (physical, core)
@@ -89,7 +115,16 @@ def hardware(storage_path: Path) -> dict:
         check=False,
     ).stdout.strip()
     backing_source, _, filesystem = mount.partition(" ")
-    disk_type = "nvme" if "nvme" in backing_source.lower() else filesystem or "unknown"
+    disk_type = filesystem or "unknown"
+    if backing_source.startswith("/dev/"):
+        topology = subprocess.run(
+            ["lsblk", "-s", "-n", "-o", "NAME,TYPE,TRAN", backing_source],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.lower()
+        if "nvme" in topology:
+            disk_type = "nvme"
     storage_hash = hashlib.sha256(str(storage_path.resolve()).encode()).hexdigest()
     measured_iops = 0
     iops_evidence_sha256 = None
@@ -267,6 +302,7 @@ def fingerprint(env_file: Path) -> dict:
         },
         "fixtures": {"manifestSha256": fixture_hash},
         "fixtureManifestPath": fixture_manifest.relative_to(ROOT).as_posix(),
+        "implementationSha256": implementation_sha256(),
         "result": {
             "metric": "healthy_spike_services",
             "value": len(runtime_services),

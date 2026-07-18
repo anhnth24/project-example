@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -24,6 +25,83 @@ SECRET = re.compile(
     r"(?:postgres(?:ql)?://[^/\s:@]+:[^@\s/]+@|AKIA[0-9A-Z]{16}|"
     r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"
 )
+IMPLEMENTATION_FILES = (
+    "deploy/dev/compose.yml",
+    "deploy/compose.spike.yml",
+    "deploy/spike/common.sh",
+    "deploy/spike/up.sh",
+    "deploy/spike/health.sh",
+    "deploy/spike/seed.sh",
+    "deploy/spike/down.sh",
+    "deploy/spike/reset.sh",
+    "deploy/spike/verify-lifecycle.sh",
+    "deploy/spike/images.lock.json",
+    "scripts/validate_spike.py",
+    "bench/markhand_web/scripts/fingerprint_spike.py",
+)
+
+
+def implementation_sha256() -> str:
+    digest = hashlib.sha256()
+    for relative in IMPLEMENTATION_FILES:
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update((ROOT / relative).read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def numeric(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def schema_errors(value: object, schema: dict, path: str) -> list[str]:
+    errors: list[str] = []
+    expected = schema.get("type")
+    allowed = expected if isinstance(expected, list) else [expected] if expected else []
+    matches = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "number": numeric,
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+        "null": lambda item: item is None,
+    }
+    if allowed and not any(matches[kind](value) for kind in allowed):
+        return [f"{path}: schema type mismatch"]
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path}: schema const mismatch")
+    if isinstance(value, str):
+        if len(value) < schema.get("minLength", 0):
+            errors.append(f"{path}: string is too short")
+        if schema.get("pattern") and not re.fullmatch(schema["pattern"], value):
+            errors.append(f"{path}: string pattern mismatch")
+    if numeric(value):
+        if "minimum" in schema and value < schema["minimum"]:
+            errors.append(f"{path}: number is below minimum")
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            errors.append(f"{path}: number is below exclusive minimum")
+    if isinstance(value, dict):
+        if len(value) < schema.get("minProperties", 0):
+            errors.append(f"{path}: object has too few properties")
+        for field in schema.get("required", []):
+            if field not in value:
+                errors.append(f"{path}: missing required field {field}")
+        for field, child in schema.get("properties", {}).items():
+            if field in value:
+                errors.extend(schema_errors(value[field], child, f"{path}.{field}"))
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            errors.append(f"{path}: array has too few items")
+        if isinstance(schema.get("items"), dict):
+            for index, item in enumerate(value):
+                errors.extend(schema_errors(item, schema["items"], f"{path}[{index}]"))
+    return errors
 
 
 def env_values(path: Path) -> dict[str, str]:
@@ -175,7 +253,13 @@ def validate_report(
     if not path.is_file():
         return [f"spike report missing: {path}"]
     payload = json.loads(path.read_text(encoding="utf-8"))
-    errors = []
+    schema = json.loads(
+        (
+            ROOT
+            / "bench/markhand_web/reports/environment-report.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    errors = schema_errors(payload, schema, "report")
     profiles = payload.get("profiles", [])
     gpu_enabled = "gpu" in profiles
     nested_enabled = "nested-network-workaround" in profiles
@@ -202,19 +286,8 @@ def validate_report(
         )
         if ancestor.returncode != 0:
             errors.append("spike report commit is not an ancestor of HEAD")
-        else:
-            changed = subprocess.check_output(
-                ["git", "diff", "--name-only", report_commit, "HEAD"],
-                cwd=ROOT,
-                text=True,
-            ).splitlines()
-            allowed = {
-                "bench/markhand_web/reports/spike-environment.json",
-                "plans/markhand-web/backlog/phase-0/issues/README.md",
-                "plans/markhand-web/roadmap.html",
-            }
-            if any(item not in allowed for item in changed):
-                errors.append("spike report is stale relative to implementation")
+    if payload.get("implementationSha256") != implementation_sha256():
+        errors.append("spike report is stale relative to implementation")
     if payload.get("git", {}).get("dirty") is not False:
         errors.append("spike report must be captured from a clean tracked tree")
     for field in ("composeFileSha256", "fixtureManifestSha256"):
@@ -232,6 +305,12 @@ def validate_report(
             != fingerprint.get("fixtureManifestSha256")
         ):
             errors.append("spike report fixture manifest fingerprint mismatch")
+    if payload.get("fixtures", {}).get("manifestSha256") != fingerprint.get(
+        "fixtureManifestSha256"
+    ):
+        errors.append("spike report fixture hash fields disagree")
+    if payload.get("workloadProfileId") != fingerprint.get("workloadProfileId"):
+        errors.append("spike report workload profile fields disagree")
     if shutil.which("docker"):
         rendered = subprocess.check_output(
             [
