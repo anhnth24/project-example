@@ -17,7 +17,8 @@ Session brainstorm toàn vẹn cho Markhand Web — web quản lý tài liệu +
 
 **Architecture chốt:**
 - Backend: Rust (axum). PG system-of-record, Qdrant vector, MinIO file gốc.
-- Embedding: vLLM GPU (bge-m3/e5). Chat: GLM cloud (có phép nhận nội dung tài liệu).
+- Embedding: interim GLM cloud (`embedding-3`) cho POC/DEMO; target vLLM GPU
+  (bge-m3/e5) — ADR 0004. Chat: GLM cloud (có phép nhận nội dung tài liệu).
 - Auth: RBAC mức 2 (role per-org + ACL collection). Rate limit: tower_governor + quota reserve/finalize atomic.
 - Desktop app tạm giữ SQLite FTS5 hybrid (không thay đổi desktop flow).
 - Frontend: React+Vite SPA, on-prem. Scale: mỗi org ~vài trăm GB, tổng ~vài TB.

@@ -18,8 +18,16 @@
       "question": "Chốt CPU, RAM, disk, GPU/VRAM và network benchmark target.",
       "owner": "infrastructure-owner",
       "status": "resolved",
-      "resolution": "Reference target: 32 cores/64 threads, 256GB RAM, 4TB NVMe with >=100k random-read IOPS, one 24GB accelerator and 10Gbps network at 1ms assumed local latency.",
-      "blocks": ["P0-04", "P0-05", "P0-08"]
+      "resolution": "Reference target: 32 cores/64 threads, 256GB RAM, 4TB NVMe with >=100k random-read IOPS, one 24GB accelerator and 10Gbps network at 1ms assumed local latency. P0-05 interim may run on glm-cloud-interim without waiting for this GPU.",
+      "blocks": ["P0-04", "P0-08"]
+    },
+    {
+      "id": "OD-EMBEDDING-INTERIM",
+      "question": "Chốt runtime embedding cho coding/POC/DEMO khi chưa có GPU on-prem.",
+      "owner": "product-owner",
+      "status": "resolved",
+      "resolution": "Interim: GLM cloud embeddings (embedding-3 primary, embedding-2 compare) via OpenAI-compatible API and FILECONV_EMBEDDING_API_KEY on synthetic/de-identified corpus only. Target remains on-prem vLLM with bge-m3/multilingual-e5; cutover rebuilds the index (ADR 0004).",
+      "blocks": ["P0-05"]
     },
     {
       "id": "OD-LOAD",

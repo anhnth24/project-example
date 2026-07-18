@@ -24,7 +24,13 @@ SECRET_PATTERNS = (
 )
 GATE_FAMILIES = {"G0-ARCH", "G0-RET", "G0-SEC", "G0-CAP", "G0-SLO", "G0-LIC"}
 OPERATORS = {">=", ">", "<=", "<", "=="}
-FAILURE_DISPOSITIONS = {"block-phase-1b", "block-issue", "research-only", "waive-with-adr"}
+FAILURE_DISPOSITIONS = {
+    "block-phase-1b",
+    "block-phase-4",
+    "block-issue",
+    "research-only",
+    "waive-with-adr",
+}
 SCALE_FIELDS = (
     "orgCount",
     "collectionsPerOrg",
@@ -445,6 +451,8 @@ class GateValidatorTests(unittest.TestCase):
             (root / "schema" / name).write_text(
                 (DEFAULT_ROOT / "schema" / name).read_text()
             )
+        for path in (DEFAULT_ROOT / "environments").glob("*.yaml"):
+            (root / "environments" / path.name).write_text(path.read_text())
 
     def test_repository_registry_is_valid(self) -> None:
         self.assertEqual(validate(DEFAULT_ROOT), [])

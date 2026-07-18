@@ -101,7 +101,7 @@ Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
 | System of record | PostgreSQL + FTS | Metadata, ACL, auth, jobs, quota, audit và lexical search | Phase 1B |
 | Vector retrieval | Qdrant | Vector candidates; kết quả luôn được hydrate và kiểm ACL lại | Phase 1B |
 | Object storage | MinIO | File gốc, quarantine, Markdown và derived artifacts | Phase 1B |
-| Embeddings | vLLM GPU endpoint | Batch embedding với model/dimension/normalize được pin | Phase 0 → 1B |
+| Embeddings | GLM cloud interim → on-prem vLLM | Interim: GLM `embedding-3` (API key) cho coding/POC/DEMO; target: vLLM GPU self-host, pin model/dimension/normalize; cắt sang vLLM = rebuild index | Phase 0 → 1B (interim); cutover trước production |
 | Chat and extraction | GLM via LLM client | Grounded Q&A, summarize và structured extraction theo policy | Phase 1B → 3 |
 | Identity | JWT + rotating refresh + OIDC | Session cho POC; SSO/OIDC và key rotation cho production | Phase 1B → 4 |
 | Observability | OpenTelemetry + structured logs | Trace, metrics, audit correlation và redacted diagnostics | Phase F → 4 |
@@ -133,13 +133,14 @@ Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
 
 ## Quyết định còn mở — Phase 0 phải chốt
 
-- GPU/VRAM, model embedding và throughput thực tế.
+- On-prem GPU/VRAM và throughput vLLM khi cutover (interim GLM cloud đã duyệt — ADR 0004).
 - SLA/SLO, RPO/RTO và retention backup.
 - Format/giới hạn upload của POC.
 - Qdrant shared collection hay phân cohort.
 - PostgreSQL partition strategy và việc bắt buộc RLS.
 - Canonical storage của Markdown/derived artifacts.
-- Chính sách GLM cloud theo phân loại dữ liệu.
+- Chính sách GLM cloud theo phân loại dữ liệu (chat + interim embedding; customer
+  data vẫn cấm egress cho tới review/cutover).
 - JWT signing/key rotation/session/MFA.
 - ACL chi tiết cho private/org/groups.
 - License PhoWhisper khi deploy server.
