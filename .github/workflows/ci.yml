@@ -124,6 +124,8 @@ jobs:
     needs: changes-and-static
     if: needs.changes-and-static.outputs.dev_stack == 'true'
     runs-on: ubuntu-22.04
+    env:
+      MARKHAND_SPIKE_REPORT: /tmp/markhand-spike-environment.json
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate and smoke-test local services
@@ -135,7 +137,7 @@ jobs:
           make dev-health
           make dev-down
           make spike-up
-          make spike-reset
+          make spike-lifecycle
           make spike-health
           make check-spike
           make spike-down

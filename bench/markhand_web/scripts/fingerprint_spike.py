@@ -85,22 +85,25 @@ def hardware() -> dict:
     disk_type = "local-or-overlay"
     if any(Path("/sys/block").glob("nvme*")):
         disk_type = "nvme"
+    try:
+        measured_iops = int(os.environ.get("MARKHAND_SPIKE_IOPS_MEASURED", "0"))
+    except ValueError:
+        measured_iops = 0
     return {
         "cpu": {
             "vendor": vendor.group(1).strip() if vendor else "unknown",
             "model": model.group(1).strip() if model else "unknown",
             "cores": len(physical_cores) or (os.cpu_count() or 1),
             "threads": os.cpu_count() or 1,
+            "physicalCoresMeasured": bool(physical_cores),
         },
         "ramGb": round(int(memory.group(1)) / 1024 / 1024, 2) if memory else 0.01,
         "disk": {
             "type": disk_type,
             "capacityGb": round(disk.total / 1024**3, 2),
-            "iopsNote": "not measured by P0-04 smoke",
-            "iopsVerified": os.environ.get(
-                "MARKHAND_SPIKE_IOPS_VERIFIED", "0"
-            )
-            == "1",
+            "iopsNote": f"measured random-read IOPS: {measured_iops}",
+            "iopsMeasured": measured_iops,
+            "iopsVerified": measured_iops >= 100_000,
         },
         "gpu": {"model": gpu_name, "vramGb": gpu_vram, "count": gpu_count},
         "network": {

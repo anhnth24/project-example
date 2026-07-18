@@ -3,7 +3,8 @@
   "type": "object",
   "required": [
     "version", "reportId", "gateId", "generatedAt", "git", "command",
-    "workloadProfileId", "environment", "fixtures", "result"
+    "workloadProfileId", "environment", "fixtures", "result", "profiles",
+    "targetMatch"
   ],
   "properties": {
     "version": {"const": 1},
@@ -12,6 +13,8 @@
     "generatedAt": {"type": "string", "minLength": 1},
     "command": {"type": "string", "minLength": 1},
     "workloadProfileId": {"type": "string", "minLength": 1},
+    "profiles": {"type": "array", "minItems": 1},
+    "targetMatch": {"type": "boolean"},
     "git": {
       "type": "object",
       "required": ["commit", "dirty"],
@@ -44,22 +47,25 @@
               "properties": {
                 "cpu": {
                   "type": "object",
-                  "required": ["vendor", "model", "cores", "threads"],
+                  "required": ["vendor", "model", "cores", "threads", "physicalCoresMeasured"],
                   "properties": {
                     "vendor": {"type": "string", "minLength": 1},
                     "model": {"type": "string", "minLength": 1},
                     "cores": {"type": "integer", "exclusiveMinimum": 0},
-                    "threads": {"type": "integer", "exclusiveMinimum": 0}
+                    "threads": {"type": "integer", "exclusiveMinimum": 0},
+                    "physicalCoresMeasured": {"type": "boolean"}
                   }
                 },
                 "ramGb": {"type": "number", "exclusiveMinimum": 0},
                 "disk": {
                   "type": "object",
-                  "required": ["type", "capacityGb", "iopsNote"],
+                  "required": ["type", "capacityGb", "iopsNote", "iopsMeasured", "iopsVerified"],
                   "properties": {
                     "type": {"type": "string", "minLength": 1},
                     "capacityGb": {"type": "number", "exclusiveMinimum": 0},
-                    "iopsNote": {"type": "string", "minLength": 1}
+                    "iopsNote": {"type": "string", "minLength": 1},
+                    "iopsMeasured": {"type": "integer", "minimum": 0},
+                    "iopsVerified": {"type": "boolean"}
                   }
                 },
                 "gpu": {

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -15,7 +16,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV_FILE = ROOT / "deploy/spike/.env.example"
 REPORT = ROOT / "bench/markhand_web/reports/spike-environment.json"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 RUNTIME_SERVICES = {"postgres", "qdrant", "minio", "otel", "mock-embedding"}
@@ -36,16 +36,26 @@ def env_values(path: Path) -> dict[str, str]:
     return values
 
 
+def default_env_file() -> Path:
+    configured = os.environ.get("MARKHAND_SPIKE_ENV_FILE")
+    if configured:
+        return Path(configured).resolve()
+    local = ROOT / "deploy/spike/.env"
+    return local if local.is_file() else ROOT / "deploy/spike/.env.example"
+
+
 def compose_command(
+    env_file: Path | None = None,
     nested_enabled: bool = False,
     gpu_enabled: bool = False,
 ) -> list[str]:
-    values = env_values(ENV_FILE)
+    env_file = env_file or default_env_file()
+    values = env_values(env_file)
     command = [
         "docker",
         "compose",
         "--env-file",
-        str(ENV_FILE),
+        str(env_file),
         "--project-name",
         values.get("MARKHAND_COMPOSE_PROJECT", "markhand-spike"),
         "-f",
@@ -60,15 +70,54 @@ def compose_command(
     return command
 
 
-def validate_config() -> list[str]:
+def expected_target_match(hardware: dict, profiles: list[str]) -> bool:
+    target = json.loads(
+        (
+            ROOT
+            / "bench/markhand_web/environments/on-prem-reference.yaml"
+        ).read_text()
+    )
+    return (
+        "gpu" in profiles
+        and "nested-network-workaround" not in profiles
+        and hardware.get("cpu", {}).get("physicalCoresMeasured") is True
+        and hardware.get("cpu", {}).get("cores", 0) >= target["cpu"]["cores"]
+        and hardware.get("cpu", {}).get("threads", 0) >= target["cpu"]["threads"]
+        and hardware.get("ramGb", 0) >= target["ramGb"]
+        and hardware.get("disk", {}).get("type") == target["disk"]["type"]
+        and hardware.get("disk", {}).get("capacityGb", 0)
+        >= target["disk"]["capacityGb"]
+        and hardware.get("disk", {}).get("iopsVerified") is True
+        and hardware.get("disk", {}).get("iopsMeasured", 0) >= 100_000
+        and hardware.get("gpu", {}).get("count", 0) >= target["gpu"]["count"]
+        and hardware.get("gpu", {}).get("vramGb", 0) >= target["gpu"]["vramGb"]
+        and hardware.get("network", {}).get("bandwidthGbps", 0)
+        >= target["network"]["bandwidthGbps"]
+        and hardware.get("os", {}).get("distro") == target["os"]["distro"]
+        and hardware.get("os", {}).get("arch") == target["os"]["arch"]
+    )
+
+
+def validate_config(env_file: Path | None = None) -> list[str]:
+    env_file = env_file or default_env_file()
     errors = []
     override = (ROOT / "deploy/compose.spike.yml").read_text(encoding="utf-8")
+    image_lock = json.loads(
+        (ROOT / "deploy/spike/images.lock.json").read_text(encoding="utf-8")
+    ).get("images", {})
     for service in (*RUNTIME_SERVICES, "vllm"):
         if not re.search(rf"^  {re.escape(service)}:\s*$", override, re.MULTILINE):
             errors.append(f"spike compose missing service override: {service}")
     if override.count("ports: !override") != 6:
         errors.append("spike compose must replace all six published port lists")
-    values = env_values(ENV_FILE)
+    if set(image_lock) != {*IMAGE_SERVICES, "vllm"}:
+        errors.append("spike image lock is incomplete")
+    for service, image in image_lock.items():
+        if not re.fullmatch(r".+@sha256:[0-9a-f]{64}", str(image)):
+            errors.append(f"spike image lock digest is invalid: {service}")
+        if f"image: {image}" not in override:
+            errors.append(f"spike compose does not consume image lock: {service}")
+    values = env_values(env_file)
     required = {
         "MARKHAND_COMPOSE_PROJECT",
         "MARKHAND_SPIKE_VOLUME_PREFIX",
@@ -88,7 +137,7 @@ def validate_config() -> list[str]:
         errors.append("spike host ports must be unique")
     if shutil.which("docker"):
         completed = subprocess.run(
-            [*compose_command(), "config"],
+            [*compose_command(env_file, gpu_enabled=True), "config"],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -96,10 +145,26 @@ def validate_config() -> list[str]:
         )
         if completed.returncode != 0:
             errors.append(f"docker compose config failed: {completed.stderr}")
+        else:
+            rendered_images = subprocess.check_output(
+                [
+                    *compose_command(env_file, gpu_enabled=True),
+                    "config",
+                    "--images",
+                ],
+                cwd=ROOT,
+                text=True,
+            ).splitlines()
+            if set(rendered_images) != set(image_lock.values()):
+                errors.append("rendered spike images differ from image lock")
     return errors
 
 
-def validate_report(path: Path = REPORT) -> list[str]:
+def validate_report(
+    path: Path = REPORT,
+    env_file: Path | None = None,
+) -> list[str]:
+    env_file = env_file or default_env_file()
     if not path.is_file():
         return [f"spike report missing: {path}"]
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -161,6 +226,7 @@ def validate_report(path: Path = REPORT) -> list[str]:
         rendered = subprocess.check_output(
             [
                 *compose_command(
+                    env_file,
                     nested_enabled=nested_enabled,
                     gpu_enabled=gpu_enabled,
                 ),
@@ -219,13 +285,11 @@ def validate_report(path: Path = REPORT) -> list[str]:
         expected_runtime
     ) or result.get("pass") is not True:
         errors.append("spike report health result is invalid")
-    if payload.get("targetMatch") is True and (
-        nested_enabled
-        or hardware.get("disk", {}).get("type") != "nvme"
-        or hardware.get("disk", {}).get("iopsVerified") is not True
-        or hardware.get("gpu", {}).get("count", 0) < 1
-    ):
-        errors.append("spike report falsely claims Profile B target match")
+    expected_match = expected_target_match(hardware, profiles)
+    if not isinstance(payload.get("targetMatch"), bool) or payload.get(
+        "targetMatch"
+    ) != expected_match:
+        errors.append("spike report targetMatch does not match Profile B evidence")
     if SECRET.search(path.read_text(encoding="utf-8")):
         errors.append("spike report contains a secret")
     return errors
@@ -244,18 +308,50 @@ class SpikeValidatorTests(unittest.TestCase):
             self.assertTrue(any("git commit" in error for error in errors))
             self.assertTrue(any("image digests" in error for error in errors))
 
+    def test_report_rejects_missing_or_false_target_claim(self) -> None:
+        if not REPORT.is_file():
+            self.skipTest("measured spike report not generated")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "report.json"
+            payload = json.loads(REPORT.read_text())
+            payload.pop("targetMatch", None)
+            path.write_text(json.dumps(payload))
+            self.assertTrue(
+                any(
+                    "targetMatch" in error
+                    for error in validate_report(path)
+                )
+            )
+            payload["targetMatch"] = True
+            path.write_text(json.dumps(payload))
+            self.assertTrue(
+                any(
+                    "targetMatch" in error
+                    for error in validate_report(path)
+                )
+            )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-only", action="store_true")
+    parser.add_argument("--env-file", type=Path)
+    parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path(
+            os.environ.get("MARKHAND_SPIKE_REPORT", str(REPORT))
+        ),
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(SpikeValidatorTests)
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
-    errors = validate_config()
+    env_file = args.env_file.resolve() if args.env_file else default_env_file()
+    errors = validate_config(env_file)
     if not args.config_only:
-        errors.extend(validate_report())
+        errors.extend(validate_report(args.report.resolve(), env_file))
     if errors:
         for error in errors:
             print(f"- {error}")

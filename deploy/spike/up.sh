@@ -33,4 +33,5 @@ fi
 "$SPIKE_DIR/health.sh"
 "$SPIKE_DIR/seed.sh"
 python3 "$ROOT/bench/markhand_web/scripts/fingerprint_spike.py" \
-  --env-file "$ENV_FILE"
+  --env-file "$ENV_FILE" \
+  --output "${MARKHAND_SPIKE_REPORT:-$ROOT/bench/markhand_web/reports/spike-environment.json}"

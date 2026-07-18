@@ -75,6 +75,7 @@ GROUPS = {
         "deploy/scripts/**",
         "docs/runbooks/local-development.md",
         "bench/markhand_web/scripts/fingerprint_spike.py",
+        "bench/markhand_web/reports/spike-environment.json",
         "scripts/validate_spike.py",
     ),
     "bundle": SHARED

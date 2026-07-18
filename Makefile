@@ -4,7 +4,7 @@ SHELL := /bin/bash
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-web check-desktop check-foundation check-spike spike-up spike-health \
-	spike-down spike-reset bundle-linux dev-up dev-health dev-down dev-reset
+	spike-down spike-reset spike-lifecycle bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
 	pnpm install --frozen-lockfile
@@ -92,6 +92,9 @@ spike-down:
 
 spike-reset:
 	deploy/spike/reset.sh
+
+spike-lifecycle:
+	deploy/spike/verify-lifecycle.sh
 
 check-foundation: check-toolchain check-static check-rust check-knowledge-extraction check-web
 
