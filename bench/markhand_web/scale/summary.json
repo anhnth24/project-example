@@ -2,28 +2,19 @@
   "version": 1,
   "reportId": "p0-07-scale-topology",
   "gateId": "P0-07-SCALE-TOPOLOGY",
-  "generatedAt": "2026-07-18T19:06:42.778095Z",
+  "generatedAt": "2026-07-18T19:06:59.288956Z",
   "command": "python3 bench/markhand_web/scripts/run_scale_topology.py",
   "mode": "offline-synthetic-in-process",
   "seed": 20260718,
   "git": {
-    "commit": "de53675efc7c829e5c3ee5425fea771bfdbd2cc1",
-    "dirty": true,
-    "dirtyPaths": [
-      "docs/adr/README.md",
-      "plans/markhand-web/backlog/github-issues.json",
-      "plans/markhand-web/backlog/phase-0/issues/README.md",
-      "bench/markhand_web/reports/scale-topology.md",
-      "bench/markhand_web/scale/",
-      "bench/markhand_web/scripts/run_scale_topology.py",
-      "docs/adr/0008-pg-partition-strategy.md",
-      "docs/adr/0009-qdrant-topology.md"
-    ]
+    "commit": "6be10e2406476c23821227eeaf8ecf49438f11e0",
+    "dirty": false,
+    "dirtyPaths": []
   },
   "environment": {
     "environmentId": "current-runner-offline-synthetic",
     "fingerprint": {
-      "gitCommit": "de53675efc7c829e5c3ee5425fea771bfdbd2cc1",
+      "gitCommit": "6be10e2406476c23821227eeaf8ecf49438f11e0",
       "workloadProfileId": "on-prem-reference-v1",
       "hardware": {
         "cpu": {
@@ -479,9 +470,9 @@
     "adrsAccepted": true,
     "harnessCompleted": true,
     "recommendationRecorded": true,
-    "gitClean": false
+    "gitClean": true
   },
-  "p0_07_closed": false,
+  "p0_07_closed": true,
   "targetMatch": false,
   "productionScaleBlocked": true,
   "pocTopologySelected": true,

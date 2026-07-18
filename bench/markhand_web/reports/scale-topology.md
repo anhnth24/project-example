@@ -1,15 +1,15 @@
 # P0-07 scale topology offline report
 
-- Generated: `2026-07-18T19:06:42.778095Z`
+- Generated: `2026-07-18T19:06:59.288956Z`
 - Mode: `offline-synthetic-in-process`
 - Seed: `20260718`
 - Workload profile: `on-prem-reference-v1`
-- Git commit: `de53675efc7c829e5c3ee5425fea771bfdbd2cc1`
-- Dirty at harness start: `True`
+- Git commit: `6be10e2406476c23821227eeaf8ecf49438f11e0`
+- Dirty at harness start: `False`
 - `targetMatch`: `false`
 - `productionScaleBlocked`: `true`
 - `pocTopologySelected`: `true`
-- `p0_07_closed`: `false`
+- `p0_07_closed`: `true`
 
 ## Scope
 
@@ -76,14 +76,4 @@ Decision keys:
 | `adrsAccepted` | `true` |
 | `harnessCompleted` | `true` |
 | `recommendationRecorded` | `true` |
-| `gitClean` | `false` |
-
-Dirty paths at harness start:
-- `docs/adr/README.md`
-- `plans/markhand-web/backlog/github-issues.json`
-- `plans/markhand-web/backlog/phase-0/issues/README.md`
-- `bench/markhand_web/reports/scale-topology.md`
-- `bench/markhand_web/scale/`
-- `bench/markhand_web/scripts/run_scale_topology.py`
-- `docs/adr/0008-pg-partition-strategy.md`
-- `docs/adr/0009-qdrant-topology.md`
+| `gitClean` | `true` |
