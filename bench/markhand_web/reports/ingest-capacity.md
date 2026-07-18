@@ -1,14 +1,14 @@
 # P0-08 ingest capacity report
 
-- Generated: `2026-07-18T19:17:28.182762Z`
+- Generated: `2026-07-18T19:18:41.620677Z`
 - Mode: `local-cpu-converter-smoke`
 - Measurement scope: `local-cpu; not Profile B`
-- Git commit: `eb0fab5633c64c2dfe61ad4f1349e26d223a1fbd`
-- Dirty at harness start: `false`
+- Git commit: `310f128e510795e04c04d0ee20ab40aae06d9882`
+- Dirty at harness start: `true`
 - `targetMatch`: `false`
 - `profileBGatePassed`: `false`
 - `productionCapacityBlocked`: `true`
-- `p0_08_closed`: `true`
+- `p0_08_closed`: `false`
 
 ## Scope
 
@@ -28,32 +28,32 @@ Explicit note: does NOT claim Profile B G0-CAP-INGEST-THROUGHPUT pass evidence.
 
 | run | workers | docs ok/error | wall s | docs/hour | pages/hour | peak RSS MB |
 |---|---:|---:|---:|---:|---:|---:|
-| singleWorker | 1 | 24/7 | 0.832 | 103866.23 | 103866.23 | 59.199 |
-| concurrent2 | 2 | 24/7 | 0.425 | 203366.067 | 203366.067 | 52.664 |
+| singleWorker | 1 | 31/0 | 5.204 | 21443.277 | 20059.84 | 220.523 |
+| concurrent2 | 2 | 31/0 | 2.77 | 40290.153 | 37690.789 | 220.387 |
 
 ## Per-format sizing from concurrent run
 
 | format | docs | ok | failed | docs/hour from file durations | p95 ms | peak RSS MB | pages est. |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| audio | 2 | 0 | 2 | 0.0 | 20.99 | 1.504 | 0 |
-| csv | 3 | 3 | 0 | 170290.598 | 21.39 | 2.98 | 3 |
-| docx | 7 | 7 | 0 | 170587.24 | 21.57 | 1.715 | 7 |
-| html | 3 | 3 | 0 | 170057.316 | 21.209 | 1.945 | 3 |
-| image_ocr | 3 | 0 | 3 | 0.0 | 82.254 | 52.664 | 3 |
-| pdf_native | 3 | 3 | 0 | 168329.177 | 21.609 | 3.551 | 3 |
-| pdf_scan | 2 | 0 | 2 | 0.0 | 21.488 | 1.836 | 2 |
-| pptx | 2 | 2 | 0 | 161601.652 | 22.684 | 6.262 | 2 |
-| text_legacy | 3 | 3 | 0 | 171570.185 | 21.142 | 1.414 | 3 |
-| xlsx | 3 | 3 | 0 | 170446.475 | 21.234 | 1.895 | 3 |
+| audio | 2 | 2 | 0 | 3984.69 | 921.486 | 217.742 | 0 |
+| csv | 3 | 3 | 0 | 169117.302 | 21.447 | 2.137 | 3 |
+| docx | 7 | 7 | 0 | 170441.864 | 21.621 | 2.168 | 7 |
+| html | 3 | 3 | 0 | 169382.538 | 21.666 | 4.254 | 3 |
+| image_ocr | 3 | 3 | 0 | 8281.415 | 436.927 | 106.398 | 3 |
+| pdf_native | 3 | 3 | 0 | 170204.718 | 21.364 | 1.641 | 3 |
+| pdf_scan | 2 | 2 | 0 | 4533.417 | 803.656 | 220.387 | 2 |
+| pptx | 2 | 2 | 0 | 171001.069 | 21.146 | 1.707 | 2 |
+| text_legacy | 3 | 3 | 0 | 172251.551 | 21.005 | 1.34 | 3 |
+| xlsx | 3 | 3 | 0 | 170301.339 | 21.611 | 3.664 | 3 |
 
 ## Headroom estimate
 
 - Target: `1200.0` docs/hour.
 - Required for 30% headroom: `1714.286` docs/hour.
-- Measured successful local-cpu throughput: `203366.067` docs/hour.
-- Gate-valid effective capacity: `0.0` docs/hour.
-- Estimated headroom: `-100.0`%.
-- Meets 30% headroom on this runner: `false`.
+- Measured successful local-cpu throughput: `40290.153` docs/hour.
+- Gate-valid effective capacity: `40290.153` docs/hour.
+- Estimated headroom: `97.022`%.
+- Meets 30% headroom on this runner: `true`.
 
 ## Queue age simulation
 
@@ -61,16 +61,16 @@ These rows are deterministic simulations. If any workload format failed,
 the gate-valid service rate is set to zero instead of extrapolating from
 partial successes.
 
-- Measured service rate: `203366.067` docs/hour.
-- Effective simulated service rate: `0.0` docs/hour.
-- Capacity valid for gate: `false`.
-- Note: set to zero for queue simulation because one or more workload documents failed.
+- Measured service rate: `40290.153` docs/hour.
+- Effective simulated service rate: `40290.153` docs/hour.
+- Capacity valid for gate: `true`.
+- Note: all workload documents succeeded.
 
 | scenario | arrival docs/hour | final queue docs | oldest age min | stable |
 |---|---:|---:|---:|---|
-| normal1x | 300.0 | 600.0 | 120.0 | false |
-| recovery2xNormal | 600.0 | 1200.0 | 120.0 | false |
-| peakGateLoad | 1200.0 | 2400.0 | 120.0 | false |
+| normal1x | 300.0 | 0.0 | 0.0 | true |
+| recovery2xNormal | 600.0 | 0.0 | 0.0 | true |
+| peakGateLoad | 1200.0 | 0.0 | 0.0 | true |
 
 ## Closure
 
@@ -78,22 +78,9 @@ partial successes.
 |---|---|
 | `harnessCompleted` | `true` |
 | `reportWritten` | `true` |
-| `gitClean` | `true` |
+| `gitClean` | `false` |
 | `honestFlagsSet` | `true` |
+| `allDocumentsSucceeded` | `true` |
 
-## Failures/timeouts
-
-- `singleWorker` `gold-004` (pdf_scan): error exit=1
-- `singleWorker` `gold-005` (pdf_scan): error exit=1
-- `singleWorker` `gold-020` (image_ocr): error exit=1
-- `singleWorker` `gold-021` (image_ocr): error exit=1
-- `singleWorker` `gold-022` (image_ocr): error exit=1
-- `singleWorker` `gold-023` (audio): error exit=1
-- `singleWorker` `gold-024` (audio): error exit=1
-- `concurrent2` `gold-004` (pdf_scan): error exit=1
-- `concurrent2` `gold-005` (pdf_scan): error exit=1
-- `concurrent2` `gold-020` (image_ocr): error exit=1
-- `concurrent2` `gold-021` (image_ocr): error exit=1
-- `concurrent2` `gold-022` (image_ocr): error exit=1
-- `concurrent2` `gold-023` (audio): error exit=1
-- `concurrent2` `gold-024` (audio): error exit=1
+Dirty paths at harness start:
+- `bench/markhand_web/scripts/run_ingest_capacity.sh`
