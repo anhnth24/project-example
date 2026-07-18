@@ -4,9 +4,7 @@
 pub mod hnsw;
 
 #[cfg(feature = "desktop-sqlite")]
-pub fn sqlite_adapter_enabled() -> bool {
-    !rusqlite::version().is_empty()
-}
+pub mod sqlite;
 
 #[cfg(feature = "desktop-hnsw")]
 pub fn hnsw_adapter_enabled() -> bool {

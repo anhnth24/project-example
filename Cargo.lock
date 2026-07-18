@@ -1615,7 +1615,6 @@ dependencies = [
  "fileconv-core",
  "fileconv-knowledge",
  "notify",
- "rusqlite",
  "serde",
  "serde_json",
  "tauri",
