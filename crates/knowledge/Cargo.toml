@@ -9,7 +9,7 @@ description = "Pure knowledge retrieval, grounding and citation contracts for Ma
 [features]
 default = []
 desktop-sqlite = ["dep:rusqlite"]
-desktop-hnsw = ["dep:hnsw_rs"]
+desktop-hnsw = ["dep:hnsw_rs", "dep:serde_json"]
 
 [dependencies]
 fileconv-core = { path = "../core" }
@@ -20,6 +20,7 @@ hnsw_rs = { version = "0.3.4", optional = true }
 sha2 = "0.11.0"
 url = "2.5.8"
 siphasher = "1.0.3"
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
