@@ -1,15 +1,22 @@
 {
-  "version": 1,
+  "version": 2,
   "issue": "P0-06",
-  "track": "retrieval-scaffold-local-hash",
-  "generatedAt": "2026-07-18T17:53:20.150969+00:00",
+  "track": "retrieval-neural-hybrid",
+  "generatedAt": "2026-07-18T18:54:00.334597+00:00",
   "git": {
-    "commit": "fdd78aec9390646aa4029ab5f7ac96454cb8fcca",
-    "dirty": false
+    "commit": "31e24f1d62ed8e48b19b1bed8ec84b582fb89148",
+    "dirty": false,
+    "dirtyPaths": []
   },
   "chunkingVersion": "heading-chunks-2000-v1",
-  "indexSignature": "dedf790eb237c6f562ba2e338fb50038345b4af26c0ef56f17a9b9ca73ca060f",
-  "runtimePath": "local-hash",
+  "indexSignature": "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835",
+  "runtimePath": "local-neural",
+  "embeddingRuntime": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
+  "embeddingFamily": "sentence-transformers/AITeamVN/Vietnamese_Embedding/local-cpu",
+  "embeddingRevision": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+  "citationTopK": 10,
+  "dimensions": 1024,
+  "environmentHardwareMatch": true,
   "rrf": {
     "k": 60.0,
     "rerankScale": 30.0,
@@ -17,65 +24,160 @@
     "bodyOverlapWeight": 0.35,
     "headingHitWeight": 0.1,
     "tuned": false,
-    "note": "frozen desktop parity constants; tuning deferred"
+    "baselineVectorWeight": 0.55,
+    "observationTuneWeight": 0.65,
+    "observationTuneImprovedHoldout": true,
+    "note": "Gating uses frozen desktop VECTOR_WEIGHT=0.55 for production parity; lexical leg uses SQLite FTS5 unicode61 remove_diacritics 2."
+  },
+  "measuredEnvironmentId": "local-cpu-quality",
+  "hardware": {
+    "cpuThreads": 8,
+    "ramGb": 47.07,
+    "diskGb": 251.86,
+    "gpuCount": 0,
+    "embeddingDevice": "cpu"
+  },
+  "fingerprint": {
+    "gitCommit": "31e24f1d62ed8e48b19b1bed8ec84b582fb89148",
+    "workloadProfileId": "on-prem-reference-v1",
+    "embeddingProvider": "sentence-transformers",
+    "embeddingModel": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
+    "embeddingDimensions": 1024,
+    "fixtureManifestSha256": "f191c5a3f893d9876d59fe83b6c2cede5a65f965218dadde8c8ac0308ae781bf",
+    "hardware": {
+      "cpuThreads": 8,
+      "ramGb": 47.07,
+      "diskGb": 251.86,
+      "gpuCount": 0,
+      "embeddingDevice": "cpu"
+    },
+    "runtimePath": "local-neural",
+    "chunkingVersion": "heading-chunks-2000-v1"
   },
   "legs": {
     "lexical": {
       "queries": 238,
       "noAnswerQueries": 30,
-      "recallAt5": 0.980392,
+      "recallAt5": 0.990196,
       "recallAt10": 0.99895,
-      "hitAt5": 0.995798,
-      "mrr": 0.892122,
-      "ndcgAt10": 0.892977
+      "hitAt5": 1.0,
+      "mrr": 0.871849,
+      "ndcgAt10": 0.882898
     },
-    "vector_local_hash": {
+    "vector_neural": {
       "queries": 238,
       "noAnswerQueries": 30,
-      "recallAt5": 0.892857,
-      "recallAt10": 0.963585,
-      "hitAt5": 0.903361,
-      "mrr": 0.724494,
-      "ndcgAt10": 0.771311
+      "recallAt5": 0.92612,
+      "recallAt10": 0.960784,
+      "hitAt5": 0.953782,
+      "mrr": 0.806749,
+      "ndcgAt10": 0.79918
     },
     "hybrid": {
       "queries": 238,
       "noAnswerQueries": 30,
-      "recallAt5": 0.986695,
-      "recallAt10": 0.995098,
+      "recallAt5": 0.984944,
+      "recallAt10": 1.0,
       "hitAt5": 0.991597,
-      "mrr": 0.837914,
-      "ndcgAt10": 0.860637
+      "mrr": 0.919788,
+      "ndcgAt10": 0.907895
     }
   },
   "versionCitation": {
     "citations": 305,
-    "citationsWithChunkId": 0,
-    "versionCitationPrecision": 0.0,
-    "versionCitationRecall": 0.0,
-    "note": "chunkId still null in golden citations; fill after expected-chunks wiring"
+    "citationsWithChunkId": 305,
+    "versionCitationPrecision": 1.0,
+    "versionCitationRecall": 1.0,
+    "citationCounts": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0
+    },
+    "temporalAnswerAccuracy": 1.0,
+    "temporalQueries": 6,
+    "currentVersionAccuracy": 1.0,
+    "currentQueries": 3,
+    "versionChangeAccuracy": 1.0,
+    "changeQueries": 4,
+    "conflictStatusAccuracy": 1.0,
+    "conflictQueries": 8,
+    "unresolvedWarningAccuracy": 1.0,
+    "warningQueries": 2,
+    "resolvedHistoryAccuracy": 1.0,
+    "historyQueries": 2,
+    "conflictPrecision": 1.0,
+    "conflictRecall": 1.0,
+    "detectedConflictPairs": [
+      "version-budget-v1|version-design-v1"
+    ]
   },
   "gates": {
     "G0-RET-RECALL-AT-5": {
-      "metric": 0.986695,
+      "metric": 0.984944,
       "threshold": 0.85,
-      "pass": null,
-      "evaluated": false,
-      "note": "scaffold vectors are synthetic blake2b, not Rust local_hash_v1; official gate not evaluated"
+      "operator": ">=",
+      "pass": true,
+      "evaluated": true,
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true,
+      "hardwareMatch": true
+    },
+    "G0-RET-TEMPORAL-ACCURACY": {
+      "metric": 1.0,
+      "threshold": 0.95,
+      "operator": ">=",
+      "pass": true,
+      "evaluated": true,
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true,
+      "hardwareMatch": true
+    },
+    "G0-RET-CHANGE-ACCURACY": {
+      "metric": 1.0,
+      "threshold": 0.95,
+      "operator": ">=",
+      "pass": true,
+      "evaluated": true,
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true,
+      "hardwareMatch": true
     },
     "G0-RET-VERSION-CITATION-PRECISION": {
-      "metric": 0.0,
+      "metric": 1.0,
       "threshold": 1.0,
-      "pass": null,
-      "evaluated": false,
-      "note": "chunkId still null in golden citations; fill after expected-chunks wiring"
+      "operator": ">=",
+      "pass": true,
+      "evaluated": true,
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true,
+      "hardwareMatch": true
+    },
+    "G0-RET-VERSION-CITATION-RECALL": {
+      "metric": 1.0,
+      "threshold": 1.0,
+      "operator": ">=",
+      "pass": true,
+      "evaluated": true,
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true,
+      "hardwareMatch": true
     }
   },
-  "p0_06_closed": false,
+  "conflictGates": {
+    "conflictPrecision": 1.0,
+    "conflictRecall": 1.0,
+    "conflictStatusAccuracy": 1.0,
+    "unresolvedWarningAccuracy": 1.0,
+    "resolvedHistoryAccuracy": 1.0,
+    "pass": true
+  },
+  "p0_06_closed": true,
   "reasons": [
-    "Expected chunks pinned for heading-chunks-2000-v1 with span resolve.",
-    "Hybrid scaffold uses frozen RRF weights + synthetic blake2b vectors (not official gate evidence).",
-    "Version-citation gates remain unevaluated until chunkId is filled into gold.",
-    "Neural embedding hybrid + claim/conflict metrics deferred."
+    "All P0-06 retrieval/version/conflict gates passed with neural hybrid."
   ]
 }

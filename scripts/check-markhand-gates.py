@@ -139,6 +139,10 @@ def positive_number(value: object) -> bool:
     return numeric(value) and value > 0
 
 
+def non_negative_number(value: object) -> bool:
+    return numeric(value) and value >= 0
+
+
 def numeric(value: object) -> bool:
     return (
         isinstance(value, (int, float))
@@ -277,14 +281,29 @@ def validate(root: Path) -> list[str]:
                 ("cpu.threads", environment.get("cpu", {}).get("threads")),
                 ("ramGb", environment.get("ramGb")),
                 ("disk.capacityGb", environment.get("disk", {}).get("capacityGb")),
-                ("gpu.vramGb", environment.get("gpu", {}).get("vramGb")),
-                ("gpu.count", environment.get("gpu", {}).get("count")),
                 ("network.bandwidthGbps", environment.get("network", {}).get("bandwidthGbps")),
                 ("network.latencyMsAssumed", environment.get("network", {}).get("latencyMsAssumed")),
             )
             for field, value in numeric_paths:
                 if not positive_number(value):
                     errors.append(f"{source}: approved {field} must be positive")
+            # CPU-only quality environments may honestly declare gpu.count=0 / vramGb=0.
+            gpu = environment.get("gpu") or {}
+            gpu_count = gpu.get("count")
+            gpu_vram = gpu.get("vramGb")
+            if not non_negative_number(gpu_count):
+                errors.append(f"{source}: approved gpu.count must be >= 0")
+            if not non_negative_number(gpu_vram):
+                errors.append(f"{source}: approved gpu.vramGb must be >= 0")
+            if non_negative_number(gpu_count) and non_negative_number(gpu_vram):
+                if gpu_count == 0 and gpu_vram != 0:
+                    errors.append(
+                        f"{source}: approved gpu.vramGb must be 0 when gpu.count is 0"
+                    )
+                if gpu_count > 0 and gpu_vram <= 0:
+                    errors.append(
+                        f"{source}: approved gpu.vramGb must be positive when gpu.count > 0"
+                    )
             string_paths = (
                 ("cpu.vendor", environment.get("cpu", {}).get("vendor")),
                 ("cpu.model", environment.get("cpu", {}).get("model")),
@@ -506,7 +525,7 @@ class GateValidatorTests(unittest.TestCase):
             workload["scale"]["orgCount"] = 0
             workload["loads"]["aggregate"]["tenantDistribution"] = ""
             workload["hardware"]["headroomPercent"]["cpu"] = 0
-            environment["gpu"]["count"] = 0
+            environment["gpu"]["count"] = -1
             environment["approver"] = ""
             gates["gates"][0]["status"] = "proposed"
             gates["gates"][1]["metric"]["name"] = ""
@@ -521,7 +540,7 @@ class GateValidatorTests(unittest.TestCase):
             self.assertTrue(any("scale.orgCount must be positive" in error for error in errors))
             self.assertTrue(any("tenantDistribution must be non-empty" in error for error in errors))
             self.assertTrue(any("headroomPercent.cpu" in error for error in errors))
-            self.assertTrue(any("gpu.count must be positive" in error for error in errors))
+            self.assertTrue(any("gpu.count must be >= 0" in error for error in errors))
             self.assertTrue(any("metric.name must be non-empty" in error for error in errors))
             self.assertTrue(any("threshold must be numeric" in error for error in errors))
             self.assertTrue(any("non-approved gates" in error for error in errors))

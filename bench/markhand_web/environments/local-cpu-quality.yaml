@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "environmentId": "local-cpu-quality",
+  "role": "spike",
+  "status": "approved",
+  "approver": "retrieval-owner",
+  "approvedAt": "2026-07-18T15:00:00Z",
+  "cpu": {
+    "vendor": "cloud-agent",
+    "model": "shared-runner-x86_64",
+    "cores": 8,
+    "threads": 8
+  },
+  "ramGb": 47,
+  "disk": {
+    "type": "ssd",
+    "capacityGb": 252,
+    "iopsNote": "cloud-runner disk; not Profile B IOPS evidence"
+  },
+  "gpu": {
+    "model": "none",
+    "vramGb": 0,
+    "count": 0
+  },
+  "network": {
+    "bandwidthGbps": 1,
+    "latencyMsAssumed": 1
+  },
+  "os": {
+    "distro": "ubuntu-22.04",
+    "arch": "x86_64"
+  },
+  "fingerprintRequiredFields": [
+    "gitCommit",
+    "workloadProfileId",
+    "embeddingProvider",
+    "embeddingModel",
+    "embeddingDimensions",
+    "fixtureManifestSha256",
+    "hardware"
+  ],
+  "notes": "CPU-only quality track for P0-05/P0-06 neural embedding and hybrid retrieval (sentence-transformers / AITeamVN). gpu.count=0 matches measured hardware (no accelerator). Not Profile B capacity evidence and not glm-cloud-interim API evidence."
+}

@@ -100,9 +100,11 @@ def validate_chunk_id(
     catalog: dict[str, dict],
 ) -> list[str]:
     if chunk_id is None:
+        if catalog:
+            return [f"{label}: chunkId is required once expected-chunks catalog exists"]
         return []
     if not (isinstance(chunk_id, str) and SHA256.fullmatch(chunk_id)):
-        return [f"{label}: chunkId must be null or a 64-hex canonical digest"]
+        return [f"{label}: chunkId must be a 64-hex canonical digest"]
     if not catalog:
         return [f"{label}: chunkId set but retrieval/expected-chunks.tsv is missing"]
     row = catalog.get(chunk_id)
@@ -1030,12 +1032,63 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         or not set(sample_ids).issubset(query_ids)
     ):
         errors.append("adjudication requires at least 50 unique known sample queries")
-    if (
-        review_sample_path.is_file()
-        and adjudication.get("sampleSha256")
-        != hashlib.sha256(review_sample_path.read_bytes()).hexdigest()
-    ):
-        errors.append("adjudication sampleSha256 does not match review packet")
+    if review_sample_path.is_file() and adjudication.get("sampleSha256"):
+        actual_sample_sha = hashlib.sha256(review_sample_path.read_bytes()).hexdigest()
+        if adjudication.get("sampleSha256") != actual_sample_sha:
+            errors.append("adjudication sampleSha256 does not match review packet")
+        semantic_pin = adjudication.get("sampleSemanticSha256")
+        if isinstance(semantic_pin, str) and semantic_pin:
+            # Mechanical chunkId annotation may change sampleSha256 while preserving
+            # the chunkId-null semantic packet approved by reviewers.
+            try:
+                with review_sample_path.open(encoding="utf-8", newline="") as source:
+                    review_for_semantic = list(csv.DictReader(source, delimiter="\t"))
+                fieldnames = list(review_for_semantic[0].keys()) if review_for_semantic else []
+                lines = ["\t".join(fieldnames)]
+                for row in review_for_semantic:
+                    values = []
+                    for name in fieldnames:
+                        value = row.get(name, "")
+                        if name in {
+                            "citations",
+                            "version_context",
+                            "conflict_context",
+                            "judgments",
+                        }:
+                            parsed = json.loads(value) if value else (
+                                [] if name == "citations" else {}
+                            )
+
+                            def _null_chunk_ids(node: object) -> object:
+                                if isinstance(node, dict):
+                                    return {
+                                        key: (
+                                            None
+                                            if key == "chunkId"
+                                            else _null_chunk_ids(child)
+                                        )
+                                        for key, child in node.items()
+                                    }
+                                if isinstance(node, list):
+                                    return [_null_chunk_ids(child) for child in node]
+                                return node
+
+                            value = json.dumps(
+                                _null_chunk_ids(parsed),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            )
+                        values.append(value)
+                    lines.append("\t".join(values))
+                semantic_bytes = ("\n".join(lines) + "\n").encode("utf-8")
+                if hashlib.sha256(semantic_bytes).hexdigest() != semantic_pin:
+                    errors.append(
+                        "adjudication sampleSemanticSha256 does not match "
+                        "chunkId-null review packet"
+                    )
+            except (OSError, json.JSONDecodeError, csv.Error) as error:
+                errors.append(f"adjudication semantic packet unreadable: {error}")
     reviews = adjudication.get("reviews", [])
     approved_roles = {
         review.get("role")
@@ -1132,36 +1185,95 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
     return errors
 
 
+def _rewrite_manifest_lock(corpus: Path) -> None:
+    golden = corpus / "golden"
+    adversarial = corpus / "adversarial"
+    managed = sorted([*golden.rglob("*"), *adversarial.rglob("*")])
+    lock_entries = [
+        {
+            "path": path.relative_to(corpus).as_posix(),
+            **checksum(path),
+        }
+        for path in managed
+        if path.is_file()
+    ]
+    (corpus / "manifest.lock.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "generator": (
+                    "python3 bench/markhand_web/scripts/generate_corpus.py + "
+                    "generate_expected_chunks.py + fill_citation_chunk_ids.py"
+                ),
+                "files": lock_entries,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def reproducibility_errors(root: Path) -> list[str]:
+    """Full canonical pipeline: generate → expected-chunks → fill chunkIds → lock."""
+    scripts = root / "scripts"
     with tempfile.TemporaryDirectory() as temporary:
         output = Path(temporary) / "markhand_web"
-        command = [
-            sys.executable,
-            str(root / "scripts/generate_corpus.py"),
-            "--output",
-            str(output),
+        # Seed adjudication so generate can preserve approval via sampleSemanticSha256.
+        (output / "golden").mkdir(parents=True)
+        seed = root / "golden" / "adjudication.json"
+        if seed.is_file():
+            shutil.copy2(seed, output / "golden" / "adjudication.json")
+        steps = [
+            [
+                sys.executable,
+                str(scripts / "generate_corpus.py"),
+                "--output",
+                str(output),
+            ],
+            [
+                sys.executable,
+                str(scripts / "generate_expected_chunks.py"),
+                "--corpus",
+                str(output),
+            ],
+            [
+                sys.executable,
+                str(scripts / "fill_citation_chunk_ids.py"),
+                "--corpus",
+                str(output),
+            ],
         ]
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
-        if completed.returncode != 0:
-            return [f"reproducibility generator failed: {completed.stderr}"]
+        for command in steps:
+            completed = subprocess.run(
+                command, capture_output=True, text=True, check=False
+            )
+            if completed.returncode != 0:
+                label = Path(command[1]).name
+                detail = (completed.stderr or completed.stdout or "").strip()
+                return [f"reproducibility {label} failed: {detail}"]
+        _rewrite_manifest_lock(output)
         expected = load_json(root / "manifest.lock.json")
         actual = load_json(output / "manifest.lock.json")
-        excluded = {"golden/adjudication.json"}
+        # Adjudication may include mechanicalAnnotations timestamps; compare via
+        # semantic pin in validate_adjudication. Lock still includes the file.
         expected_files = {
-            item["path"]: item
-            for item in expected.get("files", [])
-            if item.get("path") not in excluded
+            item["path"]: item for item in expected.get("files", [])
         }
         actual_files = {
-            item["path"]: item
-            for item in actual.get("files", [])
-            if item.get("path") not in excluded
+            item["path"]: item for item in actual.get("files", [])
         }
-        return (
-            []
-            if expected_files == actual_files
-            else ["reproducibility lock differs after regeneration"]
+        if expected_files == actual_files:
+            return []
+        drifted = sorted(
+            path
+            for path in set(expected_files) | set(actual_files)
+            if expected_files.get(path) != actual_files.get(path)
         )
+        return [
+            "reproducibility lock differs after regeneration: "
+            + ", ".join(drifted[:12])
+        ]
 
 
 class CorpusValidatorTests(unittest.TestCase):
@@ -1328,7 +1440,7 @@ class CorpusValidatorTests(unittest.TestCase):
             self.assertTrue(any("citation hash mismatch" in error for error in errors))
             self.assertTrue(
                 any(
-                    "chunkId must be null or a 64-hex" in error
+                    "chunkId must be a 64-hex" in error
                     or "chunkId not present in expected-chunks" in error
                     for error in errors
                 )

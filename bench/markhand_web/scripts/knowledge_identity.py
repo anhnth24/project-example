@@ -10,6 +10,10 @@ BODY_TEXT_VERSION = "nfc-v1"
 QUERY_NORMALIZATION_VERSION = "accent-fold-v1"
 DEFAULT_CHUNKING_VERSION = "heading-chunks-2000-v1"
 RUNTIME_LOCAL_HASH = "local-hash"
+RUNTIME_LOCAL_NEURAL = "local-neural"
+RUNTIME_GLM_CLOUD_INTERIM = "glm-cloud-interim"
+RUNTIME_VLLM_LOCAL = "vllm-local"
+RUNTIME_PROVIDER_CLOUD = "provider-cloud"
 
 
 def _update_field(hasher, value: bytes) -> None:

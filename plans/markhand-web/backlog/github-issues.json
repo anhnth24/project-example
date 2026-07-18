@@ -309,15 +309,15 @@
       "phase": "0",
       "id": "P0-06",
       "title": "P0-06 — Chunking, hybrid tuning và index signature",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
         "web-p0",
-        "in-progress"
+        "done"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-06\n- Status: `in_progress`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt chunking/hybrid parameters và canonical signature.\n\n## Implementation plan\n\nSo chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited\nsignature gồm model/revision/dim/normalize/chunk/text-normalization version;\nversion-aware identity và query modes current/as-of/compare/history; chuẩn hoá typed\nclaim key/value/unit/scope/effective interval và deterministic numeric/enum/date/\nMUST-vs-MUST-NOT conflict candidates.\n\n## Files/modules\n\n`bench/markhand_web/retrieval/`, `expected-chunks.tsv`,\n`reports/retrieval-evaluation.md`, ADR index signature.\n\n## Dependencies / blocks\n\nDesktop baseline + embedding result.\n\n## Acceptance criteria\n\nSo sánh identical candidates; source span vẫn resolve; signature\ntest vector ổn định; chunk ID có document-version; temporal/current accuracy và\nversion-citation precision/recall đạt gate; conflict precision/recall, current-warning\nvà resolved-history accuracy có cited evidence.\n\n## Required tests / evidence\n\nRecall/MRR/nDCG/citation/no-answer + variance; cross-run signature.\n\n## Security and migration notes\n\nSignature đổi tạo index generation mới, không trộn vector.\n\n## Out of scope\n\nServer adapters/ACL.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-06\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt chunking/hybrid parameters và canonical signature.\n\n## Implementation plan\n\nSo chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited\nsignature gồm model/revision/dim/normalize/chunk/text-normalization version;\nversion-aware identity và query modes current/as-of/compare/history; chuẩn hoá typed\nclaim key/value/unit/scope/effective interval và deterministic numeric/enum/date/\nMUST-vs-MUST-NOT conflict candidates.\n\n## Files/modules\n\n`bench/markhand_web/retrieval/`, `expected-chunks.tsv`,\n`reports/retrieval-evaluation.md`, ADR index signature.\n\n## Dependencies / blocks\n\nDesktop baseline + embedding result.\n\n## Acceptance criteria\n\nSo sánh identical candidates; source span vẫn resolve; signature\ntest vector ổn định; chunk ID có document-version; temporal/current accuracy và\nversion-citation precision/recall đạt gate; conflict precision/recall, current-warning\nvà resolved-history accuracy có cited evidence.\n\n## Required tests / evidence\n\nRecall/MRR/nDCG/citation/no-answer + variance; cross-run signature.\n\n## Security and migration notes\n\nSignature đổi tạo index generation mới, không trộn vector.\n\n## Out of scope\n\nServer adapters/ACL.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {

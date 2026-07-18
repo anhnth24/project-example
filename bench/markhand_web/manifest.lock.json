@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generator": "python3 bench/markhand_web/scripts/generate_corpus.py",
+  "generator": "python3 bench/markhand_web/scripts/generate_corpus.py + generate_expected_chunks.py + fill_citation_chunk_ids.py",
   "files": [
     {
       "path": "adversarial/files/actually-html.pdf",
@@ -59,13 +59,13 @@
     },
     {
       "path": "golden/adjudication.json",
-      "sha256": "892f218eb31dffaf47626e3b098fb7772380873b27c6acb624f23ad99f7cb8b1",
-      "blake3": "2d96613da9fd2d41069b3c2ccf65cd8cd8021e32b80b931214747af99dc81ca0"
+      "sha256": "93d956fba5e3d756127c0b0c0f413f75f4739ee5d5c8caa1e7dc4f38bb86ee1e",
+      "blake3": "bb179bdb2715b96f482e7030150c64cb3e623fa53b379142fd042fc5601df230"
     },
     {
       "path": "golden/conflicts.json",
-      "sha256": "d158cc3a29abe8492d0e0676239b041153d2db2af83e7a4043b9261a0eeaa8e3",
-      "blake3": "061802c8e993b403df8df41a06c4b2fb4dbc523ccb660777be6bfd9c7b1b1f2e"
+      "sha256": "0ac5bce1000e25388aa8b8c839d676177c0512e52f0e09a8ba329b14ee655aee",
+      "blake3": "56bebd46e721b0460c59222fd0bb68a87a56cff6cefd5ab25aaef42113123731"
     },
     {
       "path": "golden/documents/gold-001.pdf",
@@ -384,13 +384,13 @@
     },
     {
       "path": "golden/queries.tsv",
-      "sha256": "5a4617e8a1bde9426c0d14b4a101b69e831cd9450e7078404bd0f1e7c4473b04",
-      "blake3": "8d5aec9f267eb4c2d0dfe4dfa4bfee7fdc612a3e267aefe42033ea0e7a3d66a0"
+      "sha256": "975d98f0987c38696355e4227471653de14970c44df849fbb9ac2dee385dae13",
+      "blake3": "39a8c68860d90e86731aad87b2f6060e93dcdac4465fa4a674cfec03f1734847"
     },
     {
       "path": "golden/review-sample.tsv",
-      "sha256": "aafab0a11b3318531639ab2a5bd28476dd02e8c9b6d0e21f03e3444cface63c6",
-      "blake3": "7b6518b1a062e377a9ac16f15541fafb924289a5ca792dcee6a57f73c5cf1415"
+      "sha256": "70aa1638abbbb09e3414bc42d69b5f7b468926743497d9bbf32123050aba38e4",
+      "blake3": "dd6352f633e69a40fd7ddc5bc0dba0a3e239fafcd5345cbafd45e535324cca9c"
     }
   ]
 }

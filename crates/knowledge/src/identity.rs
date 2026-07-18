@@ -9,6 +9,7 @@ pub const QUERY_NORMALIZATION_VERSION: &str = "accent-fold-v1";
 pub const DEFAULT_CHUNKING_VERSION: &str = "heading-chunks-2000-v1";
 
 pub const RUNTIME_LOCAL_HASH: &str = "local-hash";
+pub const RUNTIME_LOCAL_NEURAL: &str = "local-neural";
 pub const RUNTIME_GLM_CLOUD_INTERIM: &str = "glm-cloud-interim";
 pub const RUNTIME_VLLM_LOCAL: &str = "vllm-local";
 pub const RUNTIME_PROVIDER_CLOUD: &str = "provider-cloud";

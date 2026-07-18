@@ -1,10 +1,10 @@
 # ADR 0006: Canonical index signature and chunk identity (P0-06)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-07-18
 - Owners: retrieval-owner, architecture-owner
 - Approver: Phase 0 architecture gate
-- Related issues/PRs: P0-06; ADR 0002, 0004, 0005
+- Related issues/PRs: P0-06; ADR 0002, 0004, 0005; PR #209
 
 ## Context
 
@@ -22,11 +22,12 @@ and query accent-fold into one `text_version` while the fixture still said
    `document_id`, `version_id`, `ordinal`, `heading_path`, `body`,
    `body_text_version` (`nfc-v1`). Versions never share chunk IDs.
 3. **Index signature** is the length-delimited SHA-256 of:
-   - `runtime_path`: `local-hash` | `glm-cloud-interim` | `vllm-local` |
-     `provider-cloud` — **explicit field** on `EmbeddingPlan` and
+   - `runtime_path`: `local-hash` | `local-neural` | `glm-cloud-interim` |
+     `vllm-local` | `provider-cloud` — **explicit field** on `EmbeddingPlan` and
      `EmbeddingConfig` (not inferred from the coarse `Provider` enum). Desktop
      presets pin this (e.g. vLLM `127.0.0.1:8000` + `BAAI/bge-m3` →
-     `vllm-local`, GLM → `glm-cloud-interim`). Host/model inference via
+     `vllm-local`, GLM → `glm-cloud-interim`). CPU sentence-transformers quality
+     track uses `local-neural`. Host/model inference via
      `infer_embedding_runtime_path` is only a fallback for unknown/custom
      endpoints — real vLLM preset URLs do not contain the string `"vllm"`.
    - `embedding_family` (provider/model/deployment digest)
@@ -44,8 +45,8 @@ and query accent-fold into one `text_version` while the fixture still said
    live digests / tests use `identity-v2.json`.
 6. Golden evaluation pins chunk catalog in
    `bench/markhand_web/retrieval/expected-chunks.tsv` generated from the same
-   chunking version. Filling `chunkId` into every query citation may follow in a
-   later P0-06 PR once span→chunk resolution is green.
+   chunking version. Query/conflict citation `chunkId` fields are filled from
+   that catalog (`fill_citation_chunk_ids.py`).
 
 ## Consequences
 
@@ -64,9 +65,11 @@ and query accent-fold into one `text_version` while the fixture still said
 
 ```bash
 cargo test -p fileconv-knowledge --lib identity::tests
-python3 bench/markhand_web/scripts/generate_expected_chunks.py
+python3 bench/markhand_web/scripts/generate_expected_chunks.py --check
+python3 bench/markhand_web/scripts/fill_citation_chunk_ids.py --check
 python3 bench/markhand_web/scripts/run_retrieval_eval.py --self-test
+python3 bench/markhand_web/scripts/run_retrieval_eval.py
 ```
 
 Inspect `crates/knowledge/fixtures/identity-v2.json` (schema v2 payload) and
-`bench/markhand_web/reports/retrieval-evaluation.md`.
+`bench/markhand_web/reports/retrieval-evaluation.md` (`p0_06_closed`).

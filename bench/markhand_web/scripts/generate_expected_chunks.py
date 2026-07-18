@@ -12,7 +12,8 @@ import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-CORPUS = ROOT / "bench/markhand_web"
+DEFAULT_CORPUS = ROOT / "bench/markhand_web"
+CORPUS = DEFAULT_CORPUS
 MD_DIR = CORPUS / "golden/markdown"
 QUERIES = CORPUS / "golden/queries.tsv"
 OUT_TSV = CORPUS / "retrieval/expected-chunks.tsv"
@@ -26,6 +27,15 @@ from knowledge_identity import (  # noqa: E402
     chunk_identity,
     document_identity,
 )
+
+
+def configure_corpus(corpus: Path) -> None:
+    global CORPUS, MD_DIR, QUERIES, OUT_TSV, OUT_META
+    CORPUS = corpus.resolve()
+    MD_DIR = CORPUS / "golden/markdown"
+    QUERIES = CORPUS / "golden/queries.tsv"
+    OUT_TSV = CORPUS / "retrieval/expected-chunks.tsv"
+    OUT_META = CORPUS / "retrieval/expected-chunks.meta.json"
 
 
 def version_id_for(doc_stem: str) -> str:
@@ -223,7 +233,14 @@ def render_tsv(rows: list[dict]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=DEFAULT_CORPUS,
+        help="Corpus root (default: bench/markhand_web)",
+    )
     args = parser.parse_args()
+    configure_corpus(args.corpus)
     rows, chunks_by_doc, span_errors = build_rows()
     if span_errors:
         print(f"span resolve errors: {len(span_errors)}", file=sys.stderr)

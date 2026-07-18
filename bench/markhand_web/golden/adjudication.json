@@ -53,7 +53,7 @@
     "q-0262",
     "q-0263"
   ],
-  "sampleSha256": "aafab0a11b3318531639ab2a5bd28476dd02e8c9b6d0e21f03e3444cface63c6",
+  "sampleSha256": "70aa1638abbbb09e3414bc42d69b5f7b468926743497d9bbf32123050aba38e4",
   "requiredRoles": [
     "domain-reviewer",
     "retrieval-reviewer"
@@ -70,6 +70,13 @@
       "reviewer": "product-owner",
       "decision": "approved",
       "reviewedAt": "2026-07-18T15:21:00Z"
+    }
+  ],
+  "sampleSemanticSha256": "e02aad18f3f9542f3f4d0d512db9d3d6e04707ea92fd546a1ea2c1b49c284399",
+  "mechanicalAnnotations": [
+    {
+      "id": "chunkId-from-expected-chunks-v1",
+      "description": "Filled citation.chunkId from retrieval/expected-chunks.tsv by unique span coverage. Query/answer/span/judgment content unchanged."
     }
   ]
 }
