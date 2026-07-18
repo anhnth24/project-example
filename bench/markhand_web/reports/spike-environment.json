@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "reportId": "p0-04-spike-smoke",
+  "gateId": "P0-04-SPIKE",
+  "generatedAt": "2026-07-18T14:52:33.684360Z",
+  "git": {
+    "commit": "fd17e205caf4f4b6a1c69c916ccb61ffd59429fb",
+    "dirty": false
+  },
+  "command": "deploy/spike/up.sh",
+  "workloadProfileId": "on-prem-reference-v1",
+  "environment": {
+    "environmentId": "current-runner-spike-smoke",
+    "fingerprint": {
+      "gitCommit": "fd17e205caf4f4b6a1c69c916ccb61ffd59429fb",
+      "workloadProfileId": "on-prem-reference-v1",
+      "composeFileSha256": "7bda76c260ec7f9f86a61543f93b354dc47e1046288e196187f213faf2fa88d5",
+      "imageDigests": {
+        "postgres": "[\"postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296\"]",
+        "qdrant": "[\"qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c\"]",
+        "minio": "[\"pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b\"]",
+        "otel": "[\"otel/opentelemetry-collector-contrib@sha256:125bdbeb7590cc1952c5b3430ecf14063568980c2c93d5b38676cc0446ed8108\"]",
+        "mock-embedding": "[\"python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0\"]",
+        "minio-init": "[\"minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727\"]"
+      },
+      "serviceVersions": {
+        "postgres": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+        "qdrant": "qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+        "minio": "pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+        "otel": "otel/opentelemetry-collector-contrib:0.156.0@sha256:125bdbeb7590cc1952c5b3430ecf14063568980c2c93d5b38676cc0446ed8108",
+        "mock-embedding": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+        "minio-init": "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
+      },
+      "fixtureManifestSha256": "a1ccd95129815af085db95f4dfa9d8f6428050b4201a1418aba20c9e0f08f013",
+      "hardware": {
+        "cpu": {
+          "vendor": "GenuineIntel",
+          "model": "Intel(R) Xeon(R) Processor",
+          "cores": 8,
+          "threads": 8,
+          "physicalCoresMeasured": true
+        },
+        "ramGb": 50.54,
+        "disk": {
+          "type": "overlay",
+          "capacityGb": 270.44,
+          "iopsNote": "measured random-read IOPS: 0",
+          "iopsMeasured": 0,
+          "iopsVerified": false,
+          "iopsEvidenceSha256": null,
+          "iopsEvidence": null,
+          "storagePathSha256": "ef1d0360071ff3a5eab615dc0797ed7b8f7c2d03d495c97a01407acc1814d2d7",
+          "storageIdentitySha256": "8963825f6b32e70e6b9a80f433c02397aa8d00bcaa931024fca411231dcec392",
+          "backingSource": "docker-vfs]"
+        },
+        "gpu": {
+          "model": "none",
+          "vramGb": 0.0,
+          "count": 0
+        },
+        "network": {
+          "bandwidthGbps": 0.0,
+          "bandwidthMeasured": false,
+          "interface": "eth0",
+          "latencyMsAssumed": 1
+        },
+        "os": {
+          "distro": "ubuntu-24.04",
+          "arch": "x86_64"
+        }
+      }
+    }
+  },
+  "fixtures": {
+    "manifestSha256": "a1ccd95129815af085db95f4dfa9d8f6428050b4201a1418aba20c9e0f08f013"
+  },
+  "fixtureManifestPath": "tests/fixtures/manifest.json",
+  "implementationSha256": "f8c60d03dd131251e0583c0edb370063ad672e8fa9cb755e23d27cb3de2f9001",
+  "result": {
+    "metric": "healthy_spike_services",
+    "value": 5,
+    "pass": true
+  },
+  "profiles": [
+    "cpu-smoke",
+    "nested-network-workaround"
+  ],
+  "targetMatch": false,
+  "lifecycle": {
+    "restartPersistence": true,
+    "resetDeletion": true,
+    "stores": [
+      "postgres",
+      "qdrant",
+      "minio"
+    ],
+    "verifiedAt": "2026-07-18T14:52:34.254388Z"
+  },
+  "notes": "IOPS must be independently verified; target Profile B gates require targetMatch=true."
+}
