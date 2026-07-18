@@ -29,6 +29,10 @@ MD_DIR = CORPUS / "golden/markdown"
 QUERIES_PATH = CORPUS / "golden/queries.tsv"
 MANIFEST_LOCK = CORPUS / "manifest.lock.json"
 MAX_CHARS = 2000
+# Match crates/knowledge/src/desktop/sqlite.rs embedding input construction.
+PAYLOAD_FORMAT = "{heading}\\n{text}"
+RECALL_GATE = 0.85
+GAP_GATE = 0.02
 
 
 def git(*args: str) -> str:
@@ -36,7 +40,17 @@ def git(*args: str) -> str:
 
 
 def load_models() -> dict:
-    return json.loads(MODELS_PATH.read_text(encoding="utf-8"))
+    try:
+        import yaml
+    except ImportError as error:  # pragma: no cover
+        raise SystemExit(
+            "PyYAML is required to load embedding/models.yaml; "
+            "install bench/markhand_web/requirements-embedding.txt"
+        ) from error
+    data = yaml.safe_load(MODELS_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"invalid models catalog: {MODELS_PATH}")
+    return data
 
 
 def chunk_markdown(md: str, max_chars: int = MAX_CHARS) -> list[dict]:
@@ -96,17 +110,24 @@ def chunk_markdown(md: str, max_chars: int = MAX_CHARS) -> list[dict]:
     return chunks
 
 
+def embedding_payload(heading: str, text: str) -> str:
+    """Desktop convention: `{heading}\\n{text}` (sqlite.rs)."""
+    if heading:
+        return f"{heading}\n{text}"
+    return text
+
+
 def load_chunks() -> list[dict]:
     chunks: list[dict] = []
     for path in sorted(MD_DIR.glob("*.md")):
         for index, chunk in enumerate(chunk_markdown(path.read_text(encoding="utf-8"))):
-            payload = chunk["text"]
-            if chunk["heading"]:
-                payload = f"# {chunk['heading']}\n\n{payload}"
+            payload = embedding_payload(chunk["heading"], chunk["text"])
             chunks.append(
                 {
                     "docId": path.stem,
                     "chunkId": f"{path.stem}#{index}",
+                    "heading": chunk["heading"],
+                    "body": chunk["text"],
                     "text": unicodedata.normalize("NFC", payload),
                     "chars": len(payload),
                 }
@@ -121,6 +142,16 @@ def load_queries() -> list[dict]:
 
 def discounted_gain(grades: list[int]) -> float:
     return sum((2**grade - 1) / math.log2(index + 2) for index, grade in enumerate(grades))
+
+
+def ranking_fingerprint(rows: list[dict]) -> str:
+    digest = hashlib.sha256()
+    for row in sorted(rows, key=lambda item: item["queryId"]):
+        digest.update(row["queryId"].encode())
+        digest.update(b"\0")
+        digest.update(",".join(row["rankedDocuments"]).encode())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def hardware_fingerprint() -> dict:
@@ -188,11 +219,47 @@ def resolve_device(requested: str) -> str:
     return "cpu"
 
 
-def maybe_segment(texts: list[str], enabled: bool) -> list[str]:
-    if not enabled:
-        return texts
-    from pyvi.ViTokenizer import tokenize
+def validate_model_cfg(model_cfg: dict) -> None:
+    required = [
+        "id",
+        "hubId",
+        "revision",
+        "dimensions",
+        "maxSeqLength",
+        "batchSize",
+        "device",
+        "wordSegment",
+    ]
+    missing = [key for key in required if key not in model_cfg]
+    if missing:
+        raise SystemExit(f"{model_cfg.get('id', '?')}: missing config keys {missing}")
+    if not isinstance(model_cfg["revision"], str) or model_cfg["revision"] in {
+        "",
+        "main",
+        "master",
+    }:
+        raise SystemExit(
+            f"{model_cfg['id']}: revision must be an immutable commit SHA, "
+            f"got {model_cfg['revision']!r}"
+        )
+    if model_cfg["wordSegment"]:
+        segmenter = model_cfg.get("wordSegmenter")
+        if segmenter != "pyvi":
+            raise SystemExit(
+                f"{model_cfg['id']}: wordSegment=true requires wordSegmenter='pyvi', "
+                f"got {segmenter!r}"
+            )
 
+
+def prepare_texts(texts: list[str], model_cfg: dict) -> list[str]:
+    if not model_cfg["wordSegment"]:
+        return texts
+    try:
+        from pyvi.ViTokenizer import tokenize
+    except Exception as error:  # pragma: no cover - fail closed
+        raise SystemExit(
+            f"{model_cfg['id']}: required wordSegmenter pyvi failed to import: {error}"
+        ) from error
     return [tokenize(text) for text in texts]
 
 
@@ -204,20 +271,18 @@ def l2_normalize(matrix):
     return matrix / norms
 
 
-def embed_texts(model, texts: list[str], batch_size: int, word_segment: bool):
-    import numpy as np
-
-    prepared = maybe_segment(texts, word_segment)
+def embed_texts(model, texts: list[str], model_cfg: dict):
+    prepared = prepare_texts(texts, model_cfg)
     started = time.perf_counter()
     vectors = model.encode(
         prepared,
-        batch_size=batch_size,
+        batch_size=int(model_cfg["batchSize"]),
         show_progress_bar=False,
         convert_to_numpy=True,
         normalize_embeddings=False,
     )
     elapsed_ms = (time.perf_counter() - started) * 1000
-    matrix = l2_normalize(np.asarray(vectors, dtype=np.float32))
+    matrix = l2_normalize(vectors)
     return matrix, elapsed_ms
 
 
@@ -296,7 +361,12 @@ def evaluate_rankings(queries: list[dict], chunks: list[dict], chunk_vecs, query
             "mrr": round(sum(item["reciprocalRank"] for item in relevant_items) / size, 6),
             "ndcgAt10": round(sum(item["ndcgAt10"] for item in relevant_items) / size, 6),
         }
-    return {"summary": summary, "byCategory": category_summary, "rows": rows}
+    return {
+        "summary": summary,
+        "byCategory": category_summary,
+        "rows": rows,
+        "rankingSha256": ranking_fingerprint(rows),
+    }
 
 
 def resolve_revision(hub_id: str, revision: str) -> str:
@@ -315,11 +385,10 @@ def load_sentence_transformer(model_cfg: dict, device: str):
     load_started = time.perf_counter()
     model = SentenceTransformer(
         model_cfg["hubId"],
-        revision=model_cfg.get("revision", "main"),
+        revision=model_cfg["revision"],
         device=device,
     )
-    if model_cfg.get("maxSeqLength"):
-        model.max_seq_length = int(model_cfg["maxSeqLength"])
+    model.max_seq_length = int(model_cfg["maxSeqLength"])
     load_ms = (time.perf_counter() - load_started) * 1000
     return model, load_ms
 
@@ -329,32 +398,35 @@ def run_model(
     chunks: list[dict],
     queries: list[dict],
     run_index: int,
-    model=None,
-    load_ms: float = 0.0,
-    revision: str | None = None,
 ) -> dict:
+    """Independent run: load model fresh, embed, score."""
     device = resolve_device(model_cfg.get("device", "auto"))
-    revision = revision or resolve_revision(model_cfg["hubId"], model_cfg.get("revision", "main"))
+    revision_requested = model_cfg["revision"]
+    revision_resolved = resolve_revision(model_cfg["hubId"], revision_requested)
+    if revision_resolved != revision_requested and not revision_requested.startswith(
+        revision_resolved[:12]
+    ):
+        # Allow short prefix pins only if they match resolved SHA.
+        if not revision_resolved.startswith(revision_requested):
+            raise SystemExit(
+                f"{model_cfg['id']}: pinned revision {revision_requested} "
+                f"resolved to different SHA {revision_resolved}"
+            )
     print(
-        f"== {model_cfg['id']} run={run_index} device={device} revision={revision[:12]} =="
+        f"== {model_cfg['id']} run={run_index} device={device} "
+        f"revision={revision_resolved[:12]} =="
     )
-    if model is None:
-        model, load_ms = load_sentence_transformer(model_cfg, device)
+    model, load_ms = load_sentence_transformer(model_cfg, device)
+    try:
+        chunk_vecs, chunk_ms = embed_texts(
+            model, [chunk["text"] for chunk in chunks], model_cfg
+        )
+        query_vecs, query_ms = embed_texts(
+            model, [query["query"] for query in queries], model_cfg
+        )
+    finally:
+        del model
 
-    chunk_texts = [chunk["text"] for chunk in chunks]
-    query_texts = [query["query"] for query in queries]
-    chunk_vecs, chunk_ms = embed_texts(
-        model,
-        chunk_texts,
-        int(model_cfg.get("batchSize", 16)),
-        bool(model_cfg.get("wordSegment")),
-    )
-    query_vecs, query_ms = embed_texts(
-        model,
-        query_texts,
-        int(model_cfg.get("batchSize", 16)),
-        bool(model_cfg.get("wordSegment")),
-    )
     if chunk_vecs.shape[1] != int(model_cfg["dimensions"]):
         raise RuntimeError(
             f"{model_cfg['id']} returned dim={chunk_vecs.shape[1]}, "
@@ -364,93 +436,112 @@ def run_model(
     evaluation = evaluate_rankings(queries, chunks, chunk_vecs, query_vecs)
     total_vectors = len(chunks) + len(queries)
     embed_wall_s = (chunk_ms + query_ms) / 1000
-    capacity = {
-        "device": device,
-        "loadMs": round(load_ms, 2),
-        "embedChunksMs": round(chunk_ms, 2),
-        "embedQueriesMs": round(query_ms, 2),
-        "vectorsPerSecond": round(total_vectors / max(embed_wall_s, 1e-6), 3),
-        "vramGb": None,
-        "note": "quality-track; VRAM not measured on CPU smoke",
-    }
-    gates = {
-        "G0-RET-RECALL-AT-5": {
-            "metric": evaluation["summary"]["recallAt5"],
-            "threshold": 0.85,
-            "pass": evaluation["summary"]["recallAt5"] >= 0.85,
-        }
-    }
+    recall_pass = evaluation["summary"]["recallAt5"] >= RECALL_GATE
     result = {
         "modelId": model_cfg["id"],
         "role": model_cfg["role"],
         "family": model_cfg["family"],
         "hubId": model_cfg["hubId"],
-        "revisionRequested": model_cfg.get("revision", "main"),
-        "revisionResolved": revision,
+        "revisionRequested": revision_requested,
+        "revisionResolved": revision_resolved,
         "dimensions": int(model_cfg["dimensions"]),
-        "maxSeqLength": int(model_cfg.get("maxSeqLength") or 0),
-        "wordSegment": bool(model_cfg.get("wordSegment")),
+        "maxSeqLength": int(model_cfg["maxSeqLength"]),
+        "batchSize": int(model_cfg["batchSize"]),
+        "device": device,
+        "wordSegment": bool(model_cfg["wordSegment"]),
+        "wordSegmenter": model_cfg.get("wordSegmenter"),
         "normalize": "l2",
+        "payloadFormat": PAYLOAD_FORMAT,
         "chunkingVersion": "heading-chunks-2000-v1",
         "runIndex": run_index,
         "summary": evaluation["summary"],
         "byCategory": evaluation["byCategory"],
-        "capacity": capacity,
-        "gates": gates,
+        "rankingSha256": evaluation["rankingSha256"],
+        "capacity": {
+            "device": device,
+            "loadMs": round(load_ms, 2),
+            "embedChunksMs": round(chunk_ms, 2),
+            "embedQueriesMs": round(query_ms, 2),
+            "vectorsPerSecond": round(total_vectors / max(embed_wall_s, 1e-6), 3),
+            "vramGb": None,
+            "note": "quality-track; VRAM not measured on CPU smoke",
+        },
+        "gates": {
+            "G0-RET-RECALL-AT-5": {
+                "metric": evaluation["summary"]["recallAt5"],
+                "threshold": RECALL_GATE,
+                "statistic": "per-run",
+                "pass": recall_pass,
+            }
+        },
         "rows": evaluation["rows"],
     }
     print(
         f"  recall@5={result['summary']['recallAt5']:.4f} "
         f"ndcg@10={result['summary']['ndcgAt10']:.4f} "
         f"mrr={result['summary']['mrr']:.4f} "
-        f"pass={result['gates']['G0-RET-RECALL-AT-5']['pass']}"
+        f"pass={recall_pass} ranking={result['rankingSha256'][:12]}"
     )
     return result
 
 
 def aggregate_runs(runs: list[dict]) -> dict:
-    summaries = [run["summary"] for run in runs]
-    def mean_key(key: str) -> float:
-        return round(statistics.fmean(summary[key] for summary in summaries), 6)
-
+    """Apply registry statistics: recall uses min; report mean/stdev for diagnostics."""
+    recalls = [run["summary"]["recallAt5"] for run in runs]
+    ndcgs = [run["summary"]["ndcgAt10"] for run in runs]
+    recall_min = min(recalls)
+    ndcg_min = min(ndcgs)
     aggregate = {
         "runs": len(runs),
-        "recallAt5": mean_key("recallAt5"),
-        "recallAt10": mean_key("recallAt10"),
-        "hitAt5": mean_key("hitAt5"),
-        "mrr": mean_key("mrr"),
-        "ndcgAt10": mean_key("ndcgAt10"),
-        "recallAt5Stdev": round(
-            statistics.pstdev(summary["recallAt5"] for summary in summaries), 6
-        )
-        if len(summaries) > 1
-        else 0.0,
+        "recallAt5": round(recall_min, 6),
+        "recallAt5Mean": round(statistics.fmean(recalls), 6),
+        "recallAt10": round(min(run["summary"]["recallAt10"] for run in runs), 6),
+        "hitAt5": round(min(run["summary"]["hitAt5"] for run in runs), 6),
+        "mrr": round(min(run["summary"]["mrr"] for run in runs), 6),
+        "ndcgAt10": round(ndcg_min, 6),
+        "ndcgAt10Mean": round(statistics.fmean(ndcgs), 6),
+        "recallAt5Stdev": round(statistics.pstdev(recalls), 6) if len(recalls) > 1 else 0.0,
+        "rankingSha256Set": sorted({run["rankingSha256"] for run in runs}),
+        "independentLoads": True,
     }
     aggregate["gates"] = {
         "G0-RET-RECALL-AT-5": {
             "metric": aggregate["recallAt5"],
-            "threshold": 0.85,
-            "pass": aggregate["recallAt5"] >= 0.85,
+            "threshold": RECALL_GATE,
+            "statistic": "min",
+            "pass": aggregate["recallAt5"] >= RECALL_GATE,
         }
     }
     return aggregate
 
 
 def write_report(summary: dict, path: Path) -> None:
+    selected = summary["verdict"]["selectedDraft"]
+    selected_model = next(
+        (
+            model
+            for model in summary["models"]
+            if model["hubId"] == selected
+        ),
+        summary["models"][0],
+    )
     lines = [
         "# P0-05 embedding evaluation (quality track)",
         "",
         f"- Generated: `{summary['generatedAt']}`",
         f"- Git commit: `{summary['git']['commit']}`",
+        f"- Dirty worktree: `{summary['git']['dirty']}`",
         f"- Environment role: `{summary['hardware']['role']}`",
         f"- Device: `{summary['device']}`",
         f"- Chunking: `{summary['chunkingVersion']}`",
-        f"- Runs per model: `{summary['runsPerModel']}`",
+        f"- Payload format: `{summary['payloadFormat']}`",
+        f"- Runs per model: `{summary['runsPerModel']}` (independent loads)",
+        f"- Gate stats: Recall@5=`min`, best-model nDCG gap=`max`",
         f"- Fixture manifest: `{summary['fixtureManifestSha256'][:16]}…`",
         "",
         "## Quality vs gates",
         "",
-        "| Model | Family | Dims | Recall@5 | Hit@5 | MRR | nDCG@10 | Recall gate | Gap to best nDCG |",
+        "| Model | Family | Dims | Recall@5 (min) | Hit@5 | MRR | nDCG@10 (min) | Recall gate | Gap to best nDCG |",
         "|---|---|---:|---:|---:|---:|---:|---|---|",
     ]
     for model in summary["models"]:
@@ -470,14 +561,12 @@ def write_report(summary: dict, path: Path) -> None:
         "- This track is CPU/GPU-auto quality only.",
         "- VRAM/saturation/queue-depth evidence remains blocked on target NVIDIA GPU.",
         "",
-        "## Category breakdown (best candidate mean)",
+        "## Category breakdown (selected draft, last run)",
         "",
         "| Category | N | Recall@5 | Hit@5 | MRR | nDCG@10 |",
         "|---|---:|---:|---:|---:|---:|",
     ]
-    best = next(model for model in summary["models"] if model["role"] == "best-candidate")
-    # use last run categories for detail
-    last_run = best["runDetails"][-1]
+    last_run = selected_model["runDetails"][-1]
     for category, stats in last_run["byCategory"].items():
         if not stats.get("queries"):
             continue
@@ -493,10 +582,19 @@ def write_report(summary: dict, path: Path) -> None:
         json.dumps(summary["immutableConfig"], ensure_ascii=False, indent=2),
         "```",
         "",
+        "## Ranking fingerprints",
+        "",
+    ]
+    for model in summary["models"]:
+        lines.append(
+            f"- `{model['hubId']}`: {', '.join(model['aggregate']['rankingSha256Set'])}"
+        )
+    lines += [
+        "",
         "## Verdict",
         "",
-        f"- Quality gate satisfied by at least one model: "
-        f"**{'YES' if summary['verdict']['anyRecallGatePass'] else 'NO'}**",
+        f"- Both quality gates satisfied by selected draft: "
+        f"**{'YES' if summary['verdict']['selectedPassesBothGates'] else 'NO'}**",
         f"- Selected draft (quality-only): `{summary['verdict']['selectedDraft']}`",
         f"- P0-05 fully closed: **{'YES' if summary['verdict']['p0_05_closed'] else 'NO'}**",
         "",
@@ -508,22 +606,78 @@ def write_report(summary: dict, path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def self_test() -> int:
+    """Parity checks for chunking + desktop embedding payload."""
+    errors: list[str] = []
+    basic = chunk_markdown(
+        "# Chương I\n\nMở đầu.\n\n## Điều 1\n\nNội dung điều 1.\n\n## Điều 2\n\nNội dung điều 2.\n",
+        1000,
+    )
+    if len(basic) != 3:
+        errors.append(f"expected 3 chunks, got {len(basic)}")
+    elif basic[1]["heading"] != "Chương I > Điều 1":
+        errors.append(f"bad heading path: {basic[1]['heading']}")
+    payload = embedding_payload(basic[1]["heading"], basic[1]["text"])
+    expected = f"{basic[1]['heading']}\n{basic[1]['text']}"
+    if payload != expected:
+        errors.append("payload format mismatch vs desktop `{heading}\\n{text}`")
+    if payload.startswith("# "):
+        errors.append("payload must not prefix markdown heading markers")
+
+    para = "x" * 150
+    long_md = f"# A\n\n{para}\n\n{para}\n\n{para}\n"
+    long_chunks = chunk_markdown(long_md, 320)
+    if len(long_chunks) < 2:
+        errors.append("long section must split at paragraph boundaries")
+    if any(len(chunk["text"]) > 320 for chunk in long_chunks):
+        errors.append("split chunks exceeded max_chars")
+
+    pop = chunk_markdown("# A\n\nbody a\n\n## B\n\nbody b\n\n# C\n\nbody c\n", 1000)
+    if pop[2]["heading"] != "C":
+        errors.append("heading level pop failed")
+
+    # Fail-closed segmenter validation
+    try:
+        validate_model_cfg(
+            {
+                "id": "bad",
+                "hubId": "x",
+                "revision": "main",
+                "dimensions": 1,
+                "maxSeqLength": 1,
+                "batchSize": 1,
+                "device": "cpu",
+                "wordSegment": True,
+            }
+        )
+        errors.append("validate_model_cfg accepted mutable revision/main + missing segmenter")
+    except SystemExit:
+        pass
+
+    if errors:
+        for error in errors:
+            print(f"self-test FAIL: {error}", file=os.sys.stderr)
+        return 1
+    print("self-test OK: chunking, payload, and config validation")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runs", type=int, default=3, help="runs per model (>=1)")
+    parser.add_argument("--runs", type=int, default=3, help="independent runs per model")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--report", type=Path, default=REPORT_PATH)
-    parser.add_argument(
-        "--models",
-        nargs="*",
-        default=None,
-        help="optional model ids from models.yaml",
-    )
+    parser.add_argument("--models", nargs="*", default=None)
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
+    if args.self_test:
+        return self_test()
     if args.runs < 1:
         raise SystemExit("--runs must be >= 1")
 
     catalog = load_models()
+    if catalog.get("payloadFormat") not in (None, PAYLOAD_FORMAT, "{heading}\\n{text}"):
+        raise SystemExit(f"unsupported catalog payloadFormat: {catalog.get('payloadFormat')}")
     selected = catalog["models"]
     if args.models:
         wanted = set(args.models)
@@ -531,10 +685,12 @@ def main() -> int:
         missing = wanted.difference(model["id"] for model in selected)
         if missing:
             raise SystemExit(f"unknown model ids: {sorted(missing)}")
+    for model_cfg in selected:
+        validate_model_cfg(model_cfg)
 
     chunks = load_chunks()
     queries = load_queries()
-    print(f"loaded chunks={len(chunks)} queries={len(queries)}")
+    print(f"loaded chunks={len(chunks)} queries={len(queries)} payload={PAYLOAD_FORMAT}")
     args.output.mkdir(parents=True, exist_ok=True)
 
     hardware = hardware_fingerprint()
@@ -553,76 +709,100 @@ def main() -> int:
         model_dir = args.output / model_cfg["id"]
         model_dir.mkdir(parents=True, exist_ok=True)
         runs = []
-        device = resolve_device(model_cfg.get("device", "auto"))
-        revision = resolve_revision(model_cfg["hubId"], model_cfg.get("revision", "main"))
-        model, load_ms = load_sentence_transformer(model_cfg, device)
         for run_index in range(1, args.runs + 1):
-            result = run_model(
-                model_cfg,
-                chunks,
-                queries,
-                run_index,
-                model=model,
-                load_ms=load_ms,
-                revision=revision,
-            )
+            result = run_model(model_cfg, chunks, queries, run_index)
             run_path = model_dir / f"run-{run_index}.json"
-            # keep rows in machine-readable output
-            run_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-            slim = {key: value for key, value in result.items() if key != "rows"}
-            runs.append(slim)
-        del model
+            # Keep auditable per-query rankings in committed evidence.
+            run_path.write_text(
+                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            runs.append(result)
         aggregate = aggregate_runs(runs)
+        # Slim in-memory summary copy for summary.json (rows remain on disk).
+        slim_runs = [{key: value for key, value in run.items() if key != "rows"} for run in runs]
         model_summaries.append(
             {
                 "modelId": model_cfg["id"],
                 "role": model_cfg["role"],
                 "family": model_cfg["family"],
                 "hubId": model_cfg["hubId"],
+                "revisionRequested": model_cfg["revision"],
                 "revisionResolved": runs[-1]["revisionResolved"],
                 "dimensions": model_cfg["dimensions"],
-                "wordSegment": model_cfg.get("wordSegment", False),
+                "maxSeqLength": model_cfg["maxSeqLength"],
+                "batchSize": model_cfg["batchSize"],
+                "deviceResolved": runs[-1]["device"],
+                "wordSegment": model_cfg["wordSegment"],
+                "wordSegmenter": model_cfg.get("wordSegmenter"),
                 "aggregate": aggregate,
                 "gates": dict(aggregate["gates"]),
-                "runDetails": runs,
+                "runDetails": slim_runs,
             }
         )
 
-    best_ndcg = max(model["aggregate"]["ndcgAt10"] for model in model_summaries)
+    # Gap gate uses registry statistic=max: worst per-run gap to the best
+    # model in that same run (not gap-of-mins across aggregates).
+    run_count = len(model_summaries[0]["runDetails"]) if model_summaries else 0
     for model in model_summaries:
-        gap = round(best_ndcg - model["aggregate"]["ndcgAt10"], 6)
+        per_run_gaps: list[float] = []
+        per_run_best: list[float] = []
+        for run_index in range(run_count):
+            best_ndcg = max(
+                other["runDetails"][run_index]["summary"]["ndcgAt10"]
+                for other in model_summaries
+            )
+            this_ndcg = model["runDetails"][run_index]["summary"]["ndcgAt10"]
+            per_run_gaps.append(best_ndcg - this_ndcg)
+            per_run_best.append(best_ndcg)
+        gap = round(max(per_run_gaps) if per_run_gaps else 0.0, 6)
         model["gates"]["G0-RET-BEST-MODEL-GAP"] = {
             "metric": gap,
-            "threshold": 0.02,
-            "pass": gap <= 0.02,
-            "bestNdcgAt10": best_ndcg,
+            "threshold": GAP_GATE,
+            "statistic": "max",
+            "pass": gap <= GAP_GATE,
+            "bestNdcgAt10": round(max(per_run_best) if per_run_best else 0.0, 6),
+            "perRunGaps": [round(value, 6) for value in per_run_gaps],
         }
 
-    passing = [model for model in model_summaries if model["gates"]["G0-RET-RECALL-AT-5"]["pass"]]
-    if passing:
-        selected_draft = min(
-            passing,
-            key=lambda model: (
-                0 if model["role"] == "best-candidate" else 1,
-                -model["aggregate"]["ndcgAt10"],
-            ),
+    eligible = [
+        model
+        for model in model_summaries
+        if model["gates"]["G0-RET-RECALL-AT-5"]["pass"]
+        and model["gates"]["G0-RET-BEST-MODEL-GAP"]["pass"]
+    ]
+    if eligible:
+        selected_draft = max(
+            eligible, key=lambda model: model["aggregate"]["ndcgAt10"]
         )["hubId"]
+        selected_passes = True
     else:
         selected_draft = max(
             model_summaries, key=lambda model: model["aggregate"]["ndcgAt10"]
         )["hubId"]
+        selected_passes = False
 
     immutable = {
         "chunkingVersion": catalog["chunkingVersion"],
         "normalize": catalog["normalize"],
         "ranking": catalog["ranking"],
+        "payloadFormat": PAYLOAD_FORMAT,
+        "gateStatistics": {
+            "G0-RET-RECALL-AT-5": "min",
+            "G0-RET-BEST-MODEL-GAP": "max",
+        },
         "models": [
             {
                 "id": model["modelId"],
                 "hubId": model["hubId"],
                 "revision": model["revisionResolved"],
+                "revisionRequested": model["revisionRequested"],
                 "dimensions": model["dimensions"],
+                "maxSeqLength": model["maxSeqLength"],
+                "batchSize": model["batchSize"],
+                "device": model["deviceResolved"],
                 "wordSegment": model["wordSegment"],
+                "wordSegmenter": model["wordSegmenter"],
+                "normalize": "l2",
             }
             for model in model_summaries
         ],
@@ -636,6 +816,7 @@ def main() -> int:
         "hardware": hardware,
         "device": device,
         "chunkingVersion": catalog["chunkingVersion"],
+        "payloadFormat": PAYLOAD_FORMAT,
         "runsPerModel": args.runs,
         "fixtureManifestSha256": fixture_manifest_sha256,
         "chunkCount": len(chunks),
@@ -643,12 +824,18 @@ def main() -> int:
         "models": model_summaries,
         "immutableConfig": immutable,
         "verdict": {
-            "anyRecallGatePass": bool(passing),
+            "anyRecallGatePass": any(
+                model["gates"]["G0-RET-RECALL-AT-5"]["pass"] for model in model_summaries
+            ),
+            "selectedPassesBothGates": selected_passes,
             "selectedDraft": selected_draft,
             "p0_05_closed": False,
             "reasons": [
-                "Quality track executed on reduced-smoke hardware (CPU unless CUDA present).",
-                "Capacity evidence (VRAM, saturation, queue depth, target GPU fingerprint) still required.",
+                "Quality track executed with independent model loads per run.",
+                "Gate statistics follow registry: Recall@5=min, best-model nDCG gap=max.",
+                "Selection requires both Recall@5 and best-model-gap gates.",
+                "Per-query rankings retained in run-*.json with rankingSha256 fingerprints.",
+                "Capacity evidence (VRAM, saturation, queue depth, target GPU) still required.",
                 "ADR remains Proposed until capacity + approver sign-off.",
                 "Restricted corpus must not leave to cloud providers; local/self-host only.",
             ],

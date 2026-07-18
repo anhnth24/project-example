@@ -11,9 +11,12 @@
 
 Phase 0 gate `G0-RET-RECALL-AT-5` requires Recall@5 >= 0.85 on the Vietnamese
 golden corpus. OpenAI cloud embeddings failed the dense quality gate on this
-corpus (best observed ~0.78). P0-05 also requires comparing at least two model
-families on the same corpus/hardware with immutable config evidence, plus
-capacity measurements on target GPU.
+corpus: best observed Recall@5 was **0.7794** (`text-embedding-ada-002`,
+1536-d) under the same dense max-pool protocol — see committed evidence in
+`bench/markhand_web/embedding/results/openai-rejected/` (catalog verdict +
+per-model JSON). P0-05 also requires comparing at least two model families on
+the same corpus/hardware with immutable config evidence, plus capacity
+measurements on target GPU.
 
 Public Vietnamese evidence points to a BGE-M3 fine-tune as the strongest dense
 candidate and a lighter PhoBERT bi-encoder as the smallest model still reporting
@@ -53,7 +56,8 @@ This ADR stays `Proposed` until:
 ## Alternatives considered
 
 - OpenAI `text-embedding-3-*` / `ada-002`: measured dense Recall@5 < 0.85 on
-  Markhand golden; rejected for selection.
+  Markhand golden (ada-002 best at 0.7794); rejected for selection. Evidence:
+  `bench/markhand_web/embedding/results/openai-rejected/`.
 - Base `BAAI/bge-m3` dense-only: public Zalo Acc@5 ~0.838 (below margin); keep as
   backbone reference, not draft selected model.
 - `intfloat/multilingual-e5-large`: strong hybrid partner in multi-domain studies;
@@ -63,8 +67,15 @@ This ADR stays `Proposed` until:
 
 ```bash
 python3 -m pip install --user -r bench/markhand_web/requirements-embedding.txt
+python3 bench/markhand_web/scripts/run_embedding_eval.py --self-test
 python3 bench/markhand_web/scripts/run_embedding_eval.py --runs 3
 ```
+
+Harness notes (Sol review fixes):
+
+- embedding payload = desktop `{heading}\n{text}` (not markdown `# heading`)
+- each run reloads the model; Recall@5 gate uses **min**, nDCG gap uses **max**
+- selection requires both quality gates; per-query `rows` kept in `run-*.json`
 
 Inspect `bench/markhand_web/reports/embedding-evaluation.md` and
 `bench/markhand_web/embedding/results/summary.json`.
