@@ -4,7 +4,7 @@ SHELL := /bin/bash
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
-	bundle-linux dev-up dev-health dev-down dev-reset
+	p0-desktop-baseline bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
 	pnpm install --frozen-lockfile
@@ -84,6 +84,9 @@ check-web:
 check-desktop:
 	pnpm --filter markhand-desktop test
 	pnpm --filter markhand-desktop build
+
+p0-desktop-baseline:
+	bash bench/markhand_web/scripts/run_desktop_baseline.sh
 
 check-foundation: check-toolchain check-static check-rust check-knowledge-extraction check-web
 
