@@ -1,10 +1,10 @@
 {
   "version": 1,
   "reportId": "p0-10-phase0-gate",
-  "generatedAt": "2026-07-18T19:38:05.434474Z",
+  "generatedAt": "2026-07-18T19:38:50.804213Z",
   "command": "python3 bench/markhand_web/scripts/run_phase0_gate.py",
   "git": {
-    "commit": "0f366902e310fdf63de28ef30be021c9d11e2020",
+    "commit": "574fd65c8d3dcfd2c28014a45b515a7f92be36b6",
     "branch": "cursor/p0-10-phase0-gate-9f2f",
     "clean": true,
     "dirtyPaths": []
