@@ -146,10 +146,11 @@ def conversion_baseline(converter: Path, output: Path, manifest: dict) -> tuple[
         elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
         actual = completed.stdout.decode("utf-8", errors="replace") if completed.returncode == 0 else ""
         stderr = completed.stderr.decode("utf-8", errors="replace")
+        stderr = stderr.replace(str(ROOT), "<repo>")
         status = "ok" if completed.returncode == 0 else "error"
         actual_path = raw / f"{item['id']}.md"
         actual_path.write_text(actual, encoding="utf-8")
-        cer, wer = error_rates(expected, actual)
+        cer, wer = error_rates(expected, actual) if status == "ok" else (None, None)
         results.append(
             {
                 "documentId": item["id"],
@@ -162,8 +163,8 @@ def conversion_baseline(converter: Path, output: Path, manifest: dict) -> tuple[
                 "expectedBehavior": item["expectedBehavior"],
                 "expectedChars": len(expected),
                 "actualChars": len(actual),
-                "cer": round(cer, 6),
-                "wer": round(wer, 6),
+                "cer": round(cer, 6) if cer is not None else None,
+                "wer": round(wer, 6) if wer is not None else None,
                 "actualSha256": hashlib.sha256(actual.encode()).hexdigest(),
                 "error": stderr[-1000:] if status == "error" else "",
             }
@@ -185,7 +186,7 @@ def write_retrieval_input(output: Path, documents: list[dict], queries: list[dic
     if runtime.exists():
         shutil.rmtree(runtime)
     runtime.mkdir(parents=True)
-    path = output / "retrieval-input.json"
+    path = runtime / "retrieval-input.json"
     path.write_text(
         json.dumps(
             {
@@ -243,6 +244,7 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
             "topDocument": ranked[0] if ranked else None,
             "expectedDocument": query["expected_doc"] or None,
             "versionAwareCitationAvailable": False,
+            "returnedHitCount": len(ranked),
         }
         rows.append(row)
         by_category[query["category"]].append(row)
@@ -256,11 +258,38 @@ def evaluate_retrieval(queries: list[dict], output: dict) -> dict:
             "ndcgAt10": round(sum(item["ndcgAt10"] for item in items) / max(1, count), 6),
         }
 
-    temporal = [row for row in rows if row["versionMode"] != "current" or row["category"] == "temporal_current"]
+    ranked_rows = [
+        row for row in rows if json.loads(expected[row["queryId"]]["judgments"])
+    ]
+    no_answer = [
+        row for row in rows if not json.loads(expected[row["queryId"]]["judgments"])
+    ]
+    temporal = [
+        row
+        for row in ranked_rows
+        if row["versionMode"] != "current"
+        or row["category"] == "temporal_current"
+    ]
+    current_temporal = [
+        row for row in temporal if row["category"] == "temporal_current"
+    ]
     return {
-        "summary": aggregate(rows),
+        "summary": aggregate(ranked_rows),
+        "noAnswerSummary": {
+            "queries": len(no_answer),
+            "accuracy": round(
+                sum(row["returnedHitCount"] == 0 for row in no_answer)
+                / max(1, len(no_answer)),
+                6,
+            ),
+        },
         "temporalSummary": {
             **aggregate(temporal),
+            "currentVersionTop1Accuracy": round(
+                sum(row["topDocument"] == row["expectedDocument"] for row in current_temporal)
+                / max(1, len(current_temporal)),
+                6,
+            ),
             "versionCitationPrecision": 0.0,
             "versionCitationRecall": 0.0,
             "note": "Desktop baseline has no version-aware citation payload yet.",
@@ -296,13 +325,24 @@ def markdown_report(
         "|---|---:|---:|---:|---:|---:|",
     ]
     for format_name, items in sorted(formats.items()):
+        successful = [item for item in items if item["status"] == "ok"]
+        mean_cer = (
+            f"{sum(item['cer'] for item in successful) / len(successful):.4f}"
+            if successful
+            else "n/a"
+        )
+        mean_wer = (
+            f"{sum(item['wer'] for item in successful) / len(successful):.4f}"
+            if successful
+            else "n/a"
+        )
         lines.append(
-            "| {} | {} | {} | {:.4f} | {:.4f} | {:.2f} |".format(
+            "| {} | {} | {} | {} | {} | {:.2f} |".format(
                 format_name,
                 len(items),
-                sum(item["status"] == "ok" for item in items),
-                sum(item["cer"] for item in items) / len(items),
-                sum(item["wer"] for item in items) / len(items),
+                len(successful),
+                mean_cer,
+                mean_wer,
                 sum(item["durationMs"] for item in items) / len(items),
             )
         )
@@ -318,6 +358,8 @@ def markdown_report(
             f"- MRR: {summary['mrr']:.4f}",
             f"- nDCG@10: {summary['ndcgAt10']:.4f}",
             f"- Temporal Recall@5: {temporal['recallAt5']:.4f}",
+            f"- Current-version Top-1 accuracy: {temporal['currentVersionTop1Accuracy']:.4f}",
+            f"- No-answer accuracy: {retrieval['noAnswerSummary']['accuracy']:.4f}",
             "- Version-citation precision/recall: 0.0 baseline (payload not implemented).",
             "",
             "## Interpretation",
@@ -334,7 +376,7 @@ def markdown_report(
 def run(output: Path, converter: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     commit = git("rev-parse", "HEAD")
-    dirty = bool(git("status", "--porcelain"))
+    dirty = bool(git("status", "--porcelain", "--untracked-files=no"))
     if dirty:
         raise RuntimeError("baseline requires a clean git worktree")
     manifest = json.loads((CORPUS / "golden/manifest.json").read_text())
@@ -362,6 +404,16 @@ def run(output: Path, converter: Path) -> None:
     )
     raw = json.loads(retrieval_raw.read_text())
     retrieval = evaluate_retrieval(queries, raw)
+    ranking_fingerprint = hashlib.sha256(
+        json.dumps(
+            [
+                [row["queryId"], row["rankedDocuments"]]
+                for row in retrieval["queries"]
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     hardware = hardware_fingerprint()
     (output / "conversion-results.json").write_text(
         json.dumps({"version": 1, "documents": conversions}, ensure_ascii=False, indent=2) + "\n"
@@ -369,6 +421,9 @@ def run(output: Path, converter: Path) -> None:
     (output / "retrieval-results.json").write_text(
         json.dumps({"version": 1, **retrieval}, ensure_ascii=False, indent=2) + "\n"
     )
+    stale_input = output / "retrieval-input.json"
+    if stale_input.exists():
+        stale_input.unlink()
     metadata = {
         "version": 1,
         "gitCommit": commit,
@@ -380,6 +435,7 @@ def run(output: Path, converter: Path) -> None:
             (CORPUS / "manifest.lock.json").read_bytes()
         ).hexdigest(),
         "converterSha256": hashlib.sha256(converter.read_bytes()).hexdigest(),
+        "retrievalRankingSha256": ranking_fingerprint,
     }
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (output / "desktop-baseline.md").write_text(
