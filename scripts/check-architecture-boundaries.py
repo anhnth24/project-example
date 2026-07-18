@@ -56,6 +56,10 @@ def direct_dependencies(manifest: Path) -> set[str]:
 def rust_files(path: Path) -> list[Path]:
     return list(path.rglob("*.rs")) if path.is_dir() else []
 
+def rust_without_comments(content: str) -> str:
+    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    return re.sub(r"//.*$", "", content, flags=re.MULTILINE)
+
 
 def validate(root: Path, *, cargo_dependencies=direct_dependencies) -> list[str]:
     failures: list[str] = []
@@ -94,17 +98,23 @@ def validate(root: Path, *, cargo_dependencies=direct_dependencies) -> list[str]
     desktop_knowledge = root / "app/src-tauri/src/knowledge.rs"
     if desktop_knowledge.is_file():
         content = desktop_knowledge.read_text(encoding="utf-8")
+        production = rust_without_comments(
+            re.split(r"#\[cfg\(test\)\]\s*mod tests", content, maxsplit=1)[0]
+        )
         for forbidden in (
             "rusqlite::",
             "hnsw_rs::",
-            "fn cosine(",
-            "fn hybrid_rerank_score(",
-            "fn extractive_answer(",
-            "fn answer_is_grounded(",
+            "HashMap",
+            "SqliteKnowledgeStore",
+            "StoredChunk",
+            "iter().zip(",
+            "lexical_ranks(",
+            ".load_chunks(",
+            "sort_by(",
             "CREATE TABLE",
             "chunks_fts MATCH",
         ):
-            if forbidden in content:
+            if forbidden in production:
                 failures.append(
                     f"desktop knowledge adapter contains extracted implementation: {forbidden}"
                 )
@@ -114,8 +124,10 @@ def validate(root: Path, *, cargo_dependencies=direct_dependencies) -> list[str]
             "service::index_stats",
             "service::grounded_answer",
         ):
-            if required not in content:
+            if not re.search(rf"\b{re.escape(required)}\s*\(", production):
                 failures.append(f"desktop knowledge adapter does not delegate {required}")
+        if production.count("\n") + 1 > 360:
+            failures.append("desktop knowledge adapter production section exceeds 360 lines")
         if (root / "app/src-tauri/src/vector_index.rs").exists():
             failures.append("legacy desktop vector_index.rs must remain extracted")
 
@@ -200,7 +212,15 @@ class BoundaryCheckTests(unittest.TestCase):
             (root / "Cargo.toml").write_text("[workspace]\n")
             adapter = root / "app/src-tauri/src/knowledge.rs"
             adapter.parent.mkdir(parents=True)
-            adapter.write_text("fn cosine() {} // rusqlite::Connection\n")
+            adapter.write_text(
+                "// service::rebuild_index()\n"
+                "// service::hybrid_search()\n"
+                "// service::index_stats()\n"
+                "// service::grounded_answer()\n"
+                "fn copied_similarity(a: &[f32], b: &[f32]) {\n"
+                "  a.iter().zip(b).map(|(x, y)| x * y).sum();\n"
+                "}\n"
+            )
             failures = validate(root, cargo_dependencies=lambda _: set())
             self.assertTrue(any("extracted implementation" in failure for failure in failures))
             self.assertTrue(any("does not delegate" in failure for failure in failures))
