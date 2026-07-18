@@ -1,7 +1,7 @@
 # P0-06 retrieval evaluation
 
-- Generated: `2026-07-18T18:49:07.671941+00:00`
-- Git commit: `6b600bf583e17d8f931a84a27b84b8cfc265585b`
+- Generated: `2026-07-18T18:54:00.334597+00:00`
+- Git commit: `31e24f1d62ed8e48b19b1bed8ec84b582fb89148`
 - Dirty: `False`
 - Chunking: `heading-chunks-2000-v1`
 - Embedding runtime: `sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33`

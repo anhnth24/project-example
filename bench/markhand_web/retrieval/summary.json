@@ -2,9 +2,9 @@
   "version": 2,
   "issue": "P0-06",
   "track": "retrieval-neural-hybrid",
-  "generatedAt": "2026-07-18T18:49:07.671941+00:00",
+  "generatedAt": "2026-07-18T18:54:00.334597+00:00",
   "git": {
-    "commit": "6b600bf583e17d8f931a84a27b84b8cfc265585b",
+    "commit": "31e24f1d62ed8e48b19b1bed8ec84b582fb89148",
     "dirty": false,
     "dirtyPaths": []
   },
@@ -38,12 +38,12 @@
     "embeddingDevice": "cpu"
   },
   "fingerprint": {
-    "gitCommit": "6b600bf583e17d8f931a84a27b84b8cfc265585b",
+    "gitCommit": "31e24f1d62ed8e48b19b1bed8ec84b582fb89148",
     "workloadProfileId": "on-prem-reference-v1",
     "embeddingProvider": "sentence-transformers",
     "embeddingModel": "sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33",
     "embeddingDimensions": 1024,
-    "fixtureManifestSha256": "fe539fda04af3a765beb15179a0fcdaafde5440b1dd6401ca1a1117ea8c98b2a",
+    "fixtureManifestSha256": "f191c5a3f893d9876d59fe83b6c2cede5a65f965218dadde8c8ac0308ae781bf",
     "hardware": {
       "cpuThreads": 8,
       "ramGb": 47.07,
