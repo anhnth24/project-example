@@ -1,0 +1,44 @@
+# P0-01 approval — workload, hardware and gates
+
+- Approved at: `2026-07-18T07:37:00Z`
+- Workload approver: `product-owner`
+- Environment approver: `infrastructure-owner`
+- Profile: `on-prem-reference-v1` / Profile B
+
+## Scale and load envelope
+
+- 20 organizations, 10 collections per organization, 5,000 documents per collection.
+- Average 10 pages per document.
+- Maximum 1,000,000 vectors per organization; 20,000,000 aggregate vectors.
+- Normal load: 20 concurrent queries, 300 ingested documents/hour, 30 deletes/hour.
+- Peak load: 80 concurrent queries, 1,200 ingested documents/hour, 120 deletes/hour.
+- Recovery: 2× load for 120 minutes; aggregate concurrent ingest target 8.
+- Tenant distribution: Zipfian 80/20.
+
+## Reference hardware
+
+- 32 physical/reference cores, 64 threads, 256 GB RAM.
+- 4 TB NVMe with at least 100k random-read IOPS.
+- One accelerator with 24 GB VRAM.
+- 10 Gbps network; assumed 1 ms local-service latency.
+- Ubuntu 22.04, x86_64.
+
+## Approved gate thresholds
+
+| Gate | Threshold |
+|---|---:|
+| Required architecture decisions | ≥ 7 |
+| Retrieval Recall@5 | ≥ 0.85 |
+| Blocked adversarial upload fixtures | 1.00 |
+| Peak ingest throughput | ≥ 1,200 documents/hour |
+| Query latency P95 | ≤ 500 ms |
+| Approved runtime licenses | 1.00 |
+
+All failures block Phase 1B. Gate approval fixes the target; it does not claim a
+measurement passed. Raw evidence must identify actual hardware and fixture checksums.
+
+## Current-runner limitation
+
+The implementation runner observed 8 CPU, approximately 47 GB RAM, approximately
+196 GB free disk and no visible GPU. It may run validators and reduced smoke tests,
+but it cannot produce target-hardware, GPU or 20M-vector acceptance evidence.

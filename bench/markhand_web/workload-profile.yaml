@@ -1,59 +1,62 @@
 {
   "version": 1,
   "profileId": "on-prem-reference-v1",
-  "status": "proposed",
+  "status": "approved",
   "approver": "product-owner",
-  "approvedAt": null,
+  "approvedAt": "2026-07-18T07:37:00Z",
   "openDecisions": [
     {
       "id": "OD-SCALE",
       "question": "Chốt org, document, page và aggregate vector scale.",
       "owner": "product-owner",
-      "status": "open",
+      "status": "resolved",
+      "resolution": "20 org, 10 collections/org, 5000 documents/collection, 10 pages/document, 1M vectors/org and 20M aggregate vectors.",
       "blocks": ["P0-07"]
     },
     {
       "id": "OD-HARDWARE",
       "question": "Chốt CPU, RAM, disk, GPU/VRAM và network benchmark target.",
       "owner": "infrastructure-owner",
-      "status": "open",
+      "status": "resolved",
+      "resolution": "Reference target: 32 cores/64 threads, 256GB RAM, 4TB NVMe, one 24GB accelerator and 10Gbps network.",
       "blocks": ["P0-04", "P0-05", "P0-08"]
     },
     {
       "id": "OD-LOAD",
       "question": "Chốt normal/peak query, ingest, delete và recovery concurrency.",
       "owner": "product-owner",
-      "status": "open",
+      "status": "resolved",
+      "resolution": "Normal 20 queries/300 ingest per hour; peak 80 queries/1200 ingest per hour; two-hour recovery at 2x load.",
       "blocks": ["P0-07", "P0-08"]
     }
   ],
   "scale": {
-    "orgCount": null,
-    "collectionsPerOrg": null,
-    "documentsPerCollection": null,
-    "averageDocumentPages": null,
-    "vectorsPerOrgMax": null,
-    "aggregateVectors": null
+    "orgCount": 20,
+    "collectionsPerOrg": 10,
+    "documentsPerCollection": 5000,
+    "averageDocumentPages": 10,
+    "vectorsPerOrgMax": 1000000,
+    "aggregateVectors": 20000000
   },
   "loads": {
     "normal": {
-      "concurrentQueries": null,
-      "ingestDocumentsPerHour": null,
-      "deleteOperationsPerHour": null
+      "concurrentQueries": 20,
+      "ingestDocumentsPerHour": 300,
+      "deleteOperationsPerHour": 30
     },
     "peak": {
-      "concurrentQueries": null,
-      "ingestDocumentsPerHour": null,
-      "deleteOperationsPerHour": null
+      "concurrentQueries": 80,
+      "ingestDocumentsPerHour": 1200,
+      "deleteOperationsPerHour": 120
     },
     "recovery": {
       "loadMultiplier": 2.0,
-      "durationMinutes": null
+      "durationMinutes": 120
     },
     "aggregate": {
-      "concurrentQueries": null,
-      "concurrentIngest": null,
-      "tenantDistribution": null
+      "concurrentQueries": 80,
+      "concurrentIngest": 8,
+      "tenantDistribution": "zipfian-80-20"
     }
   },
   "workloads": {
