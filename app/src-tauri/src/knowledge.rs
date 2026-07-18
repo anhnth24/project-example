@@ -12,8 +12,8 @@ use fileconv_knowledge::embedding::{
     PROVIDER_EMBEDDING_MODE,
 };
 pub use fileconv_knowledge::types::{
-    GroundedAnswer, HybridAskRequest, HybridSearchHit, HybridSearchRequest, HybridSearchResponse,
-    IndexBuildResult, IndexRequest, IndexStats,
+    GroundedAnswer, HybridAskRequest, HybridSearchRequest, HybridSearchResponse, IndexBuildResult,
+    IndexRequest, IndexStats,
 };
 use tauri::State;
 
@@ -21,7 +21,6 @@ use super::{data_root, es, resolve_within, AppState};
 
 #[derive(Debug, Clone)]
 struct EmbeddingPlan {
-    config: Option<EmbeddingConfig>,
     shared: DesktopEmbeddingPlan,
 }
 
@@ -30,8 +29,11 @@ fn index_path(root: &Path) -> Result<PathBuf, String> {
     Ok(markhand.join("knowledge.sqlite"))
 }
 
-fn knowledge_paths(root: &Path) -> Result<KnowledgePaths, String> {
-    Ok(KnowledgePaths::new(index_path(root)?, root))
+fn knowledge_paths(root: &Path) -> fileconv_knowledge::Result<KnowledgePaths> {
+    Ok(KnowledgePaths::new(
+        index_path(root).map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)?,
+        root,
+    ))
 }
 
 #[cfg(test)]
@@ -55,13 +57,9 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
                 config.dimensions,
             )
             .expect("validated desktop embedding configuration");
-            EmbeddingPlan {
-                config: Some(config),
-                shared,
-            }
+            EmbeddingPlan { shared }
         }
         None => EmbeddingPlan {
-            config: None,
             shared: DesktopEmbeddingPlan::local(),
         },
     }
@@ -73,8 +71,10 @@ fn index_documents_inner(
     config: Option<EmbeddingConfig>,
     fallback_local: bool,
 ) -> Result<IndexBuildResult, String> {
-    let documents = super::intelligence::load_documents(root, source_rels)?;
-    let paths = knowledge_paths(root)?;
+    let documents = super::intelligence::load_documents(root, source_rels)
+        .map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)
+        .map_err(|error| error.to_string())?;
+    let paths = knowledge_paths(root).map_err(|error| error.to_string())?;
     let plan = embedding_plan(config.clone());
     service::rebuild_index(&paths, &documents, &plan.shared, fallback_local, |inputs| {
         config
@@ -96,12 +96,14 @@ fn hybrid_search_inner(
     config: Option<EmbeddingConfig>,
     fallback_local: bool,
 ) -> Result<HybridSearchResponse, String> {
-    let documents = if source_rels.is_empty() {
+    let documents = if source_rels.is_empty() || query.trim().is_empty() {
         Vec::new()
     } else {
-        super::intelligence::load_documents(root, source_rels)?
+        super::intelligence::load_documents(root, source_rels)
+            .map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)
+            .map_err(|error| error.to_string())?
     };
-    let paths = knowledge_paths(root)?;
+    let paths = knowledge_paths(root).map_err(|error| error.to_string())?;
     let plan = embedding_plan(config.clone());
     service::hybrid_search(
         &paths,
@@ -166,7 +168,8 @@ pub async fn rebuild_knowledge_index(
 #[tauri::command]
 pub fn knowledge_index_stats(state: State<AppState>) -> Result<IndexStats, String> {
     let root = data_root(&state);
-    service::index_stats(&knowledge_paths(&root)?).map_err(|error| error.to_string())
+    let paths = knowledge_paths(&root).map_err(|error| error.to_string())?;
+    service::index_stats(&paths).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -590,6 +593,16 @@ mod tests {
         .unwrap()
         .hits;
         assert!(!hits.is_empty());
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn empty_query_does_not_load_or_validate_sources() {
+        let root = temp_root();
+        let response =
+            hybrid_search_inner(&root, &["missing.pdf".into()], " \n ", 5, None, true).unwrap();
+        assert!(response.hits.is_empty());
+        assert!(response.warnings.is_empty());
         std::fs::remove_dir_all(root).ok();
     }
 
