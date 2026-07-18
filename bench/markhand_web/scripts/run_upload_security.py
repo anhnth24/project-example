@@ -561,7 +561,8 @@ def main() -> int:
     print(f"wrote {args.report.resolve().relative_to(ROOT)}")
     print(f"blocked_attack_fixtures={payload['adversarial']['ratio']}")
     print(f"p0_09_closed={str(payload['p0_09_closed']).lower()}")
-    return 0 if payload["adversarial"]["pass"] and payload["licenseChecker"]["pass"] else 1
+    # Fail-closed: any closure check failure exits non-zero.
+    return 0 if payload["p0_09_closed"] else 1
 
 
 if __name__ == "__main__":

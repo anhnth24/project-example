@@ -2,17 +2,23 @@
 
 - Inventory id: `pdfium-linux-x64`
 - Kind: native-library
-- Source: `bblanchon/pdfium-binaries` Linux x64 runtime used by
-  `bench/download_pdfium.sh`
+- Source: `bblanchon/pdfium-binaries` Linux x64 via `bench/download_pdfium.sh`
+- Pinned version: `152.0.7947.0` (`pdfium/VERSION` MAJOR.MINOR.BUILD.PATCH)
 - Local artifact checked: `pdfium/lib/libpdfium.so`
 - Artifact SHA-256:
   `61c9f745c6296a1050599a99a1ed985036411b591a11bd2a41bafe530ecb4f33`
-- License disposition: Apache-2.0, approved
-- Redistribution: allowed
+- Package license file: `pdfium/LICENSE` (MIT for Benoit Blanchon packaging)
+- Third-party notices: `pdfium/licenses/` (Abseil, FreeType, ICU, libpng, zlib, etc.)
+- License disposition: **MIT** (packaging LICENSE), approved for bundling with
+  third-party notices retained
+- Redistribution: `source-offer-required` (preserve MIT notice + `licenses/`)
 - Bundled: true for Markhand native runtime packaging
 
-Notes:
+## Notes
 
-- The artifact path is gitignored and is not stored in source control.
-- P0-09 inventory uses the real local binary hash present in this cloud run.
-- Future release jobs must refresh this entry if the PDFium package changes.
+- Do **not** label this artifact Apache-2.0; the packaging LICENSE is MIT and the
+  binary embeds multiple third-party licenses under `pdfium/licenses/`.
+- The binary path is gitignored; release jobs must refresh the SHA-256 and VERSION
+  pin when `download_pdfium.sh` changes the artifact.
+- Profile B / production image cutover should re-run
+  `python3 scripts/check-runtime-license-inventory.py` against the packaged tree.

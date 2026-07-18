@@ -4,11 +4,11 @@
     {
       "id": "pdfium-linux-x64",
       "kind": "native-library",
-      "version": "pdfium-binaries linux-x64 local artifact",
+      "version": "152.0.7947.0",
       "source": "bench/download_pdfium.sh -> bblanchon/pdfium-binaries",
-      "license": "Apache-2.0",
+      "license": "MIT",
       "artifactSha256": "61c9f745c6296a1050599a99a1ed985036411b591a11bd2a41bafe530ecb4f33",
-      "redistribution": "allowed",
+      "redistribution": "source-offer-required",
       "disposition": "approved",
       "bundled": true,
       "evidence": "docs/licenses/pdfium-runtime-evidence.md"

@@ -5,10 +5,10 @@
       "id": "pdfium-linux-x64",
       "kind": "native-library",
       "allowedLicenses": [
-        "Apache-2.0"
+        "MIT"
       ],
       "artifactSha256": "61c9f745c6296a1050599a99a1ed985036411b591a11bd2a41bafe530ecb4f33",
-      "notes": "Bundled native runtime; hash is pdfium/lib/libpdfium.so from this run."
+      "notes": "Bundled pdfium-binaries 152.0.7947.0; packaging LICENSE is MIT plus pdfium/licenses third-party notices. Hash is pdfium/lib/libpdfium.so."
     },
     {
       "id": "tesseract-ocr-system",

@@ -286,7 +286,7 @@
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": "docs/markhand-web-runtime-license-inventory.json",
+      "evidence": null,
       "blocksIssues": [
         "P0-10"
       ]
@@ -407,15 +407,17 @@
         "value": 1.0
       },
       "command": "python3 scripts/check-runtime-license-inventory.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "release-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
+      "evidence": "docs/markhand-web-runtime-license-inventory.json",
       "blocksIssues": [
+        "P0-09",
         "P0-10"
-      ]
+      ],
+      "notes": "License inventory validated on local-cpu-quality; Profile B packaging re-check still required before production image cutover."
     }
   ]
 }
