@@ -59,8 +59,8 @@
     },
     {
       "path": "golden/adjudication.json",
-      "sha256": "97d7fd0bd1423bf57a115a7fe14045681f1af7f511b111bb15d6ae067bfe2b07",
-      "blake3": "5ae64c17becb6b66251dfd8578b1f20d57c12271023ccaceadb839e3404860f0"
+      "sha256": "6db287db951f41c140cce59b56113ff6ea4c3714f3200ad95d8d8416d178d7de",
+      "blake3": "fc580e931c2302a9859ac77cc14982e9d1ea37c414746e6fce95a75b195def6f"
     },
     {
       "path": "golden/documents/gold-001.pdf",

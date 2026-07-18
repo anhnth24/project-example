@@ -22,7 +22,9 @@
       "type": "object",
       "required": [
         "bestModelNdcgGapMax", "filteredQueryP99Ms", "rpoMinutes",
-        "queryReadyRtoMinutes", "fullVectorRtoMinutes"
+        "queryReadyRtoMinutes", "fullVectorRtoMinutes", "temporalAccuracyMin",
+        "changeAccuracyMin", "versionCitationPrecisionMin",
+        "versionCitationRecallMin"
       ]
     },
     "hardware": {
