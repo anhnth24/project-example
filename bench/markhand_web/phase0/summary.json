@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "reportId": "p0-10-phase0-gate",
+  "generatedAt": "2026-07-18T19:38:05.434474Z",
+  "command": "python3 bench/markhand_web/scripts/run_phase0_gate.py",
+  "git": {
+    "commit": "0f366902e310fdf63de28ef30be021c9d11e2020",
+    "branch": "cursor/p0-10-phase0-gate-9f2f",
+    "clean": true,
+    "dirtyPaths": []
+  },
+  "commands": {
+    "phase0Decisions": {
+      "name": "phase0Decisions",
+      "command": "/usr/bin/python3 scripts/check-phase0-decisions.py",
+      "pass": true,
+      "returnCode": 0,
+      "stdout": "{\"metric\": \"approved_architecture_decisions\", \"value\": 7}",
+      "stderr": ""
+    },
+    "markhandGates": {
+      "name": "markhandGates",
+      "command": "/usr/bin/python3 scripts/check-markhand-gates.py",
+      "pass": true,
+      "returnCode": 0,
+      "stdout": "Markhand workload and gate registry valid",
+      "stderr": ""
+    },
+    "runtimeLicenseInventory": {
+      "name": "runtimeLicenseInventory",
+      "command": "/usr/bin/python3 scripts/check-runtime-license-inventory.py",
+      "pass": true,
+      "returnCode": 0,
+      "stdout": "{\"metric\": \"approved_runtime_licenses\", \"value\": 1.0}",
+      "stderr": ""
+    }
+  },
+  "smoke": {
+    "security": {
+      "pass": true,
+      "path": "bench/markhand_web/security/summary.json",
+      "p0_09_closed": true,
+      "measurementScope": "local-cpu policy/sandbox smoke; not Profile B malware scanner"
+    },
+    "restore": {
+      "pass": true,
+      "path": "bench/markhand_web/restore/summary.json",
+      "p0_10_restore_smoke_closed": true,
+      "targetMatch": false,
+      "profileBDrGatePassed": false,
+      "profileBDrBlocked": true
+    },
+    "queryLoad": {
+      "pass": true,
+      "path": "bench/markhand_web/query_load/summary.json",
+      "p0_10_query_load_smoke_closed": true,
+      "targetMatch": false,
+      "profileBSloGatePassed": false,
+      "productionSloBlocked": true
+    }
+  },
+  "closure": {
+    "decisionsAccepted": true,
+    "gateRegistryValid": true,
+    "runtimeLicenseInventoryPassed": true,
+    "securitySmokeClosed": true,
+    "restoreSmokeClosed": true,
+    "gitClean": true,
+    "p0_10_closed": true,
+    "productionPhase0ExitBlocked": true
+  },
+  "p0_10_closed": true,
+  "productionPhase0ExitBlocked": true,
+  "remainingProfileBBlockers": [
+    {
+      "id": "G0-SLO-QUERY-P95",
+      "owner": "operations-owner",
+      "reason": "Query P95 requires live mixed-load measurement on on-prem-reference."
+    },
+    {
+      "id": "G0-SLO-QUERY-P99",
+      "owner": "operations-owner",
+      "reason": "Filtered query P99 requires live 20M aggregate vector and tenant-filter measurement."
+    },
+    {
+      "id": "G0-CAP-INGEST-THROUGHPUT",
+      "owner": "worker-owner",
+      "reason": "Ingest throughput/headroom remains local-cpu smoke until Profile B run."
+    },
+    {
+      "id": "G0-DR-RPO",
+      "owner": "operations-owner",
+      "reason": "RPO requires real component-loss backup/restore evidence."
+    },
+    {
+      "id": "G0-DR-QUERY-READY-RTO",
+      "owner": "operations-owner",
+      "reason": "Query-ready RTO requires live PG/MinIO/Qdrant restore drill."
+    },
+    {
+      "id": "G0-DR-FULL-VECTOR-RTO",
+      "owner": "operations-owner",
+      "reason": "Full-vector RTO requires live snapshot/rebuild timing on target hardware."
+    },
+    {
+      "id": "G0-RET-VLLM-CUTOVER",
+      "owner": "retrieval-owner",
+      "reason": "Production embedding cutover requires on-prem vLLM evidence."
+    }
+  ],
+  "notes": [
+    "P0-10 close means accepted decisions, license/security checks and restore smoke are closed on a clean tree.",
+    "Production Phase 0 exit remains blocked while Profile B SLO, capacity and DR gates lack targetMatch=true evidence.",
+    "G0-DR evidence remains null in gates.yaml; restore summary is smoke evidence only."
+  ]
+}
