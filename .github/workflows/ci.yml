@@ -129,6 +129,7 @@ jobs:
       - name: Validate and smoke-test local services
         run: |
           docker compose -f deploy/dev/compose.yml config >/dev/null
+          python3 scripts/validate_spike.py --config-only
           make dev-up
           make dev-health
           make dev-down

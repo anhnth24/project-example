@@ -67,8 +67,8 @@
                   "required": ["model", "vramGb", "count"],
                   "properties": {
                     "model": {"type": "string", "minLength": 1},
-                    "vramGb": {"type": "number", "exclusiveMinimum": 0},
-                    "count": {"type": "integer", "exclusiveMinimum": 0}
+                    "vramGb": {"type": "number", "minimum": 0},
+                    "count": {"type": "integer", "minimum": 0}
                   }
                 },
                 "network": {

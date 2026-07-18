@@ -70,8 +70,12 @@ GROUPS = {
     "dev_stack": SHARED
     + (
         "deploy/dev/**",
+        "deploy/compose.spike.yml",
+        "deploy/spike/**",
         "deploy/scripts/**",
         "docs/runbooks/local-development.md",
+        "bench/markhand_web/scripts/fingerprint_spike.py",
+        "scripts/validate_spike.py",
     ),
     "bundle": SHARED
     + (
