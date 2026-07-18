@@ -6,8 +6,8 @@ use fileconv_core::intelligence::{self, CorpusDocument};
 use fileconv_core::llm::EmbeddingConfig;
 use fileconv_knowledge::embedding::{
     local_vector as shared_local_vector, validate_embedding_batch,
-    EmbeddingPlan as SharedEmbeddingPlan, EmbeddingVector, LOCAL_EMBEDDING_MODE,
-    LOCAL_VECTOR_DIMENSIONS, PROVIDER_EMBEDDING_MODE,
+    EmbeddingPlan as SharedEmbeddingPlan, EmbeddingVector, ProviderDeployment,
+    LOCAL_EMBEDDING_MODE, LOCAL_VECTOR_DIMENSIONS, PROVIDER_EMBEDDING_MODE,
 };
 use fileconv_knowledge::query::{fts5_prefix_query, normalized_tokens};
 pub use fileconv_knowledge::types::{
@@ -209,10 +209,14 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
         Some(config) => {
             let provider = provider_name(config.provider);
             let model = config.model.clone();
+            let deployment = ProviderDeployment::from_base_url(config.base_url.as_deref())
+                .or_else(|_| ProviderDeployment::from_base_url(None))
+                .expect("default deployment identity is valid");
             let shared = SharedEmbeddingPlan::provider(
                 provider.clone(),
                 model.clone(),
                 model.clone(),
+                deployment,
                 config.dimensions,
             )
             .expect("validated desktop embedding configuration");
@@ -252,6 +256,15 @@ fn finalize_provider_signature(plan: &mut EmbeddingPlan) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn provider_config_matches(config: &EmbeddingConfig, metadata: &IndexMetadata) -> bool {
+    let mut plan = embedding_plan(Some(config.clone()));
+    if plan.metadata.dimensions == 0 && metadata.dimensions > 0 {
+        plan.metadata.dimensions = metadata.dimensions;
+    }
+    (plan.metadata.dimensions == 0 || finalize_provider_signature(&mut plan).is_ok())
+        && plan.metadata.signature == metadata.signature
 }
 
 fn read_metadata(connection: &Connection) -> Result<IndexMetadata, String> {
@@ -357,7 +370,9 @@ fn index_documents_with_plan(
         && current_metadata.model == plan.metadata.model
     {
         plan.metadata.dimensions = current_metadata.dimensions;
-        finalize_provider_signature(&mut plan)?;
+        if plan.metadata.dimensions > 0 {
+            finalize_provider_signature(&mut plan)?;
+        }
     }
     if indexed_documents > 0 && current_metadata.signature != plan.metadata.signature {
         clear_index(root, &mut connection)?;
@@ -399,7 +414,7 @@ fn index_documents_with_plan(
             .collect();
         let vectors = if let Some(config) = plan.config.as_ref() {
             fileconv_core::llm::embed_batch(config, &embedding_inputs)
-                .map_err(|error| format!("embedding provider lỗi: {error}"))?
+                .map_err(|_| "embedding provider lỗi; không thể tạo vector".to_string())?
         } else {
             embedding_inputs
                 .iter()
@@ -687,10 +702,7 @@ fn hybrid_search_inner(
     let mut warnings = Vec::new();
     let query_vector = if metadata.mode == PROVIDER_EMBEDDING_MODE {
         match config {
-            Some(config)
-                if embedding_plan(Some(config.clone())).metadata.signature
-                    == metadata.signature =>
-            {
+            Some(config) if provider_config_matches(&config, &metadata) => {
                 match fileconv_core::llm::embed_query(&config, query) {
                     Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
                     Ok(vector) => {
@@ -701,10 +713,8 @@ fn hybrid_search_inner(
                         ));
                         None
                     }
-                    Err(error) => {
-                        warnings.push(format!(
-                            "Embedding provider lỗi ({error}); chỉ dùng FTS lexical."
-                        ));
+                    Err(_) => {
+                        warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".to_string());
                         None
                     }
                 }
@@ -1471,9 +1481,9 @@ mod tests {
         let sources = seed(&root);
         let config = EmbeddingConfig::new(
             fileconv_core::llm::Provider::OpenAiCompatible,
-            "",
+            "provider-secret",
             "missing-model",
-            Some("http://127.0.0.1:1".into()),
+            Some("http://user:password@127.0.0.1:1?token=hidden".into()),
             None,
         )
         .unwrap();
@@ -1482,6 +1492,9 @@ mod tests {
         assert_eq!(result.vector_dimensions, LOCAL_VECTOR_DIMENSIONS);
         assert_eq!(result.indexed, 2);
         assert!(result.warnings[0].contains("rebuild"));
+        assert!(!result.warnings[0].contains("password"));
+        assert!(!result.warnings[0].contains("hidden"));
+        assert!(!result.warnings[0].contains("provider-secret"));
         let metadata = read_metadata(&open_index(&root).unwrap()).unwrap();
         assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
         std::fs::remove_dir_all(root).ok();
@@ -1503,6 +1516,63 @@ mod tests {
             .unwrap();
         let error = hybrid_search_inner(&root, &sources, "giao dịch", 5, None, true).unwrap_err();
         assert!(error.contains("không nhất quán"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn provider_signature_excludes_transport_url_and_credentials() {
+        let first = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "first-secret",
+            "mock-embedding",
+            Some("https://user:password@embedding.example/v1?token=hidden".into()),
+            Some(768),
+        )
+        .unwrap();
+        let same_deployment = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "second-secret",
+            "mock-embedding",
+            Some("https://embedding.example/v1".into()),
+            Some(768),
+        )
+        .unwrap();
+        let other_deployment = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "second-secret",
+            "mock-embedding",
+            Some("https://embedding-two.example/v1".into()),
+            Some(768),
+        )
+        .unwrap();
+        let first_signature = embedding_plan(Some(first)).metadata.signature;
+        let same_signature = embedding_plan(Some(same_deployment)).metadata.signature;
+        let other_signature = embedding_plan(Some(other_deployment)).metadata.signature;
+        assert_eq!(first_signature, same_signature);
+        assert_ne!(first_signature, other_signature);
+        assert!(!first_signature.contains("password"));
+        assert!(!first_signature.contains("hidden"));
+    }
+
+    #[test]
+    fn unknown_provider_dimensions_remain_recoverable_for_empty_documents() {
+        let root = temp_root();
+        std::fs::write(root.join("empty.txt"), b"").unwrap();
+        std::fs::write(root.join("empty.txt.md"), b"").unwrap();
+        let config = EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "",
+            "mock-embedding",
+            Some("http://127.0.0.1:1".into()),
+            None,
+        )
+        .unwrap();
+        let sources = vec!["empty.txt".to_string()];
+        let first = index_documents_inner(&root, &sources, Some(config.clone()), false).unwrap();
+        let second = index_documents_inner(&root, &sources, Some(config), false).unwrap();
+        assert_eq!(first.vector_dimensions, 0);
+        assert_eq!(first.chunks, 0);
+        assert_eq!(second.skipped, 1);
         std::fs::remove_dir_all(root).ok();
     }
 

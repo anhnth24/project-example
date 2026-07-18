@@ -1,5 +1,8 @@
 use std::hash::{Hash, Hasher};
 
+use sha2::{Digest, Sha256};
+use siphasher::sip::SipHasher13;
+
 use crate::identity::IndexSignature;
 use crate::query::PreparedQuery;
 use crate::{KnowledgeError, Result};
@@ -42,8 +45,49 @@ impl EmbeddingVector {
 }
 
 pub trait EmbeddingProvider {
-    fn signature(&self) -> &str;
     fn embed(&self, inputs: &[String]) -> Result<Vec<EmbeddingVector>>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderDeployment {
+    digest: String,
+}
+
+impl ProviderDeployment {
+    pub fn from_base_url(base_url: Option<&str>) -> Result<Self> {
+        let canonical = match base_url {
+            Some(value) => {
+                let mut url = url::Url::parse(value)
+                    .map_err(|_| KnowledgeError::InvalidInput("embedding base URL is invalid"))?;
+                if !matches!(url.scheme(), "http" | "https") {
+                    return Err(KnowledgeError::InvalidInput(
+                        "embedding base URL scheme is unsupported",
+                    ));
+                }
+                url.set_username("").map_err(|_| {
+                    KnowledgeError::InvalidInput("embedding base URL credentials are invalid")
+                })?;
+                url.set_password(None).map_err(|_| {
+                    KnowledgeError::InvalidInput("embedding base URL credentials are invalid")
+                })?;
+                url.set_query(None);
+                url.set_fragment(None);
+                let normalized_path = url.path().trim_end_matches('/').to_string();
+                url.set_path(if normalized_path.is_empty() {
+                    "/"
+                } else {
+                    &normalized_path
+                });
+                url.to_string()
+            }
+            None => "provider-default".to_string(),
+        };
+        let digest = Sha256::digest(canonical.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Ok(Self { digest })
+    }
 }
 
 /// Secret-free description of how vectors in an index are produced.
@@ -57,6 +101,7 @@ pub struct EmbeddingPlan {
     provider: String,
     model: String,
     revision: String,
+    deployment: ProviderDeployment,
     expected_dimensions: Option<usize>,
     normalized: bool,
 }
@@ -68,6 +113,8 @@ impl EmbeddingPlan {
             provider: "local".into(),
             model: LOCAL_EMBEDDING_MODE.into(),
             revision: "1".into(),
+            deployment: ProviderDeployment::from_base_url(None)
+                .expect("default deployment identity is valid"),
             expected_dimensions: Some(LOCAL_VECTOR_DIMENSIONS),
             normalized: true,
         }
@@ -77,6 +124,7 @@ impl EmbeddingPlan {
         provider: impl Into<String>,
         model: impl Into<String>,
         revision: impl Into<String>,
+        deployment: ProviderDeployment,
         expected_dimensions: Option<usize>,
     ) -> Result<Self> {
         let provider = provider.into();
@@ -101,6 +149,7 @@ impl EmbeddingPlan {
             provider,
             model,
             revision,
+            deployment,
             expected_dimensions,
             normalized: true,
         })
@@ -148,7 +197,10 @@ impl EmbeddingPlan {
     }
 
     fn signature_with_dimensions(&self, dimensions: usize) -> String {
-        let family = format!("{}/{}", self.provider, self.model);
+        let family = format!(
+            "{}/{}/{}",
+            self.provider, self.model, self.deployment.digest
+        );
         IndexSignature {
             embedding_family: &family,
             embedding_revision: &self.revision,
@@ -202,6 +254,21 @@ pub fn embed_checked(
 ) -> Result<Vec<EmbeddingVector>> {
     let vectors = provider.embed(inputs)?;
     validate_embedding_batch(&vectors, inputs.len(), plan.expected_dimensions())?;
+    if plan.normalized
+        && vectors.iter().any(|vector| {
+            let norm = vector
+                .values()
+                .iter()
+                .map(|value| value * value)
+                .sum::<f32>()
+                .sqrt();
+            (norm - 1.0).abs() > 0.001
+        })
+    {
+        return Err(KnowledgeError::InvalidInput(
+            "embedding vector is not L2-normalized",
+        ));
+    }
     Ok(vectors)
 }
 
@@ -234,7 +301,9 @@ pub fn local_vector(text: &str) -> EmbeddingVector {
 }
 
 fn add_feature(vector: &mut [f32], feature: &str, weight: f32) {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // `DefaultHasher::new()` used SipHash-1-3 with zero keys in the original
+    // desktop implementation. Naming the algorithm makes local_hash_v1 stable.
+    let mut hasher = SipHasher13::new();
     feature.hash(&mut hasher);
     let hash = hasher.finish();
     let index = (hash as usize) % vector.len();
@@ -251,15 +320,10 @@ mod tests {
     use crate::{KnowledgeError, Result};
 
     struct MockProvider {
-        signature: String,
         vectors: Vec<EmbeddingVector>,
     }
 
     impl EmbeddingProvider for MockProvider {
-        fn signature(&self) -> &str {
-            &self.signature
-        }
-
         fn embed(&self, _inputs: &[String]) -> Result<Vec<EmbeddingVector>> {
             Ok(self.vectors.clone())
         }
@@ -289,15 +353,61 @@ mod tests {
             .sqrt();
         assert!((norm - 1.0).abs() < 0.0001);
 
-        let empty = local_vector("...");
-        assert!(empty.values().iter().all(|value| *value == 0.0));
+        let punctuation = local_vector("...");
+        assert_eq!(punctuation, local_vector("..."));
+        assert!(punctuation.values().iter().all(|value| value.is_finite()));
+        let sparse_bits = first
+            .values()
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value != 0.0)
+            .map(|(index, value)| (index, value.to_bits()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sparse_bits,
+            [
+                (3, 1031655018),
+                (15, 1049197177),
+                (24, 1031655018),
+                (26, 3179138666),
+                (45, 3196680825),
+                (46, 3179138666),
+                (97, 1031655018),
+                (111, 1031655018),
+                (121, 1031655018),
+                (132, 3179138666),
+                (135, 3179138666),
+                (141, 1054048600),
+                (160, 3203611429),
+                (170, 1049197177),
+                (188, 1031655018),
+                (191, 1054048600),
+                (195, 3179138666),
+                (212, 1031655018),
+                (229, 1054048600),
+            ]
+        );
+    }
+
+    #[test]
+    fn local_hash_v1_matches_legacy_desktop_hasher() {
+        use std::hash::{Hash, Hasher};
+
+        for feature in ["doi", "soat", "giao:dich", "gia"] {
+            let mut legacy = std::collections::hash_map::DefaultHasher::new();
+            feature.hash(&mut legacy);
+            let mut stable = siphasher::sip::SipHasher13::new();
+            feature.hash(&mut stable);
+            assert_eq!(stable.finish(), legacy.finish());
+        }
     }
 
     #[test]
     fn validates_provider_mock_count_and_dimensions() {
-        let plan = EmbeddingPlan::provider("vllm", "vi-model", "r1", Some(3)).unwrap();
+        let deployment =
+            super::ProviderDeployment::from_base_url(Some("http://embedding.internal")).unwrap();
+        let plan = EmbeddingPlan::provider("vllm", "vi-model", "r1", deployment, Some(3)).unwrap();
         let provider = MockProvider {
-            signature: plan.signature(3).unwrap(),
             vectors: vec![
                 EmbeddingVector::new(vec![1.0, 0.0, 0.0]).unwrap(),
                 EmbeddingVector::new(vec![0.0, 1.0, 0.0]).unwrap(),
@@ -322,17 +432,53 @@ mod tests {
                 actual: 3
             }
         );
+        let unnormalized = MockProvider {
+            vectors: vec![EmbeddingVector::new(vec![2.0, 0.0, 0.0]).unwrap()],
+        };
+        assert_eq!(
+            embed_checked(&unnormalized, &["một".into()], &plan).unwrap_err(),
+            KnowledgeError::InvalidInput("embedding vector is not L2-normalized")
+        );
     }
 
     #[test]
     fn provider_signature_is_secret_free_and_covers_compatibility_fields() {
-        let first = EmbeddingPlan::provider("vllm", "vi-model", "r1", Some(768)).unwrap();
-        let same = EmbeddingPlan::provider("vllm", "vi-model", "r1", Some(768)).unwrap();
-        let changed_model =
-            EmbeddingPlan::provider("vllm", "other-model", "r1", Some(768)).unwrap();
-        let changed_dimensions =
-            EmbeddingPlan::provider("vllm", "vi-model", "r1", Some(1024)).unwrap();
+        let deployment = super::ProviderDeployment::from_base_url(Some(
+            "https://user:secret@embedding.internal/v1?token=hidden",
+        ))
+        .unwrap();
+        let same_deployment =
+            super::ProviderDeployment::from_base_url(Some("https://embedding.internal/v1"))
+                .unwrap();
+        let other_deployment =
+            super::ProviderDeployment::from_base_url(Some("https://embedding.other/v1")).unwrap();
+        let first =
+            EmbeddingPlan::provider("vllm", "vi-model", "r1", deployment, Some(768)).unwrap();
+        let same =
+            EmbeddingPlan::provider("vllm", "vi-model", "r1", same_deployment, Some(768)).unwrap();
+        let changed_endpoint =
+            EmbeddingPlan::provider("vllm", "vi-model", "r1", other_deployment, Some(768)).unwrap();
+        let changed_model = EmbeddingPlan::provider(
+            "vllm",
+            "other-model",
+            "r1",
+            super::ProviderDeployment::from_base_url(None).unwrap(),
+            Some(768),
+        )
+        .unwrap();
+        let changed_dimensions = EmbeddingPlan::provider(
+            "vllm",
+            "vi-model",
+            "r1",
+            super::ProviderDeployment::from_base_url(None).unwrap(),
+            Some(1024),
+        )
+        .unwrap();
         assert_eq!(first.signature(768).unwrap(), same.signature(768).unwrap());
+        assert_ne!(
+            first.signature(768).unwrap(),
+            changed_endpoint.signature(768).unwrap()
+        );
         assert_ne!(
             first.signature(768).unwrap(),
             changed_model.signature(768).unwrap()
@@ -341,6 +487,9 @@ mod tests {
             first.signature(768).unwrap(),
             changed_dimensions.signature(1024).unwrap()
         );
-        assert!(!format!("{first:?}").contains("https://"));
+        let debug = format!("{first:?}");
+        assert!(!debug.contains("https://"));
+        assert!(!debug.contains("secret"));
+        assert!(!debug.contains("hidden"));
     }
 }
