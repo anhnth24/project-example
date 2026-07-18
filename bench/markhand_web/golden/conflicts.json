@@ -1,0 +1,153 @@
+{
+  "version": 1,
+  "conflicts": [
+    {
+      "id": "conflict-budget-001",
+      "claimKey": "approved_budget_vnd",
+      "type": "numeric_mismatch",
+      "severity": "warning",
+      "status": "resolved",
+      "validFrom": "2026-01-01T00:00:00Z",
+      "resolvedAt": "2026-07-01T00:00:00Z",
+      "detected": {
+        "left": {
+          "value": 10,
+          "unit": "million_vnd",
+          "citation": {
+            "citationId": "CITE-0001",
+            "documentId": "gold-budget-v1",
+            "logicalDocumentId": "logical-budget-policy",
+            "versionId": "version-budget-v1",
+            "versionNumber": 1,
+            "contentSha256": "d1223693d889473a57d7960f1155b43afb2a18b34b8f306f45511e651cf418f1",
+            "chunkId": null,
+            "isCurrent": false,
+            "effectiveAt": "2026-01-01T00:00:00Z",
+            "page": null,
+            "start": 131,
+            "end": 186,
+            "quote": "Kinh phí được phê duyệt là 10 triệu đồng."
+          }
+        },
+        "right": {
+          "value": 15,
+          "unit": "million_vnd",
+          "citation": {
+            "citationId": "CITE-0002",
+            "documentId": "gold-design-v1",
+            "logicalDocumentId": "logical-budget-design",
+            "versionId": "version-design-v1",
+            "versionNumber": 1,
+            "contentSha256": "4831ea41d5e6f20b68feaef6a4200c8b3b33004909f329d7f05d59416888eece",
+            "chunkId": null,
+            "isCurrent": false,
+            "effectiveAt": "2026-01-01T00:00:00Z",
+            "page": null,
+            "start": 135,
+            "end": 188,
+            "quote": "Thiết kế phân bổ kinh phí 15 triệu đồng."
+          }
+        },
+        "supporting": [
+          {
+            "citationId": "CITE-0003",
+            "documentId": "gold-design-v1",
+            "logicalDocumentId": "logical-budget-design",
+            "versionId": "version-design-v1",
+            "versionNumber": 1,
+            "contentSha256": "4831ea41d5e6f20b68feaef6a4200c8b3b33004909f329d7f05d59416888eece",
+            "chunkId": null,
+            "isCurrent": false,
+            "effectiveAt": "2026-01-01T00:00:00Z",
+            "page": null,
+            "start": 341,
+            "end": 429,
+            "quote": "Thiết kế phiên bản 1 cao hơn yêu cầu BA phiên bản 1 là 5 triệu đồng."
+          }
+        ]
+      },
+      "resolution": {
+        "leftCurrent": {
+          "value": 15,
+          "unit": "million_vnd",
+          "citation": {
+            "citationId": "CITE-0001",
+            "documentId": "gold-budget-v2",
+            "logicalDocumentId": "logical-budget-policy",
+            "versionId": "version-budget-v2",
+            "versionNumber": 2,
+            "contentSha256": "ab53faf943b8f94143e05783bd658fabffb1ba27777008ef926e448826c1ed5b",
+            "chunkId": null,
+            "isCurrent": true,
+            "effectiveAt": "2026-07-01T00:00:00Z",
+            "page": null,
+            "start": 131,
+            "end": 186,
+            "quote": "Kinh phí được phê duyệt là 15 triệu đồng."
+          }
+        },
+        "rightCurrent": {
+          "value": 15,
+          "unit": "million_vnd",
+          "citation": {
+            "citationId": "CITE-0002",
+            "documentId": "gold-design-v2",
+            "logicalDocumentId": "logical-budget-design",
+            "versionId": "version-design-v2",
+            "versionNumber": 2,
+            "contentSha256": "60248905154694610a197a5d38e5e59f0cf143dced1b34ebc6053e77bb9bbd12",
+            "chunkId": null,
+            "isCurrent": true,
+            "effectiveAt": "2026-07-01T00:00:00Z",
+            "page": null,
+            "start": 135,
+            "end": 188,
+            "quote": "Thiết kế phân bổ kinh phí 15 triệu đồng."
+          }
+        },
+        "supporting": [
+          {
+            "citationId": "CITE-0003",
+            "documentId": "gold-design-v2",
+            "logicalDocumentId": "logical-budget-design",
+            "versionId": "version-design-v2",
+            "versionNumber": 2,
+            "contentSha256": "60248905154694610a197a5d38e5e59f0cf143dced1b34ebc6053e77bb9bbd12",
+            "chunkId": null,
+            "isCurrent": true,
+            "effectiveAt": "2026-07-01T00:00:00Z",
+            "page": null,
+            "start": 341,
+            "end": 410,
+            "quote": "Thiết kế phiên bản 2 đã khớp yêu cầu BA phiên bản 2."
+          }
+        ],
+        "note": "BA version 2 increased from 10 to 15 million VND, matching design version 2."
+      },
+      "authorizationCases": [
+        {
+          "scope": "both_sources",
+          "authorizedLogicalDocumentIds": [
+            "logical-budget-policy",
+            "logical-budget-design"
+          ],
+          "expectedVisibility": "full"
+        },
+        {
+          "scope": "ba_only",
+          "authorizedLogicalDocumentIds": [
+            "logical-budget-policy"
+          ],
+          "expectedVisibility": "hidden"
+        },
+        {
+          "scope": "design_only",
+          "authorizedLogicalDocumentIds": [
+            "logical-budget-design"
+          ],
+          "expectedVisibility": "hidden"
+        }
+      ]
+    }
+  ]
+}
