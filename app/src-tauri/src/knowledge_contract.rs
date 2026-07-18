@@ -82,3 +82,21 @@ fn score_contract_uses_epsilon_and_exact_hit_order() {
     assert!((response.hits[0].rerank_score - 1.875).abs() <= 0.0001);
     assert_eq!(response.hits[0].anchor.page, Some(7));
 }
+
+#[test]
+fn backend_handler_registers_every_frozen_knowledge_command() {
+    let handler_source = include_str!("lib.rs");
+    let expected = [
+        "rebuild_knowledge_index",
+        "knowledge_index_stats",
+        "hybrid_search",
+        "hybrid_ask",
+    ];
+    assert_eq!(crate::knowledge::KNOWLEDGE_COMMAND_NAMES, expected);
+    for command in expected {
+        assert!(
+            handler_source.contains(&format!("knowledge::{command}")),
+            "missing backend registration for {command}"
+        );
+    }
+}

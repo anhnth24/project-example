@@ -166,6 +166,10 @@ fn rebuild_once(
         || hnsw::clear(&paths.ann_root),
     )?;
     let mut warnings = Vec::new();
+    if stored.replaced_incompatible_index {
+        warnings
+            .push("Embedding signature thay đổi; đã rebuild knowledge index tương thích.".into());
+    }
     if stored.indexed > 0
         || !hnsw::is_available(
             &paths.ann_root,
@@ -502,5 +506,62 @@ fn answer(
         mode: mode.as_str().into(),
         grounded: true,
         warnings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::*;
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_paths() -> KnowledgePaths {
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("markhand_service_{}_{}", std::process::id(), id));
+        KnowledgePaths::new(root.join(".markhand/knowledge.sqlite"), root)
+    }
+
+    fn document() -> CorpusDocument {
+        CorpusDocument {
+            source_rel: "payments.pdf".into(),
+            md_rel: "payments.pdf.md".into(),
+            format: "pdf".into(),
+            markdown: "# Đối soát\n\nGiao dịch được đối soát mỗi ngày.".into(),
+        }
+    }
+
+    #[test]
+    fn provider_signature_change_emits_explicit_rebuild_notice() {
+        let paths = temp_paths();
+        rebuild_index(
+            &paths,
+            &[document()],
+            &DesktopEmbeddingPlan::local(),
+            false,
+            |_| Err(KnowledgeError::EmbeddingProviderFailure),
+        )
+        .unwrap();
+        let provider = DesktopEmbeddingPlan::provider(
+            "openai-compatible",
+            "replacement-model",
+            Some("https://embedding.internal/v1"),
+            Some(LOCAL_VECTOR_DIMENSIONS),
+        )
+        .unwrap();
+        let result = rebuild_index(&paths, &[document()], &provider, false, |inputs| {
+            Ok(inputs
+                .iter()
+                .map(|input| local_vector(input).into_values())
+                .collect())
+        })
+        .unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Embedding signature thay đổi")));
+        let _ = std::fs::remove_dir_all(paths.ann_root);
     }
 }

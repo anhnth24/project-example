@@ -136,7 +136,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-09 — Thin Tauri adapters
 
-- **Status:** Review — thin adapters and backend/frontend parity gates passed.
+- **Status:** Done — merged to `master` with backend/frontend IPC parity.
 - **Objective:** Desktop commands delegate shared crate, IPC giữ nguyên.
 - **Plan:** Tauri giữ state/settings/path load/spawn_blocking/error mapping; delegate
   rebuild/stats/search/ask; retain legacy commands; remove duplicate only sau parity.
@@ -151,7 +151,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-10 — CI parity và extraction gate
 
-- **Status:** Blocked bởi P1A-09.
+- **Status:** Review — full local extraction gate passed; hosted CI awaits billing restore.
 - **Objective:** Chứng minh desktop equivalence và server usability.
 - **Plan:** Full feature/contract/golden matrix; no-feature server consumer test;
   dependency deny-list; docs compatibility; file perf/concurrency defects riêng.

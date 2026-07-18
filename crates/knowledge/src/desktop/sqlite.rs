@@ -45,6 +45,7 @@ pub struct StoreIndexResult {
     pub indexed: usize,
     pub skipped: usize,
     pub metadata: IndexMetadata,
+    pub replaced_incompatible_index: bool,
 }
 
 pub struct SqliteKnowledgeStore {
@@ -378,6 +379,7 @@ impl SqliteKnowledgeStore {
             indexed,
             skipped,
             metadata,
+            replaced_incompatible_index: cleared,
         })
     }
 
@@ -878,6 +880,45 @@ mod tests {
         assert_eq!(store.document_count().unwrap(), 1);
         assert_eq!(store.chunk_count().unwrap(), 1);
         assert_eq!(store.metadata().unwrap().signature, LOCAL_EMBEDDING_MODE);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn incompatible_signature_reports_rebuild_after_atomic_commit() {
+        let path = temp_path("signature_rebuild");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        index(
+            &mut store,
+            &[document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.")],
+        );
+        let replacement = IndexMetadata {
+            mode: "provider_v1".into(),
+            provider: "mock".into(),
+            model: "mock-model".into(),
+            dimensions: LOCAL_VECTOR_DIMENSIONS,
+            signature: "replacement-signature".into(),
+        };
+        let mut cleared = false;
+        let result = store
+            .index_documents(
+                &[document("# Thay đổi\n\nNội dung mới.")],
+                replacement,
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || {
+                    cleared = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(result.replaced_incompatible_index);
+        assert!(cleared);
+        assert_eq!(store.metadata().unwrap().signature, "replacement-signature");
         let _ = std::fs::remove_file(path);
     }
 

@@ -19,6 +19,14 @@ use tauri::State;
 
 use super::{data_root, es, resolve_within, AppState};
 
+#[cfg(test)]
+pub(crate) const KNOWLEDGE_COMMAND_NAMES: [&str; 4] = [
+    "rebuild_knowledge_index",
+    "knowledge_index_stats",
+    "hybrid_search",
+    "hybrid_ask",
+];
+
 #[derive(Debug, Clone)]
 struct EmbeddingPlan {
     shared: DesktopEmbeddingPlan,

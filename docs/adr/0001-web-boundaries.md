@@ -44,6 +44,8 @@ trở thành dependency/path dependency.
 ## Consequences
 
 - Tách `fileconv-knowledge` ở Phase 1A, không copy RAG desktop vào server.
+- SQLite/HNSW desktop adapters chỉ tồn tại sau opt-in features; default/server tree
+  không kéo các dependency này.
 - Server cần interface adapter cho PostgreSQL/Qdrant/MinIO; generic trait chỉ được tạo
   khi có ít nhất hai consumer thực tế.
 - Mọi business repository API ở web server bắt buộc truyền `OrgContext`; missing scope
@@ -65,4 +67,5 @@ trở thành dependency/path dependency.
 
 - `python3 scripts/check-architecture-boundaries.py`
 - `python3 scripts/check-architecture-boundaries.py --self-test`
+- `make check-knowledge-extraction`
 - Review theo `docs/conventions/dependencies.md` và CODEOWNERS.

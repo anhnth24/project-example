@@ -2,7 +2,8 @@ SHELL := /bin/bash
 
 .PHONY: install check-toolchain check-static check-boundaries check-migrations \
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
-	check-knowledge-features check-web check-desktop check-foundation bundle-linux dev-up dev-health dev-down dev-reset
+	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
+	check-web check-desktop check-foundation bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
 	pnpm install --frozen-lockfile
@@ -46,6 +47,12 @@ check-rust:
 check-knowledge-features:
 	bash scripts/check-knowledge-features.sh
 
+check-knowledge-extraction:
+	bash scripts/check-knowledge-extraction.sh
+
+check-knowledge-extraction-rust:
+	bash scripts/check-knowledge-extraction.sh --rust-only
+
 check-rust-tests:
 	cargo test -p fileconv-core
 	cargo test -p fileconv-core --features llm llm
@@ -64,7 +71,7 @@ check-desktop:
 	pnpm --filter markhand-desktop test
 	pnpm --filter markhand-desktop build
 
-check-foundation: check-toolchain check-static check-rust check-knowledge-features check-rust-tests check-web check-desktop
+check-foundation: check-toolchain check-static check-rust check-knowledge-extraction check-web
 
 bundle-linux:
 	pnpm --dir app tauri build --bundles deb --no-sign --ci
