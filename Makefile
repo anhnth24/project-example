@@ -4,7 +4,7 @@ SHELL := /bin/bash
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
 	check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
-	bundle-linux dev-up dev-health dev-down dev-reset
+	check-desktop-baseline p0-desktop-baseline bundle-linux dev-up dev-health dev-down dev-reset
 
 install:
 	pnpm install --frozen-lockfile
@@ -53,7 +53,7 @@ check-dependencies:
 	python3 scripts/check-dependency-policy.py
 	python3 scripts/check-dependency-policy.py --self-test
 
-check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies
+check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-desktop-baseline
 
 check-rust:
 	bash scripts/check-rust-quality.sh
@@ -84,6 +84,13 @@ check-web:
 check-desktop:
 	pnpm --filter markhand-desktop test
 	pnpm --filter markhand-desktop build
+
+p0-desktop-baseline:
+	bash bench/markhand_web/scripts/run_desktop_baseline.sh
+
+check-desktop-baseline:
+	python3 scripts/validate_desktop_baseline.py
+	python3 scripts/validate_desktop_baseline.py --self-test
 
 check-foundation: check-toolchain check-static check-rust check-knowledge-extraction check-web
 
