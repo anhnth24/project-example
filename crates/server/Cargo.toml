@@ -19,7 +19,17 @@ name = "fileconv-worker"
 path = "src/bin/worker.rs"
 
 [dependencies]
+axum = { version = "0.8.9", features = ["json"] }
 fileconv-core = { path = "../core" }
 fileconv-knowledge = { path = "../knowledge" }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11.0"
+tokio = { version = "1.53.0", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio-postgres = "0.7.18"
+uuid = { version = "1.24.0", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1.4"
+tower = { version = "0.5.3", features = ["util"] }

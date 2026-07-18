@@ -4,14 +4,30 @@
  */
 
 export interface paths {
-    "/health": {
+    "/health/live": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["health"];
+        get: operations["healthLive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["healthReady"];
         put?: never;
         post?: never;
         delete?: never;
@@ -88,7 +104,7 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    health: {
+    healthLive: {
         parameters: {
             query?: never;
             header?: never;
@@ -97,7 +113,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Service health */
+            /** @description Process health; does not contact dependencies. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -106,7 +122,27 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
-            500: components["responses"]["ApiError"];
+        };
+    };
+    healthReady: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description PostgreSQL, Qdrant and MinIO are reachable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            503: components["responses"]["ApiError"];
         };
     };
     jobEvents: {

@@ -15,6 +15,20 @@ CREATE TABLE IF NOT EXISTS markhand_dev_seed (
 INSERT INTO markhand_dev_seed (key, value)
 VALUES ('environment', 'local-dev')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+
+INSERT INTO orgs (slug, name)
+VALUES ('poc', 'Markhand POC')
+ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+RETURNING id AS poc_org_id \gset
+
+INSERT INTO users (email, display_name)
+VALUES ('owner@example.test', 'POC Owner')
+ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name
+RETURNING id AS poc_user_id \gset
+
+INSERT INTO org_memberships (org_id, user_id, role)
+VALUES (:'poc_org_id', :'poc_user_id', 'owner')
+ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role;
 SQL
 
-echo "seeded local development metadata"
+echo "seeded local development metadata and POC organization"

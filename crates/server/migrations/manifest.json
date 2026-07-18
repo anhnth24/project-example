@@ -1,4 +1,6 @@
 {
   "version": 1,
-  "migrations": {}
+  "migrations": {
+    "0001_expand_orgs_users.sql": "878a7dfb7be35a943ddd6e8610e78187238be110b0a372908ef9a85fc55286f9"
+  }
 }

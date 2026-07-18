@@ -31,6 +31,10 @@ impl Profile {
 pub struct SecretString(String);
 
 impl SecretString {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -47,6 +51,8 @@ pub struct ServerConfig {
     pub profile: Profile,
     pub bind_addr: SocketAddr,
     pub database_url: Option<SecretString>,
+    pub qdrant_url: Option<String>,
+    pub minio_url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -55,6 +61,8 @@ struct ConfigFile {
     profile: Option<String>,
     bind_addr: Option<String>,
     database_url: Option<String>,
+    qdrant_url: Option<String>,
+    minio_url: Option<String>,
 }
 
 impl ServerConfig {
@@ -92,15 +100,36 @@ impl ServerConfig {
             .or_else(|| file.and_then(|value| value.database_url.as_ref()))
             .filter(|value| !value.trim().is_empty())
             .cloned()
-            .map(SecretString);
+            .map(SecretString::new);
+        let qdrant_url = optional_value(file, env, "MARKHAND_QDRANT_URL", |value| {
+            value.qdrant_url.as_ref()
+        });
+        let minio_url = optional_value(file, env, "MARKHAND_MINIO_URL", |value| {
+            value.minio_url.as_ref()
+        });
 
         let config = Self {
             profile,
             bind_addr,
             database_url,
+            qdrant_url,
+            minio_url,
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Returns the service endpoints required to start the real POC server.
+    pub fn runtime_endpoints(&self) -> Result<RuntimeEndpoints, String> {
+        Ok(RuntimeEndpoints {
+            database_url: self
+                .database_url
+                .as_ref()
+                .ok_or_else(|| "server requires MARKHAND_DATABASE_URL".to_string())?
+                .clone(),
+            qdrant_url: required_url(self.qdrant_url.as_deref(), "MARKHAND_QDRANT_URL")?,
+            minio_url: required_url(self.minio_url.as_deref(), "MARKHAND_MINIO_URL")?,
+        })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -121,6 +150,35 @@ impl ServerConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeEndpoints {
+    pub database_url: SecretString,
+    pub qdrant_url: String,
+    pub minio_url: String,
+}
+
+fn optional_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+    env_name: &str,
+    from_file: impl FnOnce(&ConfigFile) -> Option<&String>,
+) -> Option<String> {
+    env.get(env_name)
+        .or_else(|| file.and_then(from_file))
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+}
+
+fn required_url(value: Option<&str>, name: &str) -> Result<String, String> {
+    let value = value.ok_or_else(|| format!("server requires {name}"))?;
+    let parsed =
+        reqwest::Url::parse(value).map_err(|_| format!("{name} must be an absolute URL"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(format!("{name} must use http or https"));
+    }
+    Ok(value.trim_end_matches('/').to_string())
+}
+
 fn load_file(path: &Path) -> Result<ConfigFile, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|_| "cannot read MARKHAND_CONFIG_FILE".to_string())?;
@@ -138,6 +196,8 @@ mod tests {
             profile: Some("test".into()),
             bind_addr: Some("127.0.0.1:9000".into()),
             database_url: Some("postgres://file-secret".into()),
+            qdrant_url: Some("http://qdrant.test".into()),
+            minio_url: Some("http://minio.test".into()),
         };
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "dev".into()),
@@ -150,6 +210,7 @@ mod tests {
             config.database_url.unwrap().expose(),
             "postgres://file-secret"
         );
+        assert_eq!(config.qdrant_url.as_deref(), Some("http://qdrant.test"));
     }
 
     #[test]
@@ -177,5 +238,21 @@ mod tests {
     fn invalid_bind_fails_fast() {
         let env = BTreeMap::from([("MARKHAND_BIND_ADDR".into(), "not-an-address".into())]);
         assert!(ServerConfig::from_sources(None, &env).is_err());
+    }
+
+    #[test]
+    fn runtime_endpoints_require_all_real_services() {
+        let config = ServerConfig::from_sources(
+            None,
+            &BTreeMap::from([(
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand@localhost/markhand".into(),
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            config.runtime_endpoints().unwrap_err(),
+            "server requires MARKHAND_QDRANT_URL"
+        );
     }
 }
