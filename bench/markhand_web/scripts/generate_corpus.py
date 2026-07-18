@@ -38,6 +38,7 @@ from reportlab.pdfgen import canvas
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT = ROOT / "bench/markhand_web"
 FIXED_TIME = dt.datetime(2026, 6, 30, tzinfo=dt.timezone.utc)
+QUERY_TIME = "2026-07-18T00:00:00Z"
 ZIP_TIME = (2026, 6, 30, 0, 0, 0)
 FONT_PATH = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
 ENVIRONMENT_LOCK = ROOT / "bench/markhand_web/generator-environment.lock.json"
@@ -224,7 +225,82 @@ def record(index: int, format_name: str) -> dict:
         "unitCode": unit_code,
         "facts": facts,
         "conversionOnly": format_name == "audio",
+        "versionFixture": False,
+        "logicalDocumentId": f"logical-gold-{number:03}",
+        "versionId": f"version-gold-{number:03}-v1",
+        "versionNumber": 1,
+        "parentVersionId": None,
+        "effectiveAt": "2026-01-01T00:00:00Z",
+        "isCurrent": True,
+        "changeSummary": "Phiên bản đầu tiên.",
     }
+
+
+def version_records() -> list[dict]:
+    logical_id = "logical-budget-policy"
+    common = {
+        "format": "docx",
+        "topic": "quy định kinh phí",
+        "unitCode": "PTC",
+        "conversionOnly": False,
+        "versionFixture": True,
+        "logicalDocumentId": logical_id,
+    }
+    versions = []
+    for version, amount, effective, current in (
+        (1, 10, "2026-01-01T00:00:00Z", False),
+        (2, 15, "2026-07-01T00:00:00Z", True),
+    ):
+        version_id = f"version-budget-v{version}"
+        versions.append(
+            {
+                **common,
+                "id": f"gold-budget-v{version}",
+                "title": f"Quy định kinh phí chuyển đổi số — phiên bản {version}",
+                "versionId": version_id,
+                "versionNumber": version,
+                "parentVersionId": None if version == 1 else "version-budget-v1",
+                "effectiveAt": effective,
+                "isCurrent": current,
+                "changeSummary": (
+                    "Phiên bản đầu tiên, kinh phí 10 triệu đồng."
+                    if version == 1
+                    else "Tăng kinh phí từ 10 lên 15 triệu đồng, hiệu lực từ 01/07/2026."
+                ),
+                "facts": [
+                    {
+                        "key": "code",
+                        "text": "Mã quy định là QD-KP-2026.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "budget",
+                        "text": f"Kinh phí được phê duyệt là {amount} triệu đồng.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "effective",
+                        "text": f"Phiên bản {version} có hiệu lực từ ngày {effective[8:10]} tháng {effective[5:7]} năm 2026.",
+                        "queries": [],
+                    },
+                    {
+                        "key": "owner",
+                        "text": "Đơn vị ban hành là Phòng Tài chính (PTC).",
+                        "queries": [],
+                    },
+                    {
+                        "key": "change",
+                        "text": (
+                            "Đây là phiên bản đầu tiên của quy định."
+                            if version == 1
+                            else "So với phiên bản 1, kinh phí tăng thêm 5 triệu đồng."
+                        ),
+                        "queries": [],
+                    },
+                ],
+            }
+        )
+    return versions
 
 
 def canonical_markdown(item: dict) -> str:
@@ -232,6 +308,40 @@ def canonical_markdown(item: dict) -> str:
         return ""
     facts = "\n\n".join(fact["text"] for fact in item["facts"])
     return f"# {item['title']}\n\n## Thông tin đã phê duyệt\n\n{facts}\n"
+
+
+def fact_by_key(item: dict, key: str) -> dict:
+    return next(fact for fact in item["facts"] if fact["key"] == key)
+
+
+def citation(item: dict, markdown: str, fact: dict, ordinal: int) -> dict:
+    character_start = markdown.index(fact["text"])
+    start = len(markdown[:character_start].encode("utf-8"))
+    end = start + len(fact["text"].encode("utf-8"))
+    return {
+        "citationId": f"CITE-{ordinal:04}",
+        "documentId": item["id"],
+        "logicalDocumentId": item["logicalDocumentId"],
+        "versionId": item["versionId"],
+        "versionNumber": item["versionNumber"],
+        "contentSha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+        "chunkId": None,
+        "isCurrent": item["isCurrent"],
+        "effectiveAt": item["effectiveAt"],
+        "page": 1 if item["format"].startswith("pdf") else None,
+        "start": start,
+        "end": end,
+        "quote": fact["text"],
+    }
+
+
+def encoded(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def write_docx(path: Path, item: dict) -> None:
@@ -442,7 +552,7 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
     rows: list[dict] = []
     query_number = 1
     for item in items:
-        if item["conversionOnly"]:
+        if item["conversionOnly"] or item["versionFixture"]:
             continue
         markdown = markdown_by_id[item["id"]]
         for fact in item["facts"]:
@@ -464,6 +574,7 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                     if (
                         related["id"] != item["id"]
                         and not related["conversionOnly"]
+                        and not related["versionFixture"]
                         and related["topic"] == item["topic"]
                     ):
                         judgments[related["id"]] = 1
@@ -479,6 +590,19 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                         "span_end": str(end),
                         "page": "1" if item["format"].startswith("pdf") else "",
                         "answer_text": fact["text"],
+                        "expected_answer": fact["text"],
+                        "citations": encoded([citation(item, markdown, fact, 1)]),
+                        "version_mode": "current",
+                        "query_time": QUERY_TIME,
+                        "as_of": "",
+                        "version_context": encoded(
+                            {
+                                "logicalDocumentId": item["logicalDocumentId"],
+                                "currentVersionId": item["versionId"],
+                                "citedVersionIds": [item["versionId"]],
+                                "changeNote": "",
+                            }
+                        ),
                         "judgments": json.dumps(
                             judgments,
                             ensure_ascii=False,
@@ -490,10 +614,21 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                 query_number += 1
 
     for topic in TOPICS:
-        related = [
-            item["id"]
+        related_items = [
+            item
             for item in items
-            if not item["conversionOnly"] and item["topic"] == topic
+            if not item["conversionOnly"]
+            and not item["versionFixture"]
+            and item["topic"] == topic
+        ]
+        related = [item["id"] for item in related_items]
+        expected_answer = "Các hồ sơ liên quan gồm: " + "; ".join(
+            f"{item['title']} ({fact_by_key(item, 'code')['text'].removeprefix('Mã hồ sơ là ').removesuffix('.')})"
+            for item in related_items
+        ) + "."
+        expected_citations = [
+            citation(item, markdown_by_id[item["id"]], fact_by_key(item, "code"), index + 1)
+            for index, item in enumerate(related_items)
         ]
         judgments = json.dumps(
             {item_id: 2 for item_id in related},
@@ -516,15 +651,44 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                     "span_end": "",
                     "page": "",
                     "answer_text": "",
+                    "expected_answer": expected_answer,
+                    "citations": encoded(expected_citations),
+                    "version_mode": "current",
+                    "query_time": QUERY_TIME,
+                    "as_of": "",
+                    "version_context": encoded(
+                        {
+                            "logicalDocumentIds": [
+                                item["logicalDocumentId"] for item in related_items
+                            ],
+                            "currentVersionIds": [
+                                item["versionId"] for item in related_items
+                            ],
+                            "citedVersionIds": [
+                                item["versionId"] for item in related_items
+                            ],
+                            "changeNote": "",
+                        }
+                    ),
                     "judgments": judgments,
                 }
             )
             query_number += 1
     for unit_code in UNIT_CODES[:2]:
-        related = [
-            item["id"]
+        related_items = [
+            item
             for item in items
-            if not item["conversionOnly"] and item["unitCode"] == unit_code
+            if not item["conversionOnly"]
+            and not item["versionFixture"]
+            and item["unitCode"] == unit_code
+        ]
+        related = [item["id"] for item in related_items]
+        expected_answer = f"Các hồ sơ do {unit_code} phụ trách gồm: " + "; ".join(
+            item["title"] for item in related_items
+        ) + "."
+        expected_citations = [
+            citation(item, markdown_by_id[item["id"]], fact_by_key(item, "owner"), index + 1)
+            for index, item in enumerate(related_items)
         ]
         rows.append(
             {
@@ -538,6 +702,25 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                 "span_end": "",
                 "page": "",
                 "answer_text": "",
+                "expected_answer": expected_answer,
+                "citations": encoded(expected_citations),
+                "version_mode": "current",
+                "query_time": QUERY_TIME,
+                "as_of": "",
+                "version_context": encoded(
+                    {
+                        "logicalDocumentIds": [
+                            item["logicalDocumentId"] for item in related_items
+                        ],
+                        "currentVersionIds": [
+                            item["versionId"] for item in related_items
+                        ],
+                        "citedVersionIds": [
+                            item["versionId"] for item in related_items
+                        ],
+                        "changeNote": "",
+                    }
+                ),
                 "judgments": json.dumps(
                     {item_id: 2 for item_id in related},
                     sort_keys=True,
@@ -546,6 +729,180 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
             }
         )
         query_number += 1
+
+    version_items = sorted(
+        [item for item in items if item["versionFixture"]],
+        key=lambda item: item["versionNumber"],
+    )
+    v1, v2 = version_items
+    version_history = [
+        {
+            "versionId": item["versionId"],
+            "versionNumber": item["versionNumber"],
+            "effectiveAt": item["effectiveAt"],
+            "isCurrent": item["isCurrent"],
+            "changeSummary": item["changeSummary"],
+        }
+        for item in version_items
+    ]
+
+    def add_version_query(
+        query: str,
+        category: str,
+        mode: str,
+        expected_doc: dict,
+        answer: str,
+        cited: list[tuple[dict, str]],
+        judgments: dict[str, int],
+        as_of: str = "",
+    ) -> None:
+        nonlocal query_number
+        cited_anchors = [
+            citation(
+                item,
+                markdown_by_id[item["id"]],
+                fact_by_key(item, fact_key),
+                index + 1,
+            )
+            for index, (item, fact_key) in enumerate(cited)
+        ]
+        rows.append(
+            {
+                "query_id": f"q-{query_number:04}",
+                "query": query,
+                "category": category,
+                "expected_doc": expected_doc["id"],
+                "relevance": str(judgments[expected_doc["id"]]),
+                "answer_mode": {
+                    "current": "versioned_answer",
+                    "as_of": "versioned_answer",
+                    "compare": "version_compare",
+                    "history": "version_history",
+                }[mode],
+                "span_start": "",
+                "span_end": "",
+                "page": "",
+                "answer_text": "",
+                "expected_answer": answer,
+                "citations": encoded(cited_anchors),
+                "version_mode": mode,
+                "query_time": QUERY_TIME,
+                "as_of": as_of,
+                "version_context": encoded(
+                    {
+                        "logicalDocumentId": v2["logicalDocumentId"],
+                        "currentVersionId": v2["versionId"],
+                        "citedVersionIds": list(
+                            dict.fromkeys(
+                                anchor["versionId"] for anchor in cited_anchors
+                            )
+                        ),
+                        "history": version_history,
+                        "changeNote": v2["changeSummary"]
+                        if mode in {"compare", "history", "current"}
+                        else "",
+                    }
+                ),
+                "judgments": encoded(judgments),
+            }
+        )
+        query_number += 1
+
+    current_answer = (
+        "Kinh phí hiện tại là 15 triệu đồng theo phiên bản 2, "
+        "có hiệu lực từ ngày 01 tháng 07 năm 2026."
+    )
+    old_answer = "Tại ngày 01/03/2026, kinh phí là 10 triệu đồng theo phiên bản 1."
+    compare_answer = (
+        "Kinh phí tăng từ 10 triệu đồng ở phiên bản 1 lên 15 triệu đồng "
+        "ở phiên bản 2, tức tăng 5 triệu đồng."
+    )
+    current_judgments = {v2["id"]: 3, v1["id"]: 1}
+    historical_judgments = {v1["id"]: 3, v2["id"]: 1}
+    compare_judgments = {v1["id"]: 3, v2["id"]: 3}
+    add_version_query(
+        "Kinh phí hiện tại của quy định chuyển đổi số là bao nhiêu?",
+        "temporal_current",
+        "current",
+        v2,
+        current_answer,
+        [(v2, "budget"), (v2, "effective")],
+        current_judgments,
+    )
+    add_version_query(
+        "kinh phi hien tai theo phien ban dang hieu luc",
+        "temporal_current",
+        "current",
+        v2,
+        current_answer,
+        [(v2, "budget"), (v2, "effective")],
+        current_judgments,
+    )
+    add_version_query(
+        "Ngày 01/03/2026 kinh phí được phê duyệt là bao nhiêu?",
+        "temporal_as_of",
+        "as_of",
+        v1,
+        old_answer,
+        [(v1, "budget"), (v1, "effective")],
+        historical_judgments,
+        "2026-03-01T00:00:00Z",
+    )
+    add_version_query(
+        "Trước ngày 01/07/2026 quy định ghi nhận mức kinh phí nào?",
+        "temporal_as_of",
+        "as_of",
+        v1,
+        "Tại thời điểm 30/06/2026, kinh phí vẫn là 10 triệu đồng theo phiên bản 1.",
+        [(v1, "budget"), (v1, "effective")],
+        historical_judgments,
+        "2026-06-30T23:59:59Z",
+    )
+    for query in (
+        "Kinh phí đã thay đổi thế nào giữa phiên bản 1 và phiên bản hiện tại?",
+        "Mức kinh phí tăng thêm bao nhiêu sau lần cập nhật gần nhất?",
+        "So sánh kinh phí cũ và mới của quy định chuyển đổi số.",
+    ):
+        add_version_query(
+            query,
+            "version_compare",
+            "compare",
+            v2,
+            compare_answer,
+            [(v1, "budget"), (v2, "budget"), (v2, "change")],
+            compare_judgments,
+        )
+    add_version_query(
+        "Lịch sử thay đổi kinh phí của quy định này là gì?",
+        "version_history",
+        "history",
+        v2,
+        (
+            "Phiên bản 1 áp dụng mức 10 triệu đồng từ 01/01/2026; "
+            "phiên bản 2 nâng lên 15 triệu đồng từ 01/07/2026."
+        ),
+        [(v1, "budget"), (v1, "effective"), (v2, "budget"), (v2, "effective")],
+        compare_judgments,
+    )
+    add_version_query(
+        "Phiên bản hiện tại có hiệu lực từ khi nào?",
+        "temporal_current",
+        "current",
+        v2,
+        "Phiên bản hiện tại là phiên bản 2, có hiệu lực từ ngày 01 tháng 07 năm 2026.",
+        [(v2, "effective")],
+        current_judgments,
+    )
+    add_version_query(
+        "Phiên bản 1 quy định mức kinh phí bao nhiêu?",
+        "temporal_as_of",
+        "as_of",
+        v1,
+        "Phiên bản 1 quy định kinh phí 10 triệu đồng.",
+        [(v1, "budget")],
+        historical_judgments,
+        "2026-01-01T00:00:00Z",
+    )
 
     no_answer_templates = (
         "Mức phụ cấp ăn trưa tháng {n} là bao nhiêu?",
@@ -573,6 +930,12 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                 "span_end": "",
                 "page": "",
                 "answer_text": "",
+                "expected_answer": "",
+                "citations": "[]",
+                "version_mode": "current",
+                "query_time": QUERY_TIME,
+                "as_of": "",
+                "version_context": "{}",
                 "judgments": "{}",
             }
         )
@@ -602,12 +965,18 @@ def query_rows(items: list[dict], markdown_by_id: dict[str, str]) -> list[dict]:
                 "span_end": "",
                 "page": "",
                 "answer_text": "",
+                "expected_answer": "",
+                "citations": "[]",
+                "version_mode": "current",
+                "query_time": QUERY_TIME,
+                "as_of": "",
+                "version_context": "{}",
                 "judgments": "{}",
             }
         )
         query_number += 1
-    if len(rows) != 250:
-        raise AssertionError(f"expected 250 queries, generated {len(rows)}")
+    if len(rows) != 260:
+        raise AssertionError(f"expected 260 queries, generated {len(rows)}")
     return rows
 
 
@@ -623,6 +992,12 @@ def write_queries(path: Path, rows: list[dict]) -> None:
         "span_end",
         "page",
         "answer_text",
+        "expected_answer",
+        "citations",
+        "version_mode",
+        "query_time",
+        "as_of",
+        "version_context",
         "judgments",
     ]
     with path.open("w", encoding="utf-8", newline="") as output:
@@ -632,7 +1007,43 @@ def write_queries(path: Path, rows: list[dict]) -> None:
 
 
 def write_review_packet(golden: Path, rows: list[dict], existing: dict | None = None) -> None:
-    sample = rows[::5][:50]
+    sample: list[dict] = []
+    selected: set[str] = set()
+
+    def take(predicate, limit: int) -> None:
+        for row in rows:
+            if len([item for item in sample if predicate(item)]) >= limit:
+                break
+            if row["query_id"] not in selected and predicate(row):
+                sample.append(row)
+                selected.add(row["query_id"])
+
+    take(
+        lambda row: row["version_mode"] in {"as_of", "compare", "history"}
+        or row["category"] == "temporal_current",
+        10,
+    )
+    take(lambda row: row["category"] == "multi_doc", 5)
+    take(lambda row: row["category"] == "no_answer", 5)
+    take(lambda row: row["category"] == "prompt_injection_query", 5)
+    for category in (
+        "named_entity",
+        "diacritic_variant",
+        "table_numeric",
+        "numeric_fact",
+        "long_context",
+        "abbreviation",
+    ):
+        take(lambda row, expected=category: row["category"] == expected, 2)
+    for row in rows[::3]:
+        if len(sample) == 50:
+            break
+        if row["query_id"] not in selected:
+            sample.append(row)
+            selected.add(row["query_id"])
+    if len(sample) != 50:
+        raise AssertionError(f"expected 50 review rows, selected {len(sample)}")
+    sample.sort(key=lambda row: row["query_id"])
     sample_path = golden / "review-sample.tsv"
     write_queries(sample_path, sample)
     sample_sha256 = hashlib.sha256(sample_path.read_bytes()).hexdigest()
@@ -814,7 +1225,10 @@ def generate(output: Path) -> None:
     documents.mkdir(parents=True)
     markdown_dir.mkdir(parents=True)
 
-    items = [record(index, format_name) for index, format_name in enumerate(FORMATS)]
+    items = [
+        *[record(index, format_name) for index, format_name in enumerate(FORMATS)],
+        *version_records(),
+    ]
     manifest_entries: list[dict] = []
     markdown_by_id: dict[str, str] = {}
     for item in items:
@@ -832,6 +1246,14 @@ def generate(output: Path) -> None:
                 "markdownPath": f"markdown/{markdown_path.name}",
                 "format": item["format"],
                 "conversionOnly": item["conversionOnly"],
+                "versionFixture": item["versionFixture"],
+                "logicalDocumentId": item["logicalDocumentId"],
+                "versionId": item["versionId"],
+                "versionNumber": item["versionNumber"],
+                "parentVersionId": item["parentVersionId"],
+                "effectiveAt": item["effectiveAt"],
+                "isCurrent": item["isCurrent"],
+                "changeSummary": item["changeSummary"],
                 "expectedBehavior": "empty_transcript"
                 if item["format"] == "audio"
                 else "content_preserved",

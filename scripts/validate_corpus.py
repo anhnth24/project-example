@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime as dt
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -78,6 +80,16 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def timestamp(value: object) -> dt.datetime | None:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
 def validate_checksum(path: Path, item: dict, label: str) -> list[str]:
     errors = []
     expected_sha = item.get("sha256")
@@ -112,6 +124,8 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         return [f"corpus manifest unreadable: {error}"]
 
     documents: dict[str, dict] = {}
+    versions: dict[str, dict] = {}
+    logical_versions: dict[str, list[dict]] = {}
     formats: set[str] = set()
     managed: set[str] = set()
     dependencies = golden_manifest.get("dependencies", [])
@@ -147,6 +161,27 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
             errors.append(f"{label}: duplicate or missing id")
             continue
         documents[item_id] = item
+        version_id = item.get("versionId")
+        logical_id = item.get("logicalDocumentId")
+        version_number = item.get("versionNumber")
+        if (
+            not isinstance(version_id, str)
+            or not version_id
+            or version_id in versions
+            or not isinstance(logical_id, str)
+            or not logical_id
+            or not isinstance(version_number, int)
+            or isinstance(version_number, bool)
+            or version_number < 1
+            or timestamp(item.get("effectiveAt")) is None
+            or not isinstance(item.get("isCurrent"), bool)
+            or not isinstance(item.get("changeSummary"), str)
+            or not item["changeSummary"].strip()
+        ):
+            errors.append(f"{label}: invalid document version metadata")
+        else:
+            versions[version_id] = item
+            logical_versions.setdefault(logical_id, []).append(item)
         format_name = item.get("format")
         if format_name not in FORMATS:
             errors.append(f"{label}: unsupported format")
@@ -190,10 +225,25 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
     missing_formats = FORMATS - formats
     if missing_formats:
         errors.append(f"golden: missing formats {sorted(missing_formats)}")
+    for logical_id, items in logical_versions.items():
+        numbers = [item["versionNumber"] for item in items]
+        if len(numbers) != len(set(numbers)):
+            errors.append(f"logical document {logical_id}: duplicate version number")
+        if sum(item["isCurrent"] for item in items) != 1:
+            errors.append(f"logical document {logical_id}: requires exactly one current version")
+        ordered = sorted(items, key=lambda item: item["versionNumber"])
+        for index, item in enumerate(ordered):
+            expected_parent = None if index == 0 else ordered[index - 1]["versionId"]
+            if item.get("parentVersionId") != expected_parent:
+                errors.append(f"{item['id']}: parentVersionId breaks version lineage")
+        effective = [timestamp(item["effectiveAt"]) for item in ordered]
+        if effective != sorted(effective):
+            errors.append(f"logical document {logical_id}: effectiveAt is not monotonic")
 
     query_path = golden / "queries.tsv"
     managed.add(query_path.relative_to(root).as_posix())
     query_ids: set[str] = set()
+    query_rows_by_id: dict[str, dict] = {}
     categories: set[str] = set()
     query_count = 0
     no_answer_count = 0
@@ -206,6 +256,7 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                 if not query_id or query_id in query_ids:
                     errors.append(f"query {query_id}: duplicate or missing id")
                 query_ids.add(query_id)
+                query_rows_by_id[query_id] = row
                 query = row.get("query", "")
                 if not query or unicodedata.normalize("NFC", query) != query:
                     errors.append(f"query {query_id}: query must be non-empty NFC")
@@ -225,9 +276,77 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                         errors.append(f"query {query_id}: judgment grade must be 0..3")
                     else:
                         relevance_grades.add(grade)
+                try:
+                    citations = json.loads(row.get("citations", ""))
+                    version_context = json.loads(row.get("version_context", ""))
+                except json.JSONDecodeError:
+                    errors.append(f"query {query_id}: citations/version_context must be JSON")
+                    citations = []
+                    version_context = {}
+                if not isinstance(citations, list) or not isinstance(version_context, dict):
+                    errors.append(f"query {query_id}: invalid citations/version_context shape")
+                    citations = []
+                    version_context = {}
+                cited_versions: list[str] = []
+                for index, anchor in enumerate(citations):
+                    if not isinstance(anchor, dict):
+                        errors.append(f"query {query_id}: citation must be an object")
+                        continue
+                    if anchor.get("citationId") != f"CITE-{index + 1:04}":
+                        errors.append(f"query {query_id}: citation IDs must be ordered")
+                    cited_item = documents.get(anchor.get("documentId"))
+                    if cited_item is None:
+                        errors.append(f"query {query_id}: citation document missing")
+                        continue
+                    if judgments.get(cited_item["id"], 0) < 1:
+                        errors.append(f"query {query_id}: citation document is not relevant")
+                    for field in (
+                        "logicalDocumentId",
+                        "versionId",
+                        "versionNumber",
+                        "isCurrent",
+                        "effectiveAt",
+                    ):
+                        if anchor.get(field) != cited_item.get(field):
+                            errors.append(f"query {query_id}: citation {field} mismatch")
+                    if anchor.get("contentSha256") != cited_item.get("markdownSha256"):
+                        errors.append(f"query {query_id}: citation content hash mismatch")
+                    if anchor.get("chunkId") is not None:
+                        errors.append(f"query {query_id}: chunkId must remain null before P0-06")
+                    markdown_bytes = safe_path(
+                        golden, cited_item["markdownPath"]
+                    ).read_bytes()
+                    start = anchor.get("start")
+                    end = anchor.get("end")
+                    if (
+                        not isinstance(start, int)
+                        or isinstance(start, bool)
+                        or not isinstance(end, int)
+                        or isinstance(end, bool)
+                        or not 0 <= start < end <= len(markdown_bytes)
+                    ):
+                        errors.append(f"query {query_id}: citation span is invalid")
+                        continue
+                    try:
+                        quote = markdown_bytes[start:end].decode("utf-8")
+                    except UnicodeDecodeError:
+                        errors.append(f"query {query_id}: citation splits UTF-8")
+                        continue
+                    if quote != anchor.get("quote"):
+                        errors.append(f"query {query_id}: citation quote mismatch")
+                    expected_page = 1 if cited_item["format"].startswith("pdf") else None
+                    if anchor.get("page") != expected_page:
+                        errors.append(f"query {query_id}: citation page mismatch")
+                    cited_versions.append(cited_item["versionId"])
                 if row.get("answer_mode") == "no_answer":
                     no_answer_count += 1
-                    if row.get("expected_doc") or row.get("answer_text") or judgments:
+                    if (
+                        row.get("expected_doc")
+                        or row.get("answer_text")
+                        or row.get("expected_answer")
+                        or judgments
+                        or citations
+                    ):
                         errors.append(f"query {query_id}: no-answer row has expected content")
                     continue
                 document_id = row.get("expected_doc", "")
@@ -241,9 +360,138 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     relevance = -1
                 if judgments.get(document_id) != relevance:
                     errors.append(f"query {query_id}: expected relevance differs from judgments")
+                if not row.get("expected_answer") or not citations:
+                    errors.append(f"query {query_id}: answer and citations are required")
+                context_versions = version_context.get("citedVersionIds", [])
+                if context_versions != list(dict.fromkeys(cited_versions)):
+                    errors.append(f"query {query_id}: version context differs from citations")
+                version_mode = row.get("version_mode")
+                if version_mode not in {"current", "as_of", "compare", "history"}:
+                    errors.append(f"query {query_id}: invalid version mode")
+                query_time = row.get("query_time", "")
+                query_instant = timestamp(query_time)
+                if query_instant is None:
+                    errors.append(f"query {query_id}: query_time must be RFC3339 UTC")
+                if version_mode == "current":
+                    if any(
+                        not versions[version_id]["isCurrent"]
+                        or (
+                            query_instant is not None
+                            and timestamp(versions[version_id]["effectiveAt"])
+                            > query_instant
+                        )
+                        for version_id in cited_versions
+                        if version_id in versions
+                    ):
+                        errors.append(
+                            f"query {query_id}: current answer cites historical/future version"
+                        )
+                if version_mode == "as_of":
+                    as_of = row.get("as_of", "")
+                    as_of_instant = timestamp(as_of)
+                    expected_version = item.get("versionId")
+                    eligible = sorted(
+                        (
+                            version
+                            for version in logical_versions.get(
+                                item.get("logicalDocumentId"), []
+                            )
+                            if as_of_instant is not None
+                            and timestamp(version["effectiveAt"]) <= as_of_instant
+                        ),
+                        key=lambda version: timestamp(version["effectiveAt"]),
+                    )
+                    if (
+                        as_of_instant is None
+                        or not eligible
+                        or eligible[-1]["versionId"] != expected_version
+                    ):
+                        errors.append(f"query {query_id}: as_of does not resolve expected version")
+                    if any(
+                        (
+                            as_of_instant is not None
+                            and timestamp(versions[version_id]["effectiveAt"])
+                            > as_of_instant
+                        )
+                        or versions[version_id]["logicalDocumentId"]
+                        != item.get("logicalDocumentId")
+                        for version_id in cited_versions
+                        if version_id in versions
+                    ):
+                        errors.append(f"query {query_id}: as_of cites future/unrelated version")
+                if version_mode in {"compare", "history"}:
+                    logical_ids = {
+                        versions[version_id]["logicalDocumentId"]
+                        for version_id in cited_versions
+                        if version_id in versions
+                    }
+                    if len(set(cited_versions)) < 2 or len(logical_ids) != 1:
+                        errors.append(f"query {query_id}: comparison requires one version lineage")
+                if row.get("answer_mode") != "document_list":
+                    if (
+                        version_context.get("logicalDocumentId")
+                        != item.get("logicalDocumentId")
+                    ):
+                        errors.append(
+                            f"query {query_id}: version context logical document mismatch"
+                        )
+                    current_version = next(
+                        (
+                            version["versionId"]
+                            for version in logical_versions.get(
+                                item["logicalDocumentId"], []
+                            )
+                            if version["isCurrent"]
+                        ),
+                        None,
+                    )
+                    if version_context.get("currentVersionId") != current_version:
+                        errors.append(f"query {query_id}: currentVersionId is incorrect")
+                    expected_change_note = (
+                        versions[current_version]["changeSummary"]
+                        if item.get("versionFixture")
+                        and version_mode in {"current", "compare", "history"}
+                        and current_version in versions
+                        else ""
+                    )
+                    if version_context.get("changeNote") != expected_change_note:
+                        errors.append(f"query {query_id}: changeNote is incorrect")
                 if row.get("answer_mode") == "document_list":
                     if row.get("span_start") or row.get("span_end") or row.get("answer_text"):
                         errors.append(f"query {query_id}: document-list row must not contain span")
+                    expected_citation_docs = {
+                        doc_id for doc_id, grade in judgments.items() if grade >= 2
+                    }
+                    actual_citation_docs = {
+                        anchor.get("documentId") for anchor in citations
+                    }
+                    if actual_citation_docs != expected_citation_docs:
+                        errors.append(
+                            f"query {query_id}: document-list citations are incomplete"
+                        )
+                    continue
+                if row.get("answer_mode") in {
+                    "versioned_answer",
+                    "version_compare",
+                    "version_history",
+                }:
+                    if row.get("span_start") or row.get("span_end") or row.get("answer_text"):
+                        errors.append(f"query {query_id}: synthesized version answer must not contain span")
+                    expected_history = [
+                        {
+                            "versionId": version["versionId"],
+                            "versionNumber": version["versionNumber"],
+                            "effectiveAt": version["effectiveAt"],
+                            "isCurrent": version["isCurrent"],
+                            "changeSummary": version["changeSummary"],
+                        }
+                        for version in sorted(
+                            logical_versions.get(item["logicalDocumentId"], []),
+                            key=lambda version: version["versionNumber"],
+                        )
+                    ]
+                    if version_context.get("history") != expected_history:
+                        errors.append(f"query {query_id}: version history context is incomplete")
                     continue
                 markdown_path = safe_path(golden, item["markdownPath"])
                 markdown_bytes = markdown_path.read_bytes()
@@ -263,6 +511,10 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                     continue
                 if answer != row.get("answer_text"):
                     errors.append(f"query {query_id}: span does not match answer text")
+                if len(citations) != 1 or citations[0].get("quote") != answer:
+                    errors.append(f"query {query_id}: direct answer citation mismatch")
+                if row.get("expected_answer") != answer:
+                    errors.append(f"query {query_id}: direct expected answer mismatch")
                 if row.get("relevance") not in {"1", "2", "3"}:
                     errors.append(f"query {query_id}: invalid relevance")
                 if item["format"].startswith("pdf") and row.get("page") != "1":
@@ -283,6 +535,10 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         "long_context",
         "abbreviation",
         "multi_doc",
+        "temporal_current",
+        "temporal_as_of",
+        "version_compare",
+        "version_history",
         "no_answer",
         "prompt_injection_query",
     ):
@@ -337,6 +593,16 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         errors.append("adjudication requires approved domain and retrieval reviews")
     if not review_sample_path.is_file():
         errors.append("review-sample.tsv missing")
+    else:
+        with review_sample_path.open(encoding="utf-8", newline="") as source:
+            review_rows = list(csv.DictReader(source, delimiter="\t"))
+        if len(review_rows) != 50:
+            errors.append("review-sample.tsv must contain exactly 50 rows")
+        for row in review_rows:
+            if query_rows_by_id.get(row.get("query_id", "")) != row:
+                errors.append(
+                    f"review sample diverges from queries.tsv: {row.get('query_id', '')}"
+                )
 
     attack_ids: set[str] = set()
     threats: set[str] = set()
@@ -452,6 +718,53 @@ class CorpusValidatorTests(unittest.TestCase):
             path.write_text("changed")
             errors = validate_checksum(path, item, "sample")
             self.assertTrue(any("mismatch" in error for error in errors))
+
+    def test_rejects_temporal_and_multi_citation_corruption(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "markhand_web"
+            shutil.copytree(DEFAULT_CORPUS, root)
+            query_path = root / "golden/queries.tsv"
+            with query_path.open(encoding="utf-8", newline="") as source:
+                rows = list(csv.DictReader(source, delimiter="\t"))
+                fields = list(rows[0])
+            current_rows = [
+                row for row in rows if row["category"] == "temporal_current"
+            ]
+            current = current_rows[0]
+            as_of = next(row for row in rows if row["version_mode"] == "as_of")
+            future_citation = json.loads(current["citations"])[0]
+            as_of["citations"] = json.dumps([future_citation], separators=(",", ":"))
+            as_of_context = json.loads(as_of["version_context"])
+            as_of_context["citedVersionIds"] = [future_citation["versionId"]]
+            as_of["version_context"] = json.dumps(as_of_context, separators=(",", ":"))
+            document_list = next(row for row in rows if row["answer_mode"] == "document_list")
+            document_list["citations"] = json.dumps(
+                json.loads(document_list["citations"])[:-1],
+                separators=(",", ":"),
+            )
+            compare = next(row for row in rows if row["version_mode"] == "compare")
+            compare_context = json.loads(compare["version_context"])
+            compare_context["history"] = []
+            compare_context["logicalDocumentId"] = "wrong-lineage"
+            compare_context["changeNote"] = "wrong change"
+            compare["version_context"] = json.dumps(compare_context, separators=(",", ":"))
+            current["query_time"] = "zzzz"
+            current_rows[1]["query_time"] = "2026-01-01T00:00:00Z"
+            with query_path.open("w", encoding="utf-8", newline="") as output:
+                writer = csv.DictWriter(
+                    output, fields, delimiter="\t", lineterminator="\n"
+                )
+                writer.writeheader()
+                writer.writerows(rows)
+            errors = validate(root, require_adjudicated=False)
+            self.assertTrue(any("as_of cites future" in error for error in errors))
+            self.assertTrue(any("document-list citations are incomplete" in error for error in errors))
+            self.assertTrue(any("version history context is incomplete" in error for error in errors))
+            self.assertTrue(any("query_time must be RFC3339" in error for error in errors))
+            self.assertTrue(any("current answer cites historical/future" in error for error in errors))
+            self.assertTrue(any("logical document mismatch" in error for error in errors))
+            self.assertTrue(any("changeNote is incorrect" in error for error in errors))
+            self.assertTrue(any("review sample diverges" in error for error in errors))
 
 
 def main() -> int:

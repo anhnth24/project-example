@@ -59,8 +59,8 @@
     },
     {
       "path": "golden/adjudication.json",
-      "sha256": "6788f313709c2eb9087181ad4e9723bc3ad7094f9aef9a5322118fd73682c4ef",
-      "blake3": "b5b515fa400e0c0be630f3fa7b46feb4e6326f8df0712d2108cafd01fcb330f1"
+      "sha256": "97d7fd0bd1423bf57a115a7fe14045681f1af7f511b111bb15d6ae067bfe2b07",
+      "blake3": "5ae64c17becb6b66251dfd8578b1f20d57c12271023ccaceadb839e3404860f0"
     },
     {
       "path": "golden/documents/gold-001.pdf",
@@ -198,9 +198,19 @@
       "blake3": "65d278541c2035819ef63a2cedd7736401682158a144a1ab20035fd7eb9dce20"
     },
     {
+      "path": "golden/documents/gold-budget-v1.docx",
+      "sha256": "a79621b39427b391c95d6aa789f412e017c3a8b295a9845630e46d42e975bbaf",
+      "blake3": "2245133737985688d83ef629e441c01a2d92d5ff2bf65043eed9fd5d871e53b8"
+    },
+    {
+      "path": "golden/documents/gold-budget-v2.docx",
+      "sha256": "245483c9ae96f6c51bbc517045fe04047cddb79d3b4fadec9c9d99495347213c",
+      "blake3": "37c6dbfd6554e7f1897209cdd6ac52d51ba367174a79a04d036a207ad4ef1661"
+    },
+    {
       "path": "golden/manifest.json",
-      "sha256": "235424803cd0a86a44f61fdd2fb55c5a68bbd661a9f333e7135a7b35e6a7bd8d",
-      "blake3": "2a8a8a77ba89fb5589bcea00d09a616fef46b0969113f81294e84915c2f3e65c"
+      "sha256": "1052fd1f67838365d60f7d5f9cecda408c0cb50414e890a693c74e0576737b8e",
+      "blake3": "5bbfab8684bbb87e215eb8430a9f569fb4080cfc546cbb00263c71b177d71ad4"
     },
     {
       "path": "golden/markdown/gold-001.md",
@@ -338,14 +348,24 @@
       "blake3": "1a1c2e83c510794efaa2a41a789ca9b10a3cf0768ec7caa2daa1aadd6aec8f72"
     },
     {
+      "path": "golden/markdown/gold-budget-v1.md",
+      "sha256": "d1223693d889473a57d7960f1155b43afb2a18b34b8f306f45511e651cf418f1",
+      "blake3": "e3a6b8ff1eab33a6441f3d536100b4e036b3ceba80691a6e88e4a715ab143e65"
+    },
+    {
+      "path": "golden/markdown/gold-budget-v2.md",
+      "sha256": "ab53faf943b8f94143e05783bd658fabffb1ba27777008ef926e448826c1ed5b",
+      "blake3": "284b8a9652b281d710a2918253622e2b3671ca73b8051e34bbfc74f9e9d13f79"
+    },
+    {
       "path": "golden/queries.tsv",
-      "sha256": "4461162ba5f0d5226ee7b1a6de25aa6f38d9e5c729c2b344238a259850496a62",
-      "blake3": "15be584e85a06948b363c2c3d436b5141ac0b18e133ce06b0becf8a25c34fdcd"
+      "sha256": "574f0a32a88d7f87c2bc6048f6cc6baf30ea4295d1dcc657c59d25fb6b29be3b",
+      "blake3": "dfca16c1a04cf5337432372b6669f3e2bc6351619d4fe9438745406c34de6051"
     },
     {
       "path": "golden/review-sample.tsv",
-      "sha256": "6f7a30883c61868fca9db93c3fdc922ac27f05affba19bfbf746ae312c1f8158",
-      "blake3": "a4477cdd4eafa21c9aa250be87cde6deda69971e1759a17b1a7ff499da5aa7cb"
+      "sha256": "52cf13639fedb58006e35c3bb606475591e1b75f2a6254918724593bb034df3a",
+      "blake3": "8ed4cbab4b34993992f95d5c64cb83fbc8f6c776825cb4d79e55dd9451402570"
     }
   ]
 }
