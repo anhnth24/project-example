@@ -229,15 +229,16 @@
         "value": 1.0
       },
       "command": "python3 bench/markhand_web/scripts/run_upload_security.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "security-owner",
       "approver": "security-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
+      "evidence": "bench/markhand_web/security/summary.json",
       "blocksIssues": [
         "P0-09"
-      ]
+      ],
+      "notes": "P0-09 local close uses local-cpu-quality for policy linter and sandbox denial smoke evidence only. It does not claim Profile B malware scanner coverage or container runtime enforcement."
     },
     {
       "id": "G0-CAP-INGEST-THROUGHPUT",
@@ -406,15 +407,17 @@
         "value": 1.0
       },
       "command": "python3 scripts/check-runtime-license-inventory.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "local-cpu-quality",
       "owner": "release-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
-      "evidence": null,
+      "evidence": "docs/markhand-web-runtime-license-inventory.json",
       "blocksIssues": [
+        "P0-09",
         "P0-10"
-      ]
+      ],
+      "notes": "License inventory validated on local-cpu-quality; Profile B packaging re-check still required before production image cutover."
     }
   ]
 }

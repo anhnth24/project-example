@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "profileId": "markhand-web-upload-converter-p0-09",
+  "scope": "Upload conversion worker sandbox policy for Phase 1B implementation",
+  "runtimeUser": {
+    "uidMin": 10000,
+    "gidMin": 10000,
+    "nonRoot": true
+  },
+  "filesystem": {
+    "rootReadOnly": true,
+    "allowedWriteMounts": [
+      {
+        "path": "/work",
+        "type": "tmpfs",
+        "maxBytes": 1073741824,
+        "lifecycle": "deleted after job"
+      }
+    ],
+    "hostPathMountsAllowed": false,
+    "inputMountReadOnly": true,
+    "outputPathPolicy": "server-generated object keys only; uploaded filenames are metadata only"
+  },
+  "network": {
+    "egressAllowed": false,
+    "ingressAllowed": false,
+    "dnsAllowed": false,
+    "loopbackAllowed": false
+  },
+  "process": {
+    "dropCapabilities": "all",
+    "noNewPrivileges": true,
+    "seccompProfile": "converter-deny-network-and-mount",
+    "killProcessGroupOnExit": true,
+    "maxProcesses": 64,
+    "maxOpenFiles": 256
+  },
+  "resourceLimits": {
+    "cpuSeconds": 300,
+    "memoryMiB": 1536,
+    "fileBytes": 209715200,
+    "outputBytes": 52428800,
+    "wallClockSeconds": 420,
+    "archiveEntries": 4096,
+    "archiveUncompressedBytes": 1073741824,
+    "archiveCompressionRatioMax": 100,
+    "pdfPagesMax": 500,
+    "audioDurationSecondsMax": 3600,
+    "imagePixelsMax": 80000000
+  },
+  "observability": {
+    "auditEvents": [
+      "upload.accepted",
+      "upload.rejected",
+      "upload.quarantined",
+      "sandbox.denied",
+      "sandbox.timeout",
+      "sandbox.resource_limit"
+    ],
+    "redactUploadedText": true,
+    "retainQuarantineDays": 14
+  }
+}

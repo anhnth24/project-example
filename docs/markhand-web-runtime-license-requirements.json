@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "required": [
+    {
+      "id": "pdfium-linux-x64",
+      "kind": "native-library",
+      "allowedLicenses": [
+        "MIT"
+      ],
+      "artifactSha256": "61c9f745c6296a1050599a99a1ed985036411b591a11bd2a41bafe530ecb4f33",
+      "notes": "Bundled pdfium-binaries 152.0.7947.0; packaging LICENSE is MIT plus pdfium/licenses third-party notices. Hash is pdfium/lib/libpdfium.so."
+    },
+    {
+      "id": "tesseract-ocr-system",
+      "kind": "native-library",
+      "allowedLicenses": [
+        "Apache-2.0"
+      ],
+      "artifactSha256": "9f831cab7525c3dab04af41bda35182af7ea1df9dceeaaa2f3bf207ac45c06a5",
+      "notes": "System native runtime prerequisite; hash is /usr/bin/tesseract from this run."
+    },
+    {
+      "id": "ggml-whisper-tiny",
+      "kind": "model",
+      "allowedLicenses": [
+        "MIT"
+      ],
+      "artifactSha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+      "notes": "Optional non-bundled local model artifact hash when present."
+    },
+    {
+      "id": "aiteamvn-vietnamese-embedding",
+      "kind": "model",
+      "allowedLicenses": [
+        "Apache-2.0"
+      ],
+      "artifactSha256": "4b5cafd7829a88484155b4a643ec654b3cf4d8c99ef10a649d8295e2a024f6c3",
+      "notes": "Non-bundled pinned upstream model-card evidence hash for revision dea33aa1ab339f38d66ae0a40e6c40e0a9249568."
+    },
+    {
+      "id": "phowhisper-ggml",
+      "kind": "model",
+      "allowedLicenses": [
+        "LicenseRef-Unresolved-Exclude"
+      ],
+      "artifactSha256": "9a820da888b93d22ff8a850440667f9c4362894aaf99e857d8447651c7bc376b",
+      "notes": "Excluded, non-bundled upstream metadata evidence hash; no redistributed model artifact."
+    }
+  ]
+}

@@ -198,18 +198,24 @@ P1A-01 ──────────> P0-03
 
 ## P0-09 — Upload threat model, sandbox và license inventory
 
-- **Status:** Blocked bởi P0-02/P0-08; chỉ ghi research note ngoài issue trước khi
-  unblock, không bắt đầu implementation.
+- **Status:** Done — local-cpu policy/sandbox smoke evidence closes upload
+  threat model, adversarial disposition, and runtime license inventory. This
+  does not claim Profile B malware scanner coverage.
 - **Objective:** Security policy thực thi được trước khi nhận upload.
 - **Plan:** Threat model spoof/bomb/parser/SSRF/exhaustion/traversal/injection/token/
   quota/tenant/compromised worker; chốt allowlist/limits/quarantine/sandbox; inventory
   source/version/checksum/license.
 - **Files:** `docs/markhand-web-{upload-threat-model,upload-policy}.md`,
   `docs/markhand-web-model-license-inventory.md`, adversarial disposition YAML.
-- **Dependencies/blocks:** P0-02/P0-08 evidence.
+- **Dependencies/blocks:** P0-02/P0-08 evidence available for local Phase 0
+  closure; production scanner/runtime hardening remains a later gate.
 - **Acceptance:** Mỗi threat có prevention/detection/owner; sandbox non-root,
   read-only, no egress, resource/process/wall limits; unresolved model bị exclude.
-- **Tests/evidence:** Policy linter; sandbox blocks egress/traversal/fork/timeout.
+- **Tests/evidence:** `python3 bench/markhand_web/scripts/run_upload_security.py`
+  writes `bench/markhand_web/security/summary.json` and
+  `bench/markhand_web/reports/upload-security.md`; policy linter and in-process
+  sandbox smoke deny egress/traversal/fork/timeout. Runtime license checker
+  passes with PhoWhisper excluded/not bundled.
 - **Security/migration:** GLM policy theo data classification.
 - **Out of scope:** Production malware scanner.
 
