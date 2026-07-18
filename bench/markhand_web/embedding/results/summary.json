@@ -2,10 +2,10 @@
   "version": 1,
   "issue": "P0-05",
   "track": "quality-cpu-smoke",
-  "generatedAt": "2026-07-18T17:01:40.124989+00:00",
+  "generatedAt": "2026-07-18T17:13:36.496415+00:00",
   "git": {
-    "commit": "c0a801ab68da1a08aeb4c46b50941d0849beb71d",
-    "dirty": false
+    "commit": "205eb8e9b8ba2ae98300b86685daa010574e9c9b",
+    "dirty": true
   },
   "hardware": {
     "cpu": {
@@ -28,6 +28,7 @@
   },
   "device": "cpu",
   "chunkingVersion": "heading-chunks-2000-v1",
+  "payloadFormat": "{heading}\\n{text}",
   "runsPerModel": 3,
   "fixtureManifestSha256": "cf413fafabb136fe43d534b9a4a377a0dd4727613f30abe7176f70c5ed152da7",
   "chunkCount": 29,
@@ -38,36 +39,55 @@
       "role": "best-candidate",
       "family": "bge-m3-vietnamese-ft",
       "hubId": "AITeamVN/Vietnamese_Embedding",
+      "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
       "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
       "dimensions": 1024,
+      "maxSeqLength": 2048,
+      "batchSize": 16,
+      "deviceResolved": "cpu",
       "wordSegment": false,
+      "wordSegmenter": null,
       "aggregate": {
         "runs": 3,
-        "recallAt5": 0.917367,
-        "recallAt10": 0.960084,
-        "hitAt5": 0.941176,
-        "mrr": 0.812975,
-        "ndcgAt10": 0.801701,
+        "recallAt5": 0.92612,
+        "recallAt5Mean": 0.92612,
+        "recallAt10": 0.960784,
+        "hitAt5": 0.953782,
+        "mrr": 0.806749,
+        "ndcgAt10": 0.79918,
+        "ndcgAt10Mean": 0.79918,
         "recallAt5Stdev": 0.0,
+        "rankingSha256Set": [
+          "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3"
+        ],
+        "independentLoads": true,
         "gates": {
           "G0-RET-RECALL-AT-5": {
-            "metric": 0.917367,
+            "metric": 0.92612,
             "threshold": 0.85,
+            "statistic": "min",
             "pass": true
           }
         }
       },
       "gates": {
         "G0-RET-RECALL-AT-5": {
-          "metric": 0.917367,
+          "metric": 0.92612,
           "threshold": 0.85,
+          "statistic": "min",
           "pass": true
         },
         "G0-RET-BEST-MODEL-GAP": {
           "metric": 0.0,
           "threshold": 0.02,
+          "statistic": "max",
           "pass": true,
-          "bestNdcgAt10": 0.801701
+          "bestNdcgAt10": 0.79918,
+          "perRunGaps": [
+            0.0,
+            0.0,
+            0.0
+          ]
         }
       },
       "runDetails": [
@@ -76,36 +96,40 @@
           "role": "best-candidate",
           "family": "bge-m3-vietnamese-ft",
           "hubId": "AITeamVN/Vietnamese_Embedding",
-          "revisionRequested": "main",
+          "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
           "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
           "dimensions": 1024,
           "maxSeqLength": 2048,
+          "batchSize": 16,
+          "device": "cpu",
           "wordSegment": false,
+          "wordSegmenter": null,
           "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
           "chunkingVersion": "heading-chunks-2000-v1",
           "runIndex": 1,
           "summary": {
             "queries": 238,
             "noAnswerQueries": 30,
-            "recallAt5": 0.917367,
-            "recallAt10": 0.960084,
-            "hitAt5": 0.941176,
-            "mrr": 0.812975,
-            "ndcgAt10": 0.801701
+            "recallAt5": 0.92612,
+            "recallAt10": 0.960784,
+            "hitAt5": 0.953782,
+            "mrr": 0.806749,
+            "ndcgAt10": 0.79918
           },
           "byCategory": {
             "abbreviation": {
               "queries": 25,
-              "recallAt5": 0.92,
-              "hitAt5": 0.92,
-              "mrr": 0.768214,
-              "ndcgAt10": 0.74711
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.72419,
+              "ndcgAt10": 0.716154
             },
             "conflict_acl_denied": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.267857,
+              "mrr": 0.267242,
               "ndcgAt10": 0.315465
             },
             "conflict_as_of": {
@@ -124,65 +148,65 @@
             },
             "conflict_history": {
               "queries": 2,
-              "recallAt5": 0.75,
+              "recallAt5": 0.625,
               "hitAt5": 1.0,
               "mrr": 1.0,
-              "ndcgAt10": 0.809787
+              "ndcgAt10": 0.803805
             },
             "diacritic_variant": {
               "queries": 75,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.880444,
-              "ndcgAt10": 0.832922
+              "mrr": 0.873333,
+              "ndcgAt10": 0.83079
             },
             "long_context": {
               "queries": 25,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
               "mrr": 0.953333,
-              "ndcgAt10": 0.973363
+              "ndcgAt10": 0.974007
             },
             "multi_doc": {
               "queries": 20,
-              "recallAt5": 0.741667,
+              "recallAt5": 0.708333,
               "hitAt5": 0.95,
-              "mrr": 0.780833,
-              "ndcgAt10": 0.751926
+              "mrr": 0.780238,
+              "ndcgAt10": 0.757166
             },
             "named_entity": {
               "queries": 50,
               "recallAt5": 0.92,
               "hitAt5": 0.92,
-              "mrr": 0.806395,
-              "ndcgAt10": 0.820505
+              "mrr": 0.821676,
+              "ndcgAt10": 0.830171
             },
             "no_answer": {
               "queries": 0
             },
             "numeric_fact": {
               "queries": 19,
-              "recallAt5": 0.842105,
-              "hitAt5": 0.842105,
-              "mrr": 0.660965,
-              "ndcgAt10": 0.688956
+              "recallAt5": 0.894737,
+              "hitAt5": 0.894737,
+              "mrr": 0.605326,
+              "ndcgAt10": 0.657138
             },
             "prompt_injection_query": {
               "queries": 0
             },
             "table_numeric": {
               "queries": 6,
-              "recallAt5": 0.666667,
-              "hitAt5": 0.666667,
-              "mrr": 0.71131,
-              "ndcgAt10": 0.729369
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.746032,
+              "ndcgAt10": 0.75393
             },
             "temporal_as_of": {
               "queries": 3,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.583333,
-              "ndcgAt10": 0.688626
+              "mrr": 0.666667,
+              "ndcgAt10": 0.754797
             },
             "temporal_current": {
               "queries": 3,
@@ -206,19 +230,21 @@
               "ndcgAt10": 0.693426
             }
           },
+          "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
           "capacity": {
             "device": "cpu",
-            "loadMs": 12725.33,
-            "embedChunksMs": 1150.35,
-            "embedQueriesMs": 2746.58,
-            "vectorsPerSecond": 76.214,
+            "loadMs": 1902.89,
+            "embedChunksMs": 1093.11,
+            "embedQueriesMs": 2823.85,
+            "vectorsPerSecond": 75.824,
             "vramGb": null,
             "note": "quality-track; VRAM not measured on CPU smoke"
           },
           "gates": {
             "G0-RET-RECALL-AT-5": {
-              "metric": 0.917367,
+              "metric": 0.92612,
               "threshold": 0.85,
+              "statistic": "per-run",
               "pass": true
             }
           }
@@ -228,36 +254,40 @@
           "role": "best-candidate",
           "family": "bge-m3-vietnamese-ft",
           "hubId": "AITeamVN/Vietnamese_Embedding",
-          "revisionRequested": "main",
+          "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
           "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
           "dimensions": 1024,
           "maxSeqLength": 2048,
+          "batchSize": 16,
+          "device": "cpu",
           "wordSegment": false,
+          "wordSegmenter": null,
           "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
           "chunkingVersion": "heading-chunks-2000-v1",
           "runIndex": 2,
           "summary": {
             "queries": 238,
             "noAnswerQueries": 30,
-            "recallAt5": 0.917367,
-            "recallAt10": 0.960084,
-            "hitAt5": 0.941176,
-            "mrr": 0.812975,
-            "ndcgAt10": 0.801701
+            "recallAt5": 0.92612,
+            "recallAt10": 0.960784,
+            "hitAt5": 0.953782,
+            "mrr": 0.806749,
+            "ndcgAt10": 0.79918
           },
           "byCategory": {
             "abbreviation": {
               "queries": 25,
-              "recallAt5": 0.92,
-              "hitAt5": 0.92,
-              "mrr": 0.768214,
-              "ndcgAt10": 0.74711
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.72419,
+              "ndcgAt10": 0.716154
             },
             "conflict_acl_denied": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.267857,
+              "mrr": 0.267242,
               "ndcgAt10": 0.315465
             },
             "conflict_as_of": {
@@ -276,65 +306,65 @@
             },
             "conflict_history": {
               "queries": 2,
-              "recallAt5": 0.75,
+              "recallAt5": 0.625,
               "hitAt5": 1.0,
               "mrr": 1.0,
-              "ndcgAt10": 0.809787
+              "ndcgAt10": 0.803805
             },
             "diacritic_variant": {
               "queries": 75,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.880444,
-              "ndcgAt10": 0.832922
+              "mrr": 0.873333,
+              "ndcgAt10": 0.83079
             },
             "long_context": {
               "queries": 25,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
               "mrr": 0.953333,
-              "ndcgAt10": 0.973363
+              "ndcgAt10": 0.974007
             },
             "multi_doc": {
               "queries": 20,
-              "recallAt5": 0.741667,
+              "recallAt5": 0.708333,
               "hitAt5": 0.95,
-              "mrr": 0.780833,
-              "ndcgAt10": 0.751926
+              "mrr": 0.780238,
+              "ndcgAt10": 0.757166
             },
             "named_entity": {
               "queries": 50,
               "recallAt5": 0.92,
               "hitAt5": 0.92,
-              "mrr": 0.806395,
-              "ndcgAt10": 0.820505
+              "mrr": 0.821676,
+              "ndcgAt10": 0.830171
             },
             "no_answer": {
               "queries": 0
             },
             "numeric_fact": {
               "queries": 19,
-              "recallAt5": 0.842105,
-              "hitAt5": 0.842105,
-              "mrr": 0.660965,
-              "ndcgAt10": 0.688956
+              "recallAt5": 0.894737,
+              "hitAt5": 0.894737,
+              "mrr": 0.605326,
+              "ndcgAt10": 0.657138
             },
             "prompt_injection_query": {
               "queries": 0
             },
             "table_numeric": {
               "queries": 6,
-              "recallAt5": 0.666667,
-              "hitAt5": 0.666667,
-              "mrr": 0.71131,
-              "ndcgAt10": 0.729369
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.746032,
+              "ndcgAt10": 0.75393
             },
             "temporal_as_of": {
               "queries": 3,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.583333,
-              "ndcgAt10": 0.688626
+              "mrr": 0.666667,
+              "ndcgAt10": 0.754797
             },
             "temporal_current": {
               "queries": 3,
@@ -358,19 +388,21 @@
               "ndcgAt10": 0.693426
             }
           },
+          "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
           "capacity": {
             "device": "cpu",
-            "loadMs": 12725.33,
-            "embedChunksMs": 1191.86,
-            "embedQueriesMs": 2837.63,
-            "vectorsPerSecond": 73.707,
+            "loadMs": 1874.36,
+            "embedChunksMs": 1097.91,
+            "embedQueriesMs": 2773.88,
+            "vectorsPerSecond": 76.709,
             "vramGb": null,
             "note": "quality-track; VRAM not measured on CPU smoke"
           },
           "gates": {
             "G0-RET-RECALL-AT-5": {
-              "metric": 0.917367,
+              "metric": 0.92612,
               "threshold": 0.85,
+              "statistic": "per-run",
               "pass": true
             }
           }
@@ -380,36 +412,40 @@
           "role": "best-candidate",
           "family": "bge-m3-vietnamese-ft",
           "hubId": "AITeamVN/Vietnamese_Embedding",
-          "revisionRequested": "main",
+          "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
           "revisionResolved": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
           "dimensions": 1024,
           "maxSeqLength": 2048,
+          "batchSize": 16,
+          "device": "cpu",
           "wordSegment": false,
+          "wordSegmenter": null,
           "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
           "chunkingVersion": "heading-chunks-2000-v1",
           "runIndex": 3,
           "summary": {
             "queries": 238,
             "noAnswerQueries": 30,
-            "recallAt5": 0.917367,
-            "recallAt10": 0.960084,
-            "hitAt5": 0.941176,
-            "mrr": 0.812975,
-            "ndcgAt10": 0.801701
+            "recallAt5": 0.92612,
+            "recallAt10": 0.960784,
+            "hitAt5": 0.953782,
+            "mrr": 0.806749,
+            "ndcgAt10": 0.79918
           },
           "byCategory": {
             "abbreviation": {
               "queries": 25,
-              "recallAt5": 0.92,
-              "hitAt5": 0.92,
-              "mrr": 0.768214,
-              "ndcgAt10": 0.74711
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.72419,
+              "ndcgAt10": 0.716154
             },
             "conflict_acl_denied": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.267857,
+              "mrr": 0.267242,
               "ndcgAt10": 0.315465
             },
             "conflict_as_of": {
@@ -428,65 +464,65 @@
             },
             "conflict_history": {
               "queries": 2,
-              "recallAt5": 0.75,
+              "recallAt5": 0.625,
               "hitAt5": 1.0,
               "mrr": 1.0,
-              "ndcgAt10": 0.809787
+              "ndcgAt10": 0.803805
             },
             "diacritic_variant": {
               "queries": 75,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.880444,
-              "ndcgAt10": 0.832922
+              "mrr": 0.873333,
+              "ndcgAt10": 0.83079
             },
             "long_context": {
               "queries": 25,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
               "mrr": 0.953333,
-              "ndcgAt10": 0.973363
+              "ndcgAt10": 0.974007
             },
             "multi_doc": {
               "queries": 20,
-              "recallAt5": 0.741667,
+              "recallAt5": 0.708333,
               "hitAt5": 0.95,
-              "mrr": 0.780833,
-              "ndcgAt10": 0.751926
+              "mrr": 0.780238,
+              "ndcgAt10": 0.757166
             },
             "named_entity": {
               "queries": 50,
               "recallAt5": 0.92,
               "hitAt5": 0.92,
-              "mrr": 0.806395,
-              "ndcgAt10": 0.820505
+              "mrr": 0.821676,
+              "ndcgAt10": 0.830171
             },
             "no_answer": {
               "queries": 0
             },
             "numeric_fact": {
               "queries": 19,
-              "recallAt5": 0.842105,
-              "hitAt5": 0.842105,
-              "mrr": 0.660965,
-              "ndcgAt10": 0.688956
+              "recallAt5": 0.894737,
+              "hitAt5": 0.894737,
+              "mrr": 0.605326,
+              "ndcgAt10": 0.657138
             },
             "prompt_injection_query": {
               "queries": 0
             },
             "table_numeric": {
               "queries": 6,
-              "recallAt5": 0.666667,
-              "hitAt5": 0.666667,
-              "mrr": 0.71131,
-              "ndcgAt10": 0.729369
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.746032,
+              "ndcgAt10": 0.75393
             },
             "temporal_as_of": {
               "queries": 3,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.583333,
-              "ndcgAt10": 0.688626
+              "mrr": 0.666667,
+              "ndcgAt10": 0.754797
             },
             "temporal_current": {
               "queries": 3,
@@ -510,19 +546,21 @@
               "ndcgAt10": 0.693426
             }
           },
+          "rankingSha256": "45d8e8de7cbd22abdbf22fc5bf7de1f66344740cf2227c8803059dd050e4f6a3",
           "capacity": {
             "device": "cpu",
-            "loadMs": 12725.33,
-            "embedChunksMs": 1131.7,
-            "embedQueriesMs": 2817.45,
-            "vectorsPerSecond": 75.206,
+            "loadMs": 1716.8,
+            "embedChunksMs": 1088.05,
+            "embedQueriesMs": 2752.78,
+            "vectorsPerSecond": 77.327,
             "vramGb": null,
             "note": "quality-track; VRAM not measured on CPU smoke"
           },
           "gates": {
             "G0-RET-RECALL-AT-5": {
-              "metric": 0.917367,
+              "metric": 0.92612,
               "threshold": 0.85,
+              "statistic": "per-run",
               "pass": true
             }
           }
@@ -534,36 +572,55 @@
       "role": "min-candidate",
       "family": "phobert-bi-encoder",
       "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
+      "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
       "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
       "dimensions": 768,
+      "maxSeqLength": 256,
+      "batchSize": 32,
+      "deviceResolved": "cpu",
       "wordSegment": true,
+      "wordSegmenter": "pyvi",
       "aggregate": {
         "runs": 3,
-        "recallAt5": 0.79972,
-        "recallAt10": 0.878852,
+        "recallAt5": 0.796218,
+        "recallAt5Mean": 0.796218,
+        "recallAt10": 0.87465,
         "hitAt5": 0.815126,
-        "mrr": 0.655274,
-        "ndcgAt10": 0.674596,
+        "mrr": 0.650795,
+        "ndcgAt10": 0.669962,
+        "ndcgAt10Mean": 0.669962,
         "recallAt5Stdev": 0.0,
+        "rankingSha256Set": [
+          "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39"
+        ],
+        "independentLoads": true,
         "gates": {
           "G0-RET-RECALL-AT-5": {
-            "metric": 0.79972,
+            "metric": 0.796218,
             "threshold": 0.85,
+            "statistic": "min",
             "pass": false
           }
         }
       },
       "gates": {
         "G0-RET-RECALL-AT-5": {
-          "metric": 0.79972,
+          "metric": 0.796218,
           "threshold": 0.85,
+          "statistic": "min",
           "pass": false
         },
         "G0-RET-BEST-MODEL-GAP": {
-          "metric": 0.127105,
+          "metric": 0.129218,
           "threshold": 0.02,
+          "statistic": "max",
           "pass": false,
-          "bestNdcgAt10": 0.801701
+          "bestNdcgAt10": 0.79918,
+          "perRunGaps": [
+            0.129218,
+            0.129218,
+            0.129218
+          ]
         }
       },
       "runDetails": [
@@ -572,106 +629,110 @@
           "role": "min-candidate",
           "family": "phobert-bi-encoder",
           "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
-          "revisionRequested": "main",
+          "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
           "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
           "dimensions": 768,
           "maxSeqLength": 256,
+          "batchSize": 32,
+          "device": "cpu",
           "wordSegment": true,
+          "wordSegmenter": "pyvi",
           "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
           "chunkingVersion": "heading-chunks-2000-v1",
           "runIndex": 1,
           "summary": {
             "queries": 238,
             "noAnswerQueries": 30,
-            "recallAt5": 0.79972,
-            "recallAt10": 0.878852,
+            "recallAt5": 0.796218,
+            "recallAt10": 0.87465,
             "hitAt5": 0.815126,
-            "mrr": 0.655274,
-            "ndcgAt10": 0.674596
+            "mrr": 0.650795,
+            "ndcgAt10": 0.669962
           },
           "byCategory": {
             "abbreviation": {
               "queries": 25,
               "recallAt5": 0.88,
               "hitAt5": 0.88,
-              "mrr": 0.65497,
-              "ndcgAt10": 0.641716
+              "mrr": 0.650303,
+              "ndcgAt10": 0.641958
             },
             "conflict_acl_denied": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.267242,
+              "mrr": 0.267857,
               "ndcgAt10": 0.315465
             },
             "conflict_as_of": {
               "queries": 2,
               "recallAt5": 0.75,
               "hitAt5": 1.0,
-              "mrr": 0.75,
-              "ndcgAt10": 0.653287
+              "mrr": 0.666667,
+              "ndcgAt10": 0.57846
             },
             "conflict_current": {
               "queries": 2,
               "recallAt5": 0.75,
               "hitAt5": 1.0,
               "mrr": 0.75,
-              "ndcgAt10": 0.790139
+              "ndcgAt10": 0.745575
             },
             "conflict_history": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.521739,
+              "mrr": 0.520833,
               "ndcgAt10": 0.5
             },
             "diacritic_variant": {
               "queries": 75,
-              "recallAt5": 0.733333,
-              "hitAt5": 0.733333,
-              "mrr": 0.602186,
-              "ndcgAt10": 0.620236
+              "recallAt5": 0.773333,
+              "hitAt5": 0.773333,
+              "mrr": 0.583358,
+              "ndcgAt10": 0.60491
             },
             "long_context": {
               "queries": 25,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.893333,
-              "ndcgAt10": 0.926242
+              "mrr": 0.913333,
+              "ndcgAt10": 0.938461
             },
             "multi_doc": {
               "queries": 20,
-              "recallAt5": 0.716667,
-              "hitAt5": 0.85,
-              "mrr": 0.805198,
-              "ndcgAt10": 0.762351
+              "recallAt5": 0.725,
+              "hitAt5": 0.9,
+              "mrr": 0.812462,
+              "ndcgAt10": 0.766712
             },
             "named_entity": {
               "queries": 50,
-              "recallAt5": 0.86,
-              "hitAt5": 0.86,
-              "mrr": 0.722292,
-              "ndcgAt10": 0.744642
+              "recallAt5": 0.82,
+              "hitAt5": 0.82,
+              "mrr": 0.719948,
+              "ndcgAt10": 0.74129
             },
             "no_answer": {
               "queries": 0
             },
             "numeric_fact": {
               "queries": 19,
-              "recallAt5": 0.631579,
-              "hitAt5": 0.631579,
-              "mrr": 0.320608,
-              "ndcgAt10": 0.400512
+              "recallAt5": 0.578947,
+              "hitAt5": 0.578947,
+              "mrr": 0.294742,
+              "ndcgAt10": 0.38784
             },
             "prompt_injection_query": {
               "queries": 0
             },
             "table_numeric": {
               "queries": 6,
-              "recallAt5": 0.833333,
-              "hitAt5": 0.833333,
-              "mrr": 0.309127,
-              "ndcgAt10": 0.407843
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.332265,
+              "ndcgAt10": 0.41931
             },
             "temporal_as_of": {
               "queries": 3,
@@ -684,15 +745,15 @@
               "queries": 3,
               "recallAt5": 0.666667,
               "hitAt5": 0.666667,
-              "mrr": 0.44697,
+              "mrr": 0.431818,
               "ndcgAt10": 0.481921
             },
             "version_compare": {
               "queries": 3,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.833333,
-              "ndcgAt10": 0.897809
+              "mrr": 1.0,
+              "ndcgAt10": 0.97324
             },
             "version_history": {
               "queries": 1,
@@ -702,19 +763,21 @@
               "ndcgAt10": 1.0
             }
           },
+          "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
           "capacity": {
             "device": "cpu",
-            "loadMs": 6647.17,
-            "embedChunksMs": 300.64,
-            "embedQueriesMs": 711.67,
-            "vectorsPerSecond": 293.388,
+            "loadMs": 380.2,
+            "embedChunksMs": 252.58,
+            "embedQueriesMs": 759.87,
+            "vectorsPerSecond": 293.348,
             "vramGb": null,
             "note": "quality-track; VRAM not measured on CPU smoke"
           },
           "gates": {
             "G0-RET-RECALL-AT-5": {
-              "metric": 0.79972,
+              "metric": 0.796218,
               "threshold": 0.85,
+              "statistic": "per-run",
               "pass": false
             }
           }
@@ -724,106 +787,110 @@
           "role": "min-candidate",
           "family": "phobert-bi-encoder",
           "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
-          "revisionRequested": "main",
+          "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
           "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
           "dimensions": 768,
           "maxSeqLength": 256,
+          "batchSize": 32,
+          "device": "cpu",
           "wordSegment": true,
+          "wordSegmenter": "pyvi",
           "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
           "chunkingVersion": "heading-chunks-2000-v1",
           "runIndex": 2,
           "summary": {
             "queries": 238,
             "noAnswerQueries": 30,
-            "recallAt5": 0.79972,
-            "recallAt10": 0.878852,
+            "recallAt5": 0.796218,
+            "recallAt10": 0.87465,
             "hitAt5": 0.815126,
-            "mrr": 0.655274,
-            "ndcgAt10": 0.674596
+            "mrr": 0.650795,
+            "ndcgAt10": 0.669962
           },
           "byCategory": {
             "abbreviation": {
               "queries": 25,
               "recallAt5": 0.88,
               "hitAt5": 0.88,
-              "mrr": 0.65497,
-              "ndcgAt10": 0.641716
+              "mrr": 0.650303,
+              "ndcgAt10": 0.641958
             },
             "conflict_acl_denied": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.267242,
+              "mrr": 0.267857,
               "ndcgAt10": 0.315465
             },
             "conflict_as_of": {
               "queries": 2,
               "recallAt5": 0.75,
               "hitAt5": 1.0,
-              "mrr": 0.75,
-              "ndcgAt10": 0.653287
+              "mrr": 0.666667,
+              "ndcgAt10": 0.57846
             },
             "conflict_current": {
               "queries": 2,
               "recallAt5": 0.75,
               "hitAt5": 1.0,
               "mrr": 0.75,
-              "ndcgAt10": 0.790139
+              "ndcgAt10": 0.745575
             },
             "conflict_history": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.521739,
+              "mrr": 0.520833,
               "ndcgAt10": 0.5
             },
             "diacritic_variant": {
               "queries": 75,
-              "recallAt5": 0.733333,
-              "hitAt5": 0.733333,
-              "mrr": 0.602186,
-              "ndcgAt10": 0.620236
+              "recallAt5": 0.773333,
+              "hitAt5": 0.773333,
+              "mrr": 0.583358,
+              "ndcgAt10": 0.60491
             },
             "long_context": {
               "queries": 25,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.893333,
-              "ndcgAt10": 0.926242
+              "mrr": 0.913333,
+              "ndcgAt10": 0.938461
             },
             "multi_doc": {
               "queries": 20,
-              "recallAt5": 0.716667,
-              "hitAt5": 0.85,
-              "mrr": 0.805198,
-              "ndcgAt10": 0.762351
+              "recallAt5": 0.725,
+              "hitAt5": 0.9,
+              "mrr": 0.812462,
+              "ndcgAt10": 0.766712
             },
             "named_entity": {
               "queries": 50,
-              "recallAt5": 0.86,
-              "hitAt5": 0.86,
-              "mrr": 0.722292,
-              "ndcgAt10": 0.744642
+              "recallAt5": 0.82,
+              "hitAt5": 0.82,
+              "mrr": 0.719948,
+              "ndcgAt10": 0.74129
             },
             "no_answer": {
               "queries": 0
             },
             "numeric_fact": {
               "queries": 19,
-              "recallAt5": 0.631579,
-              "hitAt5": 0.631579,
-              "mrr": 0.320608,
-              "ndcgAt10": 0.400512
+              "recallAt5": 0.578947,
+              "hitAt5": 0.578947,
+              "mrr": 0.294742,
+              "ndcgAt10": 0.38784
             },
             "prompt_injection_query": {
               "queries": 0
             },
             "table_numeric": {
               "queries": 6,
-              "recallAt5": 0.833333,
-              "hitAt5": 0.833333,
-              "mrr": 0.309127,
-              "ndcgAt10": 0.407843
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.332265,
+              "ndcgAt10": 0.41931
             },
             "temporal_as_of": {
               "queries": 3,
@@ -836,15 +903,15 @@
               "queries": 3,
               "recallAt5": 0.666667,
               "hitAt5": 0.666667,
-              "mrr": 0.44697,
+              "mrr": 0.431818,
               "ndcgAt10": 0.481921
             },
             "version_compare": {
               "queries": 3,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.833333,
-              "ndcgAt10": 0.897809
+              "mrr": 1.0,
+              "ndcgAt10": 0.97324
             },
             "version_history": {
               "queries": 1,
@@ -854,19 +921,21 @@
               "ndcgAt10": 1.0
             }
           },
+          "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
           "capacity": {
             "device": "cpu",
-            "loadMs": 6647.17,
-            "embedChunksMs": 255.33,
-            "embedQueriesMs": 713.29,
-            "vectorsPerSecond": 306.623,
+            "loadMs": 399.95,
+            "embedChunksMs": 292.07,
+            "embedQueriesMs": 747.42,
+            "vectorsPerSecond": 285.715,
             "vramGb": null,
             "note": "quality-track; VRAM not measured on CPU smoke"
           },
           "gates": {
             "G0-RET-RECALL-AT-5": {
-              "metric": 0.79972,
+              "metric": 0.796218,
               "threshold": 0.85,
+              "statistic": "per-run",
               "pass": false
             }
           }
@@ -876,106 +945,110 @@
           "role": "min-candidate",
           "family": "phobert-bi-encoder",
           "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
-          "revisionRequested": "main",
+          "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
           "revisionResolved": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
           "dimensions": 768,
           "maxSeqLength": 256,
+          "batchSize": 32,
+          "device": "cpu",
           "wordSegment": true,
+          "wordSegmenter": "pyvi",
           "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
           "chunkingVersion": "heading-chunks-2000-v1",
           "runIndex": 3,
           "summary": {
             "queries": 238,
             "noAnswerQueries": 30,
-            "recallAt5": 0.79972,
-            "recallAt10": 0.878852,
+            "recallAt5": 0.796218,
+            "recallAt10": 0.87465,
             "hitAt5": 0.815126,
-            "mrr": 0.655274,
-            "ndcgAt10": 0.674596
+            "mrr": 0.650795,
+            "ndcgAt10": 0.669962
           },
           "byCategory": {
             "abbreviation": {
               "queries": 25,
               "recallAt5": 0.88,
               "hitAt5": 0.88,
-              "mrr": 0.65497,
-              "ndcgAt10": 0.641716
+              "mrr": 0.650303,
+              "ndcgAt10": 0.641958
             },
             "conflict_acl_denied": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.267242,
+              "mrr": 0.267857,
               "ndcgAt10": 0.315465
             },
             "conflict_as_of": {
               "queries": 2,
               "recallAt5": 0.75,
               "hitAt5": 1.0,
-              "mrr": 0.75,
-              "ndcgAt10": 0.653287
+              "mrr": 0.666667,
+              "ndcgAt10": 0.57846
             },
             "conflict_current": {
               "queries": 2,
               "recallAt5": 0.75,
               "hitAt5": 1.0,
               "mrr": 0.75,
-              "ndcgAt10": 0.790139
+              "ndcgAt10": 0.745575
             },
             "conflict_history": {
               "queries": 2,
               "recallAt5": 0.5,
               "hitAt5": 0.5,
-              "mrr": 0.521739,
+              "mrr": 0.520833,
               "ndcgAt10": 0.5
             },
             "diacritic_variant": {
               "queries": 75,
-              "recallAt5": 0.733333,
-              "hitAt5": 0.733333,
-              "mrr": 0.602186,
-              "ndcgAt10": 0.620236
+              "recallAt5": 0.773333,
+              "hitAt5": 0.773333,
+              "mrr": 0.583358,
+              "ndcgAt10": 0.60491
             },
             "long_context": {
               "queries": 25,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.893333,
-              "ndcgAt10": 0.926242
+              "mrr": 0.913333,
+              "ndcgAt10": 0.938461
             },
             "multi_doc": {
               "queries": 20,
-              "recallAt5": 0.716667,
-              "hitAt5": 0.85,
-              "mrr": 0.805198,
-              "ndcgAt10": 0.762351
+              "recallAt5": 0.725,
+              "hitAt5": 0.9,
+              "mrr": 0.812462,
+              "ndcgAt10": 0.766712
             },
             "named_entity": {
               "queries": 50,
-              "recallAt5": 0.86,
-              "hitAt5": 0.86,
-              "mrr": 0.722292,
-              "ndcgAt10": 0.744642
+              "recallAt5": 0.82,
+              "hitAt5": 0.82,
+              "mrr": 0.719948,
+              "ndcgAt10": 0.74129
             },
             "no_answer": {
               "queries": 0
             },
             "numeric_fact": {
               "queries": 19,
-              "recallAt5": 0.631579,
-              "hitAt5": 0.631579,
-              "mrr": 0.320608,
-              "ndcgAt10": 0.400512
+              "recallAt5": 0.578947,
+              "hitAt5": 0.578947,
+              "mrr": 0.294742,
+              "ndcgAt10": 0.38784
             },
             "prompt_injection_query": {
               "queries": 0
             },
             "table_numeric": {
               "queries": 6,
-              "recallAt5": 0.833333,
-              "hitAt5": 0.833333,
-              "mrr": 0.309127,
-              "ndcgAt10": 0.407843
+              "recallAt5": 0.666667,
+              "hitAt5": 0.666667,
+              "mrr": 0.332265,
+              "ndcgAt10": 0.41931
             },
             "temporal_as_of": {
               "queries": 3,
@@ -988,15 +1061,15 @@
               "queries": 3,
               "recallAt5": 0.666667,
               "hitAt5": 0.666667,
-              "mrr": 0.44697,
+              "mrr": 0.431818,
               "ndcgAt10": 0.481921
             },
             "version_compare": {
               "queries": 3,
               "recallAt5": 1.0,
               "hitAt5": 1.0,
-              "mrr": 0.833333,
-              "ndcgAt10": 0.897809
+              "mrr": 1.0,
+              "ndcgAt10": 0.97324
             },
             "version_history": {
               "queries": 1,
@@ -1006,19 +1079,21 @@
               "ndcgAt10": 1.0
             }
           },
+          "rankingSha256": "0fbb87f9230cfcb18db88cb36f8468a50fd4e41adb3f2d718f1be4935f5c8b39",
           "capacity": {
             "device": "cpu",
-            "loadMs": 6647.17,
-            "embedChunksMs": 271.41,
-            "embedQueriesMs": 733.78,
-            "vectorsPerSecond": 295.466,
+            "loadMs": 404.45,
+            "embedChunksMs": 277.7,
+            "embedQueriesMs": 793.73,
+            "vectorsPerSecond": 277.199,
             "vramGb": null,
             "note": "quality-track; VRAM not measured on CPU smoke"
           },
           "gates": {
             "G0-RET-RECALL-AT-5": {
-              "metric": 0.79972,
+              "metric": 0.796218,
               "threshold": 0.85,
+              "statistic": "per-run",
               "pass": false
             }
           }
@@ -1030,30 +1105,51 @@
     "chunkingVersion": "heading-chunks-2000-v1",
     "normalize": "l2",
     "ranking": "max-pool-chunk-cosine -> document",
+    "payloadFormat": "{heading}\\n{text}",
+    "gateStatistics": {
+      "G0-RET-RECALL-AT-5": "min",
+      "G0-RET-BEST-MODEL-GAP": "max"
+    },
     "models": [
       {
         "id": "aiteamvn-vietnamese-embedding",
         "hubId": "AITeamVN/Vietnamese_Embedding",
         "revision": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+        "revisionRequested": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
         "dimensions": 1024,
-        "wordSegment": false
+        "maxSeqLength": 2048,
+        "batchSize": 16,
+        "device": "cpu",
+        "wordSegment": false,
+        "wordSegmenter": null,
+        "normalize": "l2"
       },
       {
         "id": "bkai-vietnamese-bi-encoder",
         "hubId": "bkai-foundation-models/vietnamese-bi-encoder",
         "revision": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
+        "revisionRequested": "84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0",
         "dimensions": 768,
-        "wordSegment": true
+        "maxSeqLength": 256,
+        "batchSize": 32,
+        "device": "cpu",
+        "wordSegment": true,
+        "wordSegmenter": "pyvi",
+        "normalize": "l2"
       }
     ]
   },
   "verdict": {
     "anyRecallGatePass": true,
+    "selectedPassesBothGates": true,
     "selectedDraft": "AITeamVN/Vietnamese_Embedding",
     "p0_05_closed": false,
     "reasons": [
-      "Quality track executed on reduced-smoke hardware (CPU unless CUDA present).",
-      "Capacity evidence (VRAM, saturation, queue depth, target GPU fingerprint) still required.",
+      "Quality track executed with independent model loads per run.",
+      "Gate statistics follow registry: Recall@5=min, best-model nDCG gap=max.",
+      "Selection requires both Recall@5 and best-model-gap gates.",
+      "Per-query rankings retained in run-*.json with rankingSha256 fingerprints.",
+      "Capacity evidence (VRAM, saturation, queue depth, target GPU) still required.",
       "ADR remains Proposed until capacity + approver sign-off.",
       "Restricted corpus must not leave to cloud providers; local/self-host only."
     ]
