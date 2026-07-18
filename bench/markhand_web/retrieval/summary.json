@@ -2,10 +2,10 @@
   "version": 1,
   "issue": "P0-06",
   "track": "retrieval-scaffold-local-hash",
-  "generatedAt": "2026-07-18T17:44:43.440692+00:00",
+  "generatedAt": "2026-07-18T17:53:20.150969+00:00",
   "git": {
-    "commit": "78a75a49eebf191f6a3b9005cc3be07f5613d186",
-    "dirty": true
+    "commit": "fdd78aec9390646aa4029ab5f7ac96454cb8fcca",
+    "dirty": false
   },
   "chunkingVersion": "heading-chunks-2000-v1",
   "indexSignature": "dedf790eb237c6f562ba2e338fb50038345b4af26c0ef56f17a9b9ca73ca060f",
@@ -59,21 +59,23 @@
     "G0-RET-RECALL-AT-5": {
       "metric": 0.986695,
       "threshold": 0.85,
-      "pass": true,
-      "note": "local-hash scaffold; neural hybrid may differ"
+      "pass": null,
+      "evaluated": false,
+      "note": "scaffold vectors are synthetic blake2b, not Rust local_hash_v1; official gate not evaluated"
     },
     "G0-RET-VERSION-CITATION-PRECISION": {
       "metric": 0.0,
       "threshold": 1.0,
-      "pass": false,
+      "pass": null,
+      "evaluated": false,
       "note": "chunkId still null in golden citations; fill after expected-chunks wiring"
     }
   },
   "p0_06_closed": false,
   "reasons": [
     "Expected chunks pinned for heading-chunks-2000-v1 with span resolve.",
-    "Hybrid scaffold uses frozen RRF weights + local-hash vectors.",
-    "Version-citation gates remain red until chunkId is filled into gold.",
+    "Hybrid scaffold uses frozen RRF weights + synthetic blake2b vectors (not official gate evidence).",
+    "Version-citation gates remain unevaluated until chunkId is filled into gold.",
     "Neural embedding hybrid + claim/conflict metrics deferred."
   ]
 }

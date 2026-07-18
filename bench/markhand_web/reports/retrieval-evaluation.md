@@ -1,13 +1,13 @@
 # P0-06 retrieval evaluation (scaffold)
 
-- Generated: `2026-07-18T17:44:43.440692+00:00`
-- Git commit: `78a75a49eebf191f6a3b9005cc3be07f5613d186`
+- Generated: `2026-07-18T17:53:20.150969+00:00`
+- Git commit: `fdd78aec9390646aa4029ab5f7ac96454cb8fcca`
 - Chunking: `heading-chunks-2000-v1`
 - Runtime path: `local-hash`
 - Index signature: `dedf790eb237c6f562ba2e338fb50038345b4af26c0ef56f17a9b9ca73ca060f`
 - RRF tuned: `False`
 
-## Legs (document-level, local-hash scaffold)
+## Legs (document-level, synthetic blake2b scaffold — not official G0-RET)
 
 | Leg | Recall@5 | Recall@10 | Hit@5 | MRR | nDCG@10 |
 |---|---:|---:|---:|---:|---:|
@@ -27,6 +27,6 @@
 - P0-06 closed: **NO**
 
 - Expected chunks pinned for heading-chunks-2000-v1 with span resolve.
-- Hybrid scaffold uses frozen RRF weights + local-hash vectors.
-- Version-citation gates remain red until chunkId is filled into gold.
+- Hybrid scaffold uses frozen RRF weights + synthetic blake2b vectors (not official gate evidence).
+- Version-citation gates remain unevaluated until chunkId is filled into gold.
 - Neural embedding hybrid + claim/conflict metrics deferred.
