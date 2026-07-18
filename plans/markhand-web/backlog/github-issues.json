@@ -70,255 +70,239 @@
       "phase": "F",
       "id": "F-01",
       "title": "F-01 — Architecture boundaries và dependency rules",
-      "status": "ready",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "ready"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-01\n- Status: `ready`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nKhóa dependency direction và module responsibilities trước scaffold.\n\n## Implementation plan\n\nViết architecture boundary ADR; define allowed/forbidden\ndependencies; route→service→repository; tenant context rule; browser/Tauri split;\nautomated `cargo tree`/import checks. Bootstrap minimum CODEOWNERS, issue/PR\ntemplate, Definition of Ready/Done và security-review triggers để govern chính\nPhase F; F-12 hoàn thiện và kiểm chứng workflow.\n\n## Files/modules\n\n`docs/adr/0001-web-boundaries.md` (new),\n`docs/conventions/dependencies.md` (new), `.github/CODEOWNERS`,\n`.github/{ISSUE_TEMPLATE,PULL_REQUEST_TEMPLATE}.md`, CI boundary scripts.\n\n## Dependencies / blocks\n\nKhông; blocks F-02 và mọi crate/web implementation.\n\n## Acceptance criteria\n\nCore không framework/storage; knowledge pure mặc định;\nserver không reverse-depend desktop; web không Tauri; vendor không dependency.\n\n## Required tests / evidence\n\nPositive/negative sample boundary checks trong CI;\narchitecture diagram và approver.\n\n## Security and migration notes\n\nTenant context bắt buộc ở repository rule; migration N/A.\n\n## Out of scope\n\nStorage trait tổng quát và business implementation.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-01\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nKhóa dependency direction và module responsibilities trước scaffold.\n\n## Implementation plan\n\nViết architecture boundary ADR; define allowed/forbidden\ndependencies; route→service→repository; tenant context rule; browser/Tauri split;\nautomated `cargo tree`/import checks. Bootstrap minimum CODEOWNERS, issue/PR\ntemplate, Definition of Ready/Done và security-review triggers để govern chính\nPhase F; F-12 hoàn thiện và kiểm chứng workflow.\n\n## Files/modules\n\n`docs/adr/0001-web-boundaries.md` (new),\n`docs/conventions/dependencies.md` (new), `.github/CODEOWNERS`,\n`.github/{ISSUE_TEMPLATE,PULL_REQUEST_TEMPLATE}.md`, CI boundary scripts.\n\n## Dependencies / blocks\n\nKhông; blocks F-02 và mọi crate/web implementation.\n\n## Acceptance criteria\n\nCore không framework/storage; knowledge pure mặc định;\nserver không reverse-depend desktop; web không Tauri; vendor không dependency.\n\n## Required tests / evidence\n\nPositive/negative sample boundary checks trong CI;\narchitecture diagram và approver.\n\n## Security and migration notes\n\nTenant context bắt buộc ở repository rule; migration N/A.\n\n## Out of scope\n\nStorage trait tổng quát và business implementation.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-02",
       "title": "F-02 — Workspace và folder skeleton",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-02\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nTạo khung compile được cho knowledge/server/web/deploy/docs/bench.\n\n## Implementation plan\n\nAdd workspace members với minimal libraries/binaries; module\nREADMEs/ownership; Vite web shell; deploy/dev placeholders; không copy business\nlogic. Chốt root pnpm workspace/lockfile policy cho `app/` + `web/`; pin Node,\npnpm, task runner và Compose requirements; thêm bootstrap/version-check command.\n\n## Files/modules\n\n`Cargo.toml`, `crates/{knowledge,server}/`, `web/`, `deploy/dev/`,\n`docs/{adr,conventions,runbooks}/`, `bench/markhand_web/`.\n\n## Dependencies / blocks\n\nF-01; blocks coding/tooling/dev environment issues.\n\n## Acceptance criteria\n\nCargo workspace và web build; server API/worker binaries start\nhelp/config validation only; no cyclic/forbidden deps; JS workspace/lockfile policy\nvà host tool versions được máy kiểm tra.\n\n## Required tests / evidence\n\n`cargo metadata/check`, bootstrap/version check,\n`pnpm install --frozen-lockfile`, app+web build, tree/import boundary.\n\n## Security and migration notes\n\nNo credential/default public bind; no DB migration.\n\n## Out of scope\n\nAuth/schema/routes/jobs.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-02\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nTạo khung compile được cho knowledge/server/web/deploy/docs/bench.\n\n## Implementation plan\n\nAdd workspace members với minimal libraries/binaries; module\nREADMEs/ownership; Vite web shell; deploy/dev placeholders; không copy business\nlogic. Chốt root pnpm workspace/lockfile policy cho `app/` + `web/`; pin Node,\npnpm, task runner và Compose requirements; thêm bootstrap/version-check command.\n\n## Files/modules\n\n`Cargo.toml`, `crates/{knowledge,server}/`, `web/`, `deploy/dev/`,\n`docs/{adr,conventions,runbooks}/`, `bench/markhand_web/`.\n\n## Dependencies / blocks\n\nF-01; blocks coding/tooling/dev environment issues.\n\n## Acceptance criteria\n\nCargo workspace và web build; server API/worker binaries start\nhelp/config validation only; no cyclic/forbidden deps; JS workspace/lockfile policy\nvà host tool versions được máy kiểm tra.\n\n## Required tests / evidence\n\n`cargo metadata/check`, bootstrap/version check,\n`pnpm install --frozen-lockfile`, app+web build, tree/import boundary.\n\n## Security and migration notes\n\nNo credential/default public bind; no DB migration.\n\n## Out of scope\n\nAuth/schema/routes/jobs.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-03",
       "title": "F-03 — Rust coding và crate conventions",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-03\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nMột chuẩn Rust bắt buộc cho core/knowledge/server/workers.\n\n## Implementation plan\n\nRustfmt/clippy policy; error/context; async vs blocking;\ncancellation/timeouts; panic/unwrap/unsafe/public docs; naming/module visibility.\n\n## Files/modules\n\n`rustfmt.toml`, `clippy.toml` nếu cần,\n`docs/conventions/rust.md`, root lint task, CI.\n\n## Dependencies / blocks\n\nF-02; blocks Rust feature issues.\n\n## Acceptance criteria\n\nConvention có enforceable rule + justified exceptions;\nexisting code có migration plan thay vì bật deny phá toàn repo ngay.\n\n## Required tests / evidence\n\nFormat check, clippy selected warnings-as-errors,\nforbidden-pattern baseline/delta.\n\n## Security and migration notes\n\nRequest/worker path không panic; secret-safe errors; N/A schema.\n\n## Out of scope\n\nRefactor toàn bộ warning cũ trong cùng issue.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-03\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nMột chuẩn Rust bắt buộc cho core/knowledge/server/workers.\n\n## Implementation plan\n\nRustfmt/clippy policy; error/context; async vs blocking;\ncancellation/timeouts; panic/unwrap/unsafe/public docs; naming/module visibility.\n\n## Files/modules\n\n`rustfmt.toml`, `clippy.toml` nếu cần,\n`docs/conventions/rust.md`, root lint task, CI.\n\n## Dependencies / blocks\n\nF-02; blocks Rust feature issues.\n\n## Acceptance criteria\n\nConvention có enforceable rule + justified exceptions;\nexisting code có migration plan thay vì bật deny phá toàn repo ngay.\n\n## Required tests / evidence\n\nFormat check, clippy selected warnings-as-errors,\nforbidden-pattern baseline/delta.\n\n## Security and migration notes\n\nRequest/worker path không panic; secret-safe errors; N/A schema.\n\n## Out of scope\n\nRefactor toàn bộ warning cũ trong cùng issue.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-04",
       "title": "F-04 — TypeScript/React conventions",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-04\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nChuẩn strict TS, component/hook/state và accessibility cho web.\n\n## Implementation plan\n\nTS strict policy; generated API immutable; naming/import\nboundaries; state ownership; loading/error/empty; abort cleanup; a11y checklist.\n\n## Files/modules\n\n`web/tsconfig*.json`, ESLint/Prettier config,\n`docs/conventions/typescript-react.md`, web test setup.\n\n## Dependencies / blocks\n\nF-02; blocks Phase 2 implementation.\n\n## Acceptance criteria\n\nNo Tauri imports; generated code separated; hooks clean up\nrequests/streams; component patterns documented.\n\n## Required tests / evidence\n\nTypecheck/lint/format/unit sample/a11y smoke.\n\n## Security and migration notes\n\nNo token/content logging or unsafe HTML by default; N/A schema.\n\n## Out of scope\n\nFull design system và Phase 2 pages.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-04\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nChuẩn strict TS, component/hook/state và accessibility cho web.\n\n## Implementation plan\n\nTS strict policy; generated API immutable; naming/import\nboundaries; state ownership; loading/error/empty; abort cleanup; a11y checklist.\n\n## Files/modules\n\n`web/tsconfig*.json`, ESLint/Prettier config,\n`docs/conventions/typescript-react.md`, web test setup.\n\n## Dependencies / blocks\n\nF-02; blocks Phase 2 implementation.\n\n## Acceptance criteria\n\nNo Tauri imports; generated code separated; hooks clean up\nrequests/streams; component patterns documented.\n\n## Required tests / evidence\n\nTypecheck/lint/format/unit sample/a11y smoke.\n\n## Security and migration notes\n\nNo token/content logging or unsafe HTML by default; N/A schema.\n\n## Out of scope\n\nFull design system và Phase 2 pages.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-05",
       "title": "F-05 — SQL/data/migration conventions",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-05\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nNgăn schema/tenant/migration conventions bị phát minh theo từng PR.\n\n## Implementation plan\n\nNaming/types/time/UUID/FK/check/index; `org_id`; transaction/\nlocking/idempotency; immutable migration; expand/backfill/cutover/contract; rollback.\n\n## Files/modules\n\n`docs/conventions/sql-migrations.md`,\n`crates/server/migrations/README.md`, migration test harness skeleton.\n\n## Dependencies / blocks\n\nF-01/02; blocks Phase 1B schema.\n\n## Acceptance criteria\n\nExample migration/repository query hợp conventions; policy\nfresh/upgrade/mixed-version rõ.\n\n## Required tests / evidence\n\nEmpty DB apply, migration checksum/immutability,\nrollback-compat sample.\n\n## Security and migration notes\n\nTenant predicate/RLS review checklist bắt buộc.\n\n## Out of scope\n\nBusiness tables và RLS decision.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-05\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nNgăn schema/tenant/migration conventions bị phát minh theo từng PR.\n\n## Implementation plan\n\nNaming/types/time/UUID/FK/check/index; `org_id`; transaction/\nlocking/idempotency; immutable migration; expand/backfill/cutover/contract; rollback.\n\n## Files/modules\n\n`docs/conventions/sql-migrations.md`,\n`crates/server/migrations/README.md`, migration test harness skeleton.\n\n## Dependencies / blocks\n\nF-01/02; blocks Phase 1B schema.\n\n## Acceptance criteria\n\nExample migration/repository query hợp conventions; policy\nfresh/upgrade/mixed-version rõ.\n\n## Required tests / evidence\n\nEmpty DB apply, migration checksum/immutability,\nrollback-compat sample.\n\n## Security and migration notes\n\nTenant predicate/RLS review checklist bắt buộc.\n\n## Out of scope\n\nBusiness tables và RLS decision.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-06",
       "title": "F-06 — REST/OpenAPI/SSE/error conventions",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-06\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nContract thống nhất để backend/web không drift.\n\n## Implementation plan\n\n`/api/v1`; resources/pagination/idempotency; canonical error;\ndate/UUID/enum/null; OpenAPI authority; SSE envelope/version/sequence/reconnect;\ndeprecation policy.\n\n## Files/modules\n\n`docs/conventions/api.md`, `crates/server/openapi/`,\nsample DTO/error/SSE types và fixtures.\n\n## Dependencies / blocks\n\nF-01/02; blocks 1B routes và Phase 2 client.\n\n## Acceptance criteria\n\nSample contract generate TS; error/SSE fixtures round-trip;\ncompatibility rules có examples.\n\n## Required tests / evidence\n\nOpenAPI validation/snapshot, Rust↔TS fixture,\nSSE parser sequence sample.\n\n## Security and migration notes\n\nErrors không leak internal; SSE auth/revocation requirements;\npersisted migration N/A.\n\n## Out of scope\n\nBusiness endpoints.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-06\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nContract thống nhất để backend/web không drift.\n\n## Implementation plan\n\n`/api/v1`; resources/pagination/idempotency; canonical error;\ndate/UUID/enum/null; OpenAPI authority; SSE envelope/version/sequence/reconnect;\ndeprecation policy.\n\n## Files/modules\n\n`docs/conventions/api.md`, `crates/server/openapi/`,\nsample DTO/error/SSE types và fixtures.\n\n## Dependencies / blocks\n\nF-01/02; blocks 1B routes và Phase 2 client.\n\n## Acceptance criteria\n\nSample contract generate TS; error/SSE fixtures round-trip;\ncompatibility rules có examples.\n\n## Required tests / evidence\n\nOpenAPI validation/snapshot, Rust↔TS fixture,\nSSE parser sequence sample.\n\n## Security and migration notes\n\nErrors không leak internal; SSE auth/revocation requirements;\npersisted migration N/A.\n\n## Out of scope\n\nBusiness endpoints.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-07",
       "title": "F-07 — Configuration, secrets và environment profiles",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-07\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nTyped, fail-fast, secret-safe config cho local/test/prod.\n\n## Implementation plan\n\nDefine precedence; profile schema; mounted secret/env\nreferences; validation/redacted Debug; `.env.example`; unsafe dev defaults isolated.\n\n## Files/modules\n\n`crates/server/src/config.rs`, `deploy/dev/.env.example`,\n`docs/conventions/config-secrets.md`, config tests.\n\n## Dependencies / blocks\n\nF-02; blocks dev stack/server issues.\n\n## Acceptance criteria\n\nMissing/invalid config fails startup; no secret in errors;\nprod cannot use dev credentials/profile.\n\n## Required tests / evidence\n\nTable/env/file precedence, redaction canary, profile deny.\n\n## Security and migration notes\n\nNo committed secrets; rotation contract documented; N/A schema.\n\n## Out of scope\n\nProduction secret-manager implementation.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-07\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nTyped, fail-fast, secret-safe config cho local/test/prod.\n\n## Implementation plan\n\nDefine precedence; profile schema; mounted secret/env\nreferences; validation/redacted Debug; `.env.example`; unsafe dev defaults isolated.\n\n## Files/modules\n\n`crates/server/src/config.rs`, `deploy/dev/.env.example`,\n`docs/conventions/config-secrets.md`, config tests.\n\n## Dependencies / blocks\n\nF-02; blocks dev stack/server issues.\n\n## Acceptance criteria\n\nMissing/invalid config fails startup; no secret in errors;\nprod cannot use dev credentials/profile.\n\n## Required tests / evidence\n\nTable/env/file precedence, redaction canary, profile deny.\n\n## Security and migration notes\n\nNo committed secrets; rotation contract documented; N/A schema.\n\n## Out of scope\n\nProduction secret-manager implementation.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-08",
       "title": "F-08 — Reproducible local development environment",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-08\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nOne-command CPU-only dev stack, optional GPU profile.\n\n## Implementation plan\n\nPin PG/Qdrant/MinIO/OTel; init buckets/extensions; health/\nseed/reset; named volumes/private network; mock embedding; optional vLLM profile.\n\n## Files/modules\n\n`deploy/dev/compose.yml`, init/health/seed/reset scripts,\n`docs/runbooks/local-development.md`.\n\n## Dependencies / blocks\n\nF-02/07; blocks Phase 0 spike and server development.\n\n## Acceptance criteria\n\nClean machine up/health/seed/reset/down không console action;\nrestart preserves intended data; reset only dev resources.\n\n## Required tests / evidence\n\nCI compose smoke, service versions, cold setup transcript.\n\n## Security and migration notes\n\nNon-production credentials/private binds/no secret Git.\n\n## Out of scope\n\nBenchmark evidence và production orchestration.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-08\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nOne-command CPU-only dev stack, optional GPU profile.\n\n## Implementation plan\n\nPin PG/Qdrant/MinIO/OTel; init buckets/extensions; health/\nseed/reset; named volumes/private network; mock embedding; optional vLLM profile.\n\n## Files/modules\n\n`deploy/dev/compose.yml`, init/health/seed/reset scripts,\n`docs/runbooks/local-development.md`.\n\n## Dependencies / blocks\n\nF-02/07; blocks Phase 0 spike and server development.\n\n## Acceptance criteria\n\nClean machine up/health/seed/reset/down không console action;\nrestart preserves intended data; reset only dev resources.\n\n## Required tests / evidence\n\nCI compose smoke, service versions, cold setup transcript.\n\n## Security and migration notes\n\nNon-production credentials/private binds/no secret Git.\n\n## Out of scope\n\nBenchmark evidence và production orchestration.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-09",
       "title": "F-09 — Root task runner, quality tools và CI baseline",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-09\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nCùng command local/CI cho format/lint/test/build/dev/migrate.\n\n## Implementation plan\n\nAdd `just`/equivalent root tasks theo test conventions\nF-10; Rust/TS/SQL checks; dependency/license/security baseline cho cả `app/` và\n`web/`; changed-path optimization nhưng giữ full required gate; pin/bootstrap host\ntools và native Rust/Tauri prerequisites.\n\n## Files/modules\n\n`Justfile` hoặc task runner, CI workflows, tool configs,\n`docs/conventions/ci.md`.\n\n## Dependencies / blocks\n\nF-03…08 + F-10; blocks all implementation PRs.\n\n## Acceptance criteria\n\nDocumented commands identical local/CI; failures actionable;\ndesktop existing CI vẫn chạy.\n\n## Required tests / evidence\n\nClean checkout full task, cache miss/hit, intentional\nformat/lint/test failure fixtures.\n\n## Security and migration notes\n\nLeast-privilege CI, pinned actions/tools, no secret artifact.\n\n## Out of scope\n\nProduction release workflow.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-09\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nCùng command local/CI cho format/lint/test/build/dev/migrate.\n\n## Implementation plan\n\nAdd `just`/equivalent root tasks theo test conventions\nF-10; Rust/TS/SQL checks; dependency/license/security baseline cho cả `app/` và\n`web/`; changed-path optimization nhưng giữ full required gate; pin/bootstrap host\ntools và native Rust/Tauri prerequisites.\n\n## Files/modules\n\n`Justfile` hoặc task runner, CI workflows, tool configs,\n`docs/conventions/ci.md`.\n\n## Dependencies / blocks\n\nF-03…08 + F-10; blocks all implementation PRs.\n\n## Acceptance criteria\n\nDocumented commands identical local/CI; failures actionable;\ndesktop existing CI vẫn chạy.\n\n## Required tests / evidence\n\nClean checkout full task, cache miss/hit, intentional\nformat/lint/test failure fixtures.\n\n## Security and migration notes\n\nLeast-privilege CI, pinned actions/tools, no secret artifact.\n\n## Out of scope\n\nProduction release workflow.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-10",
       "title": "F-10 — Test pyramid, fixtures và golden-data conventions",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-10\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nChuẩn test/evidence dùng chung trước Phase 0/1A.\n\n## Implementation plan\n\nDefine unit/integration/contract/denial/E2E/benchmark/\nmigration/restore layers; fixture IDs/time/checksum/license; CI artifact retention.\n\n## Files/modules\n\n`docs/conventions/testing-fixtures.md`, `tests/fixtures/README.md`,\nsample fixture validators.\n\n## Dependencies / blocks\n\nF-03…08; blocks F-09, P0-02 và P1A-01.\n\n## Acceptance criteria\n\nMỗi layer có owner/location/command; fixture synthetic/\ndeterministic; large artifacts policy rõ.\n\n## Required tests / evidence\n\nFixture validator catches checksum, absolute path,\nsecret canary, duplicate ID.\n\n## Security and migration notes\n\nDe-identification/license required; migration evidence format.\n\n## Out of scope\n\nViết toàn bộ golden corpus.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-10\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nChuẩn test/evidence dùng chung trước Phase 0/1A.\n\n## Implementation plan\n\nDefine unit/integration/contract/denial/E2E/benchmark/\nmigration/restore layers; fixture IDs/time/checksum/license; CI artifact retention.\n\n## Files/modules\n\n`docs/conventions/testing-fixtures.md`, `tests/fixtures/README.md`,\nsample fixture validators.\n\n## Dependencies / blocks\n\nF-03…08; blocks F-09, P0-02 và P1A-01.\n\n## Acceptance criteria\n\nMỗi layer có owner/location/command; fixture synthetic/\ndeterministic; large artifacts policy rõ.\n\n## Required tests / evidence\n\nFixture validator catches checksum, absolute path,\nsecret canary, duplicate ID.\n\n## Security and migration notes\n\nDe-identification/license required; migration evidence format.\n\n## Out of scope\n\nViết toàn bộ golden corpus.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-11",
       "title": "F-11 — Observability/audit conventions",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-11\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nCorrelation/metrics/log/audit schema ổn định trước business services.\n\n## Implementation plan\n\nField names; request/job/version/signature propagation;\nmetric units/cardinality; log allowlist/redaction; audit envelope; sample middleware.\n\n## Files/modules\n\n`docs/conventions/observability-audit.md`,\n`crates/server/src/telemetry/`, sample tests/config.\n\n## Dependencies / blocks\n\nF-01/06/07/09; blocks 1B telemetry/business routes.\n\n## Acceptance criteria\n\nSynthetic in-memory request→job fixture chứng minh field\npropagation/redaction; không thêm durable queue, business route hoặc persisted\naudit trong Phase F; metric naming valid; seeded content/token/key absent.\n\n## Required tests / evidence\n\nTrace propagation, cardinality lint, redaction canaries,\naudit fixture.\n\n## Security and migration notes\n\nNo document/prompt/token/key/URL/PII; audit schema versioned.\n\n## Out of scope\n\nProduction dashboards/SIEM.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-11\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nCorrelation/metrics/log/audit schema ổn định trước business services.\n\n## Implementation plan\n\nField names; request/job/version/signature propagation;\nmetric units/cardinality; log allowlist/redaction; audit envelope; sample middleware.\n\n## Files/modules\n\n`docs/conventions/observability-audit.md`,\n`crates/server/src/telemetry/`, sample tests/config.\n\n## Dependencies / blocks\n\nF-01/06/07/09; blocks 1B telemetry/business routes.\n\n## Acceptance criteria\n\nSynthetic in-memory request→job fixture chứng minh field\npropagation/redaction; không thêm durable queue, business route hoặc persisted\naudit trong Phase F; metric naming valid; seeded content/token/key absent.\n\n## Required tests / evidence\n\nTrace propagation, cardinality lint, redaction canaries,\naudit fixture.\n\n## Security and migration notes\n\nNo document/prompt/token/key/URL/PII; audit schema versioned.\n\n## Out of scope\n\nProduction dashboards/SIEM.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "F",
       "id": "F-12",
       "title": "F-12 — Contributor workflow, setup docs và foundation gate",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase F — Engineering foundation",
       "labels": [
         "markhand-web",
         "docs",
-        "web-foundation",
-        "blocked"
+        "web-foundation"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-12\n- Status: `blocked`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nChứng minh contributor mới có thể setup và tuân conventions.\n\n## Implementation plan\n\nADR/RFC templates/index; ownership/CODEOWNERS; issue/PR\ntemplates; Definition of Ready/Done; security triggers; setup/troubleshooting.\n\n## Files/modules\n\n`docs/adr/{README,TEMPLATE}.md`, `.github/CODEOWNERS`,\n`.github/{ISSUE_TEMPLATE,PULL_REQUEST_TEMPLATE}.md`, contributor/runbook docs.\n\n## Dependencies / blocks\n\nF-01…F-11; blocks Phase 0/1A activation.\n\n## Acceptance criteria\n\nClean-checkout onboarding không tribal knowledge; ownership/\napproval rõ; Phase 0/1A không cần tạo convention riêng.\n\n## Required tests / evidence\n\nIndependent setup dry run gồm pinned Node/pnpm/Rust/\ntask-runner/Compose/native prerequisites; full local/CI task cho app+web; dev stack;\nsample contract/config/telemetry/fixture checks.\n\n## Security and migration notes\n\nSecurity review triggers và secret incident contact documented.\n\n## Out of scope\n\nBenchmark/business implementation/production runbooks.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase F — Engineering foundation\n- Phase code: F\n- Issue ID: F-12\n- Status: `done`\n- Catalog: `backlog/phase-f/issues/README.md`\n- Phase plan: `phase-f-engineering-foundation.md`\n\n## Objective\n\nChứng minh contributor mới có thể setup và tuân conventions.\n\n## Implementation plan\n\nADR/RFC templates/index; ownership/CODEOWNERS; issue/PR\ntemplates; Definition of Ready/Done; security triggers; setup/troubleshooting.\n\n## Files/modules\n\n`docs/adr/{README,TEMPLATE}.md`, `.github/CODEOWNERS`,\n`.github/{ISSUE_TEMPLATE,PULL_REQUEST_TEMPLATE}.md`, contributor/runbook docs.\n\n## Dependencies / blocks\n\nF-01…F-11; blocks Phase 0/1A activation.\n\n## Acceptance criteria\n\nClean-checkout onboarding không tribal knowledge; ownership/\napproval rõ; Phase 0/1A không cần tạo convention riêng.\n\n## Required tests / evidence\n\nIndependent setup dry run gồm pinned Node/pnpm/Rust/\ntask-runner/Compose/native prerequisites; full local/CI task cho app+web; dev stack;\nsample contract/config/telemetry/fixture checks.\n\n## Security and migration notes\n\nSecurity review triggers và secret incident contact documented.\n\n## Out of scope\n\nBenchmark/business implementation/production runbooks.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-f/issues/README.md"
     },
     {
       "phase": "0",
       "id": "P0-01",
       "title": "P0-01 — Khóa workload, hardware và gate registry",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p0",
-        "blocked"
+        "web-p0"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-01\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nThay giả định scale/SLA bằng workload envelope, hardware profile và\ngate schema được duyệt.\n\n## Implementation plan\n\nGhi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/\ndisk/GPU/network; tạo registry gồm metric, workload, threshold, command,\nenvironment, approver và failure disposition.\n\n## Files/modules\n\n`bench/markhand_web/{README.md,workload-profile.yaml,gates.yaml}`,\n`bench/markhand_web/environments/`, `docs/adr/README.md`.\n\n## Dependencies / blocks\n\nCần input sản phẩm/vận hành; block mọi benchmark.\n\n## Acceptance criteria\n\nNormal/peak/recovery/aggregate load đầy đủ; mọi open decision có\nowner; gate thiếu trường bị schema validator từ chối.\n\n## Required tests / evidence\n\nValidate YAML/schema; mọi report sau emit environment\nfingerprint.\n\n## Security and migration notes\n\nKhông ghi credential, hostname nội bộ hoặc tên khách hàng.\n\n## Out of scope\n\nChọn model và tuyên bố đạt SLA.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-01\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nThay giả định scale/SLA bằng workload envelope, hardware profile và\ngate schema được duyệt.\n\n## Implementation plan\n\nGhi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/\ndisk/GPU/network; tạo registry gồm metric, workload, threshold, command,\nenvironment, approver và failure disposition.\n\n## Files/modules\n\n`bench/markhand_web/{README.md,workload-profile.yaml,gates.yaml}`,\n`bench/markhand_web/environments/`, `docs/adr/README.md`.\n\n## Dependencies / blocks\n\nCần input sản phẩm/vận hành; block mọi benchmark.\n\n## Acceptance criteria\n\nNormal/peak/recovery/aggregate load đầy đủ; mọi open decision có\nowner; gate thiếu trường bị schema validator từ chối.\n\n## Required tests / evidence\n\nValidate YAML/schema; mọi report sau emit environment\nfingerprint.\n\n## Security and migration notes\n\nKhông ghi credential, hostname nội bộ hoặc tên khách hàng.\n\n## Out of scope\n\nChọn model và tuyên bố đạt SLA.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
       "phase": "0",
       "id": "P0-02",
       "title": "P0-02 — Golden corpus tiếng Việt và adversarial corpus",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p0",
-        "blocked"
+        "web-p0"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-02\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nDataset tái lập cho conversion, retrieval, citation và upload attack.\n\n## Implementation plan\n\nThêm mọi format; 200–500 query với expected document/source span/\nrelevance/no-answer; sample spoof/bomb/malformed/traversal/prompt injection; pin\nchecksum và provenance/license.\n\n## Files/modules\n\n`bench/markhand_web/golden/`, `adversarial/`,\n`manifest.lock.json`, `scripts/validate_corpus.py`.\n\n## Dependencies / blocks\n\nP0-01; fixture phải redistributable.\n\n## Acceptance criteria\n\nCoverage đủ category; source span ổn định; validator bắt checksum,\nduplicate ID, invalid span và missing license; mỗi attack có expected disposition.\n\n## Required tests / evidence\n\nClean-checkout reproducibility; dual review + adjudication.\n\n## Security and migration notes\n\nSynthetic/de-identified; bomb fixture chỉ chạy trong limits.\n\n## Out of scope\n\nCustomer data và expected chunk ID trước khi chốt chunking.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-02\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nDataset tái lập cho conversion, retrieval, citation và upload attack.\n\n## Implementation plan\n\nThêm mọi format; 200–500 query với expected document/source span/\nrelevance/no-answer; multi-document và immutable multi-version citations\n(`current`/`as_of`/`compare`/`history`); BA/design/dev cross-document conflict\nlifecycle (open/resolved/history) với cited claims; sample spoof/bomb/malformed/\ntraversal/prompt injection; pin checksum và provenance/license.\n\n## Files/modules\n\n`bench/markhand_web/golden/`, `adversarial/`,\n`manifest.lock.json`, `scripts/validate_corpus.py`.\n\n## Dependencies / blocks\n\nP0-01; fixture phải redistributable.\n\n## Acceptance criteria\n\nCoverage đủ category; source/version span ổn định; current fact không\ntrỏ version cũ; compare/history cite đủ old+new và delta; conflict current/history\ncite đủ hai phía + resolution versions; validator bắt checksum, duplicate ID, invalid\nspan/version/conflict lineage và missing license; mỗi attack có expected disposition.\n\n## Required tests / evidence\n\nClean-checkout reproducibility; dual review + adjudication.\n\n## Security and migration notes\n\nSynthetic/de-identified; bomb fixture chỉ chạy trong limits.\n\n## Out of scope\n\nCustomer data và expected chunk ID trước khi chốt chunking.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
       "phase": "0",
       "id": "P0-03",
       "title": "P0-03 — Mở rộng desktop baseline trên corpus Phase 0",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p0",
-        "blocked"
+        "web-p0"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-03\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nMở rộng parity baseline P1A-01 lên corpus/metrics Phase 0; P1A-01 là\nbaseline authoritative để việc extraction không phải đợi toàn bộ corpus.\n\n## Implementation plan\n\nTái dùng fixtures/harness P1A-01; chạy release conversion; snapshot top-k,\nscores, anchors, answer modes,\nwarnings, stats, provider fallback và signature mismatch.\n\n## Files/modules\n\n`bench/markhand_web/scripts/run_desktop_baseline.sh`,\n`baselines/desktop-v1/`, `reports/desktop-baseline.md`.\n\n## Dependencies / blocks\n\nP0-02 + P1A-01 authoritative parity harness; provider run\ncần config/model pin.\n\n## Acceptance criteria\n\nMọi format/query có raw machine-readable result; offline chạy không\ncần LLM; đủ dữ liệu so parity 1A.\n\n## Required tests / evidence\n\nCER/WER/time, Recall@5/10, MRR, nDCG, citation correctness;\ndeterministic rerun.\n\n## Security and migration notes\n\nRedact key/prompt/absolute path.\n\n## Out of scope\n\nSửa defect ranking/performance.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-03\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nMở rộng parity baseline P1A-01 lên corpus/metrics Phase 0; P1A-01 là\nbaseline authoritative để việc extraction không phải đợi toàn bộ corpus.\n\n## Implementation plan\n\nTái dùng fixtures/harness P1A-01; chạy release conversion; snapshot top-k,\nscores, anchors, answer modes,\nwarnings, stats, provider fallback và signature mismatch.\n\n## Files/modules\n\n`bench/markhand_web/scripts/run_desktop_baseline.sh`,\n`baselines/desktop-v1/`, `reports/desktop-baseline.md`.\n\n## Dependencies / blocks\n\nP0-02 + P1A-01 authoritative parity harness; provider run\ncần config/model pin.\n\n## Acceptance criteria\n\nMọi format/query có raw machine-readable result; offline chạy không\ncần LLM; đủ dữ liệu so parity 1A.\n\n## Required tests / evidence\n\nCER/WER/time, Recall@5/10, MRR, nDCG, citation correctness;\ndeterministic rerun.\n\n## Security and migration notes\n\nRedact key/prompt/absolute path.\n\n## Out of scope\n\nSửa defect ranking/performance.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
       "phase": "0",
       "id": "P0-04",
       "title": "P0-04 — Spike infrastructure tái lập",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p0",
-        "blocked"
+        "web-p0"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-04\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nStack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.\n\n## Implementation plan\n\nTái dùng compose/services/scripts base từ F-08; thêm benchmark-specific\noverride với isolated volumes/data, vLLM/GPU profile, workload sizing, image digest\nvà environment fingerprint. Không fork dev stack.\n\n## Files/modules\n\n`deploy/compose.spike.yml`, `deploy/spike/`, base `deploy/dev/`,\n`bench/markhand_web/scripts/spike-{health,reset}.sh`.\n\n## Dependencies / blocks\n\nPhase F/F-08 + P0-01; target hardware để đóng issue.\n\n## Acceptance criteria\n\nMột command boot từ empty volumes; không thao tác console; restart/\nreset đúng semantics.\n\n## Required tests / evidence\n\nClean-machine startup, service health, version/GPU/telemetry\nfingerprint.\n\n## Security and migration notes\n\nBind private/localhost; non-production secrets ngoài Git.\n\n## Out of scope\n\nHA/TLS/production orchestration.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-04\n- Status: `done`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nStack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.\n\n## Implementation plan\n\nTái dùng compose/services/scripts base từ F-08; thêm benchmark-specific\noverride với isolated volumes/data, vLLM/GPU profile, workload sizing, image digest\nvà environment fingerprint. Không fork dev stack.\n\n## Files/modules\n\n`deploy/compose.spike.yml`, `deploy/spike/`, base `deploy/dev/`,\n`bench/markhand_web/scripts/spike-{health,reset}.sh`.\n\n## Dependencies / blocks\n\nPhase F/F-08 + P0-01; target hardware để đóng issue.\n\n## Acceptance criteria\n\nMột command boot từ empty volumes; không thao tác console; restart/\nreset đúng semantics.\n\n## Required tests / evidence\n\nClean-machine startup, service health, version/GPU/telemetry\nfingerprint.\n\n## Security and migration notes\n\nBind private/localhost; non-production secrets ngoài Git.\n\n## Out of scope\n\nHA/TLS/production orchestration.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
       "phase": "0",
       "id": "P0-05",
       "title": "P0-05 — Đánh giá embedding tiếng Việt",
-      "status": "blocked",
+      "status": "ready",
       "milestone": "Phase 0 — Discovery & Gates",
       "labels": [
         "markhand-web",
         "docs",
         "web-p0",
-        "blocked"
+        "ready"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-05\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChọn model/revision/dimension/normalization theo quality + capacity.\n\n## Implementation plan\n\nSo `bge-m3` và multilingual-e5; pin tokenizer/batch/truncation; đo theo\ncategory, queue depth, cold/warm.\n\n## Files/modules\n\n`bench/markhand_web/embedding/`, `scripts/run_embedding_eval.py`,\n`reports/embedding-evaluation.md`, ADR model.\n\n## Dependencies / blocks\n\nCorpus, spike, GPU, approved model download.\n\n## Acceptance criteria\n\n≥2 model family cùng corpus/hardware; model chọn đạt gate và không\nkém best vượt margin đã duyệt; config immutable trong report.\n\n## Required tests / evidence\n\nRecall/MRR/nDCG, P50/P95/P99, vectors/s, VRAM, saturation,\nfailure rate; ≥3 runs.\n\n## Security and migration notes\n\nRestricted corpus không ra cloud; license trước bundle.\n\n## Out of scope\n\nAutoscaling và đổi desktop embedding.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-05\n- Status: `ready`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt provider/model/revision/dimension/normalization đủ để lập\ntrình Phase 0→1B; giữ đường cắt sang on-prem vLLM.\n\n## Implementation plan\n\nInterim: so GLM `embedding-3` (và `embedding-2` nếu cần) qua\nOpenAI-compatible API + `FILECONV_EMBEDDING_API_KEY`; pin tokenizer/batch/\ntruncation/dimensions/normalize; đo theo category và API latency. Target (sau):\nso `bge-m3` và multilingual-e5 trên Profile B GPU/vLLM (VRAM, saturation).\n\n## Files/modules\n\n`bench/markhand_web/embedding/`, `scripts/run_embedding_eval.py`,\n`reports/embedding-evaluation.md`, `docs/adr/0004-interim-glm-cloud-embedding.md`.\n\n## Dependencies / blocks\n\nCorpus + spike + GLM credential; không còn bắt buộc\ntarget GPU để đóng interim. Cutover vLLM vẫn cần Profile B + approved model download.\n\n## Required tests / evidence\n\nInterim: Recall/MRR/nDCG, API P50/P95/P99, vectors/s ước lượng,\nfailure rate; ≥2 runs. Target: thêm VRAM/saturation/cold-warm ≥3 runs.\n\n## Security and migration notes\n\nChỉ synthetic/de-identified corpus lên GLM; customer/\nrestricted data không ra cloud. Index signature phân biệt `glm-cloud` vs\n`vllm-local`; cắt sang vLLM = rebuild generation mới. License trước khi bundle\nlocal weights.\n\n## Out of scope\n\nAutoscaling; đổi desktop local-hash fallback mặc định.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
@@ -333,7 +317,7 @@
         "web-p0",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-06\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt chunking/hybrid parameters và canonical signature.\n\n## Implementation plan\n\nSo chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited\nsignature gồm model/revision/dim/normalize/chunk/text-normalization version.\n\n## Files/modules\n\n`bench/markhand_web/retrieval/`, `expected-chunks.tsv`,\n`reports/retrieval-evaluation.md`, ADR index signature.\n\n## Dependencies / blocks\n\nDesktop baseline + embedding result.\n\n## Acceptance criteria\n\nSo sánh identical candidates; source span vẫn resolve; signature\ntest vector ổn định; chunk ID có version.\n\n## Required tests / evidence\n\nRecall/MRR/nDCG/citation/no-answer + variance; cross-run signature.\n\n## Security and migration notes\n\nSignature đổi tạo index generation mới, không trộn vector.\n\n## Out of scope\n\nServer adapters/ACL.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 0 — Discovery & Gates\n- Phase code: 0\n- Issue ID: P0-06\n- Status: `blocked`\n- Catalog: `backlog/phase-0/issues/README.md`\n- Phase plan: `phase-0-discovery-and-gates.md`\n\n## Objective\n\nChốt chunking/hybrid parameters và canonical signature.\n\n## Implementation plan\n\nSo chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited\nsignature gồm model/revision/dim/normalize/chunk/text-normalization version;\nversion-aware identity và query modes current/as-of/compare/history; chuẩn hoá typed\nclaim key/value/unit/scope/effective interval và deterministic numeric/enum/date/\nMUST-vs-MUST-NOT conflict candidates.\n\n## Files/modules\n\n`bench/markhand_web/retrieval/`, `expected-chunks.tsv`,\n`reports/retrieval-evaluation.md`, ADR index signature.\n\n## Dependencies / blocks\n\nDesktop baseline + embedding result.\n\n## Acceptance criteria\n\nSo sánh identical candidates; source span vẫn resolve; signature\ntest vector ổn định; chunk ID có document-version; temporal/current accuracy và\nversion-citation precision/recall đạt gate; conflict precision/recall, current-warning\nvà resolved-history accuracy có cited evidence.\n\n## Required tests / evidence\n\nRecall/MRR/nDCG/citation/no-answer + variance; cross-run signature.\n\n## Security and migration notes\n\nSignature đổi tạo index generation mới, không trộn vector.\n\n## Out of scope\n\nServer adapters/ACL.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-0/issues/README.md"
     },
     {
@@ -400,150 +384,140 @@
       "phase": "1A",
       "id": "P1A-01",
       "title": "P1A-01 — Freeze desktop RAG và IPC contracts",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-01\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nBaseline parity trước khi move code.\n\n## Implementation plan\n\nInventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/\nincremental; canonical JSON cho 4 hybrid commands; offline + mock-provider flows.\n\n## Files/modules\n\n`app/src-tauri/src/{knowledge,vector_index}.rs`,\n`app/src/lib/{types,ipc}.ts`, backend/frontend contract fixtures.\n\n## Dependencies / blocks\n\nKhông.\n\n## Acceptance criteria\n\nCamelCase/answer modes/warnings/tolerance được khóa; undesirable\ncurrent behavior cũng được ghi rõ.\n\n## Security and migration notes\n\nSynthetic content/path, không credential.\n\n## Out of scope\n\nSửa ranking/concurrency.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-01\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nBaseline parity trước khi move code.\n\n## Implementation plan\n\nInventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/\nincremental; canonical JSON cho 4 hybrid commands; offline + mock-provider flows.\n\n## Files/modules\n\n`app/src-tauri/src/{knowledge,vector_index}.rs`,\n`app/src/lib/{types,ipc}.ts`, backend/frontend contract fixtures.\n\n## Dependencies / blocks\n\nKhông.\n\n## Acceptance criteria\n\nCamelCase/answer modes/warnings/tolerance được khóa; undesirable\ncurrent behavior cũng được ghi rõ.\n\n## Security and migration notes\n\nSynthetic content/path, không credential.\n\n## Out of scope\n\nSửa ranking/concurrency.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-02",
       "title": "P1A-02 — Populate knowledge skeleton và enforce dependency boundaries",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-02\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nHoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable\ncrate có typed errors và optional desktop features.\n\n## Implementation plan\n\nPopulate modules types/embedding/query/rank/citation/ask; features\n`desktop-sqlite`, `desktop-hnsw`; mở rộng CI deny-list theo boundary F-01. Không\ntạo lại workspace member hoặc convention.\n\n## Files/modules\n\n`Cargo.toml`, `crates/knowledge/**`, `.github/workflows/ci.yml`.\n\n## Dependencies / blocks\n\nBaseline committed.\n\n## Acceptance criteria\n\nBuild no-feature/all-feature; default tree không SQLite/HNSW; không\nTauri/axum/desktop; API không có DATA-root.\n\n## Security and migration notes\n\nMinimal dependency review.\n\n## Out of scope\n\nPG/Qdrant/server.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-02\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nHoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable\ncrate có typed errors và optional desktop features.\n\n## Implementation plan\n\nPopulate modules types/embedding/query/rank/citation/ask; features\n`desktop-sqlite`, `desktop-hnsw`; mở rộng CI deny-list theo boundary F-01. Không\ntạo lại workspace member hoặc convention.\n\n## Files/modules\n\n`Cargo.toml`, `crates/knowledge/**`, `.github/workflows/ci.yml`.\n\n## Dependencies / blocks\n\nBaseline committed.\n\n## Acceptance criteria\n\nBuild no-feature/all-feature; default tree không SQLite/HNSW; không\nTauri/axum/desktop; API không có DATA-root.\n\n## Security and migration notes\n\nMinimal dependency review.\n\n## Out of scope\n\nPG/Qdrant/server.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-03",
       "title": "P1A-03 — Shared DTO và serde contract",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-03\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nDi chuyển index/search/ask types mà không đổi JSON.\n\n## Implementation plan\n\nIndex request/result/stats, hit/anchor/grounded answer/metadata; serde\nfixtures; temporary desktop re-export.\n\n## Files/modules\n\n`crates/knowledge/src/types.rs`, serde fixtures/tests,\n`app/src/lib/types.ts`.\n\n## Dependencies / blocks\n\nScaffold + frozen JSON.\n\n## Acceptance criteria\n\nCanonical JSON equivalent; no desktop path/state type; TypeScript\nkhông cần behavior change.\n\n## Security and migration notes\n\nErrors không expose provider secrets.\n\n## Out of scope\n\nOpenAPI generation.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-03\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nDi chuyển index/search/ask types mà không đổi JSON.\n\n## Implementation plan\n\nIndex request/result/stats, hit/anchor/grounded answer/metadata; serde\nfixtures; temporary desktop re-export.\n\n## Files/modules\n\n`crates/knowledge/src/types.rs`, serde fixtures/tests,\n`app/src/lib/types.ts`.\n\n## Dependencies / blocks\n\nScaffold + frozen JSON.\n\n## Acceptance criteria\n\nCanonical JSON equivalent; no desktop path/state type; TypeScript\nkhông cần behavior change.\n\n## Security and migration notes\n\nErrors không expose provider secrets.\n\n## Out of scope\n\nOpenAPI generation.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-04",
       "title": "P1A-04 — Durable identities và index signatures",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-04\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nDeterministic server identities, desktop compatibility.\n\n## Implementation plan\n\nVersioned length-delimited encoding; BLAKE3/SHA-256 document/chunk/index;\nsignature model/revision/dim/normalize/chunk/text version; fixed vectors; legacy\n`DefaultHasher` compatibility.\n\n## Files/modules\n\n`crates/knowledge/src/{identity,embedding}.rs`, identity fixtures.\n\n## Dependencies / blocks\n\nShared metadata; production values tới từ Phase 0.\n\n## Acceptance criteria\n\nCross-platform stable; no concatenation ambiguity; server không\ndùng DefaultHasher; legacy index mở hoặc explicit rebuild.\n\n## Security and migration notes\n\nHash là identity, không phải access control; không mix version.\n\n## Out of scope\n\nChọn model.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-04\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nDeterministic server identities, desktop compatibility.\n\n## Implementation plan\n\nVersioned length-delimited encoding; BLAKE3/SHA-256 document/chunk/index;\nsignature model/revision/dim/normalize/chunk/text version; fixed vectors; legacy\n`DefaultHasher` compatibility.\n\n## Files/modules\n\n`crates/knowledge/src/{identity,embedding}.rs`, identity fixtures.\n\n## Dependencies / blocks\n\nShared metadata; production values tới từ Phase 0.\n\n## Acceptance criteria\n\nCross-platform stable; no concatenation ambiguity; server không\ndùng DefaultHasher; legacy index mở hoặc explicit rebuild.\n\n## Security and migration notes\n\nHash là identity, không phải access control; không mix version.\n\n## Out of scope\n\nChọn model.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-05",
       "title": "P1A-05 — Query, local vectors và embedding plan",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-05\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nTách pure query/embedding preparation.\n\n## Implementation plan\n\nNormalization, feature hash/vector norm, provider plan, dimension check,\nFTS escape; HTTP client vẫn ở core; giữ local fallback semantics.\n\n## Files/modules\n\n`crates/knowledge/src/{query,embedding}.rs`, tests; source desktop module.\n\n## Dependencies / blocks\n\nShared types.\n\n## Acceptance criteria\n\nOutput parity; query rỗng/punctuation safe; mismatch/fallback không\nđổi; không Tauri/settings/filesystem.\n\n## Security and migration notes\n\nCredential-bearing URL không vào signature/error.\n\n## Out of scope\n\nAsync client/new tokenizer.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-05\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nTách pure query/embedding preparation.\n\n## Implementation plan\n\nNormalization, feature hash/vector norm, provider plan, dimension check,\nFTS escape; HTTP client vẫn ở core; giữ local fallback semantics.\n\n## Files/modules\n\n`crates/knowledge/src/{query,embedding}.rs`, tests; source desktop module.\n\n## Dependencies / blocks\n\nShared types.\n\n## Acceptance criteria\n\nOutput parity; query rỗng/punctuation safe; mismatch/fallback không\nđổi; không Tauri/settings/filesystem.\n\n## Security and migration notes\n\nCredential-bearing URL không vào signature/error.\n\n## Out of scope\n\nAsync client/new tokenizer.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-06",
       "title": "P1A-06 — Rank, citation và grounded answer",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-06\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nReusable hybrid merge, anchors và grounding.\n\n## Implementation plan\n\nCosine/RRF/rerank/sort; snippet/page-slide-sheet anchor; extractive answer;\ncitation validator; separate LLM calls.\n\n## Files/modules\n\n`crates/knowledge/src/{rank,citation,ask}.rs`, golden tests.\n\n## Dependencies / blocks\n\nDTO/query.\n\n## Acceptance criteria\n\nTop-k/citation/answer parity trong tolerance; invented citation\nfallback; server caller không kéo desktop features.\n\n## Security and migration notes\n\nUntrusted passages không thành instruction.\n\n## Out of scope\n\nLearned reranker/streaming.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-06\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nReusable hybrid merge, anchors và grounding.\n\n## Implementation plan\n\nCosine/RRF/rerank/sort; snippet/page-slide-sheet anchor; extractive answer;\ncitation validator; separate LLM calls.\n\n## Files/modules\n\n`crates/knowledge/src/{rank,citation,ask}.rs`, golden tests.\n\n## Dependencies / blocks\n\nDTO/query.\n\n## Acceptance criteria\n\nTop-k/citation/answer parity trong tolerance; invented citation\nfallback; server caller không kéo desktop features.\n\n## Security and migration notes\n\nUntrusted passages không thành instruction.\n\n## Out of scope\n\nLearned reranker/streaming.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-07",
       "title": "P1A-07 — SQLite desktop storage feature",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-07\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nMove SQLite persistence, bỏ reverse dependency vào Tauri.\n\n## Implementation plan\n\nSchema/metadata/vector/incremental/FTS/hydration; API nhận DB path +\ncaller-supplied corpus; Tauri giữ path jail/load.\n\n## Files/modules\n\n`crates/knowledge/src/desktop/sqlite.rs`, legacy DB fixture,\n`app/src-tauri/src/{knowledge,intelligence}.rs`.\n\n## Dependencies / blocks\n\nShared APIs stable.\n\n## Acceptance criteria\n\nLegacy DB parity; incremental/scope/signature/fallback giữ nguyên;\nkhông gọi data_root/load_documents/resolve_within; optional rusqlite.\n\n## Security and migration notes\n\nCaller chịu path jail; schema additive hoặc explicit rebuild.\n\n## Out of scope\n\nPostgreSQL/perf redesign.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-07\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nMove SQLite persistence, bỏ reverse dependency vào Tauri.\n\n## Implementation plan\n\nSchema/metadata/vector/incremental/FTS/hydration; API nhận DB path +\ncaller-supplied corpus; Tauri giữ path jail/load.\n\n## Files/modules\n\n`crates/knowledge/src/desktop/sqlite.rs`, legacy DB fixture,\n`app/src-tauri/src/{knowledge,intelligence}.rs`.\n\n## Dependencies / blocks\n\nShared APIs stable.\n\n## Acceptance criteria\n\nLegacy DB parity; incremental/scope/signature/fallback giữ nguyên;\nkhông gọi data_root/load_documents/resolve_within; optional rusqlite.\n\n## Security and migration notes\n\nCaller chịu path jail; schema additive hoặc explicit rebuild.\n\n## Out of scope\n\nPostgreSQL/perf redesign.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-08",
       "title": "P1A-08 — Persistent HNSW desktop feature",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-08\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nMove optional ANN cache, SQLite vẫn authority.\n\n## Implementation plan\n\nManifest/partition/rebuild/search/clear; legacy signature compatibility;\ncorrupt/mismatch fallback exact cosine.\n\n## Files/modules\n\n`crates/knowledge/src/desktop/hnsw.rs`, legacy HNSW fixture,\nsource `vector_index.rs`.\n\n## Dependencies / blocks\n\nFeature scaffold + vectors/identity.\n\n## Acceptance criteria\n\nRound-trip parity; corruption không mất data; location/threshold\nkhông đổi; `hnsw_rs` optional.\n\n## Security and migration notes\n\nValidate manifest bounds/path.\n\n## Out of scope\n\nHNSW tuning/Qdrant.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-08\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nMove optional ANN cache, SQLite vẫn authority.\n\n## Implementation plan\n\nManifest/partition/rebuild/search/clear; legacy signature compatibility;\ncorrupt/mismatch fallback exact cosine.\n\n## Files/modules\n\n`crates/knowledge/src/desktop/hnsw.rs`, legacy HNSW fixture,\nsource `vector_index.rs`.\n\n## Dependencies / blocks\n\nFeature scaffold + vectors/identity.\n\n## Acceptance criteria\n\nRound-trip parity; corruption không mất data; location/threshold\nkhông đổi; `hnsw_rs` optional.\n\n## Security and migration notes\n\nValidate manifest bounds/path.\n\n## Out of scope\n\nHNSW tuning/Qdrant.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-09",
       "title": "P1A-09 — Thin Tauri adapters",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-09\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nDesktop commands delegate shared crate, IPC giữ nguyên.\n\n## Implementation plan\n\nTauri giữ state/settings/path load/spawn_blocking/error mapping; delegate\nrebuild/stats/search/ask; retain legacy commands; remove duplicate only sau parity.\n\n## Files/modules\n\n`app/src-tauri/src/{knowledge,vector_index,intelligence,lib}.rs`,\nCargo manifests.\n\n## Dependencies / blocks\n\nPure logic + stores.\n\n## Acceptance criteria\n\nCommand/payload/result unchanged; source adapter mỏng; legacy index\nbehavior documented; no duplicate algorithm.\n\n## Security and migration notes\n\nPath jail và secret-safe errors giữ ở desktop.\n\n## Out of scope\n\nUI/IPC rename/async redesign.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-09\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nDesktop commands delegate shared crate, IPC giữ nguyên.\n\n## Implementation plan\n\nTauri giữ state/settings/path load/spawn_blocking/error mapping; delegate\nrebuild/stats/search/ask; retain legacy commands; remove duplicate only sau parity.\n\n## Files/modules\n\n`app/src-tauri/src/{knowledge,vector_index,intelligence,lib}.rs`,\nCargo manifests.\n\n## Dependencies / blocks\n\nPure logic + stores.\n\n## Acceptance criteria\n\nCommand/payload/result unchanged; source adapter mỏng; legacy index\nbehavior documented; no duplicate algorithm.\n\n## Security and migration notes\n\nPath jail và secret-safe errors giữ ở desktop.\n\n## Out of scope\n\nUI/IPC rename/async redesign.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
       "phase": "1A",
       "id": "P1A-10",
       "title": "P1A-10 — CI parity và extraction gate",
-      "status": "blocked",
+      "status": "done",
       "milestone": "Phase 1A — Knowledge Extraction",
       "labels": [
         "markhand-web",
         "docs",
-        "web-p1a",
-        "blocked"
+        "web-p1a"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-10\n- Status: `blocked`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nChứng minh desktop equivalence và server usability.\n\n## Implementation plan\n\nFull feature/contract/golden matrix; no-feature server consumer test;\ndependency deny-list; docs compatibility; file perf/concurrency defects riêng.\n\n## Files/modules\n\nCI, `crates/knowledge/tests/`, desktop integration tests,\narchitecture/compatibility docs.\n\n## Dependencies / blocks\n\nAdapter cutover.\n\n## Acceptance criteria\n\nTất cả test xanh; golden trong tolerance; IPC unchanged; legacy\nindex path tested; server consumer không desktop deps.\n\n## Security and migration notes\n\nSynthetic fixtures; explicit index rebuild notice.\n\n## Out of scope\n\nServer/storage/auth.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1A — Knowledge Extraction\n- Phase code: 1A\n- Issue ID: P1A-10\n- Status: `done`\n- Catalog: `backlog/phase-1a/issues/README.md`\n- Phase plan: `phase-1a-knowledge-extraction.md`\n\n## Objective\n\nChứng minh desktop equivalence và server usability.\n\n## Implementation plan\n\nFull feature/contract/golden matrix; no-feature server consumer test;\ndependency deny-list; docs compatibility; file perf/concurrency defects riêng.\n\n## Files/modules\n\nCI, `crates/knowledge/tests/`, desktop integration tests,\narchitecture/compatibility docs.\n\n## Dependencies / blocks\n\nAdapter cutover.\n\n## Acceptance criteria\n\nTất cả test xanh; golden trong tolerance; IPC unchanged; legacy\nindex path tested; server consumer không desktop deps.\n\n## Security and migration notes\n\nSynthetic fixtures; explicit index rebuild notice.\n\n## Out of scope\n\nServer/storage/auth.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1a/issues/README.md"
     },
     {
@@ -588,7 +562,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-F03\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nMigrations org/auth/RBAC/groups/collections, versions/artifacts, chunks/\nFTS, jobs/outbox, quota/audit/index; seed POC riêng.\n\n## Files/modules\n\n`crates/server/migrations/000*.sql`, `src/db/models.rs`.\n\n## Dependencies / blocks\n\nF01 + G0-ARCH.\n\n## Required tests / evidence\n\nMọi business row có org; immutable versions; checks/indexes;\nfresh + supported-upgrade migration/schema introspection.\n\n## Security and migration notes\n\nFiles immutable sau merge; RLS theo ADR.\n\n## Out of scope\n\ncustom role UI.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-F03\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nMigrations org/auth/RBAC/groups/collections, immutable versions/artifacts,\natomic current-published pointer, parent/version/effective lineage, chunks/FTS,\nnormalized claims, conflict/evidence lifecycle, jobs/outbox, quota/audit/index;\nseed POC riêng.\n\n## Files/modules\n\n`crates/server/migrations/000*.sql`, `src/db/models.rs`.\n\n## Dependencies / blocks\n\nF01 + G0-ARCH.\n\n## Required tests / evidence\n\nMọi business row có org; immutable versions; exactly one\ncurrent effective published version/logical document; concurrent publish/as-of/\nlineage checks; fresh + supported-upgrade migration/schema introspection.\n\n## Security and migration notes\n\nFiles immutable sau merge; RLS theo ADR.\n\n## Out of scope\n\ncustom role UI.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -708,7 +682,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-I05\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nCheckpoint download/convert/stage/promote/DB/cleanup; immutable version;\nindex outbox; compensation/refund.\n\n## Files/modules\n\n`workers/convert.rs`, `services/{conversion,promotion,artifacts}.rs`,\n`db/document_versions.rs`.\n\n## Dependencies / blocks\n\nI01–I04/F06/G1A.\n\n## Required tests / evidence\n\nRetry tạo một visible version/job; trusted chỉ sau success;\nfault injection mọi cross-store step; immutable checks.\n\n## Security and migration notes\n\nNever overwrite original; ACL inherited.\n\n## Out of scope\n\nuser merge.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-I05\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nCheckpoint download/convert/stage/promote/DB/cleanup; immutable version;\npublish/current pointer riêng với draft/latest upload; index outbox;\ncompensation/refund.\n\n## Files/modules\n\n`workers/convert.rs`, `services/{conversion,promotion,artifacts}.rs`,\n`db/document_versions.rs`.\n\n## Dependencies / blocks\n\nI01–I04/F06/G1A.\n\n## Required tests / evidence\n\nRetry tạo một visible version/job; trusted chỉ sau success;\nfault injection mọi cross-store step; immutable checks.\n\n## Security and migration notes\n\nNever overwrite original; ACL inherited.\n\n## Out of scope\n\nuser merge.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -723,7 +697,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-I06\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nCore chunking + knowledge identity/signature; PG chunks/FTS; separate\nembedding batches; blocking client off async executor; deterministic Qdrant upsert.\n\n## Files/modules\n\n`workers/{index,embedding}.rs`, `services/{chunking,embedding,indexing}.rs`.\n\n## Dependencies / blocks\n\nI03/I05/F06 + G0-RET/G0-CAP/G1A.\n\n## Required tests / evidence\n\nApproved signature; ≤1 replay batch; no duplicate; mismatch\nbefore publish; golden/mock/backpressure/kill/consistency tests.\n\n## Security and migration notes\n\nLocal approved embedding only; new signature=new generation.\n**Out:** user-selected models.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-I06\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nCore chunking + knowledge identity/signature chứa `version_id`; PG\nchunks/FTS; separate embedding batches; Qdrant payload version/effective/current;\nextract typed claim key/value/unit/scope; incremental conflict candidate outbox;\nblocking client off async executor; deterministic upsert.\n\n## Files/modules\n\n`workers/{index,embedding}.rs`, `services/{chunking,embedding,indexing}.rs`.\n\n## Dependencies / blocks\n\nI03/I05/F06 + G0-RET/G0-CAP/G1A.\n\n## Required tests / evidence\n\nApproved signature; ≤1 replay batch; no duplicate; mismatch\nbefore publish; golden/mock/backpressure/kill/consistency tests.\n\n## Security and migration notes\n\nLocal approved embedding only; new signature=new generation.\n**Out:** user-selected models.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -753,7 +727,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R01\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nResolve scope; query embed; parallel Qdrant/FTS; knowledge merge/rerank;\nPG hydration/recheck state/ACL.\n\n## Files/modules\n\n`services/retrieval/{vector,fts,hydrate}.rs`, `db/search.rs`.\n\n## Dependencies / blocks\n\nF04/F06/I06 + G0-RET/G1A.\n\n## Required tests / evidence\n\nEmpty scope deny; stale vector no text; golden quality/\ncross-scope/deleted/one-leg outage/latency tests.\n\n## Security and migration notes\n\nText only after authorized hydration.\n\n## Out of scope\n\nnew reranker.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R01\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nResolve scope + current/as-of/compare/history mode; query embed; parallel\nQdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck\nstate/ACL/version; hydrate only conflict evidence whose both sides remain authorized.\n\n## Files/modules\n\n`services/retrieval/{vector,fts,hydrate}.rs`, `db/search.rs`.\n\n## Dependencies / blocks\n\nF04/F06/I06 + G0-RET/G1A.\n\n## Required tests / evidence\n\nEmpty scope deny; stale vector no text; current không trả\nsuperseded version; as-of resolve đúng effective version; compare/history cùng\nlineage; golden quality/cross-scope/deleted/one-leg outage/latency tests.\n\n## Security and migration notes\n\nText only after authorized hydration.\n\n## Out of scope\n\nnew reranker.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -768,7 +742,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R02\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nStable anchors/version; fresh auth per resolve; trusted Markdown fetch;\nshort single-purpose download capability.\n\n## Files/modules\n\n`services/{citation,preview,download}.rs`, document routes.\n\n## Dependencies / blocks\n\nF05/F06/R01.\n\n## Required tests / evidence\n\nSource/version/anchor valid; delete/suspend/removal deny;\nIDOR, expiry/replay, PDF/PPTX/XLSX anchor tests.\n\n## Security and migration notes\n\nNo raw bucket credential/key.\n\n## Out of scope\n\nrich rendering.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R02\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nStable anchor pin logical document/version number/version ID/content hash/\neffective time/current flag; fresh auth per resolve; trusted Markdown fetch; short\nsingle-purpose download capability.\n\n## Files/modules\n\n`services/{citation,preview,download}.rs`, document routes.\n\n## Dependencies / blocks\n\nF05/F06/R01.\n\n## Required tests / evidence\n\nQuote/hash/version/anchor valid; historical permission + fresh\nACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,\nPDF/PPTX/XLSX anchor tests.\n\n## Security and migration notes\n\nNo raw bucket credential/key.\n\n## Out of scope\n\nrich rendering.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -783,7 +757,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R03\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nPolicy-separated prompt, untrusted passage framing, GLM, citation\nvalidation, token stream, deterministic extractive fallback.\n\n## Files/modules\n\n`services/qa/{prompt,provider,grounding,stream}.rs`.\n\n## Dependencies / blocks\n\nR01/R02 + G0-RET/G0-SEC/G1A.\n\n## Required tests / evidence\n\nCitation subset only; injection không tool/scope change;\nprovider outage fallback; fabricated citation, timeout, delete-during-stream tests.\n\n## Security and migration notes\n\nAudit metadata only.\n\n## Out of scope\n\nagents/memory/web browse.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R03\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nPolicy-separated prompt, untrusted passage framing, GLM, version-aware\ncitation validation, current answer + history/change note, token stream,\ncurrent unresolved-conflict warnings + resolved-history note, token stream,\ndeterministic extractive fallback.\n\n## Files/modules\n\n`services/qa/{prompt,provider,grounding,stream}.rs`.\n\n## Dependencies / blocks\n\nR01/R02 + G0-RET/G0-SEC/G1A.\n\n## Required tests / evidence\n\nCitation subset only; current claim không cite version cũ;\ncompare cite old+new và đúng delta; injection không tool/scope change; provider\noutage fallback; BA/design numeric conflict warning và v2 resolution; false-positive/\naccepted-exception; fabricated/version-mix/conflict citation, timeout,\ndelete-during-stream tests.\n\n## Security and migration notes\n\nAudit metadata only.\n\n## Out of scope\n\nagents/memory/web browse.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -798,7 +772,7 @@
         "web-p1b",
         "blocked"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R04\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\n`/api/v1` collection POC; upload/list/get/preview/delete/reindex; job status;\npagination/idempotency/error schema.\n\n## Files/modules\n\n`routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`.\n\n## Dependencies / blocks\n\nF04/F05/I01/I03/I07/R02.\n\n## Required tests / evidence\n\nOrg context + permissions; stable errors; idempotent reindex;\nHTTP contract/pagination/IDOR/malformed tests.\n\n## Security and migration notes\n\nBounded body/page, no internals.\n\n## Out of scope\n\nadmin membership API.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R04\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\n`/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable\nversion list/get/diff/current publish; conflict list/detail/triage + evidence routes;\njob status; pagination/idempotency/error schema.\n\n## Files/modules\n\n`routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`.\n\n## Dependencies / blocks\n\nF04/F05/I01/I03/I07/R02.\n\n## Required tests / evidence\n\nOrg context + permissions; stable errors; idempotent reindex;\nHTTP contract/pagination/IDOR/malformed tests.\n\n## Security and migration notes\n\nBounded body/page, no internals.\n\n## Out of scope\n\nadmin membership API.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
@@ -1248,7 +1222,7 @@
         "web-p2",
         "backlog"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 2 — Web SPA MVP\n- Phase code: 2\n- Issue ID: P2-10\n- Status: `backlog`\n- Catalog: `backlog/phase-2/issues/README.md`\n- Phase plan: `phase-2-web-spa.md`\n\n## Dependencies / blocks\n\nP2-04…07 + backend ACL.\ncitation; sequence/fallback/no-answer/revoke/switch-mid-answer tests.\n\n## Required tests / evidence\n\n`aria-live`; current source\n\n## Security and migration notes\n\nSanitized Markdown/server route IDs.\n\n## Out of scope\n\nintelligence/conversation memory.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 2 — Web SPA MVP\n- Phase code: 2\n- Issue ID: P2-10\n- Status: `backlog`\n- Catalog: `backlog/phase-2/issues/README.md`\n- Phase plan: `phase-2-web-spa.md`\n\n## Dependencies / blocks\n\nP2-04…07 + backend ACL.\ncitation; multi-document citations; old/new amount example labels v1/v2 and delta;\nBA 10m vs design 15m warning then v2 resolved; as-of/history/deep-link/sequence/\nfallback/no-answer/revoke/switch-mid-answer tests.\n\n## Required tests / evidence\n\n`aria-live`; current source\n\n## Security and migration notes\n\nSanitized Markdown/server route IDs.\n\n## Out of scope\n\nintelligence/conversation memory.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-2/issues/README.md"
     },
     {

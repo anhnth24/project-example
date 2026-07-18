@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "environmentId": "glm-cloud-interim",
+  "role": "spike",
+  "status": "approved",
+  "approver": "product-owner",
+  "approvedAt": "2026-07-18T15:53:00Z",
+  "cpu": {
+    "vendor": "cloud-agent",
+    "model": "shared-runner-x86_64",
+    "cores": 8,
+    "threads": 8
+  },
+  "ramGb": 32,
+  "disk": {
+    "type": "ssd",
+    "capacityGb": 200,
+    "iopsNote": "cloud-runner disk; not Profile B IOPS evidence"
+  },
+  "gpu": {
+    "model": "glm-cloud-embedding-api",
+    "vramGb": 1,
+    "count": 1
+  },
+  "network": {
+    "bandwidthGbps": 1,
+    "latencyMsAssumed": 50
+  },
+  "os": {
+    "distro": "ubuntu-22.04",
+    "arch": "x86_64"
+  },
+  "fingerprintRequiredFields": [
+    "gitCommit",
+    "workloadProfileId",
+    "embeddingProvider",
+    "embeddingModel",
+    "embeddingDimensions",
+    "fixtureManifestSha256",
+    "hardware"
+  ],
+  "notes": "Interim embedding runtime for coding/POC/DEMO (ADR 0004). gpu.* fields are placeholders for the GLM cloud API, not local VRAM. Must not be used as Profile B / on-prem-reference evidence. Only synthetic or de-identified corpus may be sent to the provider."
+}

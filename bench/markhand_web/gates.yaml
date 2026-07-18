@@ -26,13 +26,14 @@
       "corpus": "golden/queries.tsv",
       "threshold": {"operator": ">=", "value": 0.85},
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "glm-cloud-interim",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-05", "P0-06"]
+      "blocksIssues": ["P0-05", "P0-06"],
+      "notes": "Interim GLM cloud path (ADR 0004). On-prem vLLM re-measurement is a cutover gate, not a Phase 1B blocker."
     },
     {
       "id": "G0-RET-BEST-MODEL-GAP",
@@ -42,13 +43,31 @@
       "corpus": "golden/queries.tsv",
       "threshold": {"operator": "<=", "value": 0.02},
       "command": "python3 bench/markhand_web/scripts/run_retrieval_eval.py",
-      "environmentId": "on-prem-reference",
+      "environmentId": "glm-cloud-interim",
       "owner": "retrieval-owner",
       "approver": "product-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1b",
       "evidence": null,
-      "blocksIssues": ["P0-05"]
+      "blocksIssues": ["P0-05"],
+      "notes": "Compare at least two GLM embedding configs (model or dimensions) on the same golden corpus."
+    },
+    {
+      "id": "G0-RET-VLLM-CUTOVER",
+      "externalGate": "G0-RET",
+      "metric": {"name": "onprem_embedding_cutover_ready", "unit": "ratio", "statistic": "min"},
+      "workload": "loads.normal",
+      "corpus": "golden/queries.tsv",
+      "threshold": {"operator": ">=", "value": 1.0},
+      "command": "python3 bench/markhand_web/scripts/run_embedding_eval.py --runtime vllm-local",
+      "environmentId": "on-prem-reference",
+      "owner": "retrieval-owner",
+      "approver": "infrastructure-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-4",
+      "evidence": null,
+      "blocksIssues": ["P0-10"],
+      "notes": "Deferred Profile B vLLM cutover. Must re-pin local model/dim/normalize and rebuild index generations before production."
     },
     {
       "id": "G0-RET-TEMPORAL-ACCURACY",

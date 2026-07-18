@@ -19,6 +19,9 @@ native, security/egress và migration strategy.
 | ADR | Status | Decision |
 |---|---|---|
 | [0001](0001-web-boundaries.md) | Accepted | Dependency boundaries của Markhand Web |
+| [0002](0002-version-aware-citations.md) | Proposed | Version-aware retrieval and citations |
+| [0003](0003-cross-document-conflict-lifecycle.md) | Proposed | Cross-document claim/conflict lifecycle |
+| [0004](0004-interim-glm-cloud-embedding.md) | Accepted | Interim GLM cloud embedding; target on-prem vLLM |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.

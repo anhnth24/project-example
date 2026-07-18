@@ -499,6 +499,18 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             "Embedding server nội bộ; phù hợp corpus lớn và GPU dùng chung.",
         ),
         preset(
+            "glm",
+            "GLM embeddings (Zhipu cloud)",
+            Provider::OpenAiCompatible,
+            Some("https://open.bigmodel.cn/api/paas/v4"),
+            "embedding-3",
+            &["embedding-3", "embedding-2"],
+            false,
+            true,
+            Some(1024),
+            "Interim cloud embedding cho POC/DEMO (ADR 0004); toàn bộ chunk được gửi khi build index. Target production vẫn là vLLM self-host.",
+        ),
+        preset(
             "openai",
             "OpenAI embeddings",
             Provider::OpenAi,
@@ -1044,6 +1056,19 @@ mod tests {
         assert!(presets.iter().any(|preset| preset.id == "anthropic"));
         assert!(presets.iter().any(|preset| preset.id == "gemini"));
         assert!(presets.iter().any(|preset| preset.id == "openrouter"));
+    }
+
+    #[test]
+    fn embedding_presets_include_glm_interim_and_vllm_target() {
+        let presets = embedding_provider_presets();
+        let glm = presets
+            .iter()
+            .find(|preset| preset.id == "glm")
+            .expect("glm embedding preset");
+        assert_eq!(glm.default_model, "embedding-3");
+        assert!(glm.requires_api_key);
+        assert!(!glm.local);
+        assert!(presets.iter().any(|preset| preset.id == "vllm" && preset.local));
     }
 
     #[test]

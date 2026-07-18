@@ -46,12 +46,21 @@ không phụ thuộc thao tác tay.
 
 ## P0.3 — Embedding và retrieval evaluation
 
-So sánh ít nhất `bge-m3` và một model multilingual-e5 phù hợp VRAM:
+Hai tầng runtime (ADR 0004):
+
+1. **Interim (dev / POC / DEMO / Phase 1B):** GLM cloud embeddings
+   (`embedding-3` / `embedding-2`) qua OpenAI-compatible API và
+   `FILECONV_EMBEDDING_API_KEY`. Đủ để đóng P0-05 quality gate sớm và mở coding.
+2. **Target (on-prem cutover):** vLLM trên Profile B GPU; so ít nhất `bge-m3` và
+   một model multilingual-e5 phù hợp VRAM. Bắt buộc trước production scale, không
+   chặn Phase 1B.
+
+Đo trên golden corpus:
 
 - Recall@5/10, MRR, nDCG;
 - chất lượng theo từng loại tài liệu và truy vấn;
 - dimension, normalization, batch size, token truncation;
-- throughput, VRAM, queue saturation;
+- interim: API latency/throughput/failure rate; target: VRAM, queue saturation;
 - hybrid PG FTS + vector so với từng leg riêng.
 - current-version accuracy, temporal/as-of accuracy, change accuracy và
   version-citation precision/recall.
@@ -60,14 +69,15 @@ So sánh ít nhất `bge-m3` và một model multilingual-e5 phù hợp VRAM:
 
 Kết quả chốt:
 
-- model + revision;
+- runtime path (`glm-cloud-interim` hoặc `vllm-local`) + model + revision;
 - dimension;
 - normalization;
 - chunking version/size;
-- index signature canonical;
+- index signature canonical (không trộn generation giữa hai runtime);
 - hybrid weights/rerank baseline.
 
-Không chọn model chỉ theo latency. Chất lượng tiếng Việt là ưu tiên.
+Không chọn model chỉ theo latency. Chất lượng tiếng Việt là ưu tiên. Chỉ
+synthetic/de-identified corpus được gửi lên GLM trong giai đoạn interim.
 
 ## P0.4 — Qdrant/PG scale spike
 

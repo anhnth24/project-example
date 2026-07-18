@@ -53,3 +53,9 @@ measurement passed. Raw evidence must identify actual hardware and fixture check
 The implementation runner observed 8 CPU, approximately 47 GB RAM, approximately
 196 GB free disk and no visible GPU. It may run validators and reduced smoke tests,
 but it cannot produce target-hardware, GPU or 20M-vector acceptance evidence.
+
+## Embedding interim exception (2026-07-18)
+
+Product approved ADR 0004: P0-05 / early G0-RET quality evidence may use GLM cloud
+embeddings on `glm-cloud-interim` for coding/POC/DEMO. Profile B GPU + vLLM remains
+required for production cutover (`G0-RET-VLLM-CUTOVER`), not for Phase 1B unblock.
