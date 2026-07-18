@@ -10,6 +10,8 @@ pub enum KnowledgeError {
     EmbeddingDimensionMismatch { expected: usize, actual: usize },
     #[error("knowledge adapter is unavailable: {0}")]
     AdapterUnavailable(&'static str),
+    #[error("knowledge adapter failed: {0}")]
+    AdapterFailure(String),
 }
 
 pub type Result<T> = std::result::Result<T, KnowledgeError>;

@@ -1,6 +1,7 @@
-//! Optional desktop adapter dependency markers.
-//!
-//! Concrete SQLite/HNSW implementation moves here in later extraction issues.
+//! Optional local desktop storage and ANN adapters.
+
+#[cfg(feature = "desktop-hnsw")]
+pub mod hnsw;
 
 #[cfg(feature = "desktop-sqlite")]
 pub fn sqlite_adapter_enabled() -> bool {
