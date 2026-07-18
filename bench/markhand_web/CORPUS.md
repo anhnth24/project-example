@@ -22,5 +22,8 @@ The generator requires the exact package and DejaVu font fingerprints in
 `review-sample.tsv` SHA-256; changing the sample invalidates approval.
 
 Chunk catalog for `heading-chunks-2000-v1` is pinned in
-`retrieval/expected-chunks.tsv` (P0-06). Query citation `chunkId` fields remain
-null until a follow-up wires spans → chunk IDs into the golden TSV.
+`retrieval/expected-chunks.tsv` (P0-06). Query and conflict citation `chunkId`
+fields are filled from that catalog via
+`bench/markhand_web/scripts/fill_citation_chunk_ids.py` (mechanical span→chunk
+annotation; adjudication keeps `sampleSemanticSha256` for the chunkId-null
+packet).

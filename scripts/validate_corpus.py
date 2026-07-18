@@ -100,9 +100,11 @@ def validate_chunk_id(
     catalog: dict[str, dict],
 ) -> list[str]:
     if chunk_id is None:
+        if catalog:
+            return [f"{label}: chunkId is required once expected-chunks catalog exists"]
         return []
     if not (isinstance(chunk_id, str) and SHA256.fullmatch(chunk_id)):
-        return [f"{label}: chunkId must be null or a 64-hex canonical digest"]
+        return [f"{label}: chunkId must be a 64-hex canonical digest"]
     if not catalog:
         return [f"{label}: chunkId set but retrieval/expected-chunks.tsv is missing"]
     row = catalog.get(chunk_id)
@@ -1030,12 +1032,63 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
         or not set(sample_ids).issubset(query_ids)
     ):
         errors.append("adjudication requires at least 50 unique known sample queries")
-    if (
-        review_sample_path.is_file()
-        and adjudication.get("sampleSha256")
-        != hashlib.sha256(review_sample_path.read_bytes()).hexdigest()
-    ):
-        errors.append("adjudication sampleSha256 does not match review packet")
+    if review_sample_path.is_file() and adjudication.get("sampleSha256"):
+        actual_sample_sha = hashlib.sha256(review_sample_path.read_bytes()).hexdigest()
+        if adjudication.get("sampleSha256") != actual_sample_sha:
+            errors.append("adjudication sampleSha256 does not match review packet")
+        semantic_pin = adjudication.get("sampleSemanticSha256")
+        if isinstance(semantic_pin, str) and semantic_pin:
+            # Mechanical chunkId annotation may change sampleSha256 while preserving
+            # the chunkId-null semantic packet approved by reviewers.
+            try:
+                with review_sample_path.open(encoding="utf-8", newline="") as source:
+                    review_for_semantic = list(csv.DictReader(source, delimiter="\t"))
+                fieldnames = list(review_for_semantic[0].keys()) if review_for_semantic else []
+                lines = ["\t".join(fieldnames)]
+                for row in review_for_semantic:
+                    values = []
+                    for name in fieldnames:
+                        value = row.get(name, "")
+                        if name in {
+                            "citations",
+                            "version_context",
+                            "conflict_context",
+                            "judgments",
+                        }:
+                            parsed = json.loads(value) if value else (
+                                [] if name == "citations" else {}
+                            )
+
+                            def _null_chunk_ids(node: object) -> object:
+                                if isinstance(node, dict):
+                                    return {
+                                        key: (
+                                            None
+                                            if key == "chunkId"
+                                            else _null_chunk_ids(child)
+                                        )
+                                        for key, child in node.items()
+                                    }
+                                if isinstance(node, list):
+                                    return [_null_chunk_ids(child) for child in node]
+                                return node
+
+                            value = json.dumps(
+                                _null_chunk_ids(parsed),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            )
+                        values.append(value)
+                    lines.append("\t".join(values))
+                semantic_bytes = ("\n".join(lines) + "\n").encode("utf-8")
+                if hashlib.sha256(semantic_bytes).hexdigest() != semantic_pin:
+                    errors.append(
+                        "adjudication sampleSemanticSha256 does not match "
+                        "chunkId-null review packet"
+                    )
+            except (OSError, json.JSONDecodeError, csv.Error) as error:
+                errors.append(f"adjudication semantic packet unreadable: {error}")
     reviews = adjudication.get("reviews", [])
     approved_roles = {
         review.get("role")
@@ -1328,7 +1381,7 @@ class CorpusValidatorTests(unittest.TestCase):
             self.assertTrue(any("citation hash mismatch" in error for error in errors))
             self.assertTrue(
                 any(
-                    "chunkId must be null or a 64-hex" in error
+                    "chunkId must be a 64-hex" in error
                     or "chunkId not present in expected-chunks" in error
                     for error in errors
                 )
