@@ -41,7 +41,7 @@ services:
       markhand.environment: benchmark-spike
 
   vllm:
-    image: vllm/vllm-openai:v0.12.0@sha256:5043179796ab4088c5551d28db820f5d4959b51ef472793e7f7c0a4ac4f6e311
+    image: vllm/vllm-openai:v0.12.0@sha256:f2309d913a07da49ea20b2a694703f4cfcb5ad8e7437ec0f26145479ac01e002
     ports: !override
       - "127.0.0.1:${MARKHAND_SPIKE_VLLM_PORT:-18000}:8000"
     volumes:

@@ -89,6 +89,10 @@ def expected_target_match(hardware: dict, profiles: list[str]) -> bool:
         >= target["disk"]["capacityGb"]
         and hardware.get("disk", {}).get("iopsVerified") is True
         and hardware.get("disk", {}).get("iopsMeasured", 0) >= 100_000
+        and SHA256.fullmatch(
+            str(hardware.get("disk", {}).get("iopsEvidenceSha256", ""))
+        )
+        is not None
         and hardware.get("gpu", {}).get("count", 0) >= target["gpu"]["count"]
         and hardware.get("gpu", {}).get("vramGb", 0) >= target["gpu"]["vramGb"]
         and hardware.get("network", {}).get("bandwidthGbps", 0)
@@ -102,9 +106,12 @@ def validate_config(env_file: Path | None = None) -> list[str]:
     env_file = env_file or default_env_file()
     errors = []
     override = (ROOT / "deploy/compose.spike.yml").read_text(encoding="utf-8")
-    image_lock = json.loads(
+    image_lock_payload = json.loads(
         (ROOT / "deploy/spike/images.lock.json").read_text(encoding="utf-8")
-    ).get("images", {})
+    )
+    image_lock = image_lock_payload.get("images", {})
+    if image_lock_payload.get("platform") != "linux/amd64":
+        errors.append("spike image lock platform must be linux/amd64")
     for service in (*RUNTIME_SERVICES, "vllm"):
         if not re.search(rf"^  {re.escape(service)}:\s*$", override, re.MULTILINE):
             errors.append(f"spike compose missing service override: {service}")
@@ -177,6 +184,9 @@ def validate_report(
     if gpu_enabled:
         expected_runtime.add("vllm")
         expected_images.add("vllm")
+    image_lock = json.loads(
+        (ROOT / "deploy/spike/images.lock.json").read_text(encoding="utf-8")
+    )["images"]
     fingerprint = payload.get("environment", {}).get("fingerprint", {})
     hardware = fingerprint.get("hardware", {})
     report_commit = str(payload.get("git", {}).get("commit", ""))
@@ -266,18 +276,78 @@ def validate_report(
                     text=True,
                     check=False,
                 )
-                if inspected.returncode != 0 or inspected.stdout.strip() != encoded:
+                if (
+                    inspected.returncode == 0
+                    and inspected.stdout.strip() != encoded
+                ):
                     errors.append(
                         f"spike report image digest differs from local image: {service}"
                     )
     if set(fingerprint.get("serviceVersions", {})) != expected_images:
         errors.append("spike report service versions are incomplete")
+    else:
+        for service in expected_images:
+            if fingerprint["serviceVersions"].get(service) != image_lock.get(service):
+                errors.append(
+                    f"spike report service version differs from image lock: {service}"
+                )
+            expected_digest = str(image_lock.get(service, "")).rsplit("@", 1)[-1]
+            try:
+                reported_digests = json.loads(
+                    fingerprint.get("imageDigests", {}).get(service, "[]")
+                )
+            except json.JSONDecodeError:
+                reported_digests = []
+            if not any(
+                digest.endswith(f"@{expected_digest}")
+                for digest in reported_digests
+            ):
+                errors.append(
+                    f"spike report digest differs from image lock: {service}"
+                )
     if (
-        not isinstance(hardware.get("cpu", {}).get("threads"), int)
+        not isinstance(hardware.get("cpu", {}).get("vendor"), str)
+        or not hardware["cpu"]["vendor"]
+        or not isinstance(hardware.get("cpu", {}).get("model"), str)
+        or not hardware["cpu"]["model"]
+        or not isinstance(hardware.get("cpu", {}).get("cores"), int)
+        or hardware["cpu"]["cores"] < 1
+        or not isinstance(hardware.get("cpu", {}).get("threads"), int)
         or hardware["cpu"]["threads"] < 1
+        or not isinstance(
+            hardware.get("cpu", {}).get("physicalCoresMeasured"), bool
+        )
         or not isinstance(hardware.get("ramGb"), (int, float))
         or hardware["ramGb"] <= 0
+        or not isinstance(hardware.get("disk", {}).get("type"), str)
+        or not hardware["disk"]["type"]
+        or not isinstance(
+            hardware.get("disk", {}).get("capacityGb"), (int, float)
+        )
+        or hardware["disk"]["capacityGb"] <= 0
         or not isinstance(hardware.get("gpu", {}).get("count"), int)
+        or hardware["gpu"]["count"] < 0
+        or not isinstance(hardware.get("gpu", {}).get("model"), str)
+        or not isinstance(hardware.get("gpu", {}).get("vramGb"), (int, float))
+        or hardware["gpu"]["vramGb"] < 0
+        or not isinstance(
+            hardware.get("network", {}).get("bandwidthGbps"), (int, float)
+        )
+        or hardware["network"]["bandwidthGbps"] <= 0
+        or not isinstance(
+            hardware.get("network", {}).get("latencyMsAssumed"), (int, float)
+        )
+        or hardware["network"]["latencyMsAssumed"] < 0
+        or not isinstance(hardware.get("os", {}).get("distro"), str)
+        or not hardware["os"]["distro"]
+        or not isinstance(hardware.get("os", {}).get("arch"), str)
+        or not hardware["os"]["arch"]
+        or not SHA256.fullmatch(
+            str(hardware.get("disk", {}).get("storagePathSha256", ""))
+        )
+        or not isinstance(hardware.get("disk", {}).get("iopsMeasured"), int)
+        or not isinstance(hardware.get("disk", {}).get("iopsVerified"), bool)
+        or not isinstance(hardware.get("disk", {}).get("backingSource"), str)
     ):
         errors.append("spike report hardware is incomplete")
     result = payload.get("result", {})

@@ -45,7 +45,7 @@ check-dependencies:
 	python3 scripts/check-dependency-policy.py
 	python3 scripts/check-dependency-policy.py --self-test
 
-check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies
+check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-spike
 
 check-rust:
 	bash scripts/check-rust-quality.sh

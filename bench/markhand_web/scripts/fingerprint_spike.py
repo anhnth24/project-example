@@ -34,13 +34,13 @@ def load_env(path: Path) -> dict[str, str]:
     return values
 
 
-def hardware() -> dict:
+def hardware(storage_path: Path) -> dict:
     cpuinfo = Path("/proc/cpuinfo").read_text(errors="replace")
     vendor = re.search(r"vendor_id\s*:\s*(.+)", cpuinfo)
     model = re.search(r"model name\s*:\s*(.+)", cpuinfo)
     meminfo = Path("/proc/meminfo").read_text()
     memory = re.search(r"MemTotal:\s*(\d+)", meminfo)
-    disk = shutil.disk_usage(ROOT)
+    disk = shutil.disk_usage(storage_path)
     gpu_name = "none"
     gpu_vram = 0.0
     gpu_count = 0
@@ -82,13 +82,26 @@ def hardware() -> dict:
             if "=" in line:
                 key, value = line.split("=", 1)
                 os_release[key] = value.strip('"')
-    disk_type = "local-or-overlay"
-    if any(Path("/sys/block").glob("nvme*")):
-        disk_type = "nvme"
-    try:
-        measured_iops = int(os.environ.get("MARKHAND_SPIKE_IOPS_MEASURED", "0"))
-    except ValueError:
-        measured_iops = 0
+    mount = subprocess.run(
+        ["findmnt", "-T", str(storage_path), "-n", "-o", "SOURCE,FSTYPE"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    backing_source, _, filesystem = mount.partition(" ")
+    disk_type = "nvme" if "nvme" in backing_source.lower() else filesystem or "unknown"
+    storage_hash = hashlib.sha256(str(storage_path.resolve()).encode()).hexdigest()
+    measured_iops = 0
+    iops_evidence_sha256 = None
+    iops_report_path = os.environ.get("MARKHAND_SPIKE_IOPS_REPORT")
+    if iops_report_path and Path(iops_report_path).is_file():
+        report_path = Path(iops_report_path)
+        report = json.loads(report_path.read_text())
+        if report.get("storagePathSha256") == storage_hash:
+            measured_iops = int(report.get("randomReadIops", 0))
+            iops_evidence_sha256 = hashlib.sha256(
+                report_path.read_bytes()
+            ).hexdigest()
     return {
         "cpu": {
             "vendor": vendor.group(1).strip() if vendor else "unknown",
@@ -104,6 +117,9 @@ def hardware() -> dict:
             "iopsNote": f"measured random-read IOPS: {measured_iops}",
             "iopsMeasured": measured_iops,
             "iopsVerified": measured_iops >= 100_000,
+            "iopsEvidenceSha256": iops_evidence_sha256,
+            "storagePathSha256": storage_hash,
+            "backingSource": Path(backing_source).name or filesystem or "unknown",
         },
         "gpu": {"model": gpu_name, "vramGb": gpu_vram, "count": gpu_count},
         "network": {
@@ -147,7 +163,11 @@ def compose(
     return command
 
 
-def meets_reference_target(actual: dict) -> bool:
+def meets_reference_target(
+    actual: dict,
+    gpu_enabled: bool,
+    nested_enabled: bool,
+) -> bool:
     target = json.loads(
         (
             ROOT
@@ -155,12 +175,16 @@ def meets_reference_target(actual: dict) -> bool:
         ).read_text()
     )
     return (
-        actual["cpu"]["cores"] >= target["cpu"]["cores"]
+        gpu_enabled
+        and not nested_enabled
+        and actual["cpu"]["physicalCoresMeasured"]
+        and actual["cpu"]["cores"] >= target["cpu"]["cores"]
         and actual["cpu"]["threads"] >= target["cpu"]["threads"]
         and actual["ramGb"] >= target["ramGb"]
         and actual["disk"]["capacityGb"] >= target["disk"]["capacityGb"]
         and actual["disk"]["type"] == target["disk"]["type"]
         and actual["disk"]["iopsVerified"]
+        and isinstance(actual["disk"]["iopsEvidenceSha256"], str)
         and actual["gpu"]["count"] >= target["gpu"]["count"]
         and actual["gpu"]["vramGb"] >= target["gpu"]["vramGb"]
         and actual["network"]["bandwidthGbps"]
@@ -217,7 +241,10 @@ def fingerprint(env_file: Path) -> dict:
     fixture_hash = hashlib.sha256(fixture_manifest.read_bytes()).hexdigest()
     git_commit = run("git", "rev-parse", "HEAD")
     git_dirty = bool(run("git", "status", "--porcelain", "--untracked-files=no"))
-    actual_hardware = hardware()
+    docker_root = Path(
+        run("docker", "info", "--format", "{{.DockerRootDir}}")
+    )
+    actual_hardware = hardware(docker_root)
     return {
         "version": 1,
         "reportId": "p0-04-spike-smoke",
@@ -253,7 +280,11 @@ def fingerprint(env_file: Path) -> dict:
                 else []
             ),
         ],
-        "targetMatch": meets_reference_target(actual_hardware),
+        "targetMatch": meets_reference_target(
+            actual_hardware,
+            gpu_enabled,
+            nested_enabled,
+        ),
         "notes": "IOPS must be independently verified; target Profile B gates require targetMatch=true.",
     }
 

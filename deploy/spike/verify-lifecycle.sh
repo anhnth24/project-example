@@ -20,6 +20,9 @@ curl --fail --silent --show-error \
   -X PUT "http://127.0.0.1:${MARKHAND_SPIKE_QDRANT_HTTP_PORT}/collections/markhand_spike_smoke/points?wait=true" \
   -H "content-type: application/json" \
   --data "$payload" >/dev/null
+printf 'persist' |
+  "${COMPOSE[@]}" run --rm --no-deps -T minio-init \
+    pipe local/markhand-documents/lifecycle-sentinel >/dev/null
 
 "$SPIKE_DIR/down.sh"
 "$SPIKE_DIR/up.sh"
@@ -35,6 +38,8 @@ persisted="$("${COMPOSE[@]}" exec -T postgres psql \
 curl --fail --silent --show-error \
   "http://127.0.0.1:${MARKHAND_SPIKE_QDRANT_HTTP_PORT}/collections/markhand_spike_smoke/points/4242" \
   >/dev/null
+"${COMPOSE[@]}" run --rm --no-deps -T minio-init \
+  stat local/markhand-documents/lifecycle-sentinel >/dev/null
 
 "$SPIKE_DIR/reset.sh"
 
@@ -50,6 +55,11 @@ if curl --fail --silent \
   "http://127.0.0.1:${MARKHAND_SPIKE_QDRANT_HTTP_PORT}/collections/markhand_spike_smoke/points/4242" \
   >/dev/null; then
   echo "Qdrant sentinel survived volume reset" >&2
+  exit 1
+fi
+if "${COMPOSE[@]}" run --rm --no-deps -T minio-init \
+  stat local/markhand-documents/lifecycle-sentinel >/dev/null 2>&1; then
+  echo "MinIO sentinel survived volume reset" >&2
   exit 1
 fi
 
