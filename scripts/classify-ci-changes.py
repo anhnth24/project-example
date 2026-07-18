@@ -14,6 +14,7 @@ SHARED = (
     ".github/workflows/ci.yml",
     "Makefile",
     "scripts/classify-ci-changes.py",
+    "scripts/check-foundation-gate.sh",
 )
 GROUPS = {
     "rust": SHARED
@@ -23,6 +24,7 @@ GROUPS = {
         "**/Cargo.toml",
         "crates/**",
         "app/src-tauri/**",
+        "rust-toolchain.toml",
         "rustfmt.toml",
         "clippy.toml",
         "scripts/check-rust*",
@@ -33,6 +35,7 @@ GROUPS = {
     + (
         "Cargo.lock",
         "Cargo.toml",
+        "crates/server/Cargo.toml",
         "crates/knowledge/**",
         "crates/server/tests/knowledge_consumer.rs",
         "app/src-tauri/src/knowledge.rs",
@@ -53,6 +56,7 @@ GROUPS = {
         "app/tsconfig.json",
         "app/vite.config.ts",
         "app/eslint.config.js",
+        "app/index.html",
         "app/src/**",
     ),
     "web": SHARED
@@ -68,6 +72,28 @@ GROUPS = {
         "deploy/dev/**",
         "deploy/scripts/**",
         "docs/runbooks/local-development.md",
+    ),
+    "bundle": SHARED
+    + (
+        ".github/workflows/release-desktop.yml",
+        "package.json",
+        "pnpm-lock.yaml",
+        "app/package.json",
+        "app/index.html",
+        "app/src-tauri/Cargo.toml",
+        "app/src-tauri/build.rs",
+        "app/assets/folyvo-logo-icon/**",
+        "app/src-tauri/icons/**",
+        "app/src-tauri/tauri*.json",
+        "app/src-tauri/native-runtime/**",
+        "scripts/prepare-desktop-runtime.py",
+        "scripts/validate-desktop-bundle.sh",
+    ),
+    "toolchain": SHARED
+    + (
+        "rust-toolchain.toml",
+        "scripts/check-web-toolchain.sh",
+        "docs/runbooks/contributor-setup.md",
     ),
 }
 
@@ -89,7 +115,7 @@ def changed_paths(base: str, head: str) -> list[str]:
             ["git", "rev-parse", f"{head}^"], text=True
         ).strip()
     return subprocess.check_output(
-        ["git", "diff", "--name-only", base, head], text=True
+        ["git", "diff", "--name-only", "--no-renames", base, head], text=True
     ).splitlines()
 
 
@@ -103,6 +129,8 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(result["frontend"])
         self.assertFalse(result["web"])
         self.assertFalse(result["dev_stack"])
+        self.assertFalse(result["bundle"])
+        self.assertFalse(result["toolchain"])
 
     def test_deploy_change_activates_only_dev_stack(self) -> None:
         result = classify(["deploy/dev/compose.yml"])
@@ -119,6 +147,29 @@ class ClassifierTests(unittest.TestCase):
         result = classify(["pnpm-lock.yaml"])
         self.assertTrue(result["frontend"])
         self.assertTrue(result["web"])
+
+    def test_vite_entry_and_server_manifest_activate_required_gates(self) -> None:
+        self.assertTrue(classify(["app/index.html"])["frontend"])
+        server = classify(["crates/server/Cargo.toml"])
+        self.assertTrue(server["rust"])
+        self.assertTrue(server["knowledge"])
+
+    def test_packaging_files_activate_linux_bundle(self) -> None:
+        self.assertTrue(classify(["app/src-tauri/tauri.conf.json"])["bundle"])
+        self.assertTrue(
+            classify(["app/assets/folyvo-logo-icon/4a-cam/app-icon.icns"])[
+                "bundle"
+            ]
+        )
+        self.assertTrue(classify(["app/package.json"])["bundle"])
+
+    def test_toolchain_checker_activates_toolchain_job(self) -> None:
+        result = classify(["scripts/check-web-toolchain.sh"])
+        self.assertTrue(result["toolchain"])
+        self.assertFalse(result["bundle"])
+        rust_toolchain = classify(["rust-toolchain.toml"])
+        self.assertTrue(rust_toolchain["rust"])
+        self.assertTrue(rust_toolchain["toolchain"])
 
 
 def main() -> int:
