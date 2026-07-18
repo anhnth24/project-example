@@ -50,6 +50,16 @@
       "source": "synthetic",
       "license": "CC0-1.0",
       "sensitive": false
+    },
+    {
+      "id": "knowledge.legacy-sqlite.v1",
+      "path": "legacy-sqlite-v1.sqlite",
+      "sha256": "449143fe3f1a755579a8bf10252b346281b0d1222ed7ddf178f538cd9760d6ff",
+      "kind": "sqlite-index",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
     }
   ]
 }

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fileconv_core::intelligence::{self, CorpusDocument};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::citation::infer_source_anchor;
 use crate::embedding::{
@@ -179,10 +179,18 @@ impl SqliteKnowledgeStore {
     ) -> Result<StoreIndexResult>
     where
         Embed: FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
-        Cleared: FnMut(),
+        Cleared: FnMut() -> Result<()>,
     {
-        let indexed_documents = self.document_count()?;
-        let current_metadata = self.metadata()?;
+        validate_writable_dimensions(metadata.dimensions)?;
+        let baseline_data_version: i64 = self
+            .connection
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .map_err(sql)?;
+        let indexed_documents: usize = self
+            .connection
+            .query_row("SELECT COUNT(*) FROM documents", [], |row| row.get(0))
+            .map_err(sql)?;
+        let current_metadata = read_metadata(&self.connection)?;
         if indexed_documents > 0
             && metadata.dimensions == 0
             && current_metadata.mode == metadata.mode
@@ -190,16 +198,15 @@ impl SqliteKnowledgeStore {
             && current_metadata.model == metadata.model
         {
             metadata.dimensions = current_metadata.dimensions;
+            validate_writable_dimensions(metadata.dimensions)?;
             finalize_signature(&mut metadata, signature_plan)?;
         }
-        if indexed_documents > 0 && current_metadata.signature != metadata.signature {
-            self.clear()?;
-            on_cleared();
-        }
+        let cleared = indexed_documents > 0 && current_metadata.signature != metadata.signature;
 
         let mut indexed = 0;
         let mut skipped = 0;
         let mut total_chunks = 0;
+        let mut prepared = Vec::new();
         for document in documents {
             let content_hash = legacy_desktop_hash(&document.markdown);
             let existing: Option<(String, String)> = self
@@ -212,9 +219,11 @@ impl SqliteKnowledgeStore {
                 )
                 .optional()
                 .map_err(sql)?;
-            if existing.as_ref().is_some_and(|(hash, signature)| {
-                hash == &content_hash && signature == &metadata.signature
-            }) {
+            if !cleared
+                && existing.as_ref().is_some_and(|(hash, signature)| {
+                    hash == &content_hash && signature == &metadata.signature
+                })
+            {
                 let count: usize = self
                     .connection
                     .query_row(
@@ -243,10 +252,37 @@ impl SqliteKnowledgeStore {
             let dimensions = validate_embedding_batch(&checked, chunks.len(), expected)?;
             if dimensions > 0 && metadata.dimensions == 0 {
                 metadata.dimensions = dimensions;
+                validate_writable_dimensions(metadata.dimensions)?;
                 finalize_signature(&mut metadata, signature_plan)?;
             }
+            prepared.push((document, content_hash, chunks, vectors));
+        }
 
-            let transaction = self.connection.transaction().map_err(sql)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
+        let current_data_version: i64 = transaction
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .map_err(sql)?;
+        if current_data_version != baseline_data_version {
+            return Err(KnowledgeError::AdapterFailure(
+                "knowledge index changed while embeddings were prepared; retry".into(),
+            ));
+        }
+        if cleared {
+            transaction
+                .execute("DELETE FROM chunks_fts", [])
+                .map_err(sql)?;
+            transaction.execute("DELETE FROM chunks", []).map_err(sql)?;
+            transaction
+                .execute("DELETE FROM documents", [])
+                .map_err(sql)?;
+            transaction
+                .execute("DELETE FROM index_meta", [])
+                .map_err(sql)?;
+        }
+        for (document, content_hash, chunks, vectors) in prepared {
             transaction
                 .execute(
                     "DELETE FROM chunks_fts WHERE doc_rel = ?1",
@@ -327,14 +363,15 @@ impl SqliteKnowledgeStore {
                     ],
                 )
                 .map_err(sql)?;
-            transaction.commit().map_err(sql)?;
             total_chunks += chunks.len();
             indexed += 1;
         }
 
-        let transaction = self.connection.transaction().map_err(sql)?;
         write_metadata(&transaction, &metadata)?;
         transaction.commit().map_err(sql)?;
+        if cleared {
+            on_cleared()?;
+        }
         Ok(StoreIndexResult {
             documents: documents.len(),
             chunks: total_chunks,
@@ -348,15 +385,30 @@ impl SqliteKnowledgeStore {
         &self,
         expected_dimensions: usize,
     ) -> Result<Vec<(String, Vec<f32>)>> {
+        if expected_dimensions == 0 {
+            return if self.chunk_count()? == 0 {
+                Ok(Vec::new())
+            } else {
+                Err(KnowledgeError::IncompatibleIndex(
+                    "zero-dimension metadata has stored chunks",
+                ))
+            };
+        }
+        let expected_bytes = expected_vector_bytes(expected_dimensions)?;
         let mut statement = self
             .connection
-            .prepare("SELECT chunk_id, vector, vector_dims FROM chunks ORDER BY chunk_id")
+            .prepare(
+                "SELECT chunk_id,
+                        CASE WHEN vector_dims = ?1 AND length(vector) = ?2 THEN vector END,
+                        vector_dims
+                 FROM chunks ORDER BY chunk_id",
+            )
             .map_err(sql)?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map(params![expected_dimensions as i64, expected_bytes], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(1)?,
                     row.get::<_, i64>(2)?,
                 ))
             })
@@ -364,6 +416,9 @@ impl SqliteKnowledgeStore {
         let mut points = Vec::new();
         for row in rows {
             let (id, bytes, stored_dimensions) = row.map_err(sql)?;
+            let bytes = bytes.ok_or(KnowledgeError::IncompatibleIndex(
+                "chunk vector storage bounds are invalid",
+            ))?;
             let dimensions = usize::try_from(stored_dimensions).map_err(|_| {
                 KnowledgeError::IncompatibleIndex("chunk vector dimensions are negative")
             })?;
@@ -383,6 +438,11 @@ impl SqliteKnowledgeStore {
         if fts_query.is_empty() || limit == 0 {
             return Ok(HashMap::new());
         }
+        let sql_limit = if scope.is_empty() {
+            limit
+        } else {
+            MAX_VECTOR_CANDIDATES
+        };
         let mut statement = self
             .connection
             .prepare(
@@ -392,7 +452,7 @@ impl SqliteKnowledgeStore {
             )
             .map_err(sql)?;
         let rows = statement
-            .query_map(params![fts_query, limit as i64], |row| {
+            .query_map(params![fts_query, sql_limit as i64], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -407,6 +467,9 @@ impl SqliteKnowledgeStore {
                 continue;
             }
             ranks.insert(id, (ranks.len(), (-bm25) as f32));
+            if ranks.len() == limit {
+                break;
+            }
         }
         Ok(ranks)
     }
@@ -416,16 +479,28 @@ impl SqliteKnowledgeStore {
         scope: &HashSet<String>,
         expected_dimensions: usize,
     ) -> Result<Vec<StoredChunk>> {
+        if expected_dimensions == 0 {
+            return if self.chunk_count()? == 0 {
+                Ok(Vec::new())
+            } else {
+                Err(KnowledgeError::IncompatibleIndex(
+                    "zero-dimension metadata has stored chunks",
+                ))
+            };
+        }
+        let expected_bytes = expected_vector_bytes(expected_dimensions)?;
         let mut statement = self
             .connection
             .prepare(
                 "SELECT chunk_id, doc_rel, md_rel, heading, body, start_offset,
-                        end_offset, page, slide, sheet, vector, vector_dims
+                        end_offset, page, slide, sheet,
+                        CASE WHEN vector_dims = ?1 AND length(vector) = ?2 THEN vector END,
+                        vector_dims
                  FROM chunks",
             )
             .map_err(sql)?;
         let rows = statement
-            .query_map([], |row| {
+            .query_map(params![expected_dimensions as i64, expected_bytes], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -437,7 +512,7 @@ impl SqliteKnowledgeStore {
                     row.get::<_, Option<u32>>(7)?,
                     row.get::<_, Option<u32>>(8)?,
                     row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Vec<u8>>(10)?,
+                    row.get::<_, Option<Vec<u8>>>(10)?,
                     row.get::<_, i64>(11)?,
                 ))
             })
@@ -458,6 +533,9 @@ impl SqliteKnowledgeStore {
                 bytes,
                 stored_dimensions,
             ) = row.map_err(sql)?;
+            let bytes = bytes.ok_or(KnowledgeError::IncompatibleIndex(
+                "chunk vector storage bounds are invalid",
+            ))?;
             let start = usize::try_from(start)
                 .map_err(|_| KnowledgeError::IncompatibleIndex("chunk start offset is negative"))?;
             let end = usize::try_from(end)
@@ -576,11 +654,30 @@ fn finalize_signature(
     Ok(())
 }
 
+fn validate_writable_dimensions(dimensions: usize) -> Result<()> {
+    if dimensions > 4_096 {
+        return Err(KnowledgeError::InvalidInput(
+            "vector dimensions must be 0..=4096",
+        ));
+    }
+    Ok(())
+}
+
 fn vector_bytes(vector: &[f32]) -> Vec<u8> {
     vector
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect()
+}
+
+fn expected_vector_bytes(dimensions: usize) -> Result<i64> {
+    if !(1..=4_096).contains(&dimensions) {
+        return Err(KnowledgeError::IncompatibleIndex(
+            "vector dimensions are out of bounds",
+        ));
+    }
+    i64::try_from(dimensions * std::mem::size_of::<f32>())
+        .map_err(|_| KnowledgeError::IncompatibleIndex("vector byte length overflow"))
 }
 
 fn vector_from_bytes(bytes: &[u8]) -> Result<Vec<f32>> {
@@ -664,7 +761,7 @@ mod tests {
                         .map(|input| local_vector(input).into_values())
                         .collect())
                 },
-                || {},
+                || Ok(()),
             )
             .unwrap()
     }
@@ -722,6 +819,112 @@ mod tests {
     }
 
     #[test]
+    fn scoped_fts_filters_before_result_limit() {
+        let path = temp_path("scope_limit");
+        let store = SqliteKnowledgeStore::open(&path).unwrap();
+        for index in 0..300 {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO chunks_fts (chunk_id, doc_rel, heading, body, folded)
+                     VALUES (?1, ?2, '', 'common term', 'common term')",
+                    params![format!("other-{index:03}"), "other.pdf"],
+                )
+                .unwrap();
+        }
+        store
+            .connection
+            .execute(
+                "INSERT INTO chunks_fts (chunk_id, doc_rel, heading, body, folded)
+                 VALUES ('target', 'target.pdf', '', 'common term', 'common term')",
+                [],
+            )
+            .unwrap();
+        let scope = HashSet::from(["target.pdf".to_string()]);
+        let ranks = store.lexical_ranks(r#""common"*"#, &scope, 10).unwrap();
+        assert_eq!(ranks.len(), 1);
+        assert!(ranks.contains_key("target"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn failed_rebuild_rolls_back_old_index_and_metadata() {
+        let path = temp_path("rollback");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        let original = document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.");
+        index(&mut store, &[original]);
+        let provider_metadata = IndexMetadata {
+            mode: "provider_v1".into(),
+            provider: "mock".into(),
+            model: "mock-model".into(),
+            dimensions: LOCAL_VECTOR_DIMENSIONS,
+            signature: "different-signature".into(),
+        };
+        let mut cleared = false;
+        let error = store
+            .index_documents(
+                &[document("# Thay đổi\n\nNội dung mới.")],
+                provider_metadata,
+                None,
+                |_| Err(KnowledgeError::EmbeddingProviderFailure),
+                || {
+                    cleared = true;
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error, KnowledgeError::EmbeddingProviderFailure);
+        assert!(!cleared);
+        assert_eq!(store.document_count().unwrap(), 1);
+        assert_eq!(store.chunk_count().unwrap(), 1);
+        assert_eq!(store.metadata().unwrap().signature, LOCAL_EMBEDDING_MODE);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn concurrent_commit_during_embedding_requests_safe_retry() {
+        let path = temp_path("concurrent_retry");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        index(
+            &mut store,
+            &[document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.")],
+        );
+        let concurrent_path = path.clone();
+        let error = store
+            .index_documents(
+                &[document("# Thay đổi\n\nNội dung mới.")],
+                local_metadata(),
+                None,
+                |inputs| {
+                    let connection = Connection::open(&concurrent_path).unwrap();
+                    connection
+                        .execute(
+                            "INSERT OR REPLACE INTO index_meta (key, value)
+                             VALUES ('concurrent-test', 'committed')",
+                            [],
+                        )
+                        .unwrap();
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || Ok(()),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            KnowledgeError::AdapterFailure(message) if message.contains("retry")
+        ));
+        assert_eq!(store.document_count().unwrap(), 1);
+        let chunks = store
+            .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
+            .unwrap();
+        assert!(chunks[0].body.contains("đối soát"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn corrupt_dimensions_and_vector_bytes_are_rejected() {
         let path = temp_path("corrupt");
         let mut store = SqliteKnowledgeStore::open(&path).unwrap();
@@ -745,5 +948,63 @@ mod tests {
             .unwrap();
         assert!(store.load_vector_points(LOCAL_VECTOR_DIMENSIONS).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn write_dimensions_are_bounded_but_empty_pending_index_is_valid() {
+        let path = temp_path("dimension_bounds");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        let mut pending = local_metadata();
+        pending.dimensions = 0;
+        pending.signature = "pending".into();
+        store
+            .index_documents(&[], pending, None, |_| Ok(Vec::new()), || Ok(()))
+            .unwrap();
+        assert!(store.load_chunks(&HashSet::new(), 0).unwrap().is_empty());
+        assert!(store.load_vector_points(0).unwrap().is_empty());
+
+        let mut oversized = local_metadata();
+        oversized.dimensions = 4_097;
+        assert!(matches!(
+            store.index_documents(&[], oversized, None, |_| Ok(Vec::new()), || Ok(())),
+            Err(KnowledgeError::InvalidInput(_))
+        ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_sqlite_fixture_migrates_additively_and_hydrates() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/legacy-sqlite-v1.sqlite");
+        let path = temp_path("legacy");
+        std::fs::copy(fixture, &path).unwrap();
+        let store = SqliteKnowledgeStore::open(&path).unwrap();
+        assert_eq!(store.document_count().unwrap(), 1);
+        assert_eq!(store.chunk_count().unwrap(), 1);
+        let metadata = store.metadata().unwrap();
+        assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
+        assert_eq!(metadata.dimensions, LOCAL_VECTOR_DIMENSIONS);
+        let chunks = store
+            .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
+            .unwrap();
+        assert_eq!(chunks[0].id, "legacy-chunk-001");
+        assert_eq!(chunks[0].page, Some(7));
+        let document_columns = table_columns(&store.connection, "documents");
+        let chunk_columns = table_columns(&store.connection, "chunks");
+        assert!(document_columns.contains(&"embedding_signature".to_string()));
+        assert!(chunk_columns.contains(&"vector_dims".to_string()));
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn table_columns(connection: &Connection, table: &str) -> Vec<String> {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
     }
 }

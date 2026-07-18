@@ -131,7 +131,10 @@ fn index_documents_with_plan(
                 Ok(inputs.iter().map(|input| local_vector(input)).collect())
             }
         },
-        || super::vector_index::clear(root),
+        || {
+            super::vector_index::clear(root)
+                .map_err(fileconv_knowledge::KnowledgeError::AdapterFailure)
+        },
     )?;
     let mut warnings = Vec::new();
     if result.indexed > 0
@@ -184,11 +187,8 @@ fn index_documents_inner(
         Err(fileconv_knowledge::KnowledgeError::EmbeddingProviderFailure)
             if provider_requested && fallback_local =>
         {
-            let mut store =
-                SqliteKnowledgeStore::open(index_path(root)?).map_err(|error| error.to_string())?;
-            store.clear().map_err(|error| error.to_string())?;
-            super::vector_index::clear(root);
-            let mut result = index_documents_with_plan(root, source_rels, embedding_plan(None))?;
+            let mut result = index_documents_with_plan(root, source_rels, embedding_plan(None))
+                .map_err(|error| error.to_string())?;
             result.warnings.push(
                 "embedding provider lỗi; đã rebuild toàn bộ scope bằng local hash offline.".into(),
             );

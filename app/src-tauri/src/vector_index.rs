@@ -4,8 +4,8 @@ use std::path::Path;
 
 use fileconv_knowledge::desktop::hnsw;
 
-pub fn clear(root: &Path) {
-    let _ = hnsw::clear(root);
+pub fn clear(root: &Path) -> Result<(), String> {
+    hnsw::clear(root).map_err(|error| error.to_string())
 }
 
 pub fn is_available(root: &Path, signature: &str, dimensions: usize) -> bool {
