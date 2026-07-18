@@ -73,6 +73,9 @@
 - P0-05 fully closed: **NO**
 
 - Quality track executed on reduced-smoke hardware (CPU unless CUDA present).
+- `AITeamVN/Vietnamese_Embedding` clears Recall@5 (0.9174 >= 0.85) with stable 3/3 runs.
+- `bkai-foundation-models/vietnamese-bi-encoder` misses the gate on this corpus (0.7997); keep as negative control, not selectable.
+- Next quality comparator should be another family that can pass (e.g. `BAAI/bge-m3` hybrid or `intfloat/multilingual-e5-large`).
 - Capacity evidence (VRAM, saturation, queue depth, target GPU fingerprint) still required.
 - ADR remains Proposed until capacity + approver sign-off.
 - Restricted corpus must not leave to cloud providers; local/self-host only.
