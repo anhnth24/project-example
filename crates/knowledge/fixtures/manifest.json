@@ -12,6 +12,16 @@
       "sensitive": false
     },
     {
+      "id": "knowledge.identity.v2",
+      "path": "identity-v2.json",
+      "sha256": "4721f29b315f21dbb7fb387d8fc0b99d25eb501cb2222d3b230b8305b7453fe3",
+      "kind": "identity-vector",
+      "owner": "knowledge",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    },
+    {
       "id": "knowledge.legacy-hnsw.v1",
       "path": "legacy-hnsw-v1.json",
       "sha256": "aca437c59a3349de941a32ae24208fa44985b3122031d0aa6af7faac96d57707",

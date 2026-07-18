@@ -10,8 +10,51 @@ use crate::{KnowledgeError, Result};
 pub const LOCAL_VECTOR_DIMENSIONS: usize = 256;
 pub const LOCAL_EMBEDDING_MODE: &str = "local_hash_v1";
 pub const PROVIDER_EMBEDDING_MODE: &str = "provider_v1";
-pub const DEFAULT_CHUNKING_VERSION: &str = "heading-chunks-2000-v1";
-pub const QUERY_NORMALIZATION_VERSION: &str = "accent-fold-v1";
+// Re-export identity pins (historical importers + local use).
+pub use crate::identity::{
+    BODY_TEXT_VERSION, DEFAULT_CHUNKING_VERSION, QUERY_NORMALIZATION_VERSION,
+    RUNTIME_GLM_CLOUD_INTERIM, RUNTIME_LOCAL_HASH, RUNTIME_PROVIDER_CLOUD, RUNTIME_VLLM_LOCAL,
+};
+pub use crate::identity::{
+    BODY_TEXT_VERSION as EMBEDDING_BODY_TEXT_VERSION,
+    DEFAULT_CHUNKING_VERSION as EMBEDDING_CHUNKING_VERSION,
+    QUERY_NORMALIZATION_VERSION as EMBEDDING_QUERY_NORMALIZATION_VERSION,
+};
+
+const ALLOWED_RUNTIME_PATHS: &[&str] = &[
+    RUNTIME_LOCAL_HASH,
+    RUNTIME_GLM_CLOUD_INTERIM,
+    RUNTIME_VLLM_LOCAL,
+    RUNTIME_PROVIDER_CLOUD,
+];
+
+/// Map endpoint metadata to a canonical runtime path (ADR 0006).
+///
+/// Fallback only — desktop presets carry an explicit `runtime_path` on
+/// `EmbeddingConfig` because real vLLM hosts (`127.0.0.1:8000` + `BAAI/bge-m3`)
+/// do not contain the string `"vllm"`. Kept here (not behind core `llm`) so the
+/// knowledge crate stays usable without the HTTP client feature.
+pub fn infer_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
+    let host = base_url
+        .and_then(|value| url::Url::parse(value).ok())
+        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
+        .unwrap_or_default();
+    let model = model.to_ascii_lowercase();
+    let blob = format!("{host} {model}");
+    if host.contains("bigmodel")
+        || host.contains("z.ai")
+        || host.contains("zhipu")
+        || model.starts_with("embedding-2")
+        || model.starts_with("embedding-3")
+        || blob.contains("glm")
+    {
+        return RUNTIME_GLM_CLOUD_INTERIM;
+    }
+    if host.contains("vllm") || model.contains("vllm") {
+        return RUNTIME_VLLM_LOCAL;
+    }
+    RUNTIME_PROVIDER_CLOUD
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingVector {
@@ -104,6 +147,7 @@ pub struct EmbeddingPlan {
     deployment: ProviderDeployment,
     expected_dimensions: Option<usize>,
     normalized: bool,
+    runtime_path: String,
 }
 
 impl EmbeddingPlan {
@@ -117,6 +161,7 @@ impl EmbeddingPlan {
                 .expect("default deployment identity is valid"),
             expected_dimensions: Some(LOCAL_VECTOR_DIMENSIONS),
             normalized: true,
+            runtime_path: RUNTIME_LOCAL_HASH.into(),
         }
     }
 
@@ -126,10 +171,12 @@ impl EmbeddingPlan {
         revision: impl Into<String>,
         deployment: ProviderDeployment,
         expected_dimensions: Option<usize>,
+        runtime_path: impl Into<String>,
     ) -> Result<Self> {
         let provider = provider.into();
         let model = model.into();
         let revision = revision.into();
+        let runtime_path = runtime_path.into();
         if provider.trim().is_empty() {
             return Err(KnowledgeError::InvalidInput("embedding provider is empty"));
         }
@@ -144,6 +191,11 @@ impl EmbeddingPlan {
                 "embedding dimensions must be positive",
             ));
         }
+        if !ALLOWED_RUNTIME_PATHS.contains(&runtime_path.as_str()) {
+            return Err(KnowledgeError::InvalidInput(
+                "embedding runtime_path is unsupported",
+            ));
+        }
         Ok(Self {
             mode: PROVIDER_EMBEDDING_MODE,
             provider,
@@ -152,6 +204,7 @@ impl EmbeddingPlan {
             deployment,
             expected_dimensions,
             normalized: true,
+            runtime_path,
         })
     }
 
@@ -165,6 +218,10 @@ impl EmbeddingPlan {
 
     pub fn model(&self) -> &str {
         &self.model
+    }
+
+    pub fn runtime_path(&self) -> &str {
+        &self.runtime_path
     }
 
     pub fn expected_dimensions(&self) -> Option<usize> {
@@ -202,12 +259,14 @@ impl EmbeddingPlan {
             self.provider, self.model, self.deployment.digest
         );
         IndexSignature {
+            runtime_path: &self.runtime_path,
             embedding_family: &family,
             embedding_revision: &self.revision,
             dimensions,
             normalized: self.normalized,
             chunking_version: DEFAULT_CHUNKING_VERSION,
-            text_version: QUERY_NORMALIZATION_VERSION,
+            body_text_version: BODY_TEXT_VERSION,
+            query_normalization_version: QUERY_NORMALIZATION_VERSION,
         }
         .digest()
     }
@@ -406,7 +465,15 @@ mod tests {
     fn validates_provider_mock_count_and_dimensions() {
         let deployment =
             super::ProviderDeployment::from_base_url(Some("http://embedding.internal")).unwrap();
-        let plan = EmbeddingPlan::provider("vllm", "vi-model", "r1", deployment, Some(3)).unwrap();
+        let plan = EmbeddingPlan::provider(
+            "vllm",
+            "vi-model",
+            "r1",
+            deployment,
+            Some(3),
+            super::RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
         let provider = MockProvider {
             vectors: vec![
                 EmbeddingVector::new(vec![1.0, 0.0, 0.0]).unwrap(),
@@ -452,26 +519,59 @@ mod tests {
                 .unwrap();
         let other_deployment =
             super::ProviderDeployment::from_base_url(Some("https://embedding.other/v1")).unwrap();
-        let first =
-            EmbeddingPlan::provider("vllm", "vi-model", "r1", deployment, Some(768)).unwrap();
-        let same =
-            EmbeddingPlan::provider("vllm", "vi-model", "r1", same_deployment, Some(768)).unwrap();
-        let changed_endpoint =
-            EmbeddingPlan::provider("vllm", "vi-model", "r1", other_deployment, Some(768)).unwrap();
+        let first = EmbeddingPlan::provider(
+            "openai-compatible",
+            "vi-model",
+            "r1",
+            deployment,
+            Some(768),
+            super::RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
+        let same = EmbeddingPlan::provider(
+            "openai-compatible",
+            "vi-model",
+            "r1",
+            same_deployment,
+            Some(768),
+            super::RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
+        let changed_endpoint = EmbeddingPlan::provider(
+            "openai-compatible",
+            "vi-model",
+            "r1",
+            other_deployment,
+            Some(768),
+            super::RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
         let changed_model = EmbeddingPlan::provider(
-            "vllm",
+            "openai-compatible",
             "other-model",
             "r1",
             super::ProviderDeployment::from_base_url(None).unwrap(),
             Some(768),
+            super::RUNTIME_VLLM_LOCAL,
         )
         .unwrap();
         let changed_dimensions = EmbeddingPlan::provider(
-            "vllm",
+            "openai-compatible",
             "vi-model",
             "r1",
             super::ProviderDeployment::from_base_url(None).unwrap(),
             Some(1024),
+            super::RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
+        let changed_runtime = EmbeddingPlan::provider(
+            "openai-compatible",
+            "vi-model",
+            "r1",
+            super::ProviderDeployment::from_base_url(Some("https://embedding.internal/v1"))
+                .unwrap(),
+            Some(768),
+            super::RUNTIME_GLM_CLOUD_INTERIM,
         )
         .unwrap();
         assert_eq!(first.signature(768).unwrap(), same.signature(768).unwrap());
@@ -486,6 +586,18 @@ mod tests {
         assert_ne!(
             first.signature(768).unwrap(),
             changed_dimensions.signature(1024).unwrap()
+        );
+        assert_ne!(
+            first.signature(768).unwrap(),
+            changed_runtime.signature(768).unwrap()
+        );
+        assert_eq!(
+            super::infer_runtime_path(Some("https://open.bigmodel.cn/api/paas/v4"), "embedding-3"),
+            super::RUNTIME_GLM_CLOUD_INTERIM
+        );
+        assert_eq!(
+            super::infer_runtime_path(Some("http://vllm.internal:8000/v1"), "bge-m3"),
+            super::RUNTIME_VLLM_LOCAL
         );
         let debug = format!("{first:?}");
         assert!(!debug.contains("https://"));

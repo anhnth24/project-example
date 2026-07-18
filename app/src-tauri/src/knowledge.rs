@@ -58,11 +58,12 @@ fn embedding_plan(config: Option<EmbeddingConfig>) -> EmbeddingPlan {
         Some(config) => {
             let provider = provider_name(config.provider);
             let model = config.model.clone();
-            let shared = DesktopEmbeddingPlan::provider(
+            let shared = DesktopEmbeddingPlan::provider_with_runtime(
                 provider.clone(),
                 model.clone(),
                 config.base_url.as_deref(),
                 config.dimensions,
+                Some(config.runtime_path.as_str()),
             )
             .expect("validated desktop embedding configuration");
             EmbeddingPlan { shared }
@@ -624,6 +625,7 @@ mod tests {
             "missing-model",
             Some("http://user:password@127.0.0.1:1?token=hidden".into()),
             None,
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let result = index_documents_inner(&root, &sources, Some(config), true).unwrap();
@@ -638,7 +640,12 @@ mod tests {
             .unwrap()
             .metadata()
             .unwrap();
-        assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
+        // Schema-v2 persists the canonical local-hash digest, not the legacy mode string.
+        assert_eq!(
+            metadata.signature,
+            DesktopEmbeddingPlan::local().metadata().signature
+        );
+        assert_ne!(metadata.signature, LOCAL_EMBEDDING_MODE);
         std::fs::remove_dir_all(root).ok();
     }
 
@@ -650,6 +657,7 @@ mod tests {
             "mock-embedding",
             Some("https://user:password@embedding.example/v1?token=hidden".into()),
             Some(768),
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let same_deployment = EmbeddingConfig::new(
@@ -658,6 +666,7 @@ mod tests {
             "mock-embedding",
             Some("https://embedding.example/v1".into()),
             Some(768),
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let other_deployment = EmbeddingConfig::new(
@@ -666,6 +675,7 @@ mod tests {
             "mock-embedding",
             Some("https://embedding-two.example/v1".into()),
             Some(768),
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let first_signature = embedding_plan(Some(first))
@@ -700,6 +710,7 @@ mod tests {
             "mock-embedding",
             Some("http://127.0.0.1:1".into()),
             None,
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let sources = vec!["empty.txt".to_string()];
@@ -709,6 +720,64 @@ mod tests {
         assert_eq!(first.chunks, 0);
         assert_eq!(second.skipped, 1);
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn vllm_preset_runtime_path_is_explicit_not_inferred() {
+        let preset = fileconv_core::llm::embedding_provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == "vllm")
+            .expect("vllm preset");
+        assert_eq!(
+            preset.runtime_path,
+            fileconv_core::llm::EMBEDDING_RUNTIME_VLLM_LOCAL
+        );
+        assert_eq!(preset.base_url.as_deref(), Some("http://127.0.0.1:8000"));
+        assert_eq!(preset.default_model, "BAAI/bge-m3");
+        // Host/model cues alone would misclassify the real desktop preset.
+        assert_eq!(
+            fileconv_core::llm::infer_embedding_runtime_path(
+                preset.base_url.as_deref(),
+                &preset.default_model
+            ),
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD
+        );
+        let config = EmbeddingConfig::new(
+            preset.provider,
+            "",
+            preset.default_model.clone(),
+            preset.base_url.clone(),
+            preset.default_dimensions,
+            preset.runtime_path.clone(),
+        )
+        .unwrap();
+        let plan = embedding_plan(Some(config));
+        assert_eq!(
+            plan.shared.runtime_path(),
+            Some(fileconv_core::llm::EMBEDDING_RUNTIME_VLLM_LOCAL)
+        );
+    }
+
+    #[test]
+    fn glm_preset_runtime_path_is_explicit() {
+        let preset = fileconv_core::llm::embedding_provider_presets()
+            .into_iter()
+            .find(|preset| preset.id == "glm")
+            .expect("glm preset");
+        let config = EmbeddingConfig::new(
+            preset.provider,
+            "key",
+            preset.default_model.clone(),
+            preset.base_url.clone(),
+            preset.default_dimensions,
+            preset.runtime_path.clone(),
+        )
+        .unwrap();
+        let plan = embedding_plan(Some(config));
+        assert_eq!(
+            plan.shared.runtime_path(),
+            Some(fileconv_core::llm::EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM)
+        );
     }
 
     #[test]
@@ -722,6 +791,7 @@ mod tests {
             "mock-embedding",
             Some(base_url),
             None,
+            fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let result =

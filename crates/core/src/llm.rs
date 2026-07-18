@@ -50,6 +50,19 @@ pub struct LlmProviderPreset {
     pub description: String,
 }
 
+/// Canonical embedding runtime paths for index signature (ADR 0006).
+pub const EMBEDDING_RUNTIME_LOCAL_HASH: &str = "local-hash";
+pub const EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM: &str = "glm-cloud-interim";
+pub const EMBEDDING_RUNTIME_VLLM_LOCAL: &str = "vllm-local";
+pub const EMBEDDING_RUNTIME_PROVIDER_CLOUD: &str = "provider-cloud";
+
+const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
+    EMBEDDING_RUNTIME_LOCAL_HASH,
+    EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM,
+    EMBEDDING_RUNTIME_VLLM_LOCAL,
+    EMBEDDING_RUNTIME_PROVIDER_CLOUD,
+];
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddingConfig {
@@ -58,6 +71,9 @@ pub struct EmbeddingConfig {
     pub model: String,
     pub base_url: Option<String>,
     pub dimensions: Option<usize>,
+    /// Explicit runtime path for index signature (ADR 0006). Prefer preset values
+    /// over host/model inference for known deployments (e.g. vLLM → `vllm-local`).
+    pub runtime_path: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -72,7 +88,49 @@ pub struct EmbeddingProviderPreset {
     pub local: bool,
     pub requires_api_key: bool,
     pub default_dimensions: Option<usize>,
+    /// Index-signature runtime path for this preset (must not rely on URL cues).
+    pub runtime_path: String,
     pub description: String,
+}
+
+fn embedding_host_hint(base_url: Option<&str>) -> String {
+    let Some(value) = base_url else {
+        return String::new();
+    };
+    let without_scheme = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .unwrap_or(value);
+    let authority = without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    host_port
+        .split(':')
+        .next()
+        .unwrap_or(host_port)
+        .to_ascii_lowercase()
+}
+
+/// Fallback when no preset supplies `runtime_path` (custom endpoints).
+pub fn infer_embedding_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
+    let host = embedding_host_hint(base_url);
+    let model = model.to_ascii_lowercase();
+    let blob = format!("{host} {model}");
+    if host.contains("bigmodel")
+        || host.contains("z.ai")
+        || host.contains("zhipu")
+        || model.starts_with("embedding-2")
+        || model.starts_with("embedding-3")
+        || blob.contains("glm")
+    {
+        return EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM;
+    }
+    if host.contains("vllm") || model.contains("vllm") {
+        return EMBEDDING_RUNTIME_VLLM_LOCAL;
+    }
+    EMBEDDING_RUNTIME_PROVIDER_CLOUD
 }
 
 impl Provider {
@@ -186,6 +244,7 @@ impl EmbeddingConfig {
         model: impl Into<String>,
         base_url: Option<String>,
         dimensions: Option<usize>,
+        runtime_path: impl Into<String>,
     ) -> Result<Self, ConvertError> {
         if matches!(
             provider,
@@ -213,12 +272,19 @@ impl EmbeddingConfig {
                 "số chiều embedding phải nằm trong khoảng 32–4096".into(),
             ));
         }
+        let runtime_path = runtime_path.into();
+        if !ALLOWED_EMBEDDING_RUNTIME_PATHS.contains(&runtime_path.as_str()) {
+            return Err(ConvertError::Failed(format!(
+                "embedding runtime_path không được hỗ trợ: {runtime_path}"
+            )));
+        }
         Ok(Self {
             provider,
             api_key: api_key.into(),
             model,
             base_url,
             dimensions,
+            runtime_path,
         })
     }
 }
@@ -449,6 +515,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
                   local: bool,
                   requires_api_key: bool,
                   default_dimensions: Option<usize>,
+                  runtime_path: &str,
                   description: &str| EmbeddingProviderPreset {
         id: id.into(),
         label: label.into(),
@@ -459,6 +526,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
         local,
         requires_api_key,
         default_dimensions,
+        runtime_path: runtime_path.into(),
         description: description.into(),
     };
     vec![
@@ -472,6 +540,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             true,
             false,
             None,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
             "Neural embedding chạy local qua OpenAI-compatible /v1/embeddings.",
         ),
         preset(
@@ -484,6 +553,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             true,
             false,
             None,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
             "Load embedding model trong LM Studio Local Server.",
         ),
         preset(
@@ -496,6 +566,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             true,
             false,
             None,
+            EMBEDDING_RUNTIME_VLLM_LOCAL,
             "Embedding server nội bộ; phù hợp corpus lớn và GPU dùng chung.",
         ),
         preset(
@@ -508,6 +579,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             false,
             true,
             Some(1024),
+            EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM,
             "Interim cloud embedding cho POC/DEMO (ADR 0004); toàn bộ chunk được gửi khi build index. Target production vẫn là vLLM self-host.",
         ),
         preset(
@@ -520,6 +592,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             false,
             true,
             Some(1536),
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
             "Cloud embedding; toàn bộ chunk được gửi khi build index.",
         ),
         preset(
@@ -532,6 +605,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             false,
             true,
             Some(768),
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
             "Cloud embedding tiếng Việt; gọi embedContent theo từng chunk.",
         ),
         preset(
@@ -544,6 +618,7 @@ pub fn embedding_provider_presets() -> Vec<EmbeddingProviderPreset> {
             false,
             false,
             None,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
             "Endpoint embedding nội bộ hoặc gateway doanh nghiệp.",
         ),
     ]
@@ -1068,9 +1143,41 @@ mod tests {
         assert_eq!(glm.default_model, "embedding-3");
         assert!(glm.requires_api_key);
         assert!(!glm.local);
-        assert!(presets
+        assert_eq!(glm.runtime_path, EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM);
+        let vllm = presets
             .iter()
-            .any(|preset| preset.id == "vllm" && preset.local));
+            .find(|preset| preset.id == "vllm")
+            .expect("vllm embedding preset");
+        assert!(vllm.local);
+        assert_eq!(vllm.base_url.as_deref(), Some("http://127.0.0.1:8000"));
+        assert_eq!(vllm.default_model, "BAAI/bge-m3");
+        assert_eq!(vllm.runtime_path, EMBEDDING_RUNTIME_VLLM_LOCAL);
+        // Real preset values must not need host/model cues containing "vllm".
+        assert_eq!(
+            infer_embedding_runtime_path(vllm.base_url.as_deref(), &vllm.default_model),
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD
+        );
+    }
+
+    #[test]
+    fn embedding_preset_runtime_paths_are_explicit() {
+        let expected = [
+            ("ollama", EMBEDDING_RUNTIME_PROVIDER_CLOUD),
+            ("lm-studio", EMBEDDING_RUNTIME_PROVIDER_CLOUD),
+            ("vllm", EMBEDDING_RUNTIME_VLLM_LOCAL),
+            ("glm", EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM),
+            ("openai", EMBEDDING_RUNTIME_PROVIDER_CLOUD),
+            ("gemini", EMBEDDING_RUNTIME_PROVIDER_CLOUD),
+            ("custom", EMBEDDING_RUNTIME_PROVIDER_CLOUD),
+        ];
+        let presets = embedding_provider_presets();
+        for (id, runtime) in expected {
+            let preset = presets
+                .iter()
+                .find(|preset| preset.id == id)
+                .unwrap_or_else(|| panic!("missing preset {id}"));
+            assert_eq!(preset.runtime_path, runtime, "preset {id}");
+        }
     }
 
     #[test]
@@ -1152,6 +1259,7 @@ mod tests {
             "nomic-embed-text",
             Some(base_url),
             None,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let vectors = embed_batch(&config, &["một".into(), "hai".into()]).unwrap();
@@ -1168,7 +1276,8 @@ mod tests {
             "key",
             "model",
             Some("https://api.anthropic.com".into()),
-            None
+            None,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .is_err());
         assert!(EmbeddingConfig::new(
@@ -1176,7 +1285,17 @@ mod tests {
             "key",
             "model",
             Some("invalid".into()),
-            None
+            None,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
+        )
+        .is_err());
+        assert!(EmbeddingConfig::new(
+            Provider::OpenAi,
+            "key",
+            "model",
+            Some("https://api.openai.com".into()),
+            None,
+            "not-a-runtime",
         )
         .is_err());
     }

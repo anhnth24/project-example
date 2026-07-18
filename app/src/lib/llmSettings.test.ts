@@ -88,6 +88,7 @@ const embeddingPreset: EmbeddingProviderPreset = {
   local: false,
   requiresApiKey: true,
   defaultDimensions: 1536,
+  runtimePath: "provider-cloud",
   description: "Cloud",
 };
 

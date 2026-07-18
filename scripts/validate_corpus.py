@@ -80,6 +80,51 @@ def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_expected_chunks(root: Path) -> dict[str, dict]:
+    """Map chunkId -> catalog row from P0-06 expected-chunks.tsv when present."""
+    path = root / "retrieval/expected-chunks.tsv"
+    if not path.is_file():
+        return {}
+    with path.open(encoding="utf-8", newline="") as handle:
+        return {row["chunkId"]: row for row in csv.DictReader(handle, delimiter="\t")}
+
+
+def validate_chunk_id(
+    chunk_id: object,
+    *,
+    label: str,
+    document_id: str | None,
+    version_id: str | None,
+    start: object,
+    end: object,
+    catalog: dict[str, dict],
+) -> list[str]:
+    if chunk_id is None:
+        return []
+    if not (isinstance(chunk_id, str) and SHA256.fullmatch(chunk_id)):
+        return [f"{label}: chunkId must be null or a 64-hex canonical digest"]
+    if not catalog:
+        return [f"{label}: chunkId set but retrieval/expected-chunks.tsv is missing"]
+    row = catalog.get(chunk_id)
+    if row is None:
+        return [f"{label}: chunkId not present in expected-chunks catalog"]
+    errors = []
+    if document_id and row.get("documentId") != document_id:
+        errors.append(f"{label}: chunkId documentId mismatch vs catalog")
+    if version_id and row.get("versionId") != version_id:
+        errors.append(f"{label}: chunkId versionId mismatch vs catalog")
+    if isinstance(start, int) and isinstance(end, int):
+        try:
+            chunk_start = int(row["start"])
+            chunk_end = int(row["end"])
+        except (KeyError, ValueError):
+            errors.append(f"{label}: catalog row missing start/end")
+            return errors
+        if not (chunk_start <= start and end <= chunk_end):
+            errors.append(f"{label}: citation span not covered by chunkId catalog row")
+    return errors
+
+
 def timestamp(value: object) -> dt.datetime | None:
     if not isinstance(value, str) or not value.endswith("Z"):
         return None
@@ -113,6 +158,7 @@ def validate_checksum(path: Path, item: dict, label: str) -> list[str]:
 
 
 def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
+    expected_chunks = load_expected_chunks(root)
     golden = root / "golden"
     adversarial = root / "adversarial"
     errors: list[str] = []
@@ -278,8 +324,17 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
             anchor_errors.append(f"{label}: citation ID mismatch")
         if anchor.get("contentSha256") != item.get("markdownSha256"):
             anchor_errors.append(f"{label}: citation hash mismatch")
-        if anchor.get("chunkId") is not None:
-            anchor_errors.append(f"{label}: chunkId must remain null before P0-06")
+        anchor_errors.extend(
+            validate_chunk_id(
+                anchor.get("chunkId"),
+                label=label,
+                document_id=str(anchor.get("documentId") or ""),
+                version_id=str(anchor.get("versionId") or item.get("versionId") or ""),
+                start=anchor.get("start"),
+                end=anchor.get("end"),
+                catalog=expected_chunks,
+            )
+        )
         expected_page = 1 if item["format"].startswith("pdf") else None
         if anchor.get("page") != expected_page:
             anchor_errors.append(f"{label}: citation page mismatch")
@@ -484,8 +539,17 @@ def validate(root: Path, require_adjudicated: bool = True) -> list[str]:
                             errors.append(f"query {query_id}: citation {field} mismatch")
                     if anchor.get("contentSha256") != cited_item.get("markdownSha256"):
                         errors.append(f"query {query_id}: citation content hash mismatch")
-                    if anchor.get("chunkId") is not None:
-                        errors.append(f"query {query_id}: chunkId must remain null before P0-06")
+                    errors.extend(
+                        validate_chunk_id(
+                            anchor.get("chunkId"),
+                            label=f"query {query_id}",
+                            document_id=str(anchor.get("documentId") or ""),
+                            version_id=str(anchor.get("versionId") or ""),
+                            start=anchor.get("start"),
+                            end=anchor.get("end"),
+                            catalog=expected_chunks,
+                        )
+                    )
                     markdown_bytes = safe_path(
                         golden, cited_item["markdownPath"]
                     ).read_bytes()
@@ -1262,7 +1326,13 @@ class CorpusValidatorTests(unittest.TestCase):
             self.assertTrue(any("citation isCurrent mismatch" in error for error in errors))
             self.assertTrue(any("citation ID mismatch" in error for error in errors))
             self.assertTrue(any("citation hash mismatch" in error for error in errors))
-            self.assertTrue(any("chunkId must remain null" in error for error in errors))
+            self.assertTrue(
+                any(
+                    "chunkId must be null or a 64-hex" in error
+                    or "chunkId not present in expected-chunks" in error
+                    for error in errors
+                )
+            )
             self.assertTrue(any("citation page mismatch" in error for error in errors))
             self.assertTrue(any("citation quote mismatch" in error for error in errors))
             self.assertTrue(any("citation document missing" in error for error in errors))

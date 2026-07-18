@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "document": {
+    "sourceRel": "pháp-luật/tài-liệu.pdf",
+    "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "identity": "5698378011e28aaf25f784a0593806d4d234e7447535b70ecfb51955a439d757"
+  },
+  "chunk": {
+    "versionId": "version-gold-001-v1",
+    "ordinal": 7,
+    "headingPath": "Chương I > Điều 2",
+    "body": "Nội dung tiếng Việt",
+    "bodyTextVersion": "nfc-v1",
+    "identity": "f80f2b912fb8abdeb1780abd07ebee297765ede476972e9bcf1fae7792745a1b"
+  },
+  "index": {
+    "runtimePath": "local-hash",
+    "embeddingFamily": "embedding-family",
+    "embeddingRevision": "revision-1",
+    "dimensions": 1024,
+    "normalized": true,
+    "chunkingVersion": "heading-chunks-2000-v1",
+    "bodyTextVersion": "nfc-v1",
+    "queryNormalizationVersion": "accent-fold-v1",
+    "signature": "5f43b9c0a0ec9ad068c9a55b6a774c97ea3bd781949a261f89f522944b029efe"
+  }
+}
