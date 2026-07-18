@@ -27,6 +27,8 @@ SECRET = re.compile(
 )
 IMPLEMENTATION_FILES = (
     "deploy/dev/compose.yml",
+    "deploy/dev/otel-collector.yaml",
+    "deploy/scripts/mock-embedding.py",
     "deploy/compose.spike.yml",
     "deploy/spike/common.sh",
     "deploy/spike/up.sh",
@@ -175,6 +177,7 @@ def expected_target_match(hardware: dict, profiles: list[str]) -> bool:
         and hardware.get("gpu", {}).get("vramGb", 0) >= target["gpu"]["vramGb"]
         and hardware.get("network", {}).get("bandwidthGbps", 0)
         >= target["network"]["bandwidthGbps"]
+        and hardware.get("network", {}).get("bandwidthMeasured") is True
         and hardware.get("os", {}).get("distro") == target["os"]["distro"]
         and hardware.get("os", {}).get("arch") == target["os"]["arch"]
     )
@@ -412,7 +415,12 @@ def validate_report(
         or not isinstance(
             hardware.get("network", {}).get("bandwidthGbps"), (int, float)
         )
-        or hardware["network"]["bandwidthGbps"] <= 0
+        or hardware["network"]["bandwidthGbps"] < 0
+        or not isinstance(
+            hardware.get("network", {}).get("bandwidthMeasured"), bool
+        )
+        or not isinstance(hardware.get("network", {}).get("interface"), str)
+        or not hardware["network"]["interface"]
         or not isinstance(
             hardware.get("network", {}).get("latencyMsAssumed"), (int, float)
         )

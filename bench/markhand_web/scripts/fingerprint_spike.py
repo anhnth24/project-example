@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_REPORT = ROOT / "bench/markhand_web/reports/spike-environment.json"
 IMPLEMENTATION_FILES = (
     "deploy/dev/compose.yml",
+    "deploy/dev/otel-collector.yaml",
+    "deploy/scripts/mock-embedding.py",
     "deploy/compose.spike.yml",
     "deploy/spike/common.sh",
     "deploy/spike/up.sh",
@@ -84,13 +86,20 @@ def hardware(storage_path: Path) -> dict:
             gpu_count = len(devices)
             gpu_name = devices[0].split(",", 1)[0].strip()
             gpu_vram = round(float(devices[0].split(",", 1)[1]) / 1024, 2)
-    bandwidth = 1.0
-    for speed_path in Path("/sys/class/net").glob("*/speed"):
+    default_route = subprocess.run(
+        ["ip", "route", "show", "default"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    route_match = re.search(r"\bdev\s+(\S+)", default_route)
+    network_interface = route_match.group(1) if route_match else "unknown"
+    bandwidth = 0.0
+    speed_path = Path("/sys/class/net") / network_interface / "speed"
+    if speed_path.is_file():
         try:
-            bandwidth = max(
-                bandwidth,
-                int(speed_path.read_text().strip()) / 1000,
-            )
+            speed = int(speed_path.read_text().strip())
+            bandwidth = speed / 1000 if speed > 0 else 0.0
         except (OSError, ValueError):
             pass
     physical_cores = {
@@ -159,6 +168,8 @@ def hardware(storage_path: Path) -> dict:
         "gpu": {"model": gpu_name, "vramGb": gpu_vram, "count": gpu_count},
         "network": {
             "bandwidthGbps": bandwidth,
+            "bandwidthMeasured": bandwidth > 0,
+            "interface": network_interface,
             "latencyMsAssumed": 1,
         },
         "os": {
@@ -224,6 +235,7 @@ def meets_reference_target(
         and actual["gpu"]["vramGb"] >= target["gpu"]["vramGb"]
         and actual["network"]["bandwidthGbps"]
         >= target["network"]["bandwidthGbps"]
+        and actual["network"]["bandwidthMeasured"]
         and actual["os"]["arch"] == target["os"]["arch"]
         and actual["os"]["distro"] == target["os"]["distro"]
     )

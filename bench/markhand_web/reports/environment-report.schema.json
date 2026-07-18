@@ -90,9 +90,14 @@
                 },
                 "network": {
                   "type": "object",
-                  "required": ["bandwidthGbps", "latencyMsAssumed"],
+                  "required": [
+                    "bandwidthGbps", "bandwidthMeasured", "interface",
+                    "latencyMsAssumed"
+                  ],
                   "properties": {
-                    "bandwidthGbps": {"type": "number", "exclusiveMinimum": 0},
+                    "bandwidthGbps": {"type": "number", "minimum": 0},
+                    "bandwidthMeasured": {"type": "boolean"},
+                    "interface": {"type": "string", "minLength": 1},
                     "latencyMsAssumed": {"type": "number", "minimum": 0}
                   }
                 },
