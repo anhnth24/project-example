@@ -662,8 +662,9 @@ def simulate_queue(
 def queue_simulations(
     profile: dict,
     measured_service_docs_per_hour: float,
-    effective_service_docs_per_hour: float,
-    capacity_valid_for_gate: bool,
+    *,
+    all_succeeded: bool,
+    target_match: bool,
 ) -> dict:
     loads = profile["loads"]
     normal = float(loads["normal"]["ingestDocumentsPerHour"])
@@ -671,42 +672,60 @@ def queue_simulations(
     recovery = loads.get("recovery", {})
     multiplier = float(recovery.get("loadMultiplier", 2.0))
     duration = float(recovery.get("durationMinutes", 120.0))
+    # Local observation may simulate queues for sizing smoke; Profile B gate rate
+    # stays zero unless environment targetMatch is true.
+    local_rate = measured_service_docs_per_hour if all_succeeded else 0.0
+    gate_rate = local_rate if (all_succeeded and target_match) else 0.0
     return {
         "label": "simulation_from_measured_local_cpu_rate",
         "measuredServiceDocsPerHour": round(measured_service_docs_per_hour, 3),
-        "effectiveServiceDocsPerHour": round(effective_service_docs_per_hour, 3),
-        "capacityValidForGate": capacity_valid_for_gate,
+        "localSimulationServiceDocsPerHour": round(local_rate, 3),
+        "effectiveServiceDocsPerHourForGate": round(gate_rate, 3),
+        "capacityValidForGate": bool(all_succeeded and target_match),
         "effectiveRateNote": (
-            "all workload documents succeeded"
-            if capacity_valid_for_gate
-            else "set to zero for queue simulation because one or more workload documents failed"
+            "local queue simulation uses measured converter rate; "
+            "gate-valid rate requires targetMatch=true on Profile B"
+            if all_succeeded
+            else "local and gate rates set to zero because one or more documents failed"
         ),
-        "normal1x": simulate_queue(effective_service_docs_per_hour, normal, duration),
-        "recovery2xNormal": simulate_queue(effective_service_docs_per_hour, normal * multiplier, duration),
-        "peakGateLoad": simulate_queue(effective_service_docs_per_hour, peak, duration),
+        "normal1x": simulate_queue(local_rate, normal, duration),
+        "recovery2xNormal": simulate_queue(local_rate, normal * multiplier, duration),
+        "peakGateLoad": simulate_queue(local_rate, peak, duration),
     }
 
 
 def headroom_estimate(
     measured_service_docs_per_hour: float,
-    effective_service_docs_per_hour: float,
+    *,
     all_succeeded: bool,
+    target_match: bool,
 ) -> dict:
     required_for_headroom = TARGET_DOCS_PER_HOUR / (1.0 - HEADROOM_TARGET_PERCENT / 100.0)
-    if effective_service_docs_per_hour > 0:
-        estimated = (1.0 - (TARGET_DOCS_PER_HOUR / effective_service_docs_per_hour)) * 100.0
+    if measured_service_docs_per_hour > 0 and all_succeeded:
+        estimated_local = (
+            1.0 - (TARGET_DOCS_PER_HOUR / measured_service_docs_per_hour)
+        ) * 100.0
     else:
-        estimated = -100.0
+        estimated_local = -100.0
+    gate_rate = (
+        measured_service_docs_per_hour if (all_succeeded and target_match) else 0.0
+    )
     return {
-        "basis": "local-cpu concurrent run docs/hour vs G0-CAP target",
+        "basis": "local-cpu concurrent observation vs G0-CAP target (not Profile B)",
         "targetDocsPerHour": TARGET_DOCS_PER_HOUR,
         "targetHeadroomPercent": HEADROOM_TARGET_PERCENT,
         "requiredDocsPerHourForTargetHeadroom": round(required_for_headroom, 3),
         "measuredSuccessfulDocsPerHour": round(measured_service_docs_per_hour, 3),
-        "effectiveCapacityDocsPerHourForGate": round(effective_service_docs_per_hour, 3),
-        "capacityValidForGate": bool(all_succeeded),
-        "estimatedHeadroomPercent": round(estimated, 3),
-        "meetsHeadroomTargetOnThisRunner": bool(all_succeeded and estimated >= HEADROOM_TARGET_PERCENT),
+        "localObservationHeadroomPercent": round(estimated_local, 3),
+        "meetsLocalObservationHeadroom": bool(
+            all_succeeded and estimated_local >= HEADROOM_TARGET_PERCENT
+        ),
+        "effectiveCapacityDocsPerHourForGate": round(gate_rate, 3),
+        "capacityValidForGate": bool(all_succeeded and target_match),
+        "estimatedHeadroomPercentForGate": (
+            round(estimated_local, 3) if target_match and all_succeeded else None
+        ),
+        "meetsHeadroomTargetForGate": False,
     }
 
 
@@ -739,7 +758,6 @@ def build_payload(args: argparse.Namespace) -> dict:
     capacity_run = run_summaries[-1]
     docs_per_hour = float(capacity_run["docsPerHour"])
     all_succeeded = all(summary["documentsFailed"] == 0 for summary in run_summaries)
-    effective_docs_per_hour_for_gate = docs_per_hour if all_succeeded else 0.0
     target_match = False
     production_capacity_blocked = True
     profile_b_gate_passed = False
@@ -801,14 +819,14 @@ def build_payload(args: argparse.Namespace) -> dict:
         "perFormat": capacity_run["perFormat"],
         "headroomEstimate": headroom_estimate(
             measured_service_docs_per_hour=docs_per_hour,
-            effective_service_docs_per_hour=effective_docs_per_hour_for_gate,
             all_succeeded=all_succeeded,
+            target_match=target_match,
         ),
         "queueAgeSimulation": queue_simulations(
             profile,
             measured_service_docs_per_hour=docs_per_hour,
-            effective_service_docs_per_hour=effective_docs_per_hour_for_gate,
-            capacity_valid_for_gate=all_succeeded,
+            all_succeeded=all_succeeded,
+            target_match=target_match,
         ),
         "allDocumentsSucceeded": all_succeeded,
         "targetMatch": target_match,
@@ -898,18 +916,20 @@ def render_report(payload: dict) -> str:
             f"- Target: `{headroom['targetDocsPerHour']}` docs/hour.",
             f"- Required for 30% headroom: `{headroom['requiredDocsPerHourForTargetHeadroom']}` docs/hour.",
             f"- Measured successful local-cpu throughput: `{headroom['measuredSuccessfulDocsPerHour']}` docs/hour.",
-            f"- Gate-valid effective capacity: `{headroom['effectiveCapacityDocsPerHourForGate']}` docs/hour.",
-            f"- Estimated headroom: `{headroom['estimatedHeadroomPercent']}`%.",
-            f"- Meets 30% headroom on this runner: `{str(headroom['meetsHeadroomTargetOnThisRunner']).lower()}`.",
+            f"- Local observation headroom: `{headroom['localObservationHeadroomPercent']}`%.",
+            f"- Meets 30% headroom as local observation only: `{str(headroom['meetsLocalObservationHeadroom']).lower()}`.",
+            f"- Gate-valid effective capacity (requires Profile B targetMatch): `{headroom['effectiveCapacityDocsPerHourForGate']}` docs/hour.",
+            f"- Capacity valid for gate: `{str(headroom['capacityValidForGate']).lower()}`.",
+            f"- Meets headroom target for gate: `{str(headroom['meetsHeadroomTargetForGate']).lower()}`.",
             "",
             "## Queue age simulation",
             "",
-            "These rows are deterministic simulations. If any workload format failed,",
-            "the gate-valid service rate is set to zero instead of extrapolating from",
-            "partial successes.",
+            "These rows are deterministic **local** simulations from the measured",
+            "converter rate. Gate-valid capacity stays zero while `targetMatch=false`.",
             "",
-            f"- Measured service rate: `{queue['measuredServiceDocsPerHour']}` docs/hour.",
-            f"- Effective simulated service rate: `{queue['effectiveServiceDocsPerHour']}` docs/hour.",
+            f"- Measured local service rate: `{queue['measuredServiceDocsPerHour']}` docs/hour.",
+            f"- Local simulation service rate: `{queue['localSimulationServiceDocsPerHour']}` docs/hour.",
+            f"- Gate-valid service rate: `{queue['effectiveServiceDocsPerHourForGate']}` docs/hour.",
             f"- Capacity valid for gate: `{str(queue['capacityValidForGate']).lower()}`.",
             f"- Note: {queue['effectiveRateNote']}.",
             "",
