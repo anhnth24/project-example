@@ -28,11 +28,12 @@ Accuracy@5 >= 0.85 on Zalo Legal.
 
 1. Best / selected draft: `AITeamVN/Vietnamese_Embedding`
    @ `dea33aa1ab339f38d66ae0a40e6c40e0a9249568`
-   (1024-d, L2, max_seq=2048) — measured Recall@5 **0.9174** on golden corpus.
+   (1024-d, L2, max_seq=2048, desktop `{heading}\n{text}` payload) — measured
+   Recall@5 **0.9261** (min of 3 independent loads) on golden corpus.
 2. Min comparator measured: `bkai-foundation-models/vietnamese-bi-encoder`
    @ `84f9d9ada0d1a3c37557398b9ae9fcedcdf40be0`
    (768-d, L2, max_seq=256, mandatory `pyvi` word segmentation) — measured
-   Recall@5 **0.7997** (**below** 0.85). Not selectable.
+   Recall@5 **0.7962** (**below** 0.85). Not selectable.
 
 Chunking pinned to `heading-chunks-2000-v1`. Ranking for this eval is dense
 max-pool chunk cosine aggregated to documents.
