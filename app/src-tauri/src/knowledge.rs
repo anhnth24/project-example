@@ -640,7 +640,12 @@ mod tests {
             .unwrap()
             .metadata()
             .unwrap();
-        assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
+        // Schema-v2 persists the canonical local-hash digest, not the legacy mode string.
+        assert_eq!(
+            metadata.signature,
+            DesktopEmbeddingPlan::local().metadata().signature
+        );
+        assert_ne!(metadata.signature, LOCAL_EMBEDDING_MODE);
         std::fs::remove_dir_all(root).ok();
     }
 

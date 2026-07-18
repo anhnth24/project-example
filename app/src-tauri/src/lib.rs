@@ -1335,6 +1335,12 @@ mod tests {
 
     #[test]
     fn embedding_settings_are_independent_from_chat_provider() {
+        // Isolate from cloud-agent injected FILECONV_* keys.
+        let previous_embedding = std::env::var("FILECONV_EMBEDDING_API_KEY").ok();
+        let previous_llm = std::env::var("FILECONV_LLM_API_KEY").ok();
+        std::env::remove_var("FILECONV_EMBEDDING_API_KEY");
+        std::env::remove_var("FILECONV_LLM_API_KEY");
+
         let mut settings = Settings::default();
         settings.llm_provider = "cursor-cli".into();
         settings.embedding_enabled = true;
@@ -1349,6 +1355,15 @@ mod tests {
             config.runtime_path,
             fileconv_core::llm::EMBEDDING_RUNTIME_PROVIDER_CLOUD
         );
+
+        match previous_embedding {
+            Some(value) => std::env::set_var("FILECONV_EMBEDDING_API_KEY", value),
+            None => std::env::remove_var("FILECONV_EMBEDDING_API_KEY"),
+        }
+        match previous_llm {
+            Some(value) => std::env::set_var("FILECONV_LLM_API_KEY", value),
+            None => std::env::remove_var("FILECONV_LLM_API_KEY"),
+        }
     }
 
     #[test]
