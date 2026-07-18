@@ -1,9 +1,9 @@
 # P0-08 ingest capacity report
 
-- Generated: `2026-07-18T19:18:54.468310Z`
+- Generated: `2026-07-18T19:20:55.784593Z`
 - Mode: `local-cpu-converter-smoke`
 - Measurement scope: `local-cpu; not Profile B`
-- Git commit: `093c0a357b4537193b128b67cf76506449f3905b`
+- Git commit: `69aa81c8cc4149829988fc575cadeb833369579f`
 - Dirty at harness start: `false`
 - `targetMatch`: `false`
 - `profileBGatePassed`: `false`
@@ -28,43 +28,45 @@ Explicit note: does NOT claim Profile B G0-CAP-INGEST-THROUGHPUT pass evidence.
 
 | run | workers | docs ok/error | wall s | docs/hour | pages/hour | peak RSS MB |
 |---|---:|---:|---:|---:|---:|---:|
-| singleWorker | 1 | 31/0 | 5.396 | 20680.226 | 19346.018 | 223.672 |
-| concurrent2 | 2 | 31/0 | 2.809 | 39729.296 | 37166.115 | 219.059 |
+| singleWorker | 1 | 31/0 | 5.288 | 21103.327 | 19741.822 | 223.277 |
+| concurrent2 | 2 | 31/0 | 2.809 | 39723.706 | 37160.886 | 218.512 |
 
 ## Per-format sizing from concurrent run
 
 | format | docs | ok | failed | docs/hour from file durations | p95 ms | peak RSS MB | pages est. |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| audio | 2 | 2 | 0 | 3915.81 | 934.606 | 217.355 | 0 |
-| csv | 3 | 3 | 0 | 173007.609 | 20.949 | 1.574 | 3 |
-| docx | 7 | 7 | 0 | 172962.882 | 20.993 | 1.402 | 7 |
-| html | 3 | 3 | 0 | 172089.614 | 21.005 | 1.332 | 3 |
-| image_ocr | 3 | 3 | 0 | 8105.747 | 451.287 | 111.648 | 3 |
-| pdf_native | 3 | 3 | 0 | 169733.926 | 21.398 | 1.676 | 3 |
-| pdf_scan | 2 | 2 | 0 | 4507.307 | 800.091 | 219.059 | 2 |
-| pptx | 2 | 2 | 0 | 172943.889 | 20.917 | 1.16 | 2 |
-| text_legacy | 3 | 3 | 0 | 172422.051 | 21.025 | 0.848 | 3 |
-| xlsx | 3 | 3 | 0 | 172243.31 | 20.959 | 1.395 | 3 |
+| audio | 2 | 2 | 0 | 3889.398 | 960.122 | 217.359 | 0 |
+| csv | 3 | 3 | 0 | 172728.145 | 21.03 | 0.645 | 3 |
+| docx | 7 | 7 | 0 | 172438.569 | 21.086 | 1.535 | 7 |
+| html | 3 | 3 | 0 | 171845.911 | 21.122 | 1.262 | 3 |
+| image_ocr | 3 | 3 | 0 | 8328.25 | 433.548 | 106.516 | 3 |
+| pdf_native | 3 | 3 | 0 | 171034.92 | 21.303 | 1.914 | 3 |
+| pdf_scan | 2 | 2 | 0 | 4506.723 | 807.649 | 218.512 | 2 |
+| pptx | 2 | 2 | 0 | 173235.167 | 20.813 | 0.914 | 2 |
+| text_legacy | 3 | 3 | 0 | 172306.514 | 21.091 | 0.828 | 3 |
+| xlsx | 3 | 3 | 0 | 172117.04 | 21.146 | 1.309 | 3 |
 
 ## Headroom estimate
 
 - Target: `1200.0` docs/hour.
 - Required for 30% headroom: `1714.286` docs/hour.
-- Measured successful local-cpu throughput: `39729.296` docs/hour.
-- Gate-valid effective capacity: `39729.296` docs/hour.
-- Estimated headroom: `96.98`%.
-- Meets 30% headroom on this runner: `true`.
+- Measured successful local-cpu throughput: `39723.706` docs/hour.
+- Local observation headroom: `96.979`%.
+- Meets 30% headroom as local observation only: `true`.
+- Gate-valid effective capacity (requires Profile B targetMatch): `0.0` docs/hour.
+- Capacity valid for gate: `false`.
+- Meets headroom target for gate: `false`.
 
 ## Queue age simulation
 
-These rows are deterministic simulations. If any workload format failed,
-the gate-valid service rate is set to zero instead of extrapolating from
-partial successes.
+These rows are deterministic **local** simulations from the measured
+converter rate. Gate-valid capacity stays zero while `targetMatch=false`.
 
-- Measured service rate: `39729.296` docs/hour.
-- Effective simulated service rate: `39729.296` docs/hour.
-- Capacity valid for gate: `true`.
-- Note: all workload documents succeeded.
+- Measured local service rate: `39723.706` docs/hour.
+- Local simulation service rate: `39723.706` docs/hour.
+- Gate-valid service rate: `0.0` docs/hour.
+- Capacity valid for gate: `false`.
+- Note: local queue simulation uses measured converter rate; gate-valid rate requires targetMatch=true on Profile B.
 
 | scenario | arrival docs/hour | final queue docs | oldest age min | stable |
 |---|---:|---:|---:|---|
