@@ -106,7 +106,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-07 — SQLite desktop storage feature
 
-- **Status:** In progress — moving schema, incremental writes, FTS and hydration.
+- **Status:** Review — atomic storage extraction, legacy fixture and parity gates passed.
 - **Objective:** Move SQLite persistence, bỏ reverse dependency vào Tauri.
 - **Plan:** Schema/metadata/vector/incremental/FTS/hydration; API nhận DB path +
   caller-supplied corpus; Tauri giữ path jail/load.
