@@ -1,7 +1,7 @@
 # P0-10 Phase 0 gate
 
-- Generated: `2026-07-18T19:41:59.696230Z`
-- Git commit: `276c58568dab013aa353be12711c709f5a6ab758`
+- Generated: `2026-07-18T19:43:28.286560Z`
+- Git commit: `77e736521ffd384802af475684b6658a43d79475`
 - Git clean at harness start: `true`
 - `p0_10_closed`: `true`
 - `productionPhase0ExitBlocked`: `true`
@@ -47,3 +47,6 @@
 | `G0-DR-QUERY-READY-RTO` | `operations-owner` | Query-ready RTO requires live PG/MinIO/Qdrant restore drill. |
 | `G0-DR-FULL-VECTOR-RTO` | `operations-owner` | Full-vector RTO requires live snapshot/rebuild timing on target hardware. |
 | `G0-RET-VLLM-CUTOVER` | `retrieval-owner` | Production embedding cutover requires on-prem vLLM evidence. |
+| `SLA-TTFT-P95` | `operations-owner` | Time-to-first-token P95 under normal load is not measured on Profile B. |
+| `SLA-AVAILABILITY` | `operations-owner` | Monthly query-path availability is not measured on Profile B. |
+| `SLA-DEGRADED-MODE` | `operations-owner` | Authz-safe FTS/text fallback under vector outage is not Profile B proven. |
