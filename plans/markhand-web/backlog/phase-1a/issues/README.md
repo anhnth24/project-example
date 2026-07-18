@@ -136,7 +136,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 
 ## P1A-09 — Thin Tauri adapters
 
-- **Status:** In progress — commands now delegate shared desktop service orchestration.
+- **Status:** Review — thin adapters and backend/frontend parity gates passed.
 - **Objective:** Desktop commands delegate shared crate, IPC giữ nguyên.
 - **Plan:** Tauri giữ state/settings/path load/spawn_blocking/error mapping; delegate
   rebuild/stats/search/ask; retain legacy commands; remove duplicate only sau parity.
