@@ -59,8 +59,8 @@
     },
     {
       "path": "golden/adjudication.json",
-      "sha256": "5814a66e7bb8f9621de7389da98201c0375411b8b256e4fb18f81a9652267194",
-      "blake3": "991a17a68ea795ad7f45468194addabb6e80d32e90d815ad3bbdbab96da45681"
+      "sha256": "892f218eb31dffaf47626e3b098fb7772380873b27c6acb624f23ad99f7cb8b1",
+      "blake3": "2d96613da9fd2d41069b3c2ccf65cd8cd8021e32b80b931214747af99dc81ca0"
     },
     {
       "path": "golden/conflicts.json",
