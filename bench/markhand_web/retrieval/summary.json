@@ -2,9 +2,9 @@
   "version": 2,
   "issue": "P0-06",
   "track": "retrieval-neural-hybrid",
-  "generatedAt": "2026-07-18T18:19:02.349189+00:00",
+  "generatedAt": "2026-07-18T18:26:33.854613+00:00",
   "git": {
-    "commit": "b6db271ca69f80854442da9330173b0967c05186",
+    "commit": "1f9d06f667b3bee7283a10d549b4cbbfa6e70746",
     "dirty": false,
     "dirtyPaths": []
   },
@@ -16,12 +16,16 @@
   "rrf": {
     "k": 60.0,
     "rerankScale": 30.0,
-    "vectorWeight": 0.65,
+    "vectorWeight": 0.55,
     "bodyOverlapWeight": 0.35,
     "headingHitWeight": 0.1,
-    "tuned": true,
-    "baselineVectorWeight": 0.55
+    "tuned": false,
+    "baselineVectorWeight": 0.55,
+    "observationTuneWeight": 0.65,
+    "observationTuneImprovedHoldout": true,
+    "note": "Gating uses frozen desktop VECTOR_WEIGHT=0.55 for production parity; Python lexical is token-overlap approximation of FTS5."
   },
+  "measuredEnvironmentId": "local-cpu-quality",
   "legs": {
     "lexical": {
       "queries": 238,
@@ -47,8 +51,8 @@
       "recallAt5": 0.987745,
       "recallAt10": 1.0,
       "hitAt5": 0.991597,
-      "mrr": 0.920885,
-      "ndcgAt10": 0.905194
+      "mrr": 0.910381,
+      "ndcgAt10": 0.898734
     }
   },
   "versionCitation": {
@@ -56,6 +60,11 @@
     "citationsWithChunkId": 305,
     "versionCitationPrecision": 1.0,
     "versionCitationRecall": 1.0,
+    "citationCounts": {
+      "tp": 292,
+      "fp": 0,
+      "fn": 0
+    },
     "temporalAnswerAccuracy": 1.0,
     "temporalQueries": 6,
     "currentVersionAccuracy": 1.0,
@@ -81,8 +90,9 @@
       "operator": ">=",
       "pass": true,
       "evaluated": true,
-      "environmentId": "glm-cloud-interim",
-      "registeredEnvironmentNote": "Measured on local CPU sentence-transformers (AITeamVN); registered gate environment may differ."
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true
     },
     "G0-RET-TEMPORAL-ACCURACY": {
       "metric": 1.0,
@@ -90,8 +100,9 @@
       "operator": ">=",
       "pass": true,
       "evaluated": true,
-      "environmentId": "on-prem-reference",
-      "registeredEnvironmentNote": null
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true
     },
     "G0-RET-CHANGE-ACCURACY": {
       "metric": 1.0,
@@ -99,8 +110,9 @@
       "operator": ">=",
       "pass": true,
       "evaluated": true,
-      "environmentId": "on-prem-reference",
-      "registeredEnvironmentNote": null
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true
     },
     "G0-RET-VERSION-CITATION-PRECISION": {
       "metric": 1.0,
@@ -108,8 +120,9 @@
       "operator": ">=",
       "pass": true,
       "evaluated": true,
-      "environmentId": "on-prem-reference",
-      "registeredEnvironmentNote": null
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true
     },
     "G0-RET-VERSION-CITATION-RECALL": {
       "metric": 1.0,
@@ -117,8 +130,9 @@
       "operator": ">=",
       "pass": true,
       "evaluated": true,
-      "environmentId": "on-prem-reference",
-      "registeredEnvironmentNote": null
+      "environmentId": "local-cpu-quality",
+      "measuredEnvironmentId": "local-cpu-quality",
+      "environmentMatch": true
     }
   },
   "conflictGates": {

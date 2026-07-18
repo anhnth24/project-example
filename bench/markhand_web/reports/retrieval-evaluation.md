@@ -1,13 +1,13 @@
 # P0-06 retrieval evaluation
 
-- Generated: `2026-07-18T18:19:02.349189+00:00`
-- Git commit: `b6db271ca69f80854442da9330173b0967c05186`
+- Generated: `2026-07-18T18:26:33.854613+00:00`
+- Git commit: `1f9d06f667b3bee7283a10d549b4cbbfa6e70746`
 - Dirty: `False`
 - Chunking: `heading-chunks-2000-v1`
 - Embedding runtime: `sentence-transformers:AITeamVN/Vietnamese_Embedding@dea33aa1ab33`
 - Runtime path: `provider-cloud`
 - Index signature: `b5e58653f6666837e3da8f2fb25f7ae36bee6bc96cab9f282ad791c9e40061cb`
-- RRF vectorWeight: `0.65` (tuned=True)
+- RRF vectorWeight: `0.55` (tuned=False)
 
 ## Legs (document-level)
 
@@ -15,7 +15,7 @@
 |---|---:|---:|---:|---:|---:|
 | `lexical` | 0.9804 | 0.9990 | 0.9958 | 0.8921 | 0.8930 |
 | `vector_neural` | 0.9261 | 0.9608 | 0.9538 | 0.8067 | 0.7992 |
-| `hybrid` | 0.9877 | 1.0000 | 0.9916 | 0.9209 | 0.9052 |
+| `hybrid` | 0.9877 | 1.0000 | 0.9916 | 0.9104 | 0.8987 |
 
 ## Version citation / temporal / conflict
 
