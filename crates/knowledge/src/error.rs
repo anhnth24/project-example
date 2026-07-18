@@ -8,6 +8,8 @@ pub enum KnowledgeError {
     EmbeddingCountMismatch { expected: usize, actual: usize },
     #[error("embedding dimension mismatch: expected {expected}, received {actual}")]
     EmbeddingDimensionMismatch { expected: usize, actual: usize },
+    #[error("embedding provider failed")]
+    EmbeddingProviderFailure,
     #[error("knowledge adapter is unavailable: {0}")]
     AdapterUnavailable(&'static str),
     #[error("knowledge adapter failed: {0}")]
