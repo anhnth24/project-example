@@ -1,0 +1,190 @@
+{
+  "version": 1,
+  "reportId": "p0-10-restore-drill",
+  "gateId": "P0-10-RESTORE-SMOKE",
+  "generatedAt": "2026-07-18T19:37:30.656237Z",
+  "command": "python3 bench/markhand_web/scripts/run_restore_drill.py",
+  "mode": "offline-synthetic-recorded-spike",
+  "seed": 20260718,
+  "git": {
+    "commit": "eabb2e18cceb8cac925a6f4b4d7ab8e3c650a5d8",
+    "branch": "cursor/p0-10-phase0-gate-9f2f",
+    "dirty": true,
+    "dirtyPaths": [
+      "docs/adr/0002-version-aware-citations.md",
+      "docs/adr/README.md",
+      "plans/markhand-web/backlog/github-issues.json",
+      "bench/markhand_web/scripts/run_phase0_gate.py",
+      "bench/markhand_web/scripts/run_query_load.py",
+      "bench/markhand_web/scripts/run_restore_drill.py",
+      "docs/adr/0007-tenant-isolation-rls.md",
+      "docs/adr/0010-auth-session-lifecycle.md",
+      "docs/adr/0011-model-index-migration.md",
+      "docs/adr/0012-backup-recovery-order.md",
+      "docs/adr/phase0-decisions.json",
+      "docs/markhand-web-risk-register.md",
+      "docs/markhand-web-sla-targets.md"
+    ]
+  },
+  "environment": {
+    "environmentId": "current-runner-offline-synthetic",
+    "targetEnvironmentId": "on-prem-reference",
+    "targetMatch": false,
+    "dockerAvailable": false,
+    "dockerUsed": false,
+    "evidenceSource": "bench/markhand_web/reports/spike-environment.json",
+    "spikeTargetMatch": false
+  },
+  "implementationSha256": "444c73769aab94111beafbf604940ff9b0d0e42a718fe645010bfe08fc81b53a",
+  "workloadProfile": {
+    "profileId": "on-prem-reference-v1",
+    "recovery": {
+      "loadMultiplier": 2.0,
+      "durationMinutes": 120
+    },
+    "serviceTargets": {
+      "rpoMinutes": 15,
+      "queryReadyRtoMinutes": 60,
+      "fullVectorRtoMinutes": 240
+    }
+  },
+  "recordedSpike": {
+    "reportId": "p0-04-spike-smoke",
+    "sha256": "e7885f58a518c853c6008dc824a72e99a457f9db49a79b136dcdd069b6d97ab2",
+    "targetMatch": false,
+    "lifecycle": {
+      "restartPersistence": true,
+      "resetDeletion": true,
+      "stores": [
+        "postgres",
+        "qdrant",
+        "minio"
+      ],
+      "verifiedAt": "2026-07-18T14:52:34.254388Z"
+    }
+  },
+  "authorityOrder": {
+    "postgres": "authority for visibility, auth, chunks, jobs and index generation pointers",
+    "minio": "durable originals and artifacts; not reconstructable from vectors",
+    "qdrant": "rebuildable from PostgreSQL chunks and active index signature"
+  },
+  "recoveryOrder": [
+    {
+      "order": 1,
+      "stage": "fence-writes",
+      "marker": "restore-fence-writes-9d3cded088e2",
+      "note": "Freeze API mutations and workers before recovery-point selection."
+    },
+    {
+      "order": 2,
+      "stage": "restore-postgres",
+      "marker": "restore-restore-postgres-286596b26b17",
+      "note": "Restore PostgreSQL first; it is authority for visibility and auth."
+    },
+    {
+      "order": 3,
+      "stage": "restore-minio",
+      "marker": "restore-restore-minio-f0e472e40137",
+      "note": "Restore MinIO originals and derived artifacts to the PG recovery point."
+    },
+    {
+      "order": 4,
+      "stage": "restore-or-rebuild-qdrant",
+      "marker": "restore-restore-or-rebuild-qdrant-5b8afa1dd9ed",
+      "note": "Restore matching Qdrant snapshot or rebuild from PG chunks."
+    },
+    {
+      "order": 5,
+      "stage": "reconcile",
+      "marker": "restore-reconcile-a25ff6244107",
+      "note": "Reconcile missing/orphan/stale objects and vectors before readiness."
+    },
+    {
+      "order": 6,
+      "stage": "open-query-ready",
+      "marker": "restore-open-query-ready-d8f5d72703f1",
+      "note": "Open authorized read/search path without claiming full vector rebuild."
+    },
+    {
+      "order": 7,
+      "stage": "complete-full-vector",
+      "marker": "restore-complete-full-vector-bad87fbb5482",
+      "note": "Finish active generation restore/rebuild and verification."
+    }
+  ],
+  "storeMarkers": {
+    "minio": {
+      "backupMarker": "minio-backup-ceff1e7fbf27",
+      "restoreMarker": "minio-restore-640c4f168de8",
+      "source": "recorded-spike-lifecycle"
+    },
+    "postgres": {
+      "backupMarker": "postgres-backup-467ec63501d1",
+      "restoreMarker": "postgres-restore-963d4c772d5a",
+      "source": "recorded-spike-lifecycle"
+    },
+    "qdrant": {
+      "backupMarker": "qdrant-backup-4889d9198c70",
+      "restoreMarker": "qdrant-restore-c1b3756e1d59",
+      "source": "recorded-spike-lifecycle"
+    }
+  },
+  "checksumPlaceholders": [
+    {
+      "store": "minio",
+      "sha256": "42ad9ba9e53839df72cee78ca8b33ae11cb393e32b4207f0169c33c10877c845",
+      "placeholder": true,
+      "verifiedAgainstLiveArtifact": false
+    },
+    {
+      "store": "postgres",
+      "sha256": "c3ad98ed2488323e1ca3a770874aa27b30fd20e1ca87008b00c4d684ee20ff05",
+      "placeholder": true,
+      "verifiedAgainstLiveArtifact": false
+    },
+    {
+      "store": "qdrant",
+      "sha256": "1ec2d669e292ac144a565b59b849f507db8975ea31877ddd9a5e0faa25dabad0",
+      "placeholder": true,
+      "verifiedAgainstLiveArtifact": false
+    }
+  ],
+  "timings": {
+    "rpoMinutesSynthetic": 5.381,
+    "queryReadyRtoMinutesSynthetic": 30.828,
+    "fullVectorRtoMinutesSynthetic": 153.647,
+    "targets": {
+      "rpoMinutes": 15,
+      "queryReadyRtoMinutes": 60,
+      "fullVectorRtoMinutes": 240
+    },
+    "syntheticWithinTargets": {
+      "rpo": true,
+      "queryReadyRto": true,
+      "fullVectorRto": true
+    }
+  },
+  "targetMatch": false,
+  "profileBDrGatePassed": false,
+  "profileBDrBlocked": true,
+  "targetResultsValidForGate": false,
+  "closure": {
+    "recordedSpikeEvidenceLoaded": true,
+    "recoveryOrderMarkersEmitted": true,
+    "checksumPlaceholdersEmitted": true,
+    "timingsEmitted": true,
+    "honestFlagsSet": true
+  },
+  "p0_10_restore_smoke_closed": true,
+  "doesNotClaim": [
+    "G0-DR-RPO pass",
+    "G0-DR-QUERY-READY-RTO pass",
+    "G0-DR-FULL-VECTOR-RTO pass",
+    "Profile B restore evidence"
+  ],
+  "notes": [
+    "Offline synthetic restore smoke only; no live PostgreSQL, MinIO or Qdrant restore was executed.",
+    "Checksum values are deterministic placeholders for runbook shape, not live artifact verification.",
+    "does NOT claim G0-DR Profile B pass evidence"
+  ]
+}

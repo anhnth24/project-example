@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "decisions": [
+    {
+      "id": "document-artifact-model",
+      "status": "accepted",
+      "evidence": "docs/adr/0002-version-aware-citations.md"
+    },
+    {
+      "id": "tenant-isolation-rls",
+      "status": "accepted",
+      "evidence": "docs/adr/0007-tenant-isolation-rls.md"
+    },
+    {
+      "id": "pg-partition-strategy",
+      "status": "accepted",
+      "evidence": "docs/adr/0008-pg-partition-strategy.md"
+    },
+    {
+      "id": "qdrant-topology",
+      "status": "accepted",
+      "evidence": "docs/adr/0009-qdrant-topology.md"
+    },
+    {
+      "id": "auth-session-lifecycle",
+      "status": "accepted",
+      "evidence": "docs/adr/0010-auth-session-lifecycle.md"
+    },
+    {
+      "id": "model-index-migration",
+      "status": "accepted",
+      "evidence": "docs/adr/0011-model-index-migration.md"
+    },
+    {
+      "id": "backup-recovery-order",
+      "status": "accepted",
+      "evidence": "docs/adr/0012-backup-recovery-order.md"
+    }
+  ]
+}

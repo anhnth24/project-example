@@ -221,23 +221,34 @@ P1A-01 ──────────> P0-03
 
 ## P0-10 — ADR, SLO/RPO/RTO và Phase 0 gate
 
-- **Status:** Blocked bởi P0-05…P0-09.
-- **Objective:** Chuyển evidence thành quyết định và clean restore proof.
+- **Status:** Done — decision/smoke track only; seven architecture decisions Accepted
+  (`phase0-decisions.json`); SLA/risk register + restore/query-load smoke recorded.
+  Not a production Phase 0 numeric exit: Profile B gates (query P95/P99, ingest
+  capacity, DR RPO/RTO, vLLM cutover) remain open (`productionPhase0ExitBlocked=true`).
+- **Objective:** Chuyển evidence thành quyết định và restore/query-load smoke proof.
 - **Plan:** ADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,
-  index migration, backup order; chốt SLO; backup/restore ba hệ; close registry.
+  index migration, backup order; chốt SLO; offline restore smoke; close decision
+  registry with Profile B blockers listed.
 - **Files:** `docs/adr/`, `docs/markhand-web-{sla-targets,risk-register}.md`,
-  `bench/markhand_web/reports/restore-drill.md`.
+  `bench/markhand_web/reports/restore-drill.md`, `phase0/summary.json`.
 - **Dependencies/blocks:** P0-01…P0-09 + approvers.
-- **Acceptance:** Mọi decision được duyệt hoặc block 1B; clean restore đạt RPO/RTO;
-  gate link raw evidence; không high/critical/license issue thiếu disposition.
-- **Tests/evidence:** Independent gate rerun; component-loss restore; checksum/
-  query-ready/full-rebuild timing.
+- **Acceptance (decision/smoke track):** Mọi decision được duyệt; restore/query-load
+  smoke honest (`targetMatch=false`); license + security smoke pass; risk register
+  có disposition; `productionPhase0ExitBlocked=true` khi Profile B gates còn mở.
+- **Acceptance (production numeric exit — still open):** clean restore đạt RPO/RTO
+  và mixed-load/capacity gates trên `on-prem-reference` với `targetMatch=true`.
+- **Tests/evidence:** `check-phase0-decisions.py`; phase0 gate harness; offline
+  restore/query-load smoke; Profile B component-loss restore remaining.
 - **Security/migration:** PG authority; MinIO originals không reconstruct được;
   migration expand/cutover/contract.
 - **Out of scope:** Production HA và user onboarding.
 
 ## Exit gate
 
-P0-10 chỉ đóng khi quality, target-scale mixed load, capacity headroom, adversarial
-disposition, clean restore, architecture decisions và license inventory đều đạt
-numeric gate trong registry.
+P0-10 **decision/smoke track** closes when architecture decisions, license inventory,
+adversarial disposition, and offline restore/query-load smoke are accepted with
+honest `productionPhase0ExitBlocked` flags.
+
+**Production Phase 0 numeric exit** still requires Profile B evidence for
+target-scale mixed load, capacity headroom, clean restore RPO/RTO, and registry
+gates with `targetMatch=true` before claiming Phase 1B scale readiness.
