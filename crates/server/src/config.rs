@@ -226,7 +226,7 @@ impl ServerConfig {
         self.bind_addr
     }
 
-    pub(crate) const fn is_api_role(&self) -> bool {
+    pub(crate) fn is_api_role(&self) -> bool {
         self.role == RuntimeRole::Api
     }
 

@@ -26,7 +26,7 @@ impl RuntimeState {
         &self.endpoints
     }
 
-    pub(crate) const fn is_api_role(&self) -> bool {
+    pub(crate) fn is_api_role(&self) -> bool {
         self.config.is_api_role()
     }
 }
