@@ -24,6 +24,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F01 — Extend server skeleton với runtime POC
 
+- **Status:** done
 - **Plan:** Mở rộng `crates/server` API/worker skeleton từ F-02/F-07 với runtime
   dependencies, application state, graceful shutdown và các config fields đã được
   Phase 0 phê duyệt. Không tạo lại workspace/config conventions.
@@ -47,6 +48,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F03 — Multi-org-ready schema và immutable migrations
 
+- **Status:** done
 - **Plan:** Migrations org/auth/RBAC/groups/collections, immutable versions/artifacts,
   atomic current-published pointer, parent/version/effective lineage, chunks/FTS,
   normalized claims, conflict/evidence lifecycle, jobs/outbox, quota/audit/index;
@@ -60,6 +62,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F04 — OrgContext, repositories và state machine
 
+- **Status:** done
 - **Plan:** Tenant-scoped repos, transaction helpers, legal document transitions;
   transaction-local RLS context nếu chọn.
 - **Files:** `src/auth/context.rs`, `src/db/{orgs,collections,documents,chunks}.rs`,
@@ -71,6 +74,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F05 — Password auth, rotating sessions và browser refresh transport
 
+- **Status:** done
 - **Plan:** Argon2; pinned JWT issuer/audience/alg/KID; short access; hashed rotating
   refresh family; provider interface; POC guards/audit; chốt transport theo auth ADR.
   Nếu dùng browser cookie: issue/rotate/clear `HttpOnly Secure SameSite`, CSRF token
@@ -86,6 +90,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F06 — Fail-closed PG/Qdrant/MinIO adapters
 
+- **Status:** done
 - **Plan:** Pools, opaque key builder, quarantine/trusted namespace, deterministic
   points, versioned collection, mandatory org/collection filters, typed errors.
 - **Files:** `src/storage/{keys,minio,qdrant}.rs`, `src/db/pool.rs`,
@@ -99,6 +104,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I01 — Streaming quarantine upload validation
 
+- **Status:** done
 - **Plan:** Multipart stream+hash; magic/extension canonical format; OOXML limits;
   PDF/audio limits; retention disposition.
 - **Files:** `routes/uploads.rs`, `services/upload/{stream,sniff,archive,limits}.rs`.
@@ -109,6 +115,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I02 — Atomic quota admission
 
+- **Status:** done
 - **Plan:** Transactional reserve/finalize/refund, expiry, concurrent-job admission,
   quota headers/errors.
 - **Files:** `src/db/quota.rs`, `services/quota.rs`, quota middleware.
@@ -119,6 +126,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I03 — Durable jobs, outbox và event log
 
+- **Status:** done
 - **Plan:** Versioned payload, transactional outbox, leased SKIP LOCKED claims,
   heartbeat/retry/checkpoint/cancel/dead-letter/idempotency/sequenced events.
 - **Files:** `src/jobs/**`, `src/db/jobs.rs`.
@@ -130,6 +138,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I04 — Isolated converter worker
 
+- **Status:** done
 - **Plan:** Download quarantine; materialize server-derived canonical extension;
   process/cgroup limits and kill descendants; ephemeral cleanup/heartbeat/cancel.
 - **Files:** `src/workers/{convert,sandbox,limits}.rs`, worker image/config.
@@ -140,6 +149,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I05 — Idempotent conversion promotion saga
 
+- **Status:** done
 - **Plan:** Checkpoint download/convert/stage/promote/DB/cleanup; immutable version;
   publish/current pointer riêng với draft/latest upload; index outbox;
   compensation/refund.
@@ -152,6 +162,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I06 — Chunk/embedding/index worker
 
+- **Status:** done
 - **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
   chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
   extract typed claim key/value/unit/scope; incremental conflict candidate outbox;
