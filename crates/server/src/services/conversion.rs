@@ -50,11 +50,17 @@ impl ConversionIdentity {
         })
     }
 
-    pub fn staged_markdown_object_id(&self, job_id: Uuid, attempts: i32) -> Uuid {
-        deterministic_uuid("markhand-conversion-staged-markdown-attempt-v1", |hasher| {
+    pub fn staged_markdown_object_id(
+        &self,
+        job_id: Uuid,
+        attempts: i32,
+        lease_token: &str,
+    ) -> Uuid {
+        deterministic_uuid("markhand-conversion-staged-markdown-claim-v1", |hasher| {
             self.hash_material(hasher);
             hasher.update(job_id.as_bytes());
             hasher.update(attempts.to_be_bytes());
+            hasher.update(lease_token.as_bytes());
         })
     }
 

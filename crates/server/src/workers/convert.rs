@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::{
     interval_at, sleep_until, timeout, timeout_at, Instant as TokioInstant, MissedTickBehavior,
@@ -53,6 +55,7 @@ pub struct ConvertWorkerConfig {
     pub fail_cleanup_delete: bool,
     pub fail_quota_refund: bool,
     pub lose_staged_handle_after_put: bool,
+    pub pause_after_staging: Option<ConvertWorkerPause>,
 }
 
 impl ConvertWorkerConfig {
@@ -71,6 +74,7 @@ impl ConvertWorkerConfig {
             fail_cleanup_delete: false,
             fail_quota_refund: false,
             lose_staged_handle_after_put: false,
+            pause_after_staging: None,
         }
     }
 
@@ -95,6 +99,7 @@ impl ConvertWorkerConfig {
             fail_cleanup_delete: false,
             fail_quota_refund: false,
             lose_staged_handle_after_put: false,
+            pause_after_staging: None,
         }
     }
 
@@ -112,6 +117,18 @@ impl ConvertWorkerConfig {
             return Err(ConvertWorkerError::InvalidMaxJobDuration);
         }
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct ConvertWorkerPause {
+    pub staged: Arc<Notify>,
+    pub release: Arc<Notify>,
+}
+
+impl std::fmt::Debug for ConvertWorkerPause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ConvertWorkerPause")
     }
 }
 
@@ -240,6 +257,7 @@ impl ConvertWorker {
                     identity.promoted_version_id(),
                     job.id,
                     attempts,
+                    &lease_token,
                 )?;
                 let current_staging_key_string = current_staging_key.as_str();
                 let claimed = ClaimedJobScope {
@@ -296,6 +314,10 @@ impl ConvertWorker {
                         ConversionStep::Staged,
                     )
                     .await?;
+                    if let Some(pause) = &self.config.pause_after_staging {
+                        pause.staged.notify_waiters();
+                        pause.release.notified().await;
+                    }
                     if self.config.promotion_fault == Some(PromotionFault::AfterStagingPut) {
                         return Err(ConvertWorkerError::Promotion(PromotionError::Injected(
                             PromotionFault::AfterStagingPut,

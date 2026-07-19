@@ -116,11 +116,12 @@ pub fn markdown_key(
     promoted_version_id: Uuid,
     job_id: Uuid,
     attempts: i32,
+    lease_token: &str,
 ) -> Result<ObjectKey, StorageError> {
     trusted_key(
         identity.org_id,
         promoted_version_id,
-        identity.staged_markdown_object_id(job_id, attempts),
+        identity.staged_markdown_object_id(job_id, attempts, lease_token),
         None,
     )
 }
