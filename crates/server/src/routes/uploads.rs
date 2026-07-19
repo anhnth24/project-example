@@ -9,19 +9,22 @@ use std::time::Duration;
 use axum::extract::multipart::Field;
 use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
+use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
 use crate::http::AppState;
 use crate::services::quota::{self, QuotaError, QuotaSnapshot};
 use crate::services::upload::{
-    quota_reserve_hook, stream_to_tempfile_with_idle_timeout, validate_and_quarantine, Disposition,
-    LimitsConfig, ReasonCode, StreamedUpload, ThreatClass, UploadError, UploadOutcome,
+    quota_reserve_hook, spawn_quota_settled_quarantine, stream_to_tempfile_with_idle_timeout,
+    Disposition, LimitsConfig, QuotaSettledUploadError, ReasonCode, StreamedUpload, ThreatClass,
+    UploadError, UploadOutcome,
 };
 
 pub fn router(max_upload_bytes: usize) -> Router<Arc<AppState>> {
@@ -52,6 +55,7 @@ struct UploadResponse {
 async fn create_upload(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedOrg,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> Result<Response, UploadRouteError> {
     let request_id = auth.request_id.clone();
@@ -76,8 +80,9 @@ async fn create_upload(
     let storage = state.object_store().ok_or_else(|| {
         UploadRouteError::Upload(UploadError::StorageUnavailable, request_id.clone())
     })?;
-    let reservation_key = upload_reservation_key(&auth, &request_id);
-    let quota = quota_reserve_hook(
+    let reservation_key = upload_reservation_key(&auth, &request_id, &headers)
+        .map_err(|message| UploadRouteError::Validation(message, request_id.clone()))?;
+    let reservation = quota_reserve_hook(
         state.pool(),
         &auth.context,
         &reservation_key,
@@ -85,31 +90,39 @@ async fn create_upload(
     )
     .await
     .map_err(|error| UploadRouteError::Quota(error, request_id.clone()))?;
+    if !reservation.storage.created || !reservation.document.created {
+        return Err(UploadRouteError::Quota(
+            QuotaError::ReservationConflict,
+            request_id,
+        ));
+    }
 
-    let outcome = validate_and_quarantine(
-        &auth.context,
-        storage,
-        &limits,
+    let handle = spawn_quota_settled_quarantine(
+        state.pool().clone(),
+        auth.context.clone(),
+        storage.clone(),
+        limits,
         pending.streamed,
-        pending.declared_filename.as_deref(),
-        pending.declared_content_type.as_deref(),
-    )
-    .await;
-    match outcome {
-        Ok(outcome) => {
-            quota::finalize_upload(state.pool(), &auth.context, &reservation_key)
-                .await
-                .map_err(|error| UploadRouteError::Quota(error, request_id.clone()))?;
-            Ok(success_response(
-                outcome,
-                &request_id,
-                Some(quota.storage_headers()),
-            ))
+        pending.declared_filename,
+        pending.declared_content_type,
+        reservation_key,
+    );
+    match handle.await {
+        Ok(Ok(success)) => Ok(success_response(
+            success.outcome,
+            &request_id,
+            Some(success.quota_snapshot),
+        )),
+        Ok(Err(QuotaSettledUploadError::Upload(error))) => {
+            Err(UploadRouteError::Upload(error, request_id.clone()))
         }
-        Err(error) => {
-            let _ = quota::refund_upload(state.pool(), &auth.context, &reservation_key).await;
-            Err(UploadRouteError::Upload(error, request_id))
+        Ok(Err(QuotaSettledUploadError::Quota(error))) => {
+            Err(UploadRouteError::Quota(error, request_id.clone()))
         }
+        Err(_) => Err(UploadRouteError::Upload(
+            UploadError::Internal,
+            request_id.clone(),
+        )),
     }
 }
 
@@ -253,6 +266,7 @@ fn success_response(
 enum UploadRouteError {
     Upload(UploadError, String),
     Quota(QuotaError, String),
+    Validation(String, String),
 }
 
 impl IntoResponse for UploadRouteError {
@@ -260,15 +274,51 @@ impl IntoResponse for UploadRouteError {
         match self {
             Self::Upload(error, request_id) => error.into_response_with_request_id(&request_id),
             Self::Quota(error, request_id) => error.into_response_with_request_id(&request_id),
+            Self::Validation(message, request_id) => (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    code: "validation_failed".into(),
+                    message,
+                    request_id,
+                    details: None,
+                }),
+            )
+                .into_response(),
         }
     }
 }
 
-fn upload_reservation_key(auth: &AuthenticatedOrg, request_id: &str) -> String {
-    format!(
-        "{}.{}.{}",
-        auth.context.org_id(),
-        auth.context.user_id(),
-        request_id
-    )
+fn upload_reservation_key(
+    auth: &AuthenticatedOrg,
+    request_id: &str,
+    headers: &HeaderMap,
+) -> Result<String, String> {
+    let operation = match headers.get("idempotency-key") {
+        Some(value) => {
+            let value = value
+                .to_str()
+                .map_err(|_| "Idempotency-Key must be visible ASCII".to_string())?;
+            validate_idempotency_key(value)?;
+            format!("client:{value}")
+        }
+        None => format!("request:{request_id}"),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(auth.context.org_id().as_bytes());
+    hasher.update(auth.context.user_id().as_bytes());
+    hasher.update(operation.as_bytes());
+    Ok(format!("op.{}", hex::encode(hasher.finalize())))
+}
+
+fn validate_idempotency_key(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 128 {
+        return Err("Idempotency-Key must be between 1 and 128 bytes".into());
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+    {
+        return Err("Idempotency-Key contains unsupported characters".into());
+    }
+    Ok(())
 }

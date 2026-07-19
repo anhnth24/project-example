@@ -15,7 +15,7 @@ use fileconv_server::db::models::{ReservationStatus, ResourceKind};
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::services::quota::{
-    self, apply_quota_headers, QuotaDenial, QuotaError, QuotaSnapshot,
+    self, apply_quota_headers, QuotaDenial, QuotaError, QuotaSettlement, QuotaSnapshot,
 };
 use tokio_postgres::NoTls;
 use uuid::Uuid;
@@ -330,16 +330,24 @@ async fn terminal_settlement_is_idempotent_and_typed() {
     )
     .await
     .unwrap();
-    quota::finalize(&pool, &context, "finalize-once")
-        .await
-        .unwrap();
-    quota::finalize(&pool, &context, "finalize-once")
-        .await
-        .unwrap();
+    assert!(matches!(
+        quota::finalize(&pool, &context, "finalize-once")
+            .await
+            .unwrap(),
+        QuotaSettlement::Finalized(_)
+    ));
+    assert!(matches!(
+        quota::finalize(&pool, &context, "finalize-once")
+            .await
+            .unwrap(),
+        QuotaSettlement::AlreadyFinalized(_)
+    ));
     assert_eq!(counter_value(&pool, &context, "storage_bytes").await, 7);
     assert!(matches!(
-        quota::refund(&pool, &context, "finalize-once").await,
-        Err(QuotaError::FinalizedCannotRefund)
+        quota::refund(&pool, &context, "finalize-once")
+            .await
+            .unwrap(),
+        QuotaSettlement::FinalizedCannotRefund(_)
     ));
 
     quota::reserve(
@@ -353,15 +361,23 @@ async fn terminal_settlement_is_idempotent_and_typed() {
     )
     .await
     .unwrap();
-    quota::refund(&pool, &context, "refund-once").await.unwrap();
-    quota::refund(&pool, &context, "refund-once").await.unwrap();
+    assert!(matches!(
+        quota::refund(&pool, &context, "refund-once").await.unwrap(),
+        QuotaSettlement::Refunded(_)
+    ));
+    assert!(matches!(
+        quota::refund(&pool, &context, "refund-once").await.unwrap(),
+        QuotaSettlement::AlreadyRefunded(_)
+    ));
     assert_eq!(
         active_reserved(&pool, &context, ResourceKind::StorageBytes).await,
         0
     );
     assert!(matches!(
-        quota::finalize(&pool, &context, "refund-once").await,
-        Err(QuotaError::RefundedCannotFinalize)
+        quota::finalize(&pool, &context, "refund-once")
+            .await
+            .unwrap(),
+        QuotaSettlement::RefundedCannotFinalize(_)
     ));
 
     quota::reserve(
@@ -381,8 +397,10 @@ async fn terminal_settlement_is_idempotent_and_typed() {
         1
     );
     assert!(matches!(
-        quota::finalize(&pool, &context, "expire-once").await,
-        Err(QuotaError::ExpiredCannotFinalize)
+        quota::finalize(&pool, &context, "expire-once")
+            .await
+            .unwrap(),
+        QuotaSettlement::Expired(_)
     ));
 
     ephemeral.drop().await;
@@ -463,6 +481,236 @@ async fn idempotency_key_retries_create_one_reservation() {
     assert_eq!(
         reservation_count(&pool, &context, "same-key-concurrent").await,
         1
+    );
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn mismatched_and_terminal_key_reuse_is_rejected() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-conflict",
+        QuotaFixture {
+            storage: 10,
+            documents: 10,
+            concurrent: 10,
+            tokens: 10,
+        },
+    )
+    .await;
+
+    quota::reserve(
+        &pool,
+        &context,
+        "reuse-conflict",
+        ResourceKind::StorageBytes,
+        2,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        quota::reserve(
+            &pool,
+            &context,
+            "reuse-conflict",
+            ResourceKind::StorageBytes,
+            3,
+            Duration::from_secs(60),
+            None,
+        )
+        .await,
+        Err(QuotaError::ReservationConflict)
+    ));
+    quota::refund(&pool, &context, "reuse-conflict")
+        .await
+        .unwrap();
+    assert!(matches!(
+        quota::reserve(
+            &pool,
+            &context,
+            "reuse-conflict",
+            ResourceKind::StorageBytes,
+            2,
+            Duration::from_secs(60),
+            None,
+        )
+        .await,
+        Err(QuotaError::ReservationConflict)
+    ));
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn concurrent_finalize_and_refund_do_not_double_apply() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let pool = Arc::new(pool);
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-race",
+        QuotaFixture {
+            storage: 10,
+            documents: 10,
+            concurrent: 10,
+            tokens: 10,
+        },
+    )
+    .await;
+    quota::reserve(
+        &pool,
+        &context,
+        "settle-race",
+        ResourceKind::StorageBytes,
+        4,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let fin_pool = Arc::clone(&pool);
+    let fin_ctx = context.clone();
+    let finalize =
+        tokio::spawn(async move { quota::finalize(&fin_pool, &fin_ctx, "settle-race").await });
+    let refund_pool = Arc::clone(&pool);
+    let refund_ctx = context.clone();
+    let refund =
+        tokio::spawn(async move { quota::refund(&refund_pool, &refund_ctx, "settle-race").await });
+
+    let finalize = finalize.await.unwrap();
+    let refund = refund.await.unwrap();
+    let finalized = matches!(
+        &finalize,
+        Ok(QuotaSettlement::Finalized(_) | QuotaSettlement::AlreadyFinalized(_))
+    ) || matches!(&refund, Ok(QuotaSettlement::FinalizedCannotRefund(_)));
+    let refunded = matches!(
+        &refund,
+        Ok(QuotaSettlement::Refunded(_) | QuotaSettlement::AlreadyRefunded(_))
+    ) || matches!(&finalize, Ok(QuotaSettlement::RefundedCannotFinalize(_)));
+    assert_ne!(finalized, refunded, "exactly one terminal direction wins");
+    assert!(
+        counter_value(&pool, &context, "storage_bytes").await == 0
+            || counter_value(&pool, &context, "storage_bytes").await == 4
+    );
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn upload_two_resource_settlement_is_atomic() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-upload-atomic",
+        QuotaFixture {
+            storage: 100,
+            documents: 10,
+            concurrent: 10,
+            tokens: 10,
+        },
+    )
+    .await;
+
+    quota::reserve_upload(&pool, &context, "upload-atomic", 9, Duration::from_secs(60))
+        .await
+        .unwrap();
+    // Force one member of the two-resource operation to be non-finalizable. The
+    // finalize transaction must not partially increment the other counter.
+    quota::refund(&pool, &context, "upload.documents.upload-atomic")
+        .await
+        .unwrap();
+    assert!(matches!(
+        quota::finalize_upload(&pool, &context, "upload-atomic").await,
+        Err(QuotaError::RefundedCannotFinalize)
+    ));
+    assert_eq!(counter_value(&pool, &context, "storage_bytes").await, 0);
+    assert_eq!(counter_value(&pool, &context, "documents").await, 0);
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::StorageBytes).await,
+        9
+    );
+
+    quota::refund_upload(&pool, &context, "upload-atomic")
+        .await
+        .unwrap();
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::StorageBytes).await,
+        0
+    );
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn concurrent_jobs_admission_respects_limit() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let pool = Arc::new(pool);
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-jobs",
+        QuotaFixture {
+            storage: 100,
+            documents: 10,
+            concurrent: 2,
+            tokens: 10,
+        },
+    )
+    .await;
+    let mut tasks = Vec::new();
+    for idx in 0..6 {
+        let pool = Arc::clone(&pool);
+        let context = context.clone();
+        tasks.push(tokio::spawn(async move {
+            quota::reserve(
+                &pool,
+                &context,
+                &format!("job-{idx}"),
+                ResourceKind::ConcurrentJobs,
+                1,
+                Duration::from_secs(60),
+                None,
+            )
+            .await
+        }));
+    }
+    let mut ok = 0;
+    let mut denied = 0;
+    for task in tasks {
+        match task.await.unwrap() {
+            Ok(_) => ok += 1,
+            Err(QuotaError::QuotaExceeded(_)) => denied += 1,
+            Err(error) => panic!("unexpected error: {error:?}"),
+        }
+    }
+    assert_eq!(ok, 2);
+    assert_eq!(denied, 4);
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        2
     );
 
     ephemeral.drop().await;

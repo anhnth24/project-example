@@ -15,6 +15,8 @@ const DEFAULT_MINIO_OPERATION_TIMEOUT_SECS: u64 = 30;
 const MAX_MINIO_OPERATION_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_ACCESS_TOKEN_TTL_SECS: u64 = 900;
 const DEFAULT_REFRESH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24 * 7;
+const DEFAULT_QUOTA_SWEEP_INTERVAL_SECS: u64 = 60;
+const DEFAULT_QUOTA_SWEEP_BATCH_SIZE: u32 = 500;
 const DEFAULT_ARGON2_MEMORY_KIB: u32 = 19_456;
 const DEFAULT_ARGON2_TIME_COST: u32 = 2;
 const DEFAULT_ARGON2_PARALLELISM: u32 = 1;
@@ -86,6 +88,7 @@ pub struct ServerConfig {
     auth: AuthConfig,
     limits: RuntimeLimits,
     upload: UploadConfig,
+    quota_sweep: QuotaSweepConfig,
     index_signature: Option<String>,
 }
 
@@ -130,6 +133,7 @@ impl fmt::Debug for ServerConfig {
             .field("auth", &self.auth)
             .field("limits", &self.limits)
             .field("upload", &self.upload)
+            .field("quota_sweep", &self.quota_sweep)
             .field("index_signature", &self.index_signature)
             .finish()
     }
@@ -345,6 +349,12 @@ pub struct RuntimeLimits {
     pub job_lease_seconds: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaSweepConfig {
+    pub interval_secs: u64,
+    pub batch_size: u32,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigFile {
@@ -382,6 +392,8 @@ struct ConfigFile {
     max_part_header_bytes: Option<u64>,
     upload_timeout_secs: Option<u64>,
     upload_idle_timeout_secs: Option<u64>,
+    quota_sweep_interval_secs: Option<u64>,
+    quota_sweep_batch_size: Option<u64>,
     index_signature: Option<String>,
 }
 
@@ -650,6 +662,22 @@ impl ServerConfig {
         let upload = UploadConfig {
             limits: upload_limits,
         };
+        let quota_sweep = QuotaSweepConfig {
+            interval_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_QUOTA_SWEEP_INTERVAL_SECS",
+                |value| value.quota_sweep_interval_secs,
+                DEFAULT_QUOTA_SWEEP_INTERVAL_SECS,
+            )?,
+            batch_size: u32_value(
+                file,
+                env,
+                "MARKHAND_QUOTA_SWEEP_BATCH_SIZE",
+                |value| value.quota_sweep_batch_size,
+                DEFAULT_QUOTA_SWEEP_BATCH_SIZE,
+            )?,
+        };
         let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
             value.index_signature.as_ref()
         });
@@ -671,6 +699,7 @@ impl ServerConfig {
             auth,
             limits,
             upload,
+            quota_sweep,
             index_signature,
         };
         config.validate()?;
@@ -693,6 +722,10 @@ impl ServerConfig {
     /// Upload intake limits (P0-09 policy defaults unless overridden).
     pub const fn upload(&self) -> &UploadConfig {
         &self.upload
+    }
+
+    pub const fn quota_sweep(&self) -> QuotaSweepConfig {
+        self.quota_sweep
     }
 
     /// Legacy runtime limits (max upload + job lease).
@@ -744,6 +777,10 @@ impl ServerConfig {
                 job_lease_seconds: DEFAULT_JOB_LEASE_SECONDS,
             },
             upload: UploadConfig::policy_defaults(),
+            quota_sweep: QuotaSweepConfig {
+                interval_secs: DEFAULT_QUOTA_SWEEP_INTERVAL_SECS,
+                batch_size: DEFAULT_QUOTA_SWEEP_BATCH_SIZE,
+            },
             index_signature: None,
         }
     }
@@ -910,6 +947,12 @@ impl ServerConfig {
             return Err(format!(
                 "MARKHAND_MINIO_OPERATION_TIMEOUT_SECS must be between 1 and {MAX_MINIO_OPERATION_TIMEOUT_SECS}"
             ));
+        }
+        if self.quota_sweep.interval_secs == 0 || self.quota_sweep.interval_secs > 86_400 {
+            return Err("MARKHAND_QUOTA_SWEEP_INTERVAL_SECS must be between 1 and 86400".into());
+        }
+        if self.quota_sweep.batch_size == 0 || self.quota_sweep.batch_size > 10_000 {
+            return Err("MARKHAND_QUOTA_SWEEP_BATCH_SIZE must be between 1 and 10000".into());
         }
         Ok(())
     }
@@ -1177,6 +1220,8 @@ mod tests {
             max_part_header_bytes: None,
             upload_timeout_secs: None,
             upload_idle_timeout_secs: None,
+            quota_sweep_interval_secs: None,
+            quota_sweep_batch_size: None,
             index_signature: None,
         };
         let env = BTreeMap::from([

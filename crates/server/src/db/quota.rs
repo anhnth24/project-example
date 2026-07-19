@@ -179,6 +179,49 @@ pub async fn find_by_key(
     row.map(|row| map_reservation(&row)).transpose()
 }
 
+pub async fn find_active_matching_by_key(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+    kind: ResourceKind,
+    amount: i64,
+) -> Result<Option<QuotaReservation>, DbError> {
+    let kind = kind.as_str();
+    let row = txn
+        .query_opt(
+            "SELECT id, org_id, reservation_key, resource_kind, amount, status,
+                    expires_at, job_id, created_at, settled_at
+             FROM quota_reservations
+             WHERE org_id = $1
+               AND reservation_key = $2
+               AND resource_kind = $3
+               AND amount = $4
+               AND status = 'reserved'
+               AND expires_at > now()",
+            &[&ctx.org_id(), &reservation_key, &kind, &amount],
+        )
+        .await?;
+    row.map(|row| map_reservation(&row)).transpose()
+}
+
+pub async fn kind_by_key(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<ResourceKind, DbError> {
+    let row = txn
+        .query_opt(
+            "SELECT resource_kind
+             FROM quota_reservations
+             WHERE org_id = $1 AND reservation_key = $2",
+            &[&ctx.org_id(), &reservation_key],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    let resource_kind: String = row.get(0);
+    ResourceKind::parse(&resource_kind).map_err(DbError::Config)
+}
+
 pub async fn insert_reserved(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -206,6 +249,69 @@ pub async fn insert_reserved(
                 &ttl_secs,
                 &job_id,
             ],
+        )
+        .await?;
+    row.map(|row| map_reservation(&row)).transpose()
+}
+
+pub async fn finalize_reserved_by_key(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<Option<QuotaReservation>, DbError> {
+    let row = txn
+        .query_opt(
+            "UPDATE quota_reservations
+             SET status = 'finalized', settled_at = now()
+             WHERE org_id = $1
+               AND reservation_key = $2
+               AND status = 'reserved'
+               AND expires_at > now()
+             RETURNING id, org_id, reservation_key, resource_kind, amount, status,
+                       expires_at, job_id, created_at, settled_at",
+            &[&ctx.org_id(), &reservation_key],
+        )
+        .await?;
+    row.map(|row| map_reservation(&row)).transpose()
+}
+
+pub async fn refund_reserved_by_key(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<Option<QuotaReservation>, DbError> {
+    let row = txn
+        .query_opt(
+            "UPDATE quota_reservations
+             SET status = 'refunded', settled_at = now()
+             WHERE org_id = $1
+               AND reservation_key = $2
+               AND status = 'reserved'
+               AND expires_at > now()
+             RETURNING id, org_id, reservation_key, resource_kind, amount, status,
+                       expires_at, job_id, created_at, settled_at",
+            &[&ctx.org_id(), &reservation_key],
+        )
+        .await?;
+    row.map(|row| map_reservation(&row)).transpose()
+}
+
+pub async fn expire_reserved_by_key_if_due(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<Option<QuotaReservation>, DbError> {
+    let row = txn
+        .query_opt(
+            "UPDATE quota_reservations
+             SET status = 'expired', settled_at = now()
+             WHERE org_id = $1
+               AND reservation_key = $2
+               AND status = 'reserved'
+               AND expires_at <= now()
+             RETURNING id, org_id, reservation_key, resource_kind, amount, status,
+                       expires_at, job_id, created_at, settled_at",
+            &[&ctx.org_id(), &reservation_key],
         )
         .await?;
     row.map(|row| map_reservation(&row)).transpose()
@@ -302,6 +408,12 @@ pub async fn expire_reserved_batch(
         )
         .await?;
     Ok(updated)
+}
+
+pub async fn list_org_ids_for_sweep(pool: &deadpool_postgres::Pool) -> Result<Vec<Uuid>, DbError> {
+    let client = pool.get().await?;
+    let rows = client.query("SELECT id FROM orgs ORDER BY id", &[]).await?;
+    Ok(rows.into_iter().map(|row| row.get(0)).collect())
 }
 
 pub(crate) fn map_reservation(row: &Row) -> Result<QuotaReservation, DbError> {

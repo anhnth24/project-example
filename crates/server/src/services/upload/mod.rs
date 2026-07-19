@@ -33,7 +33,9 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::auth::permissions::{require_permission, ResolveError};
-use crate::services::quota::{self, QuotaError, UploadQuotaReservation, DEFAULT_RESERVATION_TTL};
+use crate::services::quota::{
+    self, QuotaError, QuotaSnapshot, UploadQuotaReservation, DEFAULT_RESERVATION_TTL,
+};
 use crate::storage::keys::quarantine_key;
 use crate::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use crate::storage::ObjectKey;
@@ -91,6 +93,72 @@ pub async fn quota_reserve_hook(
     bytes: u64,
 ) -> Result<UploadQuotaReservation, QuotaError> {
     quota::reserve_upload(pool, org, reservation_key, bytes, DEFAULT_RESERVATION_TTL).await
+}
+
+#[derive(Debug)]
+pub struct QuotaSettledUpload {
+    pub outcome: UploadOutcome,
+    pub quota_snapshot: QuotaSnapshot,
+}
+
+#[derive(Debug)]
+pub enum QuotaSettledUploadError {
+    Upload(UploadError),
+    Quota(QuotaError),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_quota_settled_quarantine(
+    pool: deadpool_postgres::Pool,
+    org: OrgContext,
+    storage: MinioClient,
+    limits: LimitsConfig,
+    streamed: StreamedUpload,
+    declared_filename: Option<String>,
+    declared_content_type: Option<String>,
+    reservation_key: String,
+) -> tokio::task::JoinHandle<Result<QuotaSettledUpload, QuotaSettledUploadError>> {
+    tokio::spawn(async move {
+        let outcome = validate_and_quarantine(
+            &org,
+            &storage,
+            &limits,
+            streamed,
+            declared_filename.as_deref(),
+            declared_content_type.as_deref(),
+        )
+        .await;
+        match outcome {
+            Ok(outcome) => match quota::finalize_upload(&pool, &org, &reservation_key).await {
+                Ok(settlement) => Ok(QuotaSettledUpload {
+                    outcome,
+                    quota_snapshot: settlement.storage_quota,
+                }),
+                Err(error) => {
+                    if let Err(cleanup_error) = storage
+                        .cleanup_generated_object(org.org_id(), &outcome.object_key)
+                        .await
+                    {
+                        eprintln!(
+                            "fileconv-server: quota finalize failed and upload cleanup failed: {}",
+                            cleanup_error.code()
+                        );
+                    }
+                    Err(QuotaSettledUploadError::Quota(error))
+                }
+            },
+            Err(error) => {
+                if let Err(refund_error) = quota::refund_upload(&pool, &org, &reservation_key).await
+                {
+                    eprintln!(
+                        "fileconv-server: quota refund after upload failure failed: {}",
+                        refund_error.code()
+                    );
+                }
+                Err(QuotaSettledUploadError::Upload(error))
+            }
+        }
+    })
 }
 
 /// Validate a fully-received tempfile and optionally persist to quarantine storage.
