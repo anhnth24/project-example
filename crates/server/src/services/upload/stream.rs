@@ -1,13 +1,14 @@
 //! Bounded streaming intake: size cap + SHA-256 without full-file buffering.
 
 use std::fs::File;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom};
 use std::time::Duration;
 
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
-use tokio::io::AsyncReadExt;
+use tokio::fs::File as TokioFile;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::error::{ReasonCode, ThreatClass, UploadError};
 use super::limits::{LimitsConfig, MAGIC_SNIFF_BYTES, STREAM_CHUNK_BYTES};
@@ -47,7 +48,13 @@ where
     S: futures::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
     E: std::fmt::Debug,
 {
-    let mut tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let mut writer = TokioFile::from_std(
+        tempfile
+            .as_file()
+            .try_clone()
+            .map_err(|_| UploadError::Internal)?,
+    );
     let mut hasher = Sha256::new();
     let mut size_bytes: u64 = 0;
     let mut head = Vec::with_capacity(MAGIC_SNIFF_BYTES);
@@ -74,12 +81,13 @@ where
             let need = MAGIC_SNIFF_BYTES - head.len();
             head.extend_from_slice(&chunk[..chunk.len().min(need)]);
         }
-        tempfile
+        writer
             .write_all(&chunk)
+            .await
             .map_err(|_| UploadError::Internal)?;
     }
 
-    tempfile.flush().map_err(|_| UploadError::Internal)?;
+    writer.flush().await.map_err(|_| UploadError::Internal)?;
     let sha256_hex = hex::encode(hasher.finalize());
     Ok(StreamedUpload {
         tempfile,
@@ -99,7 +107,13 @@ where
     S: futures::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
     E: std::fmt::Debug,
 {
-    let mut tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let mut writer = TokioFile::from_std(
+        tempfile
+            .as_file()
+            .try_clone()
+            .map_err(|_| UploadError::Internal)?,
+    );
     let mut hasher = Sha256::new();
     let mut size_bytes: u64 = 0;
     let mut head = Vec::with_capacity(MAGIC_SNIFF_BYTES);
@@ -133,12 +147,13 @@ where
             let need = MAGIC_SNIFF_BYTES - head.len();
             head.extend_from_slice(&chunk[..chunk.len().min(need)]);
         }
-        tempfile
+        writer
             .write_all(&chunk)
+            .await
             .map_err(|_| UploadError::Internal)?;
     }
 
-    tempfile.flush().map_err(|_| UploadError::Internal)?;
+    writer.flush().await.map_err(|_| UploadError::Internal)?;
     Ok(StreamedUpload {
         tempfile,
         sha256_hex: hex::encode(hasher.finalize()),
@@ -155,7 +170,13 @@ pub async fn stream_async_read_to_tempfile<R>(
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let mut writer = TokioFile::from_std(
+        tempfile
+            .as_file()
+            .try_clone()
+            .map_err(|_| UploadError::Internal)?,
+    );
     let mut hasher = Sha256::new();
     let mut size_bytes: u64 = 0;
     let mut head = Vec::with_capacity(MAGIC_SNIFF_BYTES);
@@ -183,12 +204,13 @@ where
             let need = MAGIC_SNIFF_BYTES - head.len();
             head.extend_from_slice(&chunk[..chunk.len().min(need)]);
         }
-        tempfile
+        writer
             .write_all(chunk)
+            .await
             .map_err(|_| UploadError::Internal)?;
     }
 
-    tempfile.flush().map_err(|_| UploadError::Internal)?;
+    writer.flush().await.map_err(|_| UploadError::Internal)?;
     Ok(StreamedUpload {
         tempfile,
         sha256_hex: hex::encode(hasher.finalize()),

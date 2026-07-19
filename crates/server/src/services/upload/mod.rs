@@ -291,6 +291,8 @@ fn preflight_pdf(file: &mut File, limits: &LimitsConfig) -> Result<(), UploadErr
     file.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
+    // This is a bounded structural sniff only; accepted PDFs remain quarantined and the
+    // converter stage performs deeper format validation.
     let mut buf = [0_u8; STREAM_CHUNK_BYTES];
     let mut overlap = Vec::new();
     let mut tail = Vec::new();
@@ -429,6 +431,10 @@ fn validate_wav_duration(file: &mut File) -> Result<u64, UploadError> {
     file.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
+    let file_len = file
+        .metadata()
+        .map_err(|_| UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed))?
+        .len();
     let mut header = [0_u8; 12];
     file.read_exact(&mut header).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
@@ -439,10 +445,18 @@ fn validate_wav_duration(file: &mut File) -> Result<u64, UploadError> {
             ReasonCode::FailClosed,
         ));
     }
+    let riff_size = u32::from_le_bytes(header[4..8].try_into().unwrap_or([0; 4])) as u64;
+    if riff_size < 4 || riff_size.saturating_add(8) > file_len {
+        return Err(UploadError::rejected(
+            ThreatClass::ParserCorruption,
+            ReasonCode::FailClosed,
+        ));
+    }
     let mut byte_rate = None;
     let mut data_bytes = None;
     let mut scanned = 12_u64;
-    while scanned < 1024 * 1024 {
+    let riff_end = riff_size.saturating_add(8).min(file_len);
+    while scanned < 1024 * 1024 && scanned + 8 <= riff_end {
         let mut chunk = [0_u8; 8];
         file.read_exact(&mut chunk).map_err(|_| {
             UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
@@ -450,6 +464,15 @@ fn validate_wav_duration(file: &mut File) -> Result<u64, UploadError> {
         scanned = scanned.saturating_add(8);
         let id = &chunk[0..4];
         let len = u32::from_le_bytes(chunk[4..8].try_into().unwrap_or([0; 4])) as u64;
+        let padded_len = len.saturating_add(len % 2);
+        let chunk_data_end = scanned.saturating_add(len);
+        let chunk_end = scanned.saturating_add(padded_len);
+        if chunk_data_end > riff_end || chunk_end > file_len {
+            return Err(UploadError::rejected(
+                ThreatClass::ParserCorruption,
+                ReasonCode::FailClosed,
+            ));
+        }
         if id == b"fmt " {
             let mut fmt = vec![0_u8; len.min(64) as usize];
             file.read_exact(&mut fmt).map_err(|_| {
@@ -478,12 +501,13 @@ fn validate_wav_duration(file: &mut File) -> Result<u64, UploadError> {
                 UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
             })?;
         }
-        if len % 2 == 1 {
-            file.seek(SeekFrom::Current(1)).map_err(|_| {
-                UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
-            })?;
+        if padded_len > len {
+            file.seek(SeekFrom::Current((padded_len - len) as i64))
+                .map_err(|_| {
+                    UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+                })?;
         }
-        scanned = scanned.saturating_add(len + (len % 2));
+        scanned = chunk_end;
         if byte_rate.is_some() && data_bytes.is_some() {
             break;
         }
@@ -507,6 +531,8 @@ fn validate_symphonia_duration(
     file: &mut File,
     format: CanonicalFormat,
 ) -> Result<u64, UploadError> {
+    // Non-WAV audio gets a bounded container probe here; full packet/decode validation is
+    // intentionally left to the converter while the object remains quarantined.
     file.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;

@@ -58,6 +58,15 @@ pub struct ObjectPutVerification<'a> {
     pub expected_sha256: &'a str,
 }
 
+struct OwnedPutRequest {
+    org_id: Uuid,
+    key: ObjectKey,
+    meta: ObjectIdentityMeta,
+    content_type: String,
+    expected_len: u64,
+    expected_sha256: String,
+}
+
 /// Fail-closed MinIO/S3 object store client (credentials required).
 #[derive(Clone)]
 pub struct MinioClient {
@@ -227,7 +236,7 @@ impl MinioClient {
         }
     }
 
-    /// Stream an `AsyncRead` into an opaque key (bounded memory; S3 multipart under the hood).
+    /// Stream an `AsyncRead` into an opaque key with fixed-memory single-PUT upload.
     pub async fn put_object_stream<R>(
         &self,
         org_id: Uuid,
@@ -240,30 +249,52 @@ impl MinioClient {
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
-        authorize_key_for_org(key, org_id)?;
-        if meta.org_id != org_id || meta.org_id.is_nil() {
+        let client = self.clone();
+        let request = OwnedPutRequest {
+            org_id,
+            key: key.clone(),
+            meta: meta.clone(),
+            content_type: content_type.to_string(),
+            expected_len: verification.expected_len,
+            expected_sha256: verification.expected_sha256.to_string(),
+        };
+        let handle =
+            tokio::spawn(async move { client.put_object_stream_owned(reader, request).await });
+        handle.await.map_err(|_| StorageError::Transport)?
+    }
+
+    async fn put_object_stream_owned<R>(
+        &self,
+        reader: R,
+        request: OwnedPutRequest,
+    ) -> Result<(), StorageError>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        authorize_key_for_org(&request.key, request.org_id)?;
+        if request.meta.org_id != request.org_id || request.meta.org_id.is_nil() {
             return Err(StorageError::KeyOrgMismatch);
         }
-        if key.namespace() == ObjectNamespace::Trusted {
-            let version_id = meta.version_id.ok_or(StorageError::MissingScope)?;
-            authorize_key_for_version(key, version_id)?;
+        if request.key.namespace() == ObjectNamespace::Trusted {
+            let version_id = request.meta.version_id.ok_or(StorageError::MissingScope)?;
+            authorize_key_for_version(&request.key, version_id)?;
         }
-        let _ = parse_key_structure(&key.as_str())?;
-        if meta.content_length != Some(verification.expected_len)
-            || meta.content_sha256.as_deref() != Some(verification.expected_sha256)
+        let _ = parse_key_structure(&request.key.as_str())?;
+        if request.meta.content_length != Some(request.expected_len)
+            || request.meta.content_sha256.as_deref() != Some(request.expected_sha256.as_str())
         {
             return Err(StorageError::ConfigInvalid);
         }
-        let path = key.as_str();
-        let mut headers = identity_headers(meta, content_type)?;
+        let path = request.key.as_str();
+        let mut headers = identity_headers(&request.meta, &request.content_type)?;
         headers.insert(
             CONTENT_LENGTH,
-            HeaderValue::from_str(&verification.expected_len.to_string())
+            HeaderValue::from_str(&request.expected_len.to_string())
                 .map_err(|_| StorageError::ConfigInvalid)?,
         );
         let presigned = self
             .bucket
-            .presign_put(path, 300, Some(headers.clone()), None)
+            .presign_put(&path, 300, Some(headers.clone()), None)
             .await
             .map_err(|_| StorageError::Transport)?;
         let uploaded = Arc::new(AtomicU64::new(0));
@@ -293,24 +324,27 @@ impl MinioClient {
             .await
             .map_err(|_| StorageError::Transport)?;
         if !response.status().is_success() {
-            let _ = self.delete_object(org_id, key).await;
+            self.cleanup_after_failed_put(request.org_id, &request.key, StorageError::Backend)
+                .await?;
             return Err(StorageError::Backend);
         }
-        if uploaded.load(Ordering::Relaxed) != verification.expected_len {
-            let _ = self.delete_object(org_id, key).await;
+        if uploaded.load(Ordering::Relaxed) != request.expected_len {
+            self.cleanup_after_failed_put(request.org_id, &request.key, StorageError::Backend)
+                .await?;
             return Err(StorageError::Backend);
         }
         if let Err(error) = self
             .verify_stored_object(
-                org_id,
-                key,
-                verification.expected_len,
-                verification.expected_sha256,
+                request.org_id,
+                &request.key,
+                request.expected_len,
+                &request.expected_sha256,
             )
             .await
         {
-            let _ = self.delete_object(org_id, key).await;
-            return Err(error);
+            return self
+                .cleanup_after_failed_put(request.org_id, &request.key, error)
+                .await;
         }
         Ok(())
     }
@@ -346,6 +380,28 @@ impl MinioClient {
     pub async fn delete_object(&self, org_id: Uuid, key: &ObjectKey) -> Result<(), StorageError> {
         authorize_key_for_org(key, org_id)?;
         self.verify_stored_org(org_id, key).await?;
+        self.delete_object_authorized_key(key, false).await
+    }
+
+    /// Internal cleanup for objects whose key was just generated for `org_id`.
+    ///
+    /// This intentionally authorizes by the generated key instead of stored metadata so
+    /// verification-failed objects with missing/mismatched metadata can still be removed.
+    pub async fn cleanup_generated_object(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+    ) -> Result<(), StorageError> {
+        authorize_key_for_org(key, org_id)?;
+        let _ = parse_key_structure(&key.as_str())?;
+        self.delete_object_authorized_key(key, true).await
+    }
+
+    async fn delete_object_authorized_key(
+        &self,
+        key: &ObjectKey,
+        missing_ok: bool,
+    ) -> Result<(), StorageError> {
         let path = key.as_str();
         let response = self
             .bucket
@@ -354,7 +410,11 @@ impl MinioClient {
             .map_err(map_s3_get_error)?;
         let status = response.status_code();
         if status == 404 {
-            return Err(StorageError::NotFound);
+            return if missing_ok {
+                Ok(())
+            } else {
+                Err(StorageError::NotFound)
+            };
         }
         if (200..300).contains(&status) {
             Ok(())
@@ -377,6 +437,24 @@ impl MinioClient {
     async fn verify_stored_org(&self, org_id: Uuid, key: &ObjectKey) -> Result<(), StorageError> {
         let _ = self.head_for_org(org_id, key).await?;
         Ok(())
+    }
+
+    async fn cleanup_after_failed_put(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+        cause: StorageError,
+    ) -> Result<(), StorageError> {
+        match self.cleanup_generated_object(org_id, key).await {
+            Ok(()) => Err(cause),
+            Err(cleanup_error) => {
+                eprintln!(
+                    "fileconv-server: cleanup of failed upload object failed: {}",
+                    cleanup_error.code()
+                );
+                Err(cleanup_error)
+            }
+        }
     }
 
     async fn verify_stored_object(

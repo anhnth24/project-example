@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{DefaultBodyLimit, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -139,8 +139,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
-        .merge(routes::uploads::router())
-        .layer(DefaultBodyLimit::max(max_upload_bytes))
+        .merge(routes::uploads::router(max_upload_bytes))
         .with_state(Arc::new(state))
 }
 

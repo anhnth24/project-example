@@ -3,7 +3,7 @@
 //! Every member is inflated through a fixed-size buffer. Central-directory sizes
 //! are treated as claims to verify, not as authority for policy decisions.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
@@ -19,10 +19,12 @@ const CONTENT_TYPES: &str = "[Content_Types].xml";
 const WORD_DOCUMENT: &str = "word/document.xml";
 const PPT_PRESENTATION: &str = "ppt/presentation.xml";
 const XL_WORKBOOK: &str = "xl/workbook.xml";
+const XL_WORKBOOK_BIN: &str = "xl/workbook.bin";
 const ODS_MIMETYPE: &str = "mimetype";
 
 const ODS_SPREADSHEET_MIMETYPE: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
 const NESTED_MAGIC_BYTES: usize = 512;
+const XML_ENTRY_PARSE_LIMIT: u64 = 256 * 1024;
 
 /// Result of archive preflight for ZIP-based formats.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,7 +52,7 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
     provisional: CanonicalFormat,
     limits: &LimitsConfig,
 ) -> Result<ArchiveCheck, UploadError> {
-    reject_duplicate_central_directory_names(&mut reader)?;
+    let compressed_spans = scan_central_directory_names_and_spans(&mut reader)?;
     reader.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
@@ -74,7 +76,8 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
     let mut has_content_types = false;
     let mut has_word = false;
     let mut has_ppt = false;
-    let mut has_xl = false;
+    let mut has_xlsx = false;
+    let mut has_xlsb = false;
     let mut has_ods_mimetype = false;
     let mut content_types = ContentTypesSeen::default();
     let mut seen_names = HashSet::new();
@@ -99,24 +102,32 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
         if name == CONTENT_TYPES {
             has_content_types = true;
         }
-        if name == WORD_DOCUMENT || name.starts_with("word/") {
+        if name == WORD_DOCUMENT {
             has_word = true;
         }
-        if name == PPT_PRESENTATION || name.starts_with("ppt/") {
+        if name == PPT_PRESENTATION {
             has_ppt = true;
         }
-        if name == XL_WORKBOOK || name.starts_with("xl/") {
-            has_xl = true;
+        if name == XL_WORKBOOK {
+            has_xlsx = true;
+        }
+        if name == XL_WORKBOOK_BIN {
+            has_xlsb = true;
         }
         if name == ODS_MIMETYPE {
             has_ods_mimetype = true;
         }
 
+        let actual_compressed = compressed_spans
+            .get(name.trim_end_matches('/'))
+            .copied()
+            .unwrap_or_else(|| entry.compressed_size());
         let scanned = if entry.is_dir() {
             EntryScan::default()
         } else if name == CONTENT_TYPES {
             scan_content_types_xml(
                 &mut entry,
+                actual_compressed,
                 limits,
                 &mut uncompressed_bytes,
                 &mut compressed_bytes,
@@ -129,6 +140,7 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
         {
             scan_required_xml(
                 &mut entry,
+                actual_compressed,
                 limits,
                 &mut uncompressed_bytes,
                 &mut compressed_bytes,
@@ -136,6 +148,7 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
         } else if name == ODS_MIMETYPE {
             scan_ods_mimetype(
                 &mut entry,
+                actual_compressed,
                 limits,
                 &mut uncompressed_bytes,
                 &mut compressed_bytes,
@@ -143,6 +156,7 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
         } else {
             drain_checked_entry(
                 &mut entry,
+                actual_compressed,
                 limits,
                 &mut uncompressed_bytes,
                 &mut compressed_bytes,
@@ -159,7 +173,7 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
         }
     }
 
-    if [has_word, has_ppt, has_xl]
+    if [has_word, has_ppt, has_xlsx, has_xlsb, has_ods_mimetype]
         .into_iter()
         .filter(|present| *present)
         .count()
@@ -175,11 +189,13 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
         has_content_types,
         has_word,
         has_ppt,
-        has_xl,
+        has_xlsx,
+        has_xlsb,
         has_ods_mimetype,
     )?;
 
-    // Require canonical member paths for OOXML.
+    // Require canonical main members only. Full OPC relationship/namespace validation is
+    // intentionally deferred: accepted uploads still stay quarantined until conversion.
     match format {
         CanonicalFormat::Docx if !has_content_types || !has_word => {
             return Err(UploadError::rejected(
@@ -193,7 +209,13 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
                 ReasonCode::MissingFormatPaths,
             ));
         }
-        CanonicalFormat::Xlsx if !has_content_types || !has_xl => {
+        CanonicalFormat::Xlsx if !has_content_types || !has_xlsx => {
+            return Err(UploadError::rejected(
+                ThreatClass::MalformedOoxml,
+                ReasonCode::MissingFormatPaths,
+            ));
+        }
+        CanonicalFormat::Xlsb if !has_content_types || !has_xlsb => {
             return Err(UploadError::rejected(
                 ThreatClass::MalformedOoxml,
                 ReasonCode::MissingFormatPaths,
@@ -223,6 +245,7 @@ struct ContentTypesSeen {
     word_document: bool,
     ppt_presentation: bool,
     xl_workbook: bool,
+    xlsb_workbook: bool,
 }
 
 #[derive(Debug, Default)]
@@ -233,15 +256,22 @@ struct EntryScan {
 
 fn scan_content_types_xml(
     entry: &mut ZipFile<'_>,
+    actual_compressed: u64,
     limits: &LimitsConfig,
     aggregate_uncompressed: &mut u64,
     aggregate_compressed: &mut u64,
 ) -> Result<EntryScan, UploadError> {
-    let mut checked =
-        CheckedEntryReader::new(entry, limits, aggregate_uncompressed, aggregate_compressed);
-    let content_types = parse_content_types_xml(&mut checked)?;
+    let mut checked = CheckedEntryReader::new(
+        entry,
+        actual_compressed,
+        limits,
+        aggregate_uncompressed,
+        aggregate_compressed,
+    );
+    let xml = read_xml_entry_capped(&mut checked)?;
     checked.drain_to_end()?;
     checked.finish()?;
+    let content_types = parse_content_types_xml(xml.as_slice())?;
     Ok(EntryScan {
         content_types,
         ods_mimetype_ok: false,
@@ -250,26 +280,39 @@ fn scan_content_types_xml(
 
 fn scan_required_xml(
     entry: &mut ZipFile<'_>,
+    actual_compressed: u64,
     limits: &LimitsConfig,
     aggregate_uncompressed: &mut u64,
     aggregate_compressed: &mut u64,
 ) -> Result<EntryScan, UploadError> {
-    let mut checked =
-        CheckedEntryReader::new(entry, limits, aggregate_uncompressed, aggregate_compressed);
-    parse_well_formed_xml(&mut checked)?;
+    let mut checked = CheckedEntryReader::new(
+        entry,
+        actual_compressed,
+        limits,
+        aggregate_uncompressed,
+        aggregate_compressed,
+    );
+    let xml = read_xml_entry_capped(&mut checked)?;
     checked.drain_to_end()?;
     checked.finish()?;
+    parse_well_formed_xml(xml.as_slice())?;
     Ok(EntryScan::default())
 }
 
 fn scan_ods_mimetype(
     entry: &mut ZipFile<'_>,
+    actual_compressed: u64,
     limits: &LimitsConfig,
     aggregate_uncompressed: &mut u64,
     aggregate_compressed: &mut u64,
 ) -> Result<EntryScan, UploadError> {
-    let mut checked =
-        CheckedEntryReader::new(entry, limits, aggregate_uncompressed, aggregate_compressed);
+    let mut checked = CheckedEntryReader::new(
+        entry,
+        actual_compressed,
+        limits,
+        aggregate_uncompressed,
+        aggregate_compressed,
+    );
     let mut actual = Vec::with_capacity(ODS_SPREADSHEET_MIMETYPE.len());
     let mut buf = [0_u8; STREAM_CHUNK_BYTES];
     loop {
@@ -291,12 +334,18 @@ fn scan_ods_mimetype(
 
 fn drain_checked_entry(
     entry: &mut ZipFile<'_>,
+    actual_compressed: u64,
     limits: &LimitsConfig,
     aggregate_uncompressed: &mut u64,
     aggregate_compressed: &mut u64,
 ) -> Result<EntryScan, UploadError> {
-    let mut checked =
-        CheckedEntryReader::new(entry, limits, aggregate_uncompressed, aggregate_compressed);
+    let mut checked = CheckedEntryReader::new(
+        entry,
+        actual_compressed,
+        limits,
+        aggregate_uncompressed,
+        aggregate_compressed,
+    );
     checked.drain_to_end()?;
     checked.finish()?;
     Ok(EntryScan::default())
@@ -308,7 +357,7 @@ struct CheckedEntryReader<'a, 'b> {
     aggregate_uncompressed: &'a mut u64,
     aggregate_compressed: &'a mut u64,
     declared_uncompressed: u64,
-    declared_compressed: u64,
+    actual_compressed: u64,
     declared_crc32: u32,
     actual_uncompressed: u64,
     crc32: crc32fast::Hasher,
@@ -318,13 +367,14 @@ struct CheckedEntryReader<'a, 'b> {
 impl<'a, 'b> CheckedEntryReader<'a, 'b> {
     fn new(
         entry: &'a mut ZipFile<'b>,
+        actual_compressed: u64,
         limits: &'a LimitsConfig,
         aggregate_uncompressed: &'a mut u64,
         aggregate_compressed: &'a mut u64,
     ) -> Self {
         Self {
             declared_uncompressed: entry.size(),
-            declared_compressed: entry.compressed_size(),
+            actual_compressed,
             declared_crc32: entry.crc32(),
             entry,
             limits,
@@ -387,8 +437,8 @@ impl Read for CheckedEntryReader<'_, '_> {
         if self.actual_uncompressed == n as u64 {
             *self.aggregate_compressed = self
                 .aggregate_compressed
-                .saturating_add(self.declared_compressed);
-            if self.declared_compressed == 0 && self.declared_uncompressed > 0 {
+                .saturating_add(self.actual_compressed);
+            if self.actual_compressed == 0 && self.declared_uncompressed > 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "invalid compression ratio",
@@ -399,7 +449,7 @@ impl Read for CheckedEntryReader<'_, '_> {
         enforce_archive_limits(
             self.limits,
             self.actual_uncompressed,
-            self.declared_compressed,
+            self.actual_compressed,
             *self.aggregate_uncompressed,
             *self.aggregate_compressed,
         )
@@ -444,6 +494,26 @@ fn enforce_archive_limits(
     Ok(())
 }
 
+fn read_xml_entry_capped<R: Read>(reader: &mut R) -> Result<Vec<u8>, UploadError> {
+    let mut xml = Vec::new();
+    let mut buf = [0_u8; STREAM_CHUNK_BYTES];
+    while (xml.len() as u64) < XML_ENTRY_PARSE_LIMIT {
+        let remaining = (XML_ENTRY_PARSE_LIMIT as usize).saturating_sub(xml.len());
+        let take = buf.len().min(remaining);
+        let n = reader
+            .read(&mut buf[..take])
+            .map_err(map_entry_read_error)?;
+        if n == 0 {
+            return Ok(xml);
+        }
+        xml.extend_from_slice(&buf[..n]);
+    }
+    Err(UploadError::rejected(
+        ThreatClass::MalformedOoxml,
+        ReasonCode::MalformedXml,
+    ))
+}
+
 fn parse_content_types_xml<R: Read>(reader: R) -> Result<ContentTypesSeen, UploadError> {
     let mut xml =
         quick_xml::Reader::from_reader(BufReader::with_capacity(STREAM_CHUNK_BYTES, reader));
@@ -474,6 +544,9 @@ fn parse_content_types_xml<R: Read>(reader: R) -> Result<ContentTypesSeen, Uploa
                         && kind.contains("presentationml.presentation.main+xml");
                     seen.xl_workbook |=
                         part == "/xl/workbook.xml" && kind.contains("spreadsheetml.sheet.main+xml");
+                    seen.xlsb_workbook |= part == "/xl/workbook.bin"
+                        && kind.contains("sheet.binary")
+                        && kind.contains("main");
                 }
             }
             Ok(quick_xml::events::Event::Eof) => break,
@@ -535,6 +608,7 @@ fn verify_content_types(
         CanonicalFormat::Docx => content_types.word_document,
         CanonicalFormat::Pptx => content_types.ppt_presentation,
         CanonicalFormat::Xlsx => content_types.xl_workbook,
+        CanonicalFormat::Xlsb => content_types.xlsb_workbook,
         CanonicalFormat::Ods => true,
         _ => true,
     };
@@ -580,9 +654,9 @@ pub fn reject_dangerous_entry_name(name: &str) -> Result<(), UploadError> {
     Ok(())
 }
 
-fn reject_duplicate_central_directory_names<R: Read + Seek>(
+fn scan_central_directory_names_and_spans<R: Read + Seek>(
     reader: &mut R,
-) -> Result<(), UploadError> {
+) -> Result<HashMap<String, u64>, UploadError> {
     let len = reader.seek(SeekFrom::End(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
@@ -597,32 +671,34 @@ fn reject_duplicate_central_directory_names<R: Read + Seek>(
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
     let Some(eocd_pos) = tail.windows(4).rposition(|w| w == b"PK\x05\x06") else {
-        return Ok(());
+        return Ok(HashMap::new());
     };
     if eocd_pos + 22 > tail.len() {
-        return Ok(());
+        return Ok(HashMap::new());
     }
     let entries = u16::from_le_bytes(tail[eocd_pos + 10..eocd_pos + 12].try_into().unwrap());
     let central_offset =
         u32::from_le_bytes(tail[eocd_pos + 16..eocd_pos + 20].try_into().unwrap()) as u64;
     if entries == u16::MAX {
-        return Ok(());
+        return Ok(HashMap::new());
     }
     reader.seek(SeekFrom::Start(central_offset)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
     let mut seen = HashSet::new();
+    let mut central_entries = Vec::new();
     for _ in 0..entries {
         let mut header = [0_u8; 46];
         reader.read_exact(&mut header).map_err(|_| {
             UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
         })?;
         if &header[0..4] != b"PK\x01\x02" {
-            return Ok(());
+            return Ok(HashMap::new());
         }
         let name_len = u16::from_le_bytes(header[28..30].try_into().unwrap()) as usize;
         let extra_len = u16::from_le_bytes(header[30..32].try_into().unwrap()) as u64;
         let comment_len = u16::from_le_bytes(header[32..34].try_into().unwrap()) as u64;
+        let local_header_offset = u32::from_le_bytes(header[42..46].try_into().unwrap()) as u64;
         if name_len == 0 || name_len > 4096 {
             return Err(UploadError::rejected(
                 ThreatClass::MalformedOoxml,
@@ -642,13 +718,47 @@ fn reject_duplicate_central_directory_names<R: Read + Seek>(
                 ReasonCode::MalformedArchive,
             ));
         }
+        central_entries.push((name.trim_end_matches('/').to_string(), local_header_offset));
         reader
             .seek(SeekFrom::Current((extra_len + comment_len) as i64))
             .map_err(|_| {
                 UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
             })?;
     }
-    Ok(())
+    central_entries.sort_by_key(|(_, offset)| *offset);
+    let mut spans = HashMap::new();
+    for index in 0..central_entries.len() {
+        let (name, local_header_offset) = &central_entries[index];
+        let next_offset = central_entries
+            .get(index + 1)
+            .map(|(_, offset)| *offset)
+            .unwrap_or(central_offset);
+        if next_offset <= *local_header_offset {
+            continue;
+        }
+        reader
+            .seek(SeekFrom::Start(*local_header_offset))
+            .map_err(|_| {
+                UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
+            })?;
+        let mut local = [0_u8; 30];
+        reader.read_exact(&mut local).map_err(|_| {
+            UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
+        })?;
+        if &local[0..4] != b"PK\x03\x04" {
+            continue;
+        }
+        let local_name_len = u16::from_le_bytes(local[26..28].try_into().unwrap()) as u64;
+        let local_extra_len = u16::from_le_bytes(local[28..30].try_into().unwrap()) as u64;
+        let data_start = local_header_offset
+            .saturating_add(30)
+            .saturating_add(local_name_len)
+            .saturating_add(local_extra_len);
+        if next_offset > data_start {
+            spans.insert(name.clone(), next_offset - data_start);
+        }
+    }
+    Ok(spans)
 }
 
 fn map_zip_open_error(error: ZipError) -> UploadError {

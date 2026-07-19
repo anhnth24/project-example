@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::multipart::Field;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -22,8 +23,11 @@ use crate::services::upload::{
     ReasonCode, StreamedUpload, ThreatClass, UploadError, UploadOutcome,
 };
 
-pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/api/v1/uploads", post(create_upload))
+pub fn router(max_upload_bytes: usize) -> Router<Arc<AppState>> {
+    Router::new().route(
+        "/api/v1/uploads",
+        post(create_upload).layer(DefaultBodyLimit::max(max_upload_bytes)),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -53,52 +57,54 @@ async fn create_upload(
     require_permission(&auth.context, "doc.upload")
         .map_err(|_| UploadRouteError(UploadError::PermissionDenied, request_id.clone()))?;
 
-    if state.object_store().is_none() {
-        return Err(UploadRouteError(
-            UploadError::StorageUnavailable,
-            request_id.clone(),
-        ));
-    };
     let limits = state.runtime().config().upload().limits;
     let upload_timeout = Duration::from_secs(limits.upload_timeout_secs);
 
-    tokio::time::timeout(upload_timeout, async {
-        create_upload_inner(state, auth, multipart, limits).await
-    })
+    let pending = tokio::time::timeout(upload_timeout, read_multipart(multipart, limits))
+        .await
+        .map_err(|_| {
+            UploadRouteError(
+                UploadError::MultipartInvalid {
+                    reason: ReasonCode::MultipartTimeout,
+                },
+                request_id.clone(),
+            )
+        })?
+        .map_err(|error| UploadRouteError(error, request_id.clone()))?;
+
+    let storage = state
+        .object_store()
+        .ok_or_else(|| UploadRouteError(UploadError::StorageUnavailable, request_id.clone()))?;
+    validate_and_quarantine(
+        &auth.context,
+        storage,
+        &limits,
+        pending.streamed,
+        pending.declared_filename.as_deref(),
+        pending.declared_content_type.as_deref(),
+    )
     .await
-    .map_err(|_| {
-        UploadRouteError(
-            UploadError::MultipartInvalid {
-                reason: ReasonCode::MultipartTimeout,
-            },
-            request_id.clone(),
-        )
-    })?
     .map_err(|error| UploadRouteError(error, request_id.clone()))
     .map(|outcome| success_response(outcome, &request_id))
 }
 
-async fn create_upload_inner(
-    state: Arc<AppState>,
-    auth: AuthenticatedOrg,
+async fn read_multipart(
     mut multipart: Multipart,
     limits: LimitsConfig,
-) -> Result<UploadOutcome, UploadError> {
-    let storage = state
-        .object_store()
-        .ok_or(UploadError::StorageUnavailable)?;
+) -> Result<PendingUpload, UploadError> {
     let mut saw_file = false;
     let mut pending: Option<PendingUpload> = None;
     let mut parts_seen = 0_u32;
     let idle_timeout = Duration::from_secs(limits.upload_idle_timeout_secs);
 
-    while let Some(field) =
-        multipart
-            .next_field()
-            .await
-            .map_err(|_| UploadError::MultipartInvalid {
-                reason: ReasonCode::MultipartMissingFile,
-            })?
+    while let Some(field) = tokio::time::timeout(idle_timeout, multipart.next_field())
+        .await
+        .map_err(|_| UploadError::MultipartInvalid {
+            reason: ReasonCode::MultipartTimeout,
+        })?
+        .map_err(|_| UploadError::MultipartInvalid {
+            reason: ReasonCode::MultipartMissingFile,
+        })?
     {
         parts_seen = parts_seen.saturating_add(1);
         if parts_seen > limits.max_multipart_parts {
@@ -132,18 +138,9 @@ async fn create_upload_inner(
         });
     }
 
-    let pending = pending.ok_or(UploadError::MultipartInvalid {
+    pending.ok_or(UploadError::MultipartInvalid {
         reason: ReasonCode::MultipartMissingFile,
-    })?;
-    validate_and_quarantine(
-        &auth.context,
-        storage,
-        &limits,
-        pending.streamed,
-        pending.declared_filename.as_deref(),
-        pending.declared_content_type.as_deref(),
-    )
-    .await
+    })
 }
 
 struct PendingUpload {

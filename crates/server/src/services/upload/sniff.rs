@@ -59,7 +59,7 @@ impl CanonicalFormat {
     pub const fn is_zip_container(self) -> bool {
         matches!(
             self,
-            Self::Docx | Self::Pptx | Self::Xlsx | Self::Ods | Self::ZipContainer
+            Self::Docx | Self::Pptx | Self::Xlsx | Self::Xlsb | Self::Ods | Self::ZipContainer
         )
     }
 
@@ -124,7 +124,7 @@ pub fn extension_matches(format: CanonicalFormat, ext: &str) -> bool {
         CanonicalFormat::Xlsx => ext == "xlsx",
         CanonicalFormat::Ods => ext == "ods",
         CanonicalFormat::ZipContainer => {
-            matches!(ext.as_str(), "docx" | "pptx" | "xlsx" | "ods")
+            matches!(ext.as_str(), "docx" | "pptx" | "xlsx" | "xlsb" | "ods")
         }
         CanonicalFormat::Xls => ext == "xls",
         CanonicalFormat::Xlsb => ext == "xlsb",
@@ -196,6 +196,7 @@ fn refine_from_extension(magic: CanonicalFormat, ext: &str) -> Option<CanonicalF
         (CanonicalFormat::ZipContainer, "docx") => Some(CanonicalFormat::Docx),
         (CanonicalFormat::ZipContainer, "pptx") => Some(CanonicalFormat::Pptx),
         (CanonicalFormat::ZipContainer, "xlsx") => Some(CanonicalFormat::Xlsx),
+        (CanonicalFormat::ZipContainer, "xlsb") => Some(CanonicalFormat::Xlsb),
         (CanonicalFormat::ZipContainer, "ods") => Some(CanonicalFormat::Ods),
         (CanonicalFormat::Xls | CanonicalFormat::Xlsb, "xls") => Some(CanonicalFormat::Xls),
         (CanonicalFormat::Xls | CanonicalFormat::Xlsb, "xlsb") => Some(CanonicalFormat::Xlsb),
@@ -242,7 +243,8 @@ pub fn detect_magic(head: &[u8]) -> Option<CanonicalFormat> {
     if is_m4a(head) {
         return Some(CanonicalFormat::M4a);
     }
-    // OLE Compound Document (XLS / XLSB family).
+    // OLE Compound Document is kept as XLS here; deeper spreadsheet structure parsing
+    // is deferred while accepted uploads remain quarantined for converter validation.
     if head.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
         return Some(CanonicalFormat::Xls);
     }
@@ -321,21 +323,34 @@ pub fn refine_zip_format(
     has_word: bool,
     has_ppt: bool,
     has_xl: bool,
+    has_xlsb: bool,
     has_ods_mimetype: bool,
 ) -> Result<CanonicalFormat, UploadError> {
-    if has_ods_mimetype {
-        return Ok(CanonicalFormat::Ods);
-    }
     if !has_content_types {
+        if has_ods_mimetype {
+            return Ok(CanonicalFormat::Ods);
+        }
         return Err(UploadError::rejected(
             ThreatClass::MalformedOoxml,
             ReasonCode::MissingContentTypes,
         ));
     }
-    match (has_word, has_ppt, has_xl) {
-        (true, false, false) => Ok(CanonicalFormat::Docx),
-        (false, true, false) => Ok(CanonicalFormat::Pptx),
-        (false, false, true) => Ok(CanonicalFormat::Xlsx),
+    let families = [has_word, has_ppt, has_xl, has_xlsb, has_ods_mimetype]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+    if families != 1 {
+        return Err(UploadError::rejected(
+            ThreatClass::MalformedOoxml,
+            ReasonCode::MissingFormatPaths,
+        ));
+    }
+    match (has_word, has_ppt, has_xl, has_xlsb, has_ods_mimetype) {
+        (true, false, false, false, false) => Ok(CanonicalFormat::Docx),
+        (false, true, false, false, false) => Ok(CanonicalFormat::Pptx),
+        (false, false, true, false, false) => Ok(CanonicalFormat::Xlsx),
+        (false, false, false, true, false) => Ok(CanonicalFormat::Xlsb),
+        (false, false, false, false, true) => Ok(CanonicalFormat::Ods),
         _ => Err(UploadError::rejected(
             ThreatClass::MalformedOoxml,
             ReasonCode::MissingFormatPaths,

@@ -4,8 +4,10 @@
 //! gated on `MARKHAND_TEST_MINIO_*` and skip cleanly when unset. Auth-backed
 //! HTTP tests also need `MARKHAND_TEST_DATABASE_URL`.
 
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -31,7 +33,7 @@ use fileconv_server::services::upload::{
 };
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key};
-use fileconv_server::storage::minio::MinioClient;
+use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use futures::stream;
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
@@ -39,6 +41,66 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
+
+struct TrackingAllocator;
+
+#[global_allocator]
+static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator;
+
+static TRACK_ALLOCATIONS: AtomicBool = AtomicBool::new(false);
+static CURRENT_ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+static PEAK_ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+
+unsafe impl GlobalAlloc for TrackingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { System.alloc(layout) };
+        if !ptr.is_null() {
+            let current =
+                CURRENT_ALLOCATED.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+            record_peak(current);
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        CURRENT_ALLOCATED.fetch_sub(layout.size(), Ordering::Relaxed);
+        unsafe { System.dealloc(ptr, layout) };
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let ptr = unsafe { System.realloc(ptr, layout, new_size) };
+        if !ptr.is_null() {
+            let old_size = layout.size();
+            let current = if new_size >= old_size {
+                CURRENT_ALLOCATED.fetch_add(new_size - old_size, Ordering::Relaxed)
+                    + (new_size - old_size)
+            } else {
+                CURRENT_ALLOCATED.fetch_sub(old_size - new_size, Ordering::Relaxed)
+                    - (old_size - new_size)
+            };
+            record_peak(current);
+        }
+        ptr
+    }
+}
+
+fn record_peak(current: usize) {
+    if !TRACK_ALLOCATIONS.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut peak = PEAK_ALLOCATED.load(Ordering::Relaxed);
+    while current > peak {
+        match PEAK_ALLOCATED.compare_exchange_weak(
+            peak,
+            current,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(next) => peak = next,
+        }
+    }
+}
 
 const DOCX_CONTENT_TYPES_XML: &[u8] = br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
 
@@ -249,6 +311,18 @@ fn write_docx_zip(path: &Path, entries: &[(&str, &[u8])], compression: Compressi
     zip.finish().unwrap();
 }
 
+fn write_xlsb_zip(path: &Path) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    zip.start_file("[Content_Types].xml", options).unwrap();
+    zip.write_all(br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/></Types>"#)
+        .unwrap();
+    zip.start_file("xl/workbook.bin", options).unwrap();
+    zip.write_all(b"binary workbook placeholder").unwrap();
+    zip.finish().unwrap();
+}
+
 fn write_manual_stored_zip(path: &Path, entries: &[(&str, &[u8])]) {
     let mut bytes = Vec::new();
     let mut central = Vec::new();
@@ -368,28 +442,21 @@ async fn zip_bomb_rejects_without_unbounded_decompress() {
 #[tokio::test]
 async fn large_lazy_stream_keeps_memory_bounded() {
     let limits = LimitsConfig::policy_defaults();
-    let before = current_rss_kib();
+    let base = CURRENT_ALLOCATED.load(Ordering::Relaxed);
+    PEAK_ALLOCATED.store(base, Ordering::Relaxed);
+    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
     let chunks = (0..1024).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![b'a'; 64 * 1024])));
     let streamed = stream_to_tempfile(stream::iter(chunks), &limits)
         .await
         .expect("stream large lazy body");
-    let after = current_rss_kib();
+    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
+    let peak_delta = PEAK_ALLOCATED.load(Ordering::Relaxed).saturating_sub(base);
     assert_eq!(streamed.size_bytes, 64 * 1024 * 1024);
     assert!(streamed.head.len() <= 512);
-    if let (Some(before), Some(after)) = (before, after) {
-        assert!(
-            after.saturating_sub(before) < 32 * 1024,
-            "RSS grew from {before} KiB to {after} KiB"
-        );
-    }
-}
-
-fn current_rss_kib() -> Option<u64> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    status.lines().find_map(|line| {
-        let value = line.strip_prefix("VmRSS:")?.trim();
-        value.split_whitespace().next()?.parse().ok()
-    })
+    assert!(
+        peak_delta < 32 * 1024 * 1024,
+        "peak allocation grew by {peak_delta} bytes"
+    );
 }
 
 #[tokio::test]
@@ -420,6 +487,21 @@ async fn hidden_nested_polyglot_duplicate_and_symlink_reject() {
         .unwrap();
     zip.finish().unwrap();
     let err = validate_zip_archive(&polyglot, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::MalformedOoxml));
+
+    let ods_polyglot = dir.path().join("ods-polyglot.ods");
+    let file = std::fs::File::create(&ods_polyglot).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    zip.start_file("mimetype", options).unwrap();
+    zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
+        .unwrap();
+    zip.start_file("[Content_Types].xml", options).unwrap();
+    zip.write_all(DOCX_CONTENT_TYPES_XML).unwrap();
+    zip.start_file("word/document.xml", options).unwrap();
+    zip.write_all(br#"<?xml version="1.0"?><w:document></w:document>"#)
+        .unwrap();
+    zip.finish().unwrap();
+    let err = validate_zip_archive(&ods_polyglot, CanonicalFormat::Ods, &limits).unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::MalformedOoxml));
 
     let duplicate = dir.path().join("duplicate.docx");
@@ -471,6 +553,24 @@ async fn hidden_nested_polyglot_duplicate_and_symlink_reject() {
     std::fs::write(&symlink, bytes).unwrap();
     let err = validate_zip_archive(&symlink, CanonicalFormat::Docx, &limits).unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::ArchiveTraversal));
+}
+
+#[tokio::test]
+async fn valid_zip_based_xlsb_is_accepted() {
+    let limits = LimitsConfig::policy_defaults();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("book.xlsb");
+    write_xlsb_zip(&path);
+    let streamed = stream_file(&path).await;
+    let (format, disposition, _, _) = validate_streamed_bytes(
+        &streamed,
+        Some("book.xlsb"),
+        Some("application/vnd.ms-excel.sheet.binary.macroEnabled.12"),
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(format, CanonicalFormat::Xlsb);
+    assert_eq!(disposition, Disposition::Accepted);
 }
 
 #[tokio::test]
@@ -593,6 +693,35 @@ async fn mime_mismatch_and_malformed_audio_reject() {
     .unwrap();
     let err = validate_streamed_bytes(&zero_rate, Some("zero.wav"), Some("audio/wav"), &limits)
         .unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::ParserCorruption));
+
+    let mut truncated_wav = Vec::new();
+    truncated_wav.extend_from_slice(b"RIFF");
+    truncated_wav.extend_from_slice(&140_u32.to_le_bytes());
+    truncated_wav.extend_from_slice(b"WAVEfmt ");
+    truncated_wav.extend_from_slice(&16_u32.to_le_bytes());
+    truncated_wav.extend_from_slice(&1_u16.to_le_bytes());
+    truncated_wav.extend_from_slice(&1_u16.to_le_bytes());
+    truncated_wav.extend_from_slice(&16_000_u32.to_le_bytes());
+    truncated_wav.extend_from_slice(&32_000_u32.to_le_bytes());
+    truncated_wav.extend_from_slice(&2_u16.to_le_bytes());
+    truncated_wav.extend_from_slice(&16_u16.to_le_bytes());
+    truncated_wav.extend_from_slice(b"data");
+    truncated_wav.extend_from_slice(&100_u32.to_le_bytes());
+    truncated_wav.extend_from_slice(&[0_u8; 4]);
+    let truncated = stream_to_tempfile(
+        stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(truncated_wav))]),
+        &limits,
+    )
+    .await
+    .unwrap();
+    let err = validate_streamed_bytes(
+        &truncated,
+        Some("truncated.wav"),
+        Some("audio/wav"),
+        &limits,
+    )
+    .unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::ParserCorruption));
 }
 
@@ -852,6 +981,50 @@ async fn rejected_upload_is_not_stored() {
 }
 
 #[tokio::test]
+async fn verification_failed_upload_is_cleaned_by_generated_key() {
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let org = Uuid::new_v4();
+    let object_id = Uuid::new_v4();
+    let key = quarantine_key(org, object_id, Some("bad.bin")).unwrap();
+    let payload: &'static [u8] = b"actual object bytes";
+    let wrong_sha = hex::encode(Sha256::digest(b"different bytes"));
+    let meta = ObjectIdentityMeta {
+        org_id: org,
+        collection_id: None,
+        document_id: None,
+        version_id: None,
+        original_filename: Some("bad.bin".into()),
+        canonical_format: Some("txt".into()),
+        content_sha256: Some(wrong_sha.clone()),
+        content_length: Some(payload.len() as u64),
+        disposition: Some("accepted".into()),
+    };
+    let err = client
+        .put_object_stream(
+            org,
+            &key,
+            payload,
+            &meta,
+            "text/plain",
+            ObjectPutVerification {
+                expected_len: payload.len() as u64,
+                expected_sha256: &wrong_sha,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        fileconv_server::storage::error::StorageError::Backend
+            | fileconv_server::storage::error::StorageError::Transport
+    ));
+    assert!(!client.object_exists(org, &key).await.expect("exists"));
+}
+
+#[tokio::test]
 async fn http_upload_happy_and_spoof() {
     let Some(db_url) = test_database_url() else {
         return;
@@ -895,6 +1068,20 @@ async fn http_upload_happy_and_spoof() {
     let state = AppState::from_parts_with_store(runtime, pool, Some(state_auth), Some(store))
         .expect("state");
     let app = router(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(vec![b'a'; 3 * 1024 * 1024]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     let login = auth
         .login_password(
