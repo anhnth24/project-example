@@ -1,6 +1,7 @@
 //! Converter worker and sandbox tests.
 
 use std::fs;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -17,7 +18,7 @@ use fileconv_server::db::models::{CollectionVisibility, Job, JobStatus, JobType}
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
-use fileconv_server::storage::keys::quarantine_key;
+use fileconv_server::storage::keys::{quarantine_key, trusted_key};
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
@@ -32,7 +33,9 @@ const INPUT: &str = "{input}";
 static SANDBOX_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn sandbox_test_guard() -> MutexGuard<'static, ()> {
-    SANDBOX_TEST_LOCK.lock().expect("sandbox test lock")
+    SANDBOX_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn sandbox_available() -> bool {
@@ -210,12 +213,13 @@ fn org_context(org: Uuid, user: Uuid) -> OrgContext {
 async fn seed_org_collection_document_version(
     pool: &Pool,
     ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
     original_object_key: &str,
     sha256: &str,
+    byte_size: u64,
 ) -> (Uuid, Uuid) {
     let collection_id = Uuid::new_v4();
-    let document_id = Uuid::new_v4();
-    let version_id = Uuid::new_v4();
     let original_object_key = original_object_key.to_string();
     let sha256 = sha256.to_string();
     with_org_txn(pool, ctx, {
@@ -226,13 +230,15 @@ async fn seed_org_collection_document_version(
                 orgs::ensure_user(txn, &ctx, ctx.user_id(), "worker@example.test", "Worker")
                     .await?;
                 orgs::ensure_membership(txn, &ctx).await?;
+                let collection_name = format!("Worker Collection {collection_id}");
+                let collection_slug = format!("worker-collection-{collection_id}");
                 collections::insert(
                     txn,
                     &ctx,
                     NewCollection {
                         id: collection_id,
-                        name: "Worker Collection",
-                        slug: "worker-collection",
+                        name: &collection_name,
+                        slug: &collection_slug,
                         description: None,
                         visibility: CollectionVisibility::Private,
                     },
@@ -254,13 +260,14 @@ async fn seed_org_collection_document_version(
                         original_object_key, source_content_type, byte_size,
                         created_by_user_id
                      )
-                     VALUES ($1, $2, $3, 1, $4, $5, 'text/plain', 12, $6)",
+                     VALUES ($1, $2, $3, 1, $4, $5, 'text/plain', $6, $7)",
                     &[
                         &version_id,
                         &ctx.org_id(),
                         &document_id,
                         &sha256,
                         &original_object_key,
+                        &(byte_size as i64),
                         &ctx.user_id(),
                     ],
                 )
@@ -277,18 +284,19 @@ async fn seed_org_collection_document_version(
 async fn put_quarantine_object(
     storage: &MinioClient,
     ctx: &OrgContext,
+    key: &fileconv_server::storage::ObjectKey,
     bytes: &'static [u8],
     canonical_format: &str,
-) -> (fileconv_server::storage::ObjectKey, String) {
+    document_id: Uuid,
+    version_id: Uuid,
+) -> String {
     storage.ensure_bucket().await.expect("ensure bucket");
-    let object_id = Uuid::new_v4();
-    let key = quarantine_key(ctx.org_id(), object_id, None).expect("quarantine key");
     let sha256 = hex::encode(Sha256::digest(bytes));
     let meta = ObjectIdentityMeta {
         org_id: ctx.org_id(),
         collection_id: None,
-        document_id: None,
-        version_id: None,
+        document_id: Some(document_id),
+        version_id: Some(version_id),
         original_filename: None,
         canonical_format: Some(canonical_format.into()),
         content_sha256: Some(sha256.clone()),
@@ -298,14 +306,14 @@ async fn put_quarantine_object(
     storage
         .put_object(
             ctx.org_id(),
-            &key,
+            key,
             Bytes::from_static(bytes),
             &meta,
             "text/plain",
         )
         .await
         .expect("put quarantine");
-    (key, sha256)
+    sha256
 }
 
 async fn enqueue_convert(
@@ -424,18 +432,22 @@ fn sandbox_denies_network_connect() {
     if !sandbox_available() {
         return;
     }
+    let listener = TcpListener::bind("127.0.0.1:0").expect("parent loopback listener");
+    let port = listener.local_addr().expect("listener addr").port();
     let Some(config) = python(
-        r#"
+        &format!(
+            r#"
 import errno, socket, sys
 s = socket.socket()
 s.settimeout(0.2)
 try:
-    s.connect(("8.8.8.8", 53))
+    s.connect(("127.0.0.1", {port}))
     print("connected")
     sys.exit(1)
 except OSError as exc:
     print("network-denied", exc.errno)
 "#,
+        ),
         Duration::from_secs(5),
     ) else {
         return;
@@ -496,15 +508,28 @@ fn sandbox_timeout_kills_descendant_process_tree() {
     if !sandbox_available() {
         return;
     }
-    let config = shell("sleep 600 & echo $!; sleep 600", Duration::from_millis(200));
+    let Some(config) = python(
+        r#"
+import os, time, sys
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    print("daemon-ready", flush=True)
+    while True:
+        time.sleep(60)
+else:
+    time.sleep(600)
+"#,
+        Duration::from_millis(200),
+    ) else {
+        return;
+    };
     let output = run(&config);
     assert_eq!(output.exit, SandboxExit::TimedOut);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let pid = stdout
-        .lines()
-        .find_map(|line| line.trim().parse::<u32>().ok())
-        .expect("grandchild pid");
-    assert_process_exits(pid, Duration::from_secs(2));
+    assert_process_exits(
+        output.pid1_host_pid.expect("pidns pid1"),
+        Duration::from_secs(2),
+    );
     assert!(!output.workspace_path.exists());
 }
 
@@ -522,13 +547,28 @@ fn sandbox_cleans_workspace_on_success_failure_timeout_and_cancel() {
     assert_eq!(failure.exit, SandboxExit::Exit(7));
     assert!(!failure.workspace_path.exists());
 
-    let timeout = run(&shell("sleep 600", Duration::from_millis(100)));
+    let timeout = run(
+        &python("import time; time.sleep(600)", Duration::from_millis(100)).expect("python config"),
+    );
     assert_eq!(timeout.exit, SandboxExit::TimedOut);
     assert!(!timeout.workspace_path.exists());
 
     let cancel = SandboxCancel::default();
     let cancel_for_thread = cancel.clone();
-    let config = shell("sleep 600", Duration::from_secs(30));
+    let config = python(
+        r#"
+import os, time
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    while True:
+        time.sleep(60)
+else:
+    time.sleep(600)
+"#,
+        Duration::from_secs(30),
+    )
+    .expect("python config");
     let handle = std::thread::spawn(move || {
         sandbox::run(&config, input("txt", b"hello"), &cancel_for_thread).expect("sandbox run")
     });
@@ -536,6 +576,10 @@ fn sandbox_cleans_workspace_on_success_failure_timeout_and_cancel() {
     cancel.cancel();
     let cancelled = handle.join().expect("join");
     assert_eq!(cancelled.exit, SandboxExit::Cancelled);
+    assert_process_exits(
+        cancelled.pid1_host_pid.expect("pidns pid1"),
+        Duration::from_secs(2),
+    );
     assert!(!cancelled.workspace_path.exists());
 }
 
@@ -549,8 +593,25 @@ fn sandbox_limits_fork_bomb_disk_and_ram() {
     fork_limits.max_processes = 8;
     let fork = sandbox::run(
         &SandboxConfig {
-            argv_template: shell("while :; do sleep 5 & done", Duration::from_millis(500))
-                .argv_template,
+            argv_template: python(
+                r#"
+import os, time
+children = []
+while True:
+    try:
+        pid = os.fork()
+    except OSError:
+        print("fork-limited", len(children), flush=True)
+        time.sleep(60)
+        break
+    if pid == 0:
+        time.sleep(60)
+    children.append(pid)
+"#,
+                Duration::from_millis(500),
+            )
+            .expect("python config")
+            .argv_template,
             limits: fork_limits,
         },
         input("txt", b"hello"),
@@ -661,15 +722,38 @@ async fn live_convert_worker_completes_and_stores_trusted_markdown() {
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
-    let (quarantine, sha256) =
-        put_quarantine_object(&storage, &ctx, b"hello from quarantine\n", "txt").await;
-    let (document_id, version_id) =
-        seed_org_collection_document_version(&pool, &ctx, &quarantine.as_str(), &sha256).await;
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"hello from quarantine\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let worker = ConvertWorker::new(
         pool.clone(),
         storage.clone(),
-        stub_worker_config("cat \"$1\"", 50),
+        stub_worker_config(
+            r#"while IFS= read -r line; do printf '%s\n' "$line"; done < "$1""#,
+            50,
+        ),
     )
     .expect("worker");
 
@@ -708,9 +792,30 @@ async fn live_convert_worker_converter_error_retries_job() {
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
-    let (quarantine, sha256) = put_quarantine_object(&storage, &ctx, b"bad input\n", "txt").await;
-    let (document_id, version_id) =
-        seed_org_collection_document_version(&pool, &ctx, &quarantine.as_str(), &sha256).await;
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"bad input\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let worker = ConvertWorker::new(
         pool.clone(),
@@ -749,16 +854,51 @@ async fn live_convert_worker_cancel_loses_lease_and_kills_sandbox() {
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
-    let (quarantine, sha256) = put_quarantine_object(&storage, &ctx, b"cancel me\n", "txt").await;
-    let (document_id, version_id) =
-        seed_org_collection_document_version(&pool, &ctx, &quarantine.as_str(), &sha256).await;
-    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let worker = ConvertWorker::new(
-        pool.clone(),
-        storage,
-        stub_worker_config("sleep 600 & sleep 600", 50),
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"cancel me\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
     )
-    .expect("worker");
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let mut config = ConvertWorkerConfig::new(
+        format!("test-worker-{}", Uuid::new_v4()),
+        python(
+            r#"
+import os, time
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    while True:
+        time.sleep(60)
+else:
+    time.sleep(600)
+"#,
+            Duration::from_secs(10),
+        )
+        .expect("python config"),
+    );
+    config.heartbeat_interval = Duration::from_millis(50);
+    config.lease_ttl = Duration::from_secs(2);
+    let worker = ConvertWorker::new(pool.clone(), storage, config).expect("worker");
     let run_ctx = ctx.clone();
     let run_worker = worker.clone();
     let handle = tokio::spawn(async move { run_worker.run_once(&run_ctx).await });
@@ -774,6 +914,191 @@ async fn live_convert_worker_cancel_loses_lease_and_kills_sandbox() {
     assert!(markdown_artifact_key(&pool, &ctx, version_id)
         .await
         .is_none());
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"stale upload cleanup\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let generated_trusted =
+        trusted_key(ctx.org_id(), version_id, job.id, None).expect("trusted key");
+    let mut config = stub_worker_config("printf converted-after-upload", 50);
+    config.post_upload_settlement_delay = Duration::from_secs(1);
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let run_ctx = ctx.clone();
+    let run_worker = worker.clone();
+    let handle = tokio::spawn(async move { run_worker.run_once(&run_ctx).await });
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    jobs::cancel(&pool, &ctx, job.id).await.expect("cancel");
+
+    let outcome = handle.await.expect("join").expect("run once");
+    assert_eq!(outcome, ConvertWorkerRun::LeaseLost { job_id: job.id });
+    assert_eq!(
+        get_job(&pool, &ctx, job.id).await.status,
+        JobStatus::Cancelled
+    );
+    assert!(markdown_artifact_key(&pool, &ctx, version_id)
+        .await
+        .is_none());
+    assert!(!storage
+        .object_exists(ctx.org_id(), &generated_trusted)
+        .await
+        .expect("trusted object existence"));
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_resource_failures_are_bounded_job_failures() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let cases = [
+        (
+            "ram",
+            r#"
+chunks = []
+while True:
+    chunks.append(bytearray(16 * 1024 * 1024))
+"#,
+        ),
+        (
+            "disk",
+            r#"
+with open("huge.bin", "wb") as f:
+    while True:
+        f.write(b"x" * 4096)
+"#,
+        ),
+        (
+            "fork",
+            r#"
+import os, time
+while True:
+    try:
+        pid = os.fork()
+    except OSError:
+        time.sleep(60)
+        break
+    if pid == 0:
+        time.sleep(60)
+"#,
+        ),
+    ];
+    for (name, script) in cases {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let quarantine =
+            quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+        let payload = b"resource failure\n";
+        let sha256 = put_quarantine_object(
+            &storage,
+            &ctx,
+            &quarantine,
+            payload,
+            "txt",
+            document_id,
+            version_id,
+        )
+        .await;
+        let (document_id, version_id) = seed_org_collection_document_version(
+            &pool,
+            &ctx,
+            document_id,
+            version_id,
+            &quarantine.as_str(),
+            &sha256,
+            payload.len() as u64,
+        )
+        .await;
+        let job = jobs::enqueue(
+            &pool,
+            &ctx,
+            EnqueueJob::new(
+                JobType::Convert,
+                JobPayload {
+                    document_id: Some(document_id),
+                    version_id: Some(version_id),
+                    collection_id: None,
+                    upload_id: None,
+                    batch_id: None,
+                },
+                format!("convert-resource-{name}-{version_id}"),
+            ),
+        )
+        .await
+        .expect("enqueue")
+        .job;
+        let mut sandbox = python(script, Duration::from_secs(5)).expect("python config");
+        match name {
+            "ram" => sandbox.limits.memory_bytes = 64 * 1024 * 1024,
+            "disk" => sandbox.limits.file_size_bytes = 64 * 1024,
+            "fork" => {
+                sandbox.limits.max_processes = 8;
+                sandbox.limits.wall_timeout = Duration::from_millis(500);
+            }
+            _ => unreachable!("known resource case"),
+        }
+        let mut config = ConvertWorkerConfig::new(format!("worker-{name}"), sandbox);
+        config.heartbeat_interval = Duration::from_millis(50);
+        config.lease_ttl = Duration::from_secs(2);
+        let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+        let outcome = worker.run_once(&ctx).await.expect("run once");
+        assert!(matches!(
+            outcome,
+            ConvertWorkerRun::Failed {
+                job_id,
+                terminal: false
+            } if job_id == job.id
+        ));
+        assert_eq!(
+            get_job(&pool, &ctx, job.id).await.status,
+            JobStatus::Pending
+        );
+        assert!(markdown_artifact_key(&pool, &ctx, version_id)
+            .await
+            .is_none());
+    }
+    assert!(
+        sandbox_available(),
+        "host should remain able to spawn sandbox"
+    );
     ephemeral.drop().await;
 }
 

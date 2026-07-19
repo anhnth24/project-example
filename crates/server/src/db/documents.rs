@@ -20,6 +20,8 @@ pub struct VersionSource {
     pub document_id: Uuid,
     pub version_id: Uuid,
     pub original_object_key: String,
+    pub content_sha256: String,
+    pub byte_size: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,7 +170,7 @@ pub async fn get_version_source_for_convert(
 ) -> Result<VersionSource, DbError> {
     let row = txn
         .query_opt(
-            "SELECT document_id, id, original_object_key
+            "SELECT document_id, id, original_object_key, content_sha256, byte_size
              FROM document_versions
              WHERE org_id = $1 AND document_id = $2 AND id = $3",
             &[&ctx.org_id(), &document_id, &version_id],
@@ -179,6 +181,8 @@ pub async fn get_version_source_for_convert(
         document_id: row.get("document_id"),
         version_id: row.get("id"),
         original_object_key: row.get("original_object_key"),
+        content_sha256: row.get("content_sha256"),
+        byte_size: row.get("byte_size"),
     })
 }
 

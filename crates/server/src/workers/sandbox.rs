@@ -4,15 +4,15 @@
 //! materializes a single input file and executes a configured argv template.
 
 use std::ffi::CString;
-use std::fs::File;
-use std::io::{self, Read, Write};
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::os::fd::AsRawFd;
 use std::os::fd::RawFd;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
@@ -21,6 +21,8 @@ use super::limits::ResourceLimits;
 
 const INPUT_PLACEHOLDER: &str = "{input}";
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+const DRAIN_GRACE: Duration = Duration::from_millis(250);
+const KILL_REAP_GRACE: Duration = Duration::from_millis(500);
 
 const ACCESS_FS_EXECUTE: u64 = 1 << 0;
 const ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
@@ -39,6 +41,7 @@ const LANDLOCK_RULE_PATH_BENEATH: libc::c_int = 1;
 const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
 const LANDLOCK_ACCESS_FS_READ_EXECUTE: u64 =
     ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_READ_DIR;
+const LANDLOCK_ACCESS_FS_EXEC_FILE: u64 = ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE;
 const LANDLOCK_ACCESS_FS_ALL_V1: u64 = ACCESS_FS_EXECUTE
     | ACCESS_FS_WRITE_FILE
     | ACCESS_FS_READ_FILE
@@ -75,6 +78,11 @@ impl SandboxConfig {
         if self.argv_template.is_empty() {
             return Err(SandboxError::InvalidConfig(
                 "converter argv template must not be empty".into(),
+            ));
+        }
+        if !Path::new(&self.argv_template[0]).is_absolute() {
+            return Err(SandboxError::InvalidConfig(
+                "converter executable must be an absolute path".into(),
             ));
         }
         let placeholder_count = self
@@ -119,6 +127,8 @@ pub struct SandboxOutput {
     pub stderr: Vec<u8>,
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
+    /// Host PID of PID namespace init. It is gone after timeout/cancel cleanup.
+    pub pid1_host_pid: Option<u32>,
     /// Path retained for tests/evidence; RAII cleanup has removed it by return.
     pub workspace_path: PathBuf,
 }
@@ -198,7 +208,14 @@ pub fn run(
     let executable = argv
         .first()
         .ok_or_else(|| SandboxError::InvalidConfig("converter argv is empty".into()))?;
-    let pre_exec = PreExecConfig::new(config, workspace.path(), executable)?;
+    let (pid_read_fd, pid_write_fd) = pipe_cloexec()?;
+    let pre_exec = PreExecConfig::new(
+        config,
+        workspace.path(),
+        executable,
+        pid_read_fd,
+        pid_write_fd,
+    )?;
 
     let mut command = Command::new(executable);
     command
@@ -215,42 +232,71 @@ pub fn run(
         command.pre_exec(move || pre_exec.apply());
     }
 
-    let mut child = command.spawn()?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            close_fd(pid_read_fd);
+            close_fd(pid_write_fd);
+            return Err(error.into());
+        }
+    };
+    close_fd(pid_write_fd);
     let child_pid = child.id() as libc::pid_t;
+    let pid1_host_pid = read_pid_from_pipe(pid_read_fd)?;
+    close_fd(pid_read_fd);
+    let cgroup_guard =
+        CgroupGuard::best_effort_apply(pid1_host_pid.unwrap_or(child.id()), &config.limits);
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
-    let stdout_limit = config.limits.stdout_stderr_bytes;
-    let stderr_limit = config.limits.stdout_stderr_bytes;
-    let stdout_reader = thread::spawn(move || read_capped(stdout, stdout_limit));
-    let stderr_reader = thread::spawn(move || read_capped(stderr, stderr_limit));
+    set_nonblocking(stdout.as_raw_fd())?;
+    set_nonblocking(stderr.as_raw_fd())?;
+    let mut stdout_capture = CapturedPipe::new(config.limits.stdout_stderr_bytes);
+    let mut stderr_capture = CapturedPipe::new(config.limits.stdout_stderr_bytes);
 
     let deadline = Instant::now() + config.limits.wall_timeout;
     let exit = loop {
+        drain_available(stdout.as_raw_fd(), &mut stdout_capture)?;
+        drain_available(stderr.as_raw_fd(), &mut stderr_capture)?;
         if let Some(status) = child.try_wait()? {
             break exit_from_status(status);
         }
         if cancel.is_cancelled() {
-            kill_process_tree(child_pid);
-            let _ = child.wait();
+            kill_namespace(pid1_host_pid, child_pid);
+            let _ = reap_child_bounded(&mut child, KILL_REAP_GRACE);
             break SandboxExit::Cancelled;
         }
         if Instant::now() >= deadline {
-            kill_process_tree(child_pid);
-            let _ = child.wait();
+            kill_namespace(pid1_host_pid, child_pid);
+            let _ = reap_child_bounded(&mut child, KILL_REAP_GRACE);
             break SandboxExit::TimedOut;
         }
-        thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(POLL_INTERVAL);
     };
 
-    let stdout = join_reader(stdout_reader)?;
-    let stderr = join_reader(stderr_reader)?;
+    let drain_deadline = Instant::now() + DRAIN_GRACE;
+    while Instant::now() < drain_deadline && (!stdout_capture.eof || !stderr_capture.eof) {
+        drain_available(stdout.as_raw_fd(), &mut stdout_capture)?;
+        drain_available(stderr.as_raw_fd(), &mut stderr_capture)?;
+        if stdout_capture.eof && stderr_capture.eof {
+            break;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    if !stdout_capture.eof {
+        stdout_capture.truncated = true;
+    }
+    if !stderr_capture.eof {
+        stderr_capture.truncated = true;
+    }
+    drop(cgroup_guard);
     drop(workspace);
     Ok(SandboxOutput {
         exit,
-        stdout: stdout.bytes,
-        stderr: stderr.bytes,
-        stdout_truncated: stdout.truncated,
-        stderr_truncated: stderr.truncated,
+        stdout: stdout_capture.bytes,
+        stderr: stderr_capture.bytes,
+        stdout_truncated: stdout_capture.truncated,
+        stderr_truncated: stderr_capture.truncated,
+        pid1_host_pid,
         workspace_path,
     })
 }
@@ -282,34 +328,56 @@ fn safe_input_name(extension: &str) -> Result<String, SandboxError> {
 
 struct CapturedPipe {
     bytes: Vec<u8>,
+    limit: usize,
     truncated: bool,
+    eof: bool,
 }
 
-fn read_capped<R: Read>(mut pipe: R, limit: usize) -> io::Result<CapturedPipe> {
-    let mut bytes = Vec::with_capacity(limit.min(8192));
-    let mut truncated = false;
-    let mut buf = [0_u8; 8192];
-    loop {
-        let n = pipe.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        let remaining = limit.saturating_sub(bytes.len());
-        let allowed = remaining.min(n);
-        if allowed > 0 {
-            bytes.extend_from_slice(&buf[..allowed]);
-        }
-        if allowed < n {
-            truncated = true;
+impl CapturedPipe {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(limit.min(8192)),
+            limit,
+            truncated: false,
+            eof: false,
         }
     }
-    Ok(CapturedPipe { bytes, truncated })
+
+    fn capacity_remaining(&self) -> usize {
+        self.limit.saturating_sub(self.bytes.len())
+    }
 }
 
-fn join_reader(handle: thread::JoinHandle<io::Result<CapturedPipe>>) -> io::Result<CapturedPipe> {
-    handle
-        .join()
-        .map_err(|_| io::Error::other("sandbox pipe reader panicked"))?
+fn drain_available(fd: RawFd, capture: &mut CapturedPipe) -> io::Result<()> {
+    let mut buf = [0_u8; 8192];
+    loop {
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast::<libc::c_void>(), buf.len()) };
+        if n < 0 {
+            let error = io::Error::last_os_error();
+            if matches!(
+                error.raw_os_error(),
+                Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK
+            ) {
+                return Ok(());
+            }
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
+        }
+        if n == 0 {
+            capture.eof = true;
+            return Ok(());
+        }
+        let n = n as usize;
+        let allowed = capture.capacity_remaining().min(n);
+        if allowed > 0 {
+            capture.bytes.extend_from_slice(&buf[..allowed]);
+        }
+        if allowed < n {
+            capture.truncated = true;
+        }
+    }
 }
 
 fn exit_from_status(status: std::process::ExitStatus) -> SandboxExit {
@@ -324,15 +392,35 @@ fn exit_from_status(status: std::process::ExitStatus) -> SandboxExit {
     }
 }
 
-fn kill_process_tree(pid: libc::pid_t) {
+fn kill_namespace(pid1_host_pid: Option<u32>, wrapper_pid: libc::pid_t) {
     unsafe {
-        let _ = libc::kill(-pid, libc::SIGKILL);
-        let _ = libc::kill(pid, libc::SIGKILL);
+        if let Some(pid1) = pid1_host_pid {
+            let _ = libc::kill(pid1 as libc::pid_t, libc::SIGKILL);
+        }
+        let _ = libc::kill(wrapper_pid, libc::SIGKILL);
+    }
+}
+
+fn reap_child_bounded(child: &mut Child, grace: Duration) -> io::Result<()> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "sandbox child did not reap after kill",
+            ));
+        }
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 
 struct PreExecConfig {
     limits: ResourceLimits,
+    pid_read_fd: RawFd,
+    pid_write_fd: RawFd,
     uid_map: Vec<u8>,
     gid_map: Vec<u8>,
     setgroups: CString,
@@ -343,26 +431,30 @@ struct PreExecConfig {
 }
 
 impl PreExecConfig {
-    fn new(config: &SandboxConfig, workspace: &Path, executable: &str) -> io::Result<Self> {
+    fn new(
+        config: &SandboxConfig,
+        workspace: &Path,
+        executable: &str,
+        pid_read_fd: RawFd,
+        pid_write_fd: RawFd,
+    ) -> io::Result<Self> {
         let workspace = CString::new(path_to_bytes(workspace)?)?;
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
-        let executable_dir = executable_allow_path(executable);
-        let mut landlock_allow = vec![
+        let executable_path = CString::new(path_to_bytes(Path::new(executable))?)?;
+        let landlock_allow = vec![
             (workspace.clone(), LANDLOCK_ACCESS_FS_ALL_V1),
-            (cstring_path("/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
-            (cstring_path("/usr/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
+            (executable_path, LANDLOCK_ACCESS_FS_EXEC_FILE),
             (cstring_path("/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
             (cstring_path("/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
             (cstring_path("/usr/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
             (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
             (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
         ];
-        if let Some(path) = executable_dir {
-            landlock_allow.push((CString::new(path)?, LANDLOCK_ACCESS_FS_READ_EXECUTE));
-        }
         Ok(Self {
             limits: config.limits.clone(),
+            pid_read_fd,
+            pid_write_fd,
             uid_map: format!("0 {uid} 1\n").into_bytes(),
             gid_map: format!("0 {gid} 1\n").into_bytes(),
             setgroups: cstring_path("/proc/self/setgroups")?,
@@ -382,11 +474,11 @@ impl PreExecConfig {
         apply_rlimit(libc::RLIMIT_AS, self.limits.memory_bytes)?;
         apply_rlimit(libc::RLIMIT_CPU, self.limits.cpu_seconds)?;
         apply_rlimit(libc::RLIMIT_FSIZE, self.limits.file_size_bytes)?;
-        apply_rlimit(libc::RLIMIT_NPROC, self.limits.max_processes)?;
         apply_rlimit(libc::RLIMIT_CORE, 0)?;
         self.unshare_user_and_network()?;
         self.apply_landlock()?;
         apply_rlimit(libc::RLIMIT_NOFILE, self.limits.max_open_files)?;
+        self.enter_pid_namespace()?;
         Ok(())
     }
 
@@ -403,17 +495,61 @@ impl PreExecConfig {
             if libc::unshare(libc::CLONE_NEWNET) < 0 {
                 return Err(io::Error::last_os_error());
             }
-            if libc::unshare(libc::CLONE_NEWNS) == 0 {
-                let _ = libc::mount(
-                    std::ptr::null(),
-                    self.root_path.as_ptr(),
-                    std::ptr::null(),
-                    (libc::MS_REC | libc::MS_PRIVATE) as libc::c_ulong,
-                    std::ptr::null(),
-                );
+            if libc::unshare(libc::CLONE_NEWNS) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::mount(
+                std::ptr::null(),
+                self.root_path.as_ptr(),
+                std::ptr::null(),
+                (libc::MS_REC | libc::MS_PRIVATE) as libc::c_ulong,
+                std::ptr::null(),
+            ) < 0
+            {
+                return Err(io::Error::last_os_error());
             }
         }
         Ok(())
+    }
+
+    fn enter_pid_namespace(&self) -> io::Result<()> {
+        unsafe {
+            if libc::unshare(libc::CLONE_NEWPID) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let pid = libc::fork();
+            if pid < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if pid == 0 {
+                let _ = libc::close(self.pid_read_fd);
+                let _ = libc::close(self.pid_write_fd);
+                apply_rlimit(libc::RLIMIT_NPROC, self.limits.max_processes)?;
+                return Ok(());
+            }
+
+            let _ = libc::close(self.pid_read_fd);
+            let _ = write_all_fd(self.pid_write_fd, &(pid as u32).to_ne_bytes());
+            let _ = libc::close(self.pid_write_fd);
+            close_fds_from(3);
+
+            let mut status: libc::c_int = 0;
+            loop {
+                if libc::waitpid(pid, &mut status, 0) >= 0 {
+                    break;
+                }
+                if io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                    libc::_exit(127);
+                }
+            }
+            if libc::WIFEXITED(status) {
+                libc::_exit(libc::WEXITSTATUS(status));
+            }
+            if libc::WIFSIGNALED(status) {
+                libc::_exit(128 + libc::WTERMSIG(status));
+            }
+            libc::_exit(127);
+        }
     }
 
     fn apply_landlock(&self) -> io::Result<()> {
@@ -504,6 +640,137 @@ fn apply_rlimit(resource: libc::__rlimit_resource_t, value: u64) -> io::Result<(
     }
 }
 
+fn pipe_cloexec() -> io::Result<(RawFd, RawFd)> {
+    let mut fds = [0; 2];
+    unsafe {
+        if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok((fds[0], fds[1]))
+        }
+    }
+}
+
+fn close_fd(fd: RawFd) {
+    unsafe {
+        let _ = libc::close(fd);
+    }
+}
+
+fn read_pid_from_pipe(fd: RawFd) -> io::Result<Option<u32>> {
+    let mut bytes = [0_u8; 4];
+    let mut read = 0;
+    while read < bytes.len() {
+        let n = unsafe {
+            libc::read(
+                fd,
+                bytes[read..].as_mut_ptr().cast::<libc::c_void>(),
+                bytes.len() - read,
+            )
+        };
+        if n < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
+        }
+        if n == 0 {
+            return Ok(None);
+        }
+        read += n as usize;
+    }
+    Ok(Some(u32::from_ne_bytes(bytes)))
+}
+
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+fn write_all_fd(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+        let n = unsafe {
+            libc::write(
+                fd,
+                bytes[written..].as_ptr().cast::<libc::c_void>(),
+                bytes.len() - written,
+            )
+        };
+        if n < 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(error);
+        }
+        written += n as usize;
+    }
+    Ok(())
+}
+
+fn close_fds_from(first: RawFd) {
+    unsafe {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        let max = if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 {
+            limit.rlim_cur.min(4096) as RawFd
+        } else {
+            1024
+        };
+        for fd in first..max {
+            let _ = libc::close(fd);
+        }
+    }
+}
+
+struct CgroupGuard {
+    path: Option<PathBuf>,
+}
+
+impl CgroupGuard {
+    // TODO(F02): cgroup v2 aggregate limits via container runtime. This best-effort
+    // hook only activates when a writable delegated subtree exists.
+    fn best_effort_apply(pid: u32, limits: &ResourceLimits) -> Self {
+        match Self::try_apply(pid, limits) {
+            Ok(path) => Self { path: Some(path) },
+            Err(_) => Self { path: None },
+        }
+    }
+
+    fn try_apply(pid: u32, limits: &ResourceLimits) -> io::Result<PathBuf> {
+        let root = Path::new("/sys/fs/cgroup");
+        if !root.join("cgroup.controllers").exists() {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "cgroup v2 missing"));
+        }
+        let path = root.join(format!("markhand-convert-{pid}"));
+        fs::create_dir(&path)?;
+        fs::write(path.join("memory.max"), limits.memory_bytes.to_string())?;
+        fs::write(path.join("pids.max"), limits.max_processes.to_string())?;
+        fs::write(path.join("cgroup.procs"), pid.to_string())?;
+        Ok(path)
+    }
+}
+
+impl Drop for CgroupGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_dir(path);
+        }
+    }
+}
+
 fn write_all_raw(path: &CString, bytes: &[u8]) -> io::Result<()> {
     unsafe {
         let fd = libc::open(
@@ -546,16 +813,6 @@ fn path_to_bytes(path: &Path) -> io::Result<Vec<u8>> {
     } else {
         Ok(bytes.to_vec())
     }
-}
-
-fn executable_allow_path(executable: &str) -> Option<Vec<u8>> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = Path::new(executable);
-    if !path.is_absolute() {
-        return None;
-    }
-    let parent = path.parent()?;
-    Some(parent.as_os_str().as_bytes().to_vec())
 }
 
 #[cfg(test)]

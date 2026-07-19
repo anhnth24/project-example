@@ -65,11 +65,30 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
         .unwrap_or_else(|| format!("fileconv-worker-{}", std::process::id()));
     let mut config = ConvertWorkerConfig::new(worker_id, sandbox_config_from_env()?);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
+        config.heartbeat_interval = Duration::from_secs(value.parse().map_err(|_| {
+            "MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS must be an integer".to_string()
+        })?);
+    }
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_MAX_JOB_SECS") {
+        config.max_job_duration = Duration::from_secs(
+            value
+                .parse()
+                .map_err(|_| "MARKHAND_WORKER_MAX_JOB_SECS must be an integer".to_string())?,
+        );
+    }
     if let Ok(value) = std::env::var("MARKHAND_WORKER_CLAIM_LIMIT") {
-        config.claim_limit = value
+        let claim_limit: u32 = value
             .parse()
             .map_err(|_| "MARKHAND_WORKER_CLAIM_LIMIT must be an integer".to_string())?;
+        if claim_limit != 1 {
+            return Err("MARKHAND_WORKER_CLAIM_LIMIT must be exactly 1".into());
+        }
     }
+    config.approved_audio_model_path = std::env::var("MARKHAND_APPROVED_AUDIO_MODEL_PATH")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(Into::into);
     let worker = ConvertWorker::new(pool, storage, config)
         .map_err(|error| format!("converter worker initialization failed: {error}"))?;
     loop {
@@ -99,7 +118,11 @@ fn sandbox_config_from_env() -> Result<SandboxConfig, String> {
     let argv_template = match std::env::var("MARKHAND_CONVERTER_ARGV_JSON") {
         Ok(value) if !value.trim().is_empty() => serde_json::from_str::<Vec<String>>(&value)
             .map_err(|_| "MARKHAND_CONVERTER_ARGV_JSON must be a JSON string array".to_string())?,
-        _ => vec!["fileconv".into(), "one".into(), "{input}".into()],
+        _ => vec![
+            "/usr/local/bin/fileconv".into(),
+            "one".into(),
+            "{input}".into(),
+        ],
     };
     let mut limits = ResourceLimits::default();
     if let Ok(value) = std::env::var("MARKHAND_CONVERTER_TIMEOUT_SECS") {
