@@ -2124,6 +2124,7 @@ dependencies = [
  "http-body-util",
  "image",
  "jsonwebtoken",
+ "libc",
  "quick-xml 0.41.0",
  "rand 0.10.2",
  "reqwest 0.13.4",

@@ -62,7 +62,7 @@ impl FormatKind {
             "xlsx" | "xls" | "xlsb" | "ods" => Self::Xlsx,
             "csv" => Self::Csv,
             "html" | "htm" => Self::Html,
-            "txt" | "log" => Self::Text,
+            "txt" | "log" | "md" | "markdown" => Self::Text,
             "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "gif" => Self::Image,
             "wav" | "mp3" | "m4a" | "flac" | "ogg" => Self::Audio,
             _ => Self::Unknown,
@@ -88,7 +88,7 @@ impl FormatKind {
         &[
             "pdf", "docx", "pptx", "xlsx", "xls", "xlsb", "ods", "csv", "html", "htm", "png",
             "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif", "wav", "mp3", "m4a", "flac", "ogg",
-            "txt", "log",
+            "txt", "log", "md", "markdown",
         ]
     }
 }

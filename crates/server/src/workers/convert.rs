@@ -1,0 +1,846 @@
+//! Converter job worker.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::time::Duration;
+
+use bytes::Bytes;
+use deadpool_postgres::Pool;
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use tokio::task::JoinHandle;
+use tokio::time::{
+    interval_at, sleep_until, timeout, timeout_at, Instant as TokioInstant, MissedTickBehavior,
+};
+use uuid::Uuid;
+
+use crate::auth::context::OrgContext;
+use crate::db::documents;
+use crate::db::error::DbError;
+use crate::db::models::{Job, JobType};
+use crate::db::pool::with_org_txn;
+use crate::jobs::{self, CompleteConvertArtifact, JobError, JobPayload};
+use crate::storage::keys::{parse_key_for_org, trusted_key};
+use crate::storage::minio::{MinioClient, ObjectIdentityMeta};
+use crate::storage::{ObjectNamespace, StorageError};
+
+use super::limits::ResourceLimits;
+use super::sandbox::{
+    self, SandboxCancel, SandboxConfig, SandboxError, SandboxExit, SandboxInput, SandboxOutput,
+};
+
+const DEFAULT_CLAIM_LIMIT: u32 = 1;
+const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
+const DEFAULT_JOB_GRACE_SECS: u64 = 30;
+const SANDBOX_CANCEL_REAP_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone)]
+pub struct ConvertWorkerConfig {
+    pub worker_id: String,
+    pub lease_ttl: Duration,
+    pub heartbeat_interval: Duration,
+    pub sandbox: SandboxConfig,
+    pub post_upload_settlement_delay: Duration,
+    pub max_job_duration: Duration,
+}
+
+impl ConvertWorkerConfig {
+    pub fn new(worker_id: impl Into<String>, sandbox: SandboxConfig) -> Self {
+        let max_job_duration =
+            sandbox.limits.wall_timeout + Duration::from_secs(DEFAULT_JOB_GRACE_SECS);
+        Self {
+            worker_id: worker_id.into(),
+            lease_ttl: Duration::from_secs(60),
+            heartbeat_interval: Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECS),
+            sandbox,
+            post_upload_settlement_delay: Duration::ZERO,
+            max_job_duration,
+        }
+    }
+
+    pub fn default_for_fileconv(worker_id: impl Into<String>, lease_ttl: Duration) -> Self {
+        Self {
+            worker_id: worker_id.into(),
+            lease_ttl,
+            heartbeat_interval: Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECS),
+            sandbox: SandboxConfig {
+                argv_template: vec![
+                    "/usr/local/bin/fileconv".into(),
+                    "one".into(),
+                    "{input}".into(),
+                ],
+                limits: ResourceLimits::default(),
+            },
+            post_upload_settlement_delay: Duration::ZERO,
+            max_job_duration: ResourceLimits::default().wall_timeout
+                + Duration::from_secs(DEFAULT_JOB_GRACE_SECS),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ConvertWorkerError> {
+        self.sandbox
+            .validate()
+            .map_err(ConvertWorkerError::Sandbox)?;
+        if self.heartbeat_interval.is_zero()
+            || self.lease_ttl.is_zero()
+            || self.heartbeat_interval > self.lease_ttl / 3
+        {
+            return Err(ConvertWorkerError::InvalidHeartbeatConfig);
+        }
+        if self.max_job_duration < self.sandbox.limits.wall_timeout {
+            return Err(ConvertWorkerError::InvalidMaxJobDuration);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct ConvertWorker {
+    db_pool: Pool,
+    storage: MinioClient,
+    config: ConvertWorkerConfig,
+}
+
+impl ConvertWorker {
+    pub fn new(
+        db_pool: Pool,
+        storage: MinioClient,
+        config: ConvertWorkerConfig,
+    ) -> Result<Self, ConvertWorkerError> {
+        config.validate()?;
+        sandbox::preflight().map_err(ConvertWorkerError::Sandbox)?;
+        Ok(Self {
+            db_pool,
+            storage,
+            config,
+        })
+    }
+
+    pub async fn run_once(&self, ctx: &OrgContext) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let jobs = jobs::claim_type(
+            &self.db_pool,
+            ctx,
+            JobType::Convert,
+            &self.config.worker_id,
+            DEFAULT_CLAIM_LIMIT,
+            self.config.lease_ttl,
+        )
+        .await?;
+        let Some(job) = jobs.into_iter().next() else {
+            return Ok(ConvertWorkerRun::NoJob);
+        };
+        self.process_claimed_job(ctx, job).await
+    }
+
+    pub async fn process_claimed_job(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let lease_token = job
+            .lease_owner
+            .as_deref()
+            .ok_or(ConvertWorkerError::MissingLease)?
+            .to_string();
+        let attempts = job.attempts;
+        let deadline = TokioInstant::now() + self.config.max_job_duration;
+        match self
+            .convert_claimed(ctx, &job, &lease_token, attempts, deadline)
+            .await
+        {
+            Ok(ConversionSuccess {
+                markdown,
+                artifact_key,
+                markdown_sha256,
+                markdown_len,
+                document_id,
+                version_id,
+            }) => {
+                let byte_size = match i64::try_from(markdown_len) {
+                    Ok(byte_size) => byte_size,
+                    Err(_) => {
+                        let _ = self
+                            .storage
+                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                            .await;
+                        return Err(ConvertWorkerError::InvalidMarkdownLength);
+                    }
+                };
+                let artifact_key_string = artifact_key.as_str();
+                if !self.config.post_upload_settlement_delay.is_zero() {
+                    let delay = self.config.post_upload_settlement_delay;
+                    match self
+                        .heartbeat_while(ctx, &job, &lease_token, attempts, deadline, async {
+                            tokio::time::sleep(delay).await;
+                            Ok::<(), JobError>(())
+                        })
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(ConvertWorkerError::LeaseLost)
+                        | Err(ConvertWorkerError::Job(JobError::LeaseLost)) => {
+                            let _ = self
+                                .storage
+                                .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                                .await;
+                            return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
+                        }
+                        Err(error) => {
+                            let _ = self
+                                .storage
+                                .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                                .await;
+                            return Err(error);
+                        }
+                    }
+                }
+                let completed = match self
+                    .heartbeat_while(
+                        ctx,
+                        &job,
+                        &lease_token,
+                        attempts,
+                        deadline,
+                        jobs::complete_with_markdown_artifact(
+                            &self.db_pool,
+                            ctx,
+                            job.id,
+                            &lease_token,
+                            attempts,
+                            CompleteConvertArtifact {
+                                artifact_id: Uuid::new_v4(),
+                                document_id,
+                                version_id,
+                                object_key: &artifact_key_string,
+                                content_sha256: &markdown_sha256,
+                                byte_size,
+                            },
+                        ),
+                    )
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(ConvertWorkerError::Job(JobError::LeaseLost))
+                    | Err(ConvertWorkerError::LeaseLost) => {
+                        let _ = self
+                            .storage
+                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                            .await;
+                        return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
+                    }
+                    Err(error) if error.is_retryable_job_failure() => {
+                        let _ = self
+                            .storage
+                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                            .await;
+                        let failed = jobs::fail(
+                            &self.db_pool,
+                            ctx,
+                            job.id,
+                            &lease_token,
+                            attempts,
+                            error.safe_job_error(),
+                        )
+                        .await?;
+                        return Ok(ConvertWorkerRun::Failed {
+                            job_id: failed.id,
+                            terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
+                        });
+                    }
+                    Err(error) => {
+                        let _ = self
+                            .storage
+                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                            .await;
+                        return Err(error);
+                    }
+                };
+                if !completed.artifact.created
+                    && completed.artifact.object_key != artifact_key_string
+                {
+                    let _ = self
+                        .storage
+                        .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                        .await;
+                }
+                Ok(ConvertWorkerRun::Completed {
+                    job_id: completed.job.id,
+                    markdown_bytes: markdown.len(),
+                })
+            }
+            Err(ConvertWorkerError::LeaseLost) => {
+                Ok(ConvertWorkerRun::LeaseLost { job_id: job.id })
+            }
+            Err(ConvertWorkerError::SandboxCancelled) => {
+                Ok(ConvertWorkerRun::LeaseLost { job_id: job.id })
+            }
+            Err(error) if error.is_retryable_job_failure() => {
+                let failed = jobs::fail(
+                    &self.db_pool,
+                    ctx,
+                    job.id,
+                    &lease_token,
+                    attempts,
+                    error.safe_job_error(),
+                )
+                .await?;
+                Ok(ConvertWorkerRun::Failed {
+                    job_id: failed.id,
+                    terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
+                })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn convert_claimed(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+    ) -> Result<ConversionSuccess, ConvertWorkerError> {
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+        let source = with_deadline(deadline, self.load_source(ctx, payload)).await?;
+        let quarantine_key = parse_key_for_org(&source.original_object_key, ctx.org_id())?;
+        if quarantine_key.namespace() != ObjectNamespace::Quarantine {
+            return Err(ConvertWorkerError::SourceNotQuarantine);
+        }
+        let metadata = self
+            .heartbeat_while(
+                ctx,
+                job,
+                lease_token,
+                attempts,
+                deadline,
+                self.storage.head_metadata(ctx.org_id(), &quarantine_key),
+            )
+            .await?;
+        self.verify_quarantine_metadata(&source, &metadata)?;
+        let format = metadata
+            .get("canonical-format")
+            .or_else(|| metadata.get("x-amz-meta-canonical-format"))
+            .ok_or(ConvertWorkerError::MissingCanonicalFormat)?;
+        if is_audio_format(format) {
+            return Err(ConvertWorkerError::AudioConversionDisabled);
+        }
+        let canonical_extension =
+            canonical_extension(format).ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
+        let input = self
+            .heartbeat_while(
+                ctx,
+                job,
+                lease_token,
+                attempts,
+                deadline,
+                self.storage.get_object(ctx.org_id(), &quarantine_key),
+            )
+            .await?;
+        let source_for_prepare = source.clone();
+        let metadata_for_prepare = metadata.clone();
+        let canonical_extension = canonical_extension.to_string();
+        let sandbox_input = self
+            .heartbeat_while(ctx, job, lease_token, attempts, deadline, async move {
+                tokio::task::spawn_blocking(move || {
+                    verify_downloaded_integrity(
+                        &source_for_prepare,
+                        input.as_ref(),
+                        &metadata_for_prepare,
+                    )?;
+                    Ok::<_, ConvertWorkerError>(SandboxInput {
+                        bytes: input.to_vec(),
+                        canonical_extension,
+                    })
+                })
+                .await
+                .map_err(|_| ConvertWorkerError::SandboxJoin)?
+            })
+            .await?;
+        let sandbox_output = self
+            .run_sandbox_with_heartbeat(ctx, job, lease_token, attempts, deadline, sandbox_input)
+            .await?;
+        if sandbox_output.stdout_truncated || sandbox_output.stderr_truncated {
+            return Err(ConvertWorkerError::SandboxOutputTruncated);
+        }
+        match sandbox_output.exit {
+            SandboxExit::Success => {}
+            SandboxExit::TimedOut => return Err(ConvertWorkerError::SandboxTimedOut),
+            SandboxExit::Cancelled => return Err(ConvertWorkerError::SandboxCancelled),
+            SandboxExit::Exit(_) | SandboxExit::Signaled(_) => {
+                return Err(ConvertWorkerError::ConverterFailed);
+            }
+        }
+        let markdown = sandbox_output.stdout;
+        let markdown_sha256 = hex::encode(Sha256::digest(&markdown));
+        let markdown_len =
+            u64::try_from(markdown.len()).map_err(|_| ConvertWorkerError::InvalidMarkdownLength)?;
+        let artifact_key = trusted_key(
+            ctx.org_id(),
+            source.version_id,
+            artifact_object_id_for_attempt(job.id, attempts),
+            None,
+        )?;
+        let meta = ObjectIdentityMeta {
+            org_id: ctx.org_id(),
+            collection_id: None,
+            document_id: Some(source.document_id),
+            version_id: Some(source.version_id),
+            original_filename: None,
+            canonical_format: Some("md".into()),
+            content_sha256: Some(markdown_sha256.clone()),
+            content_length: Some(markdown_len),
+            disposition: Some("trusted".into()),
+        };
+        if let Err(error) = self
+            .heartbeat_while(
+                ctx,
+                job,
+                lease_token,
+                attempts,
+                deadline,
+                self.storage.put_object(
+                    ctx.org_id(),
+                    &artifact_key,
+                    Bytes::from(markdown.clone()),
+                    &meta,
+                    "text/markdown; charset=utf-8",
+                ),
+            )
+            .await
+        {
+            let _ = self
+                .storage
+                .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                .await;
+            return Err(error);
+        }
+        Ok(ConversionSuccess {
+            markdown,
+            artifact_key,
+            markdown_sha256,
+            markdown_len,
+            document_id: source.document_id,
+            version_id: source.version_id,
+        })
+    }
+
+    fn verify_quarantine_metadata(
+        &self,
+        source: &documents::VersionSource,
+        metadata: &HashMap<String, String>,
+    ) -> Result<(), ConvertWorkerError> {
+        match metadata.get("disposition").map(String::as_str) {
+            Some("accepted" | "quarantined") => {}
+            _ => return Err(ConvertWorkerError::InvalidQuarantineMetadata),
+        }
+        if metadata.get("content-sha256").map(String::as_str)
+            != Some(source.content_sha256.as_str())
+        {
+            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+        }
+        let version_id = source.version_id.to_string();
+        if metadata.get("version-id").map(String::as_str) != Some(version_id.as_str()) {
+            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+        }
+        let document_id = source.document_id.to_string();
+        if metadata.get("document-id").map(String::as_str) != Some(document_id.as_str()) {
+            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+        }
+        Ok(())
+    }
+
+    async fn run_sandbox_with_heartbeat(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+        input: SandboxInput,
+    ) -> Result<SandboxOutput, ConvertWorkerError> {
+        self.heartbeat_once(ctx, job, lease_token, attempts, deadline)
+            .await?;
+        let cancel = SandboxCancel::default();
+        let sandbox_config = self.config.sandbox.clone();
+        let sandbox_cancel = cancel.clone();
+        let mut handle = tokio::task::spawn_blocking(move || {
+            sandbox::run(&sandbox_config, input, &sandbox_cancel)
+        });
+        let mut heartbeat = heartbeat_interval(self.config.heartbeat_interval);
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut handle => {
+                    return result
+                        .map_err(|_| ConvertWorkerError::SandboxJoin)?
+                        .map_err(ConvertWorkerError::Sandbox);
+                }
+                _ = sleep_until(deadline) => {
+                    cancel.cancel();
+                    let _ = await_cancelled_sandbox(&mut handle).await;
+                    return Err(ConvertWorkerError::JobTimedOut);
+                }
+                _ = heartbeat.tick() => {
+                    match timeout(heartbeat_call_timeout(self.config.lease_ttl, deadline), jobs::heartbeat(
+                        &self.db_pool,
+                        ctx,
+                        job.id,
+                        lease_token,
+                        attempts,
+                        self.config.lease_ttl,
+                    ))
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(JobError::LeaseLost)) => {
+                            cancel.cancel();
+                            let _ = await_cancelled_sandbox(&mut handle).await;
+                            return Err(ConvertWorkerError::LeaseLost);
+                        }
+                        Ok(Err(error)) => {
+                            cancel.cancel();
+                            let _ = await_cancelled_sandbox(&mut handle).await;
+                            return Err(ConvertWorkerError::Job(error));
+                        }
+                        Err(_) => {
+                            cancel.cancel();
+                            let _ = await_cancelled_sandbox(&mut handle).await;
+                            return Err(ConvertWorkerError::JobTimedOut);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn heartbeat_while<T, E, Fut>(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+        future: Fut,
+    ) -> Result<T, ConvertWorkerError>
+    where
+        Fut: Future<Output = Result<T, E>>,
+        E: Into<ConvertWorkerError>,
+    {
+        self.heartbeat_once(ctx, job, lease_token, attempts, deadline)
+            .await?;
+        tokio::pin!(future);
+        let mut heartbeat = heartbeat_interval(self.config.heartbeat_interval);
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut future => {
+                    return result.map_err(Into::into);
+                }
+                _ = sleep_until(deadline) => {
+                    return Err(ConvertWorkerError::JobTimedOut);
+                }
+                _ = heartbeat.tick() => {
+                    match timeout(heartbeat_call_timeout(self.config.lease_ttl, deadline), jobs::heartbeat(
+                        &self.db_pool,
+                        ctx,
+                        job.id,
+                        lease_token,
+                        attempts,
+                        self.config.lease_ttl,
+                    ))
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(JobError::LeaseLost)) => return Err(ConvertWorkerError::LeaseLost),
+                        Ok(Err(error)) => return Err(ConvertWorkerError::Job(error)),
+                        Err(_) => return Err(ConvertWorkerError::JobTimedOut),
+                    }
+                }
+            }
+        }
+    }
+
+    async fn heartbeat_once(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+    ) -> Result<(), ConvertWorkerError> {
+        match timeout(
+            heartbeat_call_timeout(self.config.lease_ttl, deadline),
+            jobs::heartbeat(
+                &self.db_pool,
+                ctx,
+                job.id,
+                lease_token,
+                attempts,
+                self.config.lease_ttl,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(JobError::LeaseLost)) => Err(ConvertWorkerError::LeaseLost),
+            Ok(Err(error)) => Err(ConvertWorkerError::Job(error)),
+            Err(_) => Err(ConvertWorkerError::JobTimedOut),
+        }
+    }
+
+    async fn load_source(
+        &self,
+        ctx: &OrgContext,
+        payload: JobPayload,
+    ) -> Result<documents::VersionSource, ConvertWorkerError> {
+        let document_id = payload
+            .document_id
+            .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
+        let version_id = payload
+            .version_id
+            .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
+        with_org_txn(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    documents::get_version_source_for_convert(txn, &ctx, document_id, version_id)
+                        .await
+                })
+            }
+        })
+        .await
+        .map_err(ConvertWorkerError::Db)
+    }
+}
+
+async fn with_deadline<T, E, Fut>(
+    deadline: TokioInstant,
+    future: Fut,
+) -> Result<T, ConvertWorkerError>
+where
+    Fut: Future<Output = Result<T, E>>,
+    E: Into<ConvertWorkerError>,
+{
+    match timeout_at(deadline, future).await {
+        Ok(result) => result.map_err(Into::into),
+        Err(_) => Err(ConvertWorkerError::JobTimedOut),
+    }
+}
+
+fn verify_downloaded_integrity(
+    source: &documents::VersionSource,
+    bytes: &[u8],
+    metadata: &HashMap<String, String>,
+) -> Result<(), ConvertWorkerError> {
+    let expected_size = source
+        .byte_size
+        .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?;
+    if expected_size < 0 || bytes.len() as i64 != expected_size {
+        return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+    }
+    let meta_len = metadata
+        .get("content-length-bytes")
+        .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?
+        .parse::<usize>()
+        .map_err(|_| ConvertWorkerError::InvalidQuarantineMetadata)?;
+    if meta_len != bytes.len() {
+        return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+    }
+    let actual_sha256 = hex::encode(Sha256::digest(bytes));
+    if actual_sha256 != source.content_sha256.as_str() {
+        return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+    }
+    Ok(())
+}
+
+async fn await_cancelled_sandbox(
+    handle: &mut JoinHandle<Result<SandboxOutput, SandboxError>>,
+) -> Result<(), ConvertWorkerError> {
+    match timeout(SANDBOX_CANCEL_REAP_TIMEOUT, handle).await {
+        Ok(Ok(Ok(_))) => Ok(()),
+        Ok(Ok(Err(error))) => Err(ConvertWorkerError::Sandbox(error)),
+        Ok(Err(_)) => Err(ConvertWorkerError::SandboxJoin),
+        Err(_) => Err(ConvertWorkerError::JobTimedOut),
+    }
+}
+
+fn heartbeat_interval(interval: Duration) -> tokio::time::Interval {
+    let mut heartbeat = interval_at(TokioInstant::now() + interval, interval);
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    heartbeat
+}
+
+fn heartbeat_call_timeout(lease_ttl: Duration, deadline: TokioInstant) -> Duration {
+    let mut lease_bound = lease_ttl / 3;
+    if lease_bound.is_zero() {
+        lease_bound = Duration::from_millis(1);
+    }
+    let remaining = deadline.saturating_duration_since(TokioInstant::now());
+    remaining.min(lease_bound)
+}
+
+pub fn artifact_object_id_for_attempt(job_id: Uuid, attempts: i32) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(b"markhand-convert-artifact-attempt-v1");
+    hasher.update(job_id.as_bytes());
+    hasher.update(attempts.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConvertWorkerRun {
+    NoJob,
+    Completed { job_id: Uuid, markdown_bytes: usize },
+    Failed { job_id: Uuid, terminal: bool },
+    LeaseLost { job_id: Uuid },
+}
+
+#[derive(Debug)]
+struct ConversionSuccess {
+    markdown: Vec<u8>,
+    artifact_key: crate::storage::ObjectKey,
+    markdown_sha256: String,
+    markdown_len: u64,
+    document_id: Uuid,
+    version_id: Uuid,
+}
+
+#[derive(Debug, Error)]
+pub enum ConvertWorkerError {
+    #[error("database error")]
+    Db(#[from] DbError),
+    #[error("job error")]
+    Job(#[from] JobError),
+    #[error("storage error")]
+    Storage(#[from] StorageError),
+    #[error("sandbox error")]
+    Sandbox(#[from] SandboxError),
+    #[error("sandbox task failed")]
+    SandboxJoin,
+    #[error("sandbox timed out")]
+    SandboxTimedOut,
+    #[error("sandbox was cancelled")]
+    SandboxCancelled,
+    #[error("sandbox output exceeded configured cap")]
+    SandboxOutputTruncated,
+    #[error("converter exited unsuccessfully")]
+    ConverterFailed,
+    #[error("job lease was lost")]
+    LeaseLost,
+    #[error("claimed job is missing a lease token")]
+    MissingLease,
+    #[error("convert payload is missing document_id or version_id")]
+    InvalidConvertPayload,
+    #[error("quarantine object is missing canonical format metadata")]
+    MissingCanonicalFormat,
+    #[error("quarantine object has unsupported canonical format metadata")]
+    UnsupportedCanonicalFormat,
+    #[error("markdown output is too large")]
+    InvalidMarkdownLength,
+    #[error("worker heartbeat interval must be <= one third of lease ttl")]
+    InvalidHeartbeatConfig,
+    #[error("worker max job duration must be at least the sandbox wall timeout")]
+    InvalidMaxJobDuration,
+    #[error("convert job exceeded configured maximum duration")]
+    JobTimedOut,
+    #[error("source object is not in quarantine namespace")]
+    SourceNotQuarantine,
+    #[error("quarantine metadata failed identity or integrity validation")]
+    InvalidQuarantineMetadata,
+    #[error("audio conversion is disabled for the isolated worker")]
+    AudioConversionDisabled,
+}
+
+impl ConvertWorkerError {
+    fn is_retryable_job_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Db(_)
+                | Self::Storage(_)
+                | Self::Sandbox(_)
+                | Self::SandboxJoin
+                | Self::SandboxTimedOut
+                | Self::SandboxOutputTruncated
+                | Self::ConverterFailed
+                | Self::InvalidConvertPayload
+                | Self::MissingCanonicalFormat
+                | Self::UnsupportedCanonicalFormat
+                | Self::InvalidMarkdownLength
+                | Self::JobTimedOut
+                | Self::AudioConversionDisabled
+                | Self::SourceNotQuarantine
+                | Self::InvalidQuarantineMetadata
+        )
+    }
+
+    fn safe_job_error(&self) -> &'static str {
+        match self {
+            Self::Db(_) => "convert database error",
+            Self::Storage(_) => "convert storage error",
+            Self::Sandbox(_) => "convert sandbox error",
+            Self::SandboxJoin => "convert sandbox join error",
+            Self::SandboxTimedOut => "convert sandbox timeout",
+            Self::SandboxCancelled => "convert sandbox cancelled",
+            Self::SandboxOutputTruncated => "convert sandbox output truncated",
+            Self::ConverterFailed => "converter exited unsuccessfully",
+            Self::LeaseLost => "convert lease lost",
+            Self::Job(_) => "convert job error",
+            Self::MissingLease => "convert missing lease",
+            Self::InvalidConvertPayload => "convert payload invalid",
+            Self::MissingCanonicalFormat => "convert canonical format missing",
+            Self::UnsupportedCanonicalFormat => "convert canonical format unsupported",
+            Self::InvalidMarkdownLength => "convert markdown too large",
+            Self::InvalidHeartbeatConfig => "convert heartbeat config invalid",
+            Self::InvalidMaxJobDuration => "convert max job duration invalid",
+            Self::JobTimedOut => "convert job timed out",
+            Self::SourceNotQuarantine => "convert source not quarantine",
+            Self::InvalidQuarantineMetadata => "convert quarantine metadata invalid",
+            Self::AudioConversionDisabled => "convert audio disabled",
+        }
+    }
+}
+
+pub fn canonical_extension(format: &str) -> Option<&'static str> {
+    match format {
+        "pdf" => Some("pdf"),
+        "docx" => Some("docx"),
+        "pptx" => Some("pptx"),
+        "xlsx" => Some("xlsx"),
+        "ods" => Some("ods"),
+        "xls" => Some("xls"),
+        "xlsb" => Some("xlsb"),
+        "csv" => Some("csv"),
+        "html" => Some("html"),
+        "txt" => Some("txt"),
+        "png" => Some("png"),
+        "jpeg" => Some("jpg"),
+        "jpg" => Some("jpg"),
+        "webp" => Some("webp"),
+        "tiff" => Some("tiff"),
+        "bmp" => Some("bmp"),
+        "wav" | "mp3" | "ogg" | "flac" | "m4a" => None,
+        "zip" => Some("zip"),
+        _ => None,
+    }
+}
+
+fn is_audio_format(format: &str) -> bool {
+    matches!(format, "wav" | "mp3" | "ogg" | "flac" | "m4a")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_extensions_are_server_derived() {
+        assert_eq!(canonical_extension("jpeg"), Some("jpg"));
+        assert_eq!(canonical_extension("../../etc/passwd"), None);
+        assert_eq!(canonical_extension("txt"), Some("txt"));
+        assert_eq!(canonical_extension("mp3"), None);
+    }
+}

@@ -16,6 +16,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::db::documents::{self, MarkdownArtifactRecord, NewMarkdownArtifact};
 use crate::db::error::DbError;
 use crate::db::models::{EventLogEntry, Job, JobStatus, JobType, OutboxEvent};
 use crate::db::{jobs as repo, pool};
@@ -163,6 +164,22 @@ pub enum CancelOutcome {
 pub struct OutboxPublication {
     pub outbox: OutboxEvent,
     pub event: EventLogEntry,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompleteConvertArtifact<'a> {
+    pub artifact_id: Uuid,
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub object_key: &'a str,
+    pub content_sha256: &'a str,
+    pub byte_size: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompleteConvertOutcome {
+    pub job: Job,
+    pub artifact: MarkdownArtifactRecord,
 }
 
 pub trait OutboxSink: Send + Sync {
@@ -326,6 +343,31 @@ pub async fn claim(
     .await
 }
 
+pub async fn claim_type(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    job_type: JobType,
+    worker_id: &str,
+    limit: u32,
+    lease_ttl: Duration,
+) -> Result<Vec<Job>, JobError> {
+    validate_worker_id(worker_id)?;
+    let limit = checked_limit(limit)?;
+    let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let worker_id = worker_id.to_string();
+        move |txn| {
+            Box::pin(async move {
+                repo::claim_pending_of_type(txn, &ctx, job_type, &worker_id, limit, lease_ttl_secs)
+                    .await
+                    .map_err(Into::into)
+            })
+        }
+    })
+    .await
+}
+
 pub async fn heartbeat(
     db_pool: &Pool,
     ctx: &OrgContext,
@@ -445,6 +487,47 @@ pub async fn complete(
                 let outbox_key = transition_key(&job, "job.succeeded");
                 write_job_event(txn, &ctx, &job, "job.succeeded", &outbox_key).await?;
                 Ok(job)
+            })
+        }
+    })
+    .await
+}
+
+pub async fn complete_with_markdown_artifact(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    claimed_attempts: i32,
+    artifact: CompleteConvertArtifact<'_>,
+) -> Result<CompleteConvertOutcome, JobError> {
+    validate_lease_identifier(lease_token)?;
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let lease_token = lease_token.to_string();
+        let object_key = artifact.object_key.to_string();
+        let content_sha256 = artifact.content_sha256.to_string();
+        move |txn| {
+            Box::pin(async move {
+                let job = repo::complete_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
+                    .await?
+                    .ok_or(JobError::LeaseLost)?;
+                let artifact = documents::insert_markdown_artifact(
+                    txn,
+                    &ctx,
+                    NewMarkdownArtifact {
+                        id: artifact.artifact_id,
+                        document_id: artifact.document_id,
+                        version_id: artifact.version_id,
+                        object_key: &object_key,
+                        content_sha256: &content_sha256,
+                        byte_size: artifact.byte_size,
+                    },
+                )
+                .await?;
+                let outbox_key = transition_key(&job, "job.succeeded");
+                write_job_event(txn, &ctx, &job, "job.succeeded", &outbox_key).await?;
+                Ok(CompleteConvertOutcome { job, artifact })
             })
         }
     })

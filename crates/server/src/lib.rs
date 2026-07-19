@@ -13,6 +13,7 @@ pub mod services;
 pub mod state;
 pub mod storage;
 pub mod telemetry;
+pub mod workers;
 
 /// Validates the non-secret server configuration contract.
 pub fn validate_configuration() -> Result<(), String> {

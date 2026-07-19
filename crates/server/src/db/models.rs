@@ -325,6 +325,18 @@ pub enum ArtifactKind {
     Other,
 }
 
+impl ArtifactKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Preview => "preview",
+            Self::Thumbnail => "thumbnail",
+            Self::ExtractedText => "extracted_text",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DerivedArtifact {
     pub id: Uuid,
