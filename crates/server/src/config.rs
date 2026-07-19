@@ -7,6 +7,9 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+const DEFAULT_MAX_UPLOAD_BYTES: u64 = 200 * 1024 * 1024;
+const DEFAULT_JOB_LEASE_SECONDS: u64 = 60;
+
 /// Deployment profile with explicitly different safety requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
@@ -53,16 +56,38 @@ pub struct ServerConfig {
     pub database_url: Option<SecretString>,
     pub qdrant_url: Option<String>,
     pub minio_url: Option<String>,
+    pub auth: AuthConfig,
+    pub limits: RuntimeLimits,
+    pub index_signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub issuer: Option<String>,
+    pub audience: Option<String>,
+    pub signing_key: Option<SecretString>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeLimits {
+    pub max_upload_bytes: u64,
+    pub job_lease_seconds: u64,
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigFile {
     profile: Option<String>,
     bind_addr: Option<String>,
     database_url: Option<String>,
     qdrant_url: Option<String>,
     minio_url: Option<String>,
+    auth_issuer: Option<String>,
+    auth_audience: Option<String>,
+    auth_signing_key: Option<String>,
+    max_upload_bytes: Option<u64>,
+    job_lease_seconds: Option<u64>,
+    index_signature: Option<String>,
 }
 
 impl ServerConfig {
@@ -107,6 +132,37 @@ impl ServerConfig {
         let minio_url = optional_value(file, env, "MARKHAND_MINIO_URL", |value| {
             value.minio_url.as_ref()
         });
+        let auth = AuthConfig {
+            issuer: optional_value(file, env, "MARKHAND_AUTH_ISSUER", |value| {
+                value.auth_issuer.as_ref()
+            }),
+            audience: optional_value(file, env, "MARKHAND_AUTH_AUDIENCE", |value| {
+                value.auth_audience.as_ref()
+            }),
+            signing_key: optional_value(file, env, "MARKHAND_AUTH_SIGNING_KEY", |value| {
+                value.auth_signing_key.as_ref()
+            })
+            .map(SecretString::new),
+        };
+        let limits = RuntimeLimits {
+            max_upload_bytes: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_UPLOAD_BYTES",
+                |value| value.max_upload_bytes,
+                DEFAULT_MAX_UPLOAD_BYTES,
+            )?,
+            job_lease_seconds: numeric_value(
+                file,
+                env,
+                "MARKHAND_JOB_LEASE_SECONDS",
+                |value| value.job_lease_seconds,
+                DEFAULT_JOB_LEASE_SECONDS,
+            )?,
+        };
+        let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
+            value.index_signature.as_ref()
+        });
 
         let config = Self {
             profile,
@@ -114,6 +170,9 @@ impl ServerConfig {
             database_url,
             qdrant_url,
             minio_url,
+            auth,
+            limits,
+            index_signature,
         };
         config.validate()?;
         Ok(config)
@@ -129,6 +188,9 @@ impl ServerConfig {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.validate_limits()?;
+        self.validate_index_signature(false)?;
+        self.validate_auth()?;
         if self.profile != Profile::Prod {
             return Ok(());
         }
@@ -139,6 +201,57 @@ impl ServerConfig {
         validate_production_database_url(endpoints.database_url.expose())?;
         require_https(&endpoints.qdrant_url, "MARKHAND_QDRANT_URL")?;
         require_https(&endpoints.minio_url, "MARKHAND_MINIO_URL")?;
+        self.validate_index_signature(true)?;
+        Ok(())
+    }
+
+    fn validate_auth(&self) -> Result<(), String> {
+        let Some(issuer) = self.auth.issuer.as_deref() else {
+            return if self.profile == Profile::Prod {
+                Err("prod profile requires MARKHAND_AUTH_ISSUER".into())
+            } else {
+                Ok(())
+            };
+        };
+        reqwest::Url::parse(issuer)
+            .map_err(|_| "MARKHAND_AUTH_ISSUER must be an absolute URL".to_string())?;
+        if self.auth.audience.as_deref().is_none_or(str::is_empty) {
+            return Err("MARKHAND_AUTH_AUDIENCE must not be empty when issuer is set".into());
+        }
+        let Some(signing_key) = self.auth.signing_key.as_ref() else {
+            return Err("MARKHAND_AUTH_SIGNING_KEY is required when issuer is set".into());
+        };
+        if signing_key.expose().len() < 32 {
+            return Err("MARKHAND_AUTH_SIGNING_KEY must contain at least 32 bytes".into());
+        }
+        Ok(())
+    }
+
+    fn validate_limits(&self) -> Result<(), String> {
+        if self.limits.max_upload_bytes == 0
+            || self.limits.max_upload_bytes > DEFAULT_MAX_UPLOAD_BYTES
+        {
+            return Err(format!(
+                "MARKHAND_MAX_UPLOAD_BYTES must be between 1 and {DEFAULT_MAX_UPLOAD_BYTES}"
+            ));
+        }
+        if self.limits.job_lease_seconds == 0 || self.limits.job_lease_seconds > 3600 {
+            return Err("MARKHAND_JOB_LEASE_SECONDS must be between 1 and 3600".into());
+        }
+        Ok(())
+    }
+
+    fn validate_index_signature(&self, required: bool) -> Result<(), String> {
+        let Some(signature) = self.index_signature.as_deref() else {
+            return if required {
+                Err("prod profile requires MARKHAND_INDEX_SIGNATURE".into())
+            } else {
+                Ok(())
+            };
+        };
+        if signature.len() != 64 || !signature.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("MARKHAND_INDEX_SIGNATURE must be a 64-character hex digest".into());
+        }
         Ok(())
     }
 }
@@ -170,6 +283,21 @@ fn optional_value(
         .or_else(|| file.and_then(from_file))
         .filter(|value| !value.trim().is_empty())
         .cloned()
+}
+
+fn numeric_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+    env_name: &str,
+    from_file: impl FnOnce(&ConfigFile) -> Option<u64>,
+    default: u64,
+) -> Result<u64, String> {
+    match env.get(env_name) {
+        Some(value) => value
+            .parse()
+            .map_err(|_| format!("{env_name} must be an unsigned integer")),
+        None => Ok(file.and_then(from_file).unwrap_or(default)),
+    }
 }
 
 fn required_url(value: Option<&str>, name: &str) -> Result<String, String> {
@@ -239,6 +367,12 @@ mod tests {
             database_url: Some("postgres://file-secret".into()),
             qdrant_url: Some("http://qdrant.test".into()),
             minio_url: Some("http://minio.test".into()),
+            auth_issuer: None,
+            auth_audience: None,
+            auth_signing_key: None,
+            max_upload_bytes: None,
+            job_lease_seconds: None,
+            index_signature: None,
         };
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "dev".into()),
@@ -311,10 +445,49 @@ mod tests {
                 "https://qdrant.internal".into(),
             ),
             ("MARKHAND_MINIO_URL".into(), "http://minio.internal".into()),
+            (
+                "MARKHAND_AUTH_ISSUER".into(),
+                "https://auth.internal".into(),
+            ),
+            ("MARKHAND_AUTH_AUDIENCE".into(), "markhand-web".into()),
+            (
+                "MARKHAND_AUTH_SIGNING_KEY".into(),
+                "0123456789abcdef0123456789abcdef".into(),
+            ),
+            (
+                "MARKHAND_INDEX_SIGNATURE".into(),
+                "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835".into(),
+            ),
         ]);
         assert_eq!(
             ServerConfig::from_sources(None, &env).unwrap_err(),
             "prod MARKHAND_MINIO_URL must use https"
+        );
+    }
+
+    #[test]
+    fn auth_and_limit_configuration_fail_fast() {
+        let invalid_limit =
+            BTreeMap::from([("MARKHAND_MAX_UPLOAD_BYTES".into(), "not-a-number".into())]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &invalid_limit).unwrap_err(),
+            "MARKHAND_MAX_UPLOAD_BYTES must be an unsigned integer"
+        );
+
+        let incomplete_auth = BTreeMap::from([(
+            "MARKHAND_AUTH_ISSUER".into(),
+            "https://markhand.test".into(),
+        )]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &incomplete_auth).unwrap_err(),
+            "MARKHAND_AUTH_AUDIENCE must not be empty when issuer is set"
+        );
+
+        let invalid_signature =
+            BTreeMap::from([("MARKHAND_INDEX_SIGNATURE".into(), "not-a-signature".into())]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &invalid_signature).unwrap_err(),
+            "MARKHAND_INDEX_SIGNATURE must be a 64-character hex digest"
         );
     }
 }
