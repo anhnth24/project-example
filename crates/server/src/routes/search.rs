@@ -21,6 +21,7 @@ use crate::services::retrieval::{
 
 pub(crate) const JSON_BODY_LIMIT: usize = 16 * 1024;
 pub(crate) const MAX_QUERY_CHARS: usize = 4096;
+pub(crate) const MAX_COLLECTION_IDS: usize = 512;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -118,12 +119,26 @@ pub(crate) fn validate_search_request(
     if query.chars().count() > MAX_QUERY_CHARS {
         return Err(RestError::validation("query is too long", request_id));
     }
+    validate_collection_ids_len(body.collection_ids.as_ref(), request_id)?;
     let limit = validate_limit(body.limit, MAX_RETRIEVAL_LIMIT, request_id)?;
     Ok(ValidSearchRequest {
         query,
         limit,
         ctx: narrowed_context(ctx, body.collection_ids),
     })
+}
+
+pub(crate) fn validate_collection_ids_len(
+    collection_ids: Option<&Vec<Uuid>>,
+    request_id: &str,
+) -> Result<(), RestError> {
+    if collection_ids.is_some_and(|ids| ids.len() > MAX_COLLECTION_IDS) {
+        return Err(RestError::validation(
+            format!("collectionIds must contain at most {MAX_COLLECTION_IDS} entries"),
+            request_id,
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_limit(
@@ -222,6 +237,20 @@ mod tests {
             query: "x".repeat(MAX_QUERY_CHARS + 1),
             limit: None,
             collection_ids: None,
+        };
+
+        assert!(validate_search_request(body, &ctx, "req").is_err());
+    }
+
+    #[test]
+    fn collection_ids_length_is_bounded() {
+        let collection = Uuid::new_v4();
+        let ctx = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["qa.query"], [collection])
+            .unwrap();
+        let body = SearchRequestBody {
+            query: "hello".into(),
+            limit: None,
+            collection_ids: Some(vec![collection; MAX_COLLECTION_IDS + 1]),
         };
 
         assert!(validate_search_request(body, &ctx, "req").is_err());

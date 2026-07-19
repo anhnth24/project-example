@@ -25,7 +25,9 @@ use crate::auth::context::OrgContext;
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::http::AppState;
 use crate::routes::common::{require_permission_or_403, RestError};
-use crate::routes::search::{narrowed_context, validate_limit, JSON_BODY_LIMIT, MAX_QUERY_CHARS};
+use crate::routes::search::{
+    narrowed_context, validate_collection_ids_len, validate_limit, JSON_BODY_LIMIT, MAX_QUERY_CHARS,
+};
 use crate::services::qa::stream::{DEFAULT_QA_LIMIT, MAX_QA_LIMIT};
 use crate::services::qa::{answer_question, QaAnswerMode, QaCitation, QaError, QaEvent, QaRequest};
 use crate::services::retrieval::VersionMode;
@@ -247,6 +249,7 @@ fn validate_ask_request(
     if question.chars().count() > MAX_QUERY_CHARS {
         return Err(RestError::validation("question is too long", request_id));
     }
+    validate_collection_ids_len(body.collection_ids.as_ref(), request_id)?;
     Ok(ValidAskRequest {
         question,
         limit: validate_limit(
@@ -293,7 +296,9 @@ fn map_registry_error(error: StreamRegistryError, request_id: &str) -> RestError
         StreamRegistryError::TooManyStreams => {
             RestError::too_many_requests("too many active streams", request_id)
         }
-        StreamRegistryError::BufferLimitExceeded => RestError::internal(request_id),
+        StreamRegistryError::BufferLimitExceeded => {
+            RestError::too_many_requests("stream replay buffer limit exceeded", request_id)
+        }
     }
 }
 
@@ -323,5 +328,27 @@ mod tests {
             .event,
             "ask.done"
         );
+    }
+
+    #[test]
+    fn collection_ids_length_is_bounded() {
+        let collection = uuid::Uuid::new_v4();
+        let ctx = OrgContext::try_new(
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            ["qa.query"],
+            [collection],
+        )
+        .unwrap();
+        let body = AskRequestBody {
+            question: "hello?".into(),
+            limit: None,
+            collection_ids: Some(vec![
+                collection;
+                crate::routes::search::MAX_COLLECTION_IDS + 1
+            ]),
+        };
+
+        assert!(validate_ask_request(body, &ctx, "req").is_err());
     }
 }

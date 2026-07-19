@@ -14,6 +14,10 @@ use crate::api::SseEnvelope;
 const SSE_VERSION: u16 = 1;
 const ASK_STREAM_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_EVENTS_PER_STREAM: usize = 128;
+/// Per-stream replay budget. Accounted bytes include stored collection-scope
+/// UUIDs plus serialized envelope payload estimates; total retained replay
+/// memory is bounded by `MAX_TOTAL_STREAMS * MAX_BYTES_PER_STREAM` plus O(1)
+/// fixed overhead per retained record.
 const MAX_BYTES_PER_STREAM: usize = 300 * 1024;
 const MAX_CONCURRENT_STREAMS_PER_CALLER: usize = 4;
 const MAX_RETAINED_STREAMS_PER_CALLER: usize = 8;
@@ -44,7 +48,7 @@ struct RegistryInner {
 #[derive(Debug, Clone)]
 struct AskStreamRecord {
     caller: StreamCaller,
-    collection_scope: BTreeSet<Uuid>,
+    collection_scope: Box<[Uuid]>,
     envelopes: Vec<SseEnvelope>,
     done: bool,
     created_at: Instant,
@@ -69,6 +73,11 @@ impl AskStreamRegistry {
         caller: StreamCaller,
         collection_scope: impl IntoIterator<Item = Uuid>,
     ) -> Result<Uuid, StreamRegistryError> {
+        let collection_scope = normalized_scope(collection_scope);
+        let scope_bytes = collection_scope_bytes(collection_scope.len());
+        if scope_bytes > MAX_BYTES_PER_STREAM {
+            return Err(StreamRegistryError::BufferLimitExceeded);
+        }
         let mut inner = self.lock_inner();
         inner.evict_expired();
         if inner.active_count_for_caller(caller) >= MAX_CONCURRENT_STREAMS_PER_CALLER {
@@ -89,11 +98,11 @@ impl AskStreamRegistry {
             stream_id,
             AskStreamRecord {
                 caller,
-                collection_scope: collection_scope.into_iter().collect(),
+                collection_scope,
                 envelopes: Vec::new(),
                 done: false,
                 created_at: Instant::now(),
-                bytes: 0,
+                bytes: scope_bytes,
             },
         );
         Ok(stream_id)
@@ -149,7 +158,11 @@ impl AskStreamRegistry {
             return None;
         }
         let current_allowed: BTreeSet<Uuid> = current_allowed.into_iter().collect();
-        if !record.collection_scope.is_subset(&current_allowed) {
+        if !record
+            .collection_scope
+            .iter()
+            .all(|collection_id| current_allowed.contains(collection_id))
+        {
             return None;
         }
         Some(
@@ -262,6 +275,18 @@ fn envelope_size(envelope: &SseEnvelope) -> usize {
         + std::mem::size_of_val(&envelope.sequence)
 }
 
+fn normalized_scope(scope: impl IntoIterator<Item = Uuid>) -> Box<[Uuid]> {
+    scope
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn collection_scope_bytes(len: usize) -> usize {
+    len.saturating_mul(std::mem::size_of::<Uuid>())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -321,6 +346,37 @@ mod tests {
             .replay_after(stream_id, 0, caller, [collection])
             .is_some());
         assert!(registry.replay_after(stream_id, 0, caller, []).is_none());
+    }
+
+    #[test]
+    fn record_accounted_bytes_include_collection_scope() {
+        let registry = AskStreamRegistry::new();
+        let caller = StreamCaller {
+            org_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+        };
+        let scope = [Uuid::new_v4(), Uuid::new_v4()];
+        let stream_id = registry.start_stream(caller, scope).unwrap();
+
+        let inner = registry.lock_inner();
+        let record = inner.streams.get(&stream_id).expect("record");
+        assert_eq!(record.bytes, collection_scope_bytes(scope.len()));
+    }
+
+    #[test]
+    fn scope_larger_than_per_stream_budget_is_rejected() {
+        let registry = AskStreamRegistry::new();
+        let caller = StreamCaller {
+            org_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+        };
+        let oversized_scope =
+            (0..=(MAX_BYTES_PER_STREAM / std::mem::size_of::<Uuid>())).map(|_| Uuid::new_v4());
+
+        assert_eq!(
+            registry.start_stream(caller, oversized_scope).unwrap_err(),
+            StreamRegistryError::BufferLimitExceeded
+        );
     }
 
     #[test]
