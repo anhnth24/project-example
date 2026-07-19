@@ -29,7 +29,7 @@ const PROD_MIN_ARGON2_MEMORY_KIB: u32 = 19_456;
 const PROD_MIN_ARGON2_TIME_COST: u32 = 2;
 const PROD_MAX_ACCESS_TOKEN_TTL_SECS: u64 = 900;
 const MAX_RATE_LIMIT_PER_MINUTE: u32 = 100_000;
-const MAX_RATE_LIMIT_ENTRIES: usize = 1_000_000;
+const MAX_RATE_LIMIT_ENTRIES: usize = 65_536;
 
 /// Deployment profile with explicitly different safety requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1631,6 +1631,13 @@ mod tests {
         assert_eq!(
             ServerConfig::from_sources(None, &invalid_signature).unwrap_err(),
             "MARKHAND_INDEX_SIGNATURE must be a 64-character hex digest"
+        );
+
+        let oversized_rate_limit_map =
+            BTreeMap::from([("MARKHAND_RATE_LIMIT_MAX_ENTRIES".into(), "65537".into())]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &oversized_rate_limit_map).unwrap_err(),
+            "MARKHAND_RATE_LIMIT_MAX_ENTRIES must be between 1 and 65536"
         );
     }
 

@@ -18,7 +18,7 @@ use crate::http::AppState;
 use crate::middleware::request_id::{RequestId, X_REQUEST_ID};
 
 const WINDOW: Duration = Duration::from_secs(60);
-const IDLE_TTL: Duration = Duration::from_secs(10 * 60);
+const SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 const FALLBACK_PEER: &str = "unknown-peer";
 
 #[derive(Debug)]
@@ -30,7 +30,9 @@ pub(crate) struct RateLimiter {
 #[derive(Debug)]
 struct RateLimitStore {
     buckets: HashMap<BucketKey, Bucket>,
-    last_eviction: tokio::time::Instant,
+    last_sweep: tokio::time::Instant,
+    #[cfg(test)]
+    sweep_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -65,7 +67,9 @@ impl RateLimiter {
         Self {
             buckets: Mutex::new(RateLimitStore {
                 buckets: HashMap::new(),
-                last_eviction: tokio::time::Instant::now(),
+                last_sweep: tokio::time::Instant::now(),
+                #[cfg(test)]
+                sweep_count: 0,
             }),
             max_entries: config.max_entries,
         }
@@ -81,65 +85,80 @@ impl RateLimiter {
         limit_per_minute: u32,
         now: tokio::time::Instant,
     ) -> Result<(), Duration> {
-        let mut store = self
-            .buckets
-            .lock()
-            .expect("rate limiter mutex must not be poisoned");
-        store.evict_if_due(now, self.max_entries);
-        if !store.buckets.contains_key(&key) && store.buckets.len() >= self.max_entries {
-            store.evict_oldest();
+        let mut store = self.lock_store();
+        store.sweep_expired_if_due(now);
+        if let Some(bucket) = store.buckets.get_mut(&key) {
+            return check_bucket(bucket, limit_per_minute, now);
         }
 
+        if store.buckets.len() >= self.max_entries {
+            // Fail open at hard capacity. The table is already memory-bounded, and
+            // scanning for an eviction victim here would make novel attacker keys
+            // impose O(N) work under the global mutex.
+            return Ok(());
+        }
         let capacity = f64::from(limit_per_minute);
-        let refill_per_second = capacity / WINDOW.as_secs_f64();
-        let bucket = store.buckets.entry(key).or_insert_with(|| Bucket {
-            tokens: capacity,
-            refilled_at: now,
-            last_seen: now,
-        });
-        let elapsed = now.duration_since(bucket.refilled_at).as_secs_f64();
-        bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
-        bucket.refilled_at = now;
-        bucket.last_seen = now;
+        store.buckets.insert(
+            key,
+            Bucket {
+                tokens: capacity - 1.0,
+                refilled_at: now,
+                last_seen: now,
+            },
+        );
+        Ok(())
+    }
 
-        if bucket.tokens >= 1.0 {
-            bucket.tokens -= 1.0;
-            Ok(())
-        } else {
-            let retry = ((1.0 - bucket.tokens) / refill_per_second).ceil().max(1.0) as u64;
-            Err(Duration::from_secs(retry))
-        }
+    fn lock_store(&self) -> std::sync::MutexGuard<'_, RateLimitStore> {
+        self.buckets
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     #[cfg(test)]
     fn bucket_count(&self) -> usize {
-        self.buckets
-            .lock()
-            .expect("rate limiter mutex must not be poisoned")
-            .buckets
-            .len()
+        self.lock_store().buckets.len()
+    }
+
+    #[cfg(test)]
+    fn sweep_count(&self) -> usize {
+        self.lock_store().sweep_count
+    }
+}
+
+fn check_bucket(
+    bucket: &mut Bucket,
+    limit_per_minute: u32,
+    now: tokio::time::Instant,
+) -> Result<(), Duration> {
+    let capacity = f64::from(limit_per_minute);
+    let refill_per_second = capacity / WINDOW.as_secs_f64();
+    let elapsed = now.duration_since(bucket.refilled_at).as_secs_f64();
+    bucket.tokens = (bucket.tokens + elapsed * refill_per_second).min(capacity);
+    bucket.refilled_at = now;
+    bucket.last_seen = now;
+
+    if bucket.tokens >= 1.0 {
+        bucket.tokens -= 1.0;
+        Ok(())
+    } else {
+        let retry = ((1.0 - bucket.tokens) / refill_per_second).ceil().max(1.0) as u64;
+        Err(Duration::from_secs(retry))
     }
 }
 
 impl RateLimitStore {
-    fn evict_if_due(&mut self, now: tokio::time::Instant, max_entries: usize) {
-        if self.buckets.len() < max_entries && now.duration_since(self.last_eviction) < IDLE_TTL {
+    fn sweep_expired_if_due(&mut self, now: tokio::time::Instant) {
+        if now.duration_since(self.last_sweep) < SWEEP_INTERVAL {
             return;
         }
-        self.last_eviction = now;
-        self.buckets
-            .retain(|_, bucket| now.duration_since(bucket.last_seen) < IDLE_TTL);
-    }
-
-    fn evict_oldest(&mut self) {
-        if let Some(oldest) = self
-            .buckets
-            .iter()
-            .min_by_key(|(_, bucket)| bucket.last_seen)
-            .map(|(key, _)| key.clone())
+        self.last_sweep = now;
+        #[cfg(test)]
         {
-            self.buckets.remove(&oldest);
+            self.sweep_count += 1;
         }
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_seen) <= WINDOW);
     }
 }
 
@@ -163,7 +182,10 @@ pub async fn rate_limit(
 }
 
 fn is_health_path(path: &str) -> bool {
-    path.starts_with("/api/v1/health/")
+    matches!(
+        path,
+        "/api/v1/health/live" | "/api/v1/health/ready" | "/api/v1/health/start"
+    )
 }
 
 fn rate_decision(state: &AppState, request: &Request<Body>) -> RateDecision {
@@ -340,5 +362,101 @@ mod tests {
             assert!(limiter.check_at(key, 2, now).is_ok());
         }
         assert_eq!(limiter.bucket_count(), 2);
+    }
+
+    #[test]
+    fn saturated_map_fails_open_for_novel_keys_without_losing_existing_limits() {
+        let limiter = RateLimiter::new(test_config(2));
+        let now = tokio::time::Instant::now();
+        let first = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:192.0.2.1".into(),
+        };
+        let second = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:192.0.2.2".into(),
+        };
+        let novel = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:192.0.2.3".into(),
+        };
+
+        assert!(limiter.check_at(first.clone(), 1, now).is_ok());
+        assert!(limiter.check_at(second, 1, now).is_ok());
+        assert!(limiter.check_at(novel, 1, now).is_ok());
+        assert_eq!(limiter.bucket_count(), 2);
+        assert_eq!(
+            limiter.check_at(first, 1, now).unwrap_err(),
+            Duration::from_secs(60)
+        );
+    }
+
+    #[test]
+    fn flood_is_bounded_and_sweeps_only_on_interval() {
+        let limiter = RateLimiter::new(test_config(4));
+        let now = tokio::time::Instant::now();
+        for index in 0..100 {
+            let key = BucketKey {
+                class: RateClass::Fallback,
+                identity: format!("ip:198.51.100.{index}"),
+            };
+            assert!(limiter.check_at(key, 2, now).is_ok());
+        }
+        assert_eq!(limiter.bucket_count(), 4);
+        assert_eq!(limiter.sweep_count(), 0);
+
+        let before_sweep = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:203.0.113.1".into(),
+        };
+        assert!(limiter
+            .check_at(
+                before_sweep,
+                2,
+                now + SWEEP_INTERVAL - Duration::from_secs(1)
+            )
+            .is_ok());
+        assert_eq!(limiter.bucket_count(), 4);
+        assert_eq!(limiter.sweep_count(), 0);
+
+        let first_due = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:203.0.113.2".into(),
+        };
+        assert!(limiter.check_at(first_due, 2, now + SWEEP_INTERVAL).is_ok());
+        assert_eq!(limiter.bucket_count(), 4);
+        assert_eq!(limiter.sweep_count(), 1);
+
+        let after_expiry = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:203.0.113.3".into(),
+        };
+        assert!(limiter
+            .check_at(
+                after_expiry,
+                2,
+                now + WINDOW + SWEEP_INTERVAL + Duration::from_secs(1),
+            )
+            .is_ok());
+        assert_eq!(limiter.bucket_count(), 1);
+        assert_eq!(limiter.sweep_count(), 2);
+    }
+
+    #[test]
+    fn poisoned_mutex_recovers_for_future_requests() {
+        let limiter = RateLimiter::new(test_config(2));
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = limiter.lock_store();
+            panic!("intentional poison");
+        }));
+        assert!(poisoned.is_err());
+
+        let key = BucketKey {
+            class: RateClass::Fallback,
+            identity: "ip:192.0.2.44".into(),
+        };
+        assert!(limiter
+            .check_at(key, 2, tokio::time::Instant::now())
+            .is_ok());
     }
 }

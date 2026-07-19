@@ -64,11 +64,25 @@ pub fn migration_checksum(source: &str) -> String {
         .collect()
 }
 
-pub fn latest_migration() -> (&'static str, String) {
-    let (name, source) = MIGRATIONS
-        .last()
-        .expect("embedded migration manifest must not be empty");
-    (*name, migration_checksum(source))
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedMigrationChecksum {
+    pub version: &'static str,
+    pub name: &'static str,
+    pub checksum: String,
+}
+
+pub fn embedded_migration_checksums() -> Vec<EmbeddedMigrationChecksum> {
+    MIGRATIONS
+        .iter()
+        .map(|&(name, source)| EmbeddedMigrationChecksum {
+            version: name
+                .split_once('_')
+                .map(|(version, _)| version)
+                .unwrap_or(name),
+            name,
+            checksum: migration_checksum(source),
+        })
+        .collect()
 }
 
 pub async fn apply_migrations(database_url: &str) -> Result<(), String> {

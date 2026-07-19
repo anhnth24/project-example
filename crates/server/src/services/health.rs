@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,23 +82,35 @@ fn validate_index_signature_config(state: &AppState) -> Result<(), HealthErrorKi
 }
 
 async fn check_migrations_applied(pool: &Pool) -> Result<(), String> {
-    let (expected_name, expected_checksum) = database::latest_migration();
+    let expected = database::embedded_migration_checksums();
     let client = pool
         .get()
         .await
         .map_err(|error| format!("PostgreSQL pool checkout failed: {error}"))?;
-    let row = client
-        .query_opt(
-            "SELECT checksum FROM markhand_schema_migrations WHERE name = $1",
-            &[&expected_name],
-        )
+    let rows = client
+        .query("SELECT name, checksum FROM markhand_schema_migrations", &[])
         .await
         .map_err(|error| format!("cannot inspect migration history: {error}"))?;
-    match row {
-        Some(row) if row.get::<_, String>(0) == expected_checksum => Ok(()),
-        Some(_) => Err(format!("migration checksum mismatch for {expected_name}")),
-        None => Err(format!("migration {expected_name} has not been applied")),
+    if rows.len() != expected.len() {
+        return Err("migration history count mismatch".into());
     }
+    let actual = rows
+        .into_iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect::<HashMap<_, _>>();
+    for migration in expected {
+        match actual.get(migration.name) {
+            Some(checksum) if checksum == &migration.checksum => {}
+            Some(_) => {
+                return Err(format!(
+                    "migration checksum mismatch for {}",
+                    migration.name
+                ))
+            }
+            None => return Err(format!("migration {} has not been applied", migration.name)),
+        }
+    }
+    Ok(())
 }
 
 async fn ensure_success(
@@ -122,6 +135,7 @@ mod tests {
 
     use crate::api::ApiError;
     use crate::config::{RuntimeEndpoints, SecretString, ServerConfig};
+    use crate::database::apply_migrations;
     use crate::db::pool::create_pool;
     use crate::http::{router, AppState};
     use crate::state::RuntimeState;
@@ -264,5 +278,28 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("cannot inspect migration history"));
+    }
+
+    #[tokio::test]
+    async fn missing_earlier_migration_history_fails_closed() {
+        let Some(base_url) = test_database_url() else {
+            return;
+        };
+        let db = EphemeralDb::create(&base_url).await;
+        apply_migrations(&db.url).await.expect("migrations");
+        let client = connect_raw(&db.url).await;
+        client
+            .execute(
+                "DELETE FROM markhand_schema_migrations WHERE name = $1",
+                &[&"0001_expand_orgs_users.sql"],
+            )
+            .await
+            .expect("delete migration history row");
+        let pool = create_pool(&db.url).expect("pool");
+        let result = super::check_migrations_applied(&pool).await;
+        db.drop().await;
+        assert!(result
+            .unwrap_err()
+            .contains("migration history count mismatch"));
     }
 }
