@@ -883,7 +883,19 @@ import os, time, sys
 pid = os.fork()
 if pid == 0:
     os.setsid()
-    print("daemon-pid", os.getpid(), flush=True)
+    # Inside the sandbox PID namespace os.getpid() is namespace-local (pid 2),
+    # but /proc is the host procfs, so report the host-visible pid via NSpid
+    # (leftmost value) which is what the harness checks against host /proc.
+    _hp = os.getpid()
+    try:
+        with open("/proc/self/status") as _f:
+            for _l in _f:
+                if _l.startswith("NSpid:"):
+                    _hp = _l.split()[1]
+                    break
+    except Exception:
+        pass
+    print("daemon-pid", _hp, flush=True)
     while True:
         time.sleep(60)
 else:
@@ -936,7 +948,19 @@ import os, time
 pid = os.fork()
 if pid == 0:
     os.setsid()
-    print("daemon-pid", os.getpid(), flush=True)
+    # Inside the sandbox PID namespace os.getpid() is namespace-local (pid 2),
+    # but /proc is the host procfs, so report the host-visible pid via NSpid
+    # (leftmost value) which is what the harness checks against host /proc.
+    _hp = os.getpid()
+    try:
+        with open("/proc/self/status") as _f:
+            for _l in _f:
+                if _l.startswith("NSpid:"):
+                    _hp = _l.split()[1]
+                    break
+    except Exception:
+        pass
+    print("daemon-pid", _hp, flush=True)
     while True:
         time.sleep(60)
 else:
