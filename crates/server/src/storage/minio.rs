@@ -651,6 +651,12 @@ fn insert_header(
 
 fn metadata_map(head: &HeadObjectResult) -> HashMap<String, String> {
     let mut meta = HashMap::new();
+    if let Some(content_type) = &head.content_type {
+        meta.insert("content-type".to_string(), content_type.clone());
+    }
+    if let Some(content_length) = head.content_length {
+        meta.insert("content-length".to_string(), content_length.to_string());
+    }
     if let Some(map) = &head.metadata {
         for (k, v) in map {
             meta.insert(k.to_ascii_lowercase(), v.clone());
