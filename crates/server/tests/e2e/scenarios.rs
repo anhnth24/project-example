@@ -89,6 +89,27 @@ async fn live_authorization_e2e_unauthorized_gets_no_text() {
         env.drop().await;
         return;
     };
+    let org_a_ctx = seeded.worker_ctx();
+    assert_direct_qdrant_tenant_filter(
+        &env,
+        DirectQdrantDoc {
+            ctx: &org_a_ctx,
+            collection_id: doc.collection_id,
+            doc: &doc,
+        },
+        DirectQdrantDoc {
+            ctx: &cross_ctx,
+            collection_id: cross_doc.collection_id,
+            doc: &cross_doc,
+        },
+        cross_query,
+    )
+    .await;
+    let org_a_chunk_identities = chunk_identities_for_doc(&env, &org_a_ctx, doc.document_id).await;
+    assert!(
+        !org_a_chunk_identities.is_empty(),
+        "org-A control doc has no chunk identities"
+    );
 
     let (status, cross_search) = search(&env, &cross, cross_query, None).await;
     assert_eq!(status, StatusCode::OK, "{cross_search}");
@@ -107,6 +128,13 @@ async fn live_authorization_e2e_unauthorized_gets_no_text() {
         "cross-tenant search leaked org-A identifiers: {cross_search}"
     );
     assert_value_lacks(&cross_search, marker);
+    for chunk_identity in &org_a_chunk_identities {
+        assert_value_lacks(&cross_search, chunk_identity);
+    }
+    assert!(
+        cross_search.to_string().contains(cross_visible_marker),
+        "cross-tenant control search did not include org-B marker: {cross_search}"
+    );
 
     let (status, cross_ask) = ask(&env, &cross, cross_query, None).await;
     assert_eq!(status, StatusCode::OK, "{cross_ask}");
@@ -126,6 +154,13 @@ async fn live_authorization_e2e_unauthorized_gets_no_text() {
         "cross-tenant ask leaked org-A identifiers: {cross_ask}"
     );
     assert_value_lacks(&cross_ask, marker);
+    for chunk_identity in &org_a_chunk_identities {
+        assert_value_lacks(&cross_ask, chunk_identity);
+    }
+    assert!(
+        cross_ask.to_string().contains(cross_visible_marker),
+        "cross-tenant control ask did not include org-B marker: {cross_ask}"
+    );
 
     let (status, no_acl_search) = search(&env, &no_acl, marker, Some(doc.collection_id)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{no_acl_search}");
@@ -248,7 +283,8 @@ async fn live_lifecycle_delete_purge_and_revocation() {
     };
     assert_grounded_http_roundtrip(&env, &viewer, &doc).await;
     let pin = citation_pin_from(&first_citation(&env, &owner, &doc).await, marker);
-    let stale_download_path = mint_download_path(&env, &owner, &doc).await;
+    let tombstone_stale_download_path = mint_download_path(&env, &owner, &doc).await;
+    let purge_stale_download_path = mint_download_path(&env, &owner, &doc).await;
     let proof_download_path = mint_download_path(&env, &owner, &doc).await;
     let proof_downloaded = send_request(
         env.app.clone(),
@@ -273,6 +309,18 @@ async fn live_lifecycle_delete_purge_and_revocation() {
     assert_eq!(status, StatusCode::ACCEPTED, "{deleted}");
     assert_eq!(deleted["document"]["state"], "tombstoned");
     assert_deleted_egress_denied(&env, &owner, &doc, &pin, "after tombstone before purge").await;
+    assert_not_found_raw(
+        send_request(
+            env.app.clone(),
+            "GET",
+            &tombstone_stale_download_path,
+            Body::empty(),
+            None,
+            None,
+        )
+        .await,
+        marker,
+    );
 
     let ctx = seeded.worker_ctx();
     relay_outbox(&env, &ctx).await;
@@ -290,7 +338,7 @@ async fn live_lifecycle_delete_purge_and_revocation() {
         send_request(
             env.app.clone(),
             "GET",
-            &stale_download_path,
+            &purge_stale_download_path,
             Body::empty(),
             None,
             None,

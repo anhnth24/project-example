@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use bytes::Bytes;
 use deadpool_postgres::Pool;
-use fileconv_knowledge::embedding::LOCAL_VECTOR_DIMENSIONS;
+use fileconv_knowledge::embedding::{local_vector, LOCAL_VECTOR_DIMENSIONS};
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::auth::jwt::JwtKeys;
 use fileconv_server::auth::provider::{AuthProvider, AuthRequestMeta, PasswordAuthProvider};
@@ -1130,13 +1130,12 @@ pub async fn qdrant_points_for_doc(
         .len()
 }
 
-pub async fn assert_chunk_point_identity(
+pub async fn chunk_identities_for_doc(
     env: &LiveEnv,
     ctx: &OrgContext,
-    collection_id: Uuid,
     document_id: Uuid,
-) {
-    let chunk_identities: Vec<String> = with_org_txn(&env.pool, ctx, {
+) -> Vec<String> {
+    with_org_txn(&env.pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
@@ -1154,7 +1153,91 @@ pub async fn assert_chunk_point_identity(
         }
     })
     .await
-    .expect("chunk identities");
+    .expect("chunk identities")
+}
+
+pub struct DirectQdrantDoc<'a> {
+    pub ctx: &'a OrgContext,
+    pub collection_id: Uuid,
+    pub doc: &'a IngestedDoc,
+}
+
+pub async fn assert_direct_qdrant_tenant_filter(
+    env: &LiveEnv,
+    org_a: DirectQdrantDoc<'_>,
+    org_b: DirectQdrantDoc<'_>,
+    shared_query: &str,
+) {
+    let query_vector = local_vector(shared_query);
+    let org_a_signature = active_signature(env, org_a.ctx, org_a.collection_id).await;
+    let org_a_collection = collection_name_for_digest(&org_a_signature).expect("collection name");
+    let org_a_hits = env
+        .qdrant
+        .search(
+            &org_a_collection,
+            &VectorScope::new(org_a.ctx.org_id(), [org_a.collection_id]),
+            query_vector.values(),
+            100,
+        )
+        .await
+        .expect("direct qdrant org-a search");
+    assert!(
+        org_a_hits.iter().any(|hit| {
+            hit.payload.org_id == org_a.ctx.org_id()
+                && hit.payload.collection_id == org_a.collection_id
+                && hit.payload.document_id == org_a.doc.document_id
+        }),
+        "direct Qdrant org-A control search did not return indexed org-A content"
+    );
+
+    let org_b_signature = active_signature(env, org_b.ctx, org_b.collection_id).await;
+    let org_b_collection = collection_name_for_digest(&org_b_signature).expect("collection name");
+    let org_b_hits = env
+        .qdrant
+        .search(
+            &org_b_collection,
+            &VectorScope::new(org_b.ctx.org_id(), [org_b.collection_id]),
+            query_vector.values(),
+            100,
+        )
+        .await
+        .expect("direct qdrant org-b search");
+    assert!(
+        org_b_hits.iter().any(|hit| {
+            hit.payload.org_id == org_b.ctx.org_id()
+                && hit.payload.collection_id == org_b.collection_id
+                && hit.payload.document_id == org_b.doc.document_id
+        }),
+        "direct Qdrant org-B search did not return indexed org-B control content"
+    );
+    assert!(
+        org_b_hits.iter().all(|hit| {
+            hit.payload.org_id != org_a.ctx.org_id()
+                && hit.payload.collection_id != org_a.collection_id
+                && hit.payload.document_id != org_a.doc.document_id
+        }),
+        "direct Qdrant org-B search leaked org-A payloads"
+    );
+
+    let org_a_chunks = chunk_identities_for_doc(env, org_a.ctx, org_a.doc.document_id).await;
+    assert!(!org_a_chunks.is_empty(), "org-A control doc has no chunks");
+    for chunk_identity in org_a_chunks {
+        assert!(
+            org_b_hits
+                .iter()
+                .all(|hit| hit.payload.chunk_id != chunk_identity),
+            "direct Qdrant org-B search leaked org-A chunk identity {chunk_identity}"
+        );
+    }
+}
+
+pub async fn assert_chunk_point_identity(
+    env: &LiveEnv,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    document_id: Uuid,
+) {
+    let chunk_identities = chunk_identities_for_doc(env, ctx, document_id).await;
     assert!(
         !chunk_identities.is_empty(),
         "document must have at least one PG chunk"
