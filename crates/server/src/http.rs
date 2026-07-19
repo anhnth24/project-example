@@ -20,6 +20,7 @@ use crate::config::QuotaSweepConfig;
 use crate::database;
 use crate::db::pool::create_pool;
 use crate::routes;
+use crate::services::download::{CapabilityKey, ConsumedDownloadNonces};
 use crate::services::quota;
 use crate::state::RuntimeState;
 
@@ -34,6 +35,8 @@ pub struct AppState {
     auth_provider: Option<PasswordAuthProvider>,
     /// Object store adapter (optional when credentials are absent in tests).
     object_store: Option<crate::storage::MinioClient>,
+    download_capability_key: Option<CapabilityKey>,
+    consumed_download_nonces: ConsumedDownloadNonces,
 }
 
 struct CachedReadiness {
@@ -69,6 +72,12 @@ impl AppState {
             Err(_) => None,
         };
         start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
+        let download_capability_key = runtime
+            .config()
+            .auth()
+            .signing_key
+            .as_ref()
+            .map(CapabilityKey::derive_from_auth_signing_key);
         Ok(Self {
             runtime,
             http_client,
@@ -76,6 +85,8 @@ impl AppState {
             pool,
             auth_provider,
             object_store,
+            download_capability_key,
+            consumed_download_nonces: ConsumedDownloadNonces::new(),
         })
     }
 
@@ -102,6 +113,12 @@ impl AppState {
             .timeout(DEPENDENCY_TIMEOUT)
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        let download_capability_key = runtime
+            .config()
+            .auth()
+            .signing_key
+            .as_ref()
+            .map(CapabilityKey::derive_from_auth_signing_key);
         Ok(Self {
             runtime,
             http_client,
@@ -109,6 +126,8 @@ impl AppState {
             pool,
             auth_provider,
             object_store,
+            download_capability_key,
+            consumed_download_nonces: ConsumedDownloadNonces::new(),
         })
     }
 
@@ -126,6 +145,14 @@ impl AppState {
 
     pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
         self.object_store.as_ref()
+    }
+
+    pub fn download_capability_key(&self) -> Option<&CapabilityKey> {
+        self.download_capability_key.as_ref()
+    }
+
+    pub fn consumed_download_nonces(&self) -> &ConsumedDownloadNonces {
+        &self.consumed_download_nonces
     }
 }
 
@@ -168,6 +195,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
+        .merge(routes::documents::router())
         .merge(routes::uploads::router(max_upload_bytes))
         .with_state(Arc::new(state))
 }
