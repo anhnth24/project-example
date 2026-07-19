@@ -1189,6 +1189,23 @@ pub async fn assert_direct_qdrant_tenant_filter(
         }),
         "direct Qdrant org-A control search did not return indexed org-A content"
     );
+    let org_a_chunks = chunk_identities_for_doc(env, org_a.ctx, org_a.doc.document_id).await;
+    assert!(!org_a_chunks.is_empty(), "org-A control doc has no chunks");
+
+    let org_filter_only_hits = env
+        .qdrant
+        .search(
+            &org_a_collection,
+            &VectorScope::new(org_b.ctx.org_id(), [org_a.collection_id]),
+            query_vector.values(),
+            100,
+        )
+        .await
+        .expect("direct qdrant org-filter-only search");
+    assert!(
+        org_filter_only_hits.is_empty(),
+        "direct Qdrant org-B/org-A-collection search returned points"
+    );
 
     let org_b_signature = active_signature(env, org_b.ctx, org_b.collection_id).await;
     let org_b_collection = collection_name_for_digest(&org_b_signature).expect("collection name");
@@ -1219,13 +1236,11 @@ pub async fn assert_direct_qdrant_tenant_filter(
         "direct Qdrant org-B search leaked org-A payloads"
     );
 
-    let org_a_chunks = chunk_identities_for_doc(env, org_a.ctx, org_a.doc.document_id).await;
-    assert!(!org_a_chunks.is_empty(), "org-A control doc has no chunks");
-    for chunk_identity in org_a_chunks {
+    for chunk_identity in &org_a_chunks {
         assert!(
             org_b_hits
                 .iter()
-                .all(|hit| hit.payload.chunk_id != chunk_identity),
+                .all(|hit| hit.payload.chunk_id.as_str() != chunk_identity.as_str()),
             "direct Qdrant org-B search leaked org-A chunk identity {chunk_identity}"
         );
     }
