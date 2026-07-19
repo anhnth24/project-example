@@ -1,7 +1,10 @@
 //! Quarantine upload intake (P1B-I01): auth → stream → hash → allowlist → disposition.
 //!
-//! Quota reservation is intentionally not implemented here (P1B-I02). Callers must
-//! invoke [`quota_reserve_hook`] which currently logs a TODO and returns Ok.
+//! Upload routes must call [`quota_reserve_hook`] after streaming has produced a
+//! server-measured byte count, then finalize the returned reservation only after
+//! object-store persistence succeeds. Failures after reservation must refund; if
+//! a process crashes, the reservation TTL releases admission and the expiry sweep
+//! marks it terminal.
 
 mod archive;
 mod error;
@@ -30,6 +33,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::auth::permissions::{require_permission, ResolveError};
+use crate::services::quota::{self, QuotaError, UploadQuotaReservation, DEFAULT_RESERVATION_TTL};
 use crate::storage::keys::quarantine_key;
 use crate::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use crate::storage::ObjectKey;
@@ -75,14 +79,18 @@ pub struct UploadOutcome {
     pub original_filename: Option<String>,
 }
 
-/// Integration hook for P1B-I02 quota reservation (not implemented).
+/// Integration hook for P1B-I02 quota reservation.
 ///
-/// Callers must invoke this before streaming bytes. Today it is a no-op success
-/// so intake remains fail-open on quota until I02 lands — the hook exists so the
-/// call site is unambiguous.
-pub fn quota_reserve_hook(_org: &OrgContext, _idempotency_key: &str, _bytes: Option<u64>) {
-    // TODO(P1B-I02): atomically reserve tenant quota with an idempotency key
-    // before accepting upload bytes; release on rejection/timeout.
+/// The amount comes from `StreamedUpload::size_bytes`, not from a request field.
+/// One upload reserves storage bytes and one document slot under server-derived
+/// child keys. `reservation_key` must be server-minted by the caller.
+pub async fn quota_reserve_hook(
+    pool: &deadpool_postgres::Pool,
+    org: &OrgContext,
+    reservation_key: &str,
+    bytes: u64,
+) -> Result<UploadQuotaReservation, QuotaError> {
+    quota::reserve_upload(pool, org, reservation_key, bytes, DEFAULT_RESERVATION_TTL).await
 }
 
 /// Validate a fully-received tempfile and optionally persist to quarantine storage.
@@ -98,9 +106,6 @@ pub async fn validate_and_quarantine(
         ResolveError::PermissionDenied => UploadError::PermissionDenied,
         _ => UploadError::Internal,
     })?;
-
-    // TODO(P1B-I02): pass expected size into quota_reserve_hook once implemented.
-    quota_reserve_hook(org, "upload", Some(streamed.size_bytes));
 
     let mut validation_file = streamed.rewinded_file_clone()?;
     let head = streamed.head.clone();

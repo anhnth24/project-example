@@ -18,9 +18,10 @@ use serde::Serialize;
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
 use crate::http::AppState;
+use crate::services::quota::{self, QuotaError, QuotaSnapshot};
 use crate::services::upload::{
-    stream_to_tempfile_with_idle_timeout, validate_and_quarantine, Disposition, LimitsConfig,
-    ReasonCode, StreamedUpload, ThreatClass, UploadError, UploadOutcome,
+    quota_reserve_hook, stream_to_tempfile_with_idle_timeout, validate_and_quarantine, Disposition,
+    LimitsConfig, ReasonCode, StreamedUpload, ThreatClass, UploadError, UploadOutcome,
 };
 
 pub fn router(max_upload_bytes: usize) -> Router<Arc<AppState>> {
@@ -55,7 +56,7 @@ async fn create_upload(
 ) -> Result<Response, UploadRouteError> {
     let request_id = auth.request_id.clone();
     require_permission(&auth.context, "doc.upload")
-        .map_err(|_| UploadRouteError(UploadError::PermissionDenied, request_id.clone()))?;
+        .map_err(|_| UploadRouteError::Upload(UploadError::PermissionDenied, request_id.clone()))?;
 
     let limits = state.runtime().config().upload().limits;
     let upload_timeout = Duration::from_secs(limits.upload_timeout_secs);
@@ -63,19 +64,29 @@ async fn create_upload(
     let pending = tokio::time::timeout(upload_timeout, read_multipart(multipart, limits))
         .await
         .map_err(|_| {
-            UploadRouteError(
+            UploadRouteError::Upload(
                 UploadError::MultipartInvalid {
                     reason: ReasonCode::MultipartTimeout,
                 },
                 request_id.clone(),
             )
         })?
-        .map_err(|error| UploadRouteError(error, request_id.clone()))?;
+        .map_err(|error| UploadRouteError::Upload(error, request_id.clone()))?;
 
-    let storage = state
-        .object_store()
-        .ok_or_else(|| UploadRouteError(UploadError::StorageUnavailable, request_id.clone()))?;
-    validate_and_quarantine(
+    let storage = state.object_store().ok_or_else(|| {
+        UploadRouteError::Upload(UploadError::StorageUnavailable, request_id.clone())
+    })?;
+    let reservation_key = upload_reservation_key(&auth, &request_id);
+    let quota = quota_reserve_hook(
+        state.pool(),
+        &auth.context,
+        &reservation_key,
+        pending.streamed.size_bytes,
+    )
+    .await
+    .map_err(|error| UploadRouteError::Quota(error, request_id.clone()))?;
+
+    let outcome = validate_and_quarantine(
         &auth.context,
         storage,
         &limits,
@@ -83,9 +94,23 @@ async fn create_upload(
         pending.declared_filename.as_deref(),
         pending.declared_content_type.as_deref(),
     )
-    .await
-    .map_err(|error| UploadRouteError(error, request_id.clone()))
-    .map(|outcome| success_response(outcome, &request_id))
+    .await;
+    match outcome {
+        Ok(outcome) => {
+            quota::finalize_upload(state.pool(), &auth.context, &reservation_key)
+                .await
+                .map_err(|error| UploadRouteError::Quota(error, request_id.clone()))?;
+            Ok(success_response(
+                outcome,
+                &request_id,
+                Some(quota.storage_headers()),
+            ))
+        }
+        Err(error) => {
+            let _ = quota::refund_upload(state.pool(), &auth.context, &reservation_key).await;
+            Err(UploadRouteError::Upload(error, request_id))
+        }
+    }
 }
 
 async fn read_multipart(
@@ -193,7 +218,11 @@ async fn drain_non_file_field(
     Ok(())
 }
 
-fn success_response(outcome: UploadOutcome, request_id: &str) -> Response {
+fn success_response(
+    outcome: UploadOutcome,
+    request_id: &str,
+    quota_snapshot: Option<QuotaSnapshot>,
+) -> Response {
     let status = match outcome.disposition {
         Disposition::Accepted | Disposition::Quarantined => StatusCode::CREATED,
         Disposition::Rejected => StatusCode::BAD_REQUEST,
@@ -214,13 +243,32 @@ fn success_response(outcome: UploadOutcome, request_id: &str) -> Response {
         original_filename: outcome.original_filename,
         request_id: request_id.to_string(),
     };
-    (status, Json(body)).into_response()
+    let mut response = (status, Json(body)).into_response();
+    if let Some(snapshot) = quota_snapshot {
+        quota::apply_quota_headers(response.headers_mut(), &snapshot);
+    }
+    response
 }
 
-struct UploadRouteError(UploadError, String);
+enum UploadRouteError {
+    Upload(UploadError, String),
+    Quota(QuotaError, String),
+}
 
 impl IntoResponse for UploadRouteError {
     fn into_response(self) -> Response {
-        self.0.into_response_with_request_id(&self.1)
+        match self {
+            Self::Upload(error, request_id) => error.into_response_with_request_id(&request_id),
+            Self::Quota(error, request_id) => error.into_response_with_request_id(&request_id),
+        }
     }
+}
+
+fn upload_reservation_key(auth: &AuthenticatedOrg, request_id: &str) -> String {
+    format!(
+        "{}.{}.{}",
+        auth.context.org_id(),
+        auth.context.user_id(),
+        request_id
+    )
 }

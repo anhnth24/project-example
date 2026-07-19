@@ -241,6 +241,16 @@ async fn seed_uploader(pool: &Pool, org: Uuid, user: Uuid, email: &str, password
                 orgs::ensure_user(txn, &owned, user, &email, "Uploader").await?;
                 orgs::ensure_membership(txn, &owned).await?;
                 txn.execute(
+                    "INSERT INTO org_quotas (
+                        org_id, max_storage_bytes, max_documents,
+                        max_concurrent_jobs, max_monthly_tokens
+                     )
+                     VALUES ($1, 1073741824, 1000, 10, 1000000)
+                     ON CONFLICT (org_id) DO NOTHING",
+                    &[&org],
+                )
+                .await?;
+                txn.execute(
                     "INSERT INTO permissions (id, code, description)
                      VALUES ($1, 'doc.upload', 'Upload')
                      ON CONFLICT (code) DO NOTHING",
@@ -951,8 +961,28 @@ async fn property_filename_and_magic_never_panic() {
 
 #[tokio::test]
 async fn quota_hook_is_callable() {
-    let org = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], []).unwrap();
-    quota_reserve_hook(&org, "test-idem", Some(12));
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    seed_uploader(
+        &pool,
+        org,
+        user,
+        "quota-hook@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+    let reservation = quota_reserve_hook(&pool, &ctx, "test-idem", 12)
+        .await
+        .expect("reserve quota");
+    assert_eq!(reservation.storage.reservation.amount, 12);
+    ephemeral.drop().await;
 }
 
 #[tokio::test]
