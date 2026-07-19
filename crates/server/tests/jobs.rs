@@ -739,6 +739,7 @@ async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
     let checkpoint = CheckpointPayload {
         cursor_id: Some(Uuid::new_v4()),
         completed_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+        staged_object_keys: vec![],
         offset: Some(7),
     };
     let checkpoint_json = checkpoint.to_json().expect("checkpoint json");
@@ -816,6 +817,7 @@ async fn max_length_worker_id_yields_usable_lease_tokens_for_all_worker_mutation
         CheckpointPayload {
             cursor_id: Some(Uuid::new_v4()),
             completed_ids: vec![Uuid::new_v4()],
+            staged_object_keys: vec![],
             offset: Some(1),
         },
     )
@@ -915,6 +917,7 @@ async fn non_owner_checkpoint_is_rejected_without_mutating_checkpoint() {
             CheckpointPayload {
                 cursor_id: Some(Uuid::new_v4()),
                 completed_ids: vec![],
+                staged_object_keys: vec![],
                 offset: Some(1),
             },
         )

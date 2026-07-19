@@ -18,6 +18,7 @@ pub struct ConversionIdentity {
 pub enum ConversionStep {
     Downloaded,
     Converted,
+    StagingIntent,
     Staged,
     Promoted,
 }
@@ -46,6 +47,14 @@ impl ConversionIdentity {
     pub fn markdown_artifact_id(&self) -> Uuid {
         deterministic_uuid("markhand-conversion-markdown-artifact-v1", |hasher| {
             self.hash_material(hasher);
+        })
+    }
+
+    pub fn staged_markdown_object_id(&self, job_id: Uuid, attempts: i32) -> Uuid {
+        deterministic_uuid("markhand-conversion-staged-markdown-attempt-v1", |hasher| {
+            self.hash_material(hasher);
+            hasher.update(job_id.as_bytes());
+            hasher.update(attempts.to_be_bytes());
         })
     }
 
@@ -86,6 +95,7 @@ impl ConversionStep {
         match self {
             Self::Downloaded => b"downloaded",
             Self::Converted => b"converted",
+            Self::StagingIntent => b"staging_intent",
             Self::Staged => b"staged",
             Self::Promoted => b"promoted",
         }
@@ -107,6 +117,30 @@ pub fn checkpoint_with_step(
         checkpoint.completed_ids.push(step_id);
     }
     checkpoint
+}
+
+pub fn checkpoint_with_staged_key(
+    existing: Option<&JsonValue>,
+    identity: &ConversionIdentity,
+    object_key: &str,
+) -> CheckpointPayload {
+    let mut checkpoint = checkpoint_with_step(existing, identity, ConversionStep::StagingIntent);
+    if !checkpoint
+        .staged_object_keys
+        .iter()
+        .any(|existing| existing == object_key)
+    {
+        checkpoint.staged_object_keys.push(object_key.to_string());
+    }
+    checkpoint
+}
+
+pub fn staged_keys_from_checkpoint(existing: Option<&JsonValue>) -> Vec<String> {
+    existing
+        .cloned()
+        .and_then(|value| serde_json::from_value::<CheckpointPayload>(value).ok())
+        .map(|checkpoint| checkpoint.staged_object_keys)
+        .unwrap_or_default()
 }
 
 fn deterministic_uuid(label: &'static str, write: impl FnOnce(&mut Sha256)) -> Uuid {

@@ -20,7 +20,10 @@ use crate::db::models::{Job, JobType, ResourceKind};
 use crate::db::pool::with_org_txn;
 use crate::jobs::{self, JobError, JobPayload};
 use crate::services::artifacts::{self, MarkdownStageInput, StagedMarkdown};
-use crate::services::conversion::{checkpoint_with_step, ConversionIdentity, ConversionStep};
+use crate::services::conversion::{
+    checkpoint_with_staged_key, checkpoint_with_step, staged_keys_from_checkpoint,
+    ConversionIdentity, ConversionStep,
+};
 use crate::services::promotion::{self, PromoteConversionInput, PromotionError, PromotionFault};
 use crate::services::quota::{self, QuotaError, DEFAULT_RESERVATION_TTL};
 use crate::storage::keys::parse_key_for_org;
@@ -46,6 +49,10 @@ pub struct ConvertWorkerConfig {
     pub post_upload_settlement_delay: Duration,
     pub max_job_duration: Duration,
     pub promotion_fault: Option<PromotionFault>,
+    pub quota_reservation_ttl: Duration,
+    pub fail_cleanup_delete: bool,
+    pub fail_quota_refund: bool,
+    pub lose_staged_handle_after_put: bool,
 }
 
 impl ConvertWorkerConfig {
@@ -60,6 +67,10 @@ impl ConvertWorkerConfig {
             post_upload_settlement_delay: Duration::ZERO,
             max_job_duration,
             promotion_fault: None,
+            quota_reservation_ttl: DEFAULT_RESERVATION_TTL,
+            fail_cleanup_delete: false,
+            fail_quota_refund: false,
+            lose_staged_handle_after_put: false,
         }
     }
 
@@ -80,6 +91,10 @@ impl ConvertWorkerConfig {
             max_job_duration: ResourceLimits::default().wall_timeout
                 + Duration::from_secs(DEFAULT_JOB_GRACE_SECS),
             promotion_fault: None,
+            quota_reservation_ttl: DEFAULT_RESERVATION_TTL,
+            fail_cleanup_delete: false,
+            fail_quota_refund: false,
+            lose_staged_handle_after_put: false,
         }
     }
 
@@ -174,6 +189,24 @@ impl ConvertWorker {
                     Ok(byte_size) => byte_size,
                     Err(_) => return Err(ConvertWorkerError::InvalidMarkdownLength),
                 };
+                if let Err(error) = self
+                    .cleanup_checkpointed_staging(ctx, &identity, checkpoint.as_ref(), None)
+                    .await
+                {
+                    let failed = jobs::fail(
+                        &self.db_pool,
+                        ctx,
+                        job.id,
+                        &lease_token,
+                        attempts,
+                        error.safe_job_error(),
+                    )
+                    .await?;
+                    return Ok(ConvertWorkerRun::Failed {
+                        job_id: failed.id,
+                        terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
+                    });
+                }
                 let quota_reservation_key =
                     quota_reservation_key_for_attempt(&identity, job.id, attempts);
                 if let Err(error) = self
@@ -189,7 +222,7 @@ impl ConvertWorker {
                             &quota_reservation_key,
                             ResourceKind::StorageBytes,
                             markdown_len,
-                            DEFAULT_RESERVATION_TTL,
+                            self.config.quota_reservation_ttl,
                             Some(job.id),
                         ),
                     )
@@ -201,6 +234,14 @@ impl ConvertWorker {
                 }
 
                 let mut staged: Option<StagedMarkdown> = None;
+                let mut checkpoint_for_compensation = checkpoint.clone();
+                let current_staging_key = artifacts::markdown_key(
+                    &identity,
+                    identity.promoted_version_id(),
+                    job.id,
+                    attempts,
+                )?;
+                let current_staging_key_string = current_staging_key.as_str();
                 let claimed = ClaimedJobScope {
                     ctx,
                     job: &job,
@@ -209,6 +250,17 @@ impl ConvertWorker {
                     deadline,
                 };
                 let promotion_result = async {
+                    let saved = self
+                        .save_checkpoint_payload(
+                            &claimed,
+                            checkpoint_with_staged_key(
+                                checkpoint.as_ref(),
+                                &identity,
+                                &current_staging_key_string,
+                            ),
+                        )
+                        .await?;
+                    checkpoint_for_compensation = saved.checkpoint;
                     let staged_markdown = self
                         .heartbeat_while(
                             ctx,
@@ -219,11 +271,11 @@ impl ConvertWorker {
                             artifacts::stage_markdown(
                                 &self.storage,
                                 ctx,
-                                &identity,
                                 MarkdownStageInput {
                                     collection_id: None,
                                     document_id: source.document_id,
                                     promoted_version_id: identity.promoted_version_id(),
+                                    staging_key: current_staging_key.clone(),
                                     markdown,
                                     markdown_sha256: markdown_sha256.clone(),
                                     markdown_len,
@@ -231,11 +283,16 @@ impl ConvertWorker {
                             ),
                         )
                         .await?;
+                    if self.config.lose_staged_handle_after_put {
+                        return Err(ConvertWorkerError::Promotion(PromotionError::Injected(
+                            PromotionFault::AfterStagingPut,
+                        )));
+                    }
                     staged = Some(staged_markdown.clone());
                     self.save_checkpoint_step(
                         &claimed,
                         &identity,
-                        checkpoint.as_ref(),
+                        checkpoint_for_compensation.as_ref(),
                         ConversionStep::Staged,
                     )
                     .await?;
@@ -285,28 +342,35 @@ impl ConvertWorker {
                     Err(ConvertWorkerError::Promotion(PromotionError::LeaseLost))
                     | Err(ConvertWorkerError::Job(JobError::LeaseLost))
                     | Err(ConvertWorkerError::LeaseLost) => {
-                        self.compensate_after_promotion_failure(
-                            ctx,
-                            staged.as_ref(),
-                            &quota_reservation_key,
-                        )
-                        .await;
+                        let _ = self
+                            .compensate_after_promotion_failure(
+                                ctx,
+                                &identity,
+                                checkpoint_for_compensation.as_ref(),
+                                staged.as_ref().map(|staged| staged.object_key.as_str()),
+                                &quota_reservation_key,
+                            )
+                            .await;
                         return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
                     }
                     Err(error) if error.is_retryable_job_failure() => {
-                        self.compensate_after_promotion_failure(
-                            ctx,
-                            staged.as_ref(),
-                            &quota_reservation_key,
-                        )
-                        .await;
+                        let compensation = self
+                            .compensate_after_promotion_failure(
+                                ctx,
+                                &identity,
+                                checkpoint_for_compensation.as_ref(),
+                                staged.as_ref().map(|staged| staged.object_key.as_str()),
+                                &quota_reservation_key,
+                            )
+                            .await;
+                        let job_error = compensation.err().unwrap_or(error);
                         let failed = jobs::fail(
                             &self.db_pool,
                             ctx,
                             job.id,
                             &lease_token,
                             attempts,
-                            error.safe_job_error(),
+                            job_error.safe_job_error(),
                         )
                         .await?;
                         return Ok(ConvertWorkerRun::Failed {
@@ -315,12 +379,15 @@ impl ConvertWorker {
                         });
                     }
                     Err(error) => {
-                        self.compensate_after_promotion_failure(
-                            ctx,
-                            staged.as_ref(),
-                            &quota_reservation_key,
-                        )
-                        .await;
+                        let _ = self
+                            .compensate_after_promotion_failure(
+                                ctx,
+                                &identity,
+                                checkpoint_for_compensation.as_ref(),
+                                staged.as_ref().map(|staged| staged.object_key.as_str()),
+                                &quota_reservation_key,
+                            )
+                            .await;
                         return Err(error);
                     }
                 };
@@ -696,29 +763,129 @@ impl ConvertWorker {
         .await
     }
 
+    async fn save_checkpoint_payload(
+        &self,
+        claimed: &ClaimedJobScope<'_>,
+        checkpoint: jobs::CheckpointPayload,
+    ) -> Result<Job, ConvertWorkerError> {
+        self.heartbeat_while(
+            claimed.ctx,
+            claimed.job,
+            claimed.lease_token,
+            claimed.attempts,
+            claimed.deadline,
+            jobs::checkpoint(
+                &self.db_pool,
+                claimed.ctx,
+                claimed.job.id,
+                claimed.lease_token,
+                claimed.attempts,
+                checkpoint,
+            ),
+        )
+        .await
+    }
+
+    async fn cleanup_checkpointed_staging(
+        &self,
+        ctx: &OrgContext,
+        identity: &ConversionIdentity,
+        checkpoint: Option<&serde_json::Value>,
+        extra_key: Option<&str>,
+    ) -> Result<(), ConvertWorkerError> {
+        let mut keys = staged_keys_from_checkpoint(checkpoint);
+        if let Some(extra_key) = extra_key {
+            if !keys.iter().any(|key| key == extra_key) {
+                keys.push(extra_key.to_string());
+            }
+        }
+        for key in keys {
+            self.cleanup_staging_key_if_uncommitted(ctx, identity, &key)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn cleanup_staging_key_if_uncommitted(
+        &self,
+        ctx: &OrgContext,
+        identity: &ConversionIdentity,
+        object_key: &str,
+    ) -> Result<(), ConvertWorkerError> {
+        if let Some(committed) =
+            promotion::committed_markdown_object_key(&self.db_pool, ctx, identity).await?
+        {
+            if committed == object_key {
+                return Ok(());
+            }
+        }
+        if self.config.fail_cleanup_delete {
+            eprintln!(
+                "fileconv-server: injected staged conversion artifact cleanup failure; key={object_key}"
+            );
+            return Err(ConvertWorkerError::CompensationDeferred);
+        }
+        let key = parse_key_for_org(object_key, ctx.org_id())?;
+        if !key.belongs_to_version(identity.promoted_version_id()) {
+            return Err(ConvertWorkerError::CompensationDeferred);
+        }
+        if let Err(error) = self
+            .storage
+            .cleanup_generated_object(ctx.org_id(), &key)
+            .await
+        {
+            eprintln!(
+                "fileconv-server: staged conversion artifact cleanup failed; key={} code={}",
+                object_key,
+                error.code()
+            );
+            return Err(ConvertWorkerError::CompensationDeferred);
+        }
+        Ok(())
+    }
+
     async fn compensate_after_promotion_failure(
         &self,
         ctx: &OrgContext,
-        staged: Option<&StagedMarkdown>,
+        identity: &ConversionIdentity,
+        checkpoint: Option<&serde_json::Value>,
+        staged_key: Option<&str>,
         quota_reservation_key: &str,
-    ) {
-        if let Some(staged) = staged.filter(|staged| staged.created_or_verified) {
-            if let Err(error) = self
-                .storage
-                .cleanup_generated_object(ctx.org_id(), &staged.key)
-                .await
-            {
-                eprintln!(
-                    "fileconv-server: staged conversion artifact cleanup failed: {}",
-                    error.code()
-                );
-            }
-        }
-        if let Err(error) = quota::refund(&self.db_pool, ctx, quota_reservation_key).await {
+    ) -> Result<(), ConvertWorkerError> {
+        let mut deferred = false;
+        if let Err(error) = self
+            .cleanup_checkpointed_staging(ctx, identity, checkpoint, staged_key)
+            .await
+        {
             eprintln!(
-                "fileconv-server: conversion quota refund failed: {}",
+                "fileconv-server: conversion staging cleanup deferred: {}",
+                error.safe_job_error()
+            );
+            deferred = true;
+        }
+        if self.config.fail_quota_refund {
+            eprintln!(
+                "fileconv-server: injected conversion quota refund failure; reservation_key={quota_reservation_key}"
+            );
+            // TODO(I07): durable dead-letter GC/reconciliation should consume the
+            // checkpointed staging keys and quota marker if retries are exhausted.
+            deferred = true;
+        } else if let Err(error) = quota::refund(&self.db_pool, ctx, quota_reservation_key).await {
+            eprintln!(
+                "fileconv-server: conversion quota refund failed; reservation_key={} code={}",
+                quota_reservation_key,
                 error.code()
             );
+            // I02 quota reservations are bounded by expires_at; the sweep path is
+            // the durable backstop if inline refund cannot settle this attempt.
+            // TODO(I07): emit/consume a durable conversion-cleanup marker for
+            // permanently dead-lettered conversion attempts.
+            deferred = true;
+        }
+        if deferred {
+            Err(ConvertWorkerError::CompensationDeferred)
+        } else {
+            Ok(())
         }
     }
 
@@ -872,6 +1039,8 @@ pub enum ConvertWorkerError {
     Promotion(#[from] PromotionError),
     #[error("quota error")]
     Quota(#[from] QuotaError),
+    #[error("conversion compensation is deferred")]
+    CompensationDeferred,
     #[error("sandbox error")]
     Sandbox(#[from] SandboxError),
     #[error("sandbox task failed")]
@@ -919,6 +1088,7 @@ impl ConvertWorkerError {
                 | Self::ArtifactStage(_)
                 | Self::Promotion(_)
                 | Self::Quota(_)
+                | Self::CompensationDeferred
                 | Self::Sandbox(_)
                 | Self::SandboxJoin
                 | Self::SandboxTimedOut
@@ -942,6 +1112,7 @@ impl ConvertWorkerError {
             Self::ArtifactStage(_) => "convert artifact staging error",
             Self::Promotion(_) => "convert promotion error",
             Self::Quota(_) => "convert quota error",
+            Self::CompensationDeferred => "convert compensation deferred",
             Self::Sandbox(_) => "convert sandbox error",
             Self::SandboxJoin => "convert sandbox join error",
             Self::SandboxTimedOut => "convert sandbox timeout",

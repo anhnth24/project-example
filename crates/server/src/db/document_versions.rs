@@ -46,6 +46,7 @@ pub struct NewDerivedArtifact<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactInsertOutcome {
+    pub id: Uuid,
     pub created: bool,
     pub object_key: String,
     pub content_sha256: String,
@@ -181,11 +182,11 @@ pub async fn insert_artifact_if_absent(
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 ON CONFLICT (version_id, artifact_kind) DO NOTHING
-                RETURNING object_key, content_sha256, byte_size, true AS created
+                RETURNING id, object_key, content_sha256, byte_size, true AS created
              )
-             SELECT object_key, content_sha256, byte_size, created FROM inserted
+             SELECT id, object_key, content_sha256, byte_size, created FROM inserted
              UNION ALL
-             SELECT object_key, content_sha256, byte_size, false AS created
+             SELECT id, object_key, content_sha256, byte_size, false AS created
              FROM derived_artifacts
              WHERE org_id = $2 AND version_id = $4 AND artifact_kind = $5
              LIMIT 1",
@@ -203,11 +204,38 @@ pub async fn insert_artifact_if_absent(
         )
         .await?;
     Ok(ArtifactInsertOutcome {
+        id: row.get("id"),
         object_key: row.get("object_key"),
         content_sha256: row.get("content_sha256"),
         byte_size: row.get("byte_size"),
         created: row.get("created"),
     })
+}
+
+pub async fn find_markdown_artifact(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> Result<Option<ArtifactInsertOutcome>, DbError> {
+    let kind = ArtifactKind::Markdown.as_str();
+    let row = txn
+        .query_opt(
+            "SELECT id, object_key, content_sha256, byte_size, false AS created
+             FROM derived_artifacts
+             WHERE org_id = $1 AND version_id = $2 AND artifact_kind = $3",
+            &[&ctx.org_id(), &version_id, &kind],
+        )
+        .await?;
+    row.map(|row| {
+        Ok(ArtifactInsertOutcome {
+            id: row.get("id"),
+            object_key: row.get("object_key"),
+            content_sha256: row.get("content_sha256"),
+            byte_size: row.get("byte_size"),
+            created: row.get("created"),
+        })
+    })
+    .transpose()
 }
 
 pub async fn promote_current_if_needed(

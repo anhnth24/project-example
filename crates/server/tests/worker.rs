@@ -20,6 +20,7 @@ use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
 use fileconv_server::services::conversion::ConversionIdentity;
 use fileconv_server::services::promotion::PromotionFault;
+use fileconv_server::services::quota;
 use fileconv_server::storage::keys::quarantine_key;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
@@ -614,6 +615,51 @@ async fn quota_reservation_statuses(pool: &Pool, ctx: &OrgContext, job_id: Uuid)
     })
     .await
     .expect("quota status query")
+}
+
+fn staging_key_for_attempt(
+    ctx: &OrgContext,
+    document_id: Uuid,
+    source_version_id: Uuid,
+    job: &Job,
+    attempts: i32,
+) -> fileconv_server::storage::ObjectKey {
+    let identity = ConversionIdentity::new(
+        ctx.org_id(),
+        document_id,
+        source_version_id,
+        job.idempotency_key.clone(),
+    );
+    fileconv_server::services::artifacts::markdown_key(
+        &identity,
+        identity.promoted_version_id(),
+        job.id,
+        attempts,
+    )
+    .expect("staging key")
+}
+
+async fn first_markdown_artifact_key(pool: &Pool, ctx: &OrgContext, document_id: Uuid) -> String {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT object_key
+                         FROM derived_artifacts
+                         WHERE org_id = $1
+                           AND document_id = $2
+                           AND artifact_kind = 'markdown'",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("artifact key query")
 }
 
 async fn make_job_available(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
@@ -1269,6 +1315,8 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         let staged_key = fileconv_server::services::artifacts::markdown_key(
             &identity,
             identity.promoted_version_id(),
+            job.id,
+            job.attempts + 1,
         )
         .expect("staged key");
         let mut fault_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
@@ -1320,6 +1368,329 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
             vec!["refunded".to_string(), "finalized".to_string()]
         );
     }
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_present() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"race retry\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = jobs::enqueue(
+        &pool,
+        &ctx,
+        EnqueueJob::new(
+            JobType::Convert,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+            },
+            format!("convert-reclaim-race-{version_id}"),
+        ),
+    )
+    .await
+    .expect("enqueue")
+    .job;
+    let attempt_one_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 1);
+    let mut first_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    first_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
+    first_config.fail_cleanup_delete = true;
+    let first_worker =
+        ConvertWorker::new(pool.clone(), storage.clone(), first_config).expect("first worker");
+    assert!(matches!(
+        first_worker.run_once(&ctx).await.expect("first attempt"),
+        ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
+    ));
+    assert!(storage
+        .object_exists(ctx.org_id(), &attempt_one_key)
+        .await
+        .expect("attempt one exists"));
+
+    make_job_available(&pool, &ctx, job.id).await;
+    let attempt_two_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 2);
+    let retry_worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("retry worker");
+    assert!(matches!(
+        retry_worker.run_once(&ctx).await.expect("retry attempt"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+    ));
+
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+    let committed_key = first_markdown_artifact_key(&pool, &ctx, document_id).await;
+    assert_eq!(committed_key, attempt_two_key.as_str());
+    let committed = fileconv_server::storage::parse_key_for_org(&committed_key, ctx.org_id())
+        .expect("committed key");
+    assert!(storage
+        .object_exists(ctx.org_id(), &committed)
+        .await
+        .expect("committed exists"));
+    assert!(!storage
+        .object_exists(ctx.org_id(), &attempt_one_key)
+        .await
+        .expect("attempt one cleaned"));
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"ambiguous put\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let attempt_one_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 1);
+    let mut ambiguous_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    ambiguous_config.lose_staged_handle_after_put = true;
+    let ambiguous_worker =
+        ConvertWorker::new(pool.clone(), storage.clone(), ambiguous_config).expect("worker");
+    assert!(matches!(
+        ambiguous_worker.run_once(&ctx).await.expect("ambiguous run"),
+        ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
+    ));
+    assert!(!storage
+        .object_exists(ctx.org_id(), &attempt_one_key)
+        .await
+        .expect("checkpoint cleanup"));
+
+    make_job_available(&pool, &ctx, job.id).await;
+    let retry_worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("retry worker");
+    assert!(matches!(
+        retry_worker.run_once(&ctx).await.expect("retry"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+    ));
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"delete failure\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let attempt_one_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 1);
+    let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    config.promotion_fault = Some(PromotionFault::AfterStagingPut);
+    config.fail_cleanup_delete = true;
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("delete failure run"),
+        ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
+    ));
+    assert_eq!(
+        get_job(&pool, &ctx, job.id).await.last_error.as_deref(),
+        Some("convert compensation deferred")
+    );
+    assert!(storage
+        .object_exists(ctx.org_id(), &attempt_one_key)
+        .await
+        .expect("left for retry"));
+
+    make_job_available(&pool, &ctx, job.id).await;
+    let retry_worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("retry worker");
+    assert!(matches!(
+        retry_worker.run_once(&ctx).await.expect("retry"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+    ));
+    assert!(!storage
+        .object_exists(ctx.org_id(), &attempt_one_key)
+        .await
+        .expect("cleaned on retry"));
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"refund failure\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    config.promotion_fault = Some(PromotionFault::AfterStagingPut);
+    config.fail_quota_refund = true;
+    config.quota_reservation_ttl = Duration::from_secs(1);
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("refund failure run"),
+        ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
+    ));
+    assert_eq!(
+        get_job(&pool, &ctx, job.id).await.last_error.as_deref(),
+        Some("convert compensation deferred")
+    );
+    assert_eq!(
+        quota_reservation_statuses(&pool, &ctx, job.id).await,
+        vec!["reserved".to_string()]
+    );
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_eq!(
+        quota::expire_reserved(&pool, &ctx, 10)
+            .await
+            .expect("quota sweep"),
+        1
+    );
+    assert_eq!(
+        quota_reservation_statuses(&pool, &ctx, job.id).await,
+        vec!["expired".to_string()]
+    );
+
+    make_job_available(&pool, &ctx, job.id).await;
+    let retry_worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("retry worker");
+    assert!(matches!(
+        retry_worker.run_once(&ctx).await.expect("retry"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+    ));
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+    assert_eq!(
+        quota_reservation_statuses(&pool, &ctx, job.id).await,
+        vec!["expired".to_string(), "finalized".to_string()]
+    );
 
     ephemeral.drop().await;
 }
@@ -1621,6 +1992,8 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
     let generated_trusted = fileconv_server::services::artifacts::markdown_key(
         &identity,
         identity.promoted_version_id(),
+        job.id,
+        job.attempts + 1,
     )
     .expect("trusted key");
     let mut config = stub_worker_config("printf converted-after-upload", 50);
