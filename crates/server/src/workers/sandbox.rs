@@ -232,7 +232,7 @@ pub fn run(
         command.pre_exec(move || pre_exec.apply());
     }
 
-    let mut child = match command.spawn() {
+    let child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             close_fd(pid_read_fd);
@@ -242,18 +242,23 @@ pub fn run(
     };
     close_fd(pid_write_fd);
     let child_pid = child.id() as libc::pid_t;
-    let Some(pid1_host_pid) = read_pid_from_pipe(pid_read_fd)? else {
-        unsafe {
-            let _ = libc::kill(child_pid, libc::SIGKILL);
+    let mut supervisor = SandboxSupervisor::new(child, child_pid);
+    let pid1_host_pid = match read_pid_from_pipe(pid_read_fd) {
+        Ok(Some(pid)) => pid,
+        Ok(None) => {
+            close_fd(pid_read_fd);
+            return Err(SandboxError::IsolationUnavailable);
         }
-        let _ = reap_child_bounded(&mut child, KILL_REAP_GRACE);
-        close_fd(pid_read_fd);
-        return Err(SandboxError::IsolationUnavailable);
+        Err(error) => {
+            close_fd(pid_read_fd);
+            return Err(SandboxError::Io(error));
+        }
     };
+    supervisor.set_pid1(pid1_host_pid);
     close_fd(pid_read_fd);
     let cgroup_guard = CgroupGuard::best_effort_apply(pid1_host_pid, &config.limits);
-    let stdout = child.stdout.take().expect("stdout piped");
-    let stderr = child.stderr.take().expect("stderr piped");
+    let stdout = supervisor.child_mut().stdout.take().expect("stdout piped");
+    let stderr = supervisor.child_mut().stderr.take().expect("stderr piped");
     set_nonblocking(stdout.as_raw_fd())?;
     set_nonblocking(stderr.as_raw_fd())?;
     let mut stdout_capture = CapturedPipe::new(config.limits.stdout_stderr_bytes);
@@ -263,15 +268,16 @@ pub fn run(
     let exit = loop {
         drain_available(stdout.as_raw_fd(), &mut stdout_capture)?;
         drain_available(stderr.as_raw_fd(), &mut stderr_capture)?;
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = supervisor.child_mut().try_wait()? {
+            supervisor.disarm();
             break exit_from_status(status);
         }
         if cancel.is_cancelled() {
-            kill_namespace_and_reap(&mut child, pid1_host_pid, child_pid);
+            supervisor.kill_and_reap()?;
             break SandboxExit::Cancelled;
         }
         if Instant::now() >= deadline {
-            kill_namespace_and_reap(&mut child, pid1_host_pid, child_pid);
+            supervisor.kill_and_reap()?;
             break SandboxExit::TimedOut;
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -396,19 +402,6 @@ fn exit_from_status(status: std::process::ExitStatus) -> SandboxExit {
     }
 }
 
-fn kill_namespace_and_reap(child: &mut Child, pid1_host_pid: u32, wrapper_pid: libc::pid_t) {
-    unsafe {
-        let _ = libc::kill(pid1_host_pid as libc::pid_t, libc::SIGKILL);
-    }
-    if reap_child_bounded(child, KILL_REAP_GRACE).is_ok() {
-        return;
-    }
-    unsafe {
-        let _ = libc::kill(wrapper_pid, libc::SIGKILL);
-    }
-    let _ = reap_child_bounded(child, KILL_REAP_GRACE);
-}
-
 fn reap_child_bounded(child: &mut Child, grace: Duration) -> io::Result<()> {
     let deadline = Instant::now() + grace;
     loop {
@@ -423,6 +416,79 @@ fn reap_child_bounded(child: &mut Child, grace: Duration) -> io::Result<()> {
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+}
+
+struct SandboxSupervisor {
+    child: Option<Child>,
+    wrapper_pid: libc::pid_t,
+    pid1_host_pid: Option<u32>,
+}
+
+impl SandboxSupervisor {
+    fn new(child: Child, wrapper_pid: libc::pid_t) -> Self {
+        Self {
+            child: Some(child),
+            wrapper_pid,
+            pid1_host_pid: None,
+        }
+    }
+
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("sandbox child present")
+    }
+
+    fn set_pid1(&mut self, pid1_host_pid: u32) {
+        self.pid1_host_pid = Some(pid1_host_pid);
+    }
+
+    fn disarm(&mut self) {
+        self.child = None;
+    }
+
+    fn kill_and_reap(&mut self) -> io::Result<()> {
+        let Some(child) = self.child.as_mut() else {
+            return Ok(());
+        };
+        kill_and_reap_child(child, self.pid1_host_pid, self.wrapper_pid)?;
+        self.child = None;
+        Ok(())
+    }
+}
+
+impl Drop for SandboxSupervisor {
+    fn drop(&mut self) {
+        let _ = self.kill_and_reap();
+    }
+}
+
+fn kill_and_reap_child(
+    child: &mut Child,
+    pid1_host_pid: Option<u32>,
+    wrapper_pid: libc::pid_t,
+) -> io::Result<()> {
+    if let Some(pid1) = pid1_host_pid {
+        unsafe {
+            let _ = libc::kill(pid1 as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    if reap_child_bounded(child, KILL_REAP_GRACE).is_ok() {
+        return Ok(());
+    }
+    unsafe {
+        let _ = libc::kill(wrapper_pid, libc::SIGKILL);
+    }
+    if reap_child_bounded(child, KILL_REAP_GRACE).is_ok() {
+        return Ok(());
+    }
+    if let Some(pid1) = pid1_host_pid {
+        unsafe {
+            let _ = libc::kill(pid1 as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    unsafe {
+        let _ = libc::kill(wrapper_pid, libc::SIGKILL);
+    }
+    reap_child_bounded(child, KILL_REAP_GRACE)
 }
 
 struct PreExecConfig {
@@ -538,7 +604,20 @@ impl PreExecConfig {
             }
 
             let _ = libc::close(self.pid_read_fd);
-            let _ = write_all_fd(self.pid_write_fd, &(pid as u32).to_ne_bytes());
+            if !write_all_fd_raw(self.pid_write_fd, &(pid as u32).to_ne_bytes()) {
+                let _ = libc::kill(pid, libc::SIGKILL);
+                let mut status: libc::c_int = 0;
+                loop {
+                    if libc::waitpid(pid, &mut status, 0) >= 0 {
+                        break;
+                    }
+                    if errno_raw() != libc::EINTR {
+                        break;
+                    }
+                }
+                let _ = libc::close(self.pid_write_fd);
+                libc::_exit(127);
+            }
             let _ = libc::close(self.pid_write_fd);
             close_fds_from(3);
 
@@ -547,7 +626,7 @@ impl PreExecConfig {
                 if libc::waitpid(pid, &mut status, 0) >= 0 {
                     break;
                 }
-                if io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+                if errno_raw() != libc::EINTR {
                     libc::_exit(127);
                 }
             }
@@ -705,7 +784,7 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-fn write_all_fd(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
+fn write_all_fd_raw(fd: RawFd, bytes: &[u8]) -> bool {
     let mut written = 0;
     while written < bytes.len() {
         let n = unsafe {
@@ -716,15 +795,18 @@ fn write_all_fd(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
             )
         };
         if n < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EINTR) {
+            if errno_raw() == libc::EINTR {
                 continue;
             }
-            return Err(error);
+            return false;
         }
         written += n as usize;
     }
-    Ok(())
+    true
+}
+
+fn errno_raw() -> libc::c_int {
+    unsafe { *libc::__errno_location() }
 }
 
 fn close_fds_from(first: RawFd) {

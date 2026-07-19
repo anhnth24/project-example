@@ -337,19 +337,28 @@ impl ConvertWorker {
                 self.storage.get_object(ctx.org_id(), &quarantine_key),
             )
             .await?;
-        self.verify_downloaded_integrity(&source, input.as_ref(), &metadata)?;
+        let source_for_prepare = source.clone();
+        let metadata_for_prepare = metadata.clone();
+        let canonical_extension = canonical_extension.to_string();
+        let sandbox_input = self
+            .heartbeat_while(ctx, job, lease_token, attempts, deadline, async move {
+                tokio::task::spawn_blocking(move || {
+                    verify_downloaded_integrity(
+                        &source_for_prepare,
+                        input.as_ref(),
+                        &metadata_for_prepare,
+                    )?;
+                    Ok::<_, ConvertWorkerError>(SandboxInput {
+                        bytes: input.to_vec(),
+                        canonical_extension,
+                    })
+                })
+                .await
+                .map_err(|_| ConvertWorkerError::SandboxJoin)?
+            })
+            .await?;
         let sandbox_output = self
-            .run_sandbox_with_heartbeat(
-                ctx,
-                job,
-                lease_token,
-                attempts,
-                deadline,
-                SandboxInput {
-                    bytes: input.to_vec(),
-                    canonical_extension: canonical_extension.to_string(),
-                },
-            )
+            .run_sandbox_with_heartbeat(ctx, job, lease_token, attempts, deadline, sandbox_input)
             .await?;
         if sandbox_output.stdout_truncated || sandbox_output.stderr_truncated {
             return Err(ConvertWorkerError::SandboxOutputTruncated);
@@ -441,33 +450,6 @@ impl ConvertWorker {
         Ok(())
     }
 
-    fn verify_downloaded_integrity(
-        &self,
-        source: &documents::VersionSource,
-        bytes: &[u8],
-        metadata: &HashMap<String, String>,
-    ) -> Result<(), ConvertWorkerError> {
-        let expected_size = source
-            .byte_size
-            .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?;
-        if expected_size < 0 || bytes.len() as i64 != expected_size {
-            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
-        }
-        let meta_len = metadata
-            .get("content-length-bytes")
-            .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?
-            .parse::<usize>()
-            .map_err(|_| ConvertWorkerError::InvalidQuarantineMetadata)?;
-        if meta_len != bytes.len() {
-            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
-        }
-        let actual_sha256 = hex::encode(Sha256::digest(bytes));
-        if actual_sha256 != source.content_sha256.as_str() {
-            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
-        }
-        Ok(())
-    }
-
     async fn run_sandbox_with_heartbeat(
         &self,
         ctx: &OrgContext,
@@ -477,6 +459,8 @@ impl ConvertWorker {
         deadline: TokioInstant,
         input: SandboxInput,
     ) -> Result<SandboxOutput, ConvertWorkerError> {
+        self.heartbeat_once(ctx, job, lease_token, attempts, deadline)
+            .await?;
         let cancel = SandboxCancel::default();
         let sandbox_config = self.config.sandbox.clone();
         let sandbox_cancel = cancel.clone();
@@ -543,24 +527,8 @@ impl ConvertWorker {
         Fut: Future<Output = Result<T, E>>,
         E: Into<ConvertWorkerError>,
     {
-        match timeout(
-            heartbeat_call_timeout(self.config.lease_ttl, deadline),
-            jobs::heartbeat(
-                &self.db_pool,
-                ctx,
-                job.id,
-                lease_token,
-                attempts,
-                self.config.lease_ttl,
-            ),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(JobError::LeaseLost)) => return Err(ConvertWorkerError::LeaseLost),
-            Ok(Err(error)) => return Err(ConvertWorkerError::Job(error)),
-            Err(_) => return Err(ConvertWorkerError::JobTimedOut),
-        }
+        self.heartbeat_once(ctx, job, lease_token, attempts, deadline)
+            .await?;
         tokio::pin!(future);
         let mut heartbeat = heartbeat_interval(self.config.heartbeat_interval);
         loop {
@@ -590,6 +558,34 @@ impl ConvertWorker {
                     }
                 }
             }
+        }
+    }
+
+    async fn heartbeat_once(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+    ) -> Result<(), ConvertWorkerError> {
+        match timeout(
+            heartbeat_call_timeout(self.config.lease_ttl, deadline),
+            jobs::heartbeat(
+                &self.db_pool,
+                ctx,
+                job.id,
+                lease_token,
+                attempts,
+                self.config.lease_ttl,
+            ),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(JobError::LeaseLost)) => Err(ConvertWorkerError::LeaseLost),
+            Ok(Err(error)) => Err(ConvertWorkerError::Job(error)),
+            Err(_) => Err(ConvertWorkerError::JobTimedOut),
         }
     }
 
@@ -630,6 +626,32 @@ where
         Ok(result) => result.map_err(Into::into),
         Err(_) => Err(ConvertWorkerError::JobTimedOut),
     }
+}
+
+fn verify_downloaded_integrity(
+    source: &documents::VersionSource,
+    bytes: &[u8],
+    metadata: &HashMap<String, String>,
+) -> Result<(), ConvertWorkerError> {
+    let expected_size = source
+        .byte_size
+        .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?;
+    if expected_size < 0 || bytes.len() as i64 != expected_size {
+        return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+    }
+    let meta_len = metadata
+        .get("content-length-bytes")
+        .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?
+        .parse::<usize>()
+        .map_err(|_| ConvertWorkerError::InvalidQuarantineMetadata)?;
+    if meta_len != bytes.len() {
+        return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+    }
+    let actual_sha256 = hex::encode(Sha256::digest(bytes));
+    if actual_sha256 != source.content_sha256.as_str() {
+        return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+    }
+    Ok(())
 }
 
 async fn await_cancelled_sandbox(
