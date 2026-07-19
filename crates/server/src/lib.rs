@@ -1,11 +1,13 @@
 //! Markhand's Phase 1B server boundary.
 
 pub mod api;
+pub mod auth;
 pub mod config;
 pub mod database;
 pub mod db;
 pub mod error;
 pub mod http;
+pub mod services;
 pub mod state;
 pub mod telemetry;
 
