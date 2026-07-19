@@ -151,6 +151,25 @@ pub enum CollectionVisibility {
     Groups,
 }
 
+impl CollectionVisibility {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::Org => "org",
+            Self::Groups => "groups",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "private" => Ok(Self::Private),
+            "org" => Ok(Self::Org),
+            "groups" => Ok(Self::Groups),
+            other => Err(format!("unknown collection visibility: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Collection {
     pub id: Uuid,
@@ -214,6 +233,43 @@ pub enum DocumentState {
     Failed,
     Tombstoned,
     Purged,
+}
+
+impl DocumentState {
+    /// PostgreSQL `documents.state` text value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Uploaded => "uploaded",
+            Self::Converting => "converting",
+            Self::Converted => "converted",
+            Self::Indexing => "indexing",
+            Self::Indexed => "indexed",
+            Self::Failed => "failed",
+            Self::Tombstoned => "tombstoned",
+            Self::Purged => "purged",
+        }
+    }
+
+    /// Parses a DB state string; unknown values are rejected.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "uploaded" => Ok(Self::Uploaded),
+            "converting" => Ok(Self::Converting),
+            "converted" => Ok(Self::Converted),
+            "indexing" => Ok(Self::Indexing),
+            "indexed" => Ok(Self::Indexed),
+            "failed" => Ok(Self::Failed),
+            "tombstoned" => Ok(Self::Tombstoned),
+            "purged" => Ok(Self::Purged),
+            other => Err(format!("unknown document state: {other}")),
+        }
+    }
+}
+
+impl std::fmt::Display for DocumentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
