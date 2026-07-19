@@ -50,6 +50,20 @@ impl CapabilityKey {
         ))
     }
 
+    pub fn sign_domain_separated(&self, domain: &[u8], payload: &[u8]) -> [u8; 32] {
+        let domain_len = u32::try_from(domain.len()).unwrap_or(u32::MAX);
+        let mut message = Vec::with_capacity(4 + domain.len() + payload.len());
+        message.extend_from_slice(&domain_len.to_be_bytes());
+        message.extend_from_slice(domain);
+        message.extend_from_slice(payload);
+        hmac_sha256(&self.0, &message)
+    }
+
+    pub fn verify_domain_separated(&self, domain: &[u8], payload: &[u8], tag: &[u8]) -> bool {
+        let expected = self.sign_domain_separated(domain, payload);
+        constant_time_eq(tag, &expected)
+    }
+
     #[cfg(test)]
     fn from_test_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)

@@ -746,6 +746,13 @@ impl ServerConfig {
         Self::test_with_endpoints_for_role(endpoints, RuntimeRole::Api)
     }
 
+    /// Test helper for authenticated HTTP integration tests.
+    pub fn test_with_endpoints_and_auth(endpoints: RuntimeEndpoints, auth: AuthConfig) -> Self {
+        let mut config = Self::test_with_endpoints_for_role(endpoints, RuntimeRole::Api);
+        config.auth = auth;
+        config
+    }
+
     /// Test helper for worker-role runtime state.
     pub fn test_worker_with_endpoints(endpoints: RuntimeEndpoints) -> Self {
         Self::test_with_endpoints_for_role(endpoints, RuntimeRole::Worker)

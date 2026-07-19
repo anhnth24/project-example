@@ -86,6 +86,56 @@ pub async fn get_by_id(
     map_document(&row)
 }
 
+/// Lists visible documents in a collection, ordered by stable creation key.
+pub async fn list_by_collection(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    after: Option<(chrono::DateTime<chrono::Utc>, Uuid)>,
+    limit: i64,
+) -> Result<Vec<Document>, DbError> {
+    let rows = match after {
+        Some((after_created_at, after_id)) => {
+            txn.query(
+                "SELECT id, org_id, collection_id, title, state, current_version_id,
+                        created_by_user_id, created_at, updated_at, deleted_at
+                 FROM documents
+                 WHERE org_id = $1
+                   AND collection_id = $2
+                   AND deleted_at IS NULL
+                   AND state <> 'purged'
+                   AND (created_at, id) > ($3, $4)
+                 ORDER BY created_at, id
+                 LIMIT $5",
+                &[
+                    &ctx.org_id(),
+                    &collection_id,
+                    &after_created_at,
+                    &after_id,
+                    &limit,
+                ],
+            )
+            .await?
+        }
+        None => {
+            txn.query(
+                "SELECT id, org_id, collection_id, title, state, current_version_id,
+                        created_by_user_id, created_at, updated_at, deleted_at
+                 FROM documents
+                 WHERE org_id = $1
+                   AND collection_id = $2
+                   AND deleted_at IS NULL
+                   AND state <> 'purged'
+                 ORDER BY created_at, id
+                 LIMIT $3",
+                &[&ctx.org_id(), &collection_id, &limit],
+            )
+            .await?
+        }
+    };
+    rows.iter().map(map_document).collect()
+}
+
 /// Locks the document row for an atomic state transition (`SELECT … FOR UPDATE`).
 ///
 /// Intended for the document state machine (and tests that exercise lock contention).

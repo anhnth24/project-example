@@ -44,6 +44,17 @@ pub struct NewDerivedArtifact<'a> {
     pub byte_size: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct NewSourceVersion<'a> {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub original_object_key: &'a str,
+    pub content_sha256: &'a str,
+    pub source_filename: Option<&'a str>,
+    pub source_content_type: Option<&'a str>,
+    pub byte_size: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactInsertOutcome {
     pub id: Uuid,
@@ -98,6 +109,40 @@ pub async fn find_by_id(
         )
         .await?;
     row.map(|row| map_version(&row)).transpose()
+}
+
+pub async fn insert_source_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    input: NewSourceVersion<'_>,
+) -> Result<DocumentVersion, DbError> {
+    let publication_state = "draft";
+    let row = txn
+        .query_one(
+            "INSERT INTO document_versions (
+                id, org_id, document_id, version_number, publication_state, is_current,
+                content_sha256, original_object_key, source_filename, source_content_type,
+                byte_size, created_by_user_id
+             ) VALUES ($1, $2, $3, 1, $4, false, $5, $6, $7, $8, $9, $10)
+             RETURNING id, org_id, document_id, version_number, parent_version_id,
+                       publication_state, is_current, content_sha256, original_object_key,
+                       markdown_object_key, source_filename, source_content_type, byte_size,
+                       effective_from, effective_to, change_summary, created_by_user_id, created_at",
+            &[
+                &input.id,
+                &ctx.org_id(),
+                &input.document_id,
+                &publication_state,
+                &input.content_sha256,
+                &input.original_object_key,
+                &input.source_filename,
+                &input.source_content_type,
+                &Some(input.byte_size),
+                &ctx.user_id(),
+            ],
+        )
+        .await?;
+    map_version(&row)
 }
 
 pub async fn insert_published_version_if_absent(
@@ -313,6 +358,54 @@ pub async fn list_by_document(
             &[&ctx.org_id(), &document_id],
         )
         .await?;
+    rows.iter().map(map_version).collect()
+}
+
+pub async fn list_by_document_paginated(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    after: Option<(i32, Uuid)>,
+    limit: i64,
+) -> Result<Vec<DocumentVersion>, DbError> {
+    let rows = match after {
+        Some((after_number, after_id)) => {
+            txn.query(
+                "SELECT id, org_id, document_id, version_number, parent_version_id,
+                        publication_state, is_current, content_sha256, original_object_key,
+                        markdown_object_key, source_filename, source_content_type, byte_size,
+                        effective_from, effective_to, change_summary, created_by_user_id, created_at
+                 FROM document_versions
+                 WHERE org_id = $1
+                   AND document_id = $2
+                   AND (version_number, id) > ($3, $4)
+                 ORDER BY version_number, id
+                 LIMIT $5",
+                &[
+                    &ctx.org_id(),
+                    &document_id,
+                    &after_number,
+                    &after_id,
+                    &limit,
+                ],
+            )
+            .await?
+        }
+        None => {
+            txn.query(
+                "SELECT id, org_id, document_id, version_number, parent_version_id,
+                        publication_state, is_current, content_sha256, original_object_key,
+                        markdown_object_key, source_filename, source_content_type, byte_size,
+                        effective_from, effective_to, change_summary, created_by_user_id, created_at
+                 FROM document_versions
+                 WHERE org_id = $1 AND document_id = $2
+                 ORDER BY version_number, id
+                 LIMIT $3",
+                &[&ctx.org_id(), &document_id, &limit],
+            )
+            .await?
+        }
+    };
     rows.iter().map(map_version).collect()
 }
 
