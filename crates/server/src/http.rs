@@ -135,9 +135,10 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            // Admission itself is time-correct (`expires_at > now()` in SQL). This
-            // bounded sweep is hygiene so expired reservations become terminal and
-            // operational gauges stop showing stale reserved rows.
+            // Admission itself is time-correct (it filters `expires_at` against a
+            // lock-scoped `clock_timestamp()` in SQL). This bounded sweep is hygiene
+            // so expired reservations become terminal and operational gauges stop
+            // showing stale reserved rows.
             match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
                 Ok(expired) if expired > 0 => {
                     eprintln!("fileconv-server: quota expiry sweep marked {expired} reservations");
