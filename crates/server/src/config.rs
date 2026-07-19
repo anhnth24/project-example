@@ -7,8 +7,12 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::services::upload::{LimitsConfig, UploadConfig};
+
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 200 * 1024 * 1024;
 const DEFAULT_JOB_LEASE_SECONDS: u64 = 60;
+const DEFAULT_MINIO_OPERATION_TIMEOUT_SECS: u64 = 30;
+const MAX_MINIO_OPERATION_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_ACCESS_TOKEN_TTL_SECS: u64 = 900;
 const DEFAULT_REFRESH_TOKEN_TTL_SECS: u64 = 60 * 60 * 24 * 7;
 const DEFAULT_ARGON2_MEMORY_KIB: u32 = 19_456;
@@ -78,8 +82,10 @@ pub struct ServerConfig {
     minio_bucket: Option<String>,
     minio_region: Option<String>,
     minio_path_style: bool,
+    minio_operation_timeout_secs: u64,
     auth: AuthConfig,
     limits: RuntimeLimits,
+    upload: UploadConfig,
     index_signature: Option<String>,
 }
 
@@ -117,8 +123,13 @@ impl fmt::Debug for ServerConfig {
             .field("minio_bucket", &self.minio_bucket)
             .field("minio_region", &self.minio_region)
             .field("minio_path_style", &self.minio_path_style)
+            .field(
+                "minio_operation_timeout_secs",
+                &self.minio_operation_timeout_secs,
+            )
             .field("auth", &self.auth)
             .field("limits", &self.limits)
+            .field("upload", &self.upload)
             .field("index_signature", &self.index_signature)
             .finish()
     }
@@ -133,6 +144,7 @@ pub struct MinioConfig {
     bucket: String,
     region: String,
     path_style: bool,
+    operation_timeout_secs: u64,
 }
 
 impl fmt::Debug for MinioConfig {
@@ -145,6 +157,7 @@ impl fmt::Debug for MinioConfig {
             .field("bucket", &self.bucket)
             .field("region", &self.region)
             .field("path_style", &self.path_style)
+            .field("operation_timeout_secs", &self.operation_timeout_secs)
             .finish()
     }
 }
@@ -157,6 +170,26 @@ impl MinioConfig {
         bucket: impl Into<String>,
         region: impl Into<String>,
         path_style: bool,
+    ) -> Result<Self, String> {
+        Self::new_with_timeout(
+            endpoint,
+            access_key,
+            secret_key,
+            bucket,
+            region,
+            path_style,
+            DEFAULT_MINIO_OPERATION_TIMEOUT_SECS,
+        )
+    }
+
+    pub fn new_with_timeout(
+        endpoint: impl Into<String>,
+        access_key: SecretString,
+        secret_key: SecretString,
+        bucket: impl Into<String>,
+        region: impl Into<String>,
+        path_style: bool,
+        operation_timeout_secs: u64,
     ) -> Result<Self, String> {
         let endpoint_raw = endpoint.into();
         let endpoint = required_url(Some(endpoint_raw.as_str()), "MARKHAND_MINIO_URL")?;
@@ -173,6 +206,12 @@ impl MinioConfig {
         if region.trim().is_empty() {
             return Err("MARKHAND_MINIO_REGION must not be empty".into());
         }
+        if operation_timeout_secs == 0 || operation_timeout_secs > MAX_MINIO_OPERATION_TIMEOUT_SECS
+        {
+            return Err(format!(
+                "MARKHAND_MINIO_OPERATION_TIMEOUT_SECS must be between 1 and {MAX_MINIO_OPERATION_TIMEOUT_SECS}"
+            ));
+        }
         Ok(Self {
             endpoint,
             access_key,
@@ -180,6 +219,7 @@ impl MinioConfig {
             bucket,
             region,
             path_style,
+            operation_timeout_secs,
         })
     }
 
@@ -205,6 +245,10 @@ impl MinioConfig {
 
     pub const fn path_style(&self) -> bool {
         self.path_style
+    }
+
+    pub const fn operation_timeout_secs(&self) -> u64 {
+        self.operation_timeout_secs
     }
 }
 
@@ -315,6 +359,7 @@ struct ConfigFile {
     minio_bucket: Option<String>,
     minio_region: Option<String>,
     minio_path_style: Option<bool>,
+    minio_operation_timeout_secs: Option<u64>,
     auth_issuer: Option<String>,
     auth_audience: Option<String>,
     auth_signing_key: Option<String>,
@@ -327,6 +372,16 @@ struct ConfigFile {
     auth_argon2_parallelism: Option<u64>,
     max_upload_bytes: Option<u64>,
     job_lease_seconds: Option<u64>,
+    max_archive_entries: Option<u64>,
+    max_archive_uncompressed_bytes: Option<u64>,
+    max_archive_compression_ratio: Option<u64>,
+    max_pdf_pages: Option<u64>,
+    max_image_pixels: Option<u64>,
+    max_audio_duration_secs: Option<u64>,
+    max_multipart_parts: Option<u64>,
+    max_part_header_bytes: Option<u64>,
+    upload_timeout_secs: Option<u64>,
+    upload_idle_timeout_secs: Option<u64>,
     index_signature: Option<String>,
 }
 
@@ -421,6 +476,13 @@ impl ServerConfig {
             |value| value.minio_path_style,
             true,
         )?;
+        let minio_operation_timeout_secs = numeric_value(
+            file,
+            env,
+            "MARKHAND_MINIO_OPERATION_TIMEOUT_SECS",
+            |value| value.minio_operation_timeout_secs,
+            DEFAULT_MINIO_OPERATION_TIMEOUT_SECS,
+        )?;
         let auth = match role {
             RuntimeRole::Api => {
                 let alg = optional_value(file, env, "MARKHAND_AUTH_ALG", |value| {
@@ -512,6 +574,82 @@ impl ServerConfig {
                 DEFAULT_JOB_LEASE_SECONDS,
             )?,
         };
+        let upload_limits = LimitsConfig {
+            max_upload_bytes: limits.max_upload_bytes,
+            max_archive_entries: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_ARCHIVE_ENTRIES",
+                |value| value.max_archive_entries,
+                LimitsConfig::policy_defaults().max_archive_entries,
+            )?,
+            max_archive_uncompressed_bytes: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_ARCHIVE_UNCOMPRESSED_BYTES",
+                |value| value.max_archive_uncompressed_bytes,
+                LimitsConfig::policy_defaults().max_archive_uncompressed_bytes,
+            )?,
+            max_archive_compression_ratio: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_ARCHIVE_COMPRESSION_RATIO",
+                |value| value.max_archive_compression_ratio,
+                LimitsConfig::policy_defaults().max_archive_compression_ratio,
+            )?,
+            max_pdf_pages: u32_value(
+                file,
+                env,
+                "MARKHAND_MAX_PDF_PAGES",
+                |value| value.max_pdf_pages,
+                LimitsConfig::policy_defaults().max_pdf_pages,
+            )?,
+            max_image_pixels: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_IMAGE_PIXELS",
+                |value| value.max_image_pixels,
+                LimitsConfig::policy_defaults().max_image_pixels,
+            )?,
+            max_audio_duration_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_AUDIO_DURATION_SECS",
+                |value| value.max_audio_duration_secs,
+                LimitsConfig::policy_defaults().max_audio_duration_secs,
+            )?,
+            max_multipart_parts: u32_value(
+                file,
+                env,
+                "MARKHAND_MAX_MULTIPART_PARTS",
+                |value| value.max_multipart_parts,
+                LimitsConfig::policy_defaults().max_multipart_parts,
+            )?,
+            max_part_header_bytes: usize_value(
+                file,
+                env,
+                "MARKHAND_MAX_PART_HEADER_BYTES",
+                |value| value.max_part_header_bytes,
+                LimitsConfig::policy_defaults().max_part_header_bytes,
+            )?,
+            upload_timeout_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_UPLOAD_TIMEOUT_SECS",
+                |value| value.upload_timeout_secs,
+                LimitsConfig::policy_defaults().upload_timeout_secs,
+            )?,
+            upload_idle_timeout_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_UPLOAD_IDLE_TIMEOUT_SECS",
+                |value| value.upload_idle_timeout_secs,
+                LimitsConfig::policy_defaults().upload_idle_timeout_secs,
+            )?,
+        };
+        let upload = UploadConfig {
+            limits: upload_limits,
+        };
         let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
             value.index_signature.as_ref()
         });
@@ -529,8 +667,10 @@ impl ServerConfig {
             minio_bucket,
             minio_region,
             minio_path_style,
+            minio_operation_timeout_secs,
             auth,
             limits,
+            upload,
             index_signature,
         };
         config.validate()?;
@@ -548,6 +688,16 @@ impl ServerConfig {
     /// Authentication configuration (API role). Worker configs leave credentials unset.
     pub const fn auth(&self) -> &AuthConfig {
         &self.auth
+    }
+
+    /// Upload intake limits (P0-09 policy defaults unless overridden).
+    pub const fn upload(&self) -> &UploadConfig {
+        &self.upload
+    }
+
+    /// Legacy runtime limits (max upload + job lease).
+    pub const fn limits(&self) -> RuntimeLimits {
+        self.limits
     }
 
     pub(crate) fn is_api_role(&self) -> bool {
@@ -578,6 +728,7 @@ impl ServerConfig {
             minio_bucket: None,
             minio_region: None,
             minio_path_style: true,
+            minio_operation_timeout_secs: DEFAULT_MINIO_OPERATION_TIMEOUT_SECS,
             auth: AuthConfig {
                 issuer: None,
                 audience: None,
@@ -592,6 +743,7 @@ impl ServerConfig {
                 max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
                 job_lease_seconds: DEFAULT_JOB_LEASE_SECONDS,
             },
+            upload: UploadConfig::policy_defaults(),
             index_signature: None,
         }
     }
@@ -627,13 +779,14 @@ impl ServerConfig {
             .minio_region
             .clone()
             .unwrap_or_else(|| "us-east-1".to_string());
-        let minio = MinioConfig::new(
+        let minio = MinioConfig::new_with_timeout(
             endpoints.minio_url,
             access_key,
             secret_key,
             bucket,
             region,
             self.minio_path_style,
+            self.minio_operation_timeout_secs,
         )?;
         Ok(StorageConfig {
             qdrant_url: endpoints.qdrant_url,
@@ -644,6 +797,7 @@ impl ServerConfig {
 
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_limits()?;
+        self.upload.validate()?;
         self.validate_index_signature(false)?;
         if self.role == RuntimeRole::Api {
             self.validate_auth()?;
@@ -750,6 +904,13 @@ impl ServerConfig {
         if self.limits.job_lease_seconds == 0 || self.limits.job_lease_seconds > 3600 {
             return Err("MARKHAND_JOB_LEASE_SECONDS must be between 1 and 3600".into());
         }
+        if self.minio_operation_timeout_secs == 0
+            || self.minio_operation_timeout_secs > MAX_MINIO_OPERATION_TIMEOUT_SECS
+        {
+            return Err(format!(
+                "MARKHAND_MINIO_OPERATION_TIMEOUT_SECS must be between 1 and {MAX_MINIO_OPERATION_TIMEOUT_SECS}"
+            ));
+        }
         Ok(())
     }
 
@@ -832,6 +993,17 @@ fn u32_value(
 ) -> Result<u32, String> {
     let value = numeric_value(file, env, env_name, from_file, u64::from(default))?;
     u32::try_from(value).map_err(|_| format!("{env_name} is out of range for u32"))
+}
+
+fn usize_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+    env_name: &str,
+    from_file: impl FnOnce(&ConfigFile) -> Option<u64>,
+    default: usize,
+) -> Result<usize, String> {
+    let value = numeric_value(file, env, env_name, from_file, default as u64)?;
+    usize::try_from(value).map_err(|_| format!("{env_name} is out of range for usize"))
 }
 
 fn bool_value(
@@ -982,6 +1154,7 @@ mod tests {
             minio_bucket: None,
             minio_region: None,
             minio_path_style: None,
+            minio_operation_timeout_secs: None,
             auth_issuer: None,
             auth_audience: None,
             auth_signing_key: None,
@@ -994,6 +1167,16 @@ mod tests {
             auth_argon2_parallelism: None,
             max_upload_bytes: None,
             job_lease_seconds: None,
+            max_archive_entries: None,
+            max_archive_uncompressed_bytes: None,
+            max_archive_compression_ratio: None,
+            max_pdf_pages: None,
+            max_image_pixels: None,
+            max_audio_duration_secs: None,
+            max_multipart_parts: None,
+            max_part_header_bytes: None,
+            upload_timeout_secs: None,
+            upload_idle_timeout_secs: None,
             index_signature: None,
         };
         let env = BTreeMap::from([
