@@ -4,6 +4,7 @@ pub mod chunks;
 pub mod collections;
 pub mod documents;
 pub mod error;
+pub mod jobs;
 pub mod models;
 pub mod orgs;
 pub mod pool;

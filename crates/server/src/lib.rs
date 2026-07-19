@@ -7,6 +7,7 @@ pub mod database;
 pub mod db;
 pub mod error;
 pub mod http;
+pub mod jobs;
 pub mod routes;
 pub mod services;
 pub mod state;
