@@ -31,6 +31,10 @@ impl Profile {
 pub struct SecretString(String);
 
 impl SecretString {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     pub fn expose(&self) -> &str {
         &self.0
     }
@@ -47,6 +51,8 @@ pub struct ServerConfig {
     pub profile: Profile,
     pub bind_addr: SocketAddr,
     pub database_url: Option<SecretString>,
+    pub qdrant_url: Option<String>,
+    pub minio_url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -55,6 +61,8 @@ struct ConfigFile {
     profile: Option<String>,
     bind_addr: Option<String>,
     database_url: Option<String>,
+    qdrant_url: Option<String>,
+    minio_url: Option<String>,
 }
 
 impl ServerConfig {
@@ -92,15 +100,32 @@ impl ServerConfig {
             .or_else(|| file.and_then(|value| value.database_url.as_ref()))
             .filter(|value| !value.trim().is_empty())
             .cloned()
-            .map(SecretString);
+            .map(SecretString::new);
+        let qdrant_url = optional_value(file, env, "MARKHAND_QDRANT_URL", |value| {
+            value.qdrant_url.as_ref()
+        });
+        let minio_url = optional_value(file, env, "MARKHAND_MINIO_URL", |value| {
+            value.minio_url.as_ref()
+        });
 
         let config = Self {
             profile,
             bind_addr,
             database_url,
+            qdrant_url,
+            minio_url,
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// Returns the service endpoints required to start the real POC server.
+    pub fn runtime_endpoints(&self) -> Result<RuntimeEndpoints, String> {
+        Ok(RuntimeEndpoints {
+            database_url: required_database_url(self.database_url.as_ref())?,
+            qdrant_url: required_url(self.qdrant_url.as_deref(), "MARKHAND_QDRANT_URL")?,
+            minio_url: required_url(self.minio_url.as_deref(), "MARKHAND_MINIO_URL")?,
+        })
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -110,14 +135,88 @@ impl ServerConfig {
         if self.bind_addr.ip().is_loopback() || self.bind_addr.ip().is_unspecified() {
             return Err("prod profile requires a non-loopback explicit bind address".into());
         }
-        let Some(database_url) = self.database_url.as_ref() else {
-            return Err("prod profile requires MARKHAND_DATABASE_URL".into());
-        };
-        let value = database_url.expose().to_ascii_lowercase();
-        if value.contains("localhost") || value.contains("postgres:postgres") {
-            return Err("prod profile cannot use a development database URL".into());
-        }
+        let endpoints = self.runtime_endpoints()?;
+        validate_production_database_url(endpoints.database_url.expose())?;
+        require_https(&endpoints.qdrant_url, "MARKHAND_QDRANT_URL")?;
+        require_https(&endpoints.minio_url, "MARKHAND_MINIO_URL")?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeEndpoints {
+    pub database_url: SecretString,
+    pub qdrant_url: String,
+    pub minio_url: String,
+}
+
+fn required_database_url(value: Option<&SecretString>) -> Result<SecretString, String> {
+    let value = value.ok_or_else(|| "server requires MARKHAND_DATABASE_URL".to_string())?;
+    let parsed = reqwest::Url::parse(value.expose())
+        .map_err(|_| "MARKHAND_DATABASE_URL must be an absolute URL".to_string())?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") || parsed.host_str().is_none() {
+        return Err("MARKHAND_DATABASE_URL must include a postgres host".into());
+    }
+    Ok(value.clone())
+}
+
+fn optional_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+    env_name: &str,
+    from_file: impl FnOnce(&ConfigFile) -> Option<&String>,
+) -> Option<String> {
+    env.get(env_name)
+        .or_else(|| file.and_then(from_file))
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+}
+
+fn required_url(value: Option<&str>, name: &str) -> Result<String, String> {
+    let value = value.ok_or_else(|| format!("server requires {name}"))?;
+    let parsed =
+        reqwest::Url::parse(value).map_err(|_| format!("{name} must be an absolute URL"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(format!("{name} must use http or https"));
+    }
+    Ok(value.trim_end_matches('/').to_string())
+}
+
+fn validate_production_database_url(value: &str) -> Result<(), String> {
+    let parsed =
+        reqwest::Url::parse(value).map_err(|_| "MARKHAND_DATABASE_URL must be an absolute URL")?;
+    if !matches!(parsed.scheme(), "postgres" | "postgresql") {
+        return Err("MARKHAND_DATABASE_URL must use postgres or postgresql".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "MARKHAND_DATABASE_URL must include a host".to_string())?;
+    if host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || (parsed.username() == "markhand" && parsed.password() == Some("markhand_dev_only"))
+        || (parsed.username() == "postgres" && parsed.password() == Some("postgres"))
+        || parsed.password() == Some("markhand_dev_only")
+    {
+        return Err("prod profile cannot use a development database URL".into());
+    }
+    let sslmode = parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == "sslmode").then_some(value));
+    if sslmode.as_deref() != Some("require") {
+        return Err("prod MARKHAND_DATABASE_URL requires sslmode=require".into());
+    }
+    Ok(())
+}
+
+fn require_https(value: &str, name: &str) -> Result<(), String> {
+    if reqwest::Url::parse(value)
+        .ok()
+        .is_some_and(|parsed| parsed.scheme() == "https")
+    {
+        Ok(())
+    } else {
+        Err(format!("prod {name} must use https"))
     }
 }
 
@@ -138,6 +237,8 @@ mod tests {
             profile: Some("test".into()),
             bind_addr: Some("127.0.0.1:9000".into()),
             database_url: Some("postgres://file-secret".into()),
+            qdrant_url: Some("http://qdrant.test".into()),
+            minio_url: Some("http://minio.test".into()),
         };
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "dev".into()),
@@ -150,6 +251,7 @@ mod tests {
             config.database_url.unwrap().expose(),
             "postgres://file-secret"
         );
+        assert_eq!(config.qdrant_url.as_deref(), Some("http://qdrant.test"));
     }
 
     #[test]
@@ -177,5 +279,42 @@ mod tests {
     fn invalid_bind_fails_fast() {
         let env = BTreeMap::from([("MARKHAND_BIND_ADDR".into(), "not-an-address".into())]);
         assert!(ServerConfig::from_sources(None, &env).is_err());
+    }
+
+    #[test]
+    fn runtime_endpoints_require_all_real_services() {
+        let config = ServerConfig::from_sources(
+            None,
+            &BTreeMap::from([(
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand@localhost/markhand".into(),
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            config.runtime_endpoints().unwrap_err(),
+            "server requires MARKHAND_QDRANT_URL"
+        );
+    }
+
+    #[test]
+    fn production_requires_verified_dependency_transport() {
+        let env = BTreeMap::from([
+            ("MARKHAND_PROFILE".into(), "prod".into()),
+            ("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into()),
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://app:secret@postgres.internal/markhand?sslmode=require".into(),
+            ),
+            (
+                "MARKHAND_QDRANT_URL".into(),
+                "https://qdrant.internal".into(),
+            ),
+            ("MARKHAND_MINIO_URL".into(), "http://minio.internal".into()),
+        ]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &env).unwrap_err(),
+            "prod MARKHAND_MINIO_URL must use https"
+        );
     }
 }

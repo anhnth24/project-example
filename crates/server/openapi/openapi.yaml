@@ -2,52 +2,33 @@ openapi: 3.1.0
 info:
   title: Markhand Web API
   version: 0.1.0
-  description: Phase F contract sample. Business endpoints arrive in Phase 1B.
+  description: Phase 1B POC API contract.
 servers:
   - url: /api/v1
 paths:
-  /health:
+  /health/live:
     get:
-      operationId: health
+      operationId: healthLive
       responses:
         "200":
-          description: Service health
+          description: Process health; does not contact dependencies.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
-        "500":
-          $ref: "#/components/responses/ApiError"
-  /jobs/{jobId}/events:
+  /health/ready:
     get:
-      operationId: jobEvents
-      parameters:
-        - $ref: "#/components/parameters/JobId"
-        - $ref: "#/components/parameters/LastEventId"
+      operationId: healthReady
       responses:
         "200":
-          description: Sequenced job events
+          description: PostgreSQL, Qdrant and MinIO are reachable.
           content:
-            text/event-stream:
+            application/json:
               schema:
-                $ref: "#/components/schemas/SseEnvelope"
-        "401":
+                $ref: "#/components/schemas/Health"
+        "503":
           $ref: "#/components/responses/ApiError"
 components:
-  parameters:
-    JobId:
-      name: jobId
-      in: path
-      required: true
-      schema:
-        type: string
-        format: uuid
-    LastEventId:
-      name: Last-Event-ID
-      in: header
-      required: false
-      schema:
-        type: string
   responses:
     ApiError:
       description: Canonical API error
@@ -86,19 +67,3 @@ components:
           type: [string, "null"]
         hasMore:
           type: boolean
-    SseEnvelope:
-      type: object
-      required: [version, sequence, event, requestId, data]
-      properties:
-        version:
-          type: integer
-          const: 1
-        sequence:
-          type: integer
-          minimum: 1
-        event:
-          type: string
-        requestId:
-          type: string
-          format: uuid
-        data: {}

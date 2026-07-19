@@ -1,8 +1,25 @@
 # fileconv-server
 
-Future Markhand Web API and worker boundary. Phase F contains only compileable binaries
-for help/config validation; it intentionally has no HTTP framework, database, auth,
-route or job implementation.
+Markhand Web API and worker boundary. The first Phase 1B increment starts a real HTTP
+server, applies checksum-verified PostgreSQL migrations, and exposes:
+
+- `GET /api/v1/health/live` — process liveness;
+- `GET /api/v1/health/ready` — PostgreSQL, Qdrant and MinIO readiness.
+
+For a local run, start the real dependency stack and export endpoints from
+`deploy/dev/.env.example`:
+
+```bash
+cp deploy/dev/.env.example deploy/dev/.env
+make dev-up
+set -a && source deploy/dev/.env && set +a
+cargo run -p fileconv-server
+curl --fail http://127.0.0.1:8787/api/v1/health/ready
+deploy/scripts/seed-poc-org.sh
+```
+
+The process applies migrations before listening. Seed the local POC organization only
+after that first startup with `deploy/scripts/seed-poc-org.sh`.
 
 Later code follows `route → service → repository/adapter`; business operations require
 an explicit `OrgContext`.

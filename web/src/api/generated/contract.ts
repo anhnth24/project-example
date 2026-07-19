@@ -4,14 +4,14 @@
  */
 
 export interface paths {
-    "/health": {
+    "/health/live": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["health"];
+        get: operations["healthLive"];
         put?: never;
         post?: never;
         delete?: never;
@@ -20,14 +20,14 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/jobs/{jobId}/events": {
+    "/health/ready": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["jobEvents"];
+        get: operations["healthReady"];
         put?: never;
         post?: never;
         delete?: never;
@@ -57,15 +57,6 @@ export interface components {
             nextCursor?: string | null;
             hasMore: boolean;
         };
-        SseEnvelope: {
-            /** @constant */
-            version: 1;
-            sequence: number;
-            event: string;
-            /** Format: uuid */
-            requestId: string;
-            data: unknown;
-        };
     };
     responses: {
         /** @description Canonical API error */
@@ -78,17 +69,14 @@ export interface components {
             };
         };
     };
-    parameters: {
-        JobId: string;
-        LastEventId: string;
-    };
+    parameters: never;
     requestBodies: never;
     headers: never;
     pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    health: {
+    healthLive: {
         parameters: {
             query?: never;
             header?: never;
@@ -97,7 +85,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Service health */
+            /** @description Process health; does not contact dependencies. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -106,32 +94,27 @@ export interface operations {
                     "application/json": components["schemas"]["Health"];
                 };
             };
-            500: components["responses"]["ApiError"];
         };
     };
-    jobEvents: {
+    healthReady: {
         parameters: {
             query?: never;
-            header?: {
-                "Last-Event-ID"?: components["parameters"]["LastEventId"];
-            };
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Sequenced job events */
+            /** @description PostgreSQL, Qdrant and MinIO are reachable. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["SseEnvelope"];
+                    "application/json": components["schemas"]["Health"];
                 };
             };
-            401: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
         };
     };
 }
