@@ -59,6 +59,8 @@ discover these deterministic failures.
 - Configuration tests that assert a specific validation error must supply valid values
   for earlier invariants (for example, production auth settings before a bind-address
   assertion), so new fail-fast checks do not invalidate the test's intent.
+- Every Rust edit must pass `cargo fmt --all -- --check` before push. This is the first
+  command in the Rust CI quality gate and prevents an otherwise avoidable full rerun.
 
 ## Evidence
 

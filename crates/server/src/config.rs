@@ -393,7 +393,10 @@ mod tests {
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "prod".into()),
             ("MARKHAND_BIND_ADDR".into(), "127.0.0.1:8787".into()),
-            ("MARKHAND_AUTH_ISSUER".into(), "https://issuer.example.test".into()),
+            (
+                "MARKHAND_AUTH_ISSUER".into(),
+                "https://issuer.example.test".into(),
+            ),
             ("MARKHAND_AUTH_AUDIENCE".into(), "markhand-api".into()),
             (
                 "MARKHAND_AUTH_SIGNING_KEY".into(),
