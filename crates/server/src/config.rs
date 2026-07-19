@@ -119,6 +119,7 @@ impl ServerConfig {
         Self::from_sources_for_role(file.as_ref(), &env, role)
     }
 
+    #[cfg(test)]
     fn from_sources(
         file: Option<&ConfigFile>,
         env: &BTreeMap<String, String>,
