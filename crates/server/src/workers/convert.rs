@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
-use bytes::Bytes;
 use deadpool_postgres::Pool;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -15,13 +14,17 @@ use tokio::time::{
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
-use crate::db::documents;
+use crate::db::document_versions::ConversionSourceVersion;
 use crate::db::error::DbError;
-use crate::db::models::{Job, JobType};
+use crate::db::models::{Job, JobType, ResourceKind};
 use crate::db::pool::with_org_txn;
-use crate::jobs::{self, CompleteConvertArtifact, JobError, JobPayload};
-use crate::storage::keys::{parse_key_for_org, trusted_key};
-use crate::storage::minio::{MinioClient, ObjectIdentityMeta};
+use crate::jobs::{self, JobError, JobPayload};
+use crate::services::artifacts::{self, MarkdownStageInput, StagedMarkdown};
+use crate::services::conversion::{checkpoint_with_step, ConversionIdentity, ConversionStep};
+use crate::services::promotion::{self, PromoteConversionInput, PromotionError, PromotionFault};
+use crate::services::quota::{self, QuotaError, DEFAULT_RESERVATION_TTL};
+use crate::storage::keys::parse_key_for_org;
+use crate::storage::minio::MinioClient;
 use crate::storage::{ObjectNamespace, StorageError};
 
 use super::limits::ResourceLimits;
@@ -42,6 +45,7 @@ pub struct ConvertWorkerConfig {
     pub sandbox: SandboxConfig,
     pub post_upload_settlement_delay: Duration,
     pub max_job_duration: Duration,
+    pub promotion_fault: Option<PromotionFault>,
 }
 
 impl ConvertWorkerConfig {
@@ -55,6 +59,7 @@ impl ConvertWorkerConfig {
             sandbox,
             post_upload_settlement_delay: Duration::ZERO,
             max_job_duration,
+            promotion_fault: None,
         }
     }
 
@@ -74,6 +79,7 @@ impl ConvertWorkerConfig {
             post_upload_settlement_delay: Duration::ZERO,
             max_job_duration: ResourceLimits::default().wall_timeout
                 + Duration::from_secs(DEFAULT_JOB_GRACE_SECS),
+            promotion_fault: None,
         }
     }
 
@@ -92,6 +98,14 @@ impl ConvertWorkerConfig {
         }
         Ok(())
     }
+}
+
+struct ClaimedJobScope<'a> {
+    ctx: &'a OrgContext,
+    job: &'a Job,
+    lease_token: &'a str,
+    attempts: i32,
+    deadline: TokioInstant,
 }
 
 #[derive(Clone)]
@@ -148,91 +162,144 @@ impl ConvertWorker {
             .convert_claimed(ctx, &job, &lease_token, attempts, deadline)
             .await
         {
-            Ok(ConversionSuccess {
+            Ok(ConversionOutput {
                 markdown,
-                artifact_key,
                 markdown_sha256,
                 markdown_len,
-                document_id,
-                version_id,
+                source,
+                identity,
+                checkpoint,
             }) => {
                 let byte_size = match i64::try_from(markdown_len) {
                     Ok(byte_size) => byte_size,
-                    Err(_) => {
-                        let _ = self
-                            .storage
-                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                            .await;
-                        return Err(ConvertWorkerError::InvalidMarkdownLength);
-                    }
+                    Err(_) => return Err(ConvertWorkerError::InvalidMarkdownLength),
                 };
-                let artifact_key_string = artifact_key.as_str();
-                if !self.config.post_upload_settlement_delay.is_zero() {
-                    let delay = self.config.post_upload_settlement_delay;
-                    match self
-                        .heartbeat_while(ctx, &job, &lease_token, attempts, deadline, async {
-                            tokio::time::sleep(delay).await;
-                            Ok::<(), JobError>(())
-                        })
-                        .await
-                    {
-                        Ok(()) => {}
-                        Err(ConvertWorkerError::LeaseLost)
-                        | Err(ConvertWorkerError::Job(JobError::LeaseLost)) => {
-                            let _ = self
-                                .storage
-                                .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                                .await;
-                            return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
-                        }
-                        Err(error) => {
-                            let _ = self
-                                .storage
-                                .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                                .await;
-                            return Err(error);
-                        }
-                    }
-                }
-                let completed = match self
+                let quota_reservation_key =
+                    quota_reservation_key_for_attempt(&identity, job.id, attempts);
+                if let Err(error) = self
                     .heartbeat_while(
                         ctx,
                         &job,
                         &lease_token,
                         attempts,
                         deadline,
-                        jobs::complete_with_markdown_artifact(
+                        quota::reserve(
                             &self.db_pool,
                             ctx,
-                            job.id,
-                            &lease_token,
-                            attempts,
-                            CompleteConvertArtifact {
-                                artifact_id: Uuid::new_v4(),
-                                document_id,
-                                version_id,
-                                object_key: &artifact_key_string,
-                                content_sha256: &markdown_sha256,
-                                byte_size,
-                            },
+                            &quota_reservation_key,
+                            ResourceKind::StorageBytes,
+                            markdown_len,
+                            DEFAULT_RESERVATION_TTL,
+                            Some(job.id),
                         ),
                     )
                     .await
                 {
+                    return self
+                        .fail_retryable_or_return(ctx, &job, &lease_token, attempts, error)
+                        .await;
+                }
+
+                let mut staged: Option<StagedMarkdown> = None;
+                let claimed = ClaimedJobScope {
+                    ctx,
+                    job: &job,
+                    lease_token: &lease_token,
+                    attempts,
+                    deadline,
+                };
+                let promotion_result = async {
+                    let staged_markdown = self
+                        .heartbeat_while(
+                            ctx,
+                            &job,
+                            &lease_token,
+                            attempts,
+                            deadline,
+                            artifacts::stage_markdown(
+                                &self.storage,
+                                ctx,
+                                &identity,
+                                MarkdownStageInput {
+                                    collection_id: None,
+                                    document_id: source.document_id,
+                                    promoted_version_id: identity.promoted_version_id(),
+                                    markdown,
+                                    markdown_sha256: markdown_sha256.clone(),
+                                    markdown_len,
+                                },
+                            ),
+                        )
+                        .await?;
+                    staged = Some(staged_markdown.clone());
+                    self.save_checkpoint_step(
+                        &claimed,
+                        &identity,
+                        checkpoint.as_ref(),
+                        ConversionStep::Staged,
+                    )
+                    .await?;
+                    if self.config.promotion_fault == Some(PromotionFault::AfterStagingPut) {
+                        return Err(ConvertWorkerError::Promotion(PromotionError::Injected(
+                            PromotionFault::AfterStagingPut,
+                        )));
+                    }
+                    if !self.config.post_upload_settlement_delay.is_zero() {
+                        let delay = self.config.post_upload_settlement_delay;
+                        self.heartbeat_while(ctx, &job, &lease_token, attempts, deadline, async {
+                            tokio::time::sleep(delay).await;
+                            Ok::<(), JobError>(())
+                        })
+                        .await?;
+                    }
+                    self.heartbeat_while(
+                        ctx,
+                        &job,
+                        &lease_token,
+                        attempts,
+                        deadline,
+                        promotion::promote_conversion(
+                            &self.db_pool,
+                            ctx,
+                            PromoteConversionInput {
+                                job_id: job.id,
+                                lease_token: lease_token.to_string(),
+                                claimed_attempts: attempts,
+                                identity: identity.clone(),
+                                source: source.clone(),
+                                artifact_id: identity.markdown_artifact_id(),
+                                staged_object_key: staged_markdown.object_key.clone(),
+                                markdown_sha256: markdown_sha256.clone(),
+                                markdown_byte_size: byte_size,
+                                quota_reservation_key: quota_reservation_key.clone(),
+                                fault: self.config.promotion_fault,
+                            },
+                        ),
+                    )
+                    .await
+                }
+                .await;
+
+                let completed = match promotion_result {
                     Ok(outcome) => outcome,
-                    Err(ConvertWorkerError::Job(JobError::LeaseLost))
+                    Err(ConvertWorkerError::Promotion(PromotionError::LeaseLost))
+                    | Err(ConvertWorkerError::Job(JobError::LeaseLost))
                     | Err(ConvertWorkerError::LeaseLost) => {
-                        let _ = self
-                            .storage
-                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                            .await;
+                        self.compensate_after_promotion_failure(
+                            ctx,
+                            staged.as_ref(),
+                            &quota_reservation_key,
+                        )
+                        .await;
                         return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
                     }
                     Err(error) if error.is_retryable_job_failure() => {
-                        let _ = self
-                            .storage
-                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                            .await;
+                        self.compensate_after_promotion_failure(
+                            ctx,
+                            staged.as_ref(),
+                            &quota_reservation_key,
+                        )
+                        .await;
                         let failed = jobs::fail(
                             &self.db_pool,
                             ctx,
@@ -248,24 +315,18 @@ impl ConvertWorker {
                         });
                     }
                     Err(error) => {
-                        let _ = self
-                            .storage
-                            .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                            .await;
+                        self.compensate_after_promotion_failure(
+                            ctx,
+                            staged.as_ref(),
+                            &quota_reservation_key,
+                        )
+                        .await;
                         return Err(error);
                     }
                 };
-                if !completed.artifact.created
-                    && completed.artifact.object_key != artifact_key_string
-                {
-                    let _ = self
-                        .storage
-                        .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                        .await;
-                }
                 Ok(ConvertWorkerRun::Completed {
                     job_id: completed.job.id,
-                    markdown_bytes: markdown.len(),
+                    markdown_bytes: markdown_len as usize,
                 })
             }
             Err(ConvertWorkerError::LeaseLost) => {
@@ -300,9 +361,23 @@ impl ConvertWorker {
         lease_token: &str,
         attempts: i32,
         deadline: TokioInstant,
-    ) -> Result<ConversionSuccess, ConvertWorkerError> {
+    ) -> Result<ConversionOutput, ConvertWorkerError> {
         let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
         let source = with_deadline(deadline, self.load_source(ctx, payload)).await?;
+        let identity = ConversionIdentity::new(
+            ctx.org_id(),
+            source.document_id,
+            source.source_version_id,
+            job.idempotency_key.clone(),
+        );
+        let claimed = ClaimedJobScope {
+            ctx,
+            job,
+            lease_token,
+            attempts,
+            deadline,
+        };
+        let mut checkpoint = job.checkpoint.clone();
         let quarantine_key = parse_key_for_org(&source.original_object_key, ctx.org_id())?;
         if quarantine_key.namespace() != ObjectNamespace::Quarantine {
             return Err(ConvertWorkerError::SourceNotQuarantine);
@@ -357,6 +432,15 @@ impl ConvertWorker {
                 .map_err(|_| ConvertWorkerError::SandboxJoin)?
             })
             .await?;
+        let saved = self
+            .save_checkpoint_step(
+                &claimed,
+                &identity,
+                checkpoint.as_ref(),
+                ConversionStep::Downloaded,
+            )
+            .await?;
+        checkpoint = saved.checkpoint;
         let sandbox_output = self
             .run_sandbox_with_heartbeat(ctx, job, lease_token, attempts, deadline, sandbox_input)
             .await?;
@@ -375,59 +459,27 @@ impl ConvertWorker {
         let markdown_sha256 = hex::encode(Sha256::digest(&markdown));
         let markdown_len =
             u64::try_from(markdown.len()).map_err(|_| ConvertWorkerError::InvalidMarkdownLength)?;
-        let artifact_key = trusted_key(
-            ctx.org_id(),
-            source.version_id,
-            artifact_object_id_for_attempt(job.id, attempts),
-            None,
-        )?;
-        let meta = ObjectIdentityMeta {
-            org_id: ctx.org_id(),
-            collection_id: None,
-            document_id: Some(source.document_id),
-            version_id: Some(source.version_id),
-            original_filename: None,
-            canonical_format: Some("md".into()),
-            content_sha256: Some(markdown_sha256.clone()),
-            content_length: Some(markdown_len),
-            disposition: Some("trusted".into()),
-        };
-        if let Err(error) = self
-            .heartbeat_while(
-                ctx,
-                job,
-                lease_token,
-                attempts,
-                deadline,
-                self.storage.put_object(
-                    ctx.org_id(),
-                    &artifact_key,
-                    Bytes::from(markdown.clone()),
-                    &meta,
-                    "text/markdown; charset=utf-8",
-                ),
+        let saved = self
+            .save_checkpoint_step(
+                &claimed,
+                &identity,
+                checkpoint.as_ref(),
+                ConversionStep::Converted,
             )
-            .await
-        {
-            let _ = self
-                .storage
-                .cleanup_generated_object(ctx.org_id(), &artifact_key)
-                .await;
-            return Err(error);
-        }
-        Ok(ConversionSuccess {
+            .await?;
+        Ok(ConversionOutput {
             markdown,
-            artifact_key,
             markdown_sha256,
             markdown_len,
-            document_id: source.document_id,
-            version_id: source.version_id,
+            source,
+            identity,
+            checkpoint: saved.checkpoint,
         })
     }
 
     fn verify_quarantine_metadata(
         &self,
-        source: &documents::VersionSource,
+        source: &ConversionSourceVersion,
         metadata: &HashMap<String, String>,
     ) -> Result<(), ConvertWorkerError> {
         match metadata.get("disposition").map(String::as_str) {
@@ -439,7 +491,7 @@ impl ConvertWorker {
         {
             return Err(ConvertWorkerError::InvalidQuarantineMetadata);
         }
-        let version_id = source.version_id.to_string();
+        let version_id = source.source_version_id.to_string();
         if metadata.get("version-id").map(String::as_str) != Some(version_id.as_str()) {
             return Err(ConvertWorkerError::InvalidQuarantineMetadata);
         }
@@ -593,7 +645,7 @@ impl ConvertWorker {
         &self,
         ctx: &OrgContext,
         payload: JobPayload,
-    ) -> Result<documents::VersionSource, ConvertWorkerError> {
+    ) -> Result<ConversionSourceVersion, ConvertWorkerError> {
         let document_id = payload
             .document_id
             .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
@@ -604,13 +656,97 @@ impl ConvertWorker {
             let ctx = ctx.clone();
             move |txn| {
                 Box::pin(async move {
-                    documents::get_version_source_for_convert(txn, &ctx, document_id, version_id)
-                        .await
+                    crate::db::document_versions::source_for_conversion(
+                        txn,
+                        &ctx,
+                        document_id,
+                        version_id,
+                    )
+                    .await
                 })
             }
         })
         .await
         .map_err(ConvertWorkerError::Db)
+    }
+
+    async fn save_checkpoint_step(
+        &self,
+        claimed: &ClaimedJobScope<'_>,
+        identity: &ConversionIdentity,
+        existing: Option<&serde_json::Value>,
+        step: ConversionStep,
+    ) -> Result<Job, ConvertWorkerError> {
+        let checkpoint = checkpoint_with_step(existing, identity, step);
+        self.heartbeat_while(
+            claimed.ctx,
+            claimed.job,
+            claimed.lease_token,
+            claimed.attempts,
+            claimed.deadline,
+            jobs::checkpoint(
+                &self.db_pool,
+                claimed.ctx,
+                claimed.job.id,
+                claimed.lease_token,
+                claimed.attempts,
+                checkpoint,
+            ),
+        )
+        .await
+    }
+
+    async fn compensate_after_promotion_failure(
+        &self,
+        ctx: &OrgContext,
+        staged: Option<&StagedMarkdown>,
+        quota_reservation_key: &str,
+    ) {
+        if let Some(staged) = staged.filter(|staged| staged.created_or_verified) {
+            if let Err(error) = self
+                .storage
+                .cleanup_generated_object(ctx.org_id(), &staged.key)
+                .await
+            {
+                eprintln!(
+                    "fileconv-server: staged conversion artifact cleanup failed: {}",
+                    error.code()
+                );
+            }
+        }
+        if let Err(error) = quota::refund(&self.db_pool, ctx, quota_reservation_key).await {
+            eprintln!(
+                "fileconv-server: conversion quota refund failed: {}",
+                error.code()
+            );
+        }
+    }
+
+    async fn fail_retryable_or_return(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        error: ConvertWorkerError,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        if error.is_retryable_job_failure() {
+            let failed = jobs::fail(
+                &self.db_pool,
+                ctx,
+                job.id,
+                lease_token,
+                attempts,
+                error.safe_job_error(),
+            )
+            .await?;
+            Ok(ConvertWorkerRun::Failed {
+                job_id: failed.id,
+                terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
+            })
+        } else {
+            Err(error)
+        }
     }
 }
 
@@ -629,7 +765,7 @@ where
 }
 
 fn verify_downloaded_integrity(
-    source: &documents::VersionSource,
+    source: &ConversionSourceVersion,
     bytes: &[u8],
     metadata: &HashMap<String, String>,
 ) -> Result<(), ConvertWorkerError> {
@@ -691,6 +827,19 @@ pub fn artifact_object_id_for_attempt(job_id: Uuid, attempts: i32) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
+fn quota_reservation_key_for_attempt(
+    identity: &ConversionIdentity,
+    job_id: Uuid,
+    attempts: i32,
+) -> String {
+    format!(
+        "{}.{}.{}",
+        identity.storage_quota_reservation_key(),
+        job_id,
+        attempts.max(0)
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConvertWorkerRun {
     NoJob,
@@ -700,13 +849,13 @@ pub enum ConvertWorkerRun {
 }
 
 #[derive(Debug)]
-struct ConversionSuccess {
+struct ConversionOutput {
     markdown: Vec<u8>,
-    artifact_key: crate::storage::ObjectKey,
     markdown_sha256: String,
     markdown_len: u64,
-    document_id: Uuid,
-    version_id: Uuid,
+    source: ConversionSourceVersion,
+    identity: ConversionIdentity,
+    checkpoint: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Error)]
@@ -717,6 +866,12 @@ pub enum ConvertWorkerError {
     Job(#[from] JobError),
     #[error("storage error")]
     Storage(#[from] StorageError),
+    #[error("artifact staging error")]
+    ArtifactStage(#[from] artifacts::ArtifactStageError),
+    #[error("promotion error")]
+    Promotion(#[from] PromotionError),
+    #[error("quota error")]
+    Quota(#[from] QuotaError),
     #[error("sandbox error")]
     Sandbox(#[from] SandboxError),
     #[error("sandbox task failed")]
@@ -761,6 +916,9 @@ impl ConvertWorkerError {
             self,
             Self::Db(_)
                 | Self::Storage(_)
+                | Self::ArtifactStage(_)
+                | Self::Promotion(_)
+                | Self::Quota(_)
                 | Self::Sandbox(_)
                 | Self::SandboxJoin
                 | Self::SandboxTimedOut
@@ -781,6 +939,9 @@ impl ConvertWorkerError {
         match self {
             Self::Db(_) => "convert database error",
             Self::Storage(_) => "convert storage error",
+            Self::ArtifactStage(_) => "convert artifact staging error",
+            Self::Promotion(_) => "convert promotion error",
+            Self::Quota(_) => "convert quota error",
             Self::Sandbox(_) => "convert sandbox error",
             Self::SandboxJoin => "convert sandbox join error",
             Self::SandboxTimedOut => "convert sandbox timeout",
