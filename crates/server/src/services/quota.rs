@@ -12,6 +12,7 @@ use std::time::Duration;
 use axum::http::{header::RETRY_AFTER, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
 use thiserror::Error;
 use uuid::Uuid;
@@ -277,6 +278,7 @@ pub async fn reserve(
         move |txn| {
             Box::pin(async move {
                 quota::lock_admission(txn, &ctx, resource_kind).await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
                 if quota::find_by_key(txn, &ctx, &reservation_key)
                     .await?
                     .is_some()
@@ -287,12 +289,14 @@ pub async fn reserve(
                         &reservation_key,
                         resource_kind,
                         amount,
+                        job_id,
+                        observed_at,
                     )
                     .await?
                     else {
                         return Err(QuotaError::ReservationConflict);
                     };
-                    let snapshot = current_snapshot(txn, &ctx, resource_kind).await?;
+                    let snapshot = current_snapshot(txn, &ctx, resource_kind, observed_at).await?;
                     return Ok(QuotaReservationOutcome {
                         reservation: active,
                         quota: snapshot,
@@ -300,7 +304,7 @@ pub async fn reserve(
                     });
                 }
 
-                let usage = quota::usage(txn, &ctx, resource_kind)
+                let usage = quota::usage(txn, &ctx, resource_kind, observed_at)
                     .await
                     .map_err(map_quota_config_error)?;
                 let remaining = remaining(usage.limit, usage.committed, usage.active_reserved)?;
@@ -319,11 +323,14 @@ pub async fn reserve(
                 let Some(inserted) = quota::insert_reserved(
                     txn,
                     &ctx,
-                    &reservation_key,
-                    resource_kind,
-                    amount,
-                    ttl_secs,
-                    job_id,
+                    quota::ReservationInsert {
+                        reservation_key: &reservation_key,
+                        kind: resource_kind,
+                        amount,
+                        ttl_secs,
+                        job_id,
+                        observed_at,
+                    },
                 )
                 .await?
                 else {
@@ -336,12 +343,14 @@ pub async fn reserve(
                         &reservation_key,
                         resource_kind,
                         amount,
+                        job_id,
+                        observed_at,
                     )
                     .await?
                     else {
                         return Err(QuotaError::ReservationConflict);
                     };
-                    let snapshot = current_snapshot(txn, &ctx, resource_kind).await?;
+                    let snapshot = current_snapshot(txn, &ctx, resource_kind, observed_at).await?;
                     return Ok(QuotaReservationOutcome {
                         reservation: active,
                         quota: snapshot,
@@ -387,14 +396,18 @@ pub async fn finalize(
                     .await
                     .map_err(map_reservation_error)?;
                 quota::lock_admission(txn, &ctx, kind).await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
                 if let Some(finalized) =
-                    quota::finalize_reserved_by_key(txn, &ctx, &reservation_key).await?
+                    quota::finalize_reserved_by_key(txn, &ctx, &reservation_key, observed_at)
+                        .await?
                 {
                     if finalized.resource_kind != kind {
                         return Err(QuotaError::ReservationResourceMismatch);
                     }
                     if finalized.resource_kind.counter_key().is_some() {
-                        let period = quota::current_period(txn, finalized.resource_kind).await?;
+                        let period =
+                            quota::current_period(txn, finalized.resource_kind, observed_at)
+                                .await?;
                         let current = quota::lock_committed_counter(
                             txn,
                             &ctx,
@@ -419,7 +432,8 @@ pub async fn finalize(
                 }
 
                 if let Some(expired) =
-                    quota::expire_reserved_by_key_if_due(txn, &ctx, &reservation_key).await?
+                    quota::expire_reserved_by_key_if_due(txn, &ctx, &reservation_key, observed_at)
+                        .await?
                 {
                     return Ok(QuotaSettlement::Expired(expired));
                 }
@@ -458,13 +472,15 @@ pub async fn refund(
                     .await
                     .map_err(map_reservation_error)?;
                 quota::lock_admission(txn, &ctx, kind).await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
                 if let Some(refunded) =
-                    quota::refund_reserved_by_key(txn, &ctx, &reservation_key).await?
+                    quota::refund_reserved_by_key(txn, &ctx, &reservation_key, observed_at).await?
                 {
                     return Ok(QuotaSettlement::Refunded(refunded));
                 }
                 if let Some(expired) =
-                    quota::expire_reserved_by_key_if_due(txn, &ctx, &reservation_key).await?
+                    quota::expire_reserved_by_key_if_due(txn, &ctx, &reservation_key, observed_at)
+                        .await?
                 {
                     return Ok(QuotaSettlement::Expired(expired));
                 }
@@ -496,7 +512,10 @@ pub async fn expire_reserved(
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
-            Box::pin(async move { quota::expire_reserved_batch(txn, &ctx, batch_size).await })
+            Box::pin(async move {
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
+                quota::expire_reserved_batch(txn, &ctx, batch_size, observed_at).await
+            })
         }
     })
     .await
@@ -542,6 +561,7 @@ pub async fn reserve_upload(
                     &[ResourceKind::Documents, ResourceKind::StorageBytes],
                 )
                 .await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
                 let document = reserve_spec_in_txn(
                     txn,
                     &ctx,
@@ -549,6 +569,7 @@ pub async fn reserve_upload(
                     ResourceKind::Documents,
                     1,
                     ttl_secs,
+                    observed_at,
                 )
                 .await?;
                 let storage = reserve_spec_in_txn(
@@ -558,6 +579,7 @@ pub async fn reserve_upload(
                     ResourceKind::StorageBytes,
                     storage_amount,
                     ttl_secs,
+                    observed_at,
                 )
                 .await?;
                 Ok(UploadQuotaReservation { storage, document })
@@ -587,18 +609,41 @@ pub async fn finalize_upload(
                     &[ResourceKind::Documents, ResourceKind::StorageBytes],
                 )
                 .await?;
-                let document_preview =
-                    preview_locked(txn, &ctx, &document_key, ResourceKind::Documents).await?;
-                let storage_preview =
-                    preview_locked(txn, &ctx, &storage_key, ResourceKind::StorageBytes).await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
+                let document_preview = preview_locked(
+                    txn,
+                    &ctx,
+                    &document_key,
+                    ResourceKind::Documents,
+                    observed_at,
+                )
+                .await?;
+                let storage_preview = preview_locked(
+                    txn,
+                    &ctx,
+                    &storage_key,
+                    ResourceKind::StorageBytes,
+                    observed_at,
+                )
+                .await?;
                 let (document, storage) = match (&document_preview, &storage_preview) {
                     (QuotaSettlement::Reserved(_), QuotaSettlement::Reserved(_)) => {
-                        let document =
-                            finalize_locked(txn, &ctx, &document_key, ResourceKind::Documents)
-                                .await?;
-                        let storage =
-                            finalize_locked(txn, &ctx, &storage_key, ResourceKind::StorageBytes)
-                                .await?;
+                        let document = finalize_locked(
+                            txn,
+                            &ctx,
+                            &document_key,
+                            ResourceKind::Documents,
+                            observed_at,
+                        )
+                        .await?;
+                        let storage = finalize_locked(
+                            txn,
+                            &ctx,
+                            &storage_key,
+                            ResourceKind::StorageBytes,
+                            observed_at,
+                        )
+                        .await?;
                         (document, storage)
                     }
                     (
@@ -607,7 +652,8 @@ pub async fn finalize_upload(
                     ) => (document_preview, storage_preview),
                     _ => (document_preview, storage_preview),
                 };
-                let storage_quota = current_snapshot(txn, &ctx, ResourceKind::StorageBytes).await?;
+                let storage_quota =
+                    current_snapshot(txn, &ctx, ResourceKind::StorageBytes, observed_at).await?;
                 Ok::<UploadQuotaSettlement, QuotaError>(UploadQuotaSettlement {
                     storage,
                     document,
@@ -649,10 +695,23 @@ pub async fn refund_upload(
                     &[ResourceKind::Documents, ResourceKind::StorageBytes],
                 )
                 .await?;
-                let document_preview =
-                    preview_locked(txn, &ctx, &document_key, ResourceKind::Documents).await?;
-                let storage_preview =
-                    preview_locked(txn, &ctx, &storage_key, ResourceKind::StorageBytes).await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
+                let document_preview = preview_locked(
+                    txn,
+                    &ctx,
+                    &document_key,
+                    ResourceKind::Documents,
+                    observed_at,
+                )
+                .await?;
+                let storage_preview = preview_locked(
+                    txn,
+                    &ctx,
+                    &storage_key,
+                    ResourceKind::StorageBytes,
+                    observed_at,
+                )
+                .await?;
                 let (document, storage) =
                     if matches!(&document_preview, QuotaSettlement::AlreadyFinalized(_))
                         || matches!(&storage_preview, QuotaSettlement::AlreadyFinalized(_))
@@ -661,19 +720,33 @@ pub async fn refund_upload(
                     } else {
                         let document = if matches!(&document_preview, QuotaSettlement::Reserved(_))
                         {
-                            refund_locked(txn, &ctx, &document_key, ResourceKind::Documents).await?
+                            refund_locked(
+                                txn,
+                                &ctx,
+                                &document_key,
+                                ResourceKind::Documents,
+                                observed_at,
+                            )
+                            .await?
                         } else {
                             document_preview
                         };
                         let storage = if matches!(&storage_preview, QuotaSettlement::Reserved(_)) {
-                            refund_locked(txn, &ctx, &storage_key, ResourceKind::StorageBytes)
-                                .await?
+                            refund_locked(
+                                txn,
+                                &ctx,
+                                &storage_key,
+                                ResourceKind::StorageBytes,
+                                observed_at,
+                            )
+                            .await?
                         } else {
                             storage_preview
                         };
                         (document, storage)
                     };
-                let storage_quota = current_snapshot(txn, &ctx, ResourceKind::StorageBytes).await?;
+                let storage_quota =
+                    current_snapshot(txn, &ctx, ResourceKind::StorageBytes, observed_at).await?;
                 Ok::<UploadQuotaSettlement, QuotaError>(UploadQuotaSettlement {
                     storage,
                     document,
@@ -716,6 +789,7 @@ async fn reserve_spec_in_txn(
     resource_kind: ResourceKind,
     amount: i64,
     ttl_secs: i64,
+    observed_at: DateTime<Utc>,
 ) -> Result<QuotaReservationOutcome, QuotaError> {
     validate_reservation_key(reservation_key)?;
     if amount <= 0 {
@@ -725,13 +799,20 @@ async fn reserve_spec_in_txn(
         .await?
         .is_some()
     {
-        let Some(active) =
-            quota::find_active_matching_by_key(txn, ctx, reservation_key, resource_kind, amount)
-                .await?
+        let Some(active) = quota::find_active_matching_by_key(
+            txn,
+            ctx,
+            reservation_key,
+            resource_kind,
+            amount,
+            None,
+            observed_at,
+        )
+        .await?
         else {
             return Err(QuotaError::ReservationConflict);
         };
-        let snapshot = current_snapshot(txn, ctx, resource_kind).await?;
+        let snapshot = current_snapshot(txn, ctx, resource_kind, observed_at).await?;
         return Ok(QuotaReservationOutcome {
             reservation: active,
             quota: snapshot,
@@ -739,7 +820,7 @@ async fn reserve_spec_in_txn(
         });
     }
 
-    let usage = quota::usage(txn, ctx, resource_kind)
+    let usage = quota::usage(txn, ctx, resource_kind, observed_at)
         .await
         .map_err(map_quota_config_error)?;
     let available = remaining(usage.limit, usage.committed, usage.active_reserved)?;
@@ -758,21 +839,31 @@ async fn reserve_spec_in_txn(
     let Some(inserted) = quota::insert_reserved(
         txn,
         ctx,
-        reservation_key,
-        resource_kind,
-        amount,
-        ttl_secs,
-        None,
+        quota::ReservationInsert {
+            reservation_key,
+            kind: resource_kind,
+            amount,
+            ttl_secs,
+            job_id: None,
+            observed_at,
+        },
     )
     .await?
     else {
-        let Some(active) =
-            quota::find_active_matching_by_key(txn, ctx, reservation_key, resource_kind, amount)
-                .await?
+        let Some(active) = quota::find_active_matching_by_key(
+            txn,
+            ctx,
+            reservation_key,
+            resource_kind,
+            amount,
+            None,
+            observed_at,
+        )
+        .await?
         else {
             return Err(QuotaError::ReservationConflict);
         };
-        let snapshot = current_snapshot(txn, ctx, resource_kind).await?;
+        let snapshot = current_snapshot(txn, ctx, resource_kind, observed_at).await?;
         return Ok(QuotaReservationOutcome {
             reservation: active,
             quota: snapshot,
@@ -804,6 +895,7 @@ async fn finalize_locked(
     ctx: &OrgContext,
     reservation_key: &str,
     expected_kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<QuotaSettlement, QuotaError> {
     let kind = quota::kind_by_key(txn, ctx, reservation_key)
         .await
@@ -811,11 +903,15 @@ async fn finalize_locked(
     if kind != expected_kind {
         return Err(QuotaError::ReservationResourceMismatch);
     }
-    if let Some(finalized) = quota::finalize_reserved_by_key(txn, ctx, reservation_key).await? {
-        add_committed_counter(txn, ctx, &finalized).await?;
+    if let Some(finalized) =
+        quota::finalize_reserved_by_key(txn, ctx, reservation_key, observed_at).await?
+    {
+        add_committed_counter(txn, ctx, &finalized, observed_at).await?;
         return Ok(QuotaSettlement::Finalized(finalized));
     }
-    if let Some(expired) = quota::expire_reserved_by_key_if_due(txn, ctx, reservation_key).await? {
+    if let Some(expired) =
+        quota::expire_reserved_by_key_if_due(txn, ctx, reservation_key, observed_at).await?
+    {
         return Ok(QuotaSettlement::Expired(expired));
     }
     let reservation = quota::get_by_key_for_update(txn, ctx, reservation_key)
@@ -834,6 +930,7 @@ async fn refund_locked(
     ctx: &OrgContext,
     reservation_key: &str,
     expected_kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<QuotaSettlement, QuotaError> {
     let kind = quota::kind_by_key(txn, ctx, reservation_key)
         .await
@@ -841,10 +938,14 @@ async fn refund_locked(
     if kind != expected_kind {
         return Err(QuotaError::ReservationResourceMismatch);
     }
-    if let Some(refunded) = quota::refund_reserved_by_key(txn, ctx, reservation_key).await? {
+    if let Some(refunded) =
+        quota::refund_reserved_by_key(txn, ctx, reservation_key, observed_at).await?
+    {
         return Ok(QuotaSettlement::Refunded(refunded));
     }
-    if let Some(expired) = quota::expire_reserved_by_key_if_due(txn, ctx, reservation_key).await? {
+    if let Some(expired) =
+        quota::expire_reserved_by_key_if_due(txn, ctx, reservation_key, observed_at).await?
+    {
         return Ok(QuotaSettlement::Expired(expired));
     }
     let reservation = quota::get_by_key_for_update(txn, ctx, reservation_key)
@@ -863,6 +964,7 @@ async fn preview_locked(
     ctx: &OrgContext,
     reservation_key: &str,
     expected_kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<QuotaSettlement, QuotaError> {
     let kind = quota::kind_by_key(txn, ctx, reservation_key)
         .await
@@ -870,7 +972,9 @@ async fn preview_locked(
     if kind != expected_kind {
         return Err(QuotaError::ReservationResourceMismatch);
     }
-    if let Some(expired) = quota::expire_reserved_by_key_if_due(txn, ctx, reservation_key).await? {
+    if let Some(expired) =
+        quota::expire_reserved_by_key_if_due(txn, ctx, reservation_key, observed_at).await?
+    {
         return Ok(QuotaSettlement::Expired(expired));
     }
     let reservation = quota::get_by_key_for_update(txn, ctx, reservation_key)
@@ -888,9 +992,10 @@ async fn add_committed_counter(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     reservation: &QuotaReservation,
+    observed_at: DateTime<Utc>,
 ) -> Result<(), QuotaError> {
     if reservation.resource_kind.counter_key().is_some() {
-        let period = quota::current_period(txn, reservation.resource_kind).await?;
+        let period = quota::current_period(txn, reservation.resource_kind, observed_at).await?;
         let current = quota::lock_committed_counter(txn, ctx, reservation.resource_kind, period)
             .await?
             .unwrap_or(0);
@@ -906,8 +1011,9 @@ async fn current_snapshot(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     resource_kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<QuotaSnapshot, QuotaError> {
-    let usage = quota::usage(txn, ctx, resource_kind)
+    let usage = quota::usage(txn, ctx, resource_kind, observed_at)
         .await
         .map_err(map_quota_config_error)?;
     Ok(QuotaSnapshot {

@@ -25,11 +25,12 @@ use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::http::{router, AppState};
+use fileconv_server::services::quota as quota_service;
 use fileconv_server::services::upload::{
     assert_disposition_is_typed, detect_magic, quota_reserve_hook, reject_dangerous_entry_name,
-    resolve_canonical_format, stream_to_tempfile, validate_and_quarantine, validate_streamed_bytes,
-    validate_zip_archive, CanonicalFormat, Disposition, LimitsConfig, ReasonCode, ThreatClass,
-    UploadError,
+    resolve_canonical_format, spawn_quota_settled_quarantine, stream_to_tempfile,
+    validate_and_quarantine, validate_streamed_bytes, validate_zip_archive, CanonicalFormat,
+    Disposition, LimitsConfig, QuotaSettledUploadError, ReasonCode, ThreatClass, UploadError,
 };
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
@@ -1037,6 +1038,82 @@ async fn quota_hook_is_callable() {
         .await
         .expect("reserve quota");
     assert_eq!(reservation.storage.reservation.amount, 12);
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    seed_uploader(
+        &pool,
+        org,
+        user,
+        "finalize-cleanup@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+    let reservation_key = "finalize-cleanup";
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    quota_reserve_hook(&pool, &ctx, reservation_key, streamed.size_bytes)
+        .await
+        .expect("reserve quota");
+    quota_service::refund(&pool, &ctx, &format!("upload.documents.{reservation_key}"))
+        .await
+        .expect("force document reservation non-finalizable");
+
+    let handle = spawn_quota_settled_quarantine(
+        pool.clone(),
+        ctx.clone(),
+        client.clone(),
+        LimitsConfig::policy_defaults(),
+        streamed,
+        Some("report.pdf".into()),
+        Some("application/pdf".into()),
+        reservation_key.into(),
+    );
+    let err = handle
+        .await
+        .expect("upload task join")
+        .expect_err("finalize should fail");
+    let outcome = match err {
+        QuotaSettledUploadError::Quota { error, outcome } => {
+            assert!(matches!(
+                error,
+                quota_service::QuotaError::RefundedCannotFinalize
+            ));
+            outcome
+        }
+        other => panic!("unexpected upload task result: {other:?}"),
+    };
+
+    assert!(!client
+        .object_exists(org, &outcome.object_key)
+        .await
+        .expect("object exists"));
+    assert_eq!(
+        quota_reservation_status(&pool, &ctx, "upload.storage.finalize-cleanup").await,
+        Some("refunded".into())
+    );
+    assert_eq!(
+        quota_reservation_status(&pool, &ctx, "upload.documents.finalize-cleanup").await,
+        Some("refunded".into())
+    );
+    assert_eq!(quota_counter_value(&pool, &ctx, "storage_bytes").await, 0);
+    assert_eq!(quota_counter_value(&pool, &ctx, "documents").await, 0);
+
     ephemeral.drop().await;
 }
 

@@ -14,9 +14,11 @@ use fileconv_server::database::apply_migrations;
 use fileconv_server::db::models::{ReservationStatus, ResourceKind};
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
+use fileconv_server::db::quota as db_quota;
 use fileconv_server::services::quota::{
     self, apply_quota_headers, QuotaDenial, QuotaError, QuotaSettlement, QuotaSnapshot,
 };
+use tokio::sync::oneshot;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -163,7 +165,7 @@ async fn active_reserved(pool: &Pool, context: &OrgContext, kind: ResourceKind) 
                         "SELECT COALESCE(SUM(amount), 0)::bigint
                          FROM quota_reservations
                          WHERE org_id = $1 AND resource_kind = $2
-                           AND status = 'reserved' AND expires_at > now()",
+                           AND status = 'reserved' AND expires_at > clock_timestamp()",
                         &[&context.org_id(), &kind],
                     )
                     .await?;
@@ -547,6 +549,63 @@ async fn mismatched_and_terminal_key_reuse_is_rejected() {
         Err(QuotaError::ReservationConflict)
     ));
 
+    let job_a = Uuid::new_v4();
+    let job_b = Uuid::new_v4();
+    with_org_txn(&pool, &context, {
+        let context = context.clone();
+        move |txn| {
+            Box::pin(async move {
+                for (job_id, key) in [(job_a, "job-a"), (job_b, "job-b")] {
+                    txn.execute(
+                        "INSERT INTO jobs (id, org_id, job_type, idempotency_key)
+                         VALUES ($1, $2, 'convert', $3)",
+                        &[&job_id, &context.org_id(), &key],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        }
+    })
+    .await
+    .unwrap();
+    let first_job = quota::reserve(
+        &pool,
+        &context,
+        "job-key-conflict",
+        ResourceKind::ConcurrentJobs,
+        1,
+        Duration::from_secs(60),
+        Some(job_a),
+    )
+    .await
+    .unwrap();
+    let retry_job = quota::reserve(
+        &pool,
+        &context,
+        "job-key-conflict",
+        ResourceKind::ConcurrentJobs,
+        1,
+        Duration::from_secs(60),
+        Some(job_a),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_job.reservation.id, retry_job.reservation.id);
+    let job_conflict = quota::reserve(
+        &pool,
+        &context,
+        "job-key-conflict",
+        ResourceKind::ConcurrentJobs,
+        1,
+        Duration::from_secs(60),
+        Some(job_b),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(job_conflict, QuotaError::ReservationConflict));
+    assert_eq!(job_conflict.status_code(), StatusCode::CONFLICT);
+
     ephemeral.drop().await;
 }
 
@@ -783,6 +842,115 @@ async fn expired_crash_reservation_does_not_block_and_sweeps() {
     })
     .await
     .unwrap();
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn finalize_waiting_on_quota_lock_uses_fresh_post_lock_clock() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-stale-clock",
+        QuotaFixture {
+            storage: 10,
+            documents: 10,
+            concurrent: 10,
+            tokens: 10,
+        },
+    )
+    .await;
+
+    quota::reserve(
+        &pool,
+        &context,
+        "expires-while-waiting",
+        ResourceKind::StorageBytes,
+        1,
+        Duration::from_secs(2),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (locked_tx, locked_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let holder_pool = pool.clone();
+    let holder_ctx = context.clone();
+    let holder = tokio::spawn(async move {
+        let txn_ctx = holder_ctx.clone();
+        with_org_txn(&holder_pool, &holder_ctx, move |txn| {
+            Box::pin(async move {
+                db_quota::lock_admission(txn, &txn_ctx, ResourceKind::StorageBytes).await?;
+                let _ = locked_tx.send(());
+                let _ = release_rx.await;
+                Ok(())
+            })
+        })
+        .await
+    });
+    locked_rx.await.expect("holder acquired quota lock");
+
+    let (started_tx, started_rx) = oneshot::channel();
+    let finalize_pool = pool.clone();
+    let finalize_ctx = context.clone();
+    let finalize = tokio::spawn(async move {
+        let txn_ctx = finalize_ctx.clone();
+        with_org_txn(&finalize_pool, &finalize_ctx, move |txn| {
+            Box::pin(async move {
+                let _ = started_tx.send(());
+                db_quota::lock_admission(txn, &txn_ctx, ResourceKind::StorageBytes).await?;
+                let observed_at = db_quota::fresh_clock_timestamp(txn).await?;
+                let finalized = db_quota::finalize_reserved_by_key(
+                    txn,
+                    &txn_ctx,
+                    "expires-while-waiting",
+                    observed_at,
+                )
+                .await?;
+                let expired = db_quota::expire_reserved_by_key_if_due(
+                    txn,
+                    &txn_ctx,
+                    "expires-while-waiting",
+                    observed_at,
+                )
+                .await?;
+                Ok((finalized, expired))
+            })
+        })
+        .await
+    });
+    started_rx.await.expect("finalize transaction started");
+    tokio::time::sleep(Duration::from_millis(2_200)).await;
+    release_tx.send(()).expect("release holder");
+    holder.await.expect("holder join").expect("holder txn");
+
+    let (finalized, expired) = finalize
+        .await
+        .expect("finalize join")
+        .expect("finalize txn");
+    assert!(finalized.is_none(), "expired reservation must not finalize");
+    assert_eq!(
+        expired.expect("reservation expired after lock wait").status,
+        ReservationStatus::Expired
+    );
+    assert_eq!(counter_value(&pool, &context, "storage_bytes").await, 0);
+    quota::reserve(
+        &pool,
+        &context,
+        "replacement-after-wait",
+        ResourceKind::StorageBytes,
+        10,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .expect("expired reservation releases quota capacity");
 
     ephemeral.drop().await;
 }

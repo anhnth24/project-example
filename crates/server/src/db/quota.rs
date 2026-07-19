@@ -29,6 +29,20 @@ pub struct QuotaUsage {
     pub active_reserved: i64,
 }
 
+pub struct ReservationInsert<'a> {
+    pub reservation_key: &'a str,
+    pub kind: ResourceKind,
+    pub amount: i64,
+    pub ttl_secs: i64,
+    pub job_id: Option<Uuid>,
+    pub observed_at: DateTime<Utc>,
+}
+
+pub async fn fresh_clock_timestamp(txn: &Transaction<'_>) -> Result<DateTime<Utc>, DbError> {
+    let row = txn.query_one("SELECT clock_timestamp()", &[]).await?;
+    Ok(row.get(0))
+}
+
 pub async fn lock_admission(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -66,20 +80,21 @@ pub async fn quota_limit(
 pub async fn current_period(
     txn: &Transaction<'_>,
     kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<CounterPeriod, DbError> {
     let kind = kind.as_str();
     let row = txn
         .query_one(
             "SELECT
                 CASE WHEN $1 = 'tokens'
-                    THEN date_trunc('month', now())
+                    THEN date_trunc('month', $2::timestamptz)
                     ELSE timestamptz '1970-01-01 00:00:00+00'
                 END AS period_start,
                 CASE WHEN $1 = 'tokens'
-                    THEN date_trunc('month', now()) + interval '1 month'
+                    THEN date_trunc('month', $2::timestamptz) + interval '1 month'
                     ELSE timestamptz '9999-12-31 00:00:00+00'
                 END AS period_end",
-            &[&kind],
+            &[&kind, &observed_at],
         )
         .await?;
     Ok(CounterPeriod {
@@ -133,6 +148,7 @@ pub async fn active_reserved(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<i64, DbError> {
     let kind = kind.as_str();
     let row = txn
@@ -142,8 +158,8 @@ pub async fn active_reserved(
              WHERE org_id = $1
                AND resource_kind = $2
                AND status = 'reserved'
-               AND expires_at > now()",
-            &[&ctx.org_id(), &kind],
+               AND expires_at > $3",
+            &[&ctx.org_id(), &kind, &observed_at],
         )
         .await?;
     Ok(row.get(0))
@@ -153,12 +169,13 @@ pub async fn usage(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     kind: ResourceKind,
+    observed_at: DateTime<Utc>,
 ) -> Result<QuotaUsage, DbError> {
-    let period = current_period(txn, kind).await?;
+    let period = current_period(txn, kind, observed_at).await?;
     Ok(QuotaUsage {
         limit: quota_limit(txn, ctx, kind).await?,
         committed: committed_usage(txn, ctx, kind, period).await?,
-        active_reserved: active_reserved(txn, ctx, kind).await?,
+        active_reserved: active_reserved(txn, ctx, kind, observed_at).await?,
     })
 }
 
@@ -185,6 +202,8 @@ pub async fn find_active_matching_by_key(
     reservation_key: &str,
     kind: ResourceKind,
     amount: i64,
+    job_id: Option<Uuid>,
+    observed_at: DateTime<Utc>,
 ) -> Result<Option<QuotaReservation>, DbError> {
     let kind = kind.as_str();
     let row = txn
@@ -196,9 +215,17 @@ pub async fn find_active_matching_by_key(
                AND reservation_key = $2
                AND resource_kind = $3
                AND amount = $4
+               AND job_id IS NOT DISTINCT FROM $5
                AND status = 'reserved'
-               AND expires_at > now()",
-            &[&ctx.org_id(), &reservation_key, &kind, &amount],
+               AND expires_at > $6",
+            &[
+                &ctx.org_id(),
+                &reservation_key,
+                &kind,
+                &amount,
+                &job_id,
+                &observed_at,
+            ],
         )
         .await?;
     row.map(|row| map_reservation(&row)).transpose()
@@ -225,29 +252,26 @@ pub async fn kind_by_key(
 pub async fn insert_reserved(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
-    reservation_key: &str,
-    kind: ResourceKind,
-    amount: i64,
-    ttl_secs: i64,
-    job_id: Option<Uuid>,
+    spec: ReservationInsert<'_>,
 ) -> Result<Option<QuotaReservation>, DbError> {
-    let kind = kind.as_str();
+    let kind = spec.kind.as_str();
     let row = txn
         .query_opt(
             "INSERT INTO quota_reservations (
                 org_id, reservation_key, resource_kind, amount, expires_at, job_id
              )
-             VALUES ($1, $2, $3, $4, now() + ($5::bigint * interval '1 second'), $6)
+             VALUES ($1, $2, $3, $4, $7::timestamptz + ($5::bigint * interval '1 second'), $6)
              ON CONFLICT (org_id, reservation_key) DO NOTHING
              RETURNING id, org_id, reservation_key, resource_kind, amount, status,
                        expires_at, job_id, created_at, settled_at",
             &[
                 &ctx.org_id(),
-                &reservation_key,
+                &spec.reservation_key,
                 &kind,
-                &amount,
-                &ttl_secs,
-                &job_id,
+                &spec.amount,
+                &spec.ttl_secs,
+                &spec.job_id,
+                &spec.observed_at,
             ],
         )
         .await?;
@@ -258,18 +282,19 @@ pub async fn finalize_reserved_by_key(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     reservation_key: &str,
+    observed_at: DateTime<Utc>,
 ) -> Result<Option<QuotaReservation>, DbError> {
     let row = txn
         .query_opt(
             "UPDATE quota_reservations
-             SET status = 'finalized', settled_at = now()
+             SET status = 'finalized', settled_at = $3
              WHERE org_id = $1
                AND reservation_key = $2
                AND status = 'reserved'
-               AND expires_at > now()
+               AND expires_at > $3
              RETURNING id, org_id, reservation_key, resource_kind, amount, status,
                        expires_at, job_id, created_at, settled_at",
-            &[&ctx.org_id(), &reservation_key],
+            &[&ctx.org_id(), &reservation_key, &observed_at],
         )
         .await?;
     row.map(|row| map_reservation(&row)).transpose()
@@ -279,18 +304,19 @@ pub async fn refund_reserved_by_key(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     reservation_key: &str,
+    observed_at: DateTime<Utc>,
 ) -> Result<Option<QuotaReservation>, DbError> {
     let row = txn
         .query_opt(
             "UPDATE quota_reservations
-             SET status = 'refunded', settled_at = now()
+             SET status = 'refunded', settled_at = $3
              WHERE org_id = $1
                AND reservation_key = $2
                AND status = 'reserved'
-               AND expires_at > now()
+               AND expires_at > $3
              RETURNING id, org_id, reservation_key, resource_kind, amount, status,
                        expires_at, job_id, created_at, settled_at",
-            &[&ctx.org_id(), &reservation_key],
+            &[&ctx.org_id(), &reservation_key, &observed_at],
         )
         .await?;
     row.map(|row| map_reservation(&row)).transpose()
@@ -300,18 +326,19 @@ pub async fn expire_reserved_by_key_if_due(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     reservation_key: &str,
+    observed_at: DateTime<Utc>,
 ) -> Result<Option<QuotaReservation>, DbError> {
     let row = txn
         .query_opt(
             "UPDATE quota_reservations
-             SET status = 'expired', settled_at = now()
+             SET status = 'expired', settled_at = $3
              WHERE org_id = $1
                AND reservation_key = $2
                AND status = 'reserved'
-               AND expires_at <= now()
+               AND expires_at <= $3
              RETURNING id, org_id, reservation_key, resource_kind, amount, status,
                        expires_at, job_id, created_at, settled_at",
-            &[&ctx.org_id(), &reservation_key],
+            &[&ctx.org_id(), &reservation_key, &observed_at],
         )
         .await?;
     row.map(|row| map_reservation(&row)).transpose()
@@ -346,7 +373,7 @@ pub async fn set_status(
     let row = txn
         .query_one(
             "UPDATE quota_reservations
-             SET status = $3, settled_at = now()
+             SET status = $3, settled_at = clock_timestamp()
              WHERE org_id = $1 AND id = $2
              RETURNING id, org_id, reservation_key, resource_kind, amount, status,
                        expires_at, job_id, created_at, settled_at",
@@ -372,7 +399,7 @@ pub async fn upsert_counter_value(
          ON CONFLICT (org_id, counter_key, period_start)
          DO UPDATE SET value = EXCLUDED.value,
                        period_end = EXCLUDED.period_end,
-                       updated_at = now()",
+                       updated_at = clock_timestamp()",
         &[
             &ctx.org_id(),
             &counter_key,
@@ -389,22 +416,23 @@ pub async fn expire_reserved_batch(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     batch_size: i64,
+    observed_at: DateTime<Utc>,
 ) -> Result<u64, DbError> {
     let updated = txn
         .execute(
             "WITH expired AS (
                 SELECT id
                 FROM quota_reservations
-                WHERE org_id = $1 AND status = 'reserved' AND expires_at <= now()
+                WHERE org_id = $1 AND status = 'reserved' AND expires_at <= $3
                 ORDER BY expires_at, id
                 LIMIT $2
                 FOR UPDATE SKIP LOCKED
              )
              UPDATE quota_reservations qr
-             SET status = 'expired', settled_at = now()
+             SET status = 'expired', settled_at = $3
              FROM expired
              WHERE qr.org_id = $1 AND qr.id = expired.id",
-            &[&ctx.org_id(), &batch_size],
+            &[&ctx.org_id(), &batch_size, &observed_at],
         )
         .await?;
     Ok(updated)

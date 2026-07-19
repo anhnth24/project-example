@@ -104,7 +104,10 @@ pub struct QuotaSettledUpload {
 #[derive(Debug)]
 pub enum QuotaSettledUploadError {
     Upload(UploadError),
-    Quota(QuotaError),
+    Quota {
+        error: QuotaError,
+        outcome: Box<UploadOutcome>,
+    },
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -135,16 +138,37 @@ pub fn spawn_quota_settled_quarantine(
                     quota_snapshot: settlement.storage_quota,
                 }),
                 Err(error) => {
+                    // In-process settlement guarantee: after storage succeeds but quota
+                    // finalize fails, release quota before deleting the untrusted
+                    // quarantine object. If either best-effort cleanup step fails, the
+                    // reservation TTL/sweep prevents permanent over-limit state and the
+                    // quarantine object remains eligible for later GC.
+                    // TODO(I03/I07): durable finalize/cleanup reconciliation on crash / double-failure.
+                    if let Err(refund_error) =
+                        quota::refund_upload(&pool, &org, &reservation_key).await
+                    {
+                        eprintln!(
+                            "fileconv-server: quota refund after finalize failure failed; \
+                             reservation_key={} code={}",
+                            reservation_key,
+                            refund_error.code()
+                        );
+                    }
                     if let Err(cleanup_error) = storage
                         .cleanup_generated_object(org.org_id(), &outcome.object_key)
                         .await
                     {
                         eprintln!(
-                            "fileconv-server: quota finalize failed and upload cleanup failed: {}",
+                            "fileconv-server: quota finalize failed and upload cleanup failed; \
+                             reservation_key={} code={}",
+                            reservation_key,
                             cleanup_error.code()
                         );
                     }
-                    Err(QuotaSettledUploadError::Quota(error))
+                    Err(QuotaSettledUploadError::Quota {
+                        error,
+                        outcome: Box::new(outcome),
+                    })
                 }
             },
             Err(error) => {

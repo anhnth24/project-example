@@ -116,7 +116,7 @@ async fn create_upload(
         Ok(Err(QuotaSettledUploadError::Upload(error))) => {
             Err(UploadRouteError::Upload(error, request_id.clone()))
         }
-        Ok(Err(QuotaSettledUploadError::Quota(error))) => {
+        Ok(Err(QuotaSettledUploadError::Quota { error, .. })) => {
             Err(UploadRouteError::Quota(error, request_id.clone()))
         }
         Err(_) => Err(UploadRouteError::Upload(
