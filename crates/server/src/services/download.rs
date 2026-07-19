@@ -238,31 +238,39 @@ pub async fn redeem_download(
             if let Ok(ctx) =
                 OrgContext::try_new(verified.org_id, verified.user_id, [] as [&str; 0], [])
             {
-                let _ = audit_redeem(
-                    pool,
-                    &ctx,
-                    &verified,
+                warn_audit_failure(
+                    audit_redeem(
+                        pool,
+                        &ctx,
+                        &verified,
+                        "deny",
+                        Some("identity_not_authorized"),
+                        request_id,
+                        None,
+                    )
+                    .await,
                     "deny",
-                    Some("identity_not_authorized"),
                     request_id,
-                    None,
-                )
-                .await;
+                );
             }
             return Err(DownloadError::NotFound);
         }
     };
     if require_permission(&ctx, "qa.query").is_err() {
-        let _ = audit_redeem(
-            pool,
-            &ctx,
-            &verified,
+        warn_audit_failure(
+            audit_redeem(
+                pool,
+                &ctx,
+                &verified,
+                "deny",
+                Some("permission_denied"),
+                request_id,
+                None,
+            )
+            .await,
             "deny",
-            Some("permission_denied"),
             request_id,
-            None,
-        )
-        .await;
+        );
         return Err(DownloadError::NotFound);
     }
     let source = match authorize_original_source(
@@ -275,31 +283,40 @@ pub async fn redeem_download(
     {
         Ok(source) => source,
         Err(error) => {
-            let _ = audit_redeem(
-                pool,
-                &ctx,
-                &verified,
-                download_audit_outcome(&error),
-                Some(download_audit_reason(&error)),
+            let outcome = download_audit_outcome(&error);
+            warn_audit_failure(
+                audit_redeem(
+                    pool,
+                    &ctx,
+                    &verified,
+                    outcome,
+                    Some(download_audit_reason(&error)),
+                    request_id,
+                    None,
+                )
+                .await,
+                outcome,
                 request_id,
-                None,
-            )
-            .await;
+            );
             return Err(error);
         }
     };
     let key = parse_key_for_org(&source.original_object_key, ctx.org_id())?;
     if key.namespace() != ObjectNamespace::Quarantine {
-        let _ = audit_redeem(
-            pool,
-            &ctx,
-            &verified,
+        warn_audit_failure(
+            audit_redeem(
+                pool,
+                &ctx,
+                &verified,
+                "deny",
+                Some("source_not_found"),
+                request_id,
+                None,
+            )
+            .await,
             "deny",
-            Some("source_not_found"),
             request_id,
-            None,
-        )
-        .await;
+        );
         return Err(DownloadError::NotFound);
     }
     let metadata = storage.head_metadata(ctx.org_id(), &key).await?;
@@ -311,29 +328,37 @@ pub async fn redeem_download(
     let bytes = storage.get_object(ctx.org_id(), &key).await?;
     let actual_sha256 = hex::encode(Sha256::digest(&bytes));
     if actual_sha256 != expected_sha256 {
-        let _ = audit_redeem(
-            pool,
-            &ctx,
-            &verified,
+        warn_audit_failure(
+            audit_redeem(
+                pool,
+                &ctx,
+                &verified,
+                "error",
+                Some("integrity_failed"),
+                request_id,
+                None,
+            )
+            .await,
             "error",
-            Some("integrity_failed"),
             request_id,
-            None,
-        )
-        .await;
+        );
         return Err(DownloadError::Integrity);
     }
     let byte_size = bytes.len() as u64;
-    let _ = audit_redeem(
-        pool,
-        &ctx,
-        &verified,
+    warn_audit_failure(
+        audit_redeem(
+            pool,
+            &ctx,
+            &verified,
+            "success",
+            None,
+            request_id,
+            Some(byte_size),
+        )
+        .await,
         "success",
-        None,
         request_id,
-        Some(byte_size),
-    )
-    .await;
+    );
     Ok(DownloadStream {
         byte_size,
         bytes,
@@ -375,6 +400,18 @@ async fn audit_redeem(
         },
     )
     .await
+}
+
+fn warn_audit_failure(result: Result<(), DbError>, outcome: &'static str, request_id: &str) {
+    if let Err(error) = result {
+        tracing::warn!(
+            action = "document.download.redeem",
+            outcome = outcome,
+            request_id = %request_id,
+            error_code = error.code(),
+            "audit write failed"
+        );
+    }
 }
 
 fn download_audit_outcome(error: &DownloadError) -> &'static str {

@@ -81,14 +81,15 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "convert".into());
     let metrics = Arc::new(MetricsRegistry::new());
-    tracing::info!(worker_id = %worker_id, worker_kind = %kind, "fileconv-worker starting");
     match kind.as_str() {
         "convert" => {
+            tracing::info!(worker_kind = "convert", "fileconv-worker starting");
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             run_convert_worker(state, pool, storage, worker_id, ctx, metrics).await
         }
         "index" => {
+            tracing::info!(worker_kind = "index", "fileconv-worker starting");
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             let qdrant = QdrantClient::with_api_key(
@@ -99,6 +100,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             run_index_worker(state, pool, storage, qdrant, worker_id, ctx, metrics).await
         }
         "delete" => {
+            tracing::info!(worker_kind = "delete", "fileconv-worker starting");
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             let qdrant = QdrantClient::with_api_key(
@@ -109,6 +111,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             run_delete_worker(state, pool, storage, qdrant, worker_id, ctx, metrics).await
         }
         "reconcile" => {
+            tracing::info!(worker_kind = "reconcile", "fileconv-worker starting");
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             let qdrant = QdrantClient::with_api_key(
@@ -118,7 +121,9 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
             run_reconcile_worker(state, pool, storage, qdrant, worker_id, ctx, metrics).await
         }
-        other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
+        _ => Err(
+            "unknown MARKHAND_WORKER_KIND; expected convert, index, delete, or reconcile".into(),
+        ),
     }
 }
 

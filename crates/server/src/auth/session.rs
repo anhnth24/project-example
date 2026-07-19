@@ -220,20 +220,25 @@ pub async fn login_with_password(
                 .await
             {
                 let org_id: Uuid = row.get(0);
-                let _ = audit_on_client(
-                    &mut client,
-                    AuditEvent {
-                        org_id,
-                        actor_user_id: None,
-                        action: "auth.login",
-                        resource_type: "session",
-                        resource_id: None,
-                        outcome: "deny",
-                        request_id,
-                        metadata: serde_json::json!({ "reason": "unknown_user" }),
-                    },
-                )
-                .await;
+                warn_audit_failure(
+                    audit_on_client(
+                        &mut client,
+                        AuditEvent {
+                            org_id,
+                            actor_user_id: None,
+                            action: "auth.login",
+                            resource_type: "session",
+                            resource_id: None,
+                            outcome: "deny",
+                            request_id,
+                            metadata: serde_json::json!({ "reason": "unknown_user" }),
+                        },
+                    )
+                    .await,
+                    "auth.login",
+                    "deny",
+                    request_id,
+                );
             }
         }
         return Err(SessionError::InvalidCredentials);
@@ -251,20 +256,25 @@ pub async fn login_with_password(
             burn_password_verify_time(password, &auth.argon2);
         }
         if let Some(org_id) = find_user_org(&mut client, user_id).await? {
-            let _ = audit_on_client(
-                &mut client,
-                AuditEvent {
-                    org_id,
-                    actor_user_id: Some(user_id),
-                    action: "auth.login",
-                    resource_type: "session",
-                    resource_id: None,
-                    outcome: "deny",
-                    request_id,
-                    metadata: serde_json::json!({ "reason": "user_disabled" }),
-                },
-            )
-            .await;
+            warn_audit_failure(
+                audit_on_client(
+                    &mut client,
+                    AuditEvent {
+                        org_id,
+                        actor_user_id: Some(user_id),
+                        action: "auth.login",
+                        resource_type: "session",
+                        resource_id: None,
+                        outcome: "deny",
+                        request_id,
+                        metadata: serde_json::json!({ "reason": "user_disabled" }),
+                    },
+                )
+                .await,
+                "auth.login",
+                "deny",
+                request_id,
+            );
         }
         return Err(SessionError::InvalidCredentials);
     }
@@ -275,20 +285,25 @@ pub async fn login_with_password(
     };
     if password::verify_password(password, &password_hash).is_err() {
         if let Some(org_id) = find_user_org(&mut client, user_id).await? {
-            let _ = audit_on_client(
-                &mut client,
-                AuditEvent {
-                    org_id,
-                    actor_user_id: Some(user_id),
-                    action: "auth.login",
-                    resource_type: "session",
-                    resource_id: None,
-                    outcome: "deny",
-                    request_id,
-                    metadata: serde_json::json!({ "reason": "bad_password" }),
-                },
-            )
-            .await;
+            warn_audit_failure(
+                audit_on_client(
+                    &mut client,
+                    AuditEvent {
+                        org_id,
+                        actor_user_id: Some(user_id),
+                        action: "auth.login",
+                        resource_type: "session",
+                        resource_id: None,
+                        outcome: "deny",
+                        request_id,
+                        metadata: serde_json::json!({ "reason": "bad_password" }),
+                    },
+                )
+                .await,
+                "auth.login",
+                "deny",
+                request_id,
+            );
         }
         return Err(SessionError::InvalidCredentials);
     }
@@ -394,6 +409,37 @@ async fn audit_on_client(client: &mut Object, event: AuditEvent<'_>) -> Result<(
     write_audit(&txn, event).await?;
     txn.commit().await.map_err(|_| SessionError::Database)?;
     Ok(())
+}
+
+fn warn_audit_failure(
+    result: Result<(), SessionError>,
+    action: &'static str,
+    outcome: &'static str,
+    request_id: &str,
+) {
+    if let Err(error) = result {
+        tracing::warn!(
+            action = action,
+            outcome = outcome,
+            request_id = %request_id,
+            error_code = session_error_code(error),
+            "audit write failed"
+        );
+    }
+}
+
+fn session_error_code(error: SessionError) -> &'static str {
+    match error {
+        SessionError::InvalidCredentials => "invalid_credentials",
+        SessionError::UserDisabled => "user_disabled",
+        SessionError::MembershipMissing => "membership_missing",
+        SessionError::InvalidRefresh => "invalid_refresh",
+        SessionError::RefreshReuse => "refresh_reuse",
+        SessionError::NotConfigured => "not_configured",
+        SessionError::Database => "database",
+        SessionError::Token => "token",
+        SessionError::Password => "password",
+    }
 }
 
 async fn set_org_guc_txn(txn: &Transaction<'_>, org_id: Uuid) -> Result<(), DbError> {

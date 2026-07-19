@@ -72,14 +72,18 @@ async fn ask(
     let Json(body) =
         body.map_err(|_| RestError::validation("request body is invalid", &request_id))?;
     if let Err(error) = require_permission_or_403(&auth.context, "qa.query", &request_id) {
-        let _ = audit_qa_query(
-            &state,
-            &auth.context,
+        warn_audit_failure(
+            audit_qa_query(
+                &state,
+                &auth.context,
+                "deny",
+                &request_id,
+                serde_json::json!({ "endpoint": "ask", "reason": "permission_denied" }),
+            )
+            .await,
             "deny",
             &request_id,
-            serde_json::json!({ "endpoint": "ask", "reason": "permission_denied" }),
-        )
-        .await;
+        );
         return Err(error);
     }
     let input = validate_ask_request(body, &auth.context, &request_id)?;
@@ -112,14 +116,18 @@ async fn ask(
                 QaError::EmptyScope => ("deny", "empty_scope"),
                 QaError::Retrieval(_) => ("error", "qa_failed"),
             };
-            let _ = audit_qa_query(
-                &state,
-                &auth.context,
+            warn_audit_failure(
+                audit_qa_query(
+                    &state,
+                    &auth.context,
+                    outcome,
+                    &request_id,
+                    merge_audit_reason(audit_metadata, reason),
+                )
+                .await,
                 outcome,
                 &request_id,
-                merge_audit_reason(audit_metadata, reason),
-            )
-            .await;
+            );
             return Err(map_qa_error(error, &request_id));
         }
     };
@@ -129,14 +137,18 @@ async fn ask(
         retrieval_started.elapsed().as_secs_f64(),
     );
     let response = collect_answer(stream, &request_id).await?;
-    let _ = audit_qa_query(
-        &state,
-        &auth.context,
+    warn_audit_failure(
+        audit_qa_query(
+            &state,
+            &auth.context,
+            "success",
+            &request_id,
+            audit_metadata,
+        )
+        .await,
         "success",
         &request_id,
-        audit_metadata,
-    )
-    .await;
+    );
     Ok(Json(response).into_response())
 }
 
@@ -148,14 +160,18 @@ async fn ask_stream(
 ) -> Result<Response, RestError> {
     let request_id = auth.request_id.clone();
     if let Err(error) = require_permission_or_403(&auth.context, "qa.query", &request_id) {
-        let _ = audit_qa_query(
-            &state,
-            &auth.context,
+        warn_audit_failure(
+            audit_qa_query(
+                &state,
+                &auth.context,
+                "deny",
+                &request_id,
+                serde_json::json!({ "endpoint": "ask_stream", "reason": "permission_denied" }),
+            )
+            .await,
             "deny",
             &request_id,
-            serde_json::json!({ "endpoint": "ask_stream", "reason": "permission_denied" }),
-        )
-        .await;
+        );
         return Err(error);
     }
     let caller = StreamCaller {
@@ -224,14 +240,18 @@ async fn ask_stream(
                 QaError::EmptyScope => ("deny", "empty_scope"),
                 QaError::Retrieval(_) => ("error", "qa_failed"),
             };
-            let _ = audit_qa_query(
-                &state,
-                &auth.context,
+            warn_audit_failure(
+                audit_qa_query(
+                    &state,
+                    &auth.context,
+                    outcome,
+                    &request_id,
+                    merge_audit_reason(audit_metadata, reason),
+                )
+                .await,
                 outcome,
                 &request_id,
-                merge_audit_reason(audit_metadata, reason),
-            )
-            .await;
+            );
             return Err(map_qa_error(error, &request_id));
         }
     };
@@ -240,14 +260,18 @@ async fn ask_stream(
         "success",
         retrieval_started.elapsed().as_secs_f64(),
     );
-    let _ = audit_qa_query(
-        &state,
-        &auth.context,
+    warn_audit_failure(
+        audit_qa_query(
+            &state,
+            &auth.context,
+            "success",
+            &request_id,
+            audit_metadata,
+        )
+        .await,
         "success",
         &request_id,
-        audit_metadata,
-    )
-    .await;
+    );
     let stream = qa_sse_stream(
         stream_id,
         request_id.clone(),
@@ -277,6 +301,22 @@ async fn audit_qa_query(
         },
     )
     .await
+}
+
+fn warn_audit_failure(
+    result: Result<(), crate::db::error::DbError>,
+    outcome: &'static str,
+    request_id: &str,
+) {
+    if let Err(error) = result {
+        tracing::warn!(
+            action = "qa.query",
+            outcome = outcome,
+            request_id = %request_id,
+            error_code = error.code(),
+            "audit write failed"
+        );
+    }
 }
 
 fn merge_audit_reason(mut metadata: serde_json::Value, reason: &'static str) -> serde_json::Value {
