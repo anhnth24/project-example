@@ -47,6 +47,8 @@ async fn live_authorization_e2e_unauthorized_gets_no_text() {
     let no_query = env.token(&seeded.no_query_email).await;
     let cross = env.token(&seeded.cross_email).await;
     let marker = "E2E-AUTH-SECRET-2026";
+    let cross_query = "E2E-CROSS-TENANT-SHARED-2026";
+    let cross_visible_marker = "E2E-CROSS-TENANT-ORG-B-2026";
     let Some(doc) = ingest_document(
         &env,
         &seeded,
@@ -56,7 +58,7 @@ async fn live_authorization_e2e_unauthorized_gets_no_text() {
             filename: "auth-secret.txt",
             content_type: "text/plain",
             title: "Authorization Secret",
-            bytes: b"E2E-AUTH-SECRET-2026 must not leak to unauthorized users.\n",
+            bytes: b"E2E-CROSS-TENANT-SHARED-2026 names an org-A document. E2E-AUTH-SECRET-2026 must not leak to unauthorized users.\n",
             marker,
         },
     )
@@ -67,6 +69,63 @@ async fn live_authorization_e2e_unauthorized_gets_no_text() {
     };
     let citation = first_citation(&env, &owner, &doc).await;
     let pin = citation_pin_from(&citation, marker);
+    let cross_ctx = seeded.cross_worker_ctx();
+    let Some(cross_doc) = ingest_document_in_collection(
+        &env,
+        &cross,
+        seeded.cross_collection_id,
+        &cross_ctx,
+        FixtureCase {
+            name: "cross-tenant-visible",
+            filename: "cross-visible.txt",
+            content_type: "text/plain",
+            title: "Cross Tenant Visible",
+            bytes: b"E2E-CROSS-TENANT-SHARED-2026 names only org-B readable content. E2E-CROSS-TENANT-ORG-B-2026 is allowed.\n",
+            marker: cross_visible_marker,
+        },
+    )
+    .await
+    else {
+        env.drop().await;
+        return;
+    };
+
+    let (status, cross_search) = search(&env, &cross, cross_query, None).await;
+    assert_eq!(status, StatusCode::OK, "{cross_search}");
+    let cross_hits = cross_search["hits"].as_array().expect("cross search hits");
+    assert!(
+        cross_hits
+            .iter()
+            .any(|hit| hit["documentId"] == cross_doc.document_id.to_string()),
+        "cross-tenant control search did not retrieve org-B content"
+    );
+    assert!(
+        cross_hits
+            .iter()
+            .all(|hit| hit["documentId"] != doc.document_id.to_string()
+                && hit["collectionId"] != doc.collection_id.to_string()),
+        "cross-tenant search leaked org-A identifiers: {cross_search}"
+    );
+    assert_value_lacks(&cross_search, marker);
+
+    let (status, cross_ask) = ask(&env, &cross, cross_query, None).await;
+    assert_eq!(status, StatusCode::OK, "{cross_ask}");
+    let cross_citations = cross_ask["citations"]
+        .as_array()
+        .expect("cross ask citations");
+    assert!(
+        cross_citations
+            .iter()
+            .any(|citation| citation["documentId"] == cross_doc.document_id.to_string()),
+        "cross-tenant control ask did not cite org-B content"
+    );
+    assert!(
+        cross_citations.iter().all(|citation| citation["documentId"]
+            != doc.document_id.to_string()
+            && citation["collectionId"] != doc.collection_id.to_string()),
+        "cross-tenant ask leaked org-A identifiers: {cross_ask}"
+    );
+    assert_value_lacks(&cross_ask, marker);
 
     let (status, no_acl_search) = search(&env, &no_acl, marker, Some(doc.collection_id)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{no_acl_search}");
@@ -189,6 +248,19 @@ async fn live_lifecycle_delete_purge_and_revocation() {
     };
     assert_grounded_http_roundtrip(&env, &viewer, &doc).await;
     let pin = citation_pin_from(&first_citation(&env, &owner, &doc).await, marker);
+    let stale_download_path = mint_download_path(&env, &owner, &doc).await;
+    let proof_download_path = mint_download_path(&env, &owner, &doc).await;
+    let proof_downloaded = send_request(
+        env.app.clone(),
+        "GET",
+        &proof_download_path,
+        Body::empty(),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(proof_downloaded.status, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&proof_downloaded.bytes).contains(marker));
 
     let (status, deleted) = json_request(
         env.app.clone(),
@@ -200,6 +272,7 @@ async fn live_lifecycle_delete_purge_and_revocation() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{deleted}");
     assert_eq!(deleted["document"]["state"], "tombstoned");
+    assert_deleted_egress_denied(&env, &owner, &doc, &pin, "after tombstone before purge").await;
 
     let ctx = seeded.worker_ctx();
     relay_outbox(&env, &ctx).await;
@@ -212,40 +285,15 @@ async fn live_lifecycle_delete_purge_and_revocation() {
         qdrant_points_for_doc(&env, &ctx, doc.collection_id, doc.document_id).await,
         0
     );
-
-    let (status, search_after) = search(&env, &owner, marker, Some(doc.collection_id)).await;
-    assert_eq!(status, StatusCode::OK, "{search_after}");
-    assert!(search_after["hits"].as_array().unwrap().is_empty());
-    assert_value_lacks(&search_after, marker);
-    let (status, ask_after) = ask(&env, &owner, marker, Some(doc.collection_id)).await;
-    assert_eq!(status, StatusCode::OK, "{ask_after}");
-    assert_value_lacks(&ask_after, marker);
-    assert!(ask_after["citations"].as_array().unwrap().is_empty());
+    assert_deleted_egress_denied(&env, &owner, &doc, &pin, "after purge").await;
     assert_not_found_raw(
         send_request(
             env.app.clone(),
             "GET",
-            &format!(
-                "/api/v1/documents/{}/versions/{}/preview",
-                doc.document_id, doc.version_id
-            ),
+            &stale_download_path,
             Body::empty(),
-            Some(&owner),
             None,
-        )
-        .await,
-        marker,
-    );
-    assert_not_found_json(
-        json_request(
-            env.app.clone(),
-            "POST",
-            &format!(
-                "/api/v1/documents/{}/versions/{}/citations:resolve",
-                doc.document_id, doc.version_id
-            ),
-            Some(pin),
-            &owner,
+            None,
         )
         .await,
         marker,
@@ -308,6 +356,14 @@ async fn live_adversarial_malicious_input_rejected_or_contained() {
     )
     .await;
     assert_eq!(too_many_parts.status, StatusCode::BAD_REQUEST);
+    let too_many_body: Value =
+        serde_json::from_slice(&too_many_parts.bytes).expect("structured multipart error");
+    assert_eq!(too_many_body["code"], "multipart_invalid");
+    assert_eq!(too_many_body["details"]["threatClass"], "multipart_invalid");
+    assert_eq!(
+        too_many_body["details"]["reasonCode"],
+        "multipart_too_many_parts"
+    );
     assert_body_lacks(&too_many_parts.bytes, "E2E-MALICIOUS");
 
     let (status, spoofed) = upload(
@@ -501,10 +557,7 @@ async fn live_fault_injection_worker_kill_retry_consistency() {
     assert_grounded_http_roundtrip(&env, &owner, &doc).await;
     let chunks = chunk_count(&env, &ctx, document_id).await;
     assert!(chunks > 0);
-    assert_eq!(
-        qdrant_points_for_doc(&env, &ctx, seeded.collection_id, document_id).await as i64,
-        chunks
-    );
+    assert_chunk_point_identity(&env, &ctx, seeded.collection_id, document_id).await;
 
     env.drop().await;
 }
@@ -634,6 +687,93 @@ async fn ask(
         body["collectionIds"] = json!([collection_id]);
     }
     json_request(env.app.clone(), "POST", "/api/v1/ask", Some(body), token).await
+}
+
+async fn mint_download_path(env: &LiveEnv, token: &str, doc: &IngestedDoc) -> String {
+    let (status, capability) = json_request(
+        env.app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/download",
+            doc.document_id, doc.version_id
+        ),
+        None,
+        token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{capability}");
+    capability["downloadPath"]
+        .as_str()
+        .expect("download path")
+        .to_string()
+}
+
+async fn assert_deleted_egress_denied(
+    env: &LiveEnv,
+    token: &str,
+    doc: &IngestedDoc,
+    pin: &Value,
+    phase: &str,
+) {
+    let (status, search_after) = search(env, token, &doc.marker, Some(doc.collection_id)).await;
+    assert_eq!(status, StatusCode::OK, "{phase}: {search_after}");
+    assert!(
+        search_after["hits"].as_array().unwrap().is_empty(),
+        "{phase}: search still returned deleted document"
+    );
+    assert_value_lacks(&search_after, &doc.marker);
+
+    let (status, ask_after) = ask(env, token, &doc.marker, Some(doc.collection_id)).await;
+    assert_eq!(status, StatusCode::OK, "{phase}: {ask_after}");
+    assert_value_lacks(&ask_after, &doc.marker);
+    assert!(
+        ask_after["citations"].as_array().unwrap().is_empty(),
+        "{phase}: ask still cited deleted document"
+    );
+
+    assert_not_found_raw(
+        send_request(
+            env.app.clone(),
+            "GET",
+            &format!(
+                "/api/v1/documents/{}/versions/{}/preview",
+                doc.document_id, doc.version_id
+            ),
+            Body::empty(),
+            Some(token),
+            None,
+        )
+        .await,
+        &doc.marker,
+    );
+    assert_not_found_json(
+        json_request(
+            env.app.clone(),
+            "POST",
+            &format!(
+                "/api/v1/documents/{}/versions/{}/citations:resolve",
+                doc.document_id, doc.version_id
+            ),
+            Some(pin.clone()),
+            token,
+        )
+        .await,
+        &doc.marker,
+    );
+    assert_not_found_json(
+        json_request(
+            env.app.clone(),
+            "POST",
+            &format!(
+                "/api/v1/documents/{}/versions/{}/download",
+                doc.document_id, doc.version_id
+            ),
+            None,
+            token,
+        )
+        .await,
+        &doc.marker,
+    );
 }
 
 fn assert_not_found_json((status, body): (StatusCode, Value), marker: &str) {

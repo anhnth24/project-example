@@ -1240,6 +1240,13 @@ mod tests {
         ));
 
         metadata.insert("version-id".into(), source_version_id.to_string());
+        metadata.insert("document-id".into(), Uuid::new_v4().to_string());
+        assert!(matches!(
+            ConvertWorker::verify_quarantine_metadata(&source, &metadata),
+            Err(ConvertWorkerError::InvalidQuarantineMetadata)
+        ));
+
+        metadata.insert("document-id".into(), document_id.to_string());
         metadata.insert("content-sha256".into(), "b".repeat(64));
         assert!(matches!(
             ConvertWorker::verify_quarantine_metadata(&source, &metadata),

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +26,9 @@ use fileconv_server::services::index_signature::collection_name_for_digest;
 use fileconv_server::services::indexing::OutboxJobSink;
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::minio::MinioClient;
-use fileconv_server::storage::qdrant::{QdrantClient, VectorScope};
+use fileconv_server::storage::qdrant::{
+    point_id_from_org_collection_and_chunk, QdrantClient, VectorScope,
+};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
 use fileconv_server::workers::delete::{DeleteWorker, DeleteWorkerConfig, DeleteWorkerRun};
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
@@ -297,6 +300,16 @@ impl SeededOrg {
             [self.collection_id, self.other_collection_id],
         )
         .expect("worker context")
+    }
+
+    pub fn cross_worker_ctx(&self) -> OrgContext {
+        OrgContext::try_new(
+            self.other_org_id,
+            self.other_user_id,
+            ["doc.upload", "doc.delete", "doc.publish", "qa.query"],
+            [self.cross_collection_id],
+        )
+        .expect("cross worker context")
     }
 }
 
@@ -737,30 +750,40 @@ pub async fn ingest_document(
     token: &str,
     case: FixtureCase,
 ) -> Option<IngestedDoc> {
+    let ctx = seeded.worker_ctx();
+    ingest_document_in_collection(env, token, seeded.collection_id, &ctx, case).await
+}
+
+pub async fn ingest_document_in_collection(
+    env: &LiveEnv,
+    token: &str,
+    collection_id: Uuid,
+    ctx: &OrgContext,
+    case: FixtureCase,
+) -> Option<IngestedDoc> {
     let (status, uploaded) = upload(env, token, case.filename, case.content_type, case.bytes).await;
     assert_eq!(status, StatusCode::CREATED, "{uploaded}");
     assert_eq!(uploaded["disposition"], "accepted");
     let object_key = uploaded["objectKey"].as_str().expect("object key");
     let (document_id, source_version_id, convert_job_id) =
-        create_document(env, token, seeded.collection_id, case.title, object_key).await;
-    let ctx = seeded.worker_ctx();
-    let convert = run_convert_once(env, &ctx).await?;
+        create_document(env, token, collection_id, case.title, object_key).await;
+    let convert = run_convert_once(env, ctx).await?;
     if !matches!(
         convert,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
     ) {
-        let (status, last_error) = job_status_and_error(env, &ctx, convert_job_id).await;
+        let (status, last_error) = job_status_and_error(env, ctx, convert_job_id).await;
         panic!(
             "unexpected convert outcome for {}: {convert:?}; job_status={status}; last_error={last_error:?}",
             case.name
         );
     }
-    relay_outbox(env, &ctx).await;
-    let index = run_index_once(env, &ctx)
+    relay_outbox(env, ctx).await;
+    let index = run_index_once(env, ctx)
         .await
         .expect("index worker available");
     assert!(matches!(index, IndexWorkerRun::Completed { chunks, .. } if chunks > 0));
-    let current_version_id = current_version(env, &ctx, document_id)
+    let current_version_id = current_version(env, ctx, document_id)
         .await
         .expect("current version");
     assert_ne!(current_version_id, source_version_id);
@@ -768,7 +791,7 @@ pub async fn ingest_document(
         document_id,
         version_id: current_version_id,
         convert_job_id,
-        collection_id: seeded.collection_id,
+        collection_id,
         marker: case.marker.to_string(),
         title: case.title.to_string(),
     })
@@ -1105,6 +1128,121 @@ pub async fn qdrant_points_for_doc(
         .await
         .expect("scroll points")
         .len()
+}
+
+pub async fn assert_chunk_point_identity(
+    env: &LiveEnv,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    document_id: Uuid,
+) {
+    let chunk_identities: Vec<String> = with_org_txn(&env.pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT chunk_identity_sha256
+                         FROM chunks
+                         WHERE org_id = $1 AND document_id = $2
+                         ORDER BY ordinal, id",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(rows.into_iter().map(|row| row.get(0)).collect())
+            })
+        }
+    })
+    .await
+    .expect("chunk identities");
+    assert!(
+        !chunk_identities.is_empty(),
+        "document must have at least one PG chunk"
+    );
+
+    let mut unique_chunks = HashSet::with_capacity(chunk_identities.len());
+    for identity in &chunk_identities {
+        assert!(
+            unique_chunks.insert(identity.clone()),
+            "duplicated PG logical chunk identity {identity}"
+        );
+    }
+
+    let expected_by_identity: HashMap<String, Uuid> = chunk_identities
+        .iter()
+        .map(|identity| {
+            (
+                identity.clone(),
+                point_id_from_org_collection_and_chunk(ctx.org_id(), collection_id, identity)
+                    .expect("deterministic point id"),
+            )
+        })
+        .collect();
+    let expected_ids = expected_by_identity.values().copied().collect::<Vec<_>>();
+    let signature = active_signature(env, ctx, collection_id).await;
+    let collection = collection_name_for_digest(&signature).expect("collection name");
+    let scope = VectorScope::new(ctx.org_id(), [collection_id]);
+
+    let fetched = env
+        .qdrant
+        .get_points(&collection, &scope, &expected_ids)
+        .await
+        .expect("fetch expected qdrant points");
+    assert_eq!(
+        fetched.len(),
+        expected_ids.len(),
+        "missing Qdrant point for at least one PG chunk"
+    );
+    let fetched_by_id = fetched.iter().cloned().collect::<HashMap<_, _>>();
+    for (identity, expected_id) in &expected_by_identity {
+        let payload = fetched_by_id
+            .get(expected_id)
+            .unwrap_or_else(|| panic!("missing Qdrant point for chunk {identity}"));
+        assert_eq!(
+            payload.chunk_id, *identity,
+            "Qdrant point payload chunk identity diverged from PG"
+        );
+        assert_eq!(payload.document_id, document_id);
+        assert_eq!(payload.collection_id, collection_id);
+        assert_eq!(payload.org_id, ctx.org_id());
+    }
+
+    let scrolled = env
+        .qdrant
+        .scroll_points(
+            &collection,
+            &scope,
+            &[json!({
+                "key": "document_id",
+                "match": { "value": document_id.to_string() }
+            })],
+            1000,
+        )
+        .await
+        .expect("scroll document qdrant points");
+    assert_eq!(
+        scrolled.len(),
+        expected_ids.len(),
+        "document has orphan or duplicate Qdrant points"
+    );
+    let expected_id_set = expected_ids.iter().copied().collect::<HashSet<_>>();
+    let mut seen_payload_chunks = HashSet::with_capacity(scrolled.len());
+    for (point_id, payload) in scrolled {
+        assert!(
+            expected_id_set.contains(&point_id),
+            "orphan Qdrant point {point_id} has no matching PG chunk"
+        );
+        assert!(
+            seen_payload_chunks.insert(payload.chunk_id.clone()),
+            "duplicated Qdrant logical chunk identity {}",
+            payload.chunk_id
+        );
+        assert!(
+            unique_chunks.contains(&payload.chunk_id),
+            "Qdrant payload chunk {} has no matching PG chunk",
+            payload.chunk_id
+        );
+    }
 }
 
 pub async fn revoke_collection_access(env: &LiveEnv, seeded: &SeededOrg, user_id: Uuid) {
