@@ -25,9 +25,9 @@ describe('App', () => {
     render(<App />);
 
     expect(
-      screen.getByRole('heading', { name: 'Your workspace is ready to connect.' }),
+      screen.getByRole('heading', { name: 'Không gian làm việc đã sẵn sàng để kết nối.' }),
     ).toBeVisible();
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Server connected'));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Đã kết nối máy chủ'));
     expect(screen.getByText('5b435d32-20a3-47c0-a615-aa0b9c5bcd28')).toBeVisible();
     expect(fetch).toHaveBeenCalledWith(
       '/api/v1/health/ready',
@@ -40,7 +40,9 @@ describe('App', () => {
 
     render(<App />);
 
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Server unavailable'));
-    expect(screen.getByRole('button', { name: 'Check connection' })).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Máy chủ chưa sẵn sàng'),
+    );
+    expect(screen.getByRole('button', { name: 'Kiểm tra kết nối' })).toBeVisible();
   });
 });

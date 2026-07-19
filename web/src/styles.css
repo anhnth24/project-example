@@ -38,9 +38,14 @@ button:hover {
   background: #17482f;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 button:focus-visible,
 a:focus-visible {
-  outline: 3px solid #e68f31;
+  outline: 3px solid #8b4a16;
   outline-offset: 3px;
 }
 
@@ -110,7 +115,7 @@ a:focus-visible {
 
 .eyebrow,
 .card-label {
-  color: #a66328;
+  color: #8b4a16;
   font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.09em;
@@ -225,10 +230,4 @@ code {
     opacity: 1;
     transform: translateY(0);
   }
-}
-
-p {
-  color: #f97316;
-  font-weight: 700;
-  text-transform: uppercase;
 }
