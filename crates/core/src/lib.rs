@@ -33,6 +33,15 @@ pub use probe::{probe, FileInfo};
 
 use audio::AudioEngine;
 
+/// Normalize text to Unicode NFC using the converter's canonical Vietnamese text policy.
+pub fn normalize_nfc_text(text: &str) -> String {
+    use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
+    match is_nfc_quick(text.chars()) {
+        IsNormalized::Yes => text.to_string(),
+        _ => text.nfc().collect(),
+    }
+}
+
 /// Loại định dạng nhận diện được.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormatKind {
