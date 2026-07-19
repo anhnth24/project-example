@@ -4,8 +4,7 @@ import { fetchReadiness, type ConnectionState } from './api/health';
 export function App() {
   const [connection, setConnection] = useState<ConnectionState>({ kind: 'checking' });
 
-  const checkConnection = useCallback(async (signal?: AbortSignal) => {
-    setConnection({ kind: 'checking' });
+  const loadConnection = useCallback(async (signal?: AbortSignal) => {
     try {
       const health = await fetchReadiness(signal ?? new AbortController().signal);
       setConnection({ kind: 'ready', requestId: health.requestId });
@@ -18,9 +17,14 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void checkConnection(controller.signal);
+    void loadConnection(controller.signal);
     return () => controller.abort();
-  }, [checkConnection]);
+  }, [loadConnection]);
+
+  const checkConnection = () => {
+    setConnection({ kind: 'checking' });
+    void loadConnection();
+  };
 
   const isReady = connection.kind === 'ready';
 
@@ -61,7 +65,7 @@ export function App() {
                 : 'Start the Markhand server, then check the connection again.'}
             </p>
           </div>
-          <button type="button" onClick={() => void checkConnection()}>
+          <button type="button" onClick={checkConnection}>
             {connection.kind === 'checking' ? 'Checking…' : 'Check connection'}
           </button>
           {isReady && (
