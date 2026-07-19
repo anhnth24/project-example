@@ -16,6 +16,7 @@ pub struct MarkdownStageInput {
     pub collection_id: Option<Uuid>,
     pub document_id: Uuid,
     pub promoted_version_id: Uuid,
+    pub staging_key: ObjectKey,
     pub markdown: Vec<u8>,
     pub markdown_sha256: String,
     pub markdown_len: u64,
@@ -43,7 +44,6 @@ pub enum ArtifactStageError {
 pub async fn stage_markdown(
     storage: &MinioClient,
     ctx: &OrgContext,
-    identity: &ConversionIdentity,
     input: MarkdownStageInput,
 ) -> Result<StagedMarkdown, ArtifactStageError> {
     let expected_len =
@@ -56,7 +56,10 @@ pub async fn stage_markdown(
         return Err(ArtifactStageError::InvalidHash);
     }
 
-    let key = markdown_key(identity, input.promoted_version_id)?;
+    let key = input.staging_key;
+    if !key.belongs_to_org(ctx.org_id()) || !key.belongs_to_version(input.promoted_version_id) {
+        return Err(ArtifactStageError::Storage(StorageError::KeyOrgMismatch));
+    }
     if storage.object_exists(ctx.org_id(), &key).await? {
         let metadata = storage.head_metadata(ctx.org_id(), &key).await?;
         if metadata.get("content-sha256").map(String::as_str)
@@ -111,11 +114,13 @@ pub async fn stage_markdown(
 pub fn markdown_key(
     identity: &ConversionIdentity,
     promoted_version_id: Uuid,
+    job_id: Uuid,
+    attempts: i32,
 ) -> Result<ObjectKey, StorageError> {
     trusted_key(
         identity.org_id,
         promoted_version_id,
-        identity.markdown_artifact_id(),
+        identity.staged_markdown_object_id(job_id, attempts),
         None,
     )
 }

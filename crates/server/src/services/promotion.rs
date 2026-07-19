@@ -45,6 +45,7 @@ pub struct PromoteConversionOutcome {
     pub job: Job,
     pub version: DocumentVersion,
     pub artifact_created: bool,
+    pub committed_object_key: String,
 }
 
 #[derive(Debug, Error)]
@@ -153,6 +154,9 @@ pub async fn promote_conversion(
                 )
                 .await?;
                 ensure_artifact_matches(&artifact, &input)?;
+                if version.markdown_object_key.as_deref() != Some(artifact.object_key.as_str()) {
+                    return Err(PromotionError::IdempotencyConflict);
+                }
 
                 if created || version.is_current {
                     document_versions::promote_current_if_needed(
@@ -231,6 +235,7 @@ pub async fn promote_conversion(
                     job: completed,
                     version,
                     artifact_created: artifact.created,
+                    committed_object_key: artifact.object_key,
                 })
             })
         }
@@ -262,6 +267,32 @@ pub async fn promoted_version(
     .await
 }
 
+pub async fn committed_markdown_object_key(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    identity: &ConversionIdentity,
+) -> Result<Option<String>, PromotionError> {
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let identity = identity.clone();
+        move |txn| {
+            Box::pin(async move {
+                let version_id = identity.promoted_version_id();
+                let Some(artifact) =
+                    document_versions::find_markdown_artifact(txn, &ctx, version_id).await?
+                else {
+                    return Ok(None);
+                };
+                if artifact.id != identity.markdown_artifact_id() {
+                    return Err(PromotionError::IdempotencyConflict);
+                }
+                Ok(Some(artifact.object_key))
+            })
+        }
+    })
+    .await
+}
+
 fn ensure_existing_version_matches(
     version: &DocumentVersion,
     input: &PromoteConversionInput,
@@ -269,7 +300,7 @@ fn ensure_existing_version_matches(
     if version.document_id != input.source.document_id
         || version.parent_version_id != Some(input.source.source_version_id)
         || version.content_sha256 != input.markdown_sha256
-        || version.markdown_object_key.as_deref() != Some(input.staged_object_key.as_str())
+        || version.markdown_object_key.is_none()
     {
         return Err(PromotionError::IdempotencyConflict);
     }
@@ -280,7 +311,7 @@ fn ensure_artifact_matches(
     artifact: &document_versions::ArtifactInsertOutcome,
     input: &PromoteConversionInput,
 ) -> Result<(), PromotionError> {
-    if artifact.object_key != input.staged_object_key
+    if artifact.id != input.artifact_id
         || artifact.content_sha256 != input.markdown_sha256
         || artifact.byte_size != Some(input.markdown_byte_size)
     {

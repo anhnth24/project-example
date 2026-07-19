@@ -836,6 +836,7 @@ fn validate_checkpoint_payload(value: &JsonValue) -> Result<(), DbError> {
                             ));
                         }
                     }
+                    "staged_object_keys" => validate_checkpoint_object_keys(nested)?,
                     _ => validate_id_only_value(nested)?,
                 }
             }
@@ -845,6 +846,37 @@ fn validate_checkpoint_payload(value: &JsonValue) -> Result<(), DbError> {
             "checkpoint payload must be an object".into(),
         )),
     }
+}
+
+fn validate_checkpoint_object_keys(value: &JsonValue) -> Result<(), DbError> {
+    let JsonValue::Array(values) = value else {
+        return Err(DbError::Config(
+            "checkpoint staged_object_keys must be an array".into(),
+        ));
+    };
+    for value in values {
+        let JsonValue::String(key) = value else {
+            return Err(DbError::Config(
+                "checkpoint staged_object_keys entries must be strings".into(),
+            ));
+        };
+        if key.is_empty()
+            || key.len() > 256
+            || !key.starts_with("trusted/")
+            || key.starts_with('/')
+            || key.contains('\\')
+            || key.contains('\0')
+            || key.chars().any(char::is_control)
+            || key
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".." || part.contains(".."))
+        {
+            return Err(DbError::Config(
+                "checkpoint staged_object_keys entry is invalid".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
