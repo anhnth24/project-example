@@ -889,8 +889,8 @@ impl ConvertWorker {
             eprintln!(
                 "fileconv-server: injected conversion quota refund failure; reservation_key={quota_reservation_key}"
             );
-            // TODO(I07): durable dead-letter GC/reconciliation should consume the
-            // checkpointed staging keys and quota marker if retries are exhausted.
+            // I07 reconciliation consumes checkpointed staging keys after dead-letter;
+            // quota markers remain bounded by the I02 expiry sweep.
             deferred = true;
         } else if let Err(error) = quota::refund(&self.db_pool, ctx, quota_reservation_key).await {
             eprintln!(
@@ -900,8 +900,8 @@ impl ConvertWorker {
             );
             // I02 quota reservations are bounded by expires_at; the sweep path is
             // the durable backstop if inline refund cannot settle this attempt.
-            // TODO(I07): emit/consume a durable conversion-cleanup marker for
-            // permanently dead-lettered conversion attempts.
+            // Future cleanup markers can make quota refunds explicit for permanently
+            // dead-lettered conversion attempts; I02 expiry is the current backstop.
             deferred = true;
         }
         if deferred {

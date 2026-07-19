@@ -1,0 +1,514 @@
+//! Tombstone request and purge orchestration.
+
+use std::collections::BTreeSet;
+use std::time::Duration;
+
+use deadpool_postgres::Pool;
+use serde_json::{json, Value as JsonValue};
+use thiserror::Error;
+use tokio::time::Instant as TokioInstant;
+use uuid::Uuid;
+
+use crate::auth::context::OrgContext;
+use crate::auth::session::{write_audit, AuditEvent};
+use crate::db::error::DbError;
+use crate::db::models::{Document, DocumentState, Job, JobStatus};
+use crate::db::pool::with_org_txn_typed;
+use crate::db::{chunks, document_versions, documents, index_metadata, jobs as repo};
+use crate::jobs::{
+    self, CheckpointPayload, EventPayload, HeartbeatClaim, HeartbeatError, JobError,
+};
+use crate::services::document_state;
+use crate::services::index_signature::collection_name_for_digest;
+use crate::storage::keys::parse_key_for_org;
+use crate::storage::minio::MinioClient;
+use crate::storage::qdrant::{QdrantClient, VectorScope};
+use crate::storage::StorageError;
+
+const PURGE_STEP_QDRANT: u64 = 1;
+const PURGE_STEP_MINIO: u64 = 2;
+const PURGE_STEP_CHUNKS: u64 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeleteRequestOutcome {
+    Requested(Document),
+    AlreadyRequested(Document),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PurgeDocumentInput<'a> {
+    pub job: &'a Job,
+    pub lease_token: &'a str,
+    pub attempts: i32,
+    pub lease_ttl: Duration,
+    pub heartbeat_interval: Duration,
+    pub deadline: TokioInstant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PurgeDocumentOutcome {
+    Purged { job_id: Uuid, deleted_chunks: u64 },
+    AlreadyPurged { job_id: Uuid },
+}
+
+struct PurgePlan {
+    document: Document,
+    signatures: Vec<String>,
+    object_keys: Vec<String>,
+}
+
+pub async fn request_delete(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<DeleteRequestOutcome, DeletionError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                match document.state {
+                    DocumentState::Tombstoned | DocumentState::Purged => {
+                        Ok(DeleteRequestOutcome::AlreadyRequested(document))
+                    }
+                    DocumentState::Indexed => {
+                        // POC limitation: deletion is currently defined after successful indexing.
+                        // Tombstone holds the document row lock, then best-effort cancels any
+                        // pending/leased writer jobs. The chunk-persist path also locks this row
+                        // before writing, so a racing writer serializes behind the tombstone and
+                        // completes without resurrecting chunks.
+                        let cancelled_writers =
+                            repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
+                        document_state::apply_transition(
+                            txn,
+                            &ctx,
+                            document_id,
+                            DocumentState::Indexed,
+                            DocumentState::Tombstoned,
+                        )
+                        .await?;
+                        let tombstoned = documents::mark_deleted_at(txn, &ctx, document_id).await?;
+                        let payload = validated_event_payload(EventPayload {
+                            job_id: None,
+                            document_id: Some(document_id),
+                            version_id: tombstoned.current_version_id,
+                            outbox_event_id: None,
+                        })?;
+                        repo::insert_outbox_event(
+                            txn,
+                            &ctx,
+                            repo::NewOutboxEvent {
+                                event_type: "document.delete_requested",
+                                payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
+                                payload: &payload,
+                                idempotency_key: &format!(
+                                    "document.delete_requested.{document_id}"
+                                ),
+                                job_id: None,
+                            },
+                        )
+                        .await?;
+                        let resource_id = document_id.to_string();
+                        let request_id = format!("delete-{document_id}");
+                        write_audit(
+                            txn,
+                            AuditEvent {
+                                org_id: ctx.org_id(),
+                                actor_user_id: Some(ctx.user_id()),
+                                action: "document.tombstone",
+                                resource_type: "document",
+                                resource_id: Some(&resource_id),
+                                outcome: "success",
+                                request_id: &request_id,
+                                metadata: json!({
+                                    "document_id": document_id,
+                                    "version_id": tombstoned.current_version_id,
+                                    "cancelled_writer_jobs": cancelled_writers,
+                                }),
+                            },
+                        )
+                        .await?;
+                        Ok(DeleteRequestOutcome::Requested(tombstoned))
+                    }
+                    other => Err(DeletionError::UnexpectedState(other)),
+                }
+            })
+        }
+    })
+    .await
+}
+
+pub async fn purge_document(
+    pool: &Pool,
+    storage: &MinioClient,
+    qdrant: &QdrantClient,
+    ctx: &OrgContext,
+    input: PurgeDocumentInput<'_>,
+) -> Result<PurgeDocumentOutcome, DeletionError> {
+    let payload = jobs::decode_job_payload(input.job.payload_version, input.job.payload.clone())?;
+    let document_id = payload.document_id.ok_or(DeletionError::InvalidPayload)?;
+    let plan = load_purge_plan(pool, ctx, document_id).await?;
+    if plan.document.state == DocumentState::Purged {
+        let completed =
+            jobs::complete(pool, ctx, input.job.id, input.lease_token, input.attempts).await?;
+        return Ok(PurgeDocumentOutcome::AlreadyPurged {
+            job_id: completed.id,
+        });
+    }
+    if plan.document.state != DocumentState::Tombstoned {
+        return Err(DeletionError::UnexpectedState(plan.document.state));
+    }
+
+    let mut offset = checkpoint_offset(input.job)?;
+    if offset > PURGE_STEP_CHUNKS {
+        return Err(DeletionError::InvalidCheckpoint);
+    }
+    if offset < PURGE_STEP_QDRANT {
+        check_deadline(input.deadline)?;
+        heartbeat_while(
+            pool,
+            ctx,
+            input,
+            delete_qdrant_points(qdrant, ctx, &plan, document_id),
+        )
+        .await?;
+        save_checkpoint(pool, ctx, input, PURGE_STEP_QDRANT).await?;
+        offset = PURGE_STEP_QDRANT;
+    }
+    if offset < PURGE_STEP_MINIO {
+        check_deadline(input.deadline)?;
+        heartbeat_while(
+            pool,
+            ctx,
+            input,
+            delete_minio_objects(storage, ctx, &plan.object_keys),
+        )
+        .await?;
+        save_checkpoint(pool, ctx, input, PURGE_STEP_MINIO).await?;
+        offset = PURGE_STEP_MINIO;
+    }
+    let deleted_chunks = if offset < PURGE_STEP_CHUNKS {
+        check_deadline(input.deadline)?;
+        let deleted =
+            heartbeat_while(pool, ctx, input, delete_chunks(pool, ctx, document_id)).await?;
+        save_checkpoint(pool, ctx, input, PURGE_STEP_CHUNKS).await?;
+        deleted
+    } else {
+        0
+    };
+
+    check_deadline(input.deadline)?;
+    heartbeat_while(
+        pool,
+        ctx,
+        input,
+        delete_qdrant_points(qdrant, ctx, &plan, document_id),
+    )
+    .await?;
+    let completed = finalize_purged(pool, ctx, input, document_id, deleted_chunks).await?;
+    Ok(PurgeDocumentOutcome::Purged {
+        job_id: completed.id,
+        deleted_chunks,
+    })
+}
+
+async fn load_purge_plan(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<PurgePlan, DeletionError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let document = documents::get_by_id(txn, &ctx, document_id).await?;
+                let mut signatures = BTreeSet::new();
+                for signature in
+                    chunks::distinct_index_signatures_by_document(txn, &ctx, document_id).await?
+                {
+                    signatures.insert(signature);
+                }
+                for signature in
+                    index_metadata::list_signatures_by_collection(txn, &ctx, document.collection_id)
+                        .await?
+                {
+                    signatures.insert(signature);
+                }
+                let object_keys =
+                    document_versions::list_object_keys_by_document(txn, &ctx, document_id).await?;
+                Ok(PurgePlan {
+                    document,
+                    signatures: signatures.into_iter().collect(),
+                    object_keys,
+                })
+            })
+        }
+    })
+    .await
+}
+
+async fn delete_qdrant_points(
+    qdrant: &QdrantClient,
+    ctx: &OrgContext,
+    plan: &PurgePlan,
+    document_id: Uuid,
+) -> Result<(), DeletionError> {
+    let scope = VectorScope::new(ctx.org_id(), [plan.document.collection_id]);
+    let filter = [json!({
+        "key": "document_id",
+        "match": { "value": document_id.to_string() }
+    })];
+    for digest in &plan.signatures {
+        let collection = collection_name_for_digest(digest)?;
+        qdrant.delete_by_scope(&collection, &scope, &filter).await?;
+    }
+    Ok(())
+}
+
+async fn delete_minio_objects(
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    object_keys: &[String],
+) -> Result<(), DeletionError> {
+    for raw_key in object_keys {
+        let key = parse_key_for_org(raw_key, ctx.org_id())?;
+        match storage.delete_object(ctx.org_id(), &key).await {
+            Ok(()) | Err(StorageError::NotFound) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+async fn delete_chunks(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<u64, DeletionError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move { Ok(chunks::delete_by_document(txn, &ctx, document_id).await?) })
+        }
+    })
+    .await
+}
+
+async fn finalize_purged(
+    pool: &Pool,
+    ctx: &OrgContext,
+    input: PurgeDocumentInput<'_>,
+    document_id: Uuid,
+    deleted_chunks: u64,
+) -> Result<Job, DeletionError> {
+    let lease_token = input.lease_token.to_string();
+    let job_id = input.job.id;
+    let attempts = input.attempts;
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
+                document_state::apply_transition(
+                    txn,
+                    &ctx,
+                    document_id,
+                    DocumentState::Tombstoned,
+                    DocumentState::Purged,
+                )
+                .await?;
+                let completed = repo::complete_owned(txn, &ctx, job_id, &lease_token, attempts)
+                    .await?
+                    .ok_or(DeletionError::Job(JobError::LeaseLost))?;
+                write_job_succeeded_event(txn, &ctx, &completed).await?;
+                let resource_id = document_id.to_string();
+                let request_id = format!("purge-{job_id}");
+                write_audit(
+                    txn,
+                    AuditEvent {
+                        org_id: ctx.org_id(),
+                        actor_user_id: Some(ctx.user_id()),
+                        action: "document.purge",
+                        resource_type: "document",
+                        resource_id: Some(&resource_id),
+                        outcome: "success",
+                        request_id: &request_id,
+                        metadata: json!({
+                            "document_id": document_id,
+                            "job_id": job_id,
+                            "deleted_chunks": deleted_chunks,
+                        }),
+                    },
+                )
+                .await?;
+                Ok(completed)
+            })
+        }
+    })
+    .await
+}
+
+async fn verify_claimed_job(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    attempts: i32,
+) -> Result<Job, DeletionError> {
+    repo::get_by_id_for_update(txn, ctx, job_id)
+        .await?
+        .filter(|job| {
+            job.status == JobStatus::Leased
+                && job.lease_owner.as_deref() == Some(lease_token)
+                && job.attempts == attempts
+        })
+        .ok_or(DeletionError::Job(JobError::LeaseLost))
+}
+
+async fn write_job_succeeded_event(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job: &Job,
+) -> Result<(), DeletionError> {
+    let payload = validated_event_payload(EventPayload {
+        job_id: Some(job.id),
+        document_id: job.document_id,
+        version_id: job.version_id,
+        outbox_event_id: None,
+    })?;
+    repo::append_event_and_outbox(
+        txn,
+        ctx,
+        repo::NewEventLogEntry {
+            event_type: "job.succeeded",
+            payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
+            payload: &payload,
+            job_id: Some(job.id),
+            document_id: job.document_id,
+            version_id: job.version_id,
+        },
+        &format!("job.succeeded:{}:{}", job.id, job.attempts),
+    )
+    .await?;
+    Ok(())
+}
+
+fn validated_event_payload(
+    payload: EventPayload,
+) -> Result<repo::ValidatedEventPayload, DeletionError> {
+    let value: JsonValue = payload.to_json().map_err(DeletionError::Job)?;
+    repo::ValidatedEventPayload::new(value)
+        .map_err(|error| DeletionError::Job(JobError::InvalidPayload(error.to_string())))
+}
+
+fn checkpoint_offset(job: &Job) -> Result<u64, DeletionError> {
+    let Some(value) = job.checkpoint.clone() else {
+        return Ok(0);
+    };
+    let checkpoint = serde_json::from_value::<CheckpointPayload>(value)
+        .map_err(|_| DeletionError::InvalidCheckpoint)?;
+    Ok(checkpoint.offset.unwrap_or(0))
+}
+
+async fn save_checkpoint(
+    pool: &Pool,
+    ctx: &OrgContext,
+    input: PurgeDocumentInput<'_>,
+    offset: u64,
+) -> Result<(), DeletionError> {
+    jobs::checkpoint(
+        pool,
+        ctx,
+        input.job.id,
+        input.lease_token,
+        input.attempts,
+        CheckpointPayload {
+            offset: Some(offset),
+            ..CheckpointPayload::default()
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn heartbeat_while<T, Fut>(
+    pool: &Pool,
+    ctx: &OrgContext,
+    input: PurgeDocumentInput<'_>,
+    future: Fut,
+) -> Result<T, DeletionError>
+where
+    Fut: std::future::Future<Output = Result<T, DeletionError>>,
+{
+    jobs::heartbeat_while_claimed(heartbeat_claim(pool, ctx, input), future).await
+}
+
+fn check_deadline(deadline: TokioInstant) -> Result<(), DeletionError> {
+    if TokioInstant::now() >= deadline {
+        Err(DeletionError::JobTimedOut)
+    } else {
+        Ok(())
+    }
+}
+
+fn heartbeat_claim<'a>(
+    pool: &'a Pool,
+    ctx: &'a OrgContext,
+    input: PurgeDocumentInput<'a>,
+) -> HeartbeatClaim<'a> {
+    HeartbeatClaim {
+        db_pool: pool,
+        ctx,
+        job_id: input.job.id,
+        lease_token: input.lease_token,
+        attempts: input.attempts,
+        lease_ttl: input.lease_ttl,
+        heartbeat_interval: input.heartbeat_interval,
+        deadline: input.deadline,
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum DeletionError {
+    #[error("database error")]
+    Db(#[from] DbError),
+    #[error("job error")]
+    Job(#[from] JobError),
+    #[error("storage error")]
+    Storage(#[from] StorageError),
+    #[error("delete payload is missing document_id")]
+    InvalidPayload,
+    #[error("delete checkpoint is invalid")]
+    InvalidCheckpoint,
+    #[error("document is in unexpected state {0:?}")]
+    UnexpectedState(DocumentState),
+    #[error("delete job exceeded configured maximum duration")]
+    JobTimedOut,
+}
+
+impl From<HeartbeatError> for DeletionError {
+    fn from(value: HeartbeatError) -> Self {
+        match value {
+            HeartbeatError::Job(error) => Self::Job(error),
+            HeartbeatError::TimedOut => Self::JobTimedOut,
+        }
+    }
+}
+
+impl DeletionError {
+    pub fn safe_job_error(&self) -> &'static str {
+        match self {
+            Self::Db(_) => "delete database error",
+            Self::Job(_) => "delete job error",
+            Self::Storage(_) => "delete storage error",
+            Self::InvalidPayload => "delete payload invalid",
+            Self::InvalidCheckpoint => "delete checkpoint invalid",
+            Self::UnexpectedState(_) => "delete document state invalid",
+            Self::JobTimedOut => "delete job timed out",
+        }
+    }
+
+    pub fn is_retryable_job_failure(&self) -> bool {
+        !matches!(self, Self::Job(JobError::LeaseLost))
+    }
+}

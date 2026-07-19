@@ -7,10 +7,10 @@ use std::time::Duration;
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::LOCAL_VECTOR_DIMENSIONS;
 use fileconv_knowledge::identity::BODY_TEXT_VERSION;
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::time::{interval_at, sleep_until, timeout, Instant as TokioInstant, MissedTickBehavior};
+use tokio::time::Instant as TokioInstant;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
@@ -21,27 +21,32 @@ use crate::db::models::{
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{chunks, document_versions, documents, index_metadata, jobs as repo};
 use crate::jobs::{
-    self, CheckpointPayload, EnqueueJob, EventPayload, JobError, JobPayload,
-    CURRENT_EVENT_PAYLOAD_VERSION,
+    self, CheckpointPayload, EnqueueJob, EventPayload, HeartbeatClaim, HeartbeatError, JobError,
+    JobPayload, CURRENT_EVENT_PAYLOAD_VERSION,
 };
 use crate::services::chunking::{prepare_chunks, PreparedChunk};
 use crate::services::document_state;
 use crate::services::embedding::{self, EmbeddingError};
+use crate::services::index_signature::CollectionName;
+use crate::services::reconciliation;
 use crate::storage::keys::{authorize_key_for_version, parse_key_for_org};
 use crate::storage::minio::MinioClient;
-use crate::storage::qdrant::{ChunkPointPayload, QdrantClient, UpsertPoint, VectorScope};
+use crate::storage::qdrant::{
+    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, UpsertPoint,
+    VectorScope,
+};
 use crate::storage::{ObjectNamespace, StorageError};
 
 #[derive(Debug, Default)]
-pub struct IndexingOutboxSink;
+pub struct OutboxJobSink;
 
-impl IndexingOutboxSink {
+impl OutboxJobSink {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl jobs::OutboxSink for IndexingOutboxSink {
+impl jobs::OutboxSink for OutboxJobSink {
     fn publish<'a>(
         &'a self,
         txn: &'a tokio_postgres::Transaction<'_>,
@@ -49,28 +54,54 @@ impl jobs::OutboxSink for IndexingOutboxSink {
         event: &'a OutboxEvent,
     ) -> Pin<Box<dyn Future<Output = Result<EventLogEntry, JobError>> + Send + 'a>> {
         Box::pin(async move {
-            if event.event_type == "document.index_requested" {
-                let payload = serde_json::from_value::<EventPayload>(event.payload.clone())
-                    .map_err(|error| {
-                        JobError::InvalidPayload(format!("event decode failed: {error}"))
+            match event.event_type.as_str() {
+                "document.index_requested" => {
+                    let payload = serde_json::from_value::<EventPayload>(event.payload.clone())
+                        .map_err(|error| {
+                            JobError::InvalidPayload(format!("event decode failed: {error}"))
+                        })?;
+                    let document_id = payload.document_id.ok_or_else(|| {
+                        JobError::InvalidPayload("index event missing document_id".into())
                     })?;
-                let document_id = payload.document_id.ok_or_else(|| {
-                    JobError::InvalidPayload("index event missing document_id".into())
-                })?;
-                let version_id = payload.version_id.ok_or_else(|| {
-                    JobError::InvalidPayload("index event missing version_id".into())
-                })?;
-                let job_payload = JobPayload {
-                    document_id: Some(document_id),
-                    version_id: Some(version_id),
-                    ..JobPayload::default()
-                };
-                jobs::enqueue_within_txn(
-                    txn,
-                    ctx,
-                    EnqueueJob::new(JobType::Index, job_payload, format!("index:{version_id}")),
-                )
-                .await?;
+                    let version_id = payload.version_id.ok_or_else(|| {
+                        JobError::InvalidPayload("index event missing version_id".into())
+                    })?;
+                    let job_payload = JobPayload {
+                        document_id: Some(document_id),
+                        version_id: Some(version_id),
+                        ..JobPayload::default()
+                    };
+                    jobs::enqueue_within_txn(
+                        txn,
+                        ctx,
+                        EnqueueJob::new(JobType::Index, job_payload, format!("index:{version_id}")),
+                    )
+                    .await?;
+                }
+                "document.delete_requested" => {
+                    let payload = serde_json::from_value::<EventPayload>(event.payload.clone())
+                        .map_err(|error| {
+                            JobError::InvalidPayload(format!("event decode failed: {error}"))
+                        })?;
+                    let document_id = payload.document_id.ok_or_else(|| {
+                        JobError::InvalidPayload("delete event missing document_id".into())
+                    })?;
+                    let job_payload = JobPayload {
+                        document_id: Some(document_id),
+                        ..JobPayload::default()
+                    };
+                    jobs::enqueue_within_txn(
+                        txn,
+                        ctx,
+                        EnqueueJob::new(
+                            JobType::Delete,
+                            job_payload,
+                            format!("delete:{document_id}"),
+                        ),
+                    )
+                    .await?;
+                }
+                _ => {}
             }
 
             append_outbox_published(txn, ctx, event).await
@@ -116,6 +147,7 @@ pub enum IndexVersionOutcome {
     Finalized { job_id: Uuid, chunks: usize },
     CompleteOnly { chunks: usize },
     AlreadyIndexed,
+    Aborted,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -142,6 +174,12 @@ pub async fn index_version(
     let version_id = payload.version_id.ok_or(IndexingError::InvalidPayload)?;
     let (document, version, artifact) =
         load_index_source(db_pool, ctx, document_id, version_id).await?;
+    if matches!(
+        document.state,
+        DocumentState::Tombstoned | DocumentState::Purged
+    ) {
+        return Ok(IndexVersionOutcome::Aborted);
+    }
     let is_current = document.current_version_id == Some(version_id);
     let is_effective = version.effective_to.is_none();
 
@@ -247,16 +285,24 @@ pub async fn index_version(
                     })
                 })
                 .collect::<Result<Vec<_>, IndexingError>>()?;
-            // TODO(I07): superseded-version point flags need reconciliation when a
-            // newer version changes which version is current/effective.
-            // TODO(I07): retrieval must filter on committed PG version state and
-            // document indexed state, not solely on these Qdrant payload flags.
+            let point_ids = batch
+                .iter()
+                .map(|chunk| {
+                    point_id_from_org_collection_and_chunk(
+                        ctx.org_id(),
+                        document.collection_id,
+                        &chunk.chunk_identity,
+                    )
+                })
+                .collect::<Result<Vec<_>, StorageError>>()?;
+            // Reconciliation repairs stale/orphan vector flags; retrieval should still
+            // filter on committed PG version/document state in a future hardening pass.
             qdrant
                 .upsert_points(collection_name, &scope, &points)
                 .await?;
-            // TODO(I07): Qdrant is durable before the PG chunk/checkpoint commit;
-            // dead-lettered attempts may leave orphan vectors for reconcile/GC.
-            persist_chunk_batch(
+            // Qdrant is durable before the PG chunk/checkpoint commit; I07 reconcile
+            // treats any dead-letter leftovers as PG-authoritative orphan vectors.
+            let persist_result = persist_chunk_batch(
                 db_pool,
                 ctx,
                 PersistBatchInput {
@@ -269,7 +315,35 @@ pub async fn index_version(
                     batch_end,
                 },
             )
-            .await?;
+            .await;
+            if let Err(error) = persist_result {
+                if should_compensate_batch_points(db_pool, ctx, document_id, &error).await {
+                    match compensate_batch_points(
+                        qdrant,
+                        collection_name,
+                        &scope,
+                        document_id,
+                        &point_ids,
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(_) => {
+                            eprintln!("fileconv-server: index vector compensation failed");
+                            enqueue_compensation_reconcile(
+                                db_pool,
+                                ctx,
+                                document_id,
+                                input.job.id,
+                                input.attempts,
+                                offset,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                return Err(error);
+            }
             Ok::<(), IndexingError>(())
         })
         .await?;
@@ -355,6 +429,12 @@ async fn transition_current_to_indexing(
             Box::pin(async move {
                 verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
                 let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                if matches!(
+                    document.state,
+                    DocumentState::Tombstoned | DocumentState::Purged
+                ) {
+                    return Err(IndexingError::DocumentDeleted);
+                }
                 if document.current_version_id != Some(version_id) {
                     return Err(IndexingError::CurrentVersionChanged);
                 }
@@ -391,6 +471,12 @@ pub async fn finalize_indexed(
                 let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
                 if document.current_version_id != Some(version_id) {
                     return Err(IndexingError::CurrentVersionChanged);
+                }
+                if matches!(
+                    document.state,
+                    DocumentState::Tombstoned | DocumentState::Purged
+                ) {
+                    return Err(IndexingError::DocumentDeleted);
                 }
                 document_state::apply_transition(
                     txn,
@@ -522,6 +608,75 @@ async fn embed_batch(batch: &[PreparedChunk]) -> Result<Vec<Vec<f32>>, IndexingE
         .map_err(Into::into)
 }
 
+async fn should_compensate_batch_points(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    error: &IndexingError,
+) -> bool {
+    match error {
+        IndexingError::DocumentDeleted => true,
+        IndexingError::Job(JobError::LeaseLost) => document_is_deleted(db_pool, ctx, document_id)
+            .await
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+pub async fn enqueue_compensation_reconcile(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    job_id: Uuid,
+    attempts: i32,
+    batch_start: usize,
+) {
+    let reason = format!("{job_id}:{attempts}:{batch_start}");
+    if reconciliation::enqueue_reconcile(db_pool, ctx, document_id, &reason)
+        .await
+        .is_err()
+    {
+        eprintln!("fileconv-server: incident reconcile enqueue failed");
+    }
+}
+
+async fn document_is_deleted(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<bool, IndexingError> {
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let document = documents::get_by_id(txn, &ctx, document_id).await?;
+                Ok::<_, IndexingError>(matches!(
+                    document.state,
+                    DocumentState::Tombstoned | DocumentState::Purged
+                ))
+            })
+        }
+    })
+    .await
+}
+
+pub async fn compensate_batch_points(
+    qdrant: &QdrantClient,
+    collection_name: &CollectionName,
+    scope: &VectorScope,
+    document_id: Uuid,
+    point_ids: &[Uuid],
+) -> Result<(), IndexingError> {
+    let document_filter = [json!({
+        "key": "document_id",
+        "match": { "value": document_id.to_string() }
+    })];
+    qdrant
+        .delete_points_by_ids(collection_name, scope, &document_filter, point_ids)
+        .await?;
+    Ok(())
+}
+
 struct PersistBatchInput<'a> {
     claim: IndexVersionInput<'a>,
     metadata_id: Uuid,
@@ -550,6 +705,14 @@ async fn persist_chunk_batch(
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
+                verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
+                let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                if matches!(
+                    document.state,
+                    DocumentState::Tombstoned | DocumentState::Purged
+                ) {
+                    return Err(IndexingError::DocumentDeleted);
+                }
                 for chunk in &batch {
                     chunks::insert_if_absent(
                         txn,
@@ -615,17 +778,7 @@ async fn heartbeat_while<T, Fut>(
 where
     Fut: Future<Output = Result<T, IndexingError>>,
 {
-    heartbeat_once(db_pool, ctx, input).await?;
-    tokio::pin!(future);
-    let mut heartbeat = heartbeat_interval(input.heartbeat_interval);
-    loop {
-        tokio::select! {
-            biased;
-            result = &mut future => return result,
-            _ = sleep_until(input.deadline) => return Err(IndexingError::JobTimedOut),
-            _ = heartbeat.tick() => heartbeat_once(db_pool, ctx, input).await?,
-        }
-    }
+    jobs::heartbeat_while_claimed(heartbeat_claim(db_pool, ctx, input), future).await
 }
 
 async fn heartbeat_once(
@@ -633,39 +786,26 @@ async fn heartbeat_once(
     ctx: &OrgContext,
     input: IndexVersionInput<'_>,
 ) -> Result<(), IndexingError> {
-    match timeout(
-        heartbeat_call_timeout(input.lease_ttl, input.deadline),
-        jobs::heartbeat(
-            db_pool,
-            ctx,
-            input.job.id,
-            input.lease_token,
-            input.attempts,
-            input.lease_ttl,
-        ),
-    )
-    .await
-    {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(JobError::LeaseLost)) => Err(IndexingError::Job(JobError::LeaseLost)),
-        Ok(Err(error)) => Err(IndexingError::Job(error)),
-        Err(_) => Err(IndexingError::JobTimedOut),
-    }
+    jobs::heartbeat_once_claimed(heartbeat_claim(db_pool, ctx, input))
+        .await
+        .map_err(Into::into)
 }
 
-fn heartbeat_interval(interval: Duration) -> tokio::time::Interval {
-    let mut heartbeat = interval_at(TokioInstant::now() + interval, interval);
-    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    heartbeat
-}
-
-fn heartbeat_call_timeout(lease_ttl: Duration, deadline: TokioInstant) -> Duration {
-    let mut lease_bound = lease_ttl / 3;
-    if lease_bound.is_zero() {
-        lease_bound = Duration::from_millis(1);
+fn heartbeat_claim<'a>(
+    db_pool: &'a Pool,
+    ctx: &'a OrgContext,
+    input: IndexVersionInput<'a>,
+) -> HeartbeatClaim<'a> {
+    HeartbeatClaim {
+        db_pool,
+        ctx,
+        job_id: input.job.id,
+        lease_token: input.lease_token,
+        attempts: input.attempts,
+        lease_ttl: input.lease_ttl,
+        heartbeat_interval: input.heartbeat_interval,
+        deadline: input.deadline,
     }
-    let remaining = deadline.saturating_duration_since(TokioInstant::now());
-    remaining.min(lease_bound)
 }
 
 #[derive(Debug, Error)]
@@ -708,8 +848,19 @@ pub enum IndexingError {
     MissingQdrantCollection,
     #[error("document current version changed while indexing")]
     CurrentVersionChanged,
+    #[error("document was tombstoned or purged while indexing")]
+    DocumentDeleted,
     #[error("index job exceeded configured maximum duration")]
     JobTimedOut,
+}
+
+impl From<HeartbeatError> for IndexingError {
+    fn from(value: HeartbeatError) -> Self {
+        match value {
+            HeartbeatError::Job(error) => Self::Job(error),
+            HeartbeatError::TimedOut => Self::JobTimedOut,
+        }
+    }
 }
 
 impl IndexingError {
@@ -734,6 +885,7 @@ impl IndexingError {
             Self::IndexGeneration => "index generation invalid",
             Self::MissingQdrantCollection => "index qdrant collection missing",
             Self::CurrentVersionChanged => "index current version changed",
+            Self::DocumentDeleted => "index document deleted",
             Self::JobTimedOut => "index job timed out",
         }
     }

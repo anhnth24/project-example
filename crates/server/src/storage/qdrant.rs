@@ -28,6 +28,7 @@ use crate::storage::error::StorageError;
 use crate::storage::url_safety::normalize_service_url;
 
 const POINT_ID_DOMAIN: &[u8] = b"markhand-qdrant-point-v2";
+const SCROLL_PAGE_LIMIT: usize = 1024;
 
 /// Mandatory tenant + authorized-collection scope for every vector operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +142,12 @@ pub struct SearchHit {
     pub point_id: Uuid,
     pub score: f32,
     pub payload: ChunkPointPayload,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrolledPoints {
+    pub points: Vec<(Uuid, ChunkPointPayload)>,
+    pub next_page_offset: Option<Value>,
 }
 
 /// Fail-closed Qdrant client using the HTTP REST API (no gRPC dependency).
@@ -450,10 +457,117 @@ impl QdrantClient {
             .send()
             .await
             .map_err(|_| StorageError::Transport)?;
+        if response.status().as_u16() == 404 {
+            return Ok(());
+        }
         if !response.status().is_success() {
             return Err(StorageError::Backend);
         }
         Ok(())
+    }
+
+    /// Delete exact point ids, fenced by mandatory org + authorized collection filters.
+    pub async fn delete_points_by_ids(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        extra_must: &[Value],
+        ids: &[Uuid],
+    ) -> Result<(), StorageError> {
+        scope.validate()?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut must = mandatory_filter_must(scope);
+        must.extend(extra_must.iter().cloned());
+        let ids: Vec<Value> = ids.iter().map(|id| Value::String(id.to_string())).collect();
+        must.push(json!({ "has_id": ids }));
+        let url = format!(
+            "{}/collections/{}/points/delete?wait=true",
+            self.base_url,
+            collection_name.as_str()
+        );
+        let response = self
+            .authed(self.http.post(&url))
+            .json(&json!({ "filter": { "must": must } }))
+            .send()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if response.status().as_u16() == 404 {
+            return Ok(());
+        }
+        if !response.status().is_success() {
+            return Err(StorageError::Backend);
+        }
+        Ok(())
+    }
+
+    /// Scroll scoped points with mandatory org + authorized collection filters.
+    pub async fn scroll_points(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        extra_must: &[Value],
+        limit: usize,
+    ) -> Result<Vec<(Uuid, ChunkPointPayload)>, StorageError> {
+        self.scroll_points_page(collection_name, scope, extra_must, limit, None)
+            .await
+            .map(|page| page.points)
+    }
+
+    pub async fn scroll_points_page(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        extra_must: &[Value],
+        limit: usize,
+        offset: Option<Value>,
+    ) -> Result<ScrolledPoints, StorageError> {
+        scope.validate()?;
+        if limit == 0 || limit > SCROLL_PAGE_LIMIT {
+            return Err(StorageError::PreconditionFailed);
+        }
+        let mut must = mandatory_filter_must(scope);
+        must.extend(extra_must.iter().cloned());
+        let url = format!(
+            "{}/collections/{}/points/scroll",
+            self.base_url,
+            collection_name.as_str()
+        );
+        let mut request = json!({
+            "filter": { "must": must },
+            "limit": limit,
+            "with_payload": true,
+            "with_vector": false,
+        });
+        if let Some(cursor) = offset {
+            request["offset"] = cursor;
+        }
+        let response = self
+            .authed(self.http.post(&url))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if response.status().as_u16() == 404 {
+            return Ok(ScrolledPoints {
+                points: Vec::new(),
+                next_page_offset: None,
+            });
+        }
+        if !response.status().is_success() {
+            return Err(StorageError::Backend);
+        }
+        let body: Value = response.json().await.map_err(|_| StorageError::Backend)?;
+        let points = parse_scrolled_points(scope, &body)?;
+        let next_page_offset = match body.pointer("/result/next_page_offset").cloned() {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(value),
+        };
+        Ok(ScrolledPoints {
+            points,
+            next_page_offset,
+        })
     }
 
     /// Fetch points by id using a **server-side** org + collection + has_id filter.
@@ -489,27 +603,14 @@ impl QdrantClient {
             .send()
             .await
             .map_err(|_| StorageError::Transport)?;
+        if response.status().as_u16() == 404 {
+            return Ok(Vec::new());
+        }
         if !response.status().is_success() {
             return Err(StorageError::Backend);
         }
         let body: Value = response.json().await.map_err(|_| StorageError::Backend)?;
-        let points = body
-            .pointer("/result/points")
-            .and_then(Value::as_array)
-            .ok_or(StorageError::Backend)?;
-        let mut out = Vec::new();
-        for point in points {
-            let id = parse_point_id(point.get("id").ok_or(StorageError::Backend)?)?;
-            let payload =
-                ChunkPointPayload::from_json(point.get("payload").ok_or(StorageError::Backend)?)?;
-            if payload.org_id != scope.org_id
-                || !scope.collection_ids.contains(&payload.collection_id)
-            {
-                return Err(StorageError::OwnershipConflict);
-            }
-            out.push((id, payload));
-        }
-        Ok(out)
+        parse_scrolled_points(scope, &body)
     }
 
     async fn assert_owned_or_absent(
@@ -714,6 +815,28 @@ fn parse_search_hits(body: &Value) -> Result<Vec<SearchHit>, StorageError> {
         });
     }
     Ok(hits)
+}
+
+fn parse_scrolled_points(
+    scope: &VectorScope,
+    body: &Value,
+) -> Result<Vec<(Uuid, ChunkPointPayload)>, StorageError> {
+    let points = body
+        .pointer("/result/points")
+        .and_then(Value::as_array)
+        .ok_or(StorageError::Backend)?;
+    let mut out = Vec::new();
+    for point in points {
+        let id = parse_point_id(point.get("id").ok_or(StorageError::Backend)?)?;
+        let payload =
+            ChunkPointPayload::from_json(point.get("payload").ok_or(StorageError::Backend)?)?;
+        if payload.org_id != scope.org_id || !scope.collection_ids.contains(&payload.collection_id)
+        {
+            return Err(StorageError::OwnershipConflict);
+        }
+        out.push((id, payload));
+    }
+    Ok(out)
 }
 
 fn parse_point_id(value: &Value) -> Result<Uuid, StorageError> {

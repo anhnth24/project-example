@@ -17,7 +17,7 @@ use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
 use fileconv_server::services::chunking::prepare_chunks;
 use fileconv_server::services::embedding::{approved_plan, embed_bodies};
-use fileconv_server::services::indexing::IndexingOutboxSink;
+use fileconv_server::services::indexing::OutboxJobSink;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
     point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, UpsertPoint,
@@ -494,7 +494,7 @@ fn index_worker(
 }
 
 async fn relay(env: &LiveEnv) {
-    let sink = Arc::new(IndexingOutboxSink::new());
+    let sink = Arc::new(OutboxJobSink::new());
     jobs::relay_outbox_with_sink(&env.pool, &env.ctx, 32, &sink)
         .await
         .expect("relay outbox");
