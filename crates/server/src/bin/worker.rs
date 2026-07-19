@@ -9,12 +9,13 @@ fn main() {
         );
         return;
     }
-    match fileconv_server::config::ServerConfig::from_env() {
+    match fileconv_server::config::ServerConfig::from_worker_env() {
         Ok(config) if args.iter().any(|argument| argument == "--check-config") => {
             match fileconv_server::state::RuntimeState::from_config(config) {
                 Ok(state) => println!(
                     "configuration valid: profile={:?}, bind={}",
-                    state.config.profile, state.config.bind_addr
+                    state.config().profile(),
+                    state.config().bind_addr()
                 ),
                 Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
             }

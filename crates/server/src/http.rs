@@ -13,14 +13,14 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::api::ApiError;
-use crate::config::RuntimeEndpoints;
 use crate::database;
+use crate::state::RuntimeState;
 
 const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
 const READINESS_CACHE_TTL: Duration = Duration::from_secs(1);
 
 pub struct AppState {
-    endpoints: RuntimeEndpoints,
+    runtime: RuntimeState,
     http_client: reqwest::Client,
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
 }
@@ -31,13 +31,13 @@ struct CachedReadiness {
 }
 
 impl AppState {
-    pub fn new(endpoints: RuntimeEndpoints) -> Result<Self, String> {
+    pub fn new(runtime: RuntimeState) -> Result<Self, String> {
         let http_client = reqwest::Client::builder()
             .timeout(DEPENDENCY_TIMEOUT)
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
         Ok(Self {
-            endpoints,
+            runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
         })
@@ -90,15 +90,18 @@ async fn check_dependencies(state: Arc<AppState>) -> Result<(), ReadinessError> 
 async fn check_dependencies_uncached(state: &AppState) -> Result<(), String> {
     let database = timeout(
         DEPENDENCY_TIMEOUT,
-        database::check_connection(state.endpoints.database_url.expose()),
+        database::check_connection(state.runtime.endpoints().database_url.expose()),
     );
     let qdrant = state
         .http_client
-        .get(format!("{}/healthz", state.endpoints.qdrant_url))
+        .get(format!("{}/healthz", state.runtime.endpoints().qdrant_url))
         .send();
     let minio = state
         .http_client
-        .get(format!("{}/minio/health/live", state.endpoints.minio_url))
+        .get(format!(
+            "{}/minio/health/live",
+            state.runtime.endpoints().minio_url
+        ))
         .send();
 
     let (database, qdrant, minio) = tokio::join!(database, qdrant, minio);
@@ -150,16 +153,20 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{router, AppState};
-    use crate::config::{RuntimeEndpoints, SecretString};
+    use crate::config::{RuntimeEndpoints, SecretString, ServerConfig};
+    use crate::state::RuntimeState;
 
     #[tokio::test]
     async fn liveness_has_a_contract_compliant_body() {
         let app = router(
-            AppState::new(RuntimeEndpoints {
-                database_url: SecretString::new("postgres://unused"),
-                qdrant_url: "http://127.0.0.1:1".into(),
-                minio_url: "http://127.0.0.1:1".into(),
-            })
+            AppState::new(
+                RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
+                    database_url: SecretString::new("postgres://unused"),
+                    qdrant_url: "http://127.0.0.1:1".into(),
+                    minio_url: "http://127.0.0.1:1".into(),
+                }))
+                .unwrap(),
+            )
             .unwrap(),
         );
         let response = app

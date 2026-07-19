@@ -18,6 +18,13 @@ pub enum Profile {
     Prod,
 }
 
+/// Process role controls which secrets and invariants are applicable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeRole {
+    Api,
+    Worker,
+}
+
 impl Profile {
     fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -51,14 +58,15 @@ impl fmt::Debug for SecretString {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerConfig {
-    pub profile: Profile,
-    pub bind_addr: SocketAddr,
-    pub database_url: Option<SecretString>,
-    pub qdrant_url: Option<String>,
-    pub minio_url: Option<String>,
-    pub auth: AuthConfig,
-    pub limits: RuntimeLimits,
-    pub index_signature: Option<String>,
+    role: RuntimeRole,
+    profile: Profile,
+    bind_addr: SocketAddr,
+    database_url: Option<SecretString>,
+    qdrant_url: Option<String>,
+    minio_url: Option<String>,
+    auth: AuthConfig,
+    limits: RuntimeLimits,
+    index_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,18 +101,35 @@ struct ConfigFile {
 impl ServerConfig {
     /// Precedence: safe defaults < optional JSON config file < environment.
     pub fn from_env() -> Result<Self, String> {
+        Self::from_env_for_role(RuntimeRole::Api)
+    }
+
+    /// Loads the worker configuration without reading API authentication secrets.
+    pub fn from_worker_env() -> Result<Self, String> {
+        Self::from_env_for_role(RuntimeRole::Worker)
+    }
+
+    fn from_env_for_role(role: RuntimeRole) -> Result<Self, String> {
         let env: BTreeMap<String, String> = std::env::vars().collect();
         let file = env
             .get("MARKHAND_CONFIG_FILE")
             .map(Path::new)
-            .map(load_file)
+            .map(|path| load_file(path, role))
             .transpose()?;
-        Self::from_sources(file.as_ref(), &env)
+        Self::from_sources_for_role(file.as_ref(), &env, role)
     }
 
     fn from_sources(
         file: Option<&ConfigFile>,
         env: &BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        Self::from_sources_for_role(file, env, RuntimeRole::Api)
+    }
+
+    fn from_sources_for_role(
+        file: Option<&ConfigFile>,
+        env: &BTreeMap<String, String>,
+        role: RuntimeRole,
     ) -> Result<Self, String> {
         let profile_raw = env
             .get("MARKHAND_PROFILE")
@@ -132,17 +157,24 @@ impl ServerConfig {
         let minio_url = optional_value(file, env, "MARKHAND_MINIO_URL", |value| {
             value.minio_url.as_ref()
         });
-        let auth = AuthConfig {
-            issuer: optional_value(file, env, "MARKHAND_AUTH_ISSUER", |value| {
-                value.auth_issuer.as_ref()
-            }),
-            audience: optional_value(file, env, "MARKHAND_AUTH_AUDIENCE", |value| {
-                value.auth_audience.as_ref()
-            }),
-            signing_key: optional_value(file, env, "MARKHAND_AUTH_SIGNING_KEY", |value| {
-                value.auth_signing_key.as_ref()
-            })
-            .map(SecretString::new),
+        let auth = match role {
+            RuntimeRole::Api => AuthConfig {
+                issuer: optional_value(file, env, "MARKHAND_AUTH_ISSUER", |value| {
+                    value.auth_issuer.as_ref()
+                }),
+                audience: optional_value(file, env, "MARKHAND_AUTH_AUDIENCE", |value| {
+                    value.auth_audience.as_ref()
+                }),
+                signing_key: optional_value(file, env, "MARKHAND_AUTH_SIGNING_KEY", |value| {
+                    value.auth_signing_key.as_ref()
+                })
+                .map(SecretString::new),
+            },
+            RuntimeRole::Worker => AuthConfig {
+                issuer: None,
+                audience: None,
+                signing_key: None,
+            },
         };
         let limits = RuntimeLimits {
             max_upload_bytes: numeric_value(
@@ -165,6 +197,7 @@ impl ServerConfig {
         });
 
         let config = Self {
+            role,
             profile,
             bind_addr,
             database_url,
@@ -178,6 +211,36 @@ impl ServerConfig {
         Ok(config)
     }
 
+    pub const fn profile(&self) -> Profile {
+        self.profile
+    }
+
+    pub const fn bind_addr(&self) -> SocketAddr {
+        self.bind_addr
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_with_endpoints(endpoints: RuntimeEndpoints) -> Self {
+        Self {
+            role: RuntimeRole::Api,
+            profile: Profile::Dev,
+            bind_addr: "127.0.0.1:8787".parse().expect("valid test address"),
+            database_url: Some(endpoints.database_url),
+            qdrant_url: Some(endpoints.qdrant_url),
+            minio_url: Some(endpoints.minio_url),
+            auth: AuthConfig {
+                issuer: None,
+                audience: None,
+                signing_key: None,
+            },
+            limits: RuntimeLimits {
+                max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
+                job_lease_seconds: DEFAULT_JOB_LEASE_SECONDS,
+            },
+            index_signature: None,
+        }
+    }
+
     /// Returns the service endpoints required to start the real POC server.
     pub fn runtime_endpoints(&self) -> Result<RuntimeEndpoints, String> {
         Ok(RuntimeEndpoints {
@@ -187,10 +250,12 @@ impl ServerConfig {
         })
     }
 
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_limits()?;
         self.validate_index_signature(false)?;
-        self.validate_auth()?;
+        if self.role == RuntimeRole::Api {
+            self.validate_auth()?;
+        }
         if self.profile != Profile::Prod {
             return Ok(());
         }
@@ -207,6 +272,11 @@ impl ServerConfig {
 
     fn validate_auth(&self) -> Result<(), String> {
         let Some(issuer) = self.auth.issuer.as_deref() else {
+            if self.auth.audience.is_some() || self.auth.signing_key.is_some() {
+                return Err(
+                    "MARKHAND_AUTH_ISSUER is required when authentication is configured".into(),
+                );
+            }
             return if self.profile == Profile::Prod {
                 Err("prod profile requires MARKHAND_AUTH_ISSUER".into())
             } else {
@@ -348,15 +418,25 @@ fn require_https(value: &str, name: &str) -> Result<(), String> {
     }
 }
 
-fn load_file(path: &Path) -> Result<ConfigFile, String> {
+fn load_file(path: &Path, role: RuntimeRole) -> Result<ConfigFile, String> {
     let source = std::fs::read_to_string(path)
         .map_err(|_| "cannot read MARKHAND_CONFIG_FILE".to_string())?;
-    serde_json::from_str(&source).map_err(|_| "MARKHAND_CONFIG_FILE contains invalid JSON".into())
+    let mut value: serde_json::Value = serde_json::from_str(&source)
+        .map_err(|_| "MARKHAND_CONFIG_FILE contains invalid JSON".to_string())?;
+    if role == RuntimeRole::Worker {
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| "MARKHAND_CONFIG_FILE contains invalid JSON".to_string())?;
+        object.remove("authIssuer");
+        object.remove("authAudience");
+        object.remove("authSigningKey");
+    }
+    serde_json::from_value(value).map_err(|_| "MARKHAND_CONFIG_FILE contains invalid JSON".into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigFile, Profile, ServerConfig};
+    use super::{ConfigFile, Profile, RuntimeRole, ServerConfig};
     use std::collections::BTreeMap;
 
     #[test]
@@ -492,11 +572,45 @@ mod tests {
             "MARKHAND_AUTH_AUDIENCE must not be empty when issuer is set"
         );
 
+        let orphan_audience =
+            BTreeMap::from([("MARKHAND_AUTH_AUDIENCE".into(), "markhand-api".into())]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &orphan_audience).unwrap_err(),
+            "MARKHAND_AUTH_ISSUER is required when authentication is configured"
+        );
+
         let invalid_signature =
             BTreeMap::from([("MARKHAND_INDEX_SIGNATURE".into(), "not-a-signature".into())]);
         assert_eq!(
             ServerConfig::from_sources(None, &invalid_signature).unwrap_err(),
             "MARKHAND_INDEX_SIGNATURE must be a 64-character hex digest"
         );
+    }
+
+    #[test]
+    fn worker_configuration_drops_api_authentication() {
+        let env = BTreeMap::from([
+            ("MARKHAND_PROFILE".into(), "prod".into()),
+            ("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into()),
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://app:secret@postgres.internal/markhand?sslmode=require".into(),
+            ),
+            (
+                "MARKHAND_QDRANT_URL".into(),
+                "https://qdrant.internal".into(),
+            ),
+            ("MARKHAND_MINIO_URL".into(), "https://minio.internal".into()),
+            (
+                "MARKHAND_AUTH_SIGNING_KEY".into(),
+                "must-not-be-loaded-by-a-converter-worker".into(),
+            ),
+            (
+                "MARKHAND_INDEX_SIGNATURE".into(),
+                "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835".into(),
+            ),
+        ]);
+        let config = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker).unwrap();
+        assert!(config.auth.signing_key.is_none());
     }
 }
