@@ -31,19 +31,19 @@ struct JobPath {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct JobResponse {
-    id: Uuid,
-    job_type: &'static str,
-    status: &'static str,
-    attempts: i32,
-    max_attempts: i32,
-    document_id: Option<Uuid>,
-    version_id: Option<Uuid>,
-    available_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
-    finished_at: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+pub(crate) struct JobResponse {
+    pub(crate) id: Uuid,
+    pub(crate) job_type: &'static str,
+    pub(crate) status: &'static str,
+    pub(crate) attempts: i32,
+    pub(crate) max_attempts: i32,
+    pub(crate) document_id: Option<Uuid>,
+    pub(crate) version_id: Option<Uuid>,
+    pub(crate) available_at: DateTime<Utc>,
+    pub(crate) started_at: Option<DateTime<Utc>>,
+    pub(crate) finished_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 impl From<Job> for JobResponse {
