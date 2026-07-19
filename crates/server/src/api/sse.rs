@@ -1,8 +1,8 @@
 //! SSE helpers and bounded replay state for resumable API streams.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::convert::Infallible;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use axum::response::sse::Event;
@@ -16,6 +16,8 @@ const ASK_STREAM_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_EVENTS_PER_STREAM: usize = 128;
 const MAX_BYTES_PER_STREAM: usize = 300 * 1024;
 const MAX_CONCURRENT_STREAMS_PER_CALLER: usize = 4;
+const MAX_RETAINED_STREAMS_PER_CALLER: usize = 8;
+const MAX_TOTAL_STREAMS: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StreamCaller {
@@ -42,6 +44,7 @@ struct RegistryInner {
 #[derive(Debug, Clone)]
 struct AskStreamRecord {
     caller: StreamCaller,
+    collection_scope: BTreeSet<Uuid>,
     envelopes: Vec<SseEnvelope>,
     done: bool,
     created_at: Instant,
@@ -61,15 +64,24 @@ impl AskStreamRegistry {
         }
     }
 
-    pub(crate) fn start_stream(&self, caller: StreamCaller) -> Result<Uuid, StreamRegistryError> {
-        let mut inner = self.inner.lock().expect("ask stream registry poisoned");
+    pub(crate) fn start_stream(
+        &self,
+        caller: StreamCaller,
+        collection_scope: impl IntoIterator<Item = Uuid>,
+    ) -> Result<Uuid, StreamRegistryError> {
+        let mut inner = self.lock_inner();
         inner.evict_expired();
-        let active = inner
-            .streams
-            .values()
-            .filter(|record| record.caller == caller && !record.done)
-            .count();
-        if active >= MAX_CONCURRENT_STREAMS_PER_CALLER {
+        if inner.active_count_for_caller(caller) >= MAX_CONCURRENT_STREAMS_PER_CALLER {
+            return Err(StreamRegistryError::TooManyStreams);
+        }
+        if inner.total_count_for_caller(caller) >= MAX_RETAINED_STREAMS_PER_CALLER {
+            inner.evict_oldest_done_for_caller(caller);
+        }
+        if inner.total_count_for_caller(caller) >= MAX_RETAINED_STREAMS_PER_CALLER {
+            return Err(StreamRegistryError::TooManyStreams);
+        }
+        while inner.streams.len() >= MAX_TOTAL_STREAMS && inner.evict_oldest_done() {}
+        if inner.streams.len() >= MAX_TOTAL_STREAMS {
             return Err(StreamRegistryError::TooManyStreams);
         }
         let stream_id = Uuid::new_v4();
@@ -77,6 +89,7 @@ impl AskStreamRegistry {
             stream_id,
             AskStreamRecord {
                 caller,
+                collection_scope: collection_scope.into_iter().collect(),
                 envelopes: Vec::new(),
                 done: false,
                 created_at: Instant::now(),
@@ -91,7 +104,7 @@ impl AskStreamRegistry {
         stream_id: Uuid,
         envelope: SseEnvelope,
     ) -> Result<(), StreamRegistryError> {
-        let mut inner = self.inner.lock().expect("ask stream registry poisoned");
+        let mut inner = self.lock_inner();
         inner.evict_expired();
         let Some(record) = inner.streams.get_mut(&stream_id) else {
             return Ok(());
@@ -109,11 +122,17 @@ impl AskStreamRegistry {
     }
 
     pub(crate) fn mark_done(&self, stream_id: Uuid) {
-        let mut inner = self.inner.lock().expect("ask stream registry poisoned");
+        let mut inner = self.lock_inner();
         inner.evict_expired();
         if let Some(record) = inner.streams.get_mut(&stream_id) {
             record.done = true;
         }
+    }
+
+    pub(crate) fn remove(&self, stream_id: Uuid) {
+        let mut inner = self.lock_inner();
+        inner.evict_expired();
+        inner.streams.remove(&stream_id);
     }
 
     pub(crate) fn replay_after(
@@ -121,11 +140,16 @@ impl AskStreamRegistry {
         stream_id: Uuid,
         after_sequence: u64,
         caller: StreamCaller,
+        current_allowed: impl IntoIterator<Item = Uuid>,
     ) -> Option<Vec<SseEnvelope>> {
-        let mut inner = self.inner.lock().expect("ask stream registry poisoned");
+        let mut inner = self.lock_inner();
         inner.evict_expired();
         let record = inner.streams.get(&stream_id)?;
         if record.caller != caller {
+            return None;
+        }
+        let current_allowed: BTreeSet<Uuid> = current_allowed.into_iter().collect();
+        if !record.collection_scope.is_subset(&current_allowed) {
             return None;
         }
         Some(
@@ -137,6 +161,12 @@ impl AskStreamRegistry {
                 .collect(),
         )
     }
+
+    fn lock_inner(&self) -> MutexGuard<'_, RegistryInner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 impl RegistryInner {
@@ -144,6 +174,50 @@ impl RegistryInner {
         let now = Instant::now();
         self.streams
             .retain(|_, record| now.duration_since(record.created_at) <= ASK_STREAM_TTL);
+    }
+
+    fn active_count_for_caller(&self, caller: StreamCaller) -> usize {
+        self.streams
+            .values()
+            .filter(|record| record.caller == caller && !record.done)
+            .count()
+    }
+
+    fn total_count_for_caller(&self, caller: StreamCaller) -> usize {
+        self.streams
+            .values()
+            .filter(|record| record.caller == caller)
+            .count()
+    }
+
+    fn evict_oldest_done_for_caller(&mut self, caller: StreamCaller) -> bool {
+        let oldest = self
+            .streams
+            .iter()
+            .filter(|(_, record)| record.caller == caller && record.done)
+            .min_by_key(|(_, record)| record.created_at)
+            .map(|(stream_id, _)| *stream_id);
+        if let Some(stream_id) = oldest {
+            self.streams.remove(&stream_id);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn evict_oldest_done(&mut self) -> bool {
+        let oldest = self
+            .streams
+            .iter()
+            .filter(|(_, record)| record.done)
+            .min_by_key(|(_, record)| record.created_at)
+            .map(|(stream_id, _)| *stream_id);
+        if let Some(stream_id) = oldest {
+            self.streams.remove(&stream_id);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -197,6 +271,7 @@ mod tests {
     #[test]
     fn replay_is_bound_to_the_original_caller() {
         let registry = AskStreamRegistry::new();
+        let collection = Uuid::new_v4();
         let caller = StreamCaller {
             org_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
@@ -205,7 +280,7 @@ mod tests {
             org_id: caller.org_id,
             user_id: Uuid::new_v4(),
         };
-        let stream_id = registry.start_stream(caller).unwrap();
+        let stream_id = registry.start_stream(caller, [collection]).unwrap();
         registry
             .append(
                 stream_id,
@@ -214,10 +289,108 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            registry.replay_after(stream_id, 0, caller).unwrap().len(),
+            registry
+                .replay_after(stream_id, 0, caller, [collection])
+                .unwrap()
+                .len(),
             1
         );
-        assert!(registry.replay_after(stream_id, 0, other).is_none());
+        assert!(registry
+            .replay_after(stream_id, 0, other, [collection])
+            .is_none());
+    }
+
+    #[test]
+    fn replay_requires_current_collection_scope() {
+        let registry = AskStreamRegistry::new();
+        let caller = StreamCaller {
+            org_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+        };
+        let collection = Uuid::new_v4();
+        let stream_id = registry.start_stream(caller, [collection]).unwrap();
+        registry
+            .append(
+                stream_id,
+                envelope(1, "ask.token", "req", json!({"token":"a"})),
+            )
+            .unwrap();
+        registry.mark_done(stream_id);
+
+        assert!(registry
+            .replay_after(stream_id, 0, caller, [collection])
+            .is_some());
+        assert!(registry.replay_after(stream_id, 0, caller, []).is_none());
+    }
+
+    #[test]
+    fn active_streams_are_capped_per_caller() {
+        let registry = AskStreamRegistry::new();
+        let caller = StreamCaller {
+            org_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+        };
+        let collection = Uuid::new_v4();
+        for _ in 0..MAX_CONCURRENT_STREAMS_PER_CALLER {
+            registry.start_stream(caller, [collection]).unwrap();
+        }
+
+        assert_eq!(
+            registry.start_stream(caller, [collection]).unwrap_err(),
+            StreamRegistryError::TooManyStreams
+        );
+    }
+
+    #[test]
+    fn retained_streams_are_capped_per_caller_by_evicting_done_records() {
+        let registry = AskStreamRegistry::new();
+        let caller = StreamCaller {
+            org_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+        };
+        let collection = Uuid::new_v4();
+        let mut retained = Vec::new();
+        for _ in 0..MAX_RETAINED_STREAMS_PER_CALLER {
+            let stream_id = registry.start_stream(caller, [collection]).unwrap();
+            registry.mark_done(stream_id);
+            retained.push(stream_id);
+        }
+
+        let new_stream = registry.start_stream(caller, [collection]).unwrap();
+        registry.mark_done(new_stream);
+
+        assert!(registry
+            .replay_after(retained[0], 0, caller, [collection])
+            .is_none());
+        assert!(registry
+            .replay_after(new_stream, 0, caller, [collection])
+            .is_some());
+        assert_eq!(
+            registry.lock_inner().total_count_for_caller(caller),
+            MAX_RETAINED_STREAMS_PER_CALLER
+        );
+    }
+
+    #[test]
+    fn global_stream_cap_evicts_done_records() {
+        let registry = AskStreamRegistry::new();
+        let collection = Uuid::new_v4();
+        for _ in 0..MAX_TOTAL_STREAMS {
+            let caller = StreamCaller {
+                org_id: Uuid::new_v4(),
+                user_id: Uuid::new_v4(),
+            };
+            let stream_id = registry.start_stream(caller, [collection]).unwrap();
+            registry.mark_done(stream_id);
+        }
+        let caller = StreamCaller {
+            org_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+        };
+
+        registry.start_stream(caller, [collection]).unwrap();
+
+        assert_eq!(registry.lock_inner().streams.len(), MAX_TOTAL_STREAMS);
     }
 
     #[test]

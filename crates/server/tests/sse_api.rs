@@ -216,6 +216,9 @@ impl LiveEnv {
 
 #[derive(Clone)]
 struct Seeded {
+    org_id: Uuid,
+    owner_id: Uuid,
+    other_user_id: Uuid,
     collection_id: Uuid,
     denied_collection_id: Uuid,
     allowed_job_id: Uuid,
@@ -288,6 +291,9 @@ async fn seed(env: &LiveEnv) -> Seeded {
             .expect("password hash");
     }
     Seeded {
+        org_id,
+        owner_id,
+        other_user_id,
         collection_id,
         denied_collection_id,
         allowed_job_id,
@@ -359,7 +365,7 @@ async fn seed_indexed_document(
                         name: "Allowed R05",
                         slug: "allowed-r05",
                         description: None,
-                        visibility: CollectionVisibility::Org,
+                        visibility: CollectionVisibility::Private,
                     },
                 )
                 .await?;
@@ -730,6 +736,64 @@ async fn ask_json_stream_and_resume_are_caller_bound() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let revoke_ctx = OrgContext::try_new(
+        seeded.org_id,
+        seeded.owner_id,
+        ["qa.query"],
+        [seeded.collection_id],
+    )
+    .expect("revoke ctx");
+    with_org_txn(&env.pool, &revoke_ctx, {
+        let collection_id = seeded.collection_id;
+        let org_id = seeded.org_id;
+        let other_user_id = seeded.other_user_id;
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE collections
+                     SET owner_user_id = $3, updated_at = clock_timestamp()
+                     WHERE org_id = $1 AND id = $2",
+                    &[&org_id, &collection_id, &other_user_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("revoke owner access");
+
+    let (status, _) = sse_body(
+        env.app.clone(),
+        &owner,
+        "/api/v1/ask/stream",
+        None,
+        Some(resume_from),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, other_body) = sse_body(
+        env.app.clone(),
+        &other,
+        "/api/v1/ask/stream",
+        Some(json!({ "question": "What does R05 content say?", "collectionIds": [seeded.collection_id] })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let other_events = parse_sse(&other_body);
+    let other_resume_from = &other_events[0].0;
+    let (status, _) = sse_body(
+        env.app.clone(),
+        &other,
+        "/api/v1/ask/stream",
+        None,
+        Some(other_resume_from),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
     env.drop().await;
 }
 

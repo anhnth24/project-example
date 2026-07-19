@@ -182,7 +182,7 @@ impl AppState {
         self.object_store.as_ref()
     }
 
-    pub fn qdrant(&self) -> &crate::storage::QdrantClient {
+    pub fn vector_store(&self) -> &crate::storage::QdrantClient {
         &self.qdrant
     }
 

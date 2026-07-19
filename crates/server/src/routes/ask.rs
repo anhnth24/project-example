@@ -72,7 +72,7 @@ async fn ask(
     let input = validate_ask_request(body, &auth.context, &request_id)?;
     let stream = answer_question(
         state.pool(),
-        state.qdrant(),
+        state.vector_store(),
         &input.ctx,
         QaRequest {
             question: input.question,
@@ -107,7 +107,12 @@ async fn ask_stream(
             parse_last_event_id(last_event_id).ok_or_else(|| RestError::not_found(&request_id))?;
         let envelopes = state
             .ask_streams()
-            .replay_after(stream_id, sequence, caller)
+            .replay_after(
+                stream_id,
+                sequence,
+                caller,
+                auth.context.allowed_collection_ids().iter().copied(),
+            )
             .ok_or_else(|| RestError::not_found(&request_id))?;
         let stream = stream::iter(
             envelopes
@@ -120,9 +125,14 @@ async fn ask_stream(
     let body: AskRequestBody = serde_json::from_slice(&body)
         .map_err(|_| RestError::validation("request body is invalid", &request_id))?;
     let input = validate_ask_request(body, &auth.context, &request_id)?;
+    let collection_scope = input.ctx.allowed_collection_ids().iter().copied();
+    let stream_id = state
+        .ask_streams()
+        .start_stream(caller, collection_scope)
+        .map_err(|error| map_registry_error(error, &request_id))?;
     let qa_stream = answer_question(
         state.pool(),
-        state.qdrant(),
+        state.vector_store(),
         &input.ctx,
         QaRequest {
             question: input.question,
@@ -131,11 +141,10 @@ async fn ask_stream(
         },
     )
     .await
-    .map_err(|error| map_qa_error(error, &request_id))?;
-    let stream_id = state
-        .ask_streams()
-        .start_stream(caller)
-        .map_err(|error| map_registry_error(error, &request_id))?;
+    .map_err(|error| {
+        state.ask_streams().remove(stream_id);
+        map_qa_error(error, &request_id)
+    })?;
     let stream = qa_sse_stream(
         stream_id,
         request_id.clone(),

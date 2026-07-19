@@ -84,7 +84,7 @@ async fn search(
     let input = validate_search_request(body, &auth.context, &request_id)?;
     let response = retrieve(
         state.pool(),
-        state.qdrant(),
+        state.vector_store(),
         &input.ctx,
         RetrievalRequest {
             query: input.query,
