@@ -255,4 +255,32 @@ mod tests {
 
         assert!(validate_search_request(body, &ctx, "req").is_err());
     }
+
+    #[test]
+    fn search_response_fixture_matches_wire_dto() {
+        let response = SearchResponse {
+            hits: vec![SearchHitResponse {
+                chunk_id: Uuid::parse_str("c3010000-0000-4000-8000-000000000001").unwrap(),
+                document_id: Uuid::parse_str("d4010000-0000-4000-8000-000000000001").unwrap(),
+                version_id: Uuid::parse_str("e5010000-0000-4000-8000-000000000001").unwrap(),
+                collection_id: Uuid::parse_str("f6010000-0000-4000-8000-000000000001").unwrap(),
+                version_number: 3,
+                snippet: "Payment is due within 30 days.".into(),
+                heading_path: Some(vec!["Contract".into(), "Payment".into()]),
+                lexical_score: 0.75,
+                vector_score: 0.5,
+                rerank_score: 0.25,
+                page: Some(4),
+                slide: None,
+                sheet: None,
+                is_current: true,
+            }],
+            degraded: None,
+        };
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../../openapi/fixtures/search_response.json"))
+                .unwrap();
+
+        assert_eq!(serde_json::to_value(response).unwrap(), expected);
+    }
 }

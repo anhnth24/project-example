@@ -58,5 +58,10 @@ mod tests {
             serde_json::from_str(include_str!("../openapi/fixtures/sse.json")).unwrap();
         assert_eq!(event.version, 1);
         assert_eq!(event.sequence, 42);
+
+        let rate_limited: ApiError =
+            serde_json::from_str(include_str!("../openapi/fixtures/rate_limited.json")).unwrap();
+        assert_eq!(rate_limited.code, "rate_limited");
+        assert!(rate_limited.details.is_none());
     }
 }

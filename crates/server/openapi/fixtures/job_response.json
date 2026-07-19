@@ -1,0 +1,14 @@
+{
+  "id": "b2010000-0000-4000-8000-000000000001",
+  "jobType": "convert",
+  "status": "running",
+  "attempts": 1,
+  "maxAttempts": 3,
+  "documentId": "d4010000-0000-4000-8000-000000000001",
+  "versionId": "e5010000-0000-4000-8000-000000000001",
+  "availableAt": "2026-07-19T22:40:00Z",
+  "startedAt": "2026-07-19T22:41:00Z",
+  "finishedAt": null,
+  "createdAt": "2026-07-19T22:39:00Z",
+  "updatedAt": "2026-07-19T22:41:30Z"
+}

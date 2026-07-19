@@ -36,6 +36,342 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["healthStart"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["authLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["authRefresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["authLogout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["authMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["createUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCollections"];
+        put?: never;
+        post: operations["createCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{collectionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCollection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{collectionId}/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listCollectionDocuments"];
+        put?: never;
+        post: operations["createDocumentFromUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getDocument"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteDocument"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}:reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["reindexDocument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listDocumentVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/versions/{versionId}/citations:resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["resolveCitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/versions/{versionId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMarkdownPreview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/{documentId}/versions/{versionId}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["authorizeDownload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/documents/download/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["redeemDownload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{jobId}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["streamJobEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["search"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["ask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ask/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["streamAsk"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -46,6 +382,20 @@ export interface components {
             /** Format: uuid */
             requestId: string;
         };
+        /**
+         * @description Canonical API error. Stable `code` values currently returned by shipped routes include
+         *     `validation_failed`, `unauthorized`, `invalid_credentials`, `invalid_refresh`,
+         *     `refresh_reuse`, `user_disabled`, `membership_missing`, `auth_unavailable`,
+         *     `permission_denied`, `collection_denied`, `empty_scope`, `not_found`,
+         *     `state_conflict`, `rate_limited`, `dependency_unavailable`,
+         *     `configuration_invalid`, `storage_unavailable`, `multipart_invalid`,
+         *     `upload_rejected`, `upload_too_large`, `quota_exceeded`,
+         *     `quota_not_configured`, `quota_invalid_key`, `quota_invalid_amount`,
+         *     `quota_arithmetic_overflow`, `quota_reservation_not_found`,
+         *     `quota_reservation_resource_mismatch`, `quota_reservation_conflict`,
+         *     `quota_refunded_cannot_finalize`, `quota_expired_cannot_finalize`,
+         *     `quota_finalized_cannot_refund`, `quota_database_error`, and `internal_error`.
+         */
         ApiError: {
             code: string;
             message: string;
@@ -54,12 +404,357 @@ export interface components {
             details?: unknown;
         };
         PageInfo: {
-            nextCursor?: string | null;
+            nextCursor?: string;
             hasMore: boolean;
+        };
+        SseEnvelope: {
+            /**
+             * Format: int32
+             * @enum {integer}
+             */
+            version: 1;
+            /** Format: int64 */
+            sequence: number;
+            /** @description Stable event name, for example `job.status`, `job.done`, `job.close`, `ask.token`, `ask.citations`, `ask.warning`, or `ask.done`. */
+            event: string;
+            requestId: string;
+            data: unknown;
+        };
+        LoginRequest: {
+            email: string;
+            password: string;
+        };
+        RefreshRequest: {
+            refreshToken: string;
+        };
+        LogoutRequest: {
+            refreshToken: string;
+        };
+        TokenResponse: {
+            accessToken: string;
+            refreshToken: string;
+            /** @enum {string} */
+            tokenType: "Bearer";
+            /** Format: int64 */
+            expiresIn: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            userId: string;
+        };
+        MeResponse: {
+            /** Format: uuid */
+            userId: string;
+            /** Format: uuid */
+            orgId: string;
+            email: string;
+            displayName: string;
+            permissions: string[];
+            allowedCollectionIds: string[];
+            /** Format: uuid */
+            sessionId: string;
+        };
+        UploadResponse: {
+            /** @enum {string} */
+            disposition: "accepted" | "quarantined" | "rejected";
+            /** @enum {string} */
+            threatClass?: "extension_spoof" | "mime_mismatch" | "unsupported_format" | "archive_bomb" | "archive_path_traversal" | "nested_archive" | "malformed_ooxml" | "parser_corruption" | "oversize" | "truncated_upload" | "pdf_page_bomb" | "image_pixel_bomb" | "audio_duration_limit" | "csv_formula" | "prompt_injection" | "active_content" | "permission_denied" | "storage_failure" | "multipart_invalid" | "internal";
+            /** @enum {string} */
+            reasonCode?: "extension_magic_mismatch" | "magic_unrecognized" | "upload_too_large" | "stream_interrupted" | "archive_entry_limit" | "archive_uncompressed_limit" | "archive_compression_ratio" | "archive_path_traversal" | "nested_archive_entry" | "missing_content_types" | "missing_format_paths" | "malformed_archive" | "malformed_xml" | "pdf_missing_eof" | "pdf_page_limit" | "image_pixel_limit" | "audio_duration_review" | "csv_formula_review" | "prompt_injection_review" | "html_active_content" | "permission_denied" | "storage_unavailable" | "multipart_missing_file" | "multipart_too_many_files" | "multipart_too_many_parts" | "multipart_header_too_large" | "multipart_timeout" | "fail_closed";
+            objectKey: string;
+            /** Format: uuid */
+            objectId: string;
+            sha256: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            canonicalFormat: string;
+            originalFilename?: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        CreateCollectionRequest: {
+            name: string;
+            slug: string;
+            description?: string | null;
+            /** @enum {string} */
+            visibility: "private" | "org";
+        };
+        Collection: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+            description: string | null;
+            /** Format: uuid */
+            ownerUserId: string;
+            /** @enum {string} */
+            visibility: "private" | "org" | "groups";
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CollectionListResponse: {
+            items: components["schemas"]["Collection"][];
+            pageInfo: components["schemas"]["PageInfo"];
+        };
+        CreateDocumentRequest: {
+            objectKey?: string | null;
+            /** Format: uuid */
+            objectId?: string | null;
+            title: string;
+        };
+        Document: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            collectionId: string;
+            title: string;
+            state: components["schemas"]["DocumentState"];
+            /** Format: uuid */
+            currentVersionId: string | null;
+            /** Format: uuid */
+            createdByUserId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @enum {string} */
+        DocumentState: "uploaded" | "converting" | "converted" | "indexing" | "indexed" | "failed" | "tombstoned" | "purged";
+        DocumentListResponse: {
+            items: components["schemas"]["Document"][];
+            pageInfo: components["schemas"]["PageInfo"];
+        };
+        DocumentVersion: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            documentId: string;
+            /** Format: int32 */
+            versionNumber: number;
+            /** Format: uuid */
+            parentVersionId: string | null;
+            /** @enum {string} */
+            publicationState: "draft" | "published";
+            isCurrent: boolean;
+            contentSha256: string;
+            sourceFilename: string | null;
+            sourceContentType: string | null;
+            /** Format: int64 */
+            byteSize: number | null;
+            /** Format: date-time */
+            effectiveFrom: string;
+            /** Format: date-time */
+            effectiveTo: string | null;
+            changeSummary: string | null;
+            /** Format: uuid */
+            createdByUserId: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        DocumentVersionListResponse: {
+            items: components["schemas"]["DocumentVersion"][];
+            pageInfo: components["schemas"]["PageInfo"];
+        };
+        CreateDocumentResponse: {
+            document: components["schemas"]["Document"];
+            version: components["schemas"]["DocumentVersion"];
+            /** Format: uuid */
+            jobId: string;
+            jobStatus: components["schemas"]["JobStatus"];
+        };
+        DeleteDocumentResponse: {
+            document: components["schemas"]["Document"];
+            deleteRequested: boolean;
+        };
+        JobSummary: {
+            /** Format: uuid */
+            id: string;
+            status: components["schemas"]["JobStatus"];
+        };
+        Job: {
+            /** Format: uuid */
+            id: string;
+            jobType: components["schemas"]["JobType"];
+            status: components["schemas"]["JobStatus"];
+            /** Format: int32 */
+            attempts: number;
+            /** Format: int32 */
+            maxAttempts: number;
+            /** Format: uuid */
+            documentId: string | null;
+            /** Format: uuid */
+            versionId: string | null;
+            /** Format: date-time */
+            availableAt: string;
+            /** Format: date-time */
+            startedAt: string | null;
+            /** Format: date-time */
+            finishedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @enum {string} */
+        JobType: "convert" | "index" | "delete" | "reconcile" | "embedding_batch";
+        /** @enum {string} */
+        JobStatus: "pending" | "leased" | "running" | "succeeded" | "failed" | "cancelled" | "dead_letter";
+        CitationPin: {
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            /** Format: int32 */
+            versionNumber: number;
+            contentSha256: string;
+            /** Format: uuid */
+            chunkId: string;
+            /** Format: int32 */
+            spanStart?: number | null;
+            /** Format: int32 */
+            spanEnd?: number | null;
+            quote?: string | null;
+        };
+        ResolvedCitation: {
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            /** Format: int32 */
+            versionNumber: number;
+            contentSha256: string;
+            /** Format: uuid */
+            chunkId: string;
+            /** Format: uuid */
+            collectionId: string;
+            headingPath: string[];
+            snippet: string;
+            /** Format: int32 */
+            page: number | null;
+            /** Format: int32 */
+            slide: number | null;
+            sheet: string | null;
+            /** Format: int32 */
+            spanStart: number | null;
+            /** Format: int32 */
+            spanEnd: number | null;
+            quote: string | null;
+            /** Format: date-time */
+            effectiveFrom: string;
+            /** Format: date-time */
+            effectiveTo: string | null;
+            isCurrent: boolean;
+        };
+        DownloadCapability: {
+            token: string;
+            downloadPath: string;
+            /** Format: date-time */
+            expiresAt: string;
+            filename: string;
+            contentType: string;
+            /** Format: int64 */
+            byteSize: number;
+            contentSha256: string;
+        };
+        SearchRequest: {
+            query: string;
+            /** Format: int32 */
+            limit?: number | null;
+            collectionIds?: string[] | null;
+        };
+        SearchResponse: {
+            hits: components["schemas"]["SearchHit"][];
+            /** @enum {string|null} */
+            degraded: "vector_unavailable" | "lexical_unavailable" | null;
+        };
+        SearchHit: {
+            /** Format: uuid */
+            chunkId: string;
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            /** Format: uuid */
+            collectionId: string;
+            /** Format: int32 */
+            versionNumber: number;
+            snippet: string;
+            headingPath?: string[];
+            /** Format: float */
+            lexicalScore: number;
+            /** Format: float */
+            vectorScore: number;
+            /** Format: float */
+            rerankScore: number;
+            /** Format: int32 */
+            page?: number;
+            /** Format: int32 */
+            slide?: number;
+            sheet?: string;
+            isCurrent: boolean;
+        };
+        AskRequest: {
+            question: string;
+            /** Format: int32 */
+            limit?: number | null;
+            collectionIds?: string[] | null;
+        };
+        AskResponse: {
+            answer: string;
+            citations: components["schemas"]["QaCitation"][];
+            warnings: string[];
+            mode: components["schemas"]["QaAnswerMode"];
+        };
+        /** @enum {string} */
+        QaAnswerMode: "cloud_llm" | "fallback_extractive" | "offline_extractive";
+        QaCitation: {
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            /** Format: int32 */
+            versionNumber: number;
+            contentSha256: string;
+            /** Format: uuid */
+            chunkId: string;
+            headingPath: string[];
+            snippet: string;
+            /** Format: int32 */
+            page: number | null;
+            /** Format: int32 */
+            slide: number | null;
+            sheet: string | null;
+            isCurrent: boolean;
+        };
+        /** @description Direct serde representation of the QA service event enum (`snake_case` variant names). `/ask/stream` wraps mapped event data in `SseEnvelope`. */
+        QaEvent: {
+            token: string;
+        } | {
+            citations: components["schemas"]["QaCitation"][];
+        } | {
+            warning: string;
+        } | {
+            done: {
+                mode: components["schemas"]["QaAnswerMode"];
+            };
+        };
+        /** @description Data payloads emitted inside `SseEnvelope.data` by `/ask/stream`. */
+        AskSseData: {
+            token: string;
+        } | {
+            citations: components["schemas"]["QaCitation"][];
+        } | {
+            warning: string;
+        } | {
+            mode: components["schemas"]["QaAnswerMode"];
         };
     };
     responses: {
-        /** @description Canonical API error */
+        /** @description Canonical API error. */
         ApiError: {
             headers: {
                 [name: string]: unknown;
@@ -68,10 +763,62 @@ export interface components {
                 "application/json": components["schemas"]["ApiError"];
             };
         };
+        /** @description Request rate limit exceeded. `ApiError.code` is `rate_limited`. */
+        RateLimited: {
+            headers: {
+                "Retry-After": components["headers"]["RetryAfter"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ApiError"];
+            };
+        };
+        /** @description Request rate limit exceeded (`rate_limited`) or upload quota exceeded (`quota_exceeded`). */
+        QuotaOrRateLimited: {
+            headers: {
+                "Retry-After": components["headers"]["RetryAfter"];
+                "x-quota-resource": components["headers"]["QuotaResource"];
+                "x-quota-limit": components["headers"]["QuotaLimit"];
+                "x-quota-used": components["headers"]["QuotaUsed"];
+                "x-quota-reserved": components["headers"]["QuotaReserved"];
+                "x-quota-remaining": components["headers"]["QuotaRemaining"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ApiError"];
+            };
+        };
     };
-    parameters: never;
+    parameters: {
+        CollectionId: string;
+        DocumentId: string;
+        VersionId: string;
+        JobId: string;
+        DownloadToken: string;
+        /** @description Page size; defaults to 25 and must be between 1 and 100. */
+        Limit: string;
+        /** @description Opaque cursor returned as `pageInfo.nextCursor`. */
+        Cursor: string;
+        /** @description Optional visible-ASCII idempotency key, 1-128 bytes, using alphanumeric characters plus `.`, `_`, `-`, and `:`. */
+        IdempotencyKey: string;
+        /** @description SSE replay cursor formatted as `{streamUuid}:{sequence}`. */
+        LastEventId: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Seconds to wait before retrying. */
+        RetryAfter: string;
+        /** @description Quota resource kind that was checked. */
+        QuotaResource: "storage_bytes" | "documents";
+        /** @description Resource limit. */
+        QuotaLimit: string;
+        /** @description Committed resource usage. */
+        QuotaUsed: string;
+        /** @description Currently reserved resource usage. */
+        QuotaReserved: string;
+        /** @description Remaining resource budget. */
+        QuotaRemaining: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -115,6 +862,737 @@ export interface operations {
                 };
             };
             503: components["responses"]["ApiError"];
+        };
+    };
+    healthStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Startup has completed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            503: components["responses"]["ApiError"];
+        };
+    };
+    authLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Password login succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    authRefresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Refresh token rotation succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    authLogout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Refresh token family logout accepted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    authMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current authenticated principal and authorization context. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    createUpload: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional visible-ASCII idempotency key, 1-128 bytes, using alphanumeric characters plus `.`, `_`, `-`, and `:`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Upload accepted or quarantined. */
+            201: {
+                headers: {
+                    "x-quota-resource": components["headers"]["QuotaResource"];
+                    "x-quota-limit": components["headers"]["QuotaLimit"];
+                    "x-quota-used": components["headers"]["QuotaUsed"];
+                    "x-quota-reserved": components["headers"]["QuotaReserved"];
+                    "x-quota-remaining": components["headers"]["QuotaRemaining"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            413: components["responses"]["ApiError"];
+            429: components["responses"]["QuotaOrRateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    listCollections: {
+        parameters: {
+            query?: {
+                /** @description Page size; defaults to 25 and must be between 1 and 100. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque cursor returned as `pageInfo.nextCursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authorized collections page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionListResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    createCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCollectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Collection created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    getCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Collection metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    listCollectionDocuments: {
+        parameters: {
+            query?: {
+                /** @description Page size; defaults to 25 and must be between 1 and 100. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque cursor returned as `pageInfo.nextCursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Documents in the collection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentListResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    createDocumentFromUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateDocumentRequest"];
+            };
+        };
+        responses: {
+            /** @description Document and source version created; conversion job enqueued. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateDocumentResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    getDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    deleteDocument: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional visible-ASCII idempotency key, 1-128 bytes, using alphanumeric characters plus `.`, `_`, `-`, and `:`. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Delete was already requested. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteDocumentResponse"];
+                };
+            };
+            /** @description Delete requested and job enqueued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteDocumentResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            409: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    reindexDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Index job enqueued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSummary"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            409: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    listDocumentVersions: {
+        parameters: {
+            query?: {
+                /** @description Page size; defaults to 25 and must be between 1 and 100. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque cursor returned as `pageInfo.nextCursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document versions page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersionListResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    resolveCitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CitationPin"];
+            };
+        };
+        responses: {
+            /** @description Citation resolved against live authorization and source content. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolvedCitation"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    getMarkdownPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Markdown preview bytes. */
+            200: {
+                headers: {
+                    "x-content-type-options"?: "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/markdown; charset=utf-8": string;
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    authorizeDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Short-lived, one-time download capability. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DownloadCapability"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    redeemDownload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: components["parameters"]["DownloadToken"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Original uploaded object bytes. */
+            200: {
+                headers: {
+                    "content-disposition"?: string;
+                    "x-content-type-options"?: "nosniff";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: components["parameters"]["JobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    streamJobEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: components["parameters"]["JobId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Server-sent job status events. Event names are `job.status`, `job.done`, and `job.close`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SseEnvelope"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Grounded retrieval hits. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    ask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Grounded answer collected from the QA stream. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
+        };
+    };
+    streamAsk: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description SSE replay cursor formatted as `{streamUuid}:{sequence}`. */
+                "Last-Event-ID"?: components["parameters"]["LastEventId"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Required when starting a stream. Omitted on replay requests that provide `Last-Event-ID`. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Server-sent QA events. Event names are `ask.token`, `ask.citations`, `ask.warning`, and `ask.done`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SseEnvelope"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["ApiError"];
         };
     };
 }

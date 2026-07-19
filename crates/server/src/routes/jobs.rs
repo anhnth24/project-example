@@ -94,3 +94,36 @@ async fn get_job(
     .map_err(|error: TxnRestError| error.into_rest(&request_id))?;
     Ok(Json(JobResponse::from(job)).into_response())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dt(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn job_response_fixture_matches_wire_dto() {
+        let response = JobResponse {
+            id: Uuid::parse_str("b2010000-0000-4000-8000-000000000001").unwrap(),
+            job_type: "convert",
+            status: "running",
+            attempts: 1,
+            max_attempts: 3,
+            document_id: Some(Uuid::parse_str("d4010000-0000-4000-8000-000000000001").unwrap()),
+            version_id: Some(Uuid::parse_str("e5010000-0000-4000-8000-000000000001").unwrap()),
+            available_at: dt("2026-07-19T22:40:00Z"),
+            started_at: Some(dt("2026-07-19T22:41:00Z")),
+            finished_at: None,
+            created_at: dt("2026-07-19T22:39:00Z"),
+            updated_at: dt("2026-07-19T22:41:30Z"),
+        };
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../../openapi/fixtures/job_response.json")).unwrap();
+
+        assert_eq!(serde_json::to_value(response).unwrap(), expected);
+    }
+}
