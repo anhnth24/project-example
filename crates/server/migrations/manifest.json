@@ -2,6 +2,15 @@
   "version": 1,
   "migrations": {
     "0001_expand_orgs_users.sql": "9671c8287630efb41b7ad3dc33b83a47dbd33e1b18f6d04e409ded09340fb314",
-    "0002_expand_org_membership_rls.sql": "7ba831b36b49d20cdfb64c08dfdcfd1f6198ca2eefa99aa6abae71874ca00070"
+    "0002_expand_org_membership_rls.sql": "7ba831b36b49d20cdfb64c08dfdcfd1f6198ca2eefa99aa6abae71874ca00070",
+    "0003_expand_auth_sessions_rbac.sql": "45b15a020b35f2fc11157611c5d01fd905f6e5ac76e94172f5334d3ca9e605c5",
+    "0004_expand_collections.sql": "7baed24c9566468b1feb80c99ca6cd98a33a939e23d14a0801b512c11f7cb089",
+    "0005_expand_documents_versions_artifacts.sql": "4b6a6c99b431d6ffcfb5f2f68686e2f516cb7f1025001213aba3387faeaf500f",
+    "0006_expand_chunks_claims.sql": "7a997bdce6ca509f2f167496287fb6ce6c5c4c22c10c815d979feca3d8abbf60",
+    "0007_expand_conflicts_lifecycle.sql": "2bf667edb9594fc702aa7850397fd7727e79ff112665c730d68e7bfb938af16f",
+    "0008_expand_jobs_outbox_events.sql": "80c9a2af951f72b4937a45e655ce524a73a7cda09d5f810fee1b3bb111757149",
+    "0009_expand_quota_audit_index.sql": "141741a45e40929ac3ae6b28005e8fd3dadeb126029e2381cad2959bff120dd4",
+    "0010_expand_tenant_rls.sql": "6f45a6bfef356c16248aad2fb2d6996070a88b3c17de43a8799f6e17f239bca8",
+    "0011_expand_poc_seed.sql": "fcef18e8a7a3344c6aadc94b6d9e8a87d2f3b95a4d0ad3d0e51161de2e8565bb"
   }
 }

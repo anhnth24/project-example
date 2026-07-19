@@ -1,14 +1,23 @@
 # Server migrations
 
-Phase 1B adds schema files here. Until then, this folder intentionally has no business
-tables or database client dependency.
+Immutable expand/backfill/cutover/contract SQL for Markhand Web PostgreSQL.
 
-## Contract
+## Immutability / current-published (0005)
 
-- File name: `NNNN_<expand|backfill|cutover|contract>_<subject>.sql`.
-- Add a migration header describing owner, phase, lock/data risk and compatibility.
-- Run `python3 scripts/check-migration-manifest.py --write-manifest` when adding a
-  reviewed migration; commit the updated `manifest.json`.
-- CI runs `--check`; existing checksums cannot change.
+- Content columns never UPDATE/DELETE.
+- Legal publish-field transitions only (no caller-settable GUC):
+  - `publication_state`: draft→published only
+  - `is_current`: true→false anytime; false→true only when published
+  - `effective_to`: NULL→timestamp once; never rewritten
+- At-most-one current: partial unique index `uq_document_versions__document_current` (RLS-immune).
+- Deferred triggers validate pointer agreement and fail closed if `app.org_id` is missing/mismatched.
+- `markhand_publish_document_version()` is convenience only.
 
-See [`docs/conventions/sql-migrations.md`](../../../docs/conventions/sql-migrations.md).
+## ACL (0004)
+
+Normalized `collection_user_access` / `collection_group_access` / `collection_role_access`
+with composite FKs and `ON DELETE CASCADE` from memberships/groups/roles.
+
+## Partition strategy (ADR 0008)
+
+No physical partitioning for Phase 1B POC; `org_id` first in tenant indexes.
