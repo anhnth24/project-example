@@ -477,6 +477,29 @@ pub enum JobType {
     EmbeddingBatch,
 }
 
+impl JobType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Convert => "convert",
+            Self::Index => "index",
+            Self::Delete => "delete",
+            Self::Reconcile => "reconcile",
+            Self::EmbeddingBatch => "embedding_batch",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "convert" => Ok(Self::Convert),
+            "index" => Ok(Self::Index),
+            "delete" => Ok(Self::Delete),
+            "reconcile" => Ok(Self::Reconcile),
+            "embedding_batch" => Ok(Self::EmbeddingBatch),
+            other => Err(format!("unknown job type: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
@@ -487,6 +510,33 @@ pub enum JobStatus {
     Failed,
     Cancelled,
     DeadLetter,
+}
+
+impl JobStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Leased => "leased",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::DeadLetter => "dead_letter",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "leased" => Ok(Self::Leased),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "dead_letter" => Ok(Self::DeadLetter),
+            other => Err(format!("unknown job status: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
