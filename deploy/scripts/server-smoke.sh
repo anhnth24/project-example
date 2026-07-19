@@ -18,7 +18,8 @@ set +a
 "$ROOT/deploy/scripts/bootstrap-server-role.sh"
 
 log_file="$(mktemp)"
-cargo run -p fileconv-server >"$log_file" 2>&1 &
+cargo build -p fileconv-server
+"$ROOT/target/debug/fileconv-server" >"$log_file" 2>&1 &
 server_pid=$!
 cleanup() {
   kill "$server_pid" 2>/dev/null || true
