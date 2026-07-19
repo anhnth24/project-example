@@ -111,6 +111,9 @@ impl ServerConfig {
 
     fn from_env_for_role(role: RuntimeRole) -> Result<Self, String> {
         let env: BTreeMap<String, String> = std::env::vars().collect();
+        if role == RuntimeRole::Worker {
+            reject_worker_auth_environment(&env)?;
+        }
         let file = env
             .get("MARKHAND_CONFIG_FILE")
             .map(Path::new)
@@ -132,6 +135,9 @@ impl ServerConfig {
         env: &BTreeMap<String, String>,
         role: RuntimeRole,
     ) -> Result<Self, String> {
+        if role == RuntimeRole::Worker {
+            reject_worker_auth_environment(env)?;
+        }
         let profile_raw = env
             .get("MARKHAND_PROFILE")
             .or_else(|| file.and_then(|value| value.profile.as_ref()))
@@ -220,10 +226,24 @@ impl ServerConfig {
         self.bind_addr
     }
 
+    pub(crate) const fn is_api_role(&self) -> bool {
+        self.role == RuntimeRole::Api
+    }
+
     #[cfg(test)]
     pub(crate) fn test_with_endpoints(endpoints: RuntimeEndpoints) -> Self {
+        Self::test_with_endpoints_for_role(endpoints, RuntimeRole::Api)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_worker_with_endpoints(endpoints: RuntimeEndpoints) -> Self {
+        Self::test_with_endpoints_for_role(endpoints, RuntimeRole::Worker)
+    }
+
+    #[cfg(test)]
+    fn test_with_endpoints_for_role(endpoints: RuntimeEndpoints, role: RuntimeRole) -> Self {
         Self {
-            role: RuntimeRole::Api,
+            role,
             profile: Profile::Dev,
             bind_addr: "127.0.0.1:8787".parse().expect("valid test address"),
             database_url: Some(endpoints.database_url),
@@ -428,11 +448,27 @@ fn load_file(path: &Path, role: RuntimeRole) -> Result<ConfigFile, String> {
         let object = value
             .as_object_mut()
             .ok_or_else(|| "MARKHAND_CONFIG_FILE contains invalid JSON".to_string())?;
-        object.remove("authIssuer");
-        object.remove("authAudience");
-        object.remove("authSigningKey");
+        if ["authIssuer", "authAudience", "authSigningKey"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+        {
+            return Err("worker configuration must not contain API authentication settings".into());
+        }
     }
     serde_json::from_value(value).map_err(|_| "MARKHAND_CONFIG_FILE contains invalid JSON".into())
+}
+
+fn reject_worker_auth_environment(env: &BTreeMap<String, String>) -> Result<(), String> {
+    if env.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "MARKHAND_AUTH_ISSUER" | "MARKHAND_AUTH_AUDIENCE" | "MARKHAND_AUTH_SIGNING_KEY"
+        )
+    }) {
+        Err("worker environment must not contain API authentication settings".into())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -589,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_configuration_drops_api_authentication() {
+    fn worker_configuration_rejects_api_authentication() {
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "prod".into()),
             ("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into()),
@@ -611,7 +647,9 @@ mod tests {
                 "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835".into(),
             ),
         ]);
-        let config = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker).unwrap();
-        assert!(config.auth.signing_key.is_none());
+        assert_eq!(
+            ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker).unwrap_err(),
+            "worker environment must not contain API authentication settings"
+        );
     }
 }

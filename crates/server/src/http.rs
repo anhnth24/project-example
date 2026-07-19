@@ -32,6 +32,9 @@ struct CachedReadiness {
 
 impl AppState {
     pub fn new(runtime: RuntimeState) -> Result<Self, String> {
+        if !runtime.is_api_role() {
+            return Err("HTTP application requires API runtime configuration".into());
+        }
         let http_client = reqwest::Client::builder()
             .timeout(DEPENDENCY_TIMEOUT)
             .build()
@@ -183,5 +186,20 @@ mod tests {
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(health["status"], "ok");
         assert!(health["requestId"].as_str().is_some());
+    }
+
+    #[test]
+    fn application_rejects_worker_runtime_state() {
+        let state =
+            RuntimeState::from_config(ServerConfig::test_worker_with_endpoints(RuntimeEndpoints {
+                database_url: SecretString::new("postgres://unused"),
+                qdrant_url: "http://127.0.0.1:1".into(),
+                minio_url: "http://127.0.0.1:1".into(),
+            }))
+            .unwrap();
+        assert_eq!(
+            AppState::new(state).err().as_deref(),
+            Some("HTTP application requires API runtime configuration")
+        );
     }
 }

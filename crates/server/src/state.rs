@@ -25,4 +25,8 @@ impl RuntimeState {
     pub const fn endpoints(&self) -> &RuntimeEndpoints {
         &self.endpoints
     }
+
+    pub(crate) const fn is_api_role(&self) -> bool {
+        self.config.is_api_role()
+    }
 }
