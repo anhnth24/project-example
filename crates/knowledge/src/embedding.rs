@@ -145,8 +145,8 @@ pub struct EmbeddingPlan {
     mode: &'static str,
     provider: String,
     model: String,
+    family: String,
     revision: String,
-    deployment: ProviderDeployment,
     expected_dimensions: Option<usize>,
     normalized: bool,
     runtime_path: String,
@@ -154,13 +154,15 @@ pub struct EmbeddingPlan {
 
 impl EmbeddingPlan {
     pub fn local_hash_v1() -> Self {
+        let deployment =
+            ProviderDeployment::from_base_url(None).expect("default deployment identity is valid");
+        let family = embedding_family("local", LOCAL_EMBEDDING_MODE, &deployment);
         Self {
             mode: LOCAL_EMBEDDING_MODE,
             provider: "local".into(),
             model: LOCAL_EMBEDDING_MODE.into(),
+            family,
             revision: "1".into(),
-            deployment: ProviderDeployment::from_base_url(None)
-                .expect("default deployment identity is valid"),
             expected_dimensions: Some(LOCAL_VECTOR_DIMENSIONS),
             normalized: true,
             runtime_path: RUNTIME_LOCAL_HASH.into(),
@@ -198,12 +200,13 @@ impl EmbeddingPlan {
                 "embedding runtime_path is unsupported",
             ));
         }
+        let family = embedding_family(&provider, &model, &deployment);
         Ok(Self {
             mode: PROVIDER_EMBEDDING_MODE,
             provider,
             model,
+            family,
             revision,
-            deployment,
             expected_dimensions,
             normalized: true,
             runtime_path,
@@ -231,6 +234,10 @@ impl EmbeddingPlan {
     }
 
     pub fn signature(&self, actual_dimensions: usize) -> Result<String> {
+        Ok(self.index_signature(actual_dimensions)?.digest())
+    }
+
+    pub fn index_signature(&self, actual_dimensions: usize) -> Result<IndexSignature<'_>> {
         if actual_dimensions == 0 {
             return Err(KnowledgeError::InvalidInput(
                 "embedding dimensions must be positive",
@@ -244,7 +251,7 @@ impl EmbeddingPlan {
                 });
             }
         }
-        Ok(self.signature_with_dimensions(actual_dimensions))
+        Ok(self.index_signature_unchecked(actual_dimensions))
     }
 
     /// Planning-only signature used before a provider reports its dimensions.
@@ -252,17 +259,14 @@ impl EmbeddingPlan {
     /// It must not be persisted as index metadata; once vectors arrive callers
     /// replace it with [`Self::signature`].
     pub fn provisional_signature(&self) -> String {
-        self.signature_with_dimensions(self.expected_dimensions.unwrap_or(0))
+        self.index_signature_unchecked(self.expected_dimensions.unwrap_or(0))
+            .digest()
     }
 
-    fn signature_with_dimensions(&self, dimensions: usize) -> String {
-        let family = format!(
-            "{}/{}/{}",
-            self.provider, self.model, self.deployment.digest
-        );
+    fn index_signature_unchecked(&self, dimensions: usize) -> IndexSignature<'_> {
         IndexSignature {
             runtime_path: &self.runtime_path,
-            embedding_family: &family,
+            embedding_family: &self.family,
             embedding_revision: &self.revision,
             dimensions,
             normalized: self.normalized,
@@ -270,8 +274,11 @@ impl EmbeddingPlan {
             body_text_version: BODY_TEXT_VERSION,
             query_normalization_version: QUERY_NORMALIZATION_VERSION,
         }
-        .digest()
     }
+}
+
+fn embedding_family(provider: &str, model: &str, deployment: &ProviderDeployment) -> String {
+    format!("{provider}/{model}/{}", deployment.digest)
 }
 
 pub fn validate_embedding_batch(
@@ -605,5 +612,17 @@ mod tests {
         assert!(!debug.contains("https://"));
         assert!(!debug.contains("secret"));
         assert!(!debug.contains("hidden"));
+    }
+
+    #[test]
+    fn plan_index_signature_matches_digest() {
+        let plan = EmbeddingPlan::local_hash_v1();
+        let signature = plan.index_signature(LOCAL_VECTOR_DIMENSIONS).unwrap();
+        assert_eq!(
+            signature.digest(),
+            plan.signature(LOCAL_VECTOR_DIMENSIONS).unwrap()
+        );
+        assert_eq!(signature.runtime_path, super::RUNTIME_LOCAL_HASH);
+        assert_eq!(signature.dimensions, LOCAL_VECTOR_DIMENSIONS);
     }
 }
