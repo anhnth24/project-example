@@ -3,7 +3,7 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -23,12 +23,15 @@ use fileconv_server::services::promotion::PromotionFault;
 use fileconv_server::services::quota;
 use fileconv_server::storage::keys::quarantine_key;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
-use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
+use fileconv_server::workers::convert::{
+    ConvertWorker, ConvertWorkerConfig, ConvertWorkerPause, ConvertWorkerRun,
+};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::{
     self, SandboxCancel, SandboxConfig, SandboxExit, SandboxInput,
 };
 use sha2::{Digest, Sha256};
+use tokio::sync::Notify;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -617,12 +620,11 @@ async fn quota_reservation_statuses(pool: &Pool, ctx: &OrgContext, job_id: Uuid)
     .expect("quota status query")
 }
 
-fn staging_key_for_attempt(
+fn staging_key_for_claim(
     ctx: &OrgContext,
     document_id: Uuid,
     source_version_id: Uuid,
     job: &Job,
-    attempts: i32,
 ) -> fileconv_server::storage::ObjectKey {
     let identity = ConversionIdentity::new(
         ctx.org_id(),
@@ -630,13 +632,23 @@ fn staging_key_for_attempt(
         source_version_id,
         job.idempotency_key.clone(),
     );
+    let lease_token = job.lease_owner.as_deref().expect("claimed job lease");
     fileconv_server::services::artifacts::markdown_key(
         &identity,
         identity.promoted_version_id(),
         job.id,
-        attempts,
+        job.attempts,
+        lease_token,
     )
     .expect("staging key")
+}
+
+async fn checkpoint_staged_keys(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> Vec<String> {
+    let job = get_job(pool, ctx, job_id).await;
+    job.checkpoint
+        .and_then(|value| value.get("staged_object_keys").cloned())
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default()
 }
 
 async fn first_markdown_artifact_key(pool: &Pool, ctx: &OrgContext, document_id: Uuid) -> String {
@@ -1306,19 +1318,6 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         .await
         .expect("enqueue")
         .job;
-        let identity = ConversionIdentity::new(
-            ctx.org_id(),
-            document_id,
-            version_id,
-            job.idempotency_key.clone(),
-        );
-        let staged_key = fileconv_server::services::artifacts::markdown_key(
-            &identity,
-            identity.promoted_version_id(),
-            job.id,
-            job.attempts + 1,
-        )
-        .expect("staged key");
         let mut fault_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
         fault_config.promotion_fault = Some(fault);
         let fault_worker =
@@ -1344,10 +1343,14 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
             quota_reservation_statuses(&pool, &ctx, job.id).await,
             vec!["refunded".to_string()]
         );
-        assert!(!storage
-            .object_exists(ctx.org_id(), &staged_key)
-            .await
-            .expect("staged object existence"));
+        for staged_key in checkpoint_staged_keys(&pool, &ctx, job.id).await {
+            let staged_key = fileconv_server::storage::parse_key_for_org(&staged_key, ctx.org_id())
+                .expect("checkpoint staged key");
+            assert!(!storage
+                .object_exists(ctx.org_id(), &staged_key)
+                .await
+                .expect("staged object existence"));
+        }
 
         make_job_available(&pool, &ctx, job.id).await;
         let retry_worker = ConvertWorker::new(
@@ -1424,7 +1427,6 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
     .await
     .expect("enqueue")
     .job;
-    let attempt_one_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 1);
     let mut first_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     first_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     first_config.fail_cleanup_delete = true;
@@ -1434,13 +1436,20 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
         first_worker.run_once(&ctx).await.expect("first attempt"),
         ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
     ));
+    let attempt_one_key_raw = checkpoint_staged_keys(&pool, &ctx, job.id)
+        .await
+        .into_iter()
+        .next()
+        .expect("attempt one staged key");
+    let attempt_one_key =
+        fileconv_server::storage::parse_key_for_org(&attempt_one_key_raw, ctx.org_id())
+            .expect("attempt one key");
     assert!(storage
         .object_exists(ctx.org_id(), &attempt_one_key)
         .await
         .expect("attempt one exists"));
 
     make_job_available(&pool, &ctx, job.id).await;
-    let attempt_two_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 2);
     let retry_worker = ConvertWorker::new(
         pool.clone(),
         storage.clone(),
@@ -1455,7 +1464,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
     assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
     assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
     let committed_key = first_markdown_artifact_key(&pool, &ctx, document_id).await;
-    assert_eq!(committed_key, attempt_two_key.as_str());
+    assert_ne!(committed_key, attempt_one_key_raw);
     let committed = fileconv_server::storage::parse_key_for_org(&committed_key, ctx.org_id())
         .expect("committed key");
     assert!(storage
@@ -1466,6 +1475,137 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
         .object_exists(ctx.org_id(), &attempt_one_key)
         .await
         .expect("attempt one cleaned"));
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_keeps_committed_object(
+) {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"barrier reclaim\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = jobs::enqueue(
+        &pool,
+        &ctx,
+        EnqueueJob::new(
+            JobType::Convert,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+            },
+            format!("convert-barrier-reclaim-{version_id}"),
+        ),
+    )
+    .await
+    .expect("enqueue")
+    .job;
+
+    let pause = ConvertWorkerPause {
+        staged: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    };
+    let mut a_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    a_config.lease_ttl = Duration::from_secs(1);
+    a_config.heartbeat_interval = Duration::from_millis(100);
+    a_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
+    a_config.pause_after_staging = Some(pause.clone());
+    let worker_a = ConvertWorker::new(pool.clone(), storage.clone(), a_config).expect("worker a");
+    let run_ctx = ctx.clone();
+    let run_worker = worker_a.clone();
+    let staged_signal = Arc::clone(&pause.staged);
+    let handle_a = tokio::spawn(async move { run_worker.run_once(&run_ctx).await });
+
+    staged_signal.notified().await;
+    let claimed_a = get_job(&pool, &ctx, job.id).await;
+    let key_a = staging_key_for_claim(&ctx, document_id, version_id, &claimed_a);
+    assert!(storage
+        .object_exists(ctx.org_id(), &key_a)
+        .await
+        .expect("key A exists after stage"));
+
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let reclaimed = jobs::reclaim_expired(&pool, &ctx, 10, Duration::from_secs(1))
+        .await
+        .expect("reclaim expired");
+    assert_eq!(reclaimed.len(), 1);
+    assert_eq!(reclaimed[0].id, job.id);
+    make_job_available(&pool, &ctx, job.id).await;
+
+    let worker_b = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("worker b");
+    assert!(matches!(
+        worker_b.run_once(&ctx).await.expect("worker b promote"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+    ));
+    let committed_key = first_markdown_artifact_key(&pool, &ctx, document_id).await;
+    assert_ne!(committed_key, key_a.as_str());
+    let committed = fileconv_server::storage::parse_key_for_org(&committed_key, ctx.org_id())
+        .expect("committed key");
+    let committed_bytes = storage
+        .get_object(ctx.org_id(), &committed)
+        .await
+        .expect("committed object before A release");
+    assert_eq!(committed_bytes.as_ref(), payload);
+
+    pause.release.notify_waiters();
+    match handle_a.await.expect("worker a join") {
+        Ok(ConvertWorkerRun::LeaseLost { job_id }) if job_id == job.id => {}
+        Err(_) => {}
+        other => panic!("unexpected worker A outcome: {other:?}"),
+    }
+
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+    assert_eq!(
+        first_markdown_artifact_key(&pool, &ctx, document_id).await,
+        committed_key
+    );
+    let committed_after = storage
+        .get_object(ctx.org_id(), &committed)
+        .await
+        .expect("committed object after A compensation");
+    assert_eq!(committed_after.as_ref(), payload);
+    assert!(!storage
+        .object_exists(ctx.org_id(), &key_a)
+        .await
+        .expect("key A cleaned"));
 
     ephemeral.drop().await;
 }
@@ -1505,7 +1645,6 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
     )
     .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let attempt_one_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 1);
     let mut ambiguous_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     ambiguous_config.lose_staged_handle_after_put = true;
     let ambiguous_worker =
@@ -1514,10 +1653,14 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
         ambiguous_worker.run_once(&ctx).await.expect("ambiguous run"),
         ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
     ));
-    assert!(!storage
-        .object_exists(ctx.org_id(), &attempt_one_key)
-        .await
-        .expect("checkpoint cleanup"));
+    for staged_key in checkpoint_staged_keys(&pool, &ctx, job.id).await {
+        let staged_key = fileconv_server::storage::parse_key_for_org(&staged_key, ctx.org_id())
+            .expect("checkpoint staged key");
+        assert!(!storage
+            .object_exists(ctx.org_id(), &staged_key)
+            .await
+            .expect("checkpoint cleanup"));
+    }
 
     make_job_available(&pool, &ctx, job.id).await;
     let retry_worker = ConvertWorker::new(
@@ -1571,7 +1714,6 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
     )
     .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let attempt_one_key = staging_key_for_attempt(&ctx, document_id, version_id, &job, 1);
     let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     config.fail_cleanup_delete = true;
@@ -1584,6 +1726,14 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
         get_job(&pool, &ctx, job.id).await.last_error.as_deref(),
         Some("convert compensation deferred")
     );
+    let attempt_one_key_raw = checkpoint_staged_keys(&pool, &ctx, job.id)
+        .await
+        .into_iter()
+        .next()
+        .expect("attempt one staged key");
+    let attempt_one_key =
+        fileconv_server::storage::parse_key_for_org(&attempt_one_key_raw, ctx.org_id())
+            .expect("attempt one key");
     assert!(storage
         .object_exists(ctx.org_id(), &attempt_one_key)
         .await
@@ -1983,19 +2133,6 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
     )
     .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let identity = ConversionIdentity::new(
-        ctx.org_id(),
-        document_id,
-        version_id,
-        format!("convert-{version_id}"),
-    );
-    let generated_trusted = fileconv_server::services::artifacts::markdown_key(
-        &identity,
-        identity.promoted_version_id(),
-        job.id,
-        job.attempts + 1,
-    )
-    .expect("trusted key");
     let mut config = stub_worker_config("printf converted-after-upload", 50);
     config.post_upload_settlement_delay = Duration::from_secs(1);
     let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
@@ -2003,6 +2140,14 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
     let run_worker = worker.clone();
     let handle = tokio::spawn(async move { run_worker.run_once(&run_ctx).await });
     tokio::time::sleep(Duration::from_millis(250)).await;
+    let staged_key_raw = checkpoint_staged_keys(&pool, &ctx, job.id)
+        .await
+        .into_iter()
+        .next()
+        .expect("checkpoint staged key");
+    let generated_trusted =
+        fileconv_server::storage::parse_key_for_org(&staged_key_raw, ctx.org_id())
+            .expect("trusted key");
     jobs::cancel(&pool, &ctx, job.id).await.expect("cancel");
 
     let outcome = handle.await.expect("join").expect("run once");
