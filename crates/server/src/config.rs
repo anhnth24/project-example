@@ -25,6 +25,7 @@ const DEFAULT_RATE_LIMIT_LLM_PER_MINUTE: u32 = 60;
 const DEFAULT_RATE_LIMIT_AUTHENTICATED_PER_MINUTE: u32 = 300;
 const DEFAULT_RATE_LIMIT_FALLBACK_PER_MINUTE: u32 = 120;
 const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 8_192;
+const DEFAULT_LOG_LEVEL: &str = "info";
 const PROD_MIN_ARGON2_MEMORY_KIB: u32 = 19_456;
 const PROD_MIN_ARGON2_TIME_COST: u32 = 2;
 const PROD_MAX_ACCESS_TOKEN_TTL_SECS: u64 = 900;
@@ -37,6 +38,22 @@ pub enum Profile {
     Dev,
     Test,
     Prod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    Json,
+    Pretty,
+}
+
+impl LogFormat {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "json" => Ok(Self::Json),
+            "pretty" => Ok(Self::Pretty),
+            _ => Err("MARKHAND_LOG_FORMAT must be json or pretty".into()),
+        }
+    }
 }
 
 /// Process role controls which secrets and invariants are applicable.
@@ -100,6 +117,10 @@ pub struct ServerConfig {
     trusted_proxy: bool,
     cors_allowed_origins: Vec<String>,
     index_signature: Option<String>,
+    log_format: LogFormat,
+    log_level: String,
+    metrics_enabled: bool,
+    otlp_endpoint: Option<String>,
 }
 
 impl fmt::Debug for ServerConfig {
@@ -148,6 +169,13 @@ impl fmt::Debug for ServerConfig {
             .field("trusted_proxy", &self.trusted_proxy)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("index_signature", &self.index_signature)
+            .field("log_format", &self.log_format)
+            .field("log_level", &self.log_level)
+            .field("metrics_enabled", &self.metrics_enabled)
+            .field(
+                "otlp_endpoint",
+                &self.otlp_endpoint.as_ref().map(|_| "[REDACTED_ENDPOINT]"),
+            )
             .finish()
     }
 }
@@ -424,6 +452,10 @@ struct ConfigFile {
     trusted_proxy: Option<bool>,
     cors_allowed_origins: Option<Vec<String>>,
     index_signature: Option<String>,
+    log_format: Option<String>,
+    log_level: Option<String>,
+    metrics_enabled: Option<bool>,
+    otlp_endpoint: Option<String>,
 }
 
 impl ServerConfig {
@@ -755,6 +787,27 @@ impl ServerConfig {
         let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
             value.index_signature.as_ref()
         });
+        let log_format = optional_value(file, env, "MARKHAND_LOG_FORMAT", |value| {
+            value.log_format.as_ref()
+        })
+        .as_deref()
+        .map(LogFormat::parse)
+        .transpose()?
+        .unwrap_or(LogFormat::Json);
+        let log_level = optional_value(file, env, "MARKHAND_LOG_LEVEL", |value| {
+            value.log_level.as_ref()
+        })
+        .unwrap_or_else(|| DEFAULT_LOG_LEVEL.into());
+        let metrics_enabled = bool_value(
+            file,
+            env,
+            "MARKHAND_METRICS_ENABLED",
+            |value| value.metrics_enabled,
+            true,
+        )?;
+        let otlp_endpoint = optional_value(file, env, "MARKHAND_OTLP_ENDPOINT", |value| {
+            value.otlp_endpoint.as_ref()
+        });
 
         let config = Self {
             role,
@@ -778,6 +831,10 @@ impl ServerConfig {
             trusted_proxy,
             cors_allowed_origins,
             index_signature,
+            log_format,
+            log_level,
+            metrics_enabled,
+            otlp_endpoint,
         };
         config.validate()?;
         Ok(config)
@@ -824,6 +881,22 @@ impl ServerConfig {
 
     pub fn index_signature(&self) -> Option<&str> {
         self.index_signature.as_deref()
+    }
+
+    pub const fn log_format(&self) -> LogFormat {
+        self.log_format
+    }
+
+    pub fn log_level(&self) -> &str {
+        &self.log_level
+    }
+
+    pub const fn metrics_enabled(&self) -> bool {
+        self.metrics_enabled
+    }
+
+    pub fn otlp_endpoint(&self) -> Option<&str> {
+        self.otlp_endpoint.as_deref()
     }
 
     pub(crate) fn is_api_role(&self) -> bool {
@@ -891,6 +964,10 @@ impl ServerConfig {
             trusted_proxy: false,
             cors_allowed_origins: Vec::new(),
             index_signature: None,
+            log_format: LogFormat::Json,
+            log_level: DEFAULT_LOG_LEVEL.into(),
+            metrics_enabled: true,
+            otlp_endpoint: None,
         }
     }
 
@@ -908,6 +985,11 @@ impl ServerConfig {
     ) -> Self {
         self.trusted_proxy = trusted_proxy;
         self.cors_allowed_origins = cors_allowed_origins;
+        self
+    }
+
+    pub fn with_test_metrics_enabled(mut self, enabled: bool) -> Self {
+        self.metrics_enabled = enabled;
         self
     }
 
@@ -962,6 +1044,11 @@ impl ServerConfig {
         self.validate_limits()?;
         self.upload.validate()?;
         self.validate_index_signature(false)?;
+        validate_log_level(&self.log_level)?;
+        if let Some(endpoint) = self.otlp_endpoint.as_deref() {
+            let _ = required_url(Some(endpoint), "MARKHAND_OTLP_ENDPOINT")?;
+            // TODO(O01/Otel): wire a real OTLP exporter behind this opt-in endpoint.
+        }
         if self.role == RuntimeRole::Api {
             self.validate_auth()?;
         }
@@ -1254,6 +1341,18 @@ fn validate_rate_limit(value: u32, env_name: &str) -> Result<(), String> {
     }
 }
 
+fn validate_log_level(value: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 256
+        || trimmed.bytes().any(|byte| byte.is_ascii_control())
+    {
+        Err("MARKHAND_LOG_LEVEL must be a non-empty visible filter string".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_cors_origin(origin: &str) -> Result<(), String> {
     let trimmed = origin.trim();
     if trimmed == "*" {
@@ -1446,6 +1545,10 @@ mod tests {
             trusted_proxy: None,
             cors_allowed_origins: None,
             index_signature: None,
+            log_format: None,
+            log_level: None,
+            metrics_enabled: None,
+            otlp_endpoint: None,
         };
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "dev".into()),
@@ -1459,6 +1562,9 @@ mod tests {
             "postgres://file-secret"
         );
         assert_eq!(config.qdrant_url.as_deref(), Some("http://qdrant.test"));
+        assert_eq!(config.log_format, super::LogFormat::Json);
+        assert_eq!(config.log_level, "info");
+        assert!(config.metrics_enabled);
     }
 
     #[test]
@@ -1505,6 +1611,42 @@ mod tests {
     fn invalid_bind_fails_fast() {
         let env = BTreeMap::from([("MARKHAND_BIND_ADDR".into(), "not-an-address".into())]);
         assert!(ServerConfig::from_sources(None, &env).is_err());
+    }
+
+    #[test]
+    fn observability_configuration_has_safe_defaults_and_overrides() {
+        let defaults = ServerConfig::from_sources(None, &BTreeMap::new()).unwrap();
+        assert_eq!(defaults.log_format, super::LogFormat::Json);
+        assert_eq!(defaults.log_level, "info");
+        assert!(defaults.metrics_enabled);
+        assert_eq!(defaults.otlp_endpoint, None);
+
+        let env = BTreeMap::from([
+            ("MARKHAND_LOG_FORMAT".into(), "pretty".into()),
+            (
+                "MARKHAND_LOG_LEVEL".into(),
+                "fileconv_server=debug,tower_http=info".into(),
+            ),
+            ("MARKHAND_METRICS_ENABLED".into(), "false".into()),
+            (
+                "MARKHAND_OTLP_ENDPOINT".into(),
+                "http://127.0.0.1:4317".into(),
+            ),
+        ]);
+        let config = ServerConfig::from_sources(None, &env).unwrap();
+        assert_eq!(config.log_format, super::LogFormat::Pretty);
+        assert_eq!(config.log_level, "fileconv_server=debug,tower_http=info");
+        assert!(!config.metrics_enabled);
+        assert_eq!(
+            config.otlp_endpoint.as_deref(),
+            Some("http://127.0.0.1:4317")
+        );
+
+        let invalid = BTreeMap::from([("MARKHAND_LOG_FORMAT".into(), "plain".into())]);
+        assert_eq!(
+            ServerConfig::from_sources(None, &invalid).unwrap_err(),
+            "MARKHAND_LOG_FORMAT must be json or pretty"
+        );
     }
 
     #[test]

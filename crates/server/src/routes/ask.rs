@@ -2,7 +2,7 @@
 
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::rejection::JsonRejection;
@@ -28,6 +28,7 @@ use crate::routes::common::{require_permission_or_403, RestError};
 use crate::routes::search::{
     narrowed_context, validate_collection_ids_len, validate_limit, JSON_BODY_LIMIT, MAX_QUERY_CHARS,
 };
+use crate::services::audit::{self, SafeAuditEvent};
 use crate::services::qa::stream::{DEFAULT_QA_LIMIT, MAX_QA_LIMIT};
 use crate::services::qa::{answer_question, QaAnswerMode, QaCitation, QaError, QaEvent, QaRequest};
 use crate::services::retrieval::VersionMode;
@@ -70,9 +71,25 @@ async fn ask(
     let request_id = auth.request_id.clone();
     let Json(body) =
         body.map_err(|_| RestError::validation("request body is invalid", &request_id))?;
-    require_permission_or_403(&auth.context, "qa.query", &request_id)?;
+    if let Err(error) = require_permission_or_403(&auth.context, "qa.query", &request_id) {
+        let _ = audit_qa_query(
+            &state,
+            &auth.context,
+            "deny",
+            &request_id,
+            serde_json::json!({ "endpoint": "ask", "reason": "permission_denied" }),
+        )
+        .await;
+        return Err(error);
+    }
     let input = validate_ask_request(body, &auth.context, &request_id)?;
-    let stream = answer_question(
+    let audit_metadata = serde_json::json!({
+        "endpoint": "ask",
+        "limit": input.limit,
+        "collectionScopeCount": input.ctx.allowed_collection_ids().len()
+    });
+    let retrieval_started = Instant::now();
+    let stream = match answer_question(
         state.pool(),
         state.vector_store(),
         &input.ctx,
@@ -83,8 +100,43 @@ async fn ask(
         },
     )
     .await
-    .map_err(|error| map_qa_error(error, &request_id))?;
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            state.metrics().observe_retrieval_latency(
+                "ask",
+                "error",
+                retrieval_started.elapsed().as_secs_f64(),
+            );
+            let (outcome, reason) = match &error {
+                QaError::EmptyScope => ("deny", "empty_scope"),
+                QaError::Retrieval(_) => ("error", "qa_failed"),
+            };
+            let _ = audit_qa_query(
+                &state,
+                &auth.context,
+                outcome,
+                &request_id,
+                merge_audit_reason(audit_metadata, reason),
+            )
+            .await;
+            return Err(map_qa_error(error, &request_id));
+        }
+    };
+    state.metrics().observe_retrieval_latency(
+        "ask",
+        "success",
+        retrieval_started.elapsed().as_secs_f64(),
+    );
     let response = collect_answer(stream, &request_id).await?;
+    let _ = audit_qa_query(
+        &state,
+        &auth.context,
+        "success",
+        &request_id,
+        audit_metadata,
+    )
+    .await;
     Ok(Json(response).into_response())
 }
 
@@ -95,7 +147,17 @@ async fn ask_stream(
     body: Bytes,
 ) -> Result<Response, RestError> {
     let request_id = auth.request_id.clone();
-    require_permission_or_403(&auth.context, "qa.query", &request_id)?;
+    if let Err(error) = require_permission_or_403(&auth.context, "qa.query", &request_id) {
+        let _ = audit_qa_query(
+            &state,
+            &auth.context,
+            "deny",
+            &request_id,
+            serde_json::json!({ "endpoint": "ask_stream", "reason": "permission_denied" }),
+        )
+        .await;
+        return Err(error);
+    }
     let caller = StreamCaller {
         org_id: auth.context.org_id(),
         user_id: auth.context.user_id(),
@@ -127,12 +189,18 @@ async fn ask_stream(
     let body: AskRequestBody = serde_json::from_slice(&body)
         .map_err(|_| RestError::validation("request body is invalid", &request_id))?;
     let input = validate_ask_request(body, &auth.context, &request_id)?;
+    let audit_metadata = serde_json::json!({
+        "endpoint": "ask_stream",
+        "limit": input.limit,
+        "collectionScopeCount": input.ctx.allowed_collection_ids().len()
+    });
     let collection_scope = input.ctx.allowed_collection_ids().iter().copied();
     let stream_id = state
         .ask_streams()
         .start_stream(caller, collection_scope)
         .map_err(|error| map_registry_error(error, &request_id))?;
-    let qa_stream = answer_question(
+    let retrieval_started = Instant::now();
+    let qa_stream = match answer_question(
         state.pool(),
         state.vector_store(),
         &input.ctx,
@@ -143,10 +211,43 @@ async fn ask_stream(
         },
     )
     .await
-    .map_err(|error| {
-        state.ask_streams().remove(stream_id);
-        map_qa_error(error, &request_id)
-    })?;
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            state.ask_streams().remove(stream_id);
+            state.metrics().observe_retrieval_latency(
+                "ask_stream",
+                "error",
+                retrieval_started.elapsed().as_secs_f64(),
+            );
+            let (outcome, reason) = match &error {
+                QaError::EmptyScope => ("deny", "empty_scope"),
+                QaError::Retrieval(_) => ("error", "qa_failed"),
+            };
+            let _ = audit_qa_query(
+                &state,
+                &auth.context,
+                outcome,
+                &request_id,
+                merge_audit_reason(audit_metadata, reason),
+            )
+            .await;
+            return Err(map_qa_error(error, &request_id));
+        }
+    };
+    state.metrics().observe_retrieval_latency(
+        "ask_stream",
+        "success",
+        retrieval_started.elapsed().as_secs_f64(),
+    );
+    let _ = audit_qa_query(
+        &state,
+        &auth.context,
+        "success",
+        &request_id,
+        audit_metadata,
+    )
+    .await;
     let stream = qa_sse_stream(
         stream_id,
         request_id.clone(),
@@ -154,6 +255,35 @@ async fn ask_stream(
         qa_stream,
     );
     Ok(sse_response(stream))
+}
+
+async fn audit_qa_query(
+    state: &Arc<AppState>,
+    ctx: &OrgContext,
+    outcome: &'static str,
+    request_id: &str,
+    metadata: serde_json::Value,
+) -> Result<(), crate::db::error::DbError> {
+    audit::record_audit_event(
+        state.pool(),
+        ctx,
+        SafeAuditEvent {
+            action: "qa.query",
+            resource_type: "qa",
+            resource_id: None,
+            outcome,
+            request_id: request_id.into(),
+            metadata,
+        },
+    )
+    .await
+}
+
+fn merge_audit_reason(mut metadata: serde_json::Value, reason: &'static str) -> serde_json::Value {
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("reason".into(), serde_json::Value::String(reason.into()));
+    }
+    metadata
 }
 
 fn sse_response<S>(stream: S) -> Response

@@ -512,6 +512,7 @@ async fn live_citation_preview_download_authorization() {
         &env.capability_key,
         &consumed,
         &capability.token,
+        "req-download-live-1",
         Utc::now(),
     )
     .await
@@ -525,6 +526,7 @@ async fn live_citation_preview_download_authorization() {
             &env.capability_key,
             &consumed,
             &capability.token,
+            "req-download-live-2",
             Utc::now(),
         )
         .await,
@@ -549,6 +551,7 @@ async fn live_citation_preview_download_authorization() {
             &env.capability_key,
             &ConsumedDownloadNonces::new(),
             &expired.token,
+            "req-download-live-3",
             Utc::now(),
         )
         .await,
@@ -568,6 +571,7 @@ async fn live_citation_preview_download_authorization() {
             &env.capability_key,
             &ConsumedDownloadNonces::new(),
             &tampered,
+            "req-download-live-4",
             Utc::now(),
         )
         .await,

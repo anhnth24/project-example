@@ -14,6 +14,7 @@ use crate::auth::permissions::{resolve_org_context_in_txn, ResolveError};
 use crate::config::{Argon2Config, AuthConfig, SecretString};
 use crate::db::error::DbError;
 use crate::db::pool::{apply_org_context, with_org_txn};
+use crate::telemetry::redacted_json_value;
 
 const REFRESH_PREFIX: &str = "mh1";
 const REFRESH_SECRET_BYTES: usize = 32;
@@ -139,8 +140,9 @@ pub struct AuditEvent<'a> {
 
 /// Append-only audit row (metadata must never contain secrets).
 pub async fn write_audit(txn: &Transaction<'_>, event: AuditEvent<'_>) -> Result<(), DbError> {
+    let metadata = redacted_json_value(event.metadata);
     // Defense-in-depth: refuse metadata / request ids that embed raw secrets.
-    let rendered = event.metadata.to_string();
+    let rendered = metadata.to_string();
     for fragment in [
         "\"password\":",
         "\"refreshToken\":",
@@ -172,7 +174,7 @@ pub async fn write_audit(txn: &Transaction<'_>, event: AuditEvent<'_>) -> Result
             &event.resource_type,
             &event.resource_id,
             &event.outcome,
-            &event.metadata,
+            &metadata,
             &event.request_id,
         ],
     )

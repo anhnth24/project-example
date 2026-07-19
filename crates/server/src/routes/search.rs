@@ -1,6 +1,7 @@
 //! Search API routes backed by the tenant-scoped retrieval engine.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
@@ -14,6 +15,7 @@ use crate::auth::context::OrgContext;
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::http::AppState;
 use crate::routes::common::{require_permission_or_403, RestError};
+use crate::services::audit::{self, SafeAuditEvent};
 use crate::services::retrieval::{
     retrieve, Degradation, GroundedHit, RetrievalError, RetrievalRequest, VersionMode,
     MAX_RETRIEVAL_LIMIT,
@@ -81,9 +83,25 @@ async fn search(
     let request_id = auth.request_id.clone();
     let Json(body) =
         body.map_err(|_| RestError::validation("request body is invalid", &request_id))?;
-    require_permission_or_403(&auth.context, "qa.query", &request_id)?;
+    if let Err(error) = require_permission_or_403(&auth.context, "qa.query", &request_id) {
+        let _ = audit_qa_query(
+            &state,
+            &auth.context,
+            "deny",
+            &request_id,
+            serde_json::json!({ "endpoint": "search", "reason": "permission_denied" }),
+        )
+        .await;
+        return Err(error);
+    }
     let input = validate_search_request(body, &auth.context, &request_id)?;
-    let response = retrieve(
+    let audit_metadata = serde_json::json!({
+        "endpoint": "search",
+        "limit": input.limit,
+        "collectionScopeCount": input.ctx.allowed_collection_ids().len()
+    });
+    let retrieval_started = Instant::now();
+    let response = match retrieve(
         state.pool(),
         state.vector_store(),
         &input.ctx,
@@ -94,7 +112,42 @@ async fn search(
         },
     )
     .await
-    .map_err(|error| map_retrieval_error(error, &request_id))?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            state.metrics().observe_retrieval_latency(
+                "search",
+                "error",
+                retrieval_started.elapsed().as_secs_f64(),
+            );
+            let (outcome, reason) = match &error {
+                RetrievalError::EmptyScope => ("deny", "empty_scope"),
+                _ => ("error", "retrieval_failed"),
+            };
+            let _ = audit_qa_query(
+                &state,
+                &auth.context,
+                outcome,
+                &request_id,
+                merge_audit_reason(audit_metadata, reason),
+            )
+            .await;
+            return Err(map_retrieval_error(error, &request_id));
+        }
+    };
+    state.metrics().observe_retrieval_latency(
+        "search",
+        "success",
+        retrieval_started.elapsed().as_secs_f64(),
+    );
+    let _ = audit_qa_query(
+        &state,
+        &auth.context,
+        "success",
+        &request_id,
+        audit_metadata,
+    )
+    .await;
 
     Ok(Json(SearchResponse {
         hits: response
@@ -105,6 +158,35 @@ async fn search(
         degraded: response.degraded.map(degradation_code),
     })
     .into_response())
+}
+
+async fn audit_qa_query(
+    state: &Arc<AppState>,
+    ctx: &OrgContext,
+    outcome: &'static str,
+    request_id: &str,
+    metadata: serde_json::Value,
+) -> Result<(), crate::db::error::DbError> {
+    audit::record_audit_event(
+        state.pool(),
+        ctx,
+        SafeAuditEvent {
+            action: "qa.query",
+            resource_type: "qa",
+            resource_id: None,
+            outcome,
+            request_id: request_id.into(),
+            metadata,
+        },
+    )
+    .await
+}
+
+fn merge_audit_reason(mut metadata: serde_json::Value, reason: &'static str) -> serde_json::Value {
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("reason".into(), serde_json::Value::String(reason.into()));
+    }
+    metadata
 }
 
 pub(crate) fn validate_search_request(
