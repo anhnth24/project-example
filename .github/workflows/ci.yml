@@ -90,7 +90,8 @@ jobs:
   corpus:
     needs: changes-and-static
     if: needs.changes-and-static.outputs.corpus == 'true'
-    runs-on: ubuntu-22.04
+    # generator-environment.lock.json pins fonts-dejavu-core 2.37-8 from Ubuntu 24.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
