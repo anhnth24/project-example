@@ -17,7 +17,9 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void loadConnection(controller.signal);
+    queueMicrotask(() => {
+      void loadConnection(controller.signal);
+    });
     return () => controller.abort();
   }, [loadConnection]);
 
