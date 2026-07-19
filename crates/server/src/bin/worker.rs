@@ -83,13 +83,21 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
     let metrics = Arc::new(MetricsRegistry::new());
     match kind.as_str() {
         "convert" => {
-            tracing::info!(worker_kind = "convert", "fileconv-worker starting");
+            tracing::info!(
+                target: "fileconv_worker",
+                worker_kind = "convert",
+                "fileconv-worker starting"
+            );
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             run_convert_worker(state, pool, storage, worker_id, ctx, metrics).await
         }
         "index" => {
-            tracing::info!(worker_kind = "index", "fileconv-worker starting");
+            tracing::info!(
+                target: "fileconv_worker",
+                worker_kind = "index",
+                "fileconv-worker starting"
+            );
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             let qdrant = QdrantClient::with_api_key(
@@ -100,7 +108,11 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             run_index_worker(state, pool, storage, qdrant, worker_id, ctx, metrics).await
         }
         "delete" => {
-            tracing::info!(worker_kind = "delete", "fileconv-worker starting");
+            tracing::info!(
+                target: "fileconv_worker",
+                worker_kind = "delete",
+                "fileconv-worker starting"
+            );
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             let qdrant = QdrantClient::with_api_key(
@@ -111,7 +123,11 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             run_delete_worker(state, pool, storage, qdrant, worker_id, ctx, metrics).await
         }
         "reconcile" => {
-            tracing::info!(worker_kind = "reconcile", "fileconv-worker starting");
+            tracing::info!(
+                target: "fileconv_worker",
+                worker_kind = "reconcile",
+                "fileconv-worker starting"
+            );
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
             let qdrant = QdrantClient::with_api_key(
@@ -162,7 +178,7 @@ async fn run_convert_worker(
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("fileconv-worker shutdown requested");
+                tracing::info!(target: "fileconv_worker", "fileconv-worker shutdown requested");
                 break;
             }
             poll = instrument_worker_once(metrics.clone(), "convert", worker.run_once(&ctx)) => {
@@ -174,6 +190,7 @@ async fn run_convert_worker(
                     Err(error) => {
                         metrics.record_job_processed("convert", "error", poll.duration_seconds);
                         tracing::error!(
+                            target: "fileconv_worker",
                             job_type = "convert",
                             error_code = error.safe_job_error(),
                             "convert worker error"
@@ -222,7 +239,7 @@ async fn run_index_worker(
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("fileconv-worker shutdown requested");
+                tracing::info!(target: "fileconv_worker", "fileconv-worker shutdown requested");
                 break;
             }
             poll = instrument_worker_once(metrics.clone(), "index", async {
@@ -239,6 +256,7 @@ async fn run_index_worker(
                     Err(error) => {
                         metrics.record_job_processed("index", "error", poll.duration_seconds);
                         tracing::error!(
+                            target: "fileconv_worker",
                             job_type = "index",
                             error_code = %error,
                             "index worker error"
@@ -281,7 +299,7 @@ async fn run_delete_worker(
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("fileconv-worker shutdown requested");
+                tracing::info!(target: "fileconv_worker", "fileconv-worker shutdown requested");
                 break;
             }
             poll = instrument_worker_once(metrics.clone(), "delete", async {
@@ -298,6 +316,7 @@ async fn run_delete_worker(
                     Err(error) => {
                         metrics.record_job_processed("delete", "error", poll.duration_seconds);
                         tracing::error!(
+                            target: "fileconv_worker",
                             job_type = "delete",
                             error_code = %error,
                             "delete worker error"
@@ -343,7 +362,7 @@ async fn run_reconcile_worker(
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("fileconv-worker shutdown requested");
+                tracing::info!(target: "fileconv_worker", "fileconv-worker shutdown requested");
                 break;
             }
             poll = instrument_worker_once(metrics.clone(), "reconcile", async {
@@ -360,6 +379,7 @@ async fn run_reconcile_worker(
                     Err(error) => {
                         metrics.record_job_processed("reconcile", "error", poll.duration_seconds);
                         tracing::error!(
+                            target: "fileconv_worker",
                             job_type = "reconcile",
                             error_code = %error,
                             "reconcile worker error"
@@ -383,7 +403,7 @@ async fn instrument_worker_once<T, E>(
     job_type: &'static str,
     future: impl Future<Output = Result<T, E>>,
 ) -> WorkerPoll<T, E> {
-    let span = tracing::info_span!("worker.job", job_type = job_type);
+    let span = tracing::info_span!(target: "fileconv_worker", "worker.job", job_type = job_type);
     let started = std::time::Instant::now();
     metrics.increment_jobs_in_flight();
     let result = {
@@ -410,6 +430,7 @@ fn record_convert_run(
         } => {
             metrics.record_job_processed("convert", "success", duration_seconds);
             tracing::info!(
+                target: "fileconv_worker",
                 job_type = "convert",
                 job_id = %job_id,
                 markdown_bytes = markdown_bytes,
@@ -420,6 +441,7 @@ fn record_convert_run(
         fileconv_server::workers::convert::ConvertWorkerRun::Failed { job_id, terminal } => {
             metrics.record_job_processed("convert", "failed", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "convert",
                 job_id = %job_id,
                 terminal = terminal,
@@ -430,6 +452,7 @@ fn record_convert_run(
         fileconv_server::workers::convert::ConvertWorkerRun::LeaseLost { job_id } => {
             metrics.record_job_processed("convert", "lease_lost", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "convert",
                 job_id = %job_id,
                 outcome = "lease_lost",
@@ -445,6 +468,7 @@ fn record_index_run(metrics: &MetricsRegistry, run: IndexWorkerRun, duration_sec
         IndexWorkerRun::Completed { job_id, chunks } => {
             metrics.record_job_processed("index", "success", duration_seconds);
             tracing::info!(
+                target: "fileconv_worker",
                 job_type = "index",
                 job_id = %job_id,
                 chunks = chunks,
@@ -455,6 +479,7 @@ fn record_index_run(metrics: &MetricsRegistry, run: IndexWorkerRun, duration_sec
         IndexWorkerRun::Failed { job_id, terminal } => {
             metrics.record_job_processed("index", "failed", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "index",
                 job_id = %job_id,
                 terminal = terminal,
@@ -465,6 +490,7 @@ fn record_index_run(metrics: &MetricsRegistry, run: IndexWorkerRun, duration_sec
         IndexWorkerRun::LeaseLost { job_id } => {
             metrics.record_job_processed("index", "lease_lost", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "index",
                 job_id = %job_id,
                 outcome = "lease_lost",
@@ -483,6 +509,7 @@ fn record_delete_run(metrics: &MetricsRegistry, run: DeleteWorkerRun, duration_s
         } => {
             metrics.record_job_processed("delete", "success", duration_seconds);
             tracing::info!(
+                target: "fileconv_worker",
                 job_type = "delete",
                 job_id = %job_id,
                 deleted_chunks = deleted_chunks,
@@ -493,6 +520,7 @@ fn record_delete_run(metrics: &MetricsRegistry, run: DeleteWorkerRun, duration_s
         DeleteWorkerRun::Failed { job_id, terminal } => {
             metrics.record_job_processed("delete", "failed", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "delete",
                 job_id = %job_id,
                 terminal = terminal,
@@ -503,6 +531,7 @@ fn record_delete_run(metrics: &MetricsRegistry, run: DeleteWorkerRun, duration_s
         DeleteWorkerRun::LeaseLost { job_id } => {
             metrics.record_job_processed("delete", "lease_lost", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "delete",
                 job_id = %job_id,
                 outcome = "lease_lost",
@@ -518,6 +547,7 @@ fn record_reconcile_run(metrics: &MetricsRegistry, run: ReconcileWorkerRun, dura
         ReconcileWorkerRun::Completed { job_id, report } => {
             metrics.record_job_processed("reconcile", "success", duration_seconds);
             tracing::info!(
+                target: "fileconv_worker",
                 job_type = "reconcile",
                 job_id = %job_id,
                 orphan_vectors_repaired = report.repaired.orphan_vectors,
@@ -530,6 +560,7 @@ fn record_reconcile_run(metrics: &MetricsRegistry, run: ReconcileWorkerRun, dura
         ReconcileWorkerRun::Failed { job_id, terminal } => {
             metrics.record_job_processed("reconcile", "failed", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "reconcile",
                 job_id = %job_id,
                 terminal = terminal,
@@ -540,6 +571,7 @@ fn record_reconcile_run(metrics: &MetricsRegistry, run: ReconcileWorkerRun, dura
         ReconcileWorkerRun::LeaseLost { job_id } => {
             metrics.record_job_processed("reconcile", "lease_lost", duration_seconds);
             tracing::warn!(
+                target: "fileconv_worker",
                 job_type = "reconcile",
                 job_id = %job_id,
                 outcome = "lease_lost",

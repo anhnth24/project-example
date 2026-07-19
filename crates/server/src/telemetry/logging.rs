@@ -3,7 +3,12 @@ use tracing_subscriber::EnvFilter;
 use crate::config::{LogFormat, ServerConfig};
 
 const DEFAULT_DEPENDENCY_LEVEL: &str = "warn";
-const APPLICATION_TARGETS: &[&str] = &["fileconv_server", "fileconv_core", "fileconv_knowledge"];
+const APPLICATION_TARGETS: &[&str] = &[
+    "fileconv_server",
+    "fileconv_worker",
+    "fileconv_core",
+    "fileconv_knowledge",
+];
 const SENSITIVE_DEPENDENCY_TARGETS: &[&str] = &[
     "tokio_postgres",
     "postgres",
@@ -167,6 +172,7 @@ mod tests {
                 Some("tokio_postgres=debug,reqwest=trace,fileconv_server=debug"),
             ))
             .with_writer(capture.clone())
+            .with_target(true)
             .with_ansi(false)
             .without_time()
             .finish();
@@ -175,6 +181,7 @@ mod tests {
             tracing::debug!(target: "tokio_postgres", "postgres debug canary");
             tracing::trace!(target: "reqwest", "reqwest trace canary");
             tracing::debug!(target: "fileconv_server", "app debug canary");
+            tracing::info!(target: "fileconv_worker", "worker startup canary");
             tracing::warn!(target: "tokio_postgres", "postgres warn canary");
         });
 
@@ -187,6 +194,8 @@ mod tests {
         )
         .expect("utf8 logs");
         assert!(output.contains("app debug canary"));
+        assert!(output.contains("worker startup canary"));
+        assert!(output.contains("fileconv_worker"));
         assert!(output.contains("postgres warn canary"));
         assert!(!output.contains("postgres debug canary"));
         assert!(!output.contains("reqwest trace canary"));
@@ -197,6 +206,7 @@ mod tests {
         );
         assert!(directives.ends_with("tower_http=warn"));
         assert!(directives.contains("fileconv_server=debug"));
+        assert!(directives.contains("fileconv_worker=info"));
         assert!(directives.contains("tokio_postgres=warn"));
         assert!(directives.contains("reqwest=warn"));
     }
