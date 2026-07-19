@@ -32,11 +32,12 @@ use fileconv_server::services::upload::{
     UploadError,
 };
 use fileconv_server::state::RuntimeState;
-use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key};
+use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use futures::stream;
 use http_body_util::BodyExt;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tower::ServiceExt;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
@@ -606,6 +607,25 @@ async fn forged_central_directory_size_rejects_during_inflation() {
 }
 
 #[tokio::test]
+async fn unparseable_compressed_span_rejects_closed() {
+    let limits = LimitsConfig::policy_defaults();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("bad-span.docx");
+    write_docx_zip(&path, &[], CompressionMethod::Stored);
+    let mut bytes = std::fs::read(&path).unwrap();
+    let first_local = bytes
+        .windows(4)
+        .position(|window| window == b"PK\x03\x04")
+        .expect("local header");
+    bytes[first_local..first_local + 4].copy_from_slice(b"PX\x03\x04");
+    std::fs::write(&path, bytes).unwrap();
+
+    let err = validate_zip_archive(&path, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::MalformedOoxml));
+    assert_eq!(err.reason_code(), ReasonCode::MalformedArchive);
+}
+
+#[tokio::test]
 async fn entry_count_bomb_rejects() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("many.docx");
@@ -1022,6 +1042,76 @@ async fn verification_failed_upload_is_cleaned_by_generated_key() {
             | fileconv_server::storage::error::StorageError::Transport
     ));
     assert!(!client.object_exists(org, &key).await.expect("exists"));
+}
+
+#[tokio::test]
+async fn cancelled_stream_upload_finishes_verify_or_cleanup() {
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let org = Uuid::new_v4();
+    let object_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let key = quarantine_key(org, object_id, Some("cancelled.txt")).unwrap();
+    let trusted_probe =
+        trusted_key(org, version_id, Uuid::new_v4(), Some("cancelled.txt")).unwrap();
+    let payload = b"cancelled upload still finishes verification and cleanup".to_vec();
+    let wrong_sha = hex::encode(Sha256::digest(b"not the uploaded payload"));
+    let meta = ObjectIdentityMeta {
+        org_id: org,
+        collection_id: None,
+        document_id: None,
+        version_id: None,
+        original_filename: Some("cancelled.txt".into()),
+        canonical_format: Some("txt".into()),
+        content_sha256: Some(wrong_sha.clone()),
+        content_length: Some(payload.len() as u64),
+        disposition: Some("accepted".into()),
+    };
+    let (mut writer, reader) = tokio::io::duplex(8);
+    {
+        let upload = client.put_object_stream(
+            org,
+            &key,
+            reader,
+            &meta,
+            "text/plain",
+            ObjectPutVerification {
+                expected_len: payload.len() as u64,
+                expected_sha256: &wrong_sha,
+            },
+        );
+        tokio::pin!(upload);
+        tokio::select! {
+            result = &mut upload => panic!("upload unexpectedly finished before cancellation: {result:?}"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        writer
+            .write_all(&payload[..8])
+            .await
+            .expect("write first chunk");
+    }
+    writer
+        .write_all(&payload[8..])
+        .await
+        .expect("write remaining chunks");
+    writer.shutdown().await.expect("finish writer");
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            assert!(!client
+                .object_exists(org, &trusted_probe)
+                .await
+                .expect("trusted exists"));
+            if !client.object_exists(org, &key).await.expect("exists") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("owned upload task cleaned generated quarantine object");
 }
 
 #[tokio::test]

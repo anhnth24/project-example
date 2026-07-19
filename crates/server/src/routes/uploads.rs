@@ -150,6 +150,9 @@ struct PendingUpload {
 }
 
 fn enforce_part_header_limit(field: &Field<'_>, limits: &LimitsConfig) -> Result<(), UploadError> {
+    // Secondary per-part metadata bound: the route-level `DefaultBodyLimit`
+    // remains the primary whole-request cap, and this check runs before any
+    // field body is buffered to disk.
     let header_bytes = field.name().map_or(0, str::len)
         + field.file_name().map_or(0, str::len)
         + field.content_type().map_or(0, str::len);

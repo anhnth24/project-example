@@ -9,8 +9,10 @@
 //! mutation paths (fail closed).
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures::TryStreamExt;
@@ -23,6 +25,7 @@ use s3::Bucket;
 use s3::BucketConfiguration;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::config::MinioConfig;
@@ -73,6 +76,7 @@ pub struct MinioClient {
     bucket: Box<Bucket>,
     bucket_name: String,
     http_client: reqwest::Client,
+    operation_timeout: Duration,
 }
 
 impl std::fmt::Debug for MinioClient {
@@ -80,6 +84,7 @@ impl std::fmt::Debug for MinioClient {
         formatter
             .debug_struct("MinioClient")
             .field("bucket_name", &self.bucket_name)
+            .field("operation_timeout", &self.operation_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -110,10 +115,17 @@ impl MinioClient {
         if config.path_style() {
             bucket = bucket.with_path_style();
         }
+        let operation_timeout = Duration::from_secs(config.operation_timeout_secs());
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(operation_timeout)
+            .timeout(operation_timeout)
+            .build()
+            .map_err(|_| StorageError::ConfigInvalid)?;
         Ok(Self {
             bucket,
             bucket_name: config.bucket().to_string(),
-            http_client: reqwest::Client::new(),
+            http_client,
+            operation_timeout,
         })
     }
 
@@ -125,12 +137,16 @@ impl MinioClient {
     pub async fn ensure_bucket(&self) -> Result<(), StorageError> {
         let region = self.bucket.region.clone();
         let credentials = self
-            .bucket
-            .credentials()
-            .await
-            .map_err(|_| StorageError::Transport)?;
+            .with_s3_timeout(self.bucket.credentials(), |_| StorageError::Transport)
+            .await?;
         let config = BucketConfiguration::default();
-        match Bucket::create_with_path_style(&self.bucket_name, region, credentials, config).await {
+        match timeout(
+            self.operation_timeout,
+            Bucket::create_with_path_style(&self.bucket_name, region, credentials, config),
+        )
+        .await
+        .map_err(|_| StorageError::Transport)?
+        {
             Ok(response)
                 if response.success()
                     || response.response_code == 409
@@ -225,10 +241,9 @@ impl MinioClient {
                 .with_metadata("disposition", disposition)
                 .map_err(|_| StorageError::ConfigInvalid)?;
         }
-        let response = builder
-            .execute()
-            .await
-            .map_err(|_| StorageError::Transport)?;
+        let response = self
+            .with_s3_timeout(builder.execute(), |_| StorageError::Transport)
+            .await?;
         if (200..300).contains(&response.status_code()) {
             Ok(())
         } else {
@@ -285,7 +300,10 @@ impl MinioClient {
         {
             return Err(StorageError::ConfigInvalid);
         }
-        let path = request.key.as_str();
+        let generated_key = request.key.clone();
+        // TODO(I07): persist pending generated keys in the durable outbox/GC so crash
+        // recovery can reconcile objects beyond this live bounded task.
+        let path = generated_key.as_str();
         let mut headers = identity_headers(&request.meta, &request.content_type)?;
         headers.insert(
             CONTENT_LENGTH,
@@ -293,10 +311,12 @@ impl MinioClient {
                 .map_err(|_| StorageError::ConfigInvalid)?,
         );
         let presigned = self
-            .bucket
-            .presign_put(&path, 300, Some(headers.clone()), None)
-            .await
-            .map_err(|_| StorageError::Transport)?;
+            .with_s3_timeout(
+                self.bucket
+                    .presign_put(&path, 300, Some(headers.clone()), None),
+                |_| StorageError::Transport,
+            )
+            .await?;
         let uploaded = Arc::new(AtomicU64::new(0));
         let uploaded_for_stream = Arc::clone(&uploaded);
         let body_stream = futures::stream::try_unfold(reader, move |mut reader| {
@@ -315,35 +335,48 @@ impl MinioClient {
                 Ok::<_, std::io::Error>(Some((Bytes::from(buf), reader)))
             }
         });
-        let response = self
-            .http_client
-            .put(presigned)
-            .headers(headers)
-            .body(reqwest::Body::wrap_stream(body_stream))
-            .send()
-            .await
-            .map_err(|_| StorageError::Transport)?;
+        let response = match timeout(
+            self.operation_timeout,
+            self.http_client
+                .put(presigned)
+                .headers(headers)
+                .body(reqwest::Body::wrap_stream(body_stream))
+                .send(),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(_)) | Err(_) => {
+                return self
+                    .cleanup_after_failed_put(
+                        request.org_id,
+                        &generated_key,
+                        StorageError::Transport,
+                    )
+                    .await;
+            }
+        };
         if !response.status().is_success() {
-            self.cleanup_after_failed_put(request.org_id, &request.key, StorageError::Backend)
+            self.cleanup_after_failed_put(request.org_id, &generated_key, StorageError::Backend)
                 .await?;
             return Err(StorageError::Backend);
         }
         if uploaded.load(Ordering::Relaxed) != request.expected_len {
-            self.cleanup_after_failed_put(request.org_id, &request.key, StorageError::Backend)
+            self.cleanup_after_failed_put(request.org_id, &generated_key, StorageError::Backend)
                 .await?;
             return Err(StorageError::Backend);
         }
         if let Err(error) = self
             .verify_stored_object(
                 request.org_id,
-                &request.key,
+                &generated_key,
                 request.expected_len,
                 &request.expected_sha256,
             )
             .await
         {
             return self
-                .cleanup_after_failed_put(request.org_id, &request.key, error)
+                .cleanup_after_failed_put(request.org_id, &generated_key, error)
                 .await;
         }
         Ok(())
@@ -354,10 +387,8 @@ impl MinioClient {
         self.verify_stored_org(org_id, key).await?;
         let path = key.as_str();
         let response = self
-            .bucket
-            .get_object(&path)
-            .await
-            .map_err(map_s3_get_error)?;
+            .with_s3_timeout(self.bucket.get_object(&path), map_s3_get_error)
+            .await?;
         let status = response.status_code();
         if status == 404 {
             return Err(StorageError::NotFound);
@@ -387,7 +418,7 @@ impl MinioClient {
     ///
     /// This intentionally authorizes by the generated key instead of stored metadata so
     /// verification-failed objects with missing/mismatched metadata can still be removed.
-    pub async fn cleanup_generated_object(
+    pub(crate) async fn cleanup_generated_object(
         &self,
         org_id: Uuid,
         key: &ObjectKey,
@@ -404,10 +435,8 @@ impl MinioClient {
     ) -> Result<(), StorageError> {
         let path = key.as_str();
         let response = self
-            .bucket
-            .delete_object(&path)
-            .await
-            .map_err(map_s3_get_error)?;
+            .with_s3_timeout(self.bucket.delete_object(&path), map_s3_get_error)
+            .await?;
         let status = response.status_code();
         if status == 404 {
             return if missing_ok {
@@ -452,7 +481,7 @@ impl MinioClient {
                     "fileconv-server: cleanup of failed upload object failed: {}",
                     cleanup_error.code()
                 );
-                Err(cleanup_error)
+                Err(cause)
             }
         }
     }
@@ -475,15 +504,13 @@ impl MinioClient {
         }
         let path = key.as_str();
         let url = self
-            .bucket
-            .presign_get(path, 300, None)
+            .with_s3_timeout(self.bucket.presign_get(path, 300, None), |_| {
+                StorageError::Transport
+            })
+            .await?;
+        let response = timeout(self.operation_timeout, self.http_client.get(url).send())
             .await
-            .map_err(|_| StorageError::Transport)?;
-        let response = self
-            .http_client
-            .get(url)
-            .send()
-            .await
+            .map_err(|_| StorageError::Transport)?
             .map_err(|_| StorageError::Transport)?;
         if !response.status().is_success() {
             return Err(StorageError::Backend);
@@ -514,9 +541,12 @@ impl MinioClient {
         key: &ObjectKey,
     ) -> Result<(HeadObjectResult, u16), StorageError> {
         let path = key.as_str();
-        let (head, status) = match self.bucket.head_object(&path).await {
+        let (head, status) = match self
+            .with_s3_timeout(self.bucket.head_object(&path), map_s3_head_error)
+            .await
+        {
             Ok(pair) => pair,
-            Err(error) => return Err(map_s3_head_error(error)),
+            Err(error) => return Err(error),
         };
         if status == 404 {
             return Err(StorageError::NotFound);
@@ -533,6 +563,17 @@ impl MinioClient {
             return Err(StorageError::OwnershipConflict);
         }
         Ok((head, status))
+    }
+
+    async fn with_s3_timeout<T, F, M>(&self, future: F, map_error: M) -> Result<T, StorageError>
+    where
+        F: Future<Output = Result<T, S3Error>>,
+        M: FnOnce(S3Error) -> StorageError,
+    {
+        timeout(self.operation_timeout, future)
+            .await
+            .map_err(|_| StorageError::Transport)?
+            .map_err(map_error)
     }
 }
 

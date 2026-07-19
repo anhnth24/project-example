@@ -118,10 +118,16 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
             has_ods_mimetype = true;
         }
 
-        let actual_compressed = compressed_spans
-            .get(name.trim_end_matches('/'))
-            .copied()
-            .unwrap_or_else(|| entry.compressed_size());
+        let actual_compressed = if entry.is_dir() {
+            0
+        } else {
+            compressed_spans
+                .get(name.trim_end_matches('/'))
+                .copied()
+                .ok_or_else(|| {
+                    UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
+                })?
+        };
         let scanned = if entry.is_dir() {
             EntryScan::default()
         } else if name == CONTENT_TYPES {
@@ -671,16 +677,25 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
     let Some(eocd_pos) = tail.windows(4).rposition(|w| w == b"PK\x05\x06") else {
-        return Ok(HashMap::new());
+        return Err(UploadError::rejected(
+            ThreatClass::MalformedOoxml,
+            ReasonCode::MalformedArchive,
+        ));
     };
     if eocd_pos + 22 > tail.len() {
-        return Ok(HashMap::new());
+        return Err(UploadError::rejected(
+            ThreatClass::MalformedOoxml,
+            ReasonCode::MalformedArchive,
+        ));
     }
     let entries = u16::from_le_bytes(tail[eocd_pos + 10..eocd_pos + 12].try_into().unwrap());
     let central_offset =
         u32::from_le_bytes(tail[eocd_pos + 16..eocd_pos + 20].try_into().unwrap()) as u64;
     if entries == u16::MAX {
-        return Ok(HashMap::new());
+        return Err(UploadError::rejected(
+            ThreatClass::MalformedOoxml,
+            ReasonCode::MalformedArchive,
+        ));
     }
     reader.seek(SeekFrom::Start(central_offset)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
@@ -693,7 +708,10 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
             UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
         })?;
         if &header[0..4] != b"PK\x01\x02" {
-            return Ok(HashMap::new());
+            return Err(UploadError::rejected(
+                ThreatClass::MalformedOoxml,
+                ReasonCode::MalformedArchive,
+            ));
         }
         let name_len = u16::from_le_bytes(header[28..30].try_into().unwrap()) as usize;
         let extra_len = u16::from_le_bytes(header[30..32].try_into().unwrap()) as u64;
@@ -734,7 +752,10 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
             .map(|(_, offset)| *offset)
             .unwrap_or(central_offset);
         if next_offset <= *local_header_offset {
-            continue;
+            return Err(UploadError::rejected(
+                ThreatClass::MalformedOoxml,
+                ReasonCode::MalformedArchive,
+            ));
         }
         reader
             .seek(SeekFrom::Start(*local_header_offset))
@@ -746,7 +767,10 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
             UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
         })?;
         if &local[0..4] != b"PK\x03\x04" {
-            continue;
+            return Err(UploadError::rejected(
+                ThreatClass::MalformedOoxml,
+                ReasonCode::MalformedArchive,
+            ));
         }
         let local_name_len = u16::from_le_bytes(local[26..28].try_into().unwrap()) as u64;
         let local_extra_len = u16::from_le_bytes(local[28..30].try_into().unwrap()) as u64;
@@ -754,9 +778,13 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
             .saturating_add(30)
             .saturating_add(local_name_len)
             .saturating_add(local_extra_len);
-        if next_offset > data_start {
-            spans.insert(name.clone(), next_offset - data_start);
+        if next_offset < data_start {
+            return Err(UploadError::rejected(
+                ThreatClass::MalformedOoxml,
+                ReasonCode::MalformedArchive,
+            ));
         }
+        spans.insert(name.clone(), next_offset - data_start);
     }
     Ok(spans)
 }
