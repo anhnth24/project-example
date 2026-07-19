@@ -740,6 +740,29 @@ pub enum EmbeddingRuntimePath {
     ProviderCloud,
 }
 
+impl EmbeddingRuntimePath {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalHash => "local-hash",
+            Self::LocalNeural => "local-neural",
+            Self::GlmCloudInterim => "glm-cloud-interim",
+            Self::VllmLocal => "vllm-local",
+            Self::ProviderCloud => "provider-cloud",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "local-hash" => Ok(Self::LocalHash),
+            "local-neural" => Ok(Self::LocalNeural),
+            "glm-cloud-interim" => Ok(Self::GlmCloudInterim),
+            "vllm-local" => Ok(Self::VllmLocal),
+            "provider-cloud" => Ok(Self::ProviderCloud),
+            other => Err(format!("unknown embedding runtime path: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexMetadata {
     pub id: Uuid,
