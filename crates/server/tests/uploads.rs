@@ -25,11 +25,12 @@ use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::http::{router, AppState};
+use fileconv_server::services::quota as quota_service;
 use fileconv_server::services::upload::{
     assert_disposition_is_typed, detect_magic, quota_reserve_hook, reject_dangerous_entry_name,
-    resolve_canonical_format, stream_to_tempfile, validate_and_quarantine, validate_streamed_bytes,
-    validate_zip_archive, CanonicalFormat, Disposition, LimitsConfig, ReasonCode, ThreatClass,
-    UploadError,
+    resolve_canonical_format, spawn_quota_settled_quarantine, stream_to_tempfile,
+    validate_and_quarantine, validate_streamed_bytes, validate_zip_archive, CanonicalFormat,
+    Disposition, LimitsConfig, QuotaSettledUploadError, ReasonCode, ThreatClass, UploadError,
 };
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
@@ -241,6 +242,16 @@ async fn seed_uploader(pool: &Pool, org: Uuid, user: Uuid, email: &str, password
                 orgs::ensure_user(txn, &owned, user, &email, "Uploader").await?;
                 orgs::ensure_membership(txn, &owned).await?;
                 txn.execute(
+                    "INSERT INTO org_quotas (
+                        org_id, max_storage_bytes, max_documents,
+                        max_concurrent_jobs, max_monthly_tokens
+                     )
+                     VALUES ($1, 1073741824, 1000, 10, 1000000)
+                     ON CONFLICT (org_id) DO NOTHING",
+                    &[&org],
+                )
+                .await?;
+                txn.execute(
                     "INSERT INTO permissions (id, code, description)
                      VALUES ($1, 'doc.upload', 'Upload')
                      ON CONFLICT (code) DO NOTHING",
@@ -294,6 +305,61 @@ async fn stream_file(path: &Path) -> fileconv_server::services::upload::Streamed
     )
     .await
     .expect("stream")
+}
+
+fn upload_operation_key(org: Uuid, user: Uuid, idempotency_key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(org.as_bytes());
+    hasher.update(user.as_bytes());
+    hasher.update(format!("client:{idempotency_key}").as_bytes());
+    format!("op.{}", hex::encode(hasher.finalize()))
+}
+
+async fn quota_reservation_status(
+    pool: &Pool,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Option<String> {
+    let reservation_key = reservation_key.to_string();
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_opt(
+                        "SELECT status FROM quota_reservations
+                         WHERE org_id = $1 AND reservation_key = $2",
+                        &[&ctx.org_id(), &reservation_key],
+                    )
+                    .await?;
+                Ok(row.map(|row| row.get::<_, String>(0)))
+            })
+        }
+    })
+    .await
+    .expect("quota status")
+}
+
+async fn quota_counter_value(pool: &Pool, ctx: &OrgContext, counter_key: &str) -> i64 {
+    let counter_key = counter_key.to_string();
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COALESCE(SUM(value), 0)::bigint
+                         FROM usage_counters
+                         WHERE org_id = $1 AND counter_key = $2",
+                        &[&ctx.org_id(), &counter_key],
+                    )
+                    .await?;
+                Ok(row.get::<_, i64>(0))
+            })
+        }
+    })
+    .await
+    .expect("quota counter")
 }
 
 fn write_docx_zip(path: &Path, entries: &[(&str, &[u8])], compression: CompressionMethod) {
@@ -951,8 +1017,104 @@ async fn property_filename_and_magic_never_panic() {
 
 #[tokio::test]
 async fn quota_hook_is_callable() {
-    let org = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], []).unwrap();
-    quota_reserve_hook(&org, "test-idem", Some(12));
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    seed_uploader(
+        &pool,
+        org,
+        user,
+        "quota-hook@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+    let reservation = quota_reserve_hook(&pool, &ctx, "test-idem", 12)
+        .await
+        .expect("reserve quota");
+    assert_eq!(reservation.storage.reservation.amount, 12);
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    seed_uploader(
+        &pool,
+        org,
+        user,
+        "finalize-cleanup@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+    let reservation_key = "finalize-cleanup";
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    quota_reserve_hook(&pool, &ctx, reservation_key, streamed.size_bytes)
+        .await
+        .expect("reserve quota");
+    quota_service::refund(&pool, &ctx, &format!("upload.documents.{reservation_key}"))
+        .await
+        .expect("force document reservation non-finalizable");
+
+    let handle = spawn_quota_settled_quarantine(
+        pool.clone(),
+        ctx.clone(),
+        client.clone(),
+        LimitsConfig::policy_defaults(),
+        streamed,
+        Some("report.pdf".into()),
+        Some("application/pdf".into()),
+        reservation_key.into(),
+    );
+    let err = handle
+        .await
+        .expect("upload task join")
+        .expect_err("finalize should fail");
+    let outcome = match err {
+        QuotaSettledUploadError::Quota { error, outcome } => {
+            assert!(matches!(
+                error,
+                quota_service::QuotaError::RefundedCannotFinalize
+            ));
+            outcome
+        }
+        other => panic!("unexpected upload task result: {other:?}"),
+    };
+
+    assert!(!client
+        .object_exists(org, &outcome.object_key)
+        .await
+        .expect("object exists"));
+    assert_eq!(
+        quota_reservation_status(&pool, &ctx, "upload.storage.finalize-cleanup").await,
+        Some("refunded".into())
+    );
+    assert_eq!(
+        quota_reservation_status(&pool, &ctx, "upload.documents.finalize-cleanup").await,
+        Some("refunded".into())
+    );
+    assert_eq!(quota_counter_value(&pool, &ctx, "storage_bytes").await, 0);
+    assert_eq!(quota_counter_value(&pool, &ctx, "documents").await, 0);
+
+    ephemeral.drop().await;
 }
 
 #[tokio::test]
@@ -1227,6 +1389,7 @@ async fn http_upload_happy_and_spoof() {
                 .method("POST")
                 .uri("/api/v1/uploads")
                 .header("authorization", format!("Bearer {token}"))
+                .header("idempotency-key", "http-upload-retry-key")
                 .header(
                     "content-type",
                     format!("multipart/form-data; boundary={BOUNDARY}"),
@@ -1263,6 +1426,25 @@ async fn http_upload_happy_and_spoof() {
         .expect("get stored upload");
     assert_eq!(stored.len(), pdf.len());
     assert_eq!(hex::encode(Sha256::digest(&stored)), json["sha256"]);
+
+    let retry = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header("idempotency-key", "http-upload-retry-key")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(multipart_body("report.pdf", &pdf)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::CONFLICT);
 
     let spoof = std::fs::read(adversarial_dir().join("plain-text.pdf")).unwrap();
     let body = multipart_body("plain-text.pdf", &spoof);
@@ -1353,6 +1535,122 @@ async fn http_upload_happy_and_spoof() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn cancelled_http_upload_settles_quota_consistently() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let Some((store, _bucket)) = test_minio_client() else {
+        return;
+    };
+    store.ensure_bucket().await.expect("bucket");
+
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    seed_uploader(
+        &pool,
+        org,
+        user,
+        "cancel-quota@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+
+    let runtime = RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
+        database_url: SecretString::new(&ephemeral.url),
+        qdrant_url: "http://127.0.0.1:1".into(),
+        minio_url: "http://127.0.0.1:9000".into(),
+    }))
+    .expect("runtime");
+    let auth = PasswordAuthProvider::new(
+        pool.clone(),
+        test_auth_config(),
+        JwtKeys::from_auth(&test_auth_config()).unwrap(),
+    );
+    let state_auth = PasswordAuthProvider::new(
+        pool.clone(),
+        test_auth_config(),
+        JwtKeys::from_auth(&test_auth_config()).unwrap(),
+    );
+    let state =
+        AppState::from_parts_with_store(runtime, pool.clone(), Some(state_auth), Some(store))
+            .expect("state");
+    let app = router(state);
+    let login = auth
+        .login_password(
+            "cancel-quota@example.test",
+            "correct-password-1",
+            &AuthRequestMeta {
+                request_id: "req-cancel-quota".into(),
+            },
+        )
+        .await
+        .expect("login");
+    let token = login.tokens.access_token.expose().to_string();
+
+    let idempotency_key = "cancel-quota-key-1";
+    let operation_key = upload_operation_key(org, user, idempotency_key);
+    let storage_reservation_key = format!("upload.storage.{operation_key}");
+    let payload = vec![b'a'; 8 * 1024 * 1024];
+    let expected_len = payload.len() as i64;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/uploads")
+        .header("authorization", format!("Bearer {token}"))
+        .header("idempotency-key", idempotency_key)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={BOUNDARY}"),
+        )
+        .body(Body::from(multipart_body("cancelled.txt", &payload)))
+        .unwrap();
+    let handle = tokio::spawn(app.oneshot(request));
+
+    let mut saw_reservation = false;
+    for _ in 0..100 {
+        if quota_reservation_status(&pool, &ctx, &storage_reservation_key)
+            .await
+            .is_some()
+        {
+            saw_reservation = true;
+            break;
+        }
+        if handle.is_finished() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert!(saw_reservation, "request should reach quota reservation");
+    handle.abort();
+    let _ = handle.await;
+
+    let mut terminal = None;
+    for _ in 0..200 {
+        let status = quota_reservation_status(&pool, &ctx, &storage_reservation_key).await;
+        if matches!(
+            status.as_deref(),
+            Some("finalized" | "refunded" | "expired")
+        ) {
+            terminal = status;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let terminal = terminal.expect("quota reservation reaches terminal state");
+    let storage_counter = quota_counter_value(&pool, &ctx, "storage_bytes").await;
+    match terminal.as_str() {
+        "finalized" => assert_eq!(storage_counter, expected_len),
+        "refunded" | "expired" => assert_eq!(storage_counter, 0),
+        other => panic!("unexpected terminal status {other}"),
+    }
 
     ephemeral.drop().await;
 }

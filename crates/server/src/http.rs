@@ -16,9 +16,11 @@ use uuid::Uuid;
 use crate::api::ApiError;
 use crate::auth::jwt::JwtKeys;
 use crate::auth::provider::PasswordAuthProvider;
+use crate::config::QuotaSweepConfig;
 use crate::database;
 use crate::db::pool::create_pool;
 use crate::routes;
+use crate::services::quota;
 use crate::state::RuntimeState;
 
 const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -66,6 +68,7 @@ impl AppState {
             ),
             Err(_) => None,
         };
+        start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
         Ok(Self {
             runtime,
             http_client,
@@ -124,6 +127,32 @@ impl AppState {
     pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
         self.object_store.as_ref()
     }
+}
+
+fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            // Admission itself is time-correct (it filters `expires_at` against a
+            // lock-scoped `clock_timestamp()` in SQL). This bounded sweep is hygiene
+            // so expired reservations become terminal and operational gauges stop
+            // showing stale reserved rows.
+            match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
+                Ok(expired) if expired > 0 => {
+                    eprintln!("fileconv-server: quota expiry sweep marked {expired} reservations");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!(
+                        "fileconv-server: quota expiry sweep failed: {}",
+                        error.code()
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[derive(Debug, Serialize)]

@@ -571,6 +571,36 @@ pub enum ResourceKind {
     Tokens,
 }
 
+impl ResourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StorageBytes => "storage_bytes",
+            Self::Documents => "documents",
+            Self::ConcurrentJobs => "concurrent_jobs",
+            Self::Tokens => "tokens",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "storage_bytes" => Ok(Self::StorageBytes),
+            "documents" => Ok(Self::Documents),
+            "concurrent_jobs" => Ok(Self::ConcurrentJobs),
+            "tokens" => Ok(Self::Tokens),
+            other => Err(format!("unknown resource kind: {other}")),
+        }
+    }
+
+    pub const fn counter_key(self) -> Option<&'static str> {
+        match self {
+            Self::StorageBytes => Some("storage_bytes"),
+            Self::Documents => Some("documents"),
+            Self::Tokens => Some("tokens"),
+            Self::ConcurrentJobs => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReservationStatus {
@@ -578,6 +608,27 @@ pub enum ReservationStatus {
     Finalized,
     Refunded,
     Expired,
+}
+
+impl ReservationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reserved => "reserved",
+            Self::Finalized => "finalized",
+            Self::Refunded => "refunded",
+            Self::Expired => "expired",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "reserved" => Ok(Self::Reserved),
+            "finalized" => Ok(Self::Finalized),
+            "refunded" => Ok(Self::Refunded),
+            "expired" => Ok(Self::Expired),
+            other => Err(format!("unknown reservation status: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
