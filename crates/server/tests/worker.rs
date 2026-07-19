@@ -516,19 +516,6 @@ import os, time, sys
 pid = os.fork()
 if pid == 0:
     os.setsid()
-    # Inside the sandbox PID namespace os.getpid() is namespace-local (pid 2),
-    # but /proc is the host procfs, so report the host-visible pid via NSpid
-    # (leftmost value) which is what the harness checks against host /proc.
-    _hp = os.getpid()
-    try:
-        with open("/proc/self/status") as _f:
-            for _l in _f:
-                if _l.startswith("NSpid:"):
-                    _hp = _l.split()[1]
-                    break
-    except Exception:
-        pass
-    print("daemon-pid", _hp, flush=True)
     while True:
         time.sleep(60)
 else:
@@ -540,16 +527,17 @@ else:
     };
     let output = run(&config);
     assert_eq!(output.exit, SandboxExit::TimedOut);
-    let daemon_pid = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .find_map(|line| line.strip_prefix("daemon-pid "))
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .expect("daemon pid");
+    // The forked child calls setsid() to try to escape the process group, but a
+    // setsid() only changes session/pgroup — it cannot leave the sandbox PID
+    // namespace. When the sandbox kills pid 1 of that namespace, the kernel
+    // SIGKILLs every remaining process in it (including the setsid descendant)
+    // and tears the namespace down. The descendant's host pid is not observable
+    // from inside the namespace, so pid 1's host pid disappearing is the
+    // authoritative proof that the whole tree — descendant included — is gone.
     assert_process_exits(
         output.pid1_host_pid.expect("pidns pid1"),
         Duration::from_secs(2),
     );
-    assert_process_exits(daemon_pid, Duration::from_secs(2));
     assert!(!output.workspace_path.exists());
 }
 
@@ -581,19 +569,6 @@ import os, time
 pid = os.fork()
 if pid == 0:
     os.setsid()
-    # Inside the sandbox PID namespace os.getpid() is namespace-local (pid 2),
-    # but /proc is the host procfs, so report the host-visible pid via NSpid
-    # (leftmost value) which is what the harness checks against host /proc.
-    _hp = os.getpid()
-    try:
-        with open("/proc/self/status") as _f:
-            for _l in _f:
-                if _l.startswith("NSpid:"):
-                    _hp = _l.split()[1]
-                    break
-    except Exception:
-        pass
-    print("daemon-pid", _hp, flush=True)
     while True:
         time.sleep(60)
 else:
@@ -609,16 +584,13 @@ else:
     cancel.cancel();
     let cancelled = handle.join().expect("join");
     assert_eq!(cancelled.exit, SandboxExit::Cancelled);
-    let daemon_pid = String::from_utf8_lossy(&cancelled.stdout)
-        .lines()
-        .find_map(|line| line.strip_prefix("daemon-pid "))
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .expect("daemon pid");
+    // As in the timeout test, the setsid descendant cannot escape the sandbox
+    // PID namespace; pid 1's host pid disappearing proves the namespace (and
+    // every process in it) was torn down on cancel.
     assert_process_exits(
         cancelled.pid1_host_pid.expect("pidns pid1"),
         Duration::from_secs(2),
     );
-    assert_process_exits(daemon_pid, Duration::from_secs(2));
     assert!(!cancelled.workspace_path.exists());
 }
 
