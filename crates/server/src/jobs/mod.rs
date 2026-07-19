@@ -24,7 +24,11 @@ pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 2;
 pub const CURRENT_EVENT_PAYLOAD_VERSION: i32 = 2;
 
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 160;
-const MAX_LEASE_IDENTIFIER_LEN: usize = 200;
+pub const MAX_WORKER_ID_LEN: usize = 128;
+const LEASE_TOKEN_SEPARATOR_LEN: usize = 1;
+const LEASE_TOKEN_UUID_LEN: usize = 36;
+pub const MAX_LEASE_TOKEN_LEN: usize =
+    MAX_WORKER_ID_LEN + LEASE_TOKEN_SEPARATOR_LEN + LEASE_TOKEN_UUID_LEN;
 const MAX_LAST_ERROR_LEN: usize = 2048;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -305,7 +309,7 @@ pub async fn claim(
     limit: u32,
     lease_ttl: Duration,
 ) -> Result<Vec<Job>, JobError> {
-    validate_lease_identifier(worker_id)?;
+    validate_worker_id(worker_id)?;
     let limit = checked_limit(limit)?;
     let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
     pool::with_org_txn_typed(db_pool, ctx, {
@@ -714,10 +718,15 @@ fn validate_idempotency_key(key: &str) -> Result<(), JobError> {
     Ok(())
 }
 
+fn validate_worker_id(value: &str) -> Result<(), JobError> {
+    if value.is_empty() || value.len() > MAX_WORKER_ID_LEN || value.chars().any(char::is_control) {
+        return Err(JobError::InvalidLeaseOwner);
+    }
+    Ok(())
+}
+
 fn validate_lease_identifier(value: &str) -> Result<(), JobError> {
-    if value.is_empty()
-        || value.len() > MAX_LEASE_IDENTIFIER_LEN
-        || value.chars().any(char::is_control)
+    if value.is_empty() || value.len() > MAX_LEASE_TOKEN_LEN || value.chars().any(char::is_control)
     {
         return Err(JobError::InvalidLeaseOwner);
     }

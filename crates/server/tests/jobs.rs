@@ -20,6 +20,7 @@ use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{
     self, CancelOutcome, CheckpointPayload, EnqueueJob, EventLogOutboxSink, EventPayload, JobError,
     JobPayload, OutboxSink, CURRENT_EVENT_PAYLOAD_VERSION, CURRENT_JOB_PAYLOAD_VERSION,
+    MAX_LEASE_TOKEN_LEN, MAX_WORKER_ID_LEN,
 };
 use serde_json::json;
 use tokio::sync::Barrier;
@@ -764,6 +765,124 @@ async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
     assert_eq!(resumed[0].id, job.id);
     assert_eq!(resumed[0].checkpoint, Some(checkpoint_json));
     assert_eq!(resumed[0].attempts, 2);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn max_length_worker_id_yields_usable_lease_tokens_for_all_worker_mutations() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "jobs-worker-boundary",
+    )
+    .await;
+    let worker_id = "w".repeat(MAX_WORKER_ID_LEN);
+
+    let heartbeat_job = enqueue_with_attempts(&pool, &context, "max-worker-heartbeat", 3).await;
+    let heartbeat_claim = jobs::claim(&pool, &context, &worker_id, 1, Duration::from_secs(60))
+        .await
+        .expect("claim heartbeat")
+        .remove(0);
+    let heartbeat_token = lease_token(&heartbeat_claim);
+    assert_eq!(heartbeat_token.len(), MAX_LEASE_TOKEN_LEN);
+    jobs::heartbeat(
+        &pool,
+        &context,
+        heartbeat_job.id,
+        heartbeat_token,
+        heartbeat_claim.attempts,
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("heartbeat max token");
+
+    let checkpoint_job = enqueue_with_attempts(&pool, &context, "max-worker-checkpoint", 3).await;
+    let checkpoint_claim = jobs::claim(&pool, &context, &worker_id, 1, Duration::from_secs(60))
+        .await
+        .expect("claim checkpoint")
+        .remove(0);
+    let checkpoint = jobs::checkpoint(
+        &pool,
+        &context,
+        checkpoint_job.id,
+        lease_token(&checkpoint_claim),
+        checkpoint_claim.attempts,
+        CheckpointPayload {
+            cursor_id: Some(Uuid::new_v4()),
+            completed_ids: vec![Uuid::new_v4()],
+            offset: Some(1),
+        },
+    )
+    .await
+    .expect("checkpoint max token");
+    assert!(checkpoint.checkpoint.is_some());
+
+    let complete_job = enqueue_with_attempts(&pool, &context, "max-worker-complete", 3).await;
+    let complete_claim = jobs::claim(&pool, &context, &worker_id, 1, Duration::from_secs(60))
+        .await
+        .expect("claim complete")
+        .remove(0);
+    let completed = jobs::complete(
+        &pool,
+        &context,
+        complete_job.id,
+        lease_token(&complete_claim),
+        complete_claim.attempts,
+    )
+    .await
+    .expect("complete max token");
+    assert_eq!(completed.status, JobStatus::Succeeded);
+
+    let fail_job = enqueue_with_attempts(&pool, &context, "max-worker-fail", 3).await;
+    let fail_claim = jobs::claim(&pool, &context, &worker_id, 1, Duration::from_secs(60))
+        .await
+        .expect("claim fail")
+        .remove(0);
+    let failed = jobs::fail(
+        &pool,
+        &context,
+        fail_job.id,
+        lease_token(&fail_claim),
+        fail_claim.attempts,
+        "transient",
+    )
+    .await
+    .expect("fail max token");
+    assert_eq!(failed.status, JobStatus::Pending);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn over_limit_worker_id_is_rejected_before_claiming() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "jobs-worker-overlimit",
+    )
+    .await;
+    let job = enqueue_one(&pool, &context, "worker-overlimit").await;
+    let worker_id = "w".repeat(MAX_WORKER_ID_LEN + 1);
+
+    assert!(matches!(
+        jobs::claim(&pool, &context, &worker_id, 1, Duration::from_secs(60)).await,
+        Err(JobError::InvalidLeaseOwner)
+    ));
+    let stored = get_job(&pool, &context, job.id).await;
+    assert_eq!(stored.status, JobStatus::Pending);
+    assert_eq!(stored.attempts, 0);
+    assert!(stored.lease_owner.is_none());
 
     ephemeral.drop().await;
 }
