@@ -26,10 +26,16 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
     queueMicrotask(() => {
-      void loadConnection();
+      if (!disposed) {
+        void loadConnection();
+      }
     });
-    return () => controllerRef.current?.abort();
+    return () => {
+      disposed = true;
+      controllerRef.current?.abort();
+    };
   }, [loadConnection]);
 
   const checkConnection = () => void loadConnection();
@@ -64,7 +70,7 @@ export function App() {
         <section className="connection-card" aria-labelledby="connection-heading">
           <div>
             <p className="card-label">Kết nối dịch vụ</p>
-            <h2 id="connection-heading">{isReady ? 'Backend đã sẵn sàng' : 'Đang chờ backend'}</h2>
+            <h2 id="connection-heading">{isReady ? 'Máy chủ đã sẵn sàng' : 'Đang chờ máy chủ'}</h2>
             <p className="card-copy">
               {isReady
                 ? 'Không gian tài liệu có thể tải dữ liệu thật khi các API nghiệp vụ sẵn sàng.'
