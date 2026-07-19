@@ -161,6 +161,16 @@ impl IndexWorker {
                     Err(error) => Err(IndexWorkerError::Job(error)),
                 }
             }
+            Ok(Ok(IndexVersionOutcome::Aborted)) | Ok(Err(IndexingError::DocumentDeleted)) => {
+                self.fail_claimed(
+                    ctx,
+                    &job,
+                    &lease_token,
+                    attempts,
+                    IndexingError::DocumentDeleted.safe_job_error(),
+                )
+                .await
+            }
             Ok(Err(IndexingError::Job(JobError::LeaseLost))) => {
                 Ok(IndexWorkerRun::LeaseLost { job_id: job.id })
             }

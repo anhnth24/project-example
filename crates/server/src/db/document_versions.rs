@@ -238,6 +238,84 @@ pub async fn find_markdown_artifact(
     .transpose()
 }
 
+/// Lists distinct object keys recorded for every version/artifact of a document.
+///
+/// These rows are immutable inventory; purge deletes only the objects they name.
+pub async fn list_object_keys_by_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Vec<String>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT key
+             FROM (
+                SELECT original_object_key AS key
+                FROM document_versions
+                WHERE org_id = $1 AND document_id = $2
+                UNION
+                SELECT markdown_object_key AS key
+                FROM document_versions
+                WHERE org_id = $1 AND document_id = $2 AND markdown_object_key IS NOT NULL
+                UNION
+                SELECT object_key AS key
+                FROM derived_artifacts
+                WHERE org_id = $1 AND document_id = $2
+             ) keys
+             WHERE key IS NOT NULL
+             ORDER BY key",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get("key")).collect())
+}
+
+pub async fn object_key_is_referenced(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    object_key: &str,
+) -> Result<bool, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM document_versions
+                WHERE org_id = $1
+                  AND (
+                    original_object_key = $2
+                    OR markdown_object_key = $2
+                  )
+                UNION ALL
+                SELECT 1
+                FROM derived_artifacts
+                WHERE org_id = $1 AND object_key = $2
+             )",
+            &[&ctx.org_id(), &object_key],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+pub async fn list_by_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Vec<DocumentVersion>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT id, org_id, document_id, version_number, parent_version_id,
+                    publication_state, is_current, content_sha256, original_object_key,
+                    markdown_object_key, source_filename, source_content_type, byte_size,
+                    effective_from, effective_to, change_summary, created_by_user_id, created_at
+             FROM document_versions
+             WHERE org_id = $1 AND document_id = $2
+             ORDER BY version_number, id",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    rows.iter().map(map_version).collect()
+}
+
 pub async fn promote_current_if_needed(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

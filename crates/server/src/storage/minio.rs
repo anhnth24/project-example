@@ -301,8 +301,8 @@ impl MinioClient {
             return Err(StorageError::ConfigInvalid);
         }
         let generated_key = request.key.clone();
-        // TODO(I07): persist pending generated keys in the durable outbox/GC so crash
-        // recovery can reconcile objects beyond this live bounded task.
+        // I07 reconciles checkpointed dead-letter staging keys; uncheckpointed crash
+        // windows still need a future durable generated-object intent.
         let path = generated_key.as_str();
         let mut headers = identity_headers(&request.meta, &request.content_type)?;
         headers.insert(
