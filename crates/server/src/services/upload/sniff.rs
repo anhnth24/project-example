@@ -111,7 +111,11 @@ fn extension_of(filename: &str) -> Option<&str> {
     Some(ext)
 }
 
-fn extension_matches(format: CanonicalFormat, ext: &str) -> bool {
+pub fn declared_extension(filename: &str) -> Option<&str> {
+    extension_of(filename)
+}
+
+pub fn extension_matches(format: CanonicalFormat, ext: &str) -> bool {
     let ext = ext.to_ascii_lowercase();
     match format {
         CanonicalFormat::Pdf => ext == "pdf",
@@ -137,6 +141,52 @@ fn extension_matches(format: CanonicalFormat, ext: &str) -> bool {
         CanonicalFormat::Ogg => ext == "ogg",
         CanonicalFormat::Flac => ext == "flac",
         CanonicalFormat::M4a => matches!(ext.as_str(), "m4a" | "mp4"),
+    }
+}
+
+pub fn mime_matches(format: CanonicalFormat, content_type: &str) -> bool {
+    let mime = content_type
+        .split(';')
+        .next()
+        .unwrap_or(content_type)
+        .trim()
+        .to_ascii_lowercase();
+    if mime.is_empty()
+        || matches!(
+            mime.as_str(),
+            "application/octet-stream" | "binary/octet-stream"
+        )
+    {
+        return true;
+    }
+    match format {
+        CanonicalFormat::Pdf => mime == "application/pdf",
+        CanonicalFormat::Docx => {
+            mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        CanonicalFormat::Pptx => {
+            mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        }
+        CanonicalFormat::Xlsx => {
+            mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }
+        CanonicalFormat::Ods => mime == "application/vnd.oasis.opendocument.spreadsheet",
+        CanonicalFormat::Xls => mime == "application/vnd.ms-excel",
+        CanonicalFormat::Xlsb => mime == "application/vnd.ms-excel.sheet.binary.macroenabled.12",
+        CanonicalFormat::Csv => matches!(mime.as_str(), "text/csv" | "text/tab-separated-values"),
+        CanonicalFormat::Html => matches!(mime.as_str(), "text/html" | "application/xhtml+xml"),
+        CanonicalFormat::PlainText => matches!(mime.as_str(), "text/plain" | "text/markdown"),
+        CanonicalFormat::Png => mime == "image/png",
+        CanonicalFormat::Jpeg => mime == "image/jpeg",
+        CanonicalFormat::Webp => mime == "image/webp",
+        CanonicalFormat::Tiff => mime == "image/tiff",
+        CanonicalFormat::Bmp => mime == "image/bmp",
+        CanonicalFormat::Wav => matches!(mime.as_str(), "audio/wav" | "audio/x-wav"),
+        CanonicalFormat::Mp3 => matches!(mime.as_str(), "audio/mpeg" | "audio/mp3"),
+        CanonicalFormat::Ogg => matches!(mime.as_str(), "audio/ogg" | "application/ogg"),
+        CanonicalFormat::Flac => mime == "audio/flac",
+        CanonicalFormat::M4a => matches!(mime.as_str(), "audio/mp4" | "audio/x-m4a" | "video/mp4"),
+        CanonicalFormat::ZipContainer => mime == "application/zip",
     }
 }
 
@@ -266,7 +316,7 @@ fn looks_like_csv(head: &[u8]) -> bool {
 
 /// Map a ZIP container to a specific OOXML/ODS format using required member paths.
 pub fn refine_zip_format(
-    provisional: CanonicalFormat,
+    _provisional: CanonicalFormat,
     has_content_types: bool,
     has_word: bool,
     has_ppt: bool,
@@ -286,23 +336,10 @@ pub fn refine_zip_format(
         (true, false, false) => Ok(CanonicalFormat::Docx),
         (false, true, false) => Ok(CanonicalFormat::Pptx),
         (false, false, true) => Ok(CanonicalFormat::Xlsx),
-        _ => {
-            // Ambiguous or empty OOXML — fail closed unless provisional was set by extension.
-            if matches!(
-                provisional,
-                CanonicalFormat::Docx
-                    | CanonicalFormat::Pptx
-                    | CanonicalFormat::Xlsx
-                    | CanonicalFormat::Ods
-            ) {
-                Ok(provisional)
-            } else {
-                Err(UploadError::rejected(
-                    ThreatClass::MalformedOoxml,
-                    ReasonCode::MissingFormatPaths,
-                ))
-            }
-        }
+        _ => Err(UploadError::rejected(
+            ThreatClass::MalformedOoxml,
+            ReasonCode::MissingFormatPaths,
+        )),
     }
 }
 

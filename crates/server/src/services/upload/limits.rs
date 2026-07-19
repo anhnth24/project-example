@@ -14,6 +14,14 @@ pub const MAX_PDF_PAGES: u32 = 500;
 pub const MAX_IMAGE_PIXELS: u64 = 80_000_000;
 /// Max audio duration seconds (header-level preflight).
 pub const MAX_AUDIO_DURATION_SECS: u64 = 3_600;
+/// Max multipart parts accepted per upload request.
+pub const MAX_MULTIPART_PARTS: u32 = 8;
+/// Max bytes allowed in per-part disposition/type metadata captured by Axum.
+pub const MAX_PART_HEADER_BYTES: usize = 8 * 1024;
+/// Whole upload request timeout.
+pub const UPLOAD_TIMEOUT_SECS: u64 = 120;
+/// Idle timeout while waiting for the next multipart field/chunk.
+pub const UPLOAD_IDLE_TIMEOUT_SECS: u64 = 15;
 /// Streaming read chunk size (bounded memory).
 pub const STREAM_CHUNK_BYTES: usize = 64 * 1024;
 /// Bytes retained from the head for magic sniffing.
@@ -31,6 +39,10 @@ pub struct LimitsConfig {
     pub max_pdf_pages: u32,
     pub max_image_pixels: u64,
     pub max_audio_duration_secs: u64,
+    pub max_multipart_parts: u32,
+    pub max_part_header_bytes: usize,
+    pub upload_timeout_secs: u64,
+    pub upload_idle_timeout_secs: u64,
 }
 
 impl LimitsConfig {
@@ -44,6 +56,10 @@ impl LimitsConfig {
             max_pdf_pages: MAX_PDF_PAGES,
             max_image_pixels: MAX_IMAGE_PIXELS,
             max_audio_duration_secs: MAX_AUDIO_DURATION_SECS,
+            max_multipart_parts: MAX_MULTIPART_PARTS,
+            max_part_header_bytes: MAX_PART_HEADER_BYTES,
+            upload_timeout_secs: UPLOAD_TIMEOUT_SECS,
+            upload_idle_timeout_secs: UPLOAD_IDLE_TIMEOUT_SECS,
         }
     }
 
@@ -90,6 +106,29 @@ impl LimitsConfig {
                 "upload max_audio_duration_secs must be between 1 and {MAX_AUDIO_DURATION_SECS}"
             ));
         }
+        if self.max_multipart_parts == 0 || self.max_multipart_parts > MAX_MULTIPART_PARTS {
+            return Err(format!(
+                "upload max_multipart_parts must be between 1 and {MAX_MULTIPART_PARTS}"
+            ));
+        }
+        if self.max_part_header_bytes == 0 || self.max_part_header_bytes > MAX_PART_HEADER_BYTES {
+            return Err(format!(
+                "upload max_part_header_bytes must be between 1 and {MAX_PART_HEADER_BYTES}"
+            ));
+        }
+        if self.upload_timeout_secs == 0 || self.upload_timeout_secs > UPLOAD_TIMEOUT_SECS {
+            return Err(format!(
+                "upload upload_timeout_secs must be between 1 and {UPLOAD_TIMEOUT_SECS}"
+            ));
+        }
+        if self.upload_idle_timeout_secs == 0
+            || self.upload_idle_timeout_secs > UPLOAD_IDLE_TIMEOUT_SECS
+            || self.upload_idle_timeout_secs > self.upload_timeout_secs
+        {
+            return Err(format!(
+                "upload upload_idle_timeout_secs must be between 1 and min(upload_timeout_secs, {UPLOAD_IDLE_TIMEOUT_SECS})"
+            ));
+        }
         Ok(())
     }
 }
@@ -114,6 +153,10 @@ mod tests {
         assert_eq!(limits.max_pdf_pages, 500);
         assert_eq!(limits.max_image_pixels, 80_000_000);
         assert_eq!(limits.max_audio_duration_secs, 3_600);
+        assert_eq!(limits.max_multipart_parts, 8);
+        assert_eq!(limits.max_part_header_bytes, 8 * 1024);
+        assert_eq!(limits.upload_timeout_secs, 120);
+        assert_eq!(limits.upload_idle_timeout_secs, 15);
         limits.validate().unwrap();
     }
 

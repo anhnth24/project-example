@@ -2115,14 +2115,16 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "crc32fast",
  "deadpool-postgres",
  "fileconv-core",
  "fileconv-knowledge",
  "futures",
- "futures-util",
  "hex",
  "http-body-util",
+ "image",
  "jsonwebtoken",
+ "quick-xml 0.41.0",
  "rand 0.10.2",
  "reqwest 0.13.4",
  "rust-s3",
@@ -2132,12 +2134,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "symphonia",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
  "tokio-postgres-rustls",
- "tokio-util",
  "tower",
  "uuid",
  "zip 2.4.2",
@@ -4980,6 +4982,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
 dependencies = [
  "encoding_rs",
+ "memchr",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
  "memchr",
 ]
 

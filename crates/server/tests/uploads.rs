@@ -30,7 +30,7 @@ use fileconv_server::services::upload::{
     UploadError,
 };
 use fileconv_server::state::RuntimeState;
-use fileconv_server::storage::keys::quarantine_key;
+use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key};
 use fileconv_server::storage::minio::MinioClient;
 use futures::stream;
 use http_body_util::BodyExt;
@@ -39,6 +39,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
+
+const DOCX_CONTENT_TYPES_XML: &[u8] = br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
 
 fn adversarial_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bench/markhand_web/adversarial/files")
@@ -231,13 +233,89 @@ async fn stream_file(path: &Path) -> fileconv_server::services::upload::Streamed
     .expect("stream")
 }
 
+fn write_docx_zip(path: &Path, entries: &[(&str, &[u8])], compression: CompressionMethod) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(compression);
+    zip.start_file("[Content_Types].xml", options).unwrap();
+    zip.write_all(DOCX_CONTENT_TYPES_XML).unwrap();
+    zip.start_file("word/document.xml", options).unwrap();
+    zip.write_all(br#"<?xml version="1.0"?><w:document></w:document>"#)
+        .unwrap();
+    for (name, data) in entries {
+        zip.start_file(*name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+fn write_manual_stored_zip(path: &Path, entries: &[(&str, &[u8])]) {
+    let mut bytes = Vec::new();
+    let mut central = Vec::new();
+    for (name, data) in entries {
+        let offset = bytes.len() as u32;
+        let crc = crc32fast::hash(data);
+        let name_bytes = name.as_bytes();
+        bytes.extend_from_slice(b"PK\x03\x04");
+        bytes.extend_from_slice(&20_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(&crc.to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&0_u16.to_le_bytes());
+        bytes.extend_from_slice(name_bytes);
+        bytes.extend_from_slice(data);
+
+        central.extend_from_slice(b"PK\x01\x02");
+        central.extend_from_slice(&20_u16.to_le_bytes());
+        central.extend_from_slice(&20_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&crc.to_le_bytes());
+        central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u16.to_le_bytes());
+        central.extend_from_slice(&0_u32.to_le_bytes());
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name_bytes);
+    }
+    let central_offset = bytes.len() as u32;
+    let central_size = central.len() as u32;
+    bytes.extend_from_slice(&central);
+    bytes.extend_from_slice(b"PK\x05\x06");
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&central_size.to_le_bytes());
+    bytes.extend_from_slice(&central_offset.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    std::fs::write(path, bytes).unwrap();
+}
+
 #[tokio::test]
 async fn spoof_pdf_and_html_pdf_reject() {
     let limits = LimitsConfig::policy_defaults();
     for name in ["plain-text.pdf", "actually-html.pdf"] {
         let path = adversarial_dir().join(name);
         let streamed = stream_file(&path).await;
-        let err = validate_streamed_bytes(&streamed, Some(name), &limits).unwrap_err();
+        let err = validate_streamed_bytes(
+            &streamed,
+            Some(name),
+            Some("application/octet-stream"),
+            &limits,
+        )
+        .unwrap_err();
         assert_eq!(err.threat_class(), Some(ThreatClass::ExtensionSpoof));
         assert_eq!(err.reason_code(), ReasonCode::ExtensionMagicMismatch);
     }
@@ -247,14 +325,26 @@ async fn spoof_pdf_and_html_pdf_reject() {
 async fn malformed_and_traversal_docx_reject() {
     let limits = LimitsConfig::policy_defaults();
     let malformed = stream_file(&adversarial_dir().join("malformed.docx")).await;
-    let err = validate_streamed_bytes(&malformed, Some("malformed.docx"), &limits).unwrap_err();
+    let err = validate_streamed_bytes(
+        &malformed,
+        Some("malformed.docx"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap_err();
     assert!(matches!(
         err.threat_class(),
         Some(ThreatClass::MalformedOoxml)
     ));
 
     let traversal = stream_file(&adversarial_dir().join("traversal.docx")).await;
-    let err = validate_streamed_bytes(&traversal, Some("traversal.docx"), &limits).unwrap_err();
+    let err = validate_streamed_bytes(
+        &traversal,
+        Some("traversal.docx"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::ArchiveTraversal));
 }
 
@@ -264,10 +354,155 @@ async fn zip_bomb_rejects_without_unbounded_decompress() {
     let streamed = stream_file(&adversarial_dir().join("compressed-bomb.docx")).await;
     // Memory bound: we only hold the small on-disk fixture + CD metadata.
     assert!(streamed.size_bytes < 64 * 1024);
-    let err =
-        validate_streamed_bytes(&streamed, Some("compressed-bomb.docx"), &limits).unwrap_err();
+    let err = validate_streamed_bytes(
+        &streamed,
+        Some("compressed-bomb.docx"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::ArchiveBomb));
     assert_eq!(err.reason_code(), ReasonCode::ArchiveCompressionRatio);
+}
+
+#[tokio::test]
+async fn large_lazy_stream_keeps_memory_bounded() {
+    let limits = LimitsConfig::policy_defaults();
+    let before = current_rss_kib();
+    let chunks = (0..1024).map(|_| Ok::<_, std::io::Error>(Bytes::from(vec![b'a'; 64 * 1024])));
+    let streamed = stream_to_tempfile(stream::iter(chunks), &limits)
+        .await
+        .expect("stream large lazy body");
+    let after = current_rss_kib();
+    assert_eq!(streamed.size_bytes, 64 * 1024 * 1024);
+    assert!(streamed.head.len() <= 512);
+    if let (Some(before), Some(after)) = (before, after) {
+        assert!(
+            after.saturating_sub(before) < 32 * 1024,
+            "RSS grew from {before} KiB to {after} KiB"
+        );
+    }
+}
+
+fn current_rss_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?.trim();
+        value.split_whitespace().next()?.parse().ok()
+    })
+}
+
+#[tokio::test]
+async fn hidden_nested_polyglot_duplicate_and_symlink_reject() {
+    let limits = LimitsConfig::policy_defaults();
+    let dir = tempfile::tempdir().unwrap();
+
+    let nested = dir.path().join("nested.docx");
+    write_docx_zip(
+        &nested,
+        &[("word/media/blob.bin", b"PK\x03\x04nested")],
+        CompressionMethod::Stored,
+    );
+    let err = validate_zip_archive(&nested, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::NestedArchive));
+
+    let polyglot = dir.path().join("polyglot.docx");
+    let file = std::fs::File::create(&polyglot).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    zip.start_file("[Content_Types].xml", options).unwrap();
+    zip.write_all(DOCX_CONTENT_TYPES_XML).unwrap();
+    zip.start_file("word/document.xml", options).unwrap();
+    zip.write_all(br#"<?xml version="1.0"?><w:document></w:document>"#)
+        .unwrap();
+    zip.start_file("ppt/presentation.xml", options).unwrap();
+    zip.write_all(br#"<?xml version="1.0"?><p:presentation></p:presentation>"#)
+        .unwrap();
+    zip.finish().unwrap();
+    let err = validate_zip_archive(&polyglot, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::MalformedOoxml));
+
+    let duplicate = dir.path().join("duplicate.docx");
+    write_manual_stored_zip(
+        &duplicate,
+        &[
+            ("[Content_Types].xml", DOCX_CONTENT_TYPES_XML),
+            (
+                "word/document.xml",
+                br#"<?xml version="1.0"?><w:document></w:document>"#,
+            ),
+            (
+                "word/document.xml",
+                br#"<?xml version="1.0"?><w:document></w:document>"#,
+            ),
+        ],
+    );
+    let err = validate_zip_archive(&duplicate, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::MalformedOoxml));
+
+    let symlink = dir.path().join("symlink.docx");
+    let file = std::fs::File::create(&symlink).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    zip.start_file("[Content_Types].xml", options).unwrap();
+    zip.write_all(DOCX_CONTENT_TYPES_XML).unwrap();
+    zip.start_file("word/document.xml", options).unwrap();
+    zip.write_all(br#"<?xml version="1.0"?><w:document></w:document>"#)
+        .unwrap();
+    let symlink_options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .unix_permissions(0o120777);
+    zip.start_file("word/media/link", symlink_options).unwrap();
+    zip.write_all(b"target").unwrap();
+    zip.finish().unwrap();
+    let mut bytes = std::fs::read(&symlink).unwrap();
+    let mut pos = 0;
+    while let Some(offset) = bytes[pos..].windows(4).position(|w| w == b"PK\x01\x02") {
+        let start = pos + offset;
+        let name_len =
+            u16::from_le_bytes(bytes[start + 28..start + 30].try_into().unwrap()) as usize;
+        let name = &bytes[start + 46..start + 46 + name_len];
+        if name == b"word/media/link" {
+            bytes[start + 5] = 3;
+            bytes[start + 38..start + 42].copy_from_slice(&((0o120777_u32) << 16).to_le_bytes());
+            break;
+        }
+        pos = start + 4;
+    }
+    std::fs::write(&symlink, bytes).unwrap();
+    let err = validate_zip_archive(&symlink, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::ArchiveTraversal));
+}
+
+#[tokio::test]
+async fn forged_central_directory_size_rejects_during_inflation() {
+    let limits = LimitsConfig::policy_defaults();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("forged.docx");
+    let payload = [b'x'; 128];
+    write_docx_zip(
+        &path,
+        &[("word/media/payload.bin", payload.as_slice())],
+        CompressionMethod::Stored,
+    );
+    let mut bytes = std::fs::read(&path).unwrap();
+    let mut pos = 0;
+    while let Some(offset) = bytes[pos..].windows(4).position(|w| w == b"PK\x01\x02") {
+        let start = pos + offset;
+        let name_len =
+            u16::from_le_bytes(bytes[start + 28..start + 30].try_into().unwrap()) as usize;
+        let name = &bytes[start + 46..start + 46 + name_len];
+        if name == b"word/media/payload.bin" {
+            bytes[start + 24..start + 28].copy_from_slice(&1_u32.to_le_bytes());
+            break;
+        }
+        pos = start + 4;
+    }
+    std::fs::write(&path, bytes).unwrap();
+    let err = validate_zip_archive(&path, CanonicalFormat::Docx, &limits).unwrap_err();
+    assert!(matches!(
+        err.threat_class(),
+        Some(ThreatClass::MalformedOoxml) | Some(ThreatClass::ArchiveBomb)
+    ));
 }
 
 #[tokio::test]
@@ -278,8 +513,7 @@ async fn entry_count_bomb_rejects() {
     let mut zip = zip::ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
     zip.start_file("[Content_Types].xml", options).unwrap();
-    zip.write_all(br#"<?xml version="1.0"?><Types></Types>"#)
-        .unwrap();
+    zip.write_all(DOCX_CONTENT_TYPES_XML).unwrap();
     zip.start_file("word/document.xml", options).unwrap();
     zip.write_all(br#"<?xml version="1.0"?><w:document></w:document>"#)
         .unwrap();
@@ -313,6 +547,56 @@ async fn oversize_stream_rejects_early() {
 }
 
 #[tokio::test]
+async fn mime_mismatch_and_malformed_audio_reject() {
+    let limits = LimitsConfig::policy_defaults();
+    let pdf = stream_to_tempfile(
+        stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(
+            b"%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\nxref\n0 1\n0000000000 65535 f \ntrailer<</Root 1 0 R>>\nstartxref\n42\n%%EOF\n",
+        ))]),
+        &limits,
+    )
+    .await
+    .unwrap();
+    let err =
+        validate_streamed_bytes(&pdf, Some("ok.pdf"), Some("text/plain"), &limits).unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::MimeMismatch));
+
+    let bad_mp3 = stream_to_tempfile(
+        stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(b"ID3bad"))]),
+        &limits,
+    )
+    .await
+    .unwrap();
+    let err = validate_streamed_bytes(&bad_mp3, Some("bad.mp3"), Some("audio/mpeg"), &limits)
+        .unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::ParserCorruption));
+
+    let mut wav = Vec::new();
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&36_u32.to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&16_000_u32.to_le_bytes());
+    wav.extend_from_slice(&0_u32.to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&4_u32.to_le_bytes());
+    wav.extend_from_slice(&[0_u8; 4]);
+    let zero_rate = stream_to_tempfile(
+        stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from(wav))]),
+        &limits,
+    )
+    .await
+    .unwrap();
+    let err = validate_streamed_bytes(&zero_rate, Some("zero.wav"), Some("audio/wav"), &limits)
+        .unwrap_err();
+    assert_eq!(err.threat_class(), Some(ThreatClass::ParserCorruption));
+}
+
+#[tokio::test]
 async fn truncated_stream_is_not_accepted() {
     let limits = LimitsConfig::policy_defaults();
     // Empty body after interruption-style empty stream → magic unrecognized / reject.
@@ -323,7 +607,13 @@ async fn truncated_stream_is_not_accepted() {
     .await
     .unwrap();
     assert_eq!(streamed.size_bytes, 0);
-    let err = validate_streamed_bytes(&streamed, Some("empty.pdf"), &limits).unwrap_err();
+    let err = validate_streamed_bytes(
+        &streamed,
+        Some("empty.pdf"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap_err();
     assert!(matches!(
         err.threat_class(),
         Some(ThreatClass::UnsupportedFormat) | Some(ThreatClass::ExtensionSpoof)
@@ -334,14 +624,26 @@ async fn truncated_stream_is_not_accepted() {
 async fn corrupt_and_page_bomb_pdf_reject() {
     let limits = LimitsConfig::policy_defaults();
     let corrupt = stream_file(&adversarial_dir().join("corrupt.pdf")).await;
-    let err = validate_streamed_bytes(&corrupt, Some("corrupt.pdf"), &limits).unwrap_err();
+    let err = validate_streamed_bytes(
+        &corrupt,
+        Some("corrupt.pdf"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap_err();
     assert!(matches!(
         err.threat_class(),
         Some(ThreatClass::ParserCorruption) | Some(ThreatClass::PdfPageBomb)
     ));
 
     let page_bomb = stream_file(&adversarial_dir().join("page-bomb.pdf")).await;
-    let err = validate_streamed_bytes(&page_bomb, Some("page-bomb.pdf"), &limits).unwrap_err();
+    let err = validate_streamed_bytes(
+        &page_bomb,
+        Some("page-bomb.pdf"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::PdfPageBomb));
 }
 
@@ -349,15 +651,25 @@ async fn corrupt_and_page_bomb_pdf_reject() {
 async fn formula_csv_and_prompt_html_quarantine() {
     let limits = LimitsConfig::policy_defaults();
     let csv = stream_file(&adversarial_dir().join("formula.csv")).await;
-    let (format, disposition, threat, _) =
-        validate_streamed_bytes(&csv, Some("formula.csv"), &limits).unwrap();
+    let (format, disposition, threat, _) = validate_streamed_bytes(
+        &csv,
+        Some("formula.csv"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap();
     assert_eq!(format, CanonicalFormat::Csv);
     assert_eq!(disposition, Disposition::Quarantined);
     assert_eq!(threat, Some(ThreatClass::CsvFormula));
 
     let html = stream_file(&adversarial_dir().join("prompt-injection.html")).await;
-    let (format, disposition, threat, _) =
-        validate_streamed_bytes(&html, Some("prompt-injection.html"), &limits).unwrap();
+    let (format, disposition, threat, _) = validate_streamed_bytes(
+        &html,
+        Some("prompt-injection.html"),
+        Some("application/octet-stream"),
+        &limits,
+    )
+    .unwrap();
     assert_eq!(format, CanonicalFormat::Html);
     assert_eq!(disposition, Disposition::Quarantined);
     assert_eq!(threat, Some(ThreatClass::PromptInjection));
@@ -374,8 +686,13 @@ async fn happy_path_small_fixtures_accepted() {
     ];
     for (name, expected) in cases {
         let streamed = stream_file(&golden_dir().join(name)).await;
-        let (format, disposition, _, _) =
-            validate_streamed_bytes(&streamed, Some(name), &limits).unwrap();
+        let (format, disposition, _, _) = validate_streamed_bytes(
+            &streamed,
+            Some(name),
+            Some("application/octet-stream"),
+            &limits,
+        )
+        .unwrap();
         assert_eq!(format, expected, "{name}");
         assert_eq!(disposition, Disposition::Accepted, "{name}");
         assert_disposition_is_typed(disposition);
@@ -431,7 +748,12 @@ async fn property_filename_and_magic_never_panic() {
             )
             .await
             .unwrap();
-            let result = validate_streamed_bytes(&streamed, Some(name), &limits);
+            let result = validate_streamed_bytes(
+                &streamed,
+                Some(name),
+                Some("application/octet-stream"),
+                &limits,
+            );
             match result {
                 Ok((_, disposition, _, _)) => assert_disposition_is_typed(disposition),
                 Err(error) => {
@@ -464,9 +786,16 @@ async fn happy_path_persists_to_quarantine_with_metadata() {
     let path = golden_dir().join("gold-004.pdf");
     let streamed = stream_file(&path).await;
     let expected_sha = streamed.sha256_hex.clone();
-    let outcome = validate_and_quarantine(&ctx, &client, &limits, streamed, Some("report.pdf"))
-        .await
-        .expect("accepted");
+    let outcome = validate_and_quarantine(
+        &ctx,
+        &client,
+        &limits,
+        streamed,
+        Some("report.pdf"),
+        Some("application/pdf"),
+    )
+    .await
+    .expect("accepted");
     assert_eq!(outcome.disposition, Disposition::Accepted);
     assert_eq!(outcome.canonical_format, CanonicalFormat::Pdf);
     assert_eq!(outcome.sha256_hex, expected_sha);
@@ -506,9 +835,16 @@ async fn rejected_upload_is_not_stored() {
     let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
     let limits = LimitsConfig::policy_defaults();
     let streamed = stream_file(&adversarial_dir().join("plain-text.pdf")).await;
-    let err = validate_and_quarantine(&ctx, &client, &limits, streamed, Some("plain-text.pdf"))
-        .await
-        .unwrap_err();
+    let err = validate_and_quarantine(
+        &ctx,
+        &client,
+        &limits,
+        streamed,
+        Some("plain-text.pdf"),
+        Some("application/pdf"),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(err.threat_class(), Some(ThreatClass::ExtensionSpoof));
     // No object should have been created; a random key lookup stays NotFound-ish after auth.
     let probe = quarantine_key(org, Uuid::new_v4(), Some("plain-text.pdf")).unwrap();
@@ -524,6 +860,7 @@ async fn http_upload_happy_and_spoof() {
         return;
     };
     store.ensure_bucket().await.expect("bucket");
+    let store_for_assert = store.clone();
 
     let ephemeral = EphemeralDb::create(&db_url).await;
     apply_migrations(&ephemeral.url).await.expect("migrations");
@@ -597,10 +934,30 @@ async fn http_upload_happy_and_spoof() {
     let key = json["objectKey"].as_str().unwrap();
     assert!(!key.contains("report.pdf"));
     assert!(key.starts_with("quarantine/"));
+    let parsed_key = parse_key_for_org(key, org).expect("parse quarantine key");
+    let stored_meta = store_for_assert
+        .head_metadata(org, &parsed_key)
+        .await
+        .expect("head stored upload");
+    assert_eq!(
+        stored_meta.get("original-filename").map(String::as_str),
+        Some("report.pdf")
+    );
+    assert_eq!(
+        stored_meta.get("content-length-bytes"),
+        Some(&pdf.len().to_string())
+    );
+    let stored = store_for_assert
+        .get_object(org, &parsed_key)
+        .await
+        .expect("get stored upload");
+    assert_eq!(stored.len(), pdf.len());
+    assert_eq!(hex::encode(Sha256::digest(&stored)), json["sha256"]);
 
     let spoof = std::fs::read(adversarial_dir().join("plain-text.pdf")).unwrap();
     let body = multipart_body("plain-text.pdf", &spoof);
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -621,6 +978,72 @@ async fn http_upload_happy_and_spoof() {
     assert_eq!(json["code"], "upload_rejected");
     assert!(!bytes.windows(b"not a pdf".len()).any(|w| w == b"not a pdf"));
 
+    let truncated = multipart_body_without_close("late.pdf", &pdf);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(truncated))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(json["disposition"], "accepted");
+    assert!(json.get("objectKey").is_none());
+
+    let too_many_parts = many_part_body(10);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(too_many_parts))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        json["details"]["reasonCode"],
+        ReasonCode::MultipartTooManyParts.as_str()
+    );
+
+    let huge_name = format!("{}.pdf", "a".repeat(9 * 1024));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(multipart_body(&huge_name, &pdf)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
     ephemeral.drop().await;
 }
 
@@ -633,6 +1056,29 @@ fn multipart_body(filename: &str, content: &[u8]) -> Vec<u8> {
     );
     body.extend_from_slice(content);
     body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
+fn multipart_body_without_close(filename: &str, content: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/pdf\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(content);
+    body
+}
+
+fn many_part_body(parts: usize) -> Vec<u8> {
+    let mut body = Vec::new();
+    for i in 0..parts {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"field{i}\"\r\n\r\nx\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
     body
 }
 

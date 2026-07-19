@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -134,11 +134,13 @@ struct Health {
 }
 
 pub fn router(state: AppState) -> Router {
+    let max_upload_bytes = state.runtime.config().upload().limits.max_upload_bytes as usize;
     Router::new()
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
         .merge(routes::uploads::router())
+        .layer(DefaultBodyLimit::max(max_upload_bytes))
         .with_state(Arc::new(state))
 }
 

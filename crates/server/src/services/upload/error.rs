@@ -108,6 +108,9 @@ pub enum ReasonCode {
     StorageUnavailable,
     MultipartMissingFile,
     MultipartTooManyFiles,
+    MultipartTooManyParts,
+    MultipartHeaderTooLarge,
+    MultipartTimeout,
     FailClosed,
 }
 
@@ -138,6 +141,9 @@ impl ReasonCode {
             Self::StorageUnavailable => "storage_unavailable",
             Self::MultipartMissingFile => "multipart_missing_file",
             Self::MultipartTooManyFiles => "multipart_too_many_files",
+            Self::MultipartTooManyParts => "multipart_too_many_parts",
+            Self::MultipartHeaderTooLarge => "multipart_header_too_large",
+            Self::MultipartTimeout => "multipart_timeout",
             Self::FailClosed => "fail_closed",
         }
     }

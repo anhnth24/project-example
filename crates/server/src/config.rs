@@ -337,6 +337,10 @@ struct ConfigFile {
     max_pdf_pages: Option<u64>,
     max_image_pixels: Option<u64>,
     max_audio_duration_secs: Option<u64>,
+    max_multipart_parts: Option<u64>,
+    max_part_header_bytes: Option<u64>,
+    upload_timeout_secs: Option<u64>,
+    upload_idle_timeout_secs: Option<u64>,
     index_signature: Option<String>,
 }
 
@@ -565,6 +569,34 @@ impl ServerConfig {
                 "MARKHAND_MAX_AUDIO_DURATION_SECS",
                 |value| value.max_audio_duration_secs,
                 LimitsConfig::policy_defaults().max_audio_duration_secs,
+            )?,
+            max_multipart_parts: u32_value(
+                file,
+                env,
+                "MARKHAND_MAX_MULTIPART_PARTS",
+                |value| value.max_multipart_parts,
+                LimitsConfig::policy_defaults().max_multipart_parts,
+            )?,
+            max_part_header_bytes: usize_value(
+                file,
+                env,
+                "MARKHAND_MAX_PART_HEADER_BYTES",
+                |value| value.max_part_header_bytes,
+                LimitsConfig::policy_defaults().max_part_header_bytes,
+            )?,
+            upload_timeout_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_UPLOAD_TIMEOUT_SECS",
+                |value| value.upload_timeout_secs,
+                LimitsConfig::policy_defaults().upload_timeout_secs,
+            )?,
+            upload_idle_timeout_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_UPLOAD_IDLE_TIMEOUT_SECS",
+                |value| value.upload_idle_timeout_secs,
+                LimitsConfig::policy_defaults().upload_idle_timeout_secs,
             )?,
         };
         let upload = UploadConfig {
@@ -905,6 +937,17 @@ fn u32_value(
     u32::try_from(value).map_err(|_| format!("{env_name} is out of range for u32"))
 }
 
+fn usize_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+    env_name: &str,
+    from_file: impl FnOnce(&ConfigFile) -> Option<u64>,
+    default: usize,
+) -> Result<usize, String> {
+    let value = numeric_value(file, env, env_name, from_file, default as u64)?;
+    usize::try_from(value).map_err(|_| format!("{env_name} is out of range for usize"))
+}
+
 fn bool_value(
     file: Option<&ConfigFile>,
     env: &BTreeMap<String, String>,
@@ -1071,6 +1114,10 @@ mod tests {
             max_pdf_pages: None,
             max_image_pixels: None,
             max_audio_duration_secs: None,
+            max_multipart_parts: None,
+            max_part_header_bytes: None,
+            upload_timeout_secs: None,
+            upload_idle_timeout_secs: None,
             index_signature: None,
         };
         let env = BTreeMap::from([

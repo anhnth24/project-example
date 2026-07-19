@@ -1,6 +1,8 @@
 //! Bounded streaming intake: size cap + SHA-256 without full-file buffering.
 
-use std::io::Write;
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
+use std::time::Duration;
 
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
@@ -17,6 +19,20 @@ pub struct StreamedUpload {
     pub sha256_hex: String,
     pub size_bytes: u64,
     pub head: Vec<u8>,
+}
+
+impl StreamedUpload {
+    /// Clone and rewind the already-held tempfile descriptor; callers must not reopen by path.
+    pub fn rewinded_file_clone(&self) -> Result<File, UploadError> {
+        let mut file = self
+            .tempfile
+            .as_file()
+            .try_clone()
+            .map_err(|_| UploadError::Internal)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|_| UploadError::Internal)?;
+        Ok(file)
+    }
 }
 
 /// Consume an async byte stream into a tempfile while hashing and enforcing the size cap.
@@ -68,6 +84,64 @@ where
     Ok(StreamedUpload {
         tempfile,
         sha256_hex,
+        size_bytes,
+        head,
+    })
+}
+
+/// Same as [`stream_to_tempfile`], with an idle timeout applied to each chunk wait.
+pub async fn stream_to_tempfile_with_idle_timeout<S, E>(
+    mut stream: S,
+    limits: &LimitsConfig,
+    idle_timeout: Duration,
+) -> Result<StreamedUpload, UploadError>
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
+    E: std::fmt::Debug,
+{
+    let mut tempfile = NamedTempFile::new().map_err(|_| UploadError::Internal)?;
+    let mut hasher = Sha256::new();
+    let mut size_bytes: u64 = 0;
+    let mut head = Vec::with_capacity(MAGIC_SNIFF_BYTES);
+
+    loop {
+        let chunk = tokio::time::timeout(idle_timeout, stream.next())
+            .await
+            .map_err(|_| UploadError::MultipartInvalid {
+                reason: ReasonCode::MultipartTimeout,
+            })?;
+        let Some(chunk) = chunk else {
+            break;
+        };
+        let chunk = chunk.map_err(|_| {
+            UploadError::rejected(ThreatClass::TruncatedUpload, ReasonCode::StreamInterrupted)
+        })?;
+        if chunk.is_empty() {
+            continue;
+        }
+        let next = size_bytes.saturating_add(chunk.len() as u64);
+        if next > limits.max_upload_bytes {
+            let _ = tempfile.close();
+            return Err(UploadError::rejected(
+                ThreatClass::Oversize,
+                ReasonCode::UploadTooLarge,
+            ));
+        }
+        size_bytes = next;
+        hasher.update(&chunk);
+        if head.len() < MAGIC_SNIFF_BYTES {
+            let need = MAGIC_SNIFF_BYTES - head.len();
+            head.extend_from_slice(&chunk[..chunk.len().min(need)]);
+        }
+        tempfile
+            .write_all(&chunk)
+            .map_err(|_| UploadError::Internal)?;
+    }
+
+    tempfile.flush().map_err(|_| UploadError::Internal)?;
+    Ok(StreamedUpload {
+        tempfile,
+        sha256_hex: hex::encode(hasher.finalize()),
         size_bytes,
         head,
     })

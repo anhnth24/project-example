@@ -12,20 +12,29 @@ mod stream;
 pub use archive::{reject_dangerous_entry_name, validate_zip_archive, ArchiveCheck};
 pub use error::{Disposition, ReasonCode, ThreatClass, UploadError};
 pub use limits::{LimitsConfig, STREAM_CHUNK_BYTES};
-pub use sniff::{detect_magic, resolve_canonical_format, CanonicalFormat};
-pub use stream::{stream_async_read_to_tempfile, stream_to_tempfile, StreamedUpload};
+pub use sniff::{
+    declared_extension, detect_magic, extension_matches, mime_matches, resolve_canonical_format,
+    CanonicalFormat,
+};
+pub use stream::{
+    stream_async_read_to_tempfile, stream_to_tempfile, stream_to_tempfile_with_idle_timeout,
+    StreamedUpload,
+};
 
-use std::io::Read;
-use std::path::Path;
+use std::fs::File;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 
 use tokio::fs::File as TokioFile;
+use tokio::io::{AsyncSeekExt, SeekFrom as TokioSeekFrom};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::auth::permissions::{require_permission, ResolveError};
 use crate::storage::keys::quarantine_key;
-use crate::storage::minio::{MinioClient, ObjectIdentityMeta};
+use crate::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use crate::storage::ObjectKey;
+
+use self::archive::validate_zip_reader;
 
 /// Upload policy + limits configuration section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +92,7 @@ pub async fn validate_and_quarantine(
     limits: &LimitsConfig,
     streamed: StreamedUpload,
     declared_filename: Option<&str>,
+    declared_content_type: Option<&str>,
 ) -> Result<UploadOutcome, UploadError> {
     require_permission(org, "doc.upload").map_err(|error| match error {
         ResolveError::PermissionDenied => UploadError::PermissionDenied,
@@ -92,14 +102,22 @@ pub async fn validate_and_quarantine(
     // TODO(P1B-I02): pass expected size into quota_reserve_hook once implemented.
     quota_reserve_hook(org, "upload", Some(streamed.size_bytes));
 
-    let path = streamed.tempfile.path();
-    let validation = match validate_bytes(path, &streamed.head, declared_filename, limits) {
-        Ok(result) => result,
-        Err(error) => {
-            // Rejected: never leave a quarantine object.
-            return Err(error);
-        }
-    };
+    let mut validation_file = streamed.rewinded_file_clone()?;
+    let head = streamed.head.clone();
+    let declared_filename_owned = declared_filename.map(str::to_owned);
+    let declared_content_type_owned = declared_content_type.map(str::to_owned);
+    let limits_for_validation = *limits;
+    let validation = tokio::task::spawn_blocking(move || {
+        validate_file(
+            &mut validation_file,
+            &head,
+            declared_filename_owned.as_deref(),
+            declared_content_type_owned.as_deref(),
+            &limits_for_validation,
+        )
+    })
+    .await
+    .map_err(|_| UploadError::Internal)??;
 
     let object_id = Uuid::new_v4();
     // Filename is metadata only — quarantine_key ignores it for the path.
@@ -127,7 +145,8 @@ pub async fn validate_and_quarantine(
         disposition: Some(validation.disposition.as_str().to_string()),
     };
 
-    let file = TokioFile::open(path)
+    let mut file = TokioFile::from_std(streamed.rewinded_file_clone()?);
+    file.seek(TokioSeekFrom::Start(0))
         .await
         .map_err(|_| UploadError::Internal)?;
     storage
@@ -137,6 +156,10 @@ pub async fn validate_and_quarantine(
             file,
             &meta,
             content_type_for(validation.format),
+            ObjectPutVerification {
+                expected_len: streamed.size_bytes,
+                expected_sha256: &streamed.sha256_hex,
+            },
         )
         .await
         .map_err(|_| UploadError::StorageUnavailable)?;
@@ -161,12 +184,21 @@ pub async fn intake_field<R>(
     limits: &LimitsConfig,
     reader: R,
     declared_filename: Option<&str>,
+    declared_content_type: Option<&str>,
 ) -> Result<UploadOutcome, UploadError>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let streamed = stream_async_read_to_tempfile(reader, limits).await?;
-    validate_and_quarantine(org, storage, limits, streamed, declared_filename).await
+    validate_and_quarantine(
+        org,
+        storage,
+        limits,
+        streamed,
+        declared_filename,
+        declared_content_type,
+    )
+    .await
 }
 
 #[derive(Debug)]
@@ -177,33 +209,24 @@ struct ValidationResult {
     reason_code: Option<ReasonCode>,
 }
 
-fn validate_bytes(
-    path: &Path,
+fn validate_file(
+    file: &mut File,
     head: &[u8],
     declared_filename: Option<&str>,
+    declared_content_type: Option<&str>,
     limits: &LimitsConfig,
 ) -> Result<ValidationResult, UploadError> {
     let mut format = resolve_canonical_format(head, declared_filename)?;
 
     if format.is_zip_container() || head.starts_with(b"PK") {
-        let check = validate_zip_archive(path, format, limits)?;
+        file.seek(SeekFrom::Start(0)).map_err(|_| {
+            UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+        })?;
+        let check = validate_zip_reader(&mut *file, format, limits)?;
         format = check.format;
         // Re-check extension consistency against refined format.
         if let Some(name) = declared_filename {
-            let ext = name
-                .rsplit(['/', '\\'])
-                .next()
-                .and_then(|base| base.rsplit_once('.'))
-                .map(|(_, ext)| ext.to_ascii_lowercase())
-                .unwrap_or_default();
-            let ok = match format {
-                CanonicalFormat::Docx => ext == "docx",
-                CanonicalFormat::Pptx => ext == "pptx",
-                CanonicalFormat::Xlsx => ext == "xlsx",
-                CanonicalFormat::Ods => ext == "ods",
-                _ => true,
-            };
-            if !ok {
+            if declared_extension(name).is_none_or(|ext| !extension_matches(format, ext)) {
                 return Err(UploadError::rejected(
                     ThreatClass::ExtensionSpoof,
                     ReasonCode::ExtensionMagicMismatch,
@@ -211,30 +234,38 @@ fn validate_bytes(
             }
         }
     }
+    if let Some(content_type) = declared_content_type {
+        if !mime_matches(format, content_type) {
+            return Err(UploadError::rejected(
+                ThreatClass::MimeMismatch,
+                ReasonCode::ExtensionMagicMismatch,
+            ));
+        }
+    }
 
     match format {
-        CanonicalFormat::Pdf => preflight_pdf(path, limits)?,
+        CanonicalFormat::Pdf => preflight_pdf(file, limits)?,
         CanonicalFormat::Png
         | CanonicalFormat::Jpeg
         | CanonicalFormat::Webp
         | CanonicalFormat::Tiff
-        | CanonicalFormat::Bmp => preflight_image(path, format, limits)?,
+        | CanonicalFormat::Bmp => preflight_image(file, limits)?,
         CanonicalFormat::Wav
         | CanonicalFormat::Mp3
         | CanonicalFormat::Ogg
         | CanonicalFormat::Flac
         | CanonicalFormat::M4a => {
-            if let Some(review) = preflight_audio(path, format, limits)? {
+            if let Some(review) = preflight_audio(file, format, limits)? {
                 return Ok(review);
             }
         }
         CanonicalFormat::Csv => {
-            if let Some(review) = preflight_csv(path)? {
+            if let Some(review) = preflight_csv(file)? {
                 return Ok(review);
             }
         }
         CanonicalFormat::Html => {
-            if let Some(outcome) = preflight_html(path)? {
+            if let Some(outcome) = preflight_html(file)? {
                 return Ok(outcome);
             }
         }
@@ -256,38 +287,69 @@ fn validate_bytes(
     })
 }
 
-fn preflight_pdf(path: &Path, limits: &LimitsConfig) -> Result<(), UploadError> {
-    let mut file = std::fs::File::open(path).map_err(|_| {
+fn preflight_pdf(file: &mut File, limits: &LimitsConfig) -> Result<(), UploadError> {
+    file.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
-    let mut buf = Vec::new();
-    // Cap PDF preflight read at upload limit (already enforced) but stream in chunks.
-    file.read_to_end(&mut buf).map_err(|_| {
-        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
-    })?;
-    if !buf.windows(5).any(|w| w == b"%%EOF") && !buf.ends_with(b"%%EOF\n") {
-        // Allow %%EOF with trailing whitespace.
-        let trimmed = trim_ascii_end(&buf);
-        if !trimmed.ends_with(b"%%EOF") {
+    let mut buf = [0_u8; STREAM_CHUNK_BYTES];
+    let mut overlap = Vec::new();
+    let mut tail = Vec::new();
+    let mut pages = 0_u32;
+    let mut saw_header = false;
+    let mut saw_startxref = false;
+    let mut saw_xref_table = false;
+    let mut saw_xref_stream = false;
+    let mut saw_obj_stream = false;
+    const TAIL_LIMIT: usize = 1024 * 1024;
+    loop {
+        let n = file.read(&mut buf).map_err(|_| {
+            UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+        })?;
+        if n == 0 {
+            break;
+        }
+        if !saw_header {
+            saw_header = buf[..n].starts_with(b"%PDF-");
+        }
+        let mut window = Vec::with_capacity(overlap.len() + n);
+        window.extend_from_slice(&overlap);
+        window.extend_from_slice(&buf[..n]);
+        pages = pages.saturating_add(count_pdf_pages_heuristic(&window));
+        saw_startxref |= window.windows(9).any(|w| w == b"startxref");
+        saw_xref_table |= window.windows(5).any(|w| w == b"\nxref" || w == b"\rxref");
+        saw_xref_stream |= window.windows(10).any(|w| w == b"/Type/XRef")
+            || window.windows(11).any(|w| w == b"/Type /XRef");
+        saw_obj_stream |= window.windows(7).any(|w| w == b"/ObjStm");
+        if pages > limits.max_pdf_pages {
             return Err(UploadError::rejected(
-                ThreatClass::ParserCorruption,
-                ReasonCode::PdfMissingEof,
+                ThreatClass::PdfPageBomb,
+                ReasonCode::PdfPageLimit,
             ));
         }
+        tail.extend_from_slice(&buf[..n]);
+        if tail.len() > TAIL_LIMIT {
+            let excess = tail.len() - TAIL_LIMIT;
+            tail.drain(..excess);
+        }
+        let keep = window.len().min(64);
+        overlap.clear();
+        overlap.extend_from_slice(&window[window.len() - keep..]);
     }
-    // Cheap page-count heuristic (not a full PDF parser).
-    let pages = count_pdf_pages_heuristic(&buf);
-    if pages > limits.max_pdf_pages {
+    let trimmed = trim_ascii_end(&tail);
+    if !saw_header
+        || !trimmed.ends_with(b"%%EOF")
+        || !saw_startxref
+        || !(saw_xref_table || saw_xref_stream || saw_obj_stream)
+    {
         return Err(UploadError::rejected(
-            ThreatClass::PdfPageBomb,
-            ReasonCode::PdfPageLimit,
+            ThreatClass::ParserCorruption,
+            ReasonCode::PdfMissingEof,
         ));
     }
     Ok(())
 }
 
 fn count_pdf_pages_heuristic(data: &[u8]) -> u32 {
-    // Count `/Type /Page` not followed by `s` (Page vs Pages).
     let mut count = 0_u32;
     let mut i = 0;
     while i + 10 < data.len() {
@@ -308,19 +370,28 @@ fn count_pdf_pages_heuristic(data: &[u8]) -> u32 {
     count
 }
 
-fn preflight_image(
-    path: &Path,
-    format: CanonicalFormat,
-    limits: &LimitsConfig,
-) -> Result<(), UploadError> {
-    let mut file = std::fs::File::open(path).map_err(|_| {
+fn preflight_image(file: &mut File, limits: &LimitsConfig) -> Result<(), UploadError> {
+    file.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
-    let mut head = [0_u8; 64];
-    let n = file.read(&mut head).map_err(|_| {
+    let clone = file.try_clone().map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
-    let pixels = image_pixel_count(&head[..n], format).unwrap_or(0);
+    let reader = image::ImageReader::new(BufReader::new(clone))
+        .with_guessed_format()
+        .map_err(|_| {
+            UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+        })?;
+    let (width, height) = reader.into_dimensions().map_err(|_| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels == 0 {
+        return Err(UploadError::rejected(
+            ThreatClass::ParserCorruption,
+            ReasonCode::FailClosed,
+        ));
+    }
     if pixels > limits.max_image_pixels {
         return Err(UploadError::rejected(
             ThreatClass::ImagePixelBomb,
@@ -330,51 +401,19 @@ fn preflight_image(
     Ok(())
 }
 
-fn image_pixel_count(head: &[u8], format: CanonicalFormat) -> Option<u64> {
-    match format {
-        CanonicalFormat::Png if head.len() >= 24 => {
-            let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
-            let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
-            Some(u64::from(w).saturating_mul(u64::from(h)))
-        }
-        CanonicalFormat::Bmp if head.len() >= 26 => {
-            let w = i32::from_le_bytes(head[18..22].try_into().ok()?).unsigned_abs();
-            let h = i32::from_le_bytes(head[22..26].try_into().ok()?).unsigned_abs();
-            Some(u64::from(w).saturating_mul(u64::from(h)))
-        }
-        // JPEG/WebP/TIFF: defer deep decode to sandbox; header presence is enough here.
-        _ => Some(0),
-    }
-}
-
 fn preflight_audio(
-    path: &Path,
+    file: &mut File,
     format: CanonicalFormat,
     limits: &LimitsConfig,
 ) -> Result<Option<ValidationResult>, UploadError> {
-    if format != CanonicalFormat::Wav {
-        return Ok(None);
-    }
-    let mut file = std::fs::File::open(path).map_err(|_| {
+    file.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
-    let mut head = [0_u8; 44];
-    file.read_exact(&mut head).map_err(|_| {
-        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
-    })?;
-    if &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" {
-        return Err(UploadError::rejected(
-            ThreatClass::MimeMismatch,
-            ReasonCode::ExtensionMagicMismatch,
-        ));
-    }
-    let byte_rate = u32::from_le_bytes(head[28..32].try_into().unwrap_or([0; 4]));
-    let meta = file.metadata().map_err(|_| UploadError::Internal)?;
-    let data_bytes = meta.len().saturating_sub(44);
-    if byte_rate == 0 {
-        return Ok(None);
-    }
-    let duration_secs = data_bytes / u64::from(byte_rate);
+    let duration_secs = if format == CanonicalFormat::Wav {
+        validate_wav_duration(file)?
+    } else {
+        validate_symphonia_duration(file, format)?
+    };
     if duration_secs > limits.max_audio_duration_secs {
         return Ok(Some(ValidationResult {
             format,
@@ -386,11 +425,136 @@ fn preflight_audio(
     Ok(None)
 }
 
-fn preflight_csv(path: &Path) -> Result<Option<ValidationResult>, UploadError> {
-    let mut file = std::fs::File::open(path).map_err(|_| UploadError::Internal)?;
+fn validate_wav_duration(file: &mut File) -> Result<u64, UploadError> {
+    file.seek(SeekFrom::Start(0)).map_err(|_| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    let mut header = [0_u8; 12];
+    file.read_exact(&mut header).map_err(|_| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return Err(UploadError::rejected(
+            ThreatClass::ParserCorruption,
+            ReasonCode::FailClosed,
+        ));
+    }
+    let mut byte_rate = None;
+    let mut data_bytes = None;
+    let mut scanned = 12_u64;
+    while scanned < 1024 * 1024 {
+        let mut chunk = [0_u8; 8];
+        file.read_exact(&mut chunk).map_err(|_| {
+            UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+        })?;
+        scanned = scanned.saturating_add(8);
+        let id = &chunk[0..4];
+        let len = u32::from_le_bytes(chunk[4..8].try_into().unwrap_or([0; 4])) as u64;
+        if id == b"fmt " {
+            let mut fmt = vec![0_u8; len.min(64) as usize];
+            file.read_exact(&mut fmt).map_err(|_| {
+                UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+            })?;
+            if len > 64 {
+                file.seek(SeekFrom::Current((len - 64) as i64))
+                    .map_err(|_| {
+                        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+                    })?;
+            }
+            if fmt.len() < 16 {
+                return Err(UploadError::rejected(
+                    ThreatClass::ParserCorruption,
+                    ReasonCode::FailClosed,
+                ));
+            }
+            byte_rate = Some(u32::from_le_bytes(fmt[8..12].try_into().unwrap_or([0; 4])));
+        } else if id == b"data" {
+            data_bytes = Some(len);
+            file.seek(SeekFrom::Current(len as i64)).map_err(|_| {
+                UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+            })?;
+        } else {
+            file.seek(SeekFrom::Current(len as i64)).map_err(|_| {
+                UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+            })?;
+        }
+        if len % 2 == 1 {
+            file.seek(SeekFrom::Current(1)).map_err(|_| {
+                UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+            })?;
+        }
+        scanned = scanned.saturating_add(len + (len % 2));
+        if byte_rate.is_some() && data_bytes.is_some() {
+            break;
+        }
+    }
+    let byte_rate = byte_rate.ok_or_else(|| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    let data_bytes = data_bytes.ok_or_else(|| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    if byte_rate == 0 || data_bytes == 0 {
+        return Err(UploadError::rejected(
+            ThreatClass::ParserCorruption,
+            ReasonCode::FailClosed,
+        ));
+    }
+    Ok(data_bytes / u64::from(byte_rate))
+}
+
+fn validate_symphonia_duration(
+    file: &mut File,
+    format: CanonicalFormat,
+) -> Result<u64, UploadError> {
+    file.seek(SeekFrom::Start(0)).map_err(|_| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    let source = file.try_clone().map_err(|_| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    let mss = symphonia::core::io::MediaSourceStream::new(Box::new(source), Default::default());
+    let mut hint = symphonia::core::probe::Hint::new();
+    hint.with_extension(format.canonical_extension());
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &symphonia::core::formats::FormatOptions::default(),
+            &symphonia::core::meta::MetadataOptions::default(),
+        )
+        .map_err(|_| {
+            UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+        })?;
+    let track = probed.format.default_track().ok_or_else(|| {
+        UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
+    })?;
+    let params = &track.codec_params;
+    let duration = params
+        .time_base
+        .zip(params.n_frames)
+        .map(|(base, frames)| base.calc_time(frames));
+    let Some(duration) = duration else {
+        return Err(UploadError::rejected(
+            ThreatClass::ParserCorruption,
+            ReasonCode::FailClosed,
+        ));
+    };
+    if duration.seconds == 0 && duration.frac <= 0.0 {
+        return Err(UploadError::rejected(
+            ThreatClass::ParserCorruption,
+            ReasonCode::FailClosed,
+        ));
+    }
+    Ok(duration.seconds + u64::from(duration.frac > 0.0))
+}
+
+fn preflight_csv(file: &mut File) -> Result<Option<ValidationResult>, UploadError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| UploadError::Internal)?;
     let mut buf = String::new();
     // Bound CSV preflight text read.
-    let mut limited = (&mut file).take(1024 * 1024);
+    let mut limited = file.take(1024 * 1024);
     limited.read_to_string(&mut buf).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
@@ -410,10 +574,11 @@ fn preflight_csv(path: &Path) -> Result<Option<ValidationResult>, UploadError> {
     Ok(None)
 }
 
-fn preflight_html(path: &Path) -> Result<Option<ValidationResult>, UploadError> {
-    let mut file = std::fs::File::open(path).map_err(|_| UploadError::Internal)?;
+fn preflight_html(file: &mut File) -> Result<Option<ValidationResult>, UploadError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| UploadError::Internal)?;
     let mut buf = String::new();
-    let mut limited = (&mut file).take(1024 * 1024);
+    let mut limited = file.take(1024 * 1024);
     limited.read_to_string(&mut buf).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
@@ -503,6 +668,7 @@ pub fn assert_disposition_is_typed(disposition: Disposition) {
 pub fn validate_streamed_bytes(
     streamed: &StreamedUpload,
     declared_filename: Option<&str>,
+    declared_content_type: Option<&str>,
     limits: &LimitsConfig,
 ) -> Result<
     (
@@ -513,10 +679,12 @@ pub fn validate_streamed_bytes(
     ),
     UploadError,
 > {
-    let result = validate_bytes(
-        streamed.tempfile.path(),
+    let mut file = streamed.rewinded_file_clone()?;
+    let result = validate_file(
+        &mut file,
         &streamed.head,
         declared_filename,
+        declared_content_type,
         limits,
     )?;
     Ok((
@@ -545,10 +713,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = validate_bytes(
-            streamed.tempfile.path(),
-            &streamed.head,
+        let err = validate_streamed_bytes(
+            &streamed,
             Some("plain-text.pdf"),
+            Some("text/plain"),
             &limits,
         )
         .unwrap_err();
