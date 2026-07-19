@@ -598,6 +598,10 @@ async fn minio_put_exists_get_delete_round_trip() {
         document_id: Some(Uuid::new_v4()),
         version_id: Some(version),
         original_filename: Some("../../etc/passwd".into()),
+        canonical_format: None,
+        content_sha256: None,
+        content_length: None,
+        disposition: None,
     };
     let body = Bytes::from_static(b"markhand-storage-bytes");
     client
@@ -662,6 +666,10 @@ async fn cross_org_object_key_operation_rejected() {
         document_id: None,
         version_id: None,
         original_filename: None,
+        canonical_format: None,
+        content_sha256: None,
+        content_length: None,
+        disposition: None,
     };
     client
         .put_object(
@@ -696,6 +704,10 @@ async fn cross_org_object_key_operation_rejected() {
         document_id: None,
         version_id: None,
         original_filename: None,
+        canonical_format: None,
+        content_sha256: None,
+        content_length: None,
+        disposition: None,
     };
     assert!(matches!(
         client

@@ -7,6 +7,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::services::upload::{LimitsConfig, UploadConfig};
+
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 200 * 1024 * 1024;
 const DEFAULT_JOB_LEASE_SECONDS: u64 = 60;
 const DEFAULT_ACCESS_TOKEN_TTL_SECS: u64 = 900;
@@ -80,6 +82,7 @@ pub struct ServerConfig {
     minio_path_style: bool,
     auth: AuthConfig,
     limits: RuntimeLimits,
+    upload: UploadConfig,
     index_signature: Option<String>,
 }
 
@@ -119,6 +122,7 @@ impl fmt::Debug for ServerConfig {
             .field("minio_path_style", &self.minio_path_style)
             .field("auth", &self.auth)
             .field("limits", &self.limits)
+            .field("upload", &self.upload)
             .field("index_signature", &self.index_signature)
             .finish()
     }
@@ -327,6 +331,12 @@ struct ConfigFile {
     auth_argon2_parallelism: Option<u64>,
     max_upload_bytes: Option<u64>,
     job_lease_seconds: Option<u64>,
+    max_archive_entries: Option<u64>,
+    max_archive_uncompressed_bytes: Option<u64>,
+    max_archive_compression_ratio: Option<u64>,
+    max_pdf_pages: Option<u64>,
+    max_image_pixels: Option<u64>,
+    max_audio_duration_secs: Option<u64>,
     index_signature: Option<String>,
 }
 
@@ -512,6 +522,54 @@ impl ServerConfig {
                 DEFAULT_JOB_LEASE_SECONDS,
             )?,
         };
+        let upload_limits = LimitsConfig {
+            max_upload_bytes: limits.max_upload_bytes,
+            max_archive_entries: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_ARCHIVE_ENTRIES",
+                |value| value.max_archive_entries,
+                LimitsConfig::policy_defaults().max_archive_entries,
+            )?,
+            max_archive_uncompressed_bytes: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_ARCHIVE_UNCOMPRESSED_BYTES",
+                |value| value.max_archive_uncompressed_bytes,
+                LimitsConfig::policy_defaults().max_archive_uncompressed_bytes,
+            )?,
+            max_archive_compression_ratio: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_ARCHIVE_COMPRESSION_RATIO",
+                |value| value.max_archive_compression_ratio,
+                LimitsConfig::policy_defaults().max_archive_compression_ratio,
+            )?,
+            max_pdf_pages: u32_value(
+                file,
+                env,
+                "MARKHAND_MAX_PDF_PAGES",
+                |value| value.max_pdf_pages,
+                LimitsConfig::policy_defaults().max_pdf_pages,
+            )?,
+            max_image_pixels: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_IMAGE_PIXELS",
+                |value| value.max_image_pixels,
+                LimitsConfig::policy_defaults().max_image_pixels,
+            )?,
+            max_audio_duration_secs: numeric_value(
+                file,
+                env,
+                "MARKHAND_MAX_AUDIO_DURATION_SECS",
+                |value| value.max_audio_duration_secs,
+                LimitsConfig::policy_defaults().max_audio_duration_secs,
+            )?,
+        };
+        let upload = UploadConfig {
+            limits: upload_limits,
+        };
         let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
             value.index_signature.as_ref()
         });
@@ -531,6 +589,7 @@ impl ServerConfig {
             minio_path_style,
             auth,
             limits,
+            upload,
             index_signature,
         };
         config.validate()?;
@@ -548,6 +607,16 @@ impl ServerConfig {
     /// Authentication configuration (API role). Worker configs leave credentials unset.
     pub const fn auth(&self) -> &AuthConfig {
         &self.auth
+    }
+
+    /// Upload intake limits (P0-09 policy defaults unless overridden).
+    pub const fn upload(&self) -> &UploadConfig {
+        &self.upload
+    }
+
+    /// Legacy runtime limits (max upload + job lease).
+    pub const fn limits(&self) -> RuntimeLimits {
+        self.limits
     }
 
     pub(crate) fn is_api_role(&self) -> bool {
@@ -592,6 +661,7 @@ impl ServerConfig {
                 max_upload_bytes: DEFAULT_MAX_UPLOAD_BYTES,
                 job_lease_seconds: DEFAULT_JOB_LEASE_SECONDS,
             },
+            upload: UploadConfig::policy_defaults(),
             index_signature: None,
         }
     }
@@ -644,6 +714,7 @@ impl ServerConfig {
 
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_limits()?;
+        self.upload.validate()?;
         self.validate_index_signature(false)?;
         if self.role == RuntimeRole::Api {
             self.validate_auth()?;
@@ -994,6 +1065,12 @@ mod tests {
             auth_argon2_parallelism: None,
             max_upload_bytes: None,
             job_lease_seconds: None,
+            max_archive_entries: None,
+            max_archive_uncompressed_bytes: None,
+            max_archive_compression_ratio: None,
+            max_pdf_pages: None,
+            max_image_pixels: None,
+            max_audio_duration_secs: None,
             index_signature: None,
         };
         let env = BTreeMap::from([

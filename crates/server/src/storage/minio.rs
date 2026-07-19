@@ -35,6 +35,14 @@ pub struct ObjectIdentityMeta {
     pub version_id: Option<Uuid>,
     /// Original filename for display only — never written into the object key.
     pub original_filename: Option<String>,
+    /// Server-derived canonical format (upload intake).
+    pub canonical_format: Option<String>,
+    /// Hex SHA-256 of object bytes.
+    pub content_sha256: Option<String>,
+    /// Declared content length in bytes.
+    pub content_length: Option<u64>,
+    /// Intake disposition (`accepted` / `quarantined`).
+    pub disposition: Option<String>,
 }
 
 /// Fail-closed MinIO/S3 object store client (credentials required).
@@ -173,8 +181,117 @@ impl MinioClient {
                     .map_err(|_| StorageError::ConfigInvalid)?;
             }
         }
+        if let Some(format) = meta.canonical_format.as_deref() {
+            builder = builder
+                .with_metadata("canonical-format", format)
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(sha) = meta.content_sha256.as_deref() {
+            builder = builder
+                .with_metadata("content-sha256", sha)
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(len) = meta.content_length {
+            builder = builder
+                .with_metadata("content-length-bytes", len.to_string())
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(disposition) = meta.disposition.as_deref() {
+            builder = builder
+                .with_metadata("disposition", disposition)
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
         let response = builder
             .execute()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if (200..300).contains(&response.status_code()) {
+            Ok(())
+        } else {
+            Err(StorageError::Backend)
+        }
+    }
+
+    /// Stream an `AsyncRead` into an opaque key (bounded memory; S3 multipart under the hood).
+    pub async fn put_object_stream<R>(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+        mut reader: R,
+        meta: &ObjectIdentityMeta,
+        content_type: &str,
+    ) -> Result<(), StorageError>
+    where
+        R: tokio::io::AsyncRead + Unpin + Send,
+    {
+        authorize_key_for_org(key, org_id)?;
+        if meta.org_id != org_id || meta.org_id.is_nil() {
+            return Err(StorageError::KeyOrgMismatch);
+        }
+        if key.namespace() == ObjectNamespace::Trusted {
+            let version_id = meta.version_id.ok_or(StorageError::MissingScope)?;
+            authorize_key_for_version(key, version_id)?;
+        }
+        let _ = parse_key_structure(&key.as_str())?;
+        let path = key.as_str();
+
+        let mut builder = self
+            .bucket
+            .put_object_stream_builder(&path)
+            .with_content_type(content_type);
+        builder = builder
+            .with_metadata("org-id", meta.org_id.to_string())
+            .map_err(|_| StorageError::ConfigInvalid)?;
+        if let Some(collection_id) = meta.collection_id {
+            builder = builder
+                .with_metadata("collection-id", collection_id.to_string())
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(document_id) = meta.document_id {
+            builder = builder
+                .with_metadata("document-id", document_id.to_string())
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(version_id) = meta.version_id {
+            builder = builder
+                .with_metadata("version-id", version_id.to_string())
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(filename) = meta.original_filename.as_deref() {
+            let safe: String = filename
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(255)
+                .collect();
+            if !safe.is_empty() {
+                builder = builder
+                    .with_metadata("original-filename", safe)
+                    .map_err(|_| StorageError::ConfigInvalid)?;
+            }
+        }
+        if let Some(format) = meta.canonical_format.as_deref() {
+            builder = builder
+                .with_metadata("canonical-format", format)
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(sha) = meta.content_sha256.as_deref() {
+            builder = builder
+                .with_metadata("content-sha256", sha)
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(len) = meta.content_length {
+            builder = builder
+                .with_metadata("content-length-bytes", len.to_string())
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+        if let Some(disposition) = meta.disposition.as_deref() {
+            builder = builder
+                .with_metadata("disposition", disposition)
+                .map_err(|_| StorageError::ConfigInvalid)?;
+        }
+
+        let response = builder
+            .execute_stream(&mut reader)
             .await
             .map_err(|_| StorageError::Transport)?;
         if (200..300).contains(&response.status_code()) {

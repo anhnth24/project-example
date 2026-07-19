@@ -30,6 +30,8 @@ pub struct AppState {
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
     pool: Pool,
     auth_provider: Option<PasswordAuthProvider>,
+    /// Object store adapter (optional when credentials are absent in tests).
+    object_store: Option<crate::storage::MinioClient>,
 }
 
 struct CachedReadiness {
@@ -57,12 +59,20 @@ impl AppState {
             Err(crate::auth::jwt::JwtError::NotConfigured) => None,
             Err(error) => return Err(format!("cannot configure authentication: {error}")),
         };
+        let object_store = match runtime.config().storage_config() {
+            Ok(storage) => Some(
+                crate::storage::MinioClient::from_config(storage.minio())
+                    .map_err(|error| format!("cannot configure object store: {error}"))?,
+            ),
+            Err(_) => None,
+        };
         Ok(Self {
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
             pool,
             auth_provider,
+            object_store,
         })
     }
 
@@ -71,6 +81,16 @@ impl AppState {
         runtime: RuntimeState,
         pool: Pool,
         auth_provider: Option<PasswordAuthProvider>,
+    ) -> Result<Self, String> {
+        Self::from_parts_with_store(runtime, pool, auth_provider, None)
+    }
+
+    /// Builds state for tests that exercise object-store-backed routes.
+    pub fn from_parts_with_store(
+        runtime: RuntimeState,
+        pool: Pool,
+        auth_provider: Option<PasswordAuthProvider>,
+        object_store: Option<crate::storage::MinioClient>,
     ) -> Result<Self, String> {
         if !runtime.is_api_role() {
             return Err("HTTP application requires API runtime configuration".into());
@@ -85,6 +105,7 @@ impl AppState {
             readiness: tokio::sync::Mutex::new(None),
             pool,
             auth_provider,
+            object_store,
         })
     }
 
@@ -98,6 +119,10 @@ impl AppState {
 
     pub fn runtime(&self) -> &RuntimeState {
         &self.runtime
+    }
+
+    pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
+        self.object_store.as_ref()
     }
 }
 
@@ -113,6 +138,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
+        .merge(routes::uploads::router())
         .with_state(Arc::new(state))
 }
 
