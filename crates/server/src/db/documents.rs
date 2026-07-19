@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
-use crate::db::models::{Document, DocumentState};
+use crate::db::models::{ArtifactKind, Document, DocumentState};
 
 /// Input for creating a document in `uploaded` state.
 #[derive(Debug, Clone)]
@@ -13,6 +13,29 @@ pub struct NewDocument<'a> {
     pub id: Uuid,
     pub collection_id: Uuid,
     pub title: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionSource {
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub original_object_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewMarkdownArtifact<'a> {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub object_key: &'a str,
+    pub content_sha256: &'a str,
+    pub byte_size: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownArtifactRecord {
+    pub object_key: String,
+    pub created: bool,
 }
 
 /// Inserts a document owned by the acting user under `ctx.org_id`.
@@ -135,6 +158,71 @@ pub async fn count(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbErr
         )
         .await?;
     Ok(row.get(0))
+}
+
+pub async fn get_version_source_for_convert(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<VersionSource, DbError> {
+    let row = txn
+        .query_opt(
+            "SELECT document_id, id, original_object_key
+             FROM document_versions
+             WHERE org_id = $1 AND document_id = $2 AND id = $3",
+            &[&ctx.org_id(), &document_id, &version_id],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    Ok(VersionSource {
+        document_id: row.get("document_id"),
+        version_id: row.get("id"),
+        original_object_key: row.get("original_object_key"),
+    })
+}
+
+pub async fn insert_markdown_artifact(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    input: NewMarkdownArtifact<'_>,
+) -> Result<MarkdownArtifactRecord, DbError> {
+    let kind = ArtifactKind::Markdown.as_str();
+    let content_type = "text/markdown; charset=utf-8";
+    let row = txn
+        .query_one(
+            "WITH inserted AS (
+                INSERT INTO derived_artifacts (
+                    id, org_id, document_id, version_id, artifact_kind, object_key,
+                    content_sha256, content_type, byte_size
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (version_id, artifact_kind) DO NOTHING
+                RETURNING object_key, true AS created
+             )
+             SELECT object_key, created FROM inserted
+             UNION ALL
+             SELECT object_key, false AS created
+             FROM derived_artifacts
+             WHERE org_id = $2 AND version_id = $4 AND artifact_kind = $5
+             LIMIT 1",
+            &[
+                &input.id,
+                &ctx.org_id(),
+                &input.document_id,
+                &input.version_id,
+                &kind,
+                &input.object_key,
+                &input.content_sha256,
+                &content_type,
+                &input.byte_size,
+            ],
+        )
+        .await?;
+    Ok(MarkdownArtifactRecord {
+        object_key: row.get("object_key"),
+        created: row.get("created"),
+    })
 }
 
 pub(crate) fn map_document(row: &Row) -> Result<Document, DbError> {

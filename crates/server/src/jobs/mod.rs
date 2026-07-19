@@ -326,6 +326,31 @@ pub async fn claim(
     .await
 }
 
+pub async fn claim_type(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    job_type: JobType,
+    worker_id: &str,
+    limit: u32,
+    lease_ttl: Duration,
+) -> Result<Vec<Job>, JobError> {
+    validate_worker_id(worker_id)?;
+    let limit = checked_limit(limit)?;
+    let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let worker_id = worker_id.to_string();
+        move |txn| {
+            Box::pin(async move {
+                repo::claim_pending_of_type(txn, &ctx, job_type, &worker_id, limit, lease_ttl_secs)
+                    .await
+                    .map_err(Into::into)
+            })
+        }
+    })
+    .await
+}
+
 pub async fn heartbeat(
     db_pool: &Pool,
     ctx: &OrgContext,

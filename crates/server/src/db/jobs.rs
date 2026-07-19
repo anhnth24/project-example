@@ -249,6 +249,53 @@ pub async fn claim_pending(
     rows.iter().map(map_job).collect()
 }
 
+pub async fn claim_pending_of_type(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_type: JobType,
+    worker_id: &str,
+    limit: i64,
+    lease_ttl_secs: i64,
+) -> Result<Vec<Job>, DbError> {
+    let job_type = job_type.as_str();
+    let rows = txn
+        .query(
+            &format!(
+                "WITH candidates AS (
+                    SELECT id
+                    FROM jobs
+                    WHERE org_id = $1
+                      AND job_type = $2
+                      AND status = 'pending'
+                      AND available_at <= clock_timestamp()
+                    ORDER BY available_at, created_at, id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $3
+                 )
+                 UPDATE jobs j
+                 SET status = 'leased',
+                     lease_owner = $4 || ':' || gen_random_uuid()::text,
+                     lease_expires_at = clock_timestamp() + ($5::bigint * interval '1 second'),
+                     heartbeat_at = clock_timestamp(),
+                     started_at = COALESCE(started_at, clock_timestamp()),
+                     attempts = attempts + 1,
+                     updated_at = clock_timestamp()
+                 FROM candidates
+                 WHERE j.org_id = $1 AND j.id = candidates.id
+                 RETURNING {JOB_COLUMNS_J}"
+            ),
+            &[
+                &ctx.org_id(),
+                &job_type,
+                &limit,
+                &worker_id,
+                &lease_ttl_secs,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_job).collect()
+}
+
 pub async fn heartbeat(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
