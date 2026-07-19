@@ -20,7 +20,9 @@ use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
 use fileconv_server::storage::keys::{quarantine_key, trusted_key};
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
-use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
+use fileconv_server::workers::convert::{
+    artifact_object_id_for_attempt, ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun,
+};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::{
     self, SandboxCancel, SandboxConfig, SandboxExit, SandboxInput,
@@ -514,7 +516,7 @@ import os, time, sys
 pid = os.fork()
 if pid == 0:
     os.setsid()
-    print("daemon-ready", flush=True)
+    print("daemon-pid", os.getpid(), flush=True)
     while True:
         time.sleep(60)
 else:
@@ -526,10 +528,16 @@ else:
     };
     let output = run(&config);
     assert_eq!(output.exit, SandboxExit::TimedOut);
+    let daemon_pid = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("daemon-pid "))
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .expect("daemon pid");
     assert_process_exits(
         output.pid1_host_pid.expect("pidns pid1"),
         Duration::from_secs(2),
     );
+    assert_process_exits(daemon_pid, Duration::from_secs(2));
     assert!(!output.workspace_path.exists());
 }
 
@@ -561,6 +569,7 @@ import os, time
 pid = os.fork()
 if pid == 0:
     os.setsid()
+    print("daemon-pid", os.getpid(), flush=True)
     while True:
         time.sleep(60)
 else:
@@ -576,10 +585,16 @@ else:
     cancel.cancel();
     let cancelled = handle.join().expect("join");
     assert_eq!(cancelled.exit, SandboxExit::Cancelled);
+    let daemon_pid = String::from_utf8_lossy(&cancelled.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("daemon-pid "))
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .expect("daemon pid");
     assert_process_exits(
         cancelled.pid1_host_pid.expect("pidns pid1"),
         Duration::from_secs(2),
     );
+    assert_process_exits(daemon_pid, Duration::from_secs(2));
     assert!(!cancelled.workspace_path.exists());
 }
 
@@ -952,8 +967,13 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
     )
     .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let generated_trusted =
-        trusted_key(ctx.org_id(), version_id, job.id, None).expect("trusted key");
+    let generated_trusted = trusted_key(
+        ctx.org_id(),
+        version_id,
+        artifact_object_id_for_attempt(job.id, job.attempts + 1),
+        None,
+    )
+    .expect("trusted key");
     let mut config = stub_worker_config("printf converted-after-upload", 50);
     config.post_upload_settlement_delay = Duration::from_secs(1);
     let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");

@@ -85,10 +85,6 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             return Err("MARKHAND_WORKER_CLAIM_LIMIT must be exactly 1".into());
         }
     }
-    config.approved_audio_model_path = std::env::var("MARKHAND_APPROVED_AUDIO_MODEL_PATH")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(Into::into);
     let worker = ConvertWorker::new(pool, storage, config)
         .map_err(|error| format!("converter worker initialization failed: {error}"))?;
     loop {

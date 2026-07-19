@@ -242,10 +242,16 @@ pub fn run(
     };
     close_fd(pid_write_fd);
     let child_pid = child.id() as libc::pid_t;
-    let pid1_host_pid = read_pid_from_pipe(pid_read_fd)?;
+    let Some(pid1_host_pid) = read_pid_from_pipe(pid_read_fd)? else {
+        unsafe {
+            let _ = libc::kill(child_pid, libc::SIGKILL);
+        }
+        let _ = reap_child_bounded(&mut child, KILL_REAP_GRACE);
+        close_fd(pid_read_fd);
+        return Err(SandboxError::IsolationUnavailable);
+    };
     close_fd(pid_read_fd);
-    let cgroup_guard =
-        CgroupGuard::best_effort_apply(pid1_host_pid.unwrap_or(child.id()), &config.limits);
+    let cgroup_guard = CgroupGuard::best_effort_apply(pid1_host_pid, &config.limits);
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
     set_nonblocking(stdout.as_raw_fd())?;
@@ -261,13 +267,11 @@ pub fn run(
             break exit_from_status(status);
         }
         if cancel.is_cancelled() {
-            kill_namespace(pid1_host_pid, child_pid);
-            let _ = reap_child_bounded(&mut child, KILL_REAP_GRACE);
+            kill_namespace_and_reap(&mut child, pid1_host_pid, child_pid);
             break SandboxExit::Cancelled;
         }
         if Instant::now() >= deadline {
-            kill_namespace(pid1_host_pid, child_pid);
-            let _ = reap_child_bounded(&mut child, KILL_REAP_GRACE);
+            kill_namespace_and_reap(&mut child, pid1_host_pid, child_pid);
             break SandboxExit::TimedOut;
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -296,7 +300,7 @@ pub fn run(
         stderr: stderr_capture.bytes,
         stdout_truncated: stdout_capture.truncated,
         stderr_truncated: stderr_capture.truncated,
-        pid1_host_pid,
+        pid1_host_pid: Some(pid1_host_pid),
         workspace_path,
     })
 }
@@ -392,13 +396,17 @@ fn exit_from_status(status: std::process::ExitStatus) -> SandboxExit {
     }
 }
 
-fn kill_namespace(pid1_host_pid: Option<u32>, wrapper_pid: libc::pid_t) {
+fn kill_namespace_and_reap(child: &mut Child, pid1_host_pid: u32, wrapper_pid: libc::pid_t) {
     unsafe {
-        if let Some(pid1) = pid1_host_pid {
-            let _ = libc::kill(pid1 as libc::pid_t, libc::SIGKILL);
-        }
+        let _ = libc::kill(pid1_host_pid as libc::pid_t, libc::SIGKILL);
+    }
+    if reap_child_bounded(child, KILL_REAP_GRACE).is_ok() {
+        return;
+    }
+    unsafe {
         let _ = libc::kill(wrapper_pid, libc::SIGKILL);
     }
+    let _ = reap_child_bounded(child, KILL_REAP_GRACE);
 }
 
 fn reap_child_bounded(child: &mut Child, grace: Duration) -> io::Result<()> {
@@ -525,6 +533,7 @@ impl PreExecConfig {
                 let _ = libc::close(self.pid_read_fd);
                 let _ = libc::close(self.pid_write_fd);
                 apply_rlimit(libc::RLIMIT_NPROC, self.limits.max_processes)?;
+                close_fds_from(3);
                 return Ok(());
             }
 
@@ -720,6 +729,13 @@ fn write_all_fd(fd: RawFd, bytes: &[u8]) -> io::Result<()> {
 
 fn close_fds_from(first: RawFd) {
     unsafe {
+        #[cfg(target_os = "linux")]
+        {
+            let result = libc::syscall(libc::SYS_close_range, first as libc::c_uint, !0_u32, 0_u32);
+            if result == 0 {
+                return;
+            }
+        }
         let mut limit = libc::rlimit {
             rlim_cur: 0,
             rlim_max: 0,

@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -41,7 +40,6 @@ pub struct ConvertWorkerConfig {
     pub lease_ttl: Duration,
     pub heartbeat_interval: Duration,
     pub sandbox: SandboxConfig,
-    pub approved_audio_model_path: Option<PathBuf>,
     pub post_upload_settlement_delay: Duration,
     pub max_job_duration: Duration,
 }
@@ -55,7 +53,6 @@ impl ConvertWorkerConfig {
             lease_ttl: Duration::from_secs(60),
             heartbeat_interval: Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECS),
             sandbox,
-            approved_audio_model_path: None,
             post_upload_settlement_delay: Duration::ZERO,
             max_job_duration,
         }
@@ -74,7 +71,6 @@ impl ConvertWorkerConfig {
                 ],
                 limits: ResourceLimits::default(),
             },
-            approved_audio_model_path: None,
             post_upload_settlement_delay: Duration::ZERO,
             max_job_duration: ResourceLimits::default().wall_timeout
                 + Duration::from_secs(DEFAULT_JOB_GRACE_SECS),
@@ -189,7 +185,13 @@ impl ConvertWorker {
                                 .await;
                             return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
                         }
-                        Err(error) => return Err(error),
+                        Err(error) => {
+                            let _ = self
+                                .storage
+                                .cleanup_generated_object(ctx.org_id(), &artifact_key)
+                                .await;
+                            return Err(error);
+                        }
                     }
                 }
                 let completed = match self
@@ -320,9 +322,11 @@ impl ConvertWorker {
             .get("canonical-format")
             .or_else(|| metadata.get("x-amz-meta-canonical-format"))
             .ok_or(ConvertWorkerError::MissingCanonicalFormat)?;
+        if is_audio_format(format) {
+            return Err(ConvertWorkerError::AudioConversionDisabled);
+        }
         let canonical_extension =
-            canonical_extension(format, self.config.approved_audio_model_path.as_ref())
-                .ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
+            canonical_extension(format).ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
         let input = self
             .heartbeat_while(
                 ctx,
@@ -333,7 +337,7 @@ impl ConvertWorker {
                 self.storage.get_object(ctx.org_id(), &quarantine_key),
             )
             .await?;
-        self.verify_downloaded_integrity(&source, input.len(), &metadata)?;
+        self.verify_downloaded_integrity(&source, input.as_ref(), &metadata)?;
         let sandbox_output = self
             .run_sandbox_with_heartbeat(
                 ctx,
@@ -362,7 +366,12 @@ impl ConvertWorker {
         let markdown_sha256 = hex::encode(Sha256::digest(&markdown));
         let markdown_len =
             u64::try_from(markdown.len()).map_err(|_| ConvertWorkerError::InvalidMarkdownLength)?;
-        let artifact_key = trusted_key(ctx.org_id(), source.version_id, job.id, None)?;
+        let artifact_key = trusted_key(
+            ctx.org_id(),
+            source.version_id,
+            artifact_object_id_for_attempt(job.id, attempts),
+            None,
+        )?;
         let meta = ObjectIdentityMeta {
             org_id: ctx.org_id(),
             collection_id: None,
@@ -435,21 +444,26 @@ impl ConvertWorker {
     fn verify_downloaded_integrity(
         &self,
         source: &documents::VersionSource,
-        len: usize,
+        bytes: &[u8],
         metadata: &HashMap<String, String>,
     ) -> Result<(), ConvertWorkerError> {
-        if let Some(expected) = source.byte_size {
-            if expected < 0 || len as i64 != expected {
-                return Err(ConvertWorkerError::InvalidQuarantineMetadata);
-            }
+        let expected_size = source
+            .byte_size
+            .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?;
+        if expected_size < 0 || bytes.len() as i64 != expected_size {
+            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
         }
-        if let Some(meta_len) = metadata.get("content-length-bytes") {
-            let meta_len = meta_len
-                .parse::<usize>()
-                .map_err(|_| ConvertWorkerError::InvalidQuarantineMetadata)?;
-            if meta_len != len {
-                return Err(ConvertWorkerError::InvalidQuarantineMetadata);
-            }
+        let meta_len = metadata
+            .get("content-length-bytes")
+            .ok_or(ConvertWorkerError::InvalidQuarantineMetadata)?
+            .parse::<usize>()
+            .map_err(|_| ConvertWorkerError::InvalidQuarantineMetadata)?;
+        if meta_len != bytes.len() {
+            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+        }
+        let actual_sha256 = hex::encode(Sha256::digest(bytes));
+        if actual_sha256 != source.content_sha256.as_str() {
+            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
         }
         Ok(())
     }
@@ -484,7 +498,7 @@ impl ConvertWorker {
                     return Err(ConvertWorkerError::JobTimedOut);
                 }
                 _ = heartbeat.tick() => {
-                    match timeout_at(deadline, jobs::heartbeat(
+                    match timeout(heartbeat_call_timeout(self.config.lease_ttl, deadline), jobs::heartbeat(
                         &self.db_pool,
                         ctx,
                         job.id,
@@ -529,8 +543,8 @@ impl ConvertWorker {
         Fut: Future<Output = Result<T, E>>,
         E: Into<ConvertWorkerError>,
     {
-        match timeout_at(
-            deadline,
+        match timeout(
+            heartbeat_call_timeout(self.config.lease_ttl, deadline),
             jobs::heartbeat(
                 &self.db_pool,
                 ctx,
@@ -559,7 +573,7 @@ impl ConvertWorker {
                     return Err(ConvertWorkerError::JobTimedOut);
                 }
                 _ = heartbeat.tick() => {
-                    match timeout_at(deadline, jobs::heartbeat(
+                    match timeout(heartbeat_call_timeout(self.config.lease_ttl, deadline), jobs::heartbeat(
                         &self.db_pool,
                         ctx,
                         job.id,
@@ -635,6 +649,26 @@ fn heartbeat_interval(interval: Duration) -> tokio::time::Interval {
     heartbeat
 }
 
+fn heartbeat_call_timeout(lease_ttl: Duration, deadline: TokioInstant) -> Duration {
+    let mut lease_bound = lease_ttl / 3;
+    if lease_bound.is_zero() {
+        lease_bound = Duration::from_millis(1);
+    }
+    let remaining = deadline.saturating_duration_since(TokioInstant::now());
+    remaining.min(lease_bound)
+}
+
+pub fn artifact_object_id_for_attempt(job_id: Uuid, attempts: i32) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(b"markhand-convert-artifact-attempt-v1");
+    hasher.update(job_id.as_bytes());
+    hasher.update(attempts.to_be_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConvertWorkerRun {
     NoJob,
@@ -695,6 +729,8 @@ pub enum ConvertWorkerError {
     SourceNotQuarantine,
     #[error("quarantine metadata failed identity or integrity validation")]
     InvalidQuarantineMetadata,
+    #[error("audio conversion is disabled for the isolated worker")]
+    AudioConversionDisabled,
 }
 
 impl ConvertWorkerError {
@@ -713,6 +749,7 @@ impl ConvertWorkerError {
                 | Self::UnsupportedCanonicalFormat
                 | Self::InvalidMarkdownLength
                 | Self::JobTimedOut
+                | Self::AudioConversionDisabled
                 | Self::SourceNotQuarantine
                 | Self::InvalidQuarantineMetadata
         )
@@ -740,14 +777,12 @@ impl ConvertWorkerError {
             Self::JobTimedOut => "convert job timed out",
             Self::SourceNotQuarantine => "convert source not quarantine",
             Self::InvalidQuarantineMetadata => "convert quarantine metadata invalid",
+            Self::AudioConversionDisabled => "convert audio disabled",
         }
     }
 }
 
-pub fn canonical_extension(
-    format: &str,
-    approved_audio_model_path: Option<&PathBuf>,
-) -> Option<&'static str> {
+pub fn canonical_extension(format: &str) -> Option<&'static str> {
     match format {
         "pdf" => Some("pdf"),
         "docx" => Some("docx"),
@@ -765,20 +800,14 @@ pub fn canonical_extension(
         "webp" => Some("webp"),
         "tiff" => Some("tiff"),
         "bmp" => Some("bmp"),
-        "wav" | "mp3" | "ogg" | "flac" | "m4a" if approved_audio_model_path.is_some() => {
-            Some(match format {
-                "wav" => "wav",
-                "mp3" => "mp3",
-                "ogg" => "ogg",
-                "flac" => "flac",
-                "m4a" => "m4a",
-                _ => return None,
-            })
-        }
         "wav" | "mp3" | "ogg" | "flac" | "m4a" => None,
         "zip" => Some("zip"),
         _ => None,
     }
+}
+
+fn is_audio_format(format: &str) -> bool {
+    matches!(format, "wav" | "mp3" | "ogg" | "flac" | "m4a")
 }
 
 #[cfg(test)]
@@ -787,13 +816,9 @@ mod tests {
 
     #[test]
     fn canonical_extensions_are_server_derived() {
-        assert_eq!(canonical_extension("jpeg", None), Some("jpg"));
-        assert_eq!(canonical_extension("../../etc/passwd", None), None);
-        assert_eq!(canonical_extension("txt", None), Some("txt"));
-        assert_eq!(canonical_extension("mp3", None), None);
-        assert_eq!(
-            canonical_extension("mp3", Some(&PathBuf::from("/models/approved.bin"))),
-            Some("mp3")
-        );
+        assert_eq!(canonical_extension("jpeg"), Some("jpg"));
+        assert_eq!(canonical_extension("../../etc/passwd"), None);
+        assert_eq!(canonical_extension("txt"), Some("txt"));
+        assert_eq!(canonical_extension("mp3"), None);
     }
 }
