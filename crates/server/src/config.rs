@@ -64,17 +64,184 @@ impl fmt::Debug for SecretString {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ServerConfig {
     role: RuntimeRole,
     profile: Profile,
     bind_addr: SocketAddr,
     database_url: Option<SecretString>,
     qdrant_url: Option<String>,
+    qdrant_api_key: Option<SecretString>,
     minio_url: Option<String>,
+    minio_access_key: Option<SecretString>,
+    minio_secret_key: Option<SecretString>,
+    minio_bucket: Option<String>,
+    minio_region: Option<String>,
+    minio_path_style: bool,
     auth: AuthConfig,
     limits: RuntimeLimits,
     index_signature: Option<String>,
+}
+
+impl fmt::Debug for ServerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServerConfig")
+            .field("role", &self.role)
+            .field("profile", &self.profile)
+            .field("bind_addr", &self.bind_addr)
+            .field(
+                "database_url",
+                &self.database_url.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "qdrant_url",
+                &self.qdrant_url.as_ref().map(|_| "[REDACTED_ENDPOINT]"),
+            )
+            .field(
+                "qdrant_api_key",
+                &self.qdrant_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "minio_url",
+                &self.minio_url.as_ref().map(|_| "[REDACTED_ENDPOINT]"),
+            )
+            .field(
+                "minio_access_key",
+                &self.minio_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "minio_secret_key",
+                &self.minio_secret_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("minio_bucket", &self.minio_bucket)
+            .field("minio_region", &self.minio_region)
+            .field("minio_path_style", &self.minio_path_style)
+            .field("auth", &self.auth)
+            .field("limits", &self.limits)
+            .field("index_signature", &self.index_signature)
+            .finish()
+    }
+}
+
+/// Typed MinIO/S3 connection settings (credentials redacted in Debug).
+#[derive(Clone, PartialEq, Eq)]
+pub struct MinioConfig {
+    endpoint: String,
+    access_key: SecretString,
+    secret_key: SecretString,
+    bucket: String,
+    region: String,
+    path_style: bool,
+}
+
+impl fmt::Debug for MinioConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MinioConfig")
+            .field("endpoint", &"[REDACTED_ENDPOINT]")
+            .field("access_key", &self.access_key)
+            .field("secret_key", &self.secret_key)
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("path_style", &self.path_style)
+            .finish()
+    }
+}
+
+impl MinioConfig {
+    pub fn new(
+        endpoint: impl Into<String>,
+        access_key: SecretString,
+        secret_key: SecretString,
+        bucket: impl Into<String>,
+        region: impl Into<String>,
+        path_style: bool,
+    ) -> Result<Self, String> {
+        let endpoint_raw = endpoint.into();
+        let endpoint = required_url(Some(endpoint_raw.as_str()), "MARKHAND_MINIO_URL")?;
+        let access_key_raw = access_key.expose();
+        let secret_key_raw = secret_key.expose();
+        if access_key_raw.is_empty() || secret_key_raw.is_empty() {
+            return Err("MinIO access key and secret key must not be empty".into());
+        }
+        let bucket = bucket.into();
+        if bucket.trim().is_empty() {
+            return Err("MARKHAND_MINIO_BUCKET must not be empty".into());
+        }
+        let region = region.into();
+        if region.trim().is_empty() {
+            return Err("MARKHAND_MINIO_REGION must not be empty".into());
+        }
+        Ok(Self {
+            endpoint,
+            access_key,
+            secret_key,
+            bucket,
+            region,
+            path_style,
+        })
+    }
+
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    pub fn access_key(&self) -> &SecretString {
+        &self.access_key
+    }
+
+    pub fn secret_key(&self) -> &SecretString {
+        &self.secret_key
+    }
+
+    pub fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+
+    pub const fn path_style(&self) -> bool {
+        self.path_style
+    }
+}
+
+/// Fail-closed storage adapter configuration (Qdrant + MinIO).
+#[derive(Clone, PartialEq, Eq)]
+pub struct StorageConfig {
+    qdrant_url: String,
+    qdrant_api_key: Option<SecretString>,
+    minio: MinioConfig,
+}
+
+impl fmt::Debug for StorageConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StorageConfig")
+            .field("qdrant_url", &"[REDACTED_ENDPOINT]")
+            .field(
+                "qdrant_api_key",
+                &self.qdrant_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("minio", &self.minio)
+            .finish()
+    }
+}
+
+impl StorageConfig {
+    pub fn qdrant_url(&self) -> &str {
+        &self.qdrant_url
+    }
+
+    pub fn qdrant_api_key(&self) -> Option<&SecretString> {
+        self.qdrant_api_key.as_ref()
+    }
+
+    pub fn minio(&self) -> &MinioConfig {
+        &self.minio
+    }
 }
 
 /// Pinned JWT signing algorithm. Only HS256 is supported for Phase 1B.
@@ -134,14 +301,20 @@ pub struct RuntimeLimits {
     pub job_lease_seconds: u64,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigFile {
     profile: Option<String>,
     bind_addr: Option<String>,
     database_url: Option<String>,
     qdrant_url: Option<String>,
+    qdrant_api_key: Option<String>,
     minio_url: Option<String>,
+    minio_access_key: Option<String>,
+    minio_secret_key: Option<String>,
+    minio_bucket: Option<String>,
+    minio_region: Option<String>,
+    minio_path_style: Option<bool>,
     auth_issuer: Option<String>,
     auth_audience: Option<String>,
     auth_signing_key: Option<String>,
@@ -220,9 +393,34 @@ impl ServerConfig {
         let qdrant_url = optional_value(file, env, "MARKHAND_QDRANT_URL", |value| {
             value.qdrant_url.as_ref()
         });
+        let qdrant_api_key = optional_value(file, env, "MARKHAND_QDRANT_API_KEY", |value| {
+            value.qdrant_api_key.as_ref()
+        })
+        .map(SecretString::new);
         let minio_url = optional_value(file, env, "MARKHAND_MINIO_URL", |value| {
             value.minio_url.as_ref()
         });
+        let minio_access_key = optional_value(file, env, "MARKHAND_MINIO_ACCESS_KEY", |value| {
+            value.minio_access_key.as_ref()
+        })
+        .map(SecretString::new);
+        let minio_secret_key = optional_value(file, env, "MARKHAND_MINIO_SECRET_KEY", |value| {
+            value.minio_secret_key.as_ref()
+        })
+        .map(SecretString::new);
+        let minio_bucket = optional_value(file, env, "MARKHAND_MINIO_BUCKET", |value| {
+            value.minio_bucket.as_ref()
+        });
+        let minio_region = optional_value(file, env, "MARKHAND_MINIO_REGION", |value| {
+            value.minio_region.as_ref()
+        });
+        let minio_path_style = bool_value(
+            file,
+            env,
+            "MARKHAND_MINIO_PATH_STYLE",
+            |value| value.minio_path_style,
+            true,
+        )?;
         let auth = match role {
             RuntimeRole::Api => {
                 let alg = optional_value(file, env, "MARKHAND_AUTH_ALG", |value| {
@@ -324,7 +522,13 @@ impl ServerConfig {
             bind_addr,
             database_url,
             qdrant_url,
+            qdrant_api_key,
             minio_url,
+            minio_access_key,
+            minio_secret_key,
+            minio_bucket,
+            minio_region,
+            minio_path_style,
             auth,
             limits,
             index_signature,
@@ -367,7 +571,13 @@ impl ServerConfig {
             bind_addr: "127.0.0.1:8787".parse().expect("valid test address"),
             database_url: Some(endpoints.database_url),
             qdrant_url: Some(endpoints.qdrant_url),
+            qdrant_api_key: None,
             minio_url: Some(endpoints.minio_url),
+            minio_access_key: None,
+            minio_secret_key: None,
+            minio_bucket: None,
+            minio_region: None,
+            minio_path_style: true,
             auth: AuthConfig {
                 issuer: None,
                 audience: None,
@@ -395,6 +605,43 @@ impl ServerConfig {
         })
     }
 
+    /// Builds typed storage adapter config (Qdrant URL + MinIO credentials).
+    ///
+    /// Fail-closed: missing endpoint or credentials returns an error. Secrets
+    /// remain wrapped in [`SecretString`] (redacted in Debug).
+    pub fn storage_config(&self) -> Result<StorageConfig, String> {
+        let endpoints = self.runtime_endpoints()?;
+        let access_key = self
+            .minio_access_key
+            .clone()
+            .ok_or_else(|| "server requires MARKHAND_MINIO_ACCESS_KEY".to_string())?;
+        let secret_key = self
+            .minio_secret_key
+            .clone()
+            .ok_or_else(|| "server requires MARKHAND_MINIO_SECRET_KEY".to_string())?;
+        let bucket = self
+            .minio_bucket
+            .clone()
+            .unwrap_or_else(|| "markhand-documents".to_string());
+        let region = self
+            .minio_region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string());
+        let minio = MinioConfig::new(
+            endpoints.minio_url,
+            access_key,
+            secret_key,
+            bucket,
+            region,
+            self.minio_path_style,
+        )?;
+        Ok(StorageConfig {
+            qdrant_url: endpoints.qdrant_url,
+            qdrant_api_key: self.qdrant_api_key.clone(),
+            minio,
+        })
+    }
+
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_limits()?;
         self.validate_index_signature(false)?;
@@ -411,6 +658,8 @@ impl ServerConfig {
         validate_production_database_url(endpoints.database_url.expose())?;
         require_https(&endpoints.qdrant_url, "MARKHAND_QDRANT_URL")?;
         require_https(&endpoints.minio_url, "MARKHAND_MINIO_URL")?;
+        // Fail closed: production must have least-privilege MinIO credentials.
+        let _ = self.storage_config()?;
         self.validate_index_signature(true)?;
         Ok(())
     }
@@ -519,11 +768,22 @@ impl ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeEndpoints {
     pub database_url: SecretString,
     pub qdrant_url: String,
     pub minio_url: String,
+}
+
+impl fmt::Debug for RuntimeEndpoints {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeEndpoints")
+            .field("database_url", &"[REDACTED]")
+            .field("qdrant_url", &"[REDACTED_ENDPOINT]")
+            .field("minio_url", &"[REDACTED_ENDPOINT]")
+            .finish()
+    }
 }
 
 fn required_database_url(value: Option<&SecretString>) -> Result<SecretString, String> {
@@ -574,14 +834,48 @@ fn u32_value(
     u32::try_from(value).map_err(|_| format!("{env_name} is out of range for u32"))
 }
 
+fn bool_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+    env_name: &str,
+    from_file: impl FnOnce(&ConfigFile) -> Option<bool>,
+    default: bool,
+) -> Result<bool, String> {
+    match env.get(env_name) {
+        Some(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => Err(format!("{env_name} must be a boolean")),
+        },
+        None => Ok(file.and_then(from_file).unwrap_or(default)),
+    }
+}
+
 fn required_url(value: Option<&str>, name: &str) -> Result<String, String> {
     let value = value.ok_or_else(|| format!("server requires {name}"))?;
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.contains('?') || trimmed.contains('#') {
+        return Err(format!(
+            "{name} must not include query parameters or fragments"
+        ));
+    }
     let parsed =
-        reqwest::Url::parse(value).map_err(|_| format!("{name} must be an absolute URL"))?;
+        reqwest::Url::parse(trimmed).map_err(|_| format!("{name} must be an absolute URL"))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(format!("{name} must use http or https"));
     }
-    Ok(value.trim_end_matches('/').to_string())
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(format!("{name} must not embed userinfo credentials"));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(format!(
+            "{name} must not include query parameters or fragments"
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(format!("{name} must include a host"));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn validate_production_database_url(value: &str) -> Result<(), String> {
@@ -681,7 +975,13 @@ mod tests {
             bind_addr: Some("127.0.0.1:9000".into()),
             database_url: Some("postgres://file-secret".into()),
             qdrant_url: Some("http://qdrant.test".into()),
+            qdrant_api_key: None,
             minio_url: Some("http://minio.test".into()),
+            minio_access_key: None,
+            minio_secret_key: None,
+            minio_bucket: None,
+            minio_region: None,
+            minio_path_style: None,
             auth_issuer: None,
             auth_audience: None,
             auth_signing_key: None,
@@ -881,6 +1181,124 @@ mod tests {
             ServerConfig::from_sources(None, &invalid_signature).unwrap_err(),
             "MARKHAND_INDEX_SIGNATURE must be a 64-character hex digest"
         );
+    }
+
+    #[test]
+    fn storage_config_requires_minio_credentials_and_redacts_secrets() {
+        let env = BTreeMap::from([
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand@localhost/markhand".into(),
+            ),
+            ("MARKHAND_QDRANT_URL".into(), "http://qdrant.test".into()),
+            ("MARKHAND_MINIO_URL".into(), "http://minio.test".into()),
+        ]);
+        let config = ServerConfig::from_sources(None, &env).unwrap();
+        assert_eq!(
+            config.storage_config().unwrap_err(),
+            "server requires MARKHAND_MINIO_ACCESS_KEY"
+        );
+
+        let env = BTreeMap::from([
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand@localhost/markhand".into(),
+            ),
+            ("MARKHAND_QDRANT_URL".into(), "http://qdrant.test".into()),
+            ("MARKHAND_MINIO_URL".into(), "http://minio.test".into()),
+            ("MARKHAND_MINIO_ACCESS_KEY".into(), "access-secret".into()),
+            ("MARKHAND_MINIO_SECRET_KEY".into(), "secret-secret".into()),
+            ("MARKHAND_MINIO_BUCKET".into(), "markhand-documents".into()),
+        ]);
+        let config = ServerConfig::from_sources(None, &env).unwrap();
+        let storage = config.storage_config().unwrap();
+        let debug = format!("{storage:?}");
+        assert!(!debug.contains("access-secret"));
+        assert!(!debug.contains("secret-secret"));
+        assert!(debug.contains("[REDACTED]"));
+        assert!(storage.minio().path_style());
+        assert!(!format!("{storage:?}").contains("qdrant.test"));
+        assert!(!format!("{storage:?}").contains("minio.test"));
+    }
+
+    #[test]
+    fn endpoint_urls_reject_embedded_credentials() {
+        let env = BTreeMap::from([
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand@localhost/markhand".into(),
+            ),
+            (
+                "MARKHAND_QDRANT_URL".into(),
+                "http://user:pass@qdrant.test".into(),
+            ),
+            ("MARKHAND_MINIO_URL".into(), "http://minio.test".into()),
+            ("MARKHAND_MINIO_ACCESS_KEY".into(), "access-secret".into()),
+            ("MARKHAND_MINIO_SECRET_KEY".into(), "secret-secret".into()),
+        ]);
+        let config = ServerConfig::from_sources(None, &env).unwrap();
+        assert!(config.runtime_endpoints().unwrap_err().contains("userinfo"));
+    }
+
+    #[test]
+    fn endpoint_urls_reject_any_query_or_fragment() {
+        for bad in [
+            "http://qdrant.test?sig=abc",
+            "http://qdrant.test#frag",
+            "http://qdrant.test/?x=1",
+            "http://minio.test?token=x",
+        ] {
+            let env = BTreeMap::from([
+                (
+                    "MARKHAND_DATABASE_URL".into(),
+                    "postgres://markhand@localhost/markhand".into(),
+                ),
+                ("MARKHAND_QDRANT_URL".into(), bad.into()),
+                ("MARKHAND_MINIO_URL".into(), "http://minio.test".into()),
+            ]);
+            let config = ServerConfig::from_sources(None, &env).unwrap();
+            let err = config.runtime_endpoints().unwrap_err();
+            assert!(
+                err.contains("query") || err.contains("fragment") || err.contains("userinfo"),
+                "expected rejection for {bad}, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn server_config_debug_redacts_endpoints_and_secrets() {
+        let env = BTreeMap::from([
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand:top-secret@db.internal/markhand".into(),
+            ),
+            (
+                "MARKHAND_QDRANT_URL".into(),
+                "http://qdrant.internal:6333".into(),
+            ),
+            (
+                "MARKHAND_MINIO_URL".into(),
+                "http://minio.internal:9000".into(),
+            ),
+            ("MARKHAND_MINIO_ACCESS_KEY".into(), "access-secret".into()),
+            ("MARKHAND_MINIO_SECRET_KEY".into(), "secret-secret".into()),
+            ("MARKHAND_QDRANT_API_KEY".into(), "qdrant-secret-key".into()),
+        ]);
+        let config = ServerConfig::from_sources(None, &env).unwrap();
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("top-secret"));
+        assert!(!debug.contains("access-secret"));
+        assert!(!debug.contains("secret-secret"));
+        assert!(!debug.contains("qdrant-secret"));
+        assert!(!debug.contains("qdrant.internal"));
+        assert!(!debug.contains("minio.internal"));
+        assert!(!debug.contains("db.internal"));
+        assert!(debug.contains("[REDACTED"));
+        let endpoints = config.runtime_endpoints().unwrap();
+        let endpoints_debug = format!("{endpoints:?}");
+        assert!(!endpoints_debug.contains("qdrant.internal"));
+        assert!(!endpoints_debug.contains("minio.internal"));
+        assert!(!endpoints_debug.contains("top-secret"));
     }
 
     #[test]
