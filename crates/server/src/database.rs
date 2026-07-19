@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use tokio_postgres::{Client, NoTls};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
-const MIGRATIONS: [(&str, &str); 2] = [
+const MIGRATIONS: &[(&str, &str)] = &[
     (
         "0001_expand_orgs_users.sql",
         include_str!("../migrations/0001_expand_orgs_users.sql"),
@@ -14,8 +14,55 @@ const MIGRATIONS: [(&str, &str); 2] = [
         "0002_expand_org_membership_rls.sql",
         include_str!("../migrations/0002_expand_org_membership_rls.sql"),
     ),
+    (
+        "0003_expand_auth_sessions_rbac.sql",
+        include_str!("../migrations/0003_expand_auth_sessions_rbac.sql"),
+    ),
+    (
+        "0004_expand_collections.sql",
+        include_str!("../migrations/0004_expand_collections.sql"),
+    ),
+    (
+        "0005_expand_documents_versions_artifacts.sql",
+        include_str!("../migrations/0005_expand_documents_versions_artifacts.sql"),
+    ),
+    (
+        "0006_expand_chunks_claims.sql",
+        include_str!("../migrations/0006_expand_chunks_claims.sql"),
+    ),
+    (
+        "0007_expand_conflicts_lifecycle.sql",
+        include_str!("../migrations/0007_expand_conflicts_lifecycle.sql"),
+    ),
+    (
+        "0008_expand_jobs_outbox_events.sql",
+        include_str!("../migrations/0008_expand_jobs_outbox_events.sql"),
+    ),
+    (
+        "0009_expand_quota_audit_index.sql",
+        include_str!("../migrations/0009_expand_quota_audit_index.sql"),
+    ),
+    (
+        "0010_expand_tenant_rls.sql",
+        include_str!("../migrations/0010_expand_tenant_rls.sql"),
+    ),
+    (
+        "0011_expand_poc_seed.sql",
+        include_str!("../migrations/0011_expand_poc_seed.sql"),
+    ),
 ];
 
+/// Embedded migration sources in apply order (name, SQL). Used by integration tests.
+pub fn embedded_migrations() -> &'static [(&'static str, &'static str)] {
+    MIGRATIONS
+}
+
+pub fn migration_checksum(source: &str) -> String {
+    Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
 pub async fn apply_migrations(database_url: &str) -> Result<(), String> {
     let mut client = connect(database_url).await?;
     client
@@ -54,11 +101,8 @@ pub async fn apply_migrations(database_url: &str) -> Result<(), String> {
 }
 
 async fn apply_all_migrations(client: &mut Client) -> Result<(), String> {
-    for (name, source) in MIGRATIONS {
-        let checksum = Sha256::digest(source.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+    for &(name, source) in MIGRATIONS {
+        let checksum = migration_checksum(source);
         let prior = client
             .query_opt(
                 "SELECT checksum FROM markhand_schema_migrations WHERE name = $1",
