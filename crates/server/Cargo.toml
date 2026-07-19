@@ -22,6 +22,7 @@ path = "src/bin/worker.rs"
 argon2 = "0.5.3"
 axum = { version = "0.8.9", features = ["json"] }
 base64 = "0.22.1"
+bytes = "1.12.1"
 chrono = { version = "0.4.45", features = ["serde", "clock"] }
 deadpool-postgres = { version = "0.14", features = ["rt_tokio_1"] }
 fileconv-core = { path = "../core" }
@@ -29,7 +30,8 @@ fileconv-knowledge = { path = "../knowledge" }
 hex = "0.4.3"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 rand = "0.10.2"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+rust-s3 = { version = "0.37.2", default-features = false, features = ["tokio-rustls-tls"] }
 rust_decimal = { version = "1.42.1", features = ["serde", "db-tokio-postgres"] }
 rustls = "0.23.42"
 rustls-native-certs = "0.8.4"
@@ -40,7 +42,7 @@ thiserror.workspace = true
 tokio = { version = "1.53.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-postgres-rustls = "0.14.0"
-uuid = { version = "1.24.0", features = ["serde", "v4"] }
+uuid = { version = "1.24.0", features = ["serde", "v4", "v8"] }
 
 [dev-dependencies]
 http-body-util = "0.1.4"

@@ -10,6 +10,7 @@ pub mod http;
 pub mod routes;
 pub mod services;
 pub mod state;
+pub mod storage;
 pub mod telemetry;
 
 /// Validates the non-secret server configuration contract.
