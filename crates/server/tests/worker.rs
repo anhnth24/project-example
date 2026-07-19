@@ -18,11 +18,11 @@ use fileconv_server::db::models::{CollectionVisibility, Job, JobStatus, JobType}
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
-use fileconv_server::storage::keys::{quarantine_key, trusted_key};
+use fileconv_server::services::conversion::ConversionIdentity;
+use fileconv_server::services::promotion::PromotionFault;
+use fileconv_server::storage::keys::quarantine_key;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
-use fileconv_server::workers::convert::{
-    artifact_object_id_for_attempt, ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun,
-};
+use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::{
     self, SandboxCancel, SandboxConfig, SandboxExit, SandboxInput,
@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 const INPUT: &str = "{input}";
 static SANDBOX_TEST_LOCK: Mutex<()> = Mutex::new(());
+const ECHO_INPUT_SCRIPT: &str = r#"while IFS= read -r line; do printf '%s\n' "$line"; done < "$1""#;
 
 fn sandbox_test_guard() -> MutexGuard<'static, ()> {
     SANDBOX_TEST_LOCK
@@ -232,6 +233,16 @@ async fn seed_org_collection_document_version(
                 orgs::ensure_user(txn, &ctx, ctx.user_id(), "worker@example.test", "Worker")
                     .await?;
                 orgs::ensure_membership(txn, &ctx).await?;
+                txn.execute(
+                    "INSERT INTO org_quotas (
+                        org_id, max_storage_bytes, max_documents,
+                        max_concurrent_jobs, max_monthly_tokens
+                     )
+                     VALUES ($1, 1000000000, 100000, 100, 1000000000)
+                     ON CONFLICT (org_id) DO NOTHING",
+                    &[&ctx.org_id()],
+                )
+                .await?;
                 let collection_name = format!("Worker Collection {collection_id}");
                 let collection_slug = format!("worker-collection-{collection_id}");
                 collections::insert(
@@ -281,6 +292,50 @@ async fn seed_org_collection_document_version(
     .await
     .expect("seed document version");
     (document_id, version_id)
+}
+
+async fn seed_additional_source_version(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+    original_object_key: &str,
+    sha256: &str,
+    byte_size: u64,
+) {
+    let original_object_key = original_object_key.to_string();
+    let sha256 = sha256.to_string();
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO document_versions (
+                        id, org_id, document_id, version_number, content_sha256,
+                        original_object_key, source_content_type, byte_size,
+                        created_by_user_id
+                     )
+                     SELECT $1, $2, $3, COALESCE(MAX(version_number), 0)::integer + 1,
+                            $4, $5, 'text/plain', $6, $7
+                     FROM document_versions
+                     WHERE org_id = $2 AND document_id = $3",
+                    &[
+                        &version_id,
+                        &ctx.org_id(),
+                        &document_id,
+                        &sha256,
+                        &original_object_key,
+                        &(byte_size as i64),
+                        &ctx.user_id(),
+                    ],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed additional source version");
 }
 
 async fn put_quarantine_object(
@@ -416,6 +471,272 @@ async fn markdown_artifact_key(pool: &Pool, ctx: &OrgContext, version_id: Uuid) 
     })
     .await
     .expect("artifact query")
+}
+
+async fn published_version_for_source(
+    pool: &Pool,
+    ctx: &OrgContext,
+    source_version_id: Uuid,
+) -> Option<Uuid> {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_opt(
+                        "SELECT id
+                         FROM document_versions
+                         WHERE org_id = $1
+                           AND parent_version_id = $2
+                           AND publication_state = 'published'",
+                        &[&ctx.org_id(), &source_version_id],
+                    )
+                    .await?;
+                Ok(row.map(|row| row.get(0)))
+            })
+        }
+    })
+    .await
+    .expect("published version query")
+}
+
+async fn document_current_version(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Option<Uuid> {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT current_version_id
+                         FROM documents
+                         WHERE org_id = $1 AND id = $2",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("current version query")
+}
+
+async fn count_published_versions(pool: &Pool, ctx: &OrgContext, document_id: Uuid) -> i64 {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM document_versions
+                         WHERE org_id = $1
+                           AND document_id = $2
+                           AND publication_state = 'published'",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("published count query")
+}
+
+async fn count_markdown_artifacts(pool: &Pool, ctx: &OrgContext, document_id: Uuid) -> i64 {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM derived_artifacts
+                         WHERE org_id = $1
+                           AND document_id = $2
+                           AND artifact_kind = 'markdown'",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("artifact count query")
+}
+
+async fn count_index_outbox(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> i64 {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM outbox_events
+                         WHERE org_id = $1
+                           AND job_id = $2
+                           AND event_type = 'document.index_requested'",
+                        &[&ctx.org_id(), &job_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("index outbox count query")
+}
+
+async fn quota_reservation_statuses(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> Vec<String> {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT status
+                         FROM quota_reservations
+                         WHERE org_id = $1 AND job_id = $2
+                         ORDER BY created_at, id",
+                        &[&ctx.org_id(), &job_id],
+                    )
+                    .await?;
+                Ok(rows.into_iter().map(|row| row.get(0)).collect())
+            })
+        }
+    })
+    .await
+    .expect("quota status query")
+}
+
+async fn make_job_available(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE jobs
+                     SET available_at = clock_timestamp()
+                     WHERE org_id = $1 AND id = $2",
+                    &[&ctx.org_id(), &job_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("make job available");
+}
+
+async fn version_inherits_document_collection(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> bool {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT d.collection_id = d2.collection_id
+                         FROM documents d
+                         JOIN document_versions v
+                           ON v.org_id = d.org_id AND v.document_id = d.id
+                         JOIN documents d2
+                           ON d2.org_id = v.org_id AND d2.id = v.document_id
+                         WHERE d.org_id = $1 AND d.id = $2 AND v.id = $3",
+                        &[&ctx.org_id(), &document_id, &version_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("collection inheritance query")
+}
+
+async fn version_current_and_expired(
+    pool: &Pool,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> (bool, bool) {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT is_current, effective_to IS NOT NULL AS expired
+                         FROM document_versions
+                         WHERE org_id = $1 AND id = $2",
+                        &[&ctx.org_id(), &version_id],
+                    )
+                    .await?;
+                Ok((row.get(0), row.get(1)))
+            })
+        }
+    })
+    .await
+    .expect("version current query")
+}
+
+async fn illegal_version_content_update_is_rejected(
+    pool: &Pool,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> bool {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE document_versions
+                     SET content_sha256 = repeat('a', 64)
+                     WHERE org_id = $1 AND id = $2",
+                    &[&ctx.org_id(), &version_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .is_err()
+}
+
+async fn illegal_original_key_update_is_rejected(
+    pool: &Pool,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> bool {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE document_versions
+                     SET original_object_key = original_object_key || '-mutated'
+                     WHERE org_id = $1 AND id = $2",
+                    &[&ctx.org_id(), &version_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .is_err()
 }
 
 fn stub_worker_config(script: &str, heartbeat_ms: u64) -> ConvertWorkerConfig {
@@ -724,7 +1045,7 @@ fn real_fileconv_smoke_for_simple_formats_when_built() {
 }
 
 #[tokio::test]
-async fn live_convert_worker_completes_and_stores_trusted_markdown() {
+async fn live_convert_worker_promotes_immutable_markdown_version() {
     let Some(base_url) = test_database_url() else {
         return;
     };
@@ -780,7 +1101,28 @@ async fn live_convert_worker_completes_and_stores_trusted_markdown() {
         get_job(&pool, &ctx, job.id).await.status,
         JobStatus::Succeeded
     );
-    let artifact_key = markdown_artifact_key(&pool, &ctx, version_id)
+    let promoted_version_id = published_version_for_source(&pool, &ctx, version_id)
+        .await
+        .expect("published promoted version");
+    assert_ne!(promoted_version_id, version_id);
+    assert_eq!(
+        document_current_version(&pool, &ctx, document_id).await,
+        Some(promoted_version_id)
+    );
+    assert!(
+        version_inherits_document_collection(&pool, &ctx, document_id, promoted_version_id).await
+    );
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 1);
+    assert_eq!(
+        quota_reservation_statuses(&pool, &ctx, job.id).await,
+        vec!["finalized".to_string()]
+    );
+    assert!(markdown_artifact_key(&pool, &ctx, version_id)
+        .await
+        .is_none());
+    let artifact_key = markdown_artifact_key(&pool, &ctx, promoted_version_id)
         .await
         .expect("artifact key");
     let trusted = fileconv_server::storage::parse_key_for_org(&artifact_key, ctx.org_id())
@@ -790,6 +1132,303 @@ async fn live_convert_worker_completes_and_stores_trusted_markdown() {
         .await
         .expect("get trusted markdown");
     assert_eq!(markdown.as_ref(), b"hello from quarantine\n");
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"idempotent retry\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let duplicate = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    assert_eq!(duplicate.id, job.id);
+    let worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("worker");
+
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("first run"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+    ));
+    assert_eq!(
+        worker.run_once(&ctx).await.expect("second run"),
+        ConvertWorkerRun::NoJob
+    );
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+    assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 1);
+    let promoted = published_version_for_source(&pool, &ctx, version_id)
+        .await
+        .expect("promoted version");
+    assert_eq!(
+        document_current_version(&pool, &ctx, document_id).await,
+        Some(promoted)
+    );
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+
+    for fault in [
+        PromotionFault::AfterStagingPut,
+        PromotionFault::AfterVersionInsert,
+        PromotionFault::AfterPointerSwap,
+        PromotionFault::AfterOutboxInsert,
+    ] {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let quarantine =
+            quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+        let payload = b"fault retry\n";
+        let sha256 = put_quarantine_object(
+            &storage,
+            &ctx,
+            &quarantine,
+            payload,
+            "txt",
+            document_id,
+            version_id,
+        )
+        .await;
+        let (document_id, version_id) = seed_org_collection_document_version(
+            &pool,
+            &ctx,
+            document_id,
+            version_id,
+            &quarantine.as_str(),
+            &sha256,
+            payload.len() as u64,
+        )
+        .await;
+        let job = jobs::enqueue(
+            &pool,
+            &ctx,
+            EnqueueJob::new(
+                JobType::Convert,
+                JobPayload {
+                    document_id: Some(document_id),
+                    version_id: Some(version_id),
+                    collection_id: None,
+                    upload_id: None,
+                    batch_id: None,
+                },
+                format!("convert-fault-{fault:?}-{version_id}"),
+            ),
+        )
+        .await
+        .expect("enqueue")
+        .job;
+        let identity = ConversionIdentity::new(
+            ctx.org_id(),
+            document_id,
+            version_id,
+            job.idempotency_key.clone(),
+        );
+        let staged_key = fileconv_server::services::artifacts::markdown_key(
+            &identity,
+            identity.promoted_version_id(),
+        )
+        .expect("staged key");
+        let mut fault_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+        fault_config.promotion_fault = Some(fault);
+        let fault_worker =
+            ConvertWorker::new(pool.clone(), storage.clone(), fault_config).expect("worker");
+
+        assert!(matches!(
+            fault_worker.run_once(&ctx).await.expect("fault run"),
+            ConvertWorkerRun::Failed {
+                job_id,
+                terminal: false
+            } if job_id == job.id
+        ));
+        assert!(published_version_for_source(&pool, &ctx, version_id)
+            .await
+            .is_none());
+        assert_eq!(
+            document_current_version(&pool, &ctx, document_id).await,
+            None
+        );
+        assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 0);
+        assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 0);
+        assert_eq!(
+            quota_reservation_statuses(&pool, &ctx, job.id).await,
+            vec!["refunded".to_string()]
+        );
+        assert!(!storage
+            .object_exists(ctx.org_id(), &staged_key)
+            .await
+            .expect("staged object existence"));
+
+        make_job_available(&pool, &ctx, job.id).await;
+        let retry_worker = ConvertWorker::new(
+            pool.clone(),
+            storage.clone(),
+            stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+        )
+        .expect("retry worker");
+        assert!(matches!(
+            retry_worker.run_once(&ctx).await.expect("retry run"),
+            ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
+        ));
+        assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
+        assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
+        assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 1);
+        assert_eq!(
+            quota_reservation_statuses(&pool, &ctx, job.id).await,
+            vec!["refunded".to_string(), "finalized".to_string()]
+        );
+    }
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_second_promotion_demotes_current_and_preserves_original() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let source_one = Uuid::new_v4();
+    let quarantine_one =
+        quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload_one = b"first source\n";
+    let sha_one = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine_one,
+        payload_one,
+        "txt",
+        document_id,
+        source_one,
+    )
+    .await;
+    let (document_id, source_one) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        source_one,
+        &quarantine_one.as_str(),
+        &sha_one,
+        payload_one.len() as u64,
+    )
+    .await;
+    let first_job = enqueue_convert(&pool, &ctx, document_id, source_one).await;
+    let worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("worker");
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("first promotion"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == first_job.id
+    ));
+    let first_promoted = published_version_for_source(&pool, &ctx, source_one)
+        .await
+        .expect("first promoted");
+
+    let source_two = Uuid::new_v4();
+    let quarantine_two =
+        quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload_two = b"second source\n";
+    let sha_two = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine_two,
+        payload_two,
+        "txt",
+        document_id,
+        source_two,
+    )
+    .await;
+    seed_additional_source_version(
+        &pool,
+        &ctx,
+        document_id,
+        source_two,
+        &quarantine_two.as_str(),
+        &sha_two,
+        payload_two.len() as u64,
+    )
+    .await;
+    let second_job = enqueue_convert(&pool, &ctx, document_id, source_two).await;
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("second promotion"),
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == second_job.id
+    ));
+    let second_promoted = published_version_for_source(&pool, &ctx, source_two)
+        .await
+        .expect("second promoted");
+
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 2);
+    assert_eq!(
+        document_current_version(&pool, &ctx, document_id).await,
+        Some(second_promoted)
+    );
+    assert_eq!(
+        version_current_and_expired(&pool, &ctx, first_promoted).await,
+        (false, true)
+    );
+    assert_eq!(
+        version_current_and_expired(&pool, &ctx, second_promoted).await,
+        (true, false)
+    );
+    assert!(illegal_version_content_update_is_rejected(&pool, &ctx, second_promoted).await);
+    assert!(illegal_original_key_update_is_rejected(&pool, &ctx, source_one).await);
+    let original = storage
+        .get_object(ctx.org_id(), &quarantine_one)
+        .await
+        .expect("original quarantine object");
+    assert_eq!(original.as_ref(), payload_one);
+    assert!(version_inherits_document_collection(&pool, &ctx, document_id, second_promoted).await);
+
     ephemeral.drop().await;
 }
 
@@ -852,6 +1491,13 @@ async fn live_convert_worker_converter_error_retries_job() {
     assert!(markdown_artifact_key(&pool, &ctx, version_id)
         .await
         .is_none());
+    assert!(published_version_for_source(&pool, &ctx, version_id)
+        .await
+        .is_none());
+    assert_eq!(
+        document_current_version(&pool, &ctx, document_id).await,
+        None
+    );
     ephemeral.drop().await;
 }
 
@@ -925,6 +1571,9 @@ else:
     assert!(markdown_artifact_key(&pool, &ctx, version_id)
         .await
         .is_none());
+    assert!(published_version_for_source(&pool, &ctx, version_id)
+        .await
+        .is_none());
     ephemeral.drop().await;
 }
 
@@ -963,11 +1612,15 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
     )
     .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let generated_trusted = trusted_key(
+    let identity = ConversionIdentity::new(
         ctx.org_id(),
+        document_id,
         version_id,
-        artifact_object_id_for_attempt(job.id, job.attempts + 1),
-        None,
+        format!("convert-{version_id}"),
+    );
+    let generated_trusted = fileconv_server::services::artifacts::markdown_key(
+        &identity,
+        identity.promoted_version_id(),
     )
     .expect("trusted key");
     let mut config = stub_worker_config("printf converted-after-upload", 50);
@@ -986,6 +1639,9 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
         JobStatus::Cancelled
     );
     assert!(markdown_artifact_key(&pool, &ctx, version_id)
+        .await
+        .is_none());
+    assert!(published_version_for_source(&pool, &ctx, version_id)
         .await
         .is_none());
     assert!(!storage
