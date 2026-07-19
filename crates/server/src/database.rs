@@ -63,6 +63,14 @@ pub fn migration_checksum(source: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+pub fn latest_migration() -> (&'static str, String) {
+    let (name, source) = MIGRATIONS
+        .last()
+        .expect("embedded migration manifest must not be empty");
+    (*name, migration_checksum(source))
+}
+
 pub async fn apply_migrations(database_url: &str) -> Result<(), String> {
     let mut client = connect(database_url).await?;
     client

@@ -20,9 +20,16 @@ const DEFAULT_QUOTA_SWEEP_BATCH_SIZE: u32 = 500;
 const DEFAULT_ARGON2_MEMORY_KIB: u32 = 19_456;
 const DEFAULT_ARGON2_TIME_COST: u32 = 2;
 const DEFAULT_ARGON2_PARALLELISM: u32 = 1;
+const DEFAULT_RATE_LIMIT_AUTH_PER_MINUTE: u32 = 20;
+const DEFAULT_RATE_LIMIT_LLM_PER_MINUTE: u32 = 60;
+const DEFAULT_RATE_LIMIT_AUTHENTICATED_PER_MINUTE: u32 = 300;
+const DEFAULT_RATE_LIMIT_FALLBACK_PER_MINUTE: u32 = 120;
+const DEFAULT_RATE_LIMIT_MAX_ENTRIES: usize = 8_192;
 const PROD_MIN_ARGON2_MEMORY_KIB: u32 = 19_456;
 const PROD_MIN_ARGON2_TIME_COST: u32 = 2;
 const PROD_MAX_ACCESS_TOKEN_TTL_SECS: u64 = 900;
+const MAX_RATE_LIMIT_PER_MINUTE: u32 = 100_000;
+const MAX_RATE_LIMIT_ENTRIES: usize = 1_000_000;
 
 /// Deployment profile with explicitly different safety requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +96,9 @@ pub struct ServerConfig {
     limits: RuntimeLimits,
     upload: UploadConfig,
     quota_sweep: QuotaSweepConfig,
+    rate_limits: RateLimitConfig,
+    trusted_proxy: bool,
+    cors_allowed_origins: Vec<String>,
     index_signature: Option<String>,
 }
 
@@ -134,6 +144,9 @@ impl fmt::Debug for ServerConfig {
             .field("limits", &self.limits)
             .field("upload", &self.upload)
             .field("quota_sweep", &self.quota_sweep)
+            .field("rate_limits", &self.rate_limits)
+            .field("trusted_proxy", &self.trusted_proxy)
+            .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("index_signature", &self.index_signature)
             .finish()
     }
@@ -355,6 +368,15 @@ pub struct QuotaSweepConfig {
     pub batch_size: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimitConfig {
+    pub auth_per_ip_per_minute: u32,
+    pub llm_per_user_per_minute: u32,
+    pub authenticated_per_user_per_minute: u32,
+    pub fallback_per_ip_per_minute: u32,
+    pub max_entries: usize,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigFile {
@@ -394,6 +416,13 @@ struct ConfigFile {
     upload_idle_timeout_secs: Option<u64>,
     quota_sweep_interval_secs: Option<u64>,
     quota_sweep_batch_size: Option<u64>,
+    rate_limit_auth_per_minute: Option<u64>,
+    rate_limit_llm_per_minute: Option<u64>,
+    rate_limit_authenticated_per_minute: Option<u64>,
+    rate_limit_fallback_per_minute: Option<u64>,
+    rate_limit_max_entries: Option<u64>,
+    trusted_proxy: Option<bool>,
+    cors_allowed_origins: Option<Vec<String>>,
     index_signature: Option<String>,
 }
 
@@ -678,6 +707,51 @@ impl ServerConfig {
                 DEFAULT_QUOTA_SWEEP_BATCH_SIZE,
             )?,
         };
+        let rate_limits = RateLimitConfig {
+            auth_per_ip_per_minute: u32_value(
+                file,
+                env,
+                "MARKHAND_RATE_LIMIT_AUTH_PER_MINUTE",
+                |value| value.rate_limit_auth_per_minute,
+                DEFAULT_RATE_LIMIT_AUTH_PER_MINUTE,
+            )?,
+            llm_per_user_per_minute: u32_value(
+                file,
+                env,
+                "MARKHAND_RATE_LIMIT_LLM_PER_MINUTE",
+                |value| value.rate_limit_llm_per_minute,
+                DEFAULT_RATE_LIMIT_LLM_PER_MINUTE,
+            )?,
+            authenticated_per_user_per_minute: u32_value(
+                file,
+                env,
+                "MARKHAND_RATE_LIMIT_AUTHENTICATED_PER_MINUTE",
+                |value| value.rate_limit_authenticated_per_minute,
+                DEFAULT_RATE_LIMIT_AUTHENTICATED_PER_MINUTE,
+            )?,
+            fallback_per_ip_per_minute: u32_value(
+                file,
+                env,
+                "MARKHAND_RATE_LIMIT_FALLBACK_PER_MINUTE",
+                |value| value.rate_limit_fallback_per_minute,
+                DEFAULT_RATE_LIMIT_FALLBACK_PER_MINUTE,
+            )?,
+            max_entries: usize_value(
+                file,
+                env,
+                "MARKHAND_RATE_LIMIT_MAX_ENTRIES",
+                |value| value.rate_limit_max_entries,
+                DEFAULT_RATE_LIMIT_MAX_ENTRIES,
+            )?,
+        };
+        let trusted_proxy = bool_value(
+            file,
+            env,
+            "MARKHAND_TRUSTED_PROXY",
+            |value| value.trusted_proxy,
+            false,
+        )?;
+        let cors_allowed_origins = cors_origins_value(file, env)?;
         let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
             value.index_signature.as_ref()
         });
@@ -700,6 +774,9 @@ impl ServerConfig {
             limits,
             upload,
             quota_sweep,
+            rate_limits,
+            trusted_proxy,
+            cors_allowed_origins,
             index_signature,
         };
         config.validate()?;
@@ -726,6 +803,18 @@ impl ServerConfig {
 
     pub const fn quota_sweep(&self) -> QuotaSweepConfig {
         self.quota_sweep
+    }
+
+    pub const fn rate_limits(&self) -> RateLimitConfig {
+        self.rate_limits
+    }
+
+    pub const fn trusted_proxy(&self) -> bool {
+        self.trusted_proxy
+    }
+
+    pub fn cors_allowed_origins(&self) -> &[String] {
+        &self.cors_allowed_origins
     }
 
     /// Legacy runtime limits (max upload + job lease).
@@ -792,8 +881,34 @@ impl ServerConfig {
                 interval_secs: DEFAULT_QUOTA_SWEEP_INTERVAL_SECS,
                 batch_size: DEFAULT_QUOTA_SWEEP_BATCH_SIZE,
             },
+            rate_limits: RateLimitConfig {
+                auth_per_ip_per_minute: DEFAULT_RATE_LIMIT_AUTH_PER_MINUTE,
+                llm_per_user_per_minute: DEFAULT_RATE_LIMIT_LLM_PER_MINUTE,
+                authenticated_per_user_per_minute: DEFAULT_RATE_LIMIT_AUTHENTICATED_PER_MINUTE,
+                fallback_per_ip_per_minute: DEFAULT_RATE_LIMIT_FALLBACK_PER_MINUTE,
+                max_entries: DEFAULT_RATE_LIMIT_MAX_ENTRIES,
+            },
+            trusted_proxy: false,
+            cors_allowed_origins: Vec::new(),
             index_signature: None,
         }
+    }
+
+    /// Test helper for middleware-focused HTTP tests.
+    pub fn with_test_rate_limits(mut self, rate_limits: RateLimitConfig) -> Self {
+        self.rate_limits = rate_limits;
+        self
+    }
+
+    /// Test helper for proxy/CORS middleware-focused HTTP tests.
+    pub fn with_test_http_hardening(
+        mut self,
+        trusted_proxy: bool,
+        cors_allowed_origins: Vec<String>,
+    ) -> Self {
+        self.trusted_proxy = trusted_proxy;
+        self.cors_allowed_origins = cors_allowed_origins;
+        self
     }
 
     /// Returns the service endpoints required to start the real POC server.
@@ -965,6 +1080,32 @@ impl ServerConfig {
         if self.quota_sweep.batch_size == 0 || self.quota_sweep.batch_size > 10_000 {
             return Err("MARKHAND_QUOTA_SWEEP_BATCH_SIZE must be between 1 and 10000".into());
         }
+        validate_rate_limit(
+            self.rate_limits.auth_per_ip_per_minute,
+            "MARKHAND_RATE_LIMIT_AUTH_PER_MINUTE",
+        )?;
+        validate_rate_limit(
+            self.rate_limits.llm_per_user_per_minute,
+            "MARKHAND_RATE_LIMIT_LLM_PER_MINUTE",
+        )?;
+        validate_rate_limit(
+            self.rate_limits.authenticated_per_user_per_minute,
+            "MARKHAND_RATE_LIMIT_AUTHENTICATED_PER_MINUTE",
+        )?;
+        validate_rate_limit(
+            self.rate_limits.fallback_per_ip_per_minute,
+            "MARKHAND_RATE_LIMIT_FALLBACK_PER_MINUTE",
+        )?;
+        if self.rate_limits.max_entries == 0
+            || self.rate_limits.max_entries > MAX_RATE_LIMIT_ENTRIES
+        {
+            return Err(format!(
+                "MARKHAND_RATE_LIMIT_MAX_ENTRIES must be between 1 and {MAX_RATE_LIMIT_ENTRIES}"
+            ));
+        }
+        for origin in &self.cors_allowed_origins {
+            validate_cors_origin(origin)?;
+        }
         Ok(())
     }
 
@@ -1075,6 +1216,70 @@ fn bool_value(
         },
         None => Ok(file.and_then(from_file).unwrap_or(default)),
     }
+}
+
+fn cors_origins_value(
+    file: Option<&ConfigFile>,
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let origins = match env.get("MARKHAND_CORS_ALLOWED_ORIGINS") {
+        Some(value) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        None => file
+            .and_then(|value| value.cors_allowed_origins.clone())
+            .unwrap_or_default(),
+    };
+    origins
+        .into_iter()
+        .map(|origin| normalize_cors_origin(&origin))
+        .collect()
+}
+
+fn normalize_cors_origin(origin: &str) -> Result<String, String> {
+    validate_cors_origin(origin)?;
+    Ok(origin.trim().trim_end_matches('/').to_string())
+}
+
+fn validate_rate_limit(value: u32, env_name: &str) -> Result<(), String> {
+    if value == 0 || value > MAX_RATE_LIMIT_PER_MINUTE {
+        Err(format!(
+            "{env_name} must be between 1 and {MAX_RATE_LIMIT_PER_MINUTE}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_cors_origin(origin: &str) -> Result<(), String> {
+    let trimmed = origin.trim();
+    if trimmed == "*" {
+        return Err("MARKHAND_CORS_ALLOWED_ORIGINS must not contain *".into());
+    }
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|_| "MARKHAND_CORS_ALLOWED_ORIGINS must contain absolute origins".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("MARKHAND_CORS_ALLOWED_ORIGINS origins must use http or https".into());
+    }
+    if parsed.host_str().is_none() {
+        return Err("MARKHAND_CORS_ALLOWED_ORIGINS origins must include a host".into());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("MARKHAND_CORS_ALLOWED_ORIGINS origins must not embed credentials".into());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(
+            "MARKHAND_CORS_ALLOWED_ORIGINS origins must not include query or fragment".into(),
+        );
+    }
+    let path = parsed.path();
+    if path != "/" && !path.is_empty() {
+        return Err("MARKHAND_CORS_ALLOWED_ORIGINS origins must not include a path".into());
+    }
+    Ok(())
 }
 
 fn required_url(value: Option<&str>, name: &str) -> Result<String, String> {
@@ -1233,6 +1438,13 @@ mod tests {
             upload_idle_timeout_secs: None,
             quota_sweep_interval_secs: None,
             quota_sweep_batch_size: None,
+            rate_limit_auth_per_minute: None,
+            rate_limit_llm_per_minute: None,
+            rate_limit_authenticated_per_minute: None,
+            rate_limit_fallback_per_minute: None,
+            rate_limit_max_entries: None,
+            trusted_proxy: None,
+            cors_allowed_origins: None,
             index_signature: None,
         };
         let env = BTreeMap::from([
