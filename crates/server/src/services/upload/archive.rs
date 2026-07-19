@@ -52,7 +52,7 @@ pub(crate) fn validate_zip_reader<R: Read + Seek>(
     provisional: CanonicalFormat,
     limits: &LimitsConfig,
 ) -> Result<ArchiveCheck, UploadError> {
-    let compressed_spans = scan_central_directory_names_and_spans(&mut reader)?;
+    let compressed_spans = scan_central_directory_names_and_spans(&mut reader, limits)?;
     reader.seek(SeekFrom::Start(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
@@ -662,6 +662,7 @@ pub fn reject_dangerous_entry_name(name: &str) -> Result<(), UploadError> {
 
 fn scan_central_directory_names_and_spans<R: Read + Seek>(
     reader: &mut R,
+    limits: &LimitsConfig,
 ) -> Result<HashMap<String, u64>, UploadError> {
     let len = reader.seek(SeekFrom::End(0)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
@@ -697,12 +698,23 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
             ReasonCode::MalformedArchive,
         ));
     }
+    if u64::from(entries) > limits.max_archive_entries {
+        return Err(UploadError::rejected(
+            ThreatClass::ArchiveBomb,
+            ReasonCode::ArchiveEntryLimit,
+        ));
+    }
     reader.seek(SeekFrom::Start(central_offset)).map_err(|_| {
         UploadError::rejected(ThreatClass::ParserCorruption, ReasonCode::FailClosed)
     })?;
-    let mut seen = HashSet::new();
-    let mut central_entries = Vec::new();
-    for _ in 0..entries {
+    let mut central_entries = Vec::with_capacity(entries as usize);
+    for index in 0..entries {
+        if u64::from(index) >= limits.max_archive_entries {
+            return Err(UploadError::rejected(
+                ThreatClass::ArchiveBomb,
+                ReasonCode::ArchiveEntryLimit,
+            ));
+        }
         let mut header = [0_u8; 46];
         reader.read_exact(&mut header).map_err(|_| {
             UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
@@ -730,12 +742,6 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
         let name = String::from_utf8(name).map_err(|_| {
             UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
         })?;
-        if !seen.insert(name.trim_end_matches('/').to_string()) {
-            return Err(UploadError::rejected(
-                ThreatClass::MalformedOoxml,
-                ReasonCode::MalformedArchive,
-            ));
-        }
         central_entries.push((name.trim_end_matches('/').to_string(), local_header_offset));
         reader
             .seek(SeekFrom::Current((extra_len + comment_len) as i64))
@@ -744,21 +750,21 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
             })?;
     }
     central_entries.sort_by_key(|(_, offset)| *offset);
-    let mut spans = HashMap::new();
-    for index in 0..central_entries.len() {
-        let (name, local_header_offset) = &central_entries[index];
+    let mut spans = HashMap::with_capacity(central_entries.len());
+    let mut central_entries = central_entries.into_iter().peekable();
+    while let Some((name, local_header_offset)) = central_entries.next() {
         let next_offset = central_entries
-            .get(index + 1)
+            .peek()
             .map(|(_, offset)| *offset)
             .unwrap_or(central_offset);
-        if next_offset <= *local_header_offset {
+        if next_offset <= local_header_offset {
             return Err(UploadError::rejected(
                 ThreatClass::MalformedOoxml,
                 ReasonCode::MalformedArchive,
             ));
         }
         reader
-            .seek(SeekFrom::Start(*local_header_offset))
+            .seek(SeekFrom::Start(local_header_offset))
             .map_err(|_| {
                 UploadError::rejected(ThreatClass::MalformedOoxml, ReasonCode::MalformedArchive)
             })?;
@@ -784,7 +790,12 @@ fn scan_central_directory_names_and_spans<R: Read + Seek>(
                 ReasonCode::MalformedArchive,
             ));
         }
-        spans.insert(name.clone(), next_offset - data_start);
+        if spans.insert(name, next_offset - data_start).is_some() {
+            return Err(UploadError::rejected(
+                ThreatClass::MalformedOoxml,
+                ReasonCode::MalformedArchive,
+            ));
+        }
     }
     Ok(spans)
 }

@@ -626,6 +626,39 @@ async fn unparseable_compressed_span_rejects_closed() {
 }
 
 #[tokio::test]
+async fn declared_entry_count_rejects_before_name_allocation() {
+    let limits = LimitsConfig {
+        max_archive_entries: 4,
+        ..LimitsConfig::policy_defaults()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("declared-too-many.docx");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"PK\x05\x06");
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    bytes.extend_from_slice(&5_u16.to_le_bytes());
+    bytes.extend_from_slice(&5_u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
+    std::fs::write(&path, bytes).unwrap();
+
+    let base = CURRENT_ALLOCATED.load(Ordering::Relaxed);
+    PEAK_ALLOCATED.store(base, Ordering::Relaxed);
+    TRACK_ALLOCATIONS.store(true, Ordering::Relaxed);
+    let err = validate_zip_archive(&path, CanonicalFormat::Docx, &limits).unwrap_err();
+    TRACK_ALLOCATIONS.store(false, Ordering::Relaxed);
+    let peak_delta = PEAK_ALLOCATED.load(Ordering::Relaxed).saturating_sub(base);
+    assert_eq!(err.threat_class(), Some(ThreatClass::ArchiveBomb));
+    assert_eq!(err.reason_code(), ReasonCode::ArchiveEntryLimit);
+    assert!(
+        peak_delta < 8 * 1024 * 1024,
+        "declared entry count rejection allocated {peak_delta} bytes"
+    );
+}
+
+#[tokio::test]
 async fn entry_count_bomb_rejects() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("many.docx");
