@@ -1,4 +1,4 @@
-//! HTTP liveness and readiness routes backed by real POC dependencies.
+//! HTTP liveness, readiness, and API routes backed by real POC dependencies.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,12 +8,17 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use deadpool_postgres::Pool;
 use serde::Serialize;
 use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::api::ApiError;
+use crate::auth::jwt::JwtKeys;
+use crate::auth::provider::PasswordAuthProvider;
 use crate::database;
+use crate::db::pool::create_pool;
+use crate::routes;
 use crate::state::RuntimeState;
 
 const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -23,6 +28,8 @@ pub struct AppState {
     runtime: RuntimeState,
     http_client: reqwest::Client,
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
+    pool: Pool,
+    auth_provider: Option<PasswordAuthProvider>,
 }
 
 struct CachedReadiness {
@@ -39,11 +46,58 @@ impl AppState {
             .timeout(DEPENDENCY_TIMEOUT)
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        let pool = create_pool(runtime.endpoints().database_url.expose())
+            .map_err(|error| format!("cannot create database pool: {error}"))?;
+        let auth_provider = match JwtKeys::from_auth(runtime.config().auth()) {
+            Ok(keys) => Some(PasswordAuthProvider::new(
+                pool.clone(),
+                runtime.config().auth().clone(),
+                keys,
+            )),
+            Err(crate::auth::jwt::JwtError::NotConfigured) => None,
+            Err(error) => return Err(format!("cannot configure authentication: {error}")),
+        };
         Ok(Self {
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
+            pool,
+            auth_provider,
         })
+    }
+
+    /// Builds state for tests with an explicit pool and optional auth provider.
+    pub fn from_parts(
+        runtime: RuntimeState,
+        pool: Pool,
+        auth_provider: Option<PasswordAuthProvider>,
+    ) -> Result<Self, String> {
+        if !runtime.is_api_role() {
+            return Err("HTTP application requires API runtime configuration".into());
+        }
+        let http_client = reqwest::Client::builder()
+            .timeout(DEPENDENCY_TIMEOUT)
+            .build()
+            .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        Ok(Self {
+            runtime,
+            http_client,
+            readiness: tokio::sync::Mutex::new(None),
+            pool,
+            auth_provider,
+        })
+    }
+
+    pub fn auth_provider(&self) -> Option<&PasswordAuthProvider> {
+        self.auth_provider.as_ref()
+    }
+
+    pub fn pool(&self) -> &Pool {
+        &self.pool
+    }
+
+    pub fn runtime(&self) -> &RuntimeState {
+        &self.runtime
     }
 }
 
@@ -58,6 +112,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
+        .merge(routes::auth::router())
         .with_state(Arc::new(state))
 }
 
@@ -157,21 +212,22 @@ mod tests {
 
     use super::{router, AppState};
     use crate::config::{RuntimeEndpoints, SecretString, ServerConfig};
+    use crate::db::pool::create_pool;
     use crate::state::RuntimeState;
 
     #[tokio::test]
     async fn liveness_has_a_contract_compliant_body() {
-        let app = router(
-            AppState::new(
-                RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
-                    database_url: SecretString::new("postgres://unused"),
-                    qdrant_url: "http://127.0.0.1:1".into(),
-                    minio_url: "http://127.0.0.1:1".into(),
-                }))
-                .unwrap(),
-            )
-            .unwrap(),
-        );
+        let runtime =
+            RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
+                database_url: SecretString::new("postgres://unused"),
+                qdrant_url: "http://127.0.0.1:1".into(),
+                minio_url: "http://127.0.0.1:1".into(),
+            }))
+            .unwrap();
+        // Pool construction is lazy; a dummy URL is enough for the liveness route.
+        let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
+            .expect("pool");
+        let app = router(AppState::from_parts(runtime, pool, None).unwrap());
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -197,8 +253,10 @@ mod tests {
                 minio_url: "http://127.0.0.1:1".into(),
             }))
             .unwrap();
+        let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
+            .expect("pool");
         assert_eq!(
-            AppState::new(state).err().as_deref(),
+            AppState::from_parts(state, pool, None).err().as_deref(),
             Some("HTTP application requires API runtime configuration")
         );
     }
