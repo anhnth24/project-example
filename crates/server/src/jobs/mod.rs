@@ -3,6 +3,9 @@
 //! Job, outbox, and event payloads are intentionally ID-only. Human content,
 //! filenames, object keys, raw errors, and secrets remain outside payload JSON.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::TimeDelta;
@@ -21,7 +24,7 @@ pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 2;
 pub const CURRENT_EVENT_PAYLOAD_VERSION: i32 = 2;
 
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 160;
-const MAX_LEASE_OWNER_LEN: usize = 128;
+const MAX_LEASE_IDENTIFIER_LEN: usize = 200;
 const MAX_LAST_ERROR_LEN: usize = 2048;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -39,7 +42,7 @@ impl JobPayload {
         let value = serde_json::to_value(self).map_err(|error| {
             JobError::InvalidPayload(format!("job payload serialization failed: {error}"))
         })?;
-        assert_id_only_payload(&value)?;
+        validate_job_payload_json(&value)?;
         Ok(value)
     }
 }
@@ -94,7 +97,7 @@ impl EventPayload {
         let value = serde_json::to_value(self).map_err(|error| {
             JobError::InvalidPayload(format!("event payload serialization failed: {error}"))
         })?;
-        assert_id_only_payload(&value)?;
+        validate_event_payload_json(&value)?;
         Ok(value)
     }
 }
@@ -112,7 +115,7 @@ impl CheckpointPayload {
         let value = serde_json::to_value(self).map_err(|error| {
             JobError::InvalidPayload(format!("checkpoint serialization failed: {error}"))
         })?;
-        assert_checkpoint_payload(&value)?;
+        validate_checkpoint_payload_json(&value)?;
         Ok(value)
     }
 }
@@ -156,6 +159,48 @@ pub enum CancelOutcome {
 pub struct OutboxPublication {
     pub outbox: OutboxEvent,
     pub event: EventLogEntry,
+}
+
+pub trait OutboxSink: Send + Sync {
+    fn publish<'a>(
+        &'a self,
+        txn: &'a tokio_postgres::Transaction<'_>,
+        ctx: &'a OrgContext,
+        event: &'a OutboxEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<EventLogEntry, JobError>> + Send + 'a>>;
+}
+
+#[derive(Debug, Default)]
+pub struct EventLogOutboxSink;
+
+impl OutboxSink for EventLogOutboxSink {
+    fn publish<'a>(
+        &'a self,
+        txn: &'a tokio_postgres::Transaction<'_>,
+        ctx: &'a OrgContext,
+        event: &'a OutboxEvent,
+    ) -> Pin<Box<dyn Future<Output = Result<EventLogEntry, JobError>> + Send + 'a>> {
+        Box::pin(async move {
+            if let Some(existing) = repo::find_outbox_published_event(txn, ctx, event.id).await? {
+                return Ok(existing);
+            }
+            let payload = validated_event_payload(EventPayload::for_outbox(event))?;
+            repo::append_event_log(
+                txn,
+                ctx,
+                repo::NewEventLogEntry {
+                    event_type: "outbox.published",
+                    payload_version: CURRENT_EVENT_PAYLOAD_VERSION,
+                    payload: &payload,
+                    job_id: event.job_id,
+                    document_id: None,
+                    version_id: None,
+                },
+            )
+            .await
+            .map_err(Into::into)
+        })
+    }
 }
 
 #[derive(Debug, Error)]
@@ -207,7 +252,7 @@ pub async fn enqueue(
     validate_idempotency_key(&input.idempotency_key)?;
     let max_attempts = checked_max_attempts(input.max_attempts)?;
     let available_after = checked_duration(input.available_after)?;
-    let payload_json = input.payload.to_json()?;
+    let payload = validated_job_payload(&input.payload)?;
     validate_job_payload_lineage(&input.payload)?;
 
     pool::with_org_txn_typed(db_pool, ctx, {
@@ -224,7 +269,7 @@ pub async fn enqueue(
                     version_id: input.payload.version_id,
                     outbox_event_id: None,
                 }
-                .to_json()?;
+                .to_validated()?;
                 let outbox_idempotency_key = format!("job.enqueued:{}", input.id);
                 let (job, created) = repo::insert_job_with_outbox(
                     txn,
@@ -233,7 +278,7 @@ pub async fn enqueue(
                         id: input.id,
                         job_type: input.job_type,
                         payload_version: CURRENT_JOB_PAYLOAD_VERSION,
-                        payload: &payload_json,
+                        payload: &payload,
                         max_attempts,
                         idempotency_key: &input.idempotency_key,
                         document_id: input.payload.document_id,
@@ -256,19 +301,19 @@ pub async fn enqueue(
 pub async fn claim(
     db_pool: &Pool,
     ctx: &OrgContext,
-    lease_owner: &str,
+    worker_id: &str,
     limit: u32,
     lease_ttl: Duration,
 ) -> Result<Vec<Job>, JobError> {
-    validate_lease_owner(lease_owner)?;
+    validate_lease_identifier(worker_id)?;
     let limit = checked_limit(limit)?;
     let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let lease_owner = lease_owner.to_string();
+        let worker_id = worker_id.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::claim_pending(txn, &ctx, &lease_owner, limit, lease_ttl_secs)
+                repo::claim_pending(txn, &ctx, &worker_id, limit, lease_ttl_secs)
                     .await
                     .map_err(Into::into)
             })
@@ -281,19 +326,31 @@ pub async fn heartbeat(
     db_pool: &Pool,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
     lease_ttl: Duration,
-) -> Result<bool, JobError> {
-    validate_lease_owner(lease_owner)?;
+) -> Result<(), JobError> {
+    validate_lease_identifier(lease_token)?;
     let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let lease_owner = lease_owner.to_string();
+        let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::heartbeat(txn, &ctx, job_id, &lease_owner, lease_ttl_secs)
-                    .await
-                    .map_err(Into::into)
+                if repo::heartbeat(
+                    txn,
+                    &ctx,
+                    job_id,
+                    &lease_token,
+                    claimed_attempts,
+                    lease_ttl_secs,
+                )
+                .await?
+                {
+                    Ok(())
+                } else {
+                    Err(JobError::LeaseLost)
+                }
             })
         }
     })
@@ -304,19 +361,27 @@ pub async fn checkpoint(
     db_pool: &Pool,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
     checkpoint: CheckpointPayload,
 ) -> Result<Job, JobError> {
-    validate_lease_owner(lease_owner)?;
-    let checkpoint = checkpoint.to_json()?;
+    validate_lease_identifier(lease_token)?;
+    let checkpoint = validated_checkpoint_payload(checkpoint)?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let lease_owner = lease_owner.to_string();
+        let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::save_checkpoint(txn, &ctx, job_id, &lease_owner, &checkpoint)
-                    .await?
-                    .ok_or(JobError::LeaseLost)
+                repo::save_checkpoint(
+                    txn,
+                    &ctx,
+                    job_id,
+                    &lease_token,
+                    claimed_attempts,
+                    &checkpoint,
+                )
+                .await?
+                .ok_or(JobError::LeaseLost)
             })
         }
     })
@@ -361,15 +426,16 @@ pub async fn complete(
     db_pool: &Pool,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
 ) -> Result<Job, JobError> {
-    validate_lease_owner(lease_owner)?;
+    validate_lease_identifier(lease_token)?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let lease_owner = lease_owner.to_string();
+        let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
-                let job = repo::complete_owned(txn, &ctx, job_id, &lease_owner)
+                let job = repo::complete_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
                     .await?
                     .ok_or(JobError::LeaseLost)?;
                 let outbox_key = transition_key(&job, "job.succeeded");
@@ -385,28 +451,37 @@ pub async fn fail(
     db_pool: &Pool,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
     last_error: &str,
 ) -> Result<Job, JobError> {
-    validate_lease_owner(lease_owner)?;
+    validate_lease_identifier(lease_token)?;
     let last_error = sanitize_last_error(last_error);
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let lease_owner = lease_owner.to_string();
+        let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
                 let current = repo::get_by_id_for_update(txn, &ctx, job_id)
                     .await?
                     .filter(|job| {
                         job.status == JobStatus::Leased
-                            && job.lease_owner.as_deref() == Some(lease_owner.as_str())
+                            && job.lease_owner.as_deref() == Some(lease_token.as_str())
+                            && job.attempts == claimed_attempts
                     })
                     .ok_or(JobError::LeaseLost)?;
                 let backoff_secs = backoff_for_attempt(current.attempts)?;
-                let job =
-                    repo::fail_owned(txn, &ctx, job_id, &lease_owner, &last_error, backoff_secs)
-                        .await?
-                        .ok_or(JobError::LeaseLost)?;
+                let job = repo::fail_owned(
+                    txn,
+                    &ctx,
+                    job_id,
+                    &lease_token,
+                    claimed_attempts,
+                    &last_error,
+                    backoff_secs,
+                )
+                .await?
+                .ok_or(JobError::LeaseLost)?;
                 let event_type = match job.status {
                     JobStatus::Pending => "job.retry_scheduled",
                     JobStatus::DeadLetter => "job.dead_lettered",
@@ -440,6 +515,10 @@ pub async fn cancel(
                     .ok_or(JobError::NotFound)?;
                 match current.status {
                     JobStatus::Pending | JobStatus::Leased => {
+                        // External/admin cancel is intentionally token-free: a user can
+                        // cancel pending/running work without knowing a worker lease.
+                        // Worker-side completion/failure/checkpoint remains fenced by
+                        // exact lease token, claimed attempts, and status='leased'.
                         let job = repo::cancel_job(txn, &ctx, job_id)
                             .await?
                             .ok_or(JobError::NotFound)?;
@@ -466,7 +545,7 @@ pub async fn append_event(
     payload: EventPayload,
 ) -> Result<EventLogEntry, JobError> {
     validate_event_type(event_type)?;
-    let payload = payload.to_json()?;
+    let payload = payload.to_validated()?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         let event_type = event_type.to_string();
@@ -497,28 +576,29 @@ pub async fn relay_outbox(
     ctx: &OrgContext,
     limit: u32,
 ) -> Result<Vec<OutboxPublication>, JobError> {
+    let sink = Arc::new(EventLogOutboxSink);
+    relay_outbox_with_sink(db_pool, ctx, limit, &sink).await
+}
+
+pub async fn relay_outbox_with_sink<S>(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    limit: u32,
+    sink: &Arc<S>,
+) -> Result<Vec<OutboxPublication>, JobError>
+where
+    S: OutboxSink + ?Sized + 'static,
+{
     let limit = checked_limit(limit)?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
+        let sink = Arc::clone(sink);
         move |txn| {
             Box::pin(async move {
                 let outbox_events = repo::claim_unpublished_outbox(txn, &ctx, limit).await?;
                 let mut publications = Vec::with_capacity(outbox_events.len());
                 for outbox in outbox_events {
-                    let payload = EventPayload::for_outbox(&outbox).to_json()?;
-                    let event = repo::append_event_log(
-                        txn,
-                        &ctx,
-                        repo::NewEventLogEntry {
-                            event_type: "outbox.published",
-                            payload_version: CURRENT_EVENT_PAYLOAD_VERSION,
-                            payload: &payload,
-                            job_id: outbox.job_id,
-                            document_id: None,
-                            version_id: None,
-                        },
-                    )
-                    .await?;
+                    let event = sink.publish(txn, &ctx, &outbox).await?;
                     let Some(outbox) = repo::mark_outbox_published(txn, &ctx, outbox.id).await?
                     else {
                         return Err(JobError::Database(DbError::Config(
@@ -535,7 +615,7 @@ pub async fn relay_outbox(
 }
 
 pub fn decode_job_payload(version: i32, payload: JsonValue) -> Result<JobPayload, JobError> {
-    assert_id_only_payload(&payload)?;
+    validate_job_payload_json(&payload)?;
     match version {
         1 => serde_json::from_value::<JobPayloadV1>(payload)
             .map(Into::into)
@@ -555,7 +635,7 @@ async fn write_job_event(
     event_type: &str,
     outbox_idempotency_key: &str,
 ) -> Result<(), JobError> {
-    let payload = EventPayload::for_job(job).to_json()?;
+    let payload = EventPayload::for_job(job).to_validated()?;
     repo::append_event_and_outbox(
         txn,
         ctx,
@@ -573,6 +653,51 @@ async fn write_job_event(
     Ok(())
 }
 
+impl EventPayload {
+    fn to_validated(&self) -> Result<repo::ValidatedEventPayload, JobError> {
+        let value = self.to_json()?;
+        repo::ValidatedEventPayload::new(value).map_err(payload_validation_error)
+    }
+}
+
+fn validated_job_payload(payload: &JobPayload) -> Result<repo::ValidatedJobPayload, JobError> {
+    let value = payload.to_json()?;
+    repo::ValidatedJobPayload::new(value).map_err(payload_validation_error)
+}
+
+fn validated_event_payload(payload: EventPayload) -> Result<repo::ValidatedEventPayload, JobError> {
+    payload.to_validated()
+}
+
+fn validated_checkpoint_payload(
+    checkpoint: CheckpointPayload,
+) -> Result<repo::ValidatedCheckpointPayload, JobError> {
+    let value = checkpoint.to_json()?;
+    repo::ValidatedCheckpointPayload::new(value).map_err(payload_validation_error)
+}
+
+fn validate_job_payload_json(value: &JsonValue) -> Result<(), JobError> {
+    repo::ValidatedJobPayload::new(value.clone())
+        .map(|_| ())
+        .map_err(payload_validation_error)
+}
+
+fn validate_event_payload_json(value: &JsonValue) -> Result<(), JobError> {
+    repo::ValidatedEventPayload::new(value.clone())
+        .map(|_| ())
+        .map_err(payload_validation_error)
+}
+
+fn validate_checkpoint_payload_json(value: &JsonValue) -> Result<(), JobError> {
+    repo::ValidatedCheckpointPayload::new(value.clone())
+        .map(|_| ())
+        .map_err(payload_validation_error)
+}
+
+fn payload_validation_error(error: DbError) -> JobError {
+    JobError::InvalidPayload(error.to_string())
+}
+
 fn validate_job_payload_lineage(payload: &JobPayload) -> Result<(), JobError> {
     if payload.version_id.is_some() && payload.document_id.is_none() {
         return Err(JobError::InvalidPayload(
@@ -582,87 +707,6 @@ fn validate_job_payload_lineage(payload: &JobPayload) -> Result<(), JobError> {
     Ok(())
 }
 
-fn assert_id_only_payload(value: &JsonValue) -> Result<(), JobError> {
-    assert_no_forbidden_keys(value)?;
-    assert_id_only_value(value)
-}
-
-fn assert_no_forbidden_keys(value: &JsonValue) -> Result<(), JobError> {
-    match value {
-        JsonValue::Object(map) => {
-            for (key, nested) in map {
-                let normalized = key.to_ascii_lowercase();
-                if [
-                    "content", "secret", "token", "password", "markdown", "body", "text",
-                ]
-                .iter()
-                .any(|forbidden| normalized.contains(forbidden))
-                {
-                    return Err(JobError::InvalidPayload(format!(
-                        "forbidden payload field: {key}"
-                    )));
-                }
-                assert_no_forbidden_keys(nested)?;
-            }
-        }
-        JsonValue::Array(values) => {
-            for nested in values {
-                assert_no_forbidden_keys(nested)?;
-            }
-        }
-        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {}
-    }
-    Ok(())
-}
-
-fn assert_id_only_value(value: &JsonValue) -> Result<(), JobError> {
-    match value {
-        JsonValue::Null => Ok(()),
-        JsonValue::String(value) => Uuid::parse_str(value)
-            .map(|_| ())
-            .map_err(|_| JobError::InvalidPayload("payload strings must be UUIDs".into())),
-        JsonValue::Array(values) => {
-            for nested in values {
-                assert_id_only_value(nested)?;
-            }
-            Ok(())
-        }
-        JsonValue::Object(map) => {
-            for nested in map.values() {
-                assert_id_only_value(nested)?;
-            }
-            Ok(())
-        }
-        JsonValue::Bool(_) | JsonValue::Number(_) => Err(JobError::InvalidPayload(
-            "job/event payloads may contain only UUID strings, arrays, objects, or null".into(),
-        )),
-    }
-}
-
-fn assert_checkpoint_payload(value: &JsonValue) -> Result<(), JobError> {
-    assert_no_forbidden_keys(value)?;
-    match value {
-        JsonValue::Object(map) => {
-            for (key, nested) in map {
-                match key.as_str() {
-                    "offset" => {
-                        if !(nested.is_null() || nested.as_u64().is_some()) {
-                            return Err(JobError::InvalidPayload(
-                                "checkpoint offset must be an unsigned integer".into(),
-                            ));
-                        }
-                    }
-                    _ => assert_id_only_value(nested)?,
-                }
-            }
-            Ok(())
-        }
-        _ => Err(JobError::InvalidPayload(
-            "checkpoint payload must be an object".into(),
-        )),
-    }
-}
-
 fn validate_idempotency_key(key: &str) -> Result<(), JobError> {
     if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_LEN || key.chars().any(char::is_control) {
         return Err(JobError::InvalidIdempotencyKey);
@@ -670,8 +714,10 @@ fn validate_idempotency_key(key: &str) -> Result<(), JobError> {
     Ok(())
 }
 
-fn validate_lease_owner(owner: &str) -> Result<(), JobError> {
-    if owner.is_empty() || owner.len() > MAX_LEASE_OWNER_LEN || owner.chars().any(char::is_control)
+fn validate_lease_identifier(value: &str) -> Result<(), JobError> {
+    if value.is_empty()
+        || value.len() > MAX_LEASE_IDENTIFIER_LEN
+        || value.chars().any(char::is_control)
     {
         return Err(JobError::InvalidLeaseOwner);
     }
@@ -766,7 +812,7 @@ mod tests {
             offset: Some(42),
         };
         assert!(checkpoint.to_json().is_ok());
-        assert!(assert_checkpoint_payload(&json!({ "body": "not allowed" })).is_err());
+        assert!(validate_checkpoint_payload_json(&json!({ "body": "not allowed" })).is_err());
     }
 
     #[test]

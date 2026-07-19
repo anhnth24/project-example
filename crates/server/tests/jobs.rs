@@ -4,6 +4,9 @@
 //! non-superuser app role and production org-scoped transaction helper.
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,17 +14,16 @@ use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::error::DbError;
-use fileconv_server::db::jobs as db_jobs;
 use fileconv_server::db::models::{Job, JobStatus, JobType};
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{
-    self, CancelOutcome, CheckpointPayload, EnqueueJob, EventPayload, JobError, JobPayload,
-    CURRENT_EVENT_PAYLOAD_VERSION, CURRENT_JOB_PAYLOAD_VERSION,
+    self, CancelOutcome, CheckpointPayload, EnqueueJob, EventLogOutboxSink, EventPayload, JobError,
+    JobPayload, OutboxSink, CURRENT_EVENT_PAYLOAD_VERSION, CURRENT_JOB_PAYLOAD_VERSION,
 };
 use serde_json::json;
 use tokio::sync::Barrier;
-use tokio_postgres::NoTls;
+use tokio_postgres::{NoTls, Row};
 use uuid::Uuid;
 
 fn test_database_url() -> Option<String> {
@@ -157,14 +159,57 @@ async fn get_job(pool: &Pool, context: &OrgContext, job_id: Uuid) -> Job {
         let context = context.clone();
         move |txn| {
             Box::pin(async move {
-                db_jobs::get_by_id(txn, &context, job_id)
+                let row = txn
+                    .query_opt(
+                        "SELECT id, org_id, job_type, status, payload_version, payload,
+                                attempts, max_attempts, lease_owner, lease_expires_at,
+                                heartbeat_at, checkpoint, idempotency_key, document_id,
+                                version_id, available_at, started_at, finished_at,
+                                last_error, created_at, updated_at
+                         FROM jobs
+                         WHERE org_id = $1 AND id = $2",
+                        &[&context.org_id(), &job_id],
+                    )
                     .await?
-                    .ok_or(DbError::NotFound)
+                    .ok_or(DbError::NotFound)?;
+                map_job(&row)
             })
         }
     })
     .await
     .expect("get job")
+}
+
+fn map_job(row: &Row) -> Result<Job, DbError> {
+    let job_type: String = row.get("job_type");
+    let status: String = row.get("status");
+    Ok(Job {
+        id: row.get("id"),
+        org_id: row.get("org_id"),
+        job_type: JobType::parse(&job_type).map_err(DbError::Config)?,
+        status: JobStatus::parse(&status).map_err(DbError::Config)?,
+        payload_version: row.get("payload_version"),
+        payload: row.get("payload"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+        lease_owner: row.get("lease_owner"),
+        lease_expires_at: row.get("lease_expires_at"),
+        heartbeat_at: row.get("heartbeat_at"),
+        checkpoint: row.get("checkpoint"),
+        idempotency_key: row.get("idempotency_key"),
+        document_id: row.get("document_id"),
+        version_id: row.get("version_id"),
+        available_at: row.get("available_at"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
+        last_error: row.get("last_error"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn lease_token(job: &Job) -> &str {
+    job.lease_owner.as_deref().expect("claimed job has token")
 }
 
 async fn table_counts(pool: &Pool, context: &OrgContext) -> (i64, i64, i64) {
@@ -250,6 +295,66 @@ async fn unpublished_outbox_count(pool: &Pool, context: &OrgContext) -> i64 {
     .expect("unpublished count")
 }
 
+async fn event_count(pool: &Pool, context: &OrgContext, event_type: &str) -> i64 {
+    with_org_txn(pool, context, {
+        let context = context.clone();
+        let event_type = event_type.to_string();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM event_log
+                         WHERE org_id = $1 AND event_type = $2",
+                        &[&context.org_id(), &event_type],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("event count")
+}
+
+struct FailingOnceSink {
+    failed: AtomicBool,
+    delegate: EventLogOutboxSink,
+}
+
+impl Default for FailingOnceSink {
+    fn default() -> Self {
+        Self {
+            failed: AtomicBool::new(false),
+            delegate: EventLogOutboxSink,
+        }
+    }
+}
+
+impl OutboxSink for FailingOnceSink {
+    fn publish<'a>(
+        &'a self,
+        txn: &'a tokio_postgres::Transaction<'_>,
+        ctx: &'a OrgContext,
+        event: &'a fileconv_server::db::models::OutboxEvent,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<fileconv_server::db::models::EventLogEntry, JobError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            if !self.failed.swap(true, Ordering::SeqCst) {
+                return Err(JobError::Database(DbError::Config(
+                    "intentional sink failure".into(),
+                )));
+            }
+            self.delegate.publish(txn, ctx, event).await
+        })
+    }
+}
+
 #[tokio::test]
 async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
     let Some(base_url) = test_database_url() else {
@@ -277,27 +382,41 @@ async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
         let context = context.clone();
         move |txn| {
             Box::pin(async move {
-                let now = db_jobs::fresh_clock_timestamp(txn).await?;
+                let row = txn.query_one("SELECT clock_timestamp()", &[]).await?;
+                let now: chrono::DateTime<chrono::Utc> = row.get(0);
                 let job_id = Uuid::new_v4();
                 let outbox_key = format!("job.enqueued:{job_id}");
-                db_jobs::insert_job_with_outbox(
-                    txn,
-                    &context,
-                    db_jobs::NewJob {
-                        id: job_id,
-                        job_type: JobType::Convert,
-                        payload_version: CURRENT_JOB_PAYLOAD_VERSION,
-                        payload: &payload,
-                        max_attempts: 5,
-                        idempotency_key: "forced-rollback",
-                        document_id: None,
-                        version_id: None,
-                        available_at: now,
-                        outbox_event_type: "job.enqueued",
-                        outbox_payload_version: CURRENT_EVENT_PAYLOAD_VERSION,
-                        outbox_payload: &event_payload,
-                        outbox_idempotency_key: &outbox_key,
-                    },
+                let job_type = JobType::Convert.as_str();
+                txn.execute(
+                    "INSERT INTO jobs (
+                        id, org_id, job_type, payload_version, payload, max_attempts,
+                        idempotency_key, document_id, version_id, available_at
+                     )
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, $8)",
+                    &[
+                        &job_id,
+                        &context.org_id(),
+                        &job_type,
+                        &CURRENT_JOB_PAYLOAD_VERSION,
+                        &payload,
+                        &5_i32,
+                        &"forced-rollback",
+                        &now,
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO outbox_events (
+                        org_id, event_type, payload_version, payload, idempotency_key, job_id
+                     )
+                     VALUES ($1, 'job.enqueued', $2, $3, $4, $5)",
+                    &[
+                        &context.org_id(),
+                        &CURRENT_EVENT_PAYLOAD_VERSION,
+                        &event_payload,
+                        &outbox_key,
+                        &job_id,
+                    ],
                 )
                 .await?;
                 Err(DbError::Config("forced rollback".into()))
@@ -331,6 +450,44 @@ async fn duplicate_enqueue_returns_existing_job_and_single_outbox() {
     assert_eq!(first.job.id, second.job.id);
     assert_eq!(table_counts(&pool, &context).await, (1, 1, 0));
 
+    ephemeral.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_duplicate_enqueue_same_key_creates_one_job_and_one_outbox() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-dup-concurrent").await;
+    let pool = Arc::new(pool);
+    let barrier = Arc::new(Barrier::new(16));
+    let mut handles = Vec::new();
+    for _ in 0..16 {
+        let pool = Arc::clone(&pool);
+        let context = context.clone();
+        let barrier = Arc::clone(&barrier);
+        handles.push(tokio::spawn(async move {
+            barrier.wait().await;
+            jobs::enqueue(&pool, &context, enqueue_spec("dup-concurrent"))
+                .await
+                .expect("enqueue")
+                .job
+                .id
+        }));
+    }
+
+    let mut ids = Vec::new();
+    for handle in handles {
+        ids.push(handle.await.expect("enqueue task"));
+    }
+    let unique: HashSet<_> = ids.into_iter().collect();
+    assert_eq!(unique.len(), 1);
+    assert_eq!(table_counts(&pool, &context).await, (1, 1, 0));
+
+    if let Ok(pool) = Arc::try_unwrap(pool) {
+        pool.close();
+    }
     ephemeral.drop().await;
 }
 
@@ -398,13 +555,23 @@ async fn reclaim_expired_leases_preserves_live_heartbeat_and_dead_letters_exhaus
         .await
         .expect("claim");
     assert_eq!(claimed.len(), 3);
+    let live_claim = claimed
+        .iter()
+        .find(|claimed| claimed.id == live.id)
+        .expect("live claim")
+        .clone();
     force_expire(&pool, &context, reclaimable.id).await;
     force_expire(&pool, &context, exhausted.id).await;
-    assert!(
-        jobs::heartbeat(&pool, &context, live.id, "worker", Duration::from_secs(60))
-            .await
-            .expect("heartbeat")
-    );
+    jobs::heartbeat(
+        &pool,
+        &context,
+        live.id,
+        lease_token(&live_claim),
+        live_claim.attempts,
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("heartbeat");
 
     let reclaimed = jobs::reclaim_expired(&pool, &context, 10, Duration::from_secs(5))
         .await
@@ -424,6 +591,137 @@ async fn reclaim_expired_leases_preserves_live_heartbeat_and_dead_letters_exhaus
     ephemeral.drop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn heartbeat_vs_reclaim_race_has_one_winner_and_no_lost_update() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-heartbeat-race").await;
+    let job = enqueue_with_attempts(&pool, &context, "heartbeat-race", 3).await;
+    let claim = jobs::claim(&pool, &context, "race-worker", 1, Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .remove(0);
+    force_expire(&pool, &context, job.id).await;
+
+    let pool = Arc::new(pool);
+    let barrier = Arc::new(Barrier::new(2));
+    let heartbeat_pool = Arc::clone(&pool);
+    let heartbeat_ctx = context.clone();
+    let heartbeat_barrier = Arc::clone(&barrier);
+    let token = lease_token(&claim).to_string();
+    let attempts = claim.attempts;
+    let heartbeat = tokio::spawn(async move {
+        heartbeat_barrier.wait().await;
+        jobs::heartbeat(
+            &heartbeat_pool,
+            &heartbeat_ctx,
+            job.id,
+            &token,
+            attempts,
+            Duration::from_secs(60),
+        )
+        .await
+    });
+
+    let reclaim_pool = Arc::clone(&pool);
+    let reclaim_ctx = context.clone();
+    let reclaim_barrier = Arc::clone(&barrier);
+    let reclaim = tokio::spawn(async move {
+        reclaim_barrier.wait().await;
+        jobs::reclaim_expired(&reclaim_pool, &reclaim_ctx, 10, Duration::from_secs(1)).await
+    });
+
+    let heartbeat_result = heartbeat.await.expect("heartbeat task");
+    let reclaimed = reclaim.await.expect("reclaim task").expect("reclaim");
+    let stored = get_job(&pool, &context, job.id).await;
+    match heartbeat_result {
+        Ok(()) => {
+            assert!(reclaimed.is_empty());
+            assert_eq!(stored.status, JobStatus::Leased);
+            assert_eq!(stored.lease_owner.as_deref(), Some(lease_token(&claim)));
+        }
+        Err(JobError::LeaseLost) => {
+            assert_eq!(reclaimed.len(), 1);
+            assert_eq!(stored.status, JobStatus::Pending);
+            assert!(stored.lease_owner.is_none());
+        }
+        other => panic!("unexpected heartbeat result: {other:?}"),
+    }
+
+    if let Ok(pool) = Arc::try_unwrap(pool) {
+        pool.close();
+    }
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn stale_same_worker_reclaim_reclaim_token_cannot_mutate_new_lease() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-stale-token").await;
+    let job = enqueue_with_attempts(&pool, &context, "stale-token", 3).await;
+    let first = jobs::claim(&pool, &context, "same-worker", 1, Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .remove(0);
+    let old_token = lease_token(&first).to_string();
+    let old_attempts = first.attempts;
+    force_expire(&pool, &context, job.id).await;
+    jobs::reclaim_expired(&pool, &context, 10, Duration::from_secs(1))
+        .await
+        .expect("reclaim");
+    force_available(&pool, &context, job.id).await;
+    let second = jobs::claim(&pool, &context, "same-worker", 1, Duration::from_secs(60))
+        .await
+        .expect("reclaim claim")
+        .remove(0);
+    assert_eq!(second.id, job.id);
+    assert_ne!(lease_token(&second), old_token);
+    assert_ne!(second.attempts, old_attempts);
+
+    assert!(matches!(
+        jobs::heartbeat(
+            &pool,
+            &context,
+            job.id,
+            &old_token,
+            old_attempts,
+            Duration::from_secs(60),
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    assert!(matches!(
+        jobs::checkpoint(
+            &pool,
+            &context,
+            job.id,
+            &old_token,
+            old_attempts,
+            CheckpointPayload::default(),
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    assert!(matches!(
+        jobs::complete(&pool, &context, job.id, &old_token, old_attempts).await,
+        Err(JobError::LeaseLost)
+    ));
+    assert!(matches!(
+        jobs::fail(&pool, &context, job.id, &old_token, old_attempts, "stale").await,
+        Err(JobError::LeaseLost)
+    ));
+    let stored = get_job(&pool, &context, job.id).await;
+    assert_eq!(stored.status, JobStatus::Leased);
+    assert_eq!(stored.lease_owner.as_deref(), Some(lease_token(&second)));
+
+    ephemeral.drop().await;
+}
+
 #[tokio::test]
 async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
     let Some(base_url) = test_database_url() else {
@@ -432,9 +730,10 @@ async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
     let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-checkpoint").await;
     let job = enqueue_one(&pool, &context, "checkpoint").await;
-    jobs::claim(&pool, &context, "worker-a", 1, Duration::from_secs(60))
+    let claimed = jobs::claim(&pool, &context, "worker-a", 1, Duration::from_secs(60))
         .await
         .expect("claim");
+    let claim = claimed.first().expect("claimed job").clone();
 
     let checkpoint = CheckpointPayload {
         cursor_id: Some(Uuid::new_v4()),
@@ -442,9 +741,16 @@ async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
         offset: Some(7),
     };
     let checkpoint_json = checkpoint.to_json().expect("checkpoint json");
-    jobs::checkpoint(&pool, &context, job.id, "worker-a", checkpoint)
-        .await
-        .expect("checkpoint");
+    jobs::checkpoint(
+        &pool,
+        &context,
+        job.id,
+        lease_token(&claim),
+        claim.attempts,
+        checkpoint,
+    )
+    .await
+    .expect("checkpoint");
     force_expire(&pool, &context, job.id).await;
     jobs::reclaim_expired(&pool, &context, 10, Duration::from_secs(1))
         .await
@@ -463,6 +769,46 @@ async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
 }
 
 #[tokio::test]
+async fn non_owner_checkpoint_is_rejected_without_mutating_checkpoint() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "jobs-checkpoint-guard",
+    )
+    .await;
+    let job = enqueue_one(&pool, &context, "checkpoint-guard").await;
+    let claim = jobs::claim(&pool, &context, "owner", 1, Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .remove(0);
+    assert!(matches!(
+        jobs::checkpoint(
+            &pool,
+            &context,
+            job.id,
+            "not-the-token",
+            claim.attempts,
+            CheckpointPayload {
+                cursor_id: Some(Uuid::new_v4()),
+                completed_ids: vec![],
+                offset: Some(1),
+            },
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    let stored = get_job(&pool, &context, job.id).await;
+    assert_eq!(stored.checkpoint, None);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
 async fn fail_retries_with_future_backoff_then_dead_letters_when_exhausted() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -470,24 +816,40 @@ async fn fail_retries_with_future_backoff_then_dead_letters_when_exhausted() {
     let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-retry").await;
     let job = enqueue_with_attempts(&pool, &context, "retry", 2).await;
-    jobs::claim(&pool, &context, "worker", 1, Duration::from_secs(60))
+    let claimed = jobs::claim(&pool, &context, "worker", 1, Duration::from_secs(60))
         .await
         .expect("claim");
+    let first_claim = claimed.first().expect("first claim").clone();
 
-    let retry = jobs::fail(&pool, &context, job.id, "worker", "transient")
-        .await
-        .expect("fail retry");
+    let retry = jobs::fail(
+        &pool,
+        &context,
+        job.id,
+        lease_token(&first_claim),
+        first_claim.attempts,
+        "transient",
+    )
+    .await
+    .expect("fail retry");
     assert_eq!(retry.status, JobStatus::Pending);
     assert!(retry.available_at > retry.updated_at);
     assert_eq!(retry.last_error.as_deref(), Some("transient"));
 
     force_available(&pool, &context, job.id).await;
-    jobs::claim(&pool, &context, "worker", 1, Duration::from_secs(60))
+    let claimed = jobs::claim(&pool, &context, "worker", 1, Duration::from_secs(60))
         .await
         .expect("claim retry");
-    let dead = jobs::fail(&pool, &context, job.id, "worker", "exhausted")
-        .await
-        .expect("fail dead");
+    let second_claim = claimed.first().expect("second claim").clone();
+    let dead = jobs::fail(
+        &pool,
+        &context,
+        job.id,
+        lease_token(&second_claim),
+        second_claim.attempts,
+        "exhausted",
+    )
+    .await
+    .expect("fail dead");
     assert_eq!(dead.status, JobStatus::DeadLetter);
     assert!(dead.finished_at.is_some());
 
@@ -517,36 +879,93 @@ async fn cancel_is_idempotent_and_owner_guards_in_flight_mutations() {
     ));
 
     let leased = enqueue_one(&pool, &context, "cancel-leased").await;
-    jobs::claim(&pool, &context, "owner", 1, Duration::from_secs(60))
+    let leased_claimed = jobs::claim(&pool, &context, "owner", 1, Duration::from_secs(60))
         .await
         .expect("claim leased");
+    let leased_claim = leased_claimed.first().expect("leased claim").clone();
     assert!(matches!(
         jobs::cancel(&pool, &context, leased.id)
             .await
             .expect("cancel leased"),
         CancelOutcome::Cancelled(_)
     ));
-    assert!(
-        !jobs::heartbeat(&pool, &context, leased.id, "owner", Duration::from_secs(60))
-            .await
-            .expect("heartbeat lost")
+    assert!(matches!(
+        jobs::heartbeat(
+            &pool,
+            &context,
+            leased.id,
+            lease_token(&leased_claim),
+            leased_claim.attempts,
+            Duration::from_secs(60),
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    assert!(matches!(
+        jobs::complete(
+            &pool,
+            &context,
+            leased.id,
+            lease_token(&leased_claim),
+            leased_claim.attempts,
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    assert!(matches!(
+        jobs::fail(
+            &pool,
+            &context,
+            leased.id,
+            lease_token(&leased_claim),
+            leased_claim.attempts,
+            "cancelled worker tried to fail",
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    assert_eq!(
+        get_job(&pool, &context, leased.id).await.status,
+        JobStatus::Cancelled
     );
 
     let guarded = enqueue_one(&pool, &context, "owner-guard").await;
-    jobs::claim(&pool, &context, "owner-a", 1, Duration::from_secs(60))
+    let guarded_claimed = jobs::claim(&pool, &context, "owner-a", 1, Duration::from_secs(60))
         .await
         .expect("claim guarded");
+    let guarded_claim = guarded_claimed.first().expect("guarded claim").clone();
     assert!(matches!(
-        jobs::complete(&pool, &context, guarded.id, "owner-b").await,
+        jobs::complete(
+            &pool,
+            &context,
+            guarded.id,
+            "owner-b",
+            guarded_claim.attempts
+        )
+        .await,
         Err(JobError::LeaseLost)
     ));
     assert!(matches!(
-        jobs::fail(&pool, &context, guarded.id, "owner-b", "nope").await,
+        jobs::fail(
+            &pool,
+            &context,
+            guarded.id,
+            "owner-b",
+            guarded_claim.attempts,
+            "nope"
+        )
+        .await,
         Err(JobError::LeaseLost)
     ));
-    jobs::complete(&pool, &context, guarded.id, "owner-a")
-        .await
-        .expect("complete owner");
+    jobs::complete(
+        &pool,
+        &context,
+        guarded.id,
+        lease_token(&guarded_claim),
+        guarded_claim.attempts,
+    )
+    .await
+    .expect("complete owner");
     assert!(matches!(
         jobs::cancel(&pool, &context, guarded.id).await,
         Err(JobError::CannotCancelTerminal(JobStatus::Succeeded))
@@ -592,7 +1011,20 @@ async fn concurrent_event_appends_are_per_org_gapless_and_unique() {
 
     let sequences = with_org_txn(&pool, &context, {
         let context = context.clone();
-        move |txn| Box::pin(async move { db_jobs::event_log_sequences(txn, &context).await })
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT sequence_no
+                         FROM event_log
+                         WHERE org_id = $1
+                         ORDER BY sequence_no",
+                        &[&context.org_id()],
+                    )
+                    .await?;
+                Ok(rows.into_iter().map(|row| row.get(0)).collect::<Vec<i64>>())
+            })
+        }
     })
     .await
     .expect("sequences");
@@ -655,6 +1087,39 @@ async fn outbox_relay_is_concurrent_safe_and_replay_idempotent() {
 }
 
 #[tokio::test]
+async fn outbox_sink_failure_leaves_unpublished_and_retry_publishes_once() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-outbox-failure").await;
+    enqueue_one(&pool, &context, "outbox-failure").await;
+    assert_eq!(unpublished_outbox_count(&pool, &context).await, 1);
+
+    let sink = Arc::new(FailingOnceSink::default());
+    assert!(matches!(
+        jobs::relay_outbox_with_sink(&pool, &context, 10, &sink).await,
+        Err(JobError::Database(_))
+    ));
+    assert_eq!(unpublished_outbox_count(&pool, &context).await, 1);
+    assert_eq!(event_count(&pool, &context, "outbox.published").await, 0);
+
+    let published = jobs::relay_outbox_with_sink(&pool, &context, 10, &sink)
+        .await
+        .expect("retry relay");
+    assert_eq!(published.len(), 1);
+    assert_eq!(unpublished_outbox_count(&pool, &context).await, 0);
+    assert_eq!(event_count(&pool, &context, "outbox.published").await, 1);
+    assert!(jobs::relay_outbox_with_sink(&pool, &context, 10, &sink)
+        .await
+        .expect("replay")
+        .is_empty());
+    assert_eq!(event_count(&pool, &context, "outbox.published").await, 1);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
 async fn older_payload_deserializes_and_payloads_reject_content_or_secrets() {
     let document_id = Uuid::new_v4();
     let decoded = jobs::decode_job_payload(1, json!({ "document_id": document_id }))
@@ -690,8 +1155,16 @@ async fn org_isolation_prevents_cross_org_claim_see_and_mutate() {
         claimed_b.iter().map(|job| job.id).collect::<Vec<_>>(),
         vec![job_b.id]
     );
+    let claim_b = claimed_b.first().expect("claim b").clone();
     assert!(matches!(
-        jobs::complete(&pool, &ctx_b, job_a.id, "worker-b").await,
+        jobs::complete(
+            &pool,
+            &ctx_b,
+            job_a.id,
+            lease_token(&claim_b),
+            claim_b.attempts
+        )
+        .await,
         Err(JobError::LeaseLost)
     ));
 
@@ -702,14 +1175,28 @@ async fn org_isolation_prevents_cross_org_claim_see_and_mutate() {
         claimed_a.iter().map(|job| job.id).collect::<Vec<_>>(),
         vec![job_a.id]
     );
-    assert!(
-        !jobs::heartbeat(&pool, &ctx_b, job_a.id, "worker-a", Duration::from_secs(60))
-            .await
-            .expect("cross heartbeat")
-    );
-    jobs::complete(&pool, &ctx_a, job_a.id, "worker-a")
-        .await
-        .expect("complete a");
+    let claim_a = claimed_a.first().expect("claim a").clone();
+    assert!(matches!(
+        jobs::heartbeat(
+            &pool,
+            &ctx_b,
+            job_a.id,
+            lease_token(&claim_a),
+            claim_a.attempts,
+            Duration::from_secs(60),
+        )
+        .await,
+        Err(JobError::LeaseLost)
+    ));
+    jobs::complete(
+        &pool,
+        &ctx_a,
+        job_a.id,
+        lease_token(&claim_a),
+        claim_a.attempts,
+    )
+    .await
+    .expect("complete a");
 
     let (jobs_a, outbox_a, _) = table_counts(&pool, &ctx_a).await;
     let (jobs_b, outbox_b, _) = table_counts(&pool, &ctx_b).await;

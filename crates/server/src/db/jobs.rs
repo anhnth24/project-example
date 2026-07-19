@@ -29,11 +29,53 @@ const EVENT_COLUMNS: &str = "id, org_id, sequence_no, event_type, payload_versio
     job_id, document_id, version_id, created_at";
 
 #[derive(Debug, Clone)]
+pub(crate) struct ValidatedJobPayload(JsonValue);
+
+#[derive(Debug, Clone)]
+pub(crate) struct ValidatedEventPayload(JsonValue);
+
+#[derive(Debug, Clone)]
+pub(crate) struct ValidatedCheckpointPayload(JsonValue);
+
+impl ValidatedJobPayload {
+    pub(crate) fn new(value: JsonValue) -> Result<Self, DbError> {
+        validate_id_only_payload(&value)?;
+        Ok(Self(value))
+    }
+
+    fn as_json(&self) -> &JsonValue {
+        &self.0
+    }
+}
+
+impl ValidatedEventPayload {
+    pub(crate) fn new(value: JsonValue) -> Result<Self, DbError> {
+        validate_id_only_payload(&value)?;
+        Ok(Self(value))
+    }
+
+    fn as_json(&self) -> &JsonValue {
+        &self.0
+    }
+}
+
+impl ValidatedCheckpointPayload {
+    pub(crate) fn new(value: JsonValue) -> Result<Self, DbError> {
+        validate_checkpoint_payload(&value)?;
+        Ok(Self(value))
+    }
+
+    fn as_json(&self) -> &JsonValue {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct NewJob<'a> {
     pub id: Uuid,
     pub job_type: JobType,
     pub payload_version: i32,
-    pub payload: &'a JsonValue,
+    pub payload: &'a ValidatedJobPayload,
     pub max_attempts: i32,
     pub idempotency_key: &'a str,
     pub document_id: Option<Uuid>,
@@ -41,7 +83,7 @@ pub struct NewJob<'a> {
     pub available_at: DateTime<Utc>,
     pub outbox_event_type: &'a str,
     pub outbox_payload_version: i32,
-    pub outbox_payload: &'a JsonValue,
+    pub outbox_payload: &'a ValidatedEventPayload,
     pub outbox_idempotency_key: &'a str,
 }
 
@@ -49,7 +91,7 @@ pub struct NewJob<'a> {
 pub struct NewOutboxEvent<'a> {
     pub event_type: &'a str,
     pub payload_version: i32,
-    pub payload: &'a JsonValue,
+    pub payload: &'a ValidatedEventPayload,
     pub idempotency_key: &'a str,
     pub job_id: Option<Uuid>,
 }
@@ -58,7 +100,7 @@ pub struct NewOutboxEvent<'a> {
 pub struct NewEventLogEntry<'a> {
     pub event_type: &'a str,
     pub payload_version: i32,
-    pub payload: &'a JsonValue,
+    pub payload: &'a ValidatedEventPayload,
     pub job_id: Option<Uuid>,
     pub document_id: Option<Uuid>,
     pub version_id: Option<Uuid>,
@@ -75,6 +117,7 @@ pub async fn insert_job_with_outbox(
     input: NewJob<'_>,
 ) -> Result<(Job, bool), DbError> {
     let job_type = input.job_type.as_str();
+    let payload = input.payload.as_json();
     let row = txn
         .query_opt(
             &format!(
@@ -91,7 +134,7 @@ pub async fn insert_job_with_outbox(
                 &ctx.org_id(),
                 &job_type,
                 &input.payload_version,
-                &input.payload,
+                &payload,
                 &input.max_attempts,
                 &input.idempotency_key,
                 &input.document_id,
@@ -149,24 +192,6 @@ pub async fn find_by_idempotency_key(
     row.map(|row| map_job(&row)).transpose()
 }
 
-pub async fn get_by_id(
-    txn: &Transaction<'_>,
-    ctx: &OrgContext,
-    job_id: Uuid,
-) -> Result<Option<Job>, DbError> {
-    let row = txn
-        .query_opt(
-            &format!(
-                "SELECT {JOB_COLUMNS}
-                 FROM jobs
-                 WHERE org_id = $1 AND id = $2"
-            ),
-            &[&ctx.org_id(), &job_id],
-        )
-        .await?;
-    row.map(|row| map_job(&row)).transpose()
-}
-
 pub async fn get_by_id_for_update(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -189,7 +214,7 @@ pub async fn get_by_id_for_update(
 pub async fn claim_pending(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
-    lease_owner: &str,
+    worker_id: &str,
     limit: i64,
     lease_ttl_secs: i64,
 ) -> Result<Vec<Job>, DbError> {
@@ -208,7 +233,7 @@ pub async fn claim_pending(
                  )
                  UPDATE jobs j
                  SET status = 'leased',
-                     lease_owner = $3,
+                     lease_owner = $3 || ':' || gen_random_uuid()::text,
                      lease_expires_at = clock_timestamp() + ($4::bigint * interval '1 second'),
                      heartbeat_at = clock_timestamp(),
                      started_at = COALESCE(started_at, clock_timestamp()),
@@ -218,7 +243,7 @@ pub async fn claim_pending(
                  WHERE j.org_id = $1 AND j.id = candidates.id
                  RETURNING {JOB_COLUMNS_J}"
             ),
-            &[&ctx.org_id(), &limit, &lease_owner, &lease_ttl_secs],
+            &[&ctx.org_id(), &limit, &worker_id, &lease_ttl_secs],
         )
         .await?;
     rows.iter().map(map_job).collect()
@@ -228,20 +253,28 @@ pub async fn heartbeat(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
     lease_ttl_secs: i64,
 ) -> Result<bool, DbError> {
     let updated = txn
         .execute(
             "UPDATE jobs
              SET heartbeat_at = clock_timestamp(),
-                 lease_expires_at = clock_timestamp() + ($4::bigint * interval '1 second'),
+                 lease_expires_at = clock_timestamp() + ($5::bigint * interval '1 second'),
                  updated_at = clock_timestamp()
              WHERE org_id = $1
                AND id = $2
                AND lease_owner = $3
+               AND attempts = $4
                AND status = 'leased'",
-            &[&ctx.org_id(), &job_id, &lease_owner, &lease_ttl_secs],
+            &[
+                &ctx.org_id(),
+                &job_id,
+                &lease_token,
+                &claimed_attempts,
+                &lease_ttl_secs,
+            ],
         )
         .await?;
     Ok(updated == 1)
@@ -251,21 +284,30 @@ pub async fn save_checkpoint(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
-    checkpoint: &JsonValue,
+    lease_token: &str,
+    claimed_attempts: i32,
+    checkpoint: &ValidatedCheckpointPayload,
 ) -> Result<Option<Job>, DbError> {
+    let checkpoint = checkpoint.as_json();
     let row = txn
         .query_opt(
             &format!(
                 "UPDATE jobs
-                 SET checkpoint = $4, updated_at = clock_timestamp()
+                 SET checkpoint = $5, updated_at = clock_timestamp()
                  WHERE org_id = $1
                    AND id = $2
                    AND lease_owner = $3
+                   AND attempts = $4
                    AND status = 'leased'
                  RETURNING {JOB_COLUMNS}"
             ),
-            &[&ctx.org_id(), &job_id, &lease_owner, &checkpoint],
+            &[
+                &ctx.org_id(),
+                &job_id,
+                &lease_token,
+                &claimed_attempts,
+                &checkpoint,
+            ],
         )
         .await?;
     row.map(|row| map_job(&row)).transpose()
@@ -280,15 +322,26 @@ pub async fn reclaim_expired(
     let rows = txn
         .query(
             &format!(
-                "WITH expired AS (
+                "WITH locked AS (
                     SELECT id
                     FROM jobs
                     WHERE org_id = $1
                       AND status = 'leased'
-                      AND lease_expires_at < clock_timestamp()
                     ORDER BY lease_expires_at, id
                     FOR UPDATE SKIP LOCKED
                     LIMIT $2
+                 ),
+                 observed AS (
+                    SELECT clock_timestamp() AS now
+                 ),
+                 expired AS (
+                    SELECT j.id, observed.now
+                    FROM jobs j
+                    JOIN locked ON locked.id = j.id
+                    CROSS JOIN observed
+                    WHERE j.org_id = $1
+                      AND j.status = 'leased'
+                      AND j.lease_expires_at < observed.now
                  )
                  UPDATE jobs j
                  SET status = CASE
@@ -300,18 +353,18 @@ pub async fn reclaim_expired(
                      heartbeat_at = NULL,
                      available_at = CASE
                          WHEN j.attempts < j.max_attempts
-                             THEN clock_timestamp() + ($3::bigint * interval '1 second')
+                             THEN expired.now + ($3::bigint * interval '1 second')
                          ELSE j.available_at
                      END,
                      finished_at = CASE
                          WHEN j.attempts < j.max_attempts THEN NULL
-                         ELSE clock_timestamp()
+                         ELSE expired.now
                      END,
                      last_error = CASE
                          WHEN j.attempts < j.max_attempts THEN j.last_error
                          ELSE COALESCE(j.last_error, 'lease expired after max attempts')
                      END,
-                     updated_at = clock_timestamp()
+                     updated_at = expired.now
                  FROM expired
                  WHERE j.org_id = $1 AND j.id = expired.id
                  RETURNING {JOB_COLUMNS_J}"
@@ -326,7 +379,8 @@ pub async fn complete_owned(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
 ) -> Result<Option<Job>, DbError> {
     let row = txn
         .query_opt(
@@ -341,10 +395,11 @@ pub async fn complete_owned(
                  WHERE org_id = $1
                    AND id = $2
                    AND lease_owner = $3
+                   AND attempts = $4
                    AND status = 'leased'
                  RETURNING {JOB_COLUMNS}"
             ),
-            &[&ctx.org_id(), &job_id, &lease_owner],
+            &[&ctx.org_id(), &job_id, &lease_token, &claimed_attempts],
         )
         .await?;
     row.map(|row| map_job(&row)).transpose()
@@ -354,7 +409,8 @@ pub async fn fail_owned(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     job_id: Uuid,
-    lease_owner: &str,
+    lease_token: &str,
+    claimed_attempts: i32,
     last_error: &str,
     backoff_secs: i64,
 ) -> Result<Option<Job>, DbError> {
@@ -371,25 +427,27 @@ pub async fn fail_owned(
                      heartbeat_at = NULL,
                      available_at = CASE
                          WHEN attempts < max_attempts
-                             THEN clock_timestamp() + ($5::bigint * interval '1 second')
+                             THEN clock_timestamp() + ($6::bigint * interval '1 second')
                          ELSE available_at
                      END,
                      finished_at = CASE
                          WHEN attempts < max_attempts THEN NULL
                          ELSE clock_timestamp()
                      END,
-                     last_error = $4,
+                     last_error = $5,
                      updated_at = clock_timestamp()
                  WHERE org_id = $1
                    AND id = $2
                    AND lease_owner = $3
+                   AND attempts = $4
                    AND status = 'leased'
                  RETURNING {JOB_COLUMNS}"
             ),
             &[
                 &ctx.org_id(),
                 &job_id,
-                &lease_owner,
+                &lease_token,
+                &claimed_attempts,
                 &last_error,
                 &backoff_secs,
             ],
@@ -429,6 +487,7 @@ pub async fn insert_outbox_event(
     ctx: &OrgContext,
     input: NewOutboxEvent<'_>,
 ) -> Result<OutboxEvent, DbError> {
+    let payload = input.payload.as_json();
     let row = txn
         .query_opt(
             &format!(
@@ -443,7 +502,7 @@ pub async fn insert_outbox_event(
                 &ctx.org_id(),
                 &input.event_type,
                 &input.payload_version,
-                &input.payload,
+                &payload,
                 &input.idempotency_key,
                 &input.job_id,
             ],
@@ -472,6 +531,7 @@ pub async fn append_event_log(
 ) -> Result<EventLogEntry, DbError> {
     lock_event_log_sequence(txn, ctx).await?;
     let sequence_no = next_event_sequence(txn, ctx).await?;
+    let payload = input.payload.as_json();
     let row = txn
         .query_one(
             &format!(
@@ -487,7 +547,7 @@ pub async fn append_event_log(
                 &sequence_no,
                 &input.event_type,
                 &input.payload_version,
-                &input.payload,
+                &payload,
                 &input.job_id,
                 &input.document_id,
                 &input.version_id,
@@ -517,6 +577,29 @@ pub async fn append_event_and_outbox(
     )
     .await?;
     Ok((entry, outbox))
+}
+
+pub async fn find_outbox_published_event(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    outbox_id: Uuid,
+) -> Result<Option<EventLogEntry>, DbError> {
+    let outbox_id = outbox_id.to_string();
+    let row = txn
+        .query_opt(
+            &format!(
+                "SELECT {EVENT_COLUMNS}
+                 FROM event_log
+                 WHERE org_id = $1
+                   AND event_type = 'outbox.published'
+                   AND payload->>'outbox_event_id' = $2
+                 ORDER BY sequence_no
+                 LIMIT 1"
+            ),
+            &[&ctx.org_id(), &outbox_id],
+        )
+        .await?;
+    row.map(|row| map_event_log_entry(&row)).transpose()
 }
 
 pub async fn claim_unpublished_outbox(
@@ -557,22 +640,6 @@ pub async fn mark_outbox_published(
         )
         .await?;
     row.map(|row| map_outbox_event(&row)).transpose()
-}
-
-pub async fn event_log_sequences(
-    txn: &Transaction<'_>,
-    ctx: &OrgContext,
-) -> Result<Vec<i64>, DbError> {
-    let rows = txn
-        .query(
-            "SELECT sequence_no
-             FROM event_log
-             WHERE org_id = $1
-             ORDER BY sequence_no",
-            &[&ctx.org_id()],
-        )
-        .await?;
-    Ok(rows.into_iter().map(|row| row.get(0)).collect())
 }
 
 async fn lock_event_log_sequence(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<(), DbError> {
@@ -652,4 +719,126 @@ pub(crate) fn map_event_log_entry(row: &Row) -> Result<EventLogEntry, DbError> {
         version_id: row.get("version_id"),
         created_at: row.get("created_at"),
     })
+}
+
+fn validate_id_only_payload(value: &JsonValue) -> Result<(), DbError> {
+    reject_forbidden_keys(value)?;
+    validate_id_only_value(value)
+}
+
+fn reject_forbidden_keys(value: &JsonValue) -> Result<(), DbError> {
+    match value {
+        JsonValue::Object(map) => {
+            for (key, nested) in map {
+                let normalized = key.to_ascii_lowercase();
+                if [
+                    "content", "secret", "token", "password", "markdown", "body", "text",
+                ]
+                .iter()
+                .any(|forbidden| normalized.contains(forbidden))
+                {
+                    return Err(DbError::Config(format!("forbidden payload field: {key}")));
+                }
+                reject_forbidden_keys(nested)?;
+            }
+        }
+        JsonValue::Array(values) => {
+            for nested in values {
+                reject_forbidden_keys(nested)?;
+            }
+        }
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_id_only_value(value: &JsonValue) -> Result<(), DbError> {
+    match value {
+        JsonValue::Null => Ok(()),
+        JsonValue::String(value) => Uuid::parse_str(value)
+            .map(|_| ())
+            .map_err(|_| DbError::Config("payload strings must be UUIDs".into())),
+        JsonValue::Array(values) => {
+            for nested in values {
+                validate_id_only_value(nested)?;
+            }
+            Ok(())
+        }
+        JsonValue::Object(map) => {
+            for nested in map.values() {
+                validate_id_only_value(nested)?;
+            }
+            Ok(())
+        }
+        JsonValue::Bool(_) | JsonValue::Number(_) => Err(DbError::Config(
+            "job/event payloads may contain only UUID strings, arrays, objects, or null".into(),
+        )),
+    }
+}
+
+fn validate_checkpoint_payload(value: &JsonValue) -> Result<(), DbError> {
+    reject_forbidden_keys(value)?;
+    match value {
+        JsonValue::Object(map) => {
+            for (key, nested) in map {
+                match key.as_str() {
+                    "offset" => {
+                        if !(nested.is_null() || nested.as_u64().is_some()) {
+                            return Err(DbError::Config(
+                                "checkpoint offset must be an unsigned integer".into(),
+                            ));
+                        }
+                    }
+                    _ => validate_id_only_value(nested)?,
+                }
+            }
+            Ok(())
+        }
+        _ => Err(DbError::Config(
+            "checkpoint payload must be an object".into(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn validated_payloads_reject_nested_forbidden_fields() {
+        assert!(ValidatedJobPayload::new(json!({
+            "document_id": Uuid::new_v4(),
+            "nested": [{ "secret_token": Uuid::new_v4() }]
+        }))
+        .is_err());
+        assert!(ValidatedEventPayload::new(json!({
+            "outbox_event_id": Uuid::new_v4(),
+            "items": [{ "body": Uuid::new_v4() }]
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn repo_write_types_are_validated_newtypes_not_raw_json_values() {
+        let payload = ValidatedJobPayload::new(json!({ "document_id": Uuid::new_v4() }))
+            .expect("validated job payload");
+        let event = ValidatedEventPayload::new(json!({ "job_id": Uuid::new_v4() }))
+            .expect("validated event payload");
+        let _new_job = NewJob {
+            id: Uuid::new_v4(),
+            job_type: JobType::Convert,
+            payload_version: 1,
+            payload: &payload,
+            max_attempts: 1,
+            idempotency_key: "compile-time-typed",
+            document_id: None,
+            version_id: None,
+            available_at: Utc::now(),
+            outbox_event_type: "job.enqueued",
+            outbox_payload_version: 1,
+            outbox_payload: &event,
+            outbox_idempotency_key: "outbox-typed",
+        };
+    }
 }
