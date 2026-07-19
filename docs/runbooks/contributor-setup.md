@@ -56,6 +56,9 @@ discover these deterministic failures.
   font checksum from a different OS.
 - Server smoke must build first and apply its readiness timeout only after the binary
   starts. A cold Rust build is not a failed readiness probe.
+- Configuration tests that assert a specific validation error must supply valid values
+  for earlier invariants (for example, production auth settings before a bind-address
+  assertion), so new fail-fast checks do not invalidate the test's intent.
 
 ## Evidence
 
