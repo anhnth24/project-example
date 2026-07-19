@@ -4,20 +4,33 @@ fn main() {
         .iter()
         .any(|argument| argument == "--help" || argument == "-h")
     {
-        println!("fileconv-worker\n\nPhase F scaffold; no jobs are enabled yet.");
+        println!(
+            "fileconv-worker\n\nPhase 1B worker runtime; job handlers are enabled by later issues."
+        );
         return;
     }
-    match fileconv_server::config::ServerConfig::from_env() {
+    match fileconv_server::config::ServerConfig::from_worker_env() {
         Ok(config) if args.iter().any(|argument| argument == "--check-config") => {
-            println!(
-                "configuration valid: profile={:?}, bind={}",
-                config.profile, config.bind_addr
-            );
+            match fileconv_server::state::RuntimeState::from_config(config) {
+                Ok(state) => println!(
+                    "configuration valid: profile={:?}, bind={}",
+                    state.config().profile(),
+                    state.config().bind_addr()
+                ),
+                Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
+            }
         }
-        Ok(_) => println!("fileconv-worker scaffold: no jobs are enabled yet"),
+        Ok(config) => match fileconv_server::state::RuntimeState::from_config(config) {
+            Ok(_) => println!("fileconv-worker: no runnable job handlers are enabled yet"),
+            Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
+        },
         Err(error) => {
-            eprintln!("invalid worker configuration: {error}");
-            std::process::exit(1);
+            exit_with_error(format!("invalid worker configuration: {error}"));
         }
     }
+}
+
+fn exit_with_error(error: String) -> ! {
+    eprintln!("fileconv-worker: {error}");
+    std::process::exit(1);
 }

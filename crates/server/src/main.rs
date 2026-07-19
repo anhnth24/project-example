@@ -13,30 +13,35 @@ async fn main() {
             match config.runtime_endpoints() {
                 Ok(_) => println!(
                     "configuration valid: profile={:?}, bind={}",
-                    config.profile, config.bind_addr
+                    config.profile(),
+                    config.bind_addr()
                 ),
                 Err(error) => exit_with_error(format!("invalid server configuration: {error}")),
             }
         }
         Ok(config) => {
-            let endpoints = match config.runtime_endpoints() {
-                Ok(endpoints) => endpoints,
-                Err(error) => exit_with_error(error),
+            let state = match fileconv_server::state::RuntimeState::from_config(config) {
+                Ok(state) => state,
+                Err(error) => exit_with_error(error.to_string()),
             };
             if let Err(error) =
-                fileconv_server::database::apply_migrations(endpoints.database_url.expose()).await
+                fileconv_server::database::apply_migrations(state.endpoints().database_url.expose())
+                    .await
             {
                 exit_with_error(error);
             }
-            let app = match fileconv_server::http::AppState::new(endpoints) {
+            let app = match fileconv_server::http::AppState::new(state.clone()) {
                 Ok(state) => fileconv_server::http::router(state),
                 Err(error) => exit_with_error(error),
             };
-            let listener = match tokio::net::TcpListener::bind(config.bind_addr).await {
+            let listener = match tokio::net::TcpListener::bind(state.config().bind_addr()).await {
                 Ok(listener) => listener,
                 Err(error) => exit_with_error(format!("cannot bind server: {error}")),
             };
-            println!("fileconv-server listening on http://{}", config.bind_addr);
+            println!(
+                "fileconv-server listening on http://{}",
+                state.config().bind_addr()
+            );
             if let Err(error) = axum::serve(listener, app)
                 .with_graceful_shutdown(shutdown_signal())
                 .await
