@@ -371,10 +371,25 @@ impl QdrantClient {
         vector: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchHit>, StorageError> {
+        self.search_filtered(collection_name, scope, vector, limit, &[])
+            .await
+    }
+
+    /// Search with mandatory tenant scope plus caller-supplied extra `must` filters.
+    pub async fn search_filtered(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        vector: &[f32],
+        limit: usize,
+        extra_must: &[Value],
+    ) -> Result<Vec<SearchHit>, StorageError> {
         scope.validate()?;
         if limit == 0 {
             return Err(StorageError::PreconditionFailed);
         }
+        let mut must = mandatory_filter_must(scope);
+        must.extend(extra_must.iter().cloned());
         let url = format!(
             "{}/collections/{}/points/query",
             self.base_url,
@@ -382,7 +397,7 @@ impl QdrantClient {
         );
         let body = json!({
             "query": vector,
-            "filter": mandatory_filter(scope),
+            "filter": { "must": must },
             "limit": limit,
             "with_payload": true,
         });
@@ -394,7 +409,7 @@ impl QdrantClient {
             .map_err(|_| StorageError::Transport)?;
         if response.status().as_u16() == 404 || !response.status().is_success() {
             return self
-                .search_legacy(collection_name, scope, vector, limit)
+                .search_legacy(collection_name, scope, vector, limit, extra_must)
                 .await;
         }
         let payload: Value = response.json().await.map_err(|_| StorageError::Backend)?;
@@ -409,7 +424,10 @@ impl QdrantClient {
         scope: &VectorScope,
         vector: &[f32],
         limit: usize,
+        extra_must: &[Value],
     ) -> Result<Vec<SearchHit>, StorageError> {
+        let mut must = mandatory_filter_must(scope);
+        must.extend(extra_must.iter().cloned());
         let url = format!(
             "{}/collections/{}/points/search",
             self.base_url,
@@ -417,7 +435,7 @@ impl QdrantClient {
         );
         let body = json!({
             "vector": vector,
-            "filter": mandatory_filter(scope),
+            "filter": { "must": must },
             "limit": limit,
             "with_payload": true,
         });
@@ -765,10 +783,6 @@ pub fn point_id_from_org_collection_and_chunk(
 
 fn distance_matches(existing: &str, expected: &str) -> bool {
     existing.eq_ignore_ascii_case(expected)
-}
-
-fn mandatory_filter(scope: &VectorScope) -> Value {
-    json!({ "must": mandatory_filter_must(scope) })
 }
 
 fn mandatory_filter_must(scope: &VectorScope) -> Vec<Value> {
