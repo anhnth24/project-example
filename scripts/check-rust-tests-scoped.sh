@@ -36,6 +36,17 @@ fi
 
 echo "running scoped rust tests: ${ordered[*]}"
 
+if printf '%s\n' "${ordered[@]}" | grep -qx server; then
+  filtered=()
+  for scope in "${ordered[@]}"; do
+    if [[ "$scope" == "knowledge" ]]; then
+      continue
+    fi
+    filtered+=("$scope")
+  done
+  ordered=("${filtered[@]}")
+fi
+
 for scope in "${ordered[@]}"; do
   case "$scope" in
     core)
@@ -53,8 +64,12 @@ for scope in "${ordered[@]}"; do
       cargo test -p fileconv-knowledge --all-features
       ;;
     server)
-      # One compile graph; lib tests give fast PR signal. Integration tests run on full gate.
-      cargo test -p fileconv-knowledge --no-default-features -p fileconv-server --lib
+      # One compile graph; lib tests give fast PR signal. Integration tests run on master.
+      server_args=(--lib)
+      if [[ "${RUST_INTEGRATION:-false}" == "true" ]]; then
+        server_args=()
+      fi
+      cargo test -p fileconv-knowledge --no-default-features -p fileconv-server "${server_args[@]}"
       ;;
     mcp)
       cargo test -p fileconv-mcp

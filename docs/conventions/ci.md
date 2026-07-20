@@ -40,11 +40,15 @@ validation uses `make bundle-linux`.
   change, on both PR and `master`. This keeps direct pushes safe without running
   unrelated product gates.
 - The Rust job runs `scripts/run-rust-ci-fast.sh` (fmt + clippy + tests in one step):
-  - `server` PRs run `knowledge,server` **lib tests** (~2–3 min after cache warm).
-  - Workspace Clippy baseline runs only on the **full** Rust gate (`Cargo.lock`,
-    workspace manifest changes).
-  - Integration test binaries and the full workspace test matrix run on the full gate
-    and on every `master` push that touches Rust paths (`RUST_INTEGRATION=true`).
+  - **smoke** (CI/Makefile/Rust-script edits): server **lib tests** only (~1–2 min).
+  - **scoped** (`server`, `core`, …): smallest crate set; server PRs skip duplicate
+    knowledge compile (~2–3 min after cache warm).
+  - **workspace** (`Cargo.lock`, root manifests): all crates except desktop, no GTK
+    (~3–4 min).
+  - **full** (desktop paths): entire matrix including `fileconv-desktop`.
+  - Clippy uses `--lib` on PR gates; `--all-targets` on full/master integration.
+  - Integration test binaries run on `master` push (`RUST_INTEGRATION=true`) and the
+    full desktop gate.
 - A Makefile or Rust-script change activates **rust + toolchain** only, not frontend,
   web, corpus, bundle, or dev-stack.
 - Spike report/validator edits are checked in `changes-and-static` only; they no

@@ -29,6 +29,14 @@ FULL_RUST_MARKERS = RUST_INFRA + (
     "clippy.toml",
     "scripts/check-architecture-boundaries.py",
 )
+WORKSPACE_MARKERS = (
+    "Cargo.lock",
+    "Cargo.toml",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "clippy.toml",
+    "scripts/check-architecture-boundaries.py",
+)
 DEV_STACK_FULL = (
     "deploy/dev/**",
     "deploy/compose.spike.yml",
@@ -165,13 +173,6 @@ def dev_stack_mode_for(paths: list[str]) -> str:
 
 
 def rust_crates_for(paths: list[str]) -> tuple[str, bool]:
-    if any(
-        fnmatch.fnmatch(path, pattern)
-        for path in paths
-        for pattern in FULL_RUST_MARKERS
-    ):
-        return "full", True
-
     scopes: list[str] = []
     for scope, patterns in CRATE_SCOPES.items():
         if any(
@@ -181,13 +182,34 @@ def rust_crates_for(paths: list[str]) -> tuple[str, bool]:
         ):
             scopes.append(scope)
 
-    if "server" in scopes and "knowledge" not in scopes:
-        scopes.insert(0, "knowledge")
-
     desktop_deps = "desktop" in scopes
-    if not scopes:
-        return "full", True
-    return ",".join(scopes), desktop_deps
+    workspace_touch = any(
+        fnmatch.fnmatch(path, pattern)
+        for path in paths
+        for pattern in WORKSPACE_MARKERS
+    )
+    if scopes:
+        if desktop_deps and scopes == ["desktop"] and not workspace_touch:
+            return "desktop", True
+        if desktop_deps:
+            return "full", True
+        return ",".join(scopes), False
+
+    if any(
+        fnmatch.fnmatch(path, pattern)
+        for path in paths
+        for pattern in WORKSPACE_MARKERS
+    ):
+        return "workspace", False
+
+    if any(
+        fnmatch.fnmatch(path, pattern)
+        for path in paths
+        for pattern in FULL_RUST_MARKERS
+    ):
+        return "smoke", False
+
+    return "full", True
 
 
 def changed_paths(base: str, head: str) -> list[str]:
@@ -289,11 +311,28 @@ class ClassifierTests(unittest.TestCase):
 
     def test_server_only_change_scopes_rust_tests(self) -> None:
         crates, desktop = rust_crates_for(["crates/server/src/workers/delete.rs"])
-        self.assertEqual(crates, "knowledge,server")
+        self.assertEqual(crates, "server")
         self.assertFalse(desktop)
 
-    def test_cargo_lock_runs_full_rust_gate(self) -> None:
+    def test_ci_infra_uses_smoke_rust_gate(self) -> None:
+        crates, desktop = rust_crates_for([".github/workflows/ci.yml"])
+        self.assertEqual(crates, "smoke")
+        self.assertFalse(desktop)
+
+    def test_makefile_uses_smoke_rust_gate(self) -> None:
+        crates, desktop = rust_crates_for(["Makefile"])
+        self.assertEqual(crates, "smoke")
+        self.assertFalse(desktop)
+
+    def test_cargo_lock_runs_workspace_rust_gate(self) -> None:
         crates, desktop = rust_crates_for(["Cargo.lock"])
+        self.assertEqual(crates, "workspace")
+        self.assertFalse(desktop)
+
+    def test_cargo_lock_with_desktop_runs_full_gate(self) -> None:
+        crates, desktop = rust_crates_for(
+            ["Cargo.lock", "app/src-tauri/src/lib.rs"]
+        )
         self.assertEqual(crates, "full")
         self.assertTrue(desktop)
 
