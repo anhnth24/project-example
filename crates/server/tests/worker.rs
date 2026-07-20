@@ -1572,6 +1572,149 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
 }
 
 #[tokio::test]
+async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"fair reconciliation scheduling\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let first_convert = jobs::enqueue(
+        &pool,
+        &ctx,
+        EnqueueJob::new(
+            JobType::Convert,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+                cleanup_target_job_id: None,
+            },
+            format!("convert-fair-first-{version_id}"),
+        ),
+    )
+    .await
+    .expect("enqueue first convert")
+    .job;
+    let second_convert = jobs::enqueue(
+        &pool,
+        &ctx,
+        EnqueueJob::new(
+            JobType::Convert,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+                cleanup_target_job_id: None,
+            },
+            format!("convert-fair-second-{version_id}"),
+        ),
+    )
+    .await
+    .expect("enqueue second convert")
+    .job;
+    let parent = jobs::enqueue(
+        &pool,
+        &ctx,
+        EnqueueJob::new(
+            JobType::Convert,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+                cleanup_target_job_id: None,
+            },
+            format!("convert-fair-cleanup-parent-{version_id}"),
+        ),
+    )
+    .await
+    .expect("enqueue cleanup parent")
+    .job;
+    jobs::cancel(&pool, &ctx, parent.id)
+        .await
+        .expect("cancel cleanup parent");
+    jobs::enqueue(
+        &pool,
+        &ctx,
+        EnqueueJob::new(
+            JobType::Reconcile,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+                cleanup_target_job_id: Some(parent.id),
+            },
+            format!("convert.cleanup:{}", parent.id),
+        ),
+    )
+    .await
+    .expect("enqueue reconciliation");
+    let worker = ConvertWorker::new(
+        pool.clone(),
+        storage,
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("worker");
+
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("first scheduling run"),
+        ConvertWorkerRun::Completed { .. }
+    ));
+    assert!(matches!(
+        worker
+            .run_once(&ctx)
+            .await
+            .expect("fair reconciliation run"),
+        ConvertWorkerRun::Reconciled { .. }
+    ));
+    assert!(
+        matches!(
+            get_job(&pool, &ctx, first_convert.id).await.status,
+            JobStatus::Pending
+        ) || matches!(
+            get_job(&pool, &ctx, second_convert.id).await.status,
+            JobStatus::Pending
+        ),
+        "one conversion must remain pending when reconciliation is selected"
+    );
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
 async fn live_convert_worker_tombstone_before_promotion_does_not_regress_document_state() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2385,7 +2528,7 @@ else:
 }
 
 #[tokio::test]
-async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
+async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_reconciliation() {
     let Some(base_url) = test_database_url() else {
         return;
     };
@@ -2448,6 +2591,13 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object() {
     assert!(published_version_for_source(&pool, &ctx, version_id)
         .await
         .is_none());
+    assert!(matches!(
+        worker
+            .run_once(&ctx)
+            .await
+            .expect("reconciliation run after cancellation"),
+        ConvertWorkerRun::Reconciled { .. }
+    ));
     assert!(!storage
         .object_exists(ctx.org_id(), &generated_trusted)
         .await

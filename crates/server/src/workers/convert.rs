@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
@@ -152,6 +155,7 @@ pub struct ConvertWorker {
     db_pool: Pool,
     storage: MinioClient,
     config: ConvertWorkerConfig,
+    next_claim_prefers_reconciliation: Arc<AtomicBool>,
 }
 
 impl ConvertWorker {
@@ -166,35 +170,38 @@ impl ConvertWorker {
             db_pool,
             storage,
             config,
+            next_claim_prefers_reconciliation: Arc::new(AtomicBool::new(false)),
         })
     }
 
     pub async fn run_once(&self, ctx: &OrgContext) -> Result<ConvertWorkerRun, ConvertWorkerError> {
-        let jobs = jobs::claim_type(
-            &self.db_pool,
-            ctx,
-            JobType::Convert,
-            &self.config.worker_id,
-            DEFAULT_CLAIM_LIMIT,
-            self.config.lease_ttl,
-        )
-        .await?;
-        if let Some(job) = jobs.into_iter().next() {
-            return self.process_claimed_job(ctx, job).await;
-        }
-        let jobs = jobs::claim_type(
-            &self.db_pool,
-            ctx,
-            JobType::Reconcile,
-            &self.config.worker_id,
-            DEFAULT_CLAIM_LIMIT,
-            self.config.lease_ttl,
-        )
-        .await?;
-        let Some(job) = jobs.into_iter().next() else {
-            return Ok(ConvertWorkerRun::NoJob);
+        let claim_order = if self
+            .next_claim_prefers_reconciliation
+            .fetch_xor(true, Ordering::Relaxed)
+        {
+            [JobType::Reconcile, JobType::Convert]
+        } else {
+            [JobType::Convert, JobType::Reconcile]
         };
-        self.process_reconciliation_job(ctx, job).await
+        for job_type in claim_order {
+            let jobs = jobs::claim_type(
+                &self.db_pool,
+                ctx,
+                job_type,
+                &self.config.worker_id,
+                DEFAULT_CLAIM_LIMIT,
+                self.config.lease_ttl,
+            )
+            .await?;
+            if let Some(job) = jobs.into_iter().next() {
+                return if job_type == JobType::Convert {
+                    self.process_claimed_job(ctx, job).await
+                } else {
+                    self.process_reconciliation_job(ctx, job).await
+                };
+            }
+        }
+        Ok(ConvertWorkerRun::NoJob)
     }
 
     pub async fn process_claimed_job(
