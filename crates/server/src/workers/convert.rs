@@ -146,7 +146,7 @@ struct ClaimedJobScope<'a> {
 }
 
 enum PromotionWait {
-    Finished(Result<promotion::PromoteConversionOutcome, PromotionError>),
+    Finished(Box<Result<promotion::PromoteConversionOutcome, PromotionError>>),
     ReconciliationNeeded,
 }
 
@@ -385,49 +385,54 @@ impl ConvertWorker {
                 .await;
 
                 let completed = match promotion_result {
-                    Ok(PromotionWait::Finished(Ok(outcome))) => outcome,
+                    Ok(PromotionWait::Finished(result)) => match *result {
+                        Ok(outcome) => outcome,
+                        Err(PromotionError::LeaseLost) => {
+                            self.enqueue_conversion_reconciliation(ctx, &job).await?;
+                            return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
+                        }
+                        Err(error) => {
+                            let compensation = self
+                                .compensate_after_promotion_failure(
+                                    ctx,
+                                    &identity,
+                                    checkpoint_for_compensation.as_ref(),
+                                    staged.as_ref().map(|staged| staged.object_key.as_str()),
+                                    &quota_reservation_key,
+                                )
+                                .await;
+                            if compensation.is_err() {
+                                self.enqueue_conversion_reconciliation(ctx, &job).await?;
+                            }
+                            let job_error = compensation
+                                .err()
+                                .unwrap_or_else(|| ConvertWorkerError::Promotion(error));
+                            if !job_error.is_retryable_job_failure() {
+                                return Err(job_error);
+                            }
+                            let failed = jobs::fail(
+                                &self.db_pool,
+                                ctx,
+                                job.id,
+                                &lease_token,
+                                attempts,
+                                job_error.safe_job_error(),
+                            )
+                            .await?;
+                            return Ok(ConvertWorkerRun::Failed {
+                                job_id: failed.id,
+                                terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
+                            });
+                        }
+                    },
                     Ok(PromotionWait::ReconciliationNeeded) => {
                         self.enqueue_conversion_reconciliation(ctx, &job).await?;
                         return Ok(ConvertWorkerRun::ReconciliationNeeded { job_id: job.id });
                     }
-                    Ok(PromotionWait::Finished(Err(PromotionError::LeaseLost)))
-                    | Err(ConvertWorkerError::LeaseLost)
+                    Err(ConvertWorkerError::LeaseLost)
                     | Err(ConvertWorkerError::Job(JobError::LeaseLost)) => {
                         self.enqueue_conversion_reconciliation(ctx, &job).await?;
                         return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
-                    }
-                    Ok(PromotionWait::Finished(Err(error))) => {
-                        let compensation = self
-                            .compensate_after_promotion_failure(
-                                ctx,
-                                &identity,
-                                checkpoint_for_compensation.as_ref(),
-                                staged.as_ref().map(|staged| staged.object_key.as_str()),
-                                &quota_reservation_key,
-                            )
-                            .await;
-                        if compensation.is_err() {
-                            self.enqueue_conversion_reconciliation(ctx, &job).await?;
-                        }
-                        let job_error = compensation
-                            .err()
-                            .unwrap_or_else(|| ConvertWorkerError::Promotion(error));
-                        if !job_error.is_retryable_job_failure() {
-                            return Err(job_error);
-                        }
-                        let failed = jobs::fail(
-                            &self.db_pool,
-                            ctx,
-                            job.id,
-                            &lease_token,
-                            attempts,
-                            job_error.safe_job_error(),
-                        )
-                        .await?;
-                        return Ok(ConvertWorkerRun::Failed {
-                            job_id: failed.id,
-                            terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
-                        });
                     }
                     Err(error) => {
                         let compensation = self
@@ -601,7 +606,7 @@ impl ConvertWorker {
                         | Err(PromotionError::CommittedOutcomeUnknown) => {
                             PromotionWait::ReconciliationNeeded
                         }
-                        result => PromotionWait::Finished(result),
+                        result => PromotionWait::Finished(Box::new(result)),
                     };
                 }
                 _ = sleep_until(deadline) => return PromotionWait::ReconciliationNeeded,
