@@ -2,6 +2,7 @@
 
 pub mod artifacts;
 pub mod chunking;
+pub mod claims;
 pub mod conversion;
 pub mod document_state;
 pub mod embedding;

@@ -19,18 +19,20 @@ use crate::db::models::{
     DocumentState, EmbeddingRuntimePath, EventLogEntry, Job, JobStatus, JobType, OutboxEvent,
 };
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, document_versions, documents, index_metadata, jobs as repo};
+use crate::db::{chunks, claims as claim_repo, documents, index_metadata, jobs as repo};
 use crate::jobs::{
     self, CheckpointPayload, EnqueueJob, EventPayload, JobError, JobPayload,
     CURRENT_EVENT_PAYLOAD_VERSION,
 };
 use crate::services::chunking::{prepare_chunks, PreparedChunk};
+use crate::services::claims::{extract_typed_claims, ClaimValue};
 use crate::services::document_state;
 use crate::services::embedding::{self, EmbeddingError};
 use crate::storage::keys::{authorize_key_for_version, parse_key_for_org};
 use crate::storage::minio::MinioClient;
 use crate::storage::qdrant::{ChunkPointPayload, QdrantClient, UpsertPoint, VectorScope};
 use crate::storage::{ObjectNamespace, StorageError};
+use crate::workers::embedding::{EmbeddingWorker, EmbeddingWorkerError};
 
 #[derive(Debug, Default)]
 pub struct IndexingOutboxSink;
@@ -128,6 +130,7 @@ pub struct IndexVersionInput<'a> {
     pub embedding_batch_size: usize,
     pub approved_signature: Option<&'a str>,
     pub deadline: TokioInstant,
+    pub embedding_worker: &'a EmbeddingWorker,
 }
 
 pub async fn index_version(
@@ -223,7 +226,7 @@ pub async fn index_version(
             .as_ref()
             .ok_or(IndexingError::MissingQdrantCollection)?;
         heartbeat_while(db_pool, ctx, input, async {
-            let vectors = embed_batch(batch).await?;
+            let vectors = embed_batch(batch, input.embedding_worker).await?;
             let points = batch
                 .iter()
                 .zip(vectors)
@@ -267,6 +270,8 @@ pub async fn index_version(
                     version_id,
                     batch,
                     batch_end,
+                    effective_from: version.effective_from,
+                    effective_to: version.effective_to,
                 },
             )
             .await?;
@@ -297,8 +302,8 @@ async fn load_index_source(
 ) -> Result<
     (
         crate::db::models::Document,
-        crate::db::models::DocumentVersion,
-        document_versions::ArtifactInsertOutcome,
+        documents::IndexVersionRecord,
+        documents::IndexMarkdownArtifact,
     ),
     IndexingError,
 > {
@@ -307,10 +312,10 @@ async fn load_index_source(
         move |txn| {
             Box::pin(async move {
                 let document = documents::get_by_id(txn, &ctx, document_id).await?;
-                let version = document_versions::find_by_id(txn, &ctx, document_id, version_id)
+                let version = documents::find_index_version(txn, &ctx, document_id, version_id)
                     .await?
                     .ok_or(DbError::NotFound)?;
-                let artifact = document_versions::find_markdown_artifact(txn, &ctx, version_id)
+                let artifact = documents::find_markdown_artifact_for_index(txn, &ctx, version_id)
                     .await?
                     .ok_or(DbError::NotFound)?;
                 Ok::<_, IndexingError>((document, version, artifact))
@@ -511,14 +516,17 @@ impl EnsureGenerationOwned {
     }
 }
 
-async fn embed_batch(batch: &[PreparedChunk]) -> Result<Vec<Vec<f32>>, IndexingError> {
+async fn embed_batch(
+    batch: &[PreparedChunk],
+    embedding_worker: &EmbeddingWorker,
+) -> Result<Vec<Vec<f32>>, IndexingError> {
     let bodies = batch
         .iter()
         .map(|chunk| chunk.body.clone())
         .collect::<Vec<_>>();
-    tokio::task::spawn_blocking(move || embedding::embed_bodies(&bodies))
+    embedding_worker
+        .embed_bodies(bodies)
         .await
-        .map_err(|_| IndexingError::EmbeddingJoin)?
         .map_err(Into::into)
 }
 
@@ -530,6 +538,8 @@ struct PersistBatchInput<'a> {
     version_id: Uuid,
     batch: &'a [PreparedChunk],
     batch_end: usize,
+    effective_from: chrono::DateTime<chrono::Utc>,
+    effective_to: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 async fn persist_chunk_batch(
@@ -546,12 +556,14 @@ async fn persist_chunk_batch(
     let attempts = input.claim.attempts;
     let document_id = input.document_id;
     let version_id = input.version_id;
+    let effective_from = input.effective_from;
+    let effective_to = input.effective_to;
     with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
                 for chunk in &batch {
-                    chunks::insert_if_absent(
+                    let persisted_chunk = chunks::insert_if_absent(
                         txn,
                         &ctx,
                         chunks::NewChunk {
@@ -566,6 +578,18 @@ async fn persist_chunk_batch(
                             index_metadata_id: metadata_id,
                             index_signature: &signature_digest,
                         },
+                    )
+                    .await?;
+                    persist_claims_for_chunk(
+                        txn,
+                        &ctx,
+                        job_id,
+                        document_id,
+                        version_id,
+                        persisted_chunk.id,
+                        effective_from,
+                        effective_to,
+                        chunk,
                     )
                     .await?;
                 }
@@ -586,6 +610,114 @@ async fn persist_chunk_batch(
         }
     })
     .await
+}
+
+async fn persist_claims_for_chunk(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    chunk_id: Uuid,
+    effective_from: chrono::DateTime<chrono::Utc>,
+    effective_to: Option<chrono::DateTime<chrono::Utc>>,
+    chunk: &PreparedChunk,
+) -> Result<(), IndexingError> {
+    for claim in extract_typed_claims(&chunk.body, version_id, &chunk.chunk_identity) {
+        let (value_number, value_text, value_boolean, value_date, value_money) =
+            claim_value_fields(&claim.value);
+        let input = claim_repo::NewClaim {
+            id: claim.id,
+            document_id,
+            version_id,
+            chunk_id,
+            claim_key: &claim.claim_key,
+            subject: &claim.subject,
+            predicate: &claim.predicate,
+            value_type: claim.value.value_type(),
+            value_number,
+            value_text,
+            value_boolean,
+            value_date,
+            value_money,
+            unit: claim.unit.as_deref(),
+            scope: &claim.scope,
+            effective_from,
+            effective_to,
+            citation_quote: &claim.citation_quote,
+            citation_span_start: claim.citation_span_start,
+            citation_span_end: claim.citation_span_end,
+        };
+        let claim_id = claim_repo::insert_if_absent(txn, ctx, &input).await?;
+        for candidate_id in claim_repo::find_conflict_candidates(txn, ctx, &input).await? {
+            enqueue_conflict_candidate(
+                txn,
+                ctx,
+                job_id,
+                document_id,
+                version_id,
+                claim_id,
+                candidate_id,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+fn claim_value_fields(
+    value: &ClaimValue,
+) -> (
+    Option<rust_decimal::Decimal>,
+    Option<&str>,
+    Option<bool>,
+    Option<chrono::NaiveDate>,
+    Option<rust_decimal::Decimal>,
+) {
+    match value {
+        ClaimValue::Number(value) => (Some(*value), None, None, None, None),
+        ClaimValue::Money(value) => (None, None, None, None, Some(*value)),
+        ClaimValue::Boolean(value) => (None, None, Some(*value), None, None),
+        ClaimValue::Date(value) => (None, None, None, Some(*value), None),
+        ClaimValue::Enum(value) | ClaimValue::Text(value) => {
+            (None, Some(value.as_str()), None, None, None)
+        }
+    }
+}
+
+async fn enqueue_conflict_candidate(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    first_claim_id: Uuid,
+    second_claim_id: Uuid,
+) -> Result<(), IndexingError> {
+    let (claim_a_id, claim_b_id) = if first_claim_id < second_claim_id {
+        (first_claim_id, second_claim_id)
+    } else {
+        (second_claim_id, first_claim_id)
+    };
+    let payload = repo::ValidatedEventPayload::new(serde_json::json!({
+        "claim_a_id": claim_a_id,
+        "claim_b_id": claim_b_id,
+        "document_id": document_id,
+        "version_id": version_id,
+    }))?;
+    repo::insert_outbox_event(
+        txn,
+        ctx,
+        repo::NewOutboxEvent {
+            event_type: "claim.conflict_candidate",
+            payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
+            payload: &payload,
+            idempotency_key: &format!("claim.conflict_candidate:{claim_a_id}:{claim_b_id}"),
+            job_id: Some(job_id),
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 fn checkpoint_offset(job: &Job) -> Result<usize, IndexingError> {
@@ -680,8 +812,8 @@ pub enum IndexingError {
     Knowledge(#[from] fileconv_knowledge::KnowledgeError),
     #[error("embedding error")]
     Embedding(#[from] EmbeddingError),
-    #[error("embedding task failed")]
-    EmbeddingJoin,
+    #[error("embedding worker error")]
+    EmbeddingWorker(#[from] EmbeddingWorkerError),
     #[error("index payload is missing document_id or version_id")]
     InvalidPayload,
     #[error("document is in unexpected state {0:?}")]
@@ -720,7 +852,7 @@ impl IndexingError {
             Self::Storage(_) => "index storage error",
             Self::Knowledge(_) => "index knowledge error",
             Self::Embedding(_) => "index embedding error",
-            Self::EmbeddingJoin => "index embedding join error",
+            Self::EmbeddingWorker(_) => "index embedding worker error",
             Self::InvalidPayload => "index payload invalid",
             Self::UnexpectedDocumentState(_) => "index document state invalid",
             Self::MarkdownNotTrusted => "index markdown key invalid",

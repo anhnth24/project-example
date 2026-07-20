@@ -14,6 +14,7 @@ use crate::jobs::{self, JobError};
 use crate::services::indexing::{self, IndexVersionInput, IndexVersionOutcome, IndexingError};
 use crate::storage::minio::MinioClient;
 use crate::storage::qdrant::QdrantClient;
+use crate::workers::embedding::EmbeddingWorker;
 
 const DEFAULT_CLAIM_LIMIT: u32 = 1;
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -65,6 +66,7 @@ pub struct IndexWorker {
     qdrant: QdrantClient,
     config: IndexWorkerConfig,
     approved_signature: Option<String>,
+    embedding_worker: EmbeddingWorker,
 }
 
 impl IndexWorker {
@@ -91,6 +93,7 @@ impl IndexWorker {
             qdrant,
             config,
             approved_signature,
+            embedding_worker: EmbeddingWorker::new(),
         })
     }
 
@@ -131,6 +134,7 @@ impl IndexWorker {
             embedding_batch_size: self.config.embedding_batch_size,
             approved_signature: self.approved_signature.as_deref(),
             deadline,
+            embedding_worker: &self.embedding_worker,
         };
         let result = timeout_at(
             deadline,

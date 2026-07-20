@@ -1,5 +1,6 @@
 //! Tenant-scoped document repository (ADR 0007).
 
+use chrono::{DateTime, Utc};
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
@@ -38,6 +39,23 @@ pub struct NewMarkdownArtifact<'a> {
 pub struct MarkdownArtifactRecord {
     pub object_key: String,
     pub created: bool,
+}
+
+/// Immutable version state required by the index pipeline.
+///
+/// This deliberately contains only the lifecycle field that determines whether
+/// a vector payload is effective. Promotion owns richer version mutations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexVersionRecord {
+    pub effective_from: DateTime<Utc>,
+    pub effective_to: Option<DateTime<Utc>>,
+}
+
+/// Trusted Markdown artifact metadata required before indexing its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexMarkdownArtifact {
+    pub object_key: String,
+    pub content_sha256: String,
 }
 
 /// Inserts a document owned by the acting user under `ctx.org_id`.
@@ -184,6 +202,51 @@ pub async fn get_version_source_for_convert(
         content_sha256: row.get("content_sha256"),
         byte_size: row.get("byte_size"),
     })
+}
+
+/// Loads a version's effective lifecycle bound for an index job.
+///
+/// The document and version IDs are both scoped to the organization so a job
+/// payload can never select a version from another document.
+pub async fn find_index_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<Option<IndexVersionRecord>, DbError> {
+    let row = txn
+        .query_opt(
+            "SELECT effective_from, effective_to
+             FROM document_versions
+             WHERE org_id = $1 AND document_id = $2 AND id = $3",
+            &[&ctx.org_id(), &document_id, &version_id],
+        )
+        .await?;
+    Ok(row.map(|row| IndexVersionRecord {
+        effective_from: row.get("effective_from"),
+        effective_to: row.get("effective_to"),
+    }))
+}
+
+/// Finds the sole Markdown artifact recorded for an immutable version.
+pub async fn find_markdown_artifact_for_index(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> Result<Option<IndexMarkdownArtifact>, DbError> {
+    let kind = ArtifactKind::Markdown.as_str();
+    let row = txn
+        .query_opt(
+            "SELECT object_key, content_sha256
+             FROM derived_artifacts
+             WHERE org_id = $1 AND version_id = $2 AND artifact_kind = $3",
+            &[&ctx.org_id(), &version_id, &kind],
+        )
+        .await?;
+    Ok(row.map(|row| IndexMarkdownArtifact {
+        object_key: row.get("object_key"),
+        content_sha256: row.get("content_sha256"),
+    }))
 }
 
 pub async fn insert_markdown_artifact(
