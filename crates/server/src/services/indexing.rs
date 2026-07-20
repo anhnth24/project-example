@@ -19,7 +19,9 @@ use crate::db::models::{
     DocumentState, EmbeddingRuntimePath, EventLogEntry, Job, JobStatus, JobType, OutboxEvent,
 };
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, claims as claim_repo, documents, index_metadata, jobs as repo};
+use crate::db::{
+    chunks, claims as claim_repo, document_versions, documents, index_metadata, jobs as repo,
+};
 use crate::jobs::{
     self, CheckpointPayload, EnqueueJob, EventPayload, JobError, JobPayload,
     CURRENT_EVENT_PAYLOAD_VERSION,
@@ -302,8 +304,8 @@ async fn load_index_source(
 ) -> Result<
     (
         crate::db::models::Document,
-        documents::IndexVersionRecord,
-        documents::IndexMarkdownArtifact,
+        crate::db::models::DocumentVersion,
+        document_versions::ArtifactInsertOutcome,
     ),
     IndexingError,
 > {
@@ -312,10 +314,10 @@ async fn load_index_source(
         move |txn| {
             Box::pin(async move {
                 let document = documents::get_by_id(txn, &ctx, document_id).await?;
-                let version = documents::find_index_version(txn, &ctx, document_id, version_id)
+                let version = document_versions::find_by_id(txn, &ctx, document_id, version_id)
                     .await?
                     .ok_or(DbError::NotFound)?;
-                let artifact = documents::find_markdown_artifact_for_index(txn, &ctx, version_id)
+                let artifact = document_versions::find_markdown_artifact(txn, &ctx, version_id)
                     .await?
                     .ok_or(DbError::NotFound)?;
                 Ok::<_, IndexingError>((document, version, artifact))
