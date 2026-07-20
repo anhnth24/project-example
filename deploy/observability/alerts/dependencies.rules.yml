@@ -1,0 +1,38 @@
+groups:
+  - name: markhand-dependency-health
+    rules:
+      - alert: MarkhandReadinessEndpointFailing
+        expr: |
+          increase(markhand_http_requests_total{route="/api/v1/health/ready",method="GET",status=~"5.."}[2m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          slo: SLA-DEGRADED-MODE
+        annotations:
+          summary: "Readiness is failing for PostgreSQL, Qdrant, MinIO, migrations, config, or reconciliation"
+          description: "/api/v1/health/ready returned 5xx during the last 2m. The endpoint checks PostgreSQL, migration history, Qdrant /healthz, MinIO /minio/health/live, index-signature config, and the O03 readiness fence; response code not_reconciled means restore or reconcile is still in progress."
+          runbook_url: "docs/runbooks/dependency-outage.md"
+
+      - alert: MarkhandReadinessScrapeMissing
+        expr: |
+          absent_over_time(markhand_http_request_duration_seconds_count{route="/api/v1/health/ready",method="GET"}[5m])
+        for: 5m
+        labels:
+          severity: critical
+          slo: SLA-AVAILABILITY
+        annotations:
+          summary: "No readiness scrape observations have been recorded"
+          description: "No /api/v1/health/ready request-duration samples were present for 5m. Verify Prometheus is scraping the readiness endpoint and the server is reachable before assuming the application is healthy."
+          runbook_url: "docs/runbooks/dependency-outage.md"
+
+      - alert: MarkhandMetricsEndpointFailing
+        expr: |
+          increase(markhand_http_requests_total{route="/api/v1/metrics",method="GET",status=~"5.."}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          slo: SLA-AVAILABILITY
+        annotations:
+          summary: "Prometheus metrics endpoint is returning errors"
+          description: "/api/v1/metrics returned 5xx during the last 5m. O01 metrics are unauthenticated and must remain network-restricted but scrapeable for alert coverage."
+          runbook_url: "docs/runbooks/dependency-outage.md"

@@ -1,0 +1,68 @@
+groups:
+  - name: markhand-slo-burn
+    rules:
+      - alert: MarkhandQueryP95LatencySloBurn
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, route) (
+              rate(markhand_http_request_duration_seconds_bucket{route=~"/api/v1/search|/api/v1/ask|/api/v1/ask/stream"}[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          slo: G0-SLO-QUERY-P95
+        annotations:
+          summary: "Query path P95 latency is above the 500 ms SLA target"
+          description: "P95 latency for {{ $labels.route }} has exceeded 0.5s for 10m. Threshold comes from docs/markhand-web-sla-targets.md and bench/markhand_web/gates.yaml gate G0-SLO-QUERY-P95. Follow docs/runbooks/dependency-outage.md for dependency-caused latency or docs/runbooks/vector-index-rebuild.md for retrieval/index causes."
+          runbook_url: "docs/runbooks/dependency-outage.md"
+
+      - alert: MarkhandFilteredQueryP99LatencySloBurn
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, route) (
+              rate(markhand_http_request_duration_seconds_bucket{route=~"/api/v1/search|/api/v1/ask|/api/v1/ask/stream"}[5m])
+            )
+          ) > 1
+        for: 10m
+        labels:
+          severity: critical
+          slo: G0-SLO-QUERY-P99
+        annotations:
+          summary: "Query path P99 latency is above the 1000 ms SLA target"
+          description: "P99 latency for {{ $labels.route }} has exceeded 1.0s for 10m. Threshold comes from docs/markhand-web-sla-targets.md, workload-profile OD-TAIL-LATENCY, and bench/markhand_web/gates.yaml gate G0-SLO-QUERY-P99."
+          runbook_url: "docs/runbooks/dependency-outage.md"
+
+      - alert: MarkhandQueryErrorBudgetBurnCritical
+        expr: |
+          (
+            sum(rate(markhand_http_requests_total{route=~"/api/v1/search|/api/v1/ask|/api/v1/ask/stream",status=~"5.."}[5m]))
+            /
+            sum(rate(markhand_http_requests_total{route=~"/api/v1/search|/api/v1/ask|/api/v1/ask/stream"}[5m]))
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          slo: SLA-AVAILABILITY
+        annotations:
+          summary: "Query path 5xx rate is burning the 99.5% availability budget"
+          description: "5xx ratio on search/ask routes is above 2% for 10m, a fast burn against the 0.5% monthly error budget from docs/markhand-web-sla-targets.md (service availability >= 99.5%)."
+          runbook_url: "docs/runbooks/dependency-outage.md"
+
+      - alert: MarkhandQueryErrorBudgetBurnWarning
+        expr: |
+          (
+            sum(rate(markhand_http_requests_total{route=~"/api/v1/search|/api/v1/ask|/api/v1/ask/stream",status=~"5.."}[30m]))
+            /
+            sum(rate(markhand_http_requests_total{route=~"/api/v1/search|/api/v1/ask|/api/v1/ask/stream"}[30m]))
+          ) > 0.005
+        for: 30m
+        labels:
+          severity: warning
+          slo: SLA-AVAILABILITY
+        annotations:
+          summary: "Query path 5xx rate is at the monthly error-budget limit"
+          description: "5xx ratio on search/ask routes is above 0.5% for 30m, matching the monthly error budget implied by the 99.5% availability SLA in docs/markhand-web-sla-targets.md."
+          runbook_url: "docs/runbooks/dependency-outage.md"
