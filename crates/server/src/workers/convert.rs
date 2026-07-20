@@ -481,7 +481,7 @@ impl ConvertWorker {
                 self.storage.head_metadata(ctx.org_id(), &quarantine_key),
             )
             .await?;
-        self.verify_quarantine_metadata(&source, &metadata)?;
+        Self::verify_quarantine_metadata(&source, &metadata)?;
         let format = metadata
             .get("canonical-format")
             .or_else(|| metadata.get("x-amz-meta-canonical-format"))
@@ -567,7 +567,6 @@ impl ConvertWorker {
     }
 
     fn verify_quarantine_metadata(
-        &self,
         source: &ConversionSourceVersion,
         metadata: &HashMap<String, String>,
     ) -> Result<(), ConvertWorkerError> {
@@ -580,13 +579,23 @@ impl ConvertWorker {
         {
             return Err(ConvertWorkerError::InvalidQuarantineMetadata);
         }
-        let version_id = source.source_version_id.to_string();
-        if metadata.get("version-id").map(String::as_str) != Some(version_id.as_str()) {
-            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+        // I01 uploads quarantine objects before a document/version exists, so real
+        // upload metadata legitimately has no document-id/version-id. If an older
+        // seeded or future bound object carries those ids, they remain authoritative
+        // and must match. Isolation/integrity still comes from the org-scoped key,
+        // quarantine namespace, accepted disposition, and content SHA recorded on
+        // the source version.
+        if let Some(version_id) = metadata.get("version-id") {
+            let source_version_id = source.source_version_id.to_string();
+            if version_id.as_str() != source_version_id.as_str() {
+                return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+            }
         }
-        let document_id = source.document_id.to_string();
-        if metadata.get("document-id").map(String::as_str) != Some(document_id.as_str()) {
-            return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+        if let Some(document_id) = metadata.get("document-id") {
+            let source_document_id = source.document_id.to_string();
+            if document_id.as_str() != source_document_id.as_str() {
+                return Err(ConvertWorkerError::InvalidQuarantineMetadata);
+            }
         }
         Ok(())
     }
@@ -1196,5 +1205,52 @@ mod tests {
         assert_eq!(canonical_extension("../../etc/passwd"), None);
         assert_eq!(canonical_extension("txt"), Some("txt"));
         assert_eq!(canonical_extension("mp3"), None);
+    }
+
+    #[test]
+    fn quarantine_metadata_allows_absent_ids_but_rejects_mismatch_and_wrong_sha() {
+        let document_id = Uuid::new_v4();
+        let source_version_id = Uuid::new_v4();
+        let content_sha256 = "a".repeat(64);
+        let source = ConversionSourceVersion {
+            document_id,
+            source_version_id,
+            original_object_key: "quarantine/test/object".into(),
+            content_sha256: content_sha256.clone(),
+            source_filename: None,
+            source_content_type: Some("text/plain".into()),
+            byte_size: Some(12),
+        };
+        let mut metadata = HashMap::from([
+            ("disposition".to_string(), "accepted".to_string()),
+            ("content-sha256".to_string(), content_sha256),
+            ("canonical-format".to_string(), "txt".to_string()),
+        ]);
+
+        assert!(ConvertWorker::verify_quarantine_metadata(&source, &metadata).is_ok());
+
+        metadata.insert("document-id".into(), document_id.to_string());
+        metadata.insert("version-id".into(), source_version_id.to_string());
+        assert!(ConvertWorker::verify_quarantine_metadata(&source, &metadata).is_ok());
+
+        metadata.insert("version-id".into(), Uuid::new_v4().to_string());
+        assert!(matches!(
+            ConvertWorker::verify_quarantine_metadata(&source, &metadata),
+            Err(ConvertWorkerError::InvalidQuarantineMetadata)
+        ));
+
+        metadata.insert("version-id".into(), source_version_id.to_string());
+        metadata.insert("document-id".into(), Uuid::new_v4().to_string());
+        assert!(matches!(
+            ConvertWorker::verify_quarantine_metadata(&source, &metadata),
+            Err(ConvertWorkerError::InvalidQuarantineMetadata)
+        ));
+
+        metadata.insert("document-id".into(), document_id.to_string());
+        metadata.insert("content-sha256".into(), "b".repeat(64));
+        assert!(matches!(
+            ConvertWorker::verify_quarantine_metadata(&source, &metadata),
+            Err(ConvertWorkerError::InvalidQuarantineMetadata)
+        ));
     }
 }
