@@ -149,7 +149,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I05 — Idempotent conversion promotion saga
 
-- **Status:** done
+- **Status:** done — merged to `master` via PR #244 (2026-07-20).
 - **Plan:** Checkpoint download/convert/stage/promote/DB/cleanup; immutable version;
   publish/current pointer riêng với draft/latest upload; index outbox;
   compensation/refund.
@@ -162,7 +162,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I06 — Chunk/embedding/index worker
 
-- **Status:** done
+- **Status:** done — merged to `master` (orchestrated branch, lifecycle fixes through `3af4c79`).
 - **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
   chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
   extract typed claim key/value/unit/scope; incremental conflict candidate outbox;

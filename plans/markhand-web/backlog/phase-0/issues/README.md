@@ -98,9 +98,12 @@ P1A-01 ──────────> P0-03
 
 ## P0-05 — Đánh giá embedding tiếng Việt
 
-- **Status:** Ready — interim GLM cloud path được duyệt (ADR 0004); local dense
-  quality smoke recorded (ADR 0005 Proposed: AITeamVN PASS / BKAI FAIL on CPU).
-  Target GPU/vLLM remains cutover, not a coding blocker.
+- **Status:** Ready — **chưa Done** (Phase 0 issue duy nhất còn mở). Đã có:
+  local dense quality smoke (AITeamVN Recall@5 0.9261 PASS, BKAI 0.7962 FAIL;
+  `bench/markhand_web/reports/embedding-evaluation.md`; ADR 0005 Proposed). Còn
+  thiếu để đóng: ≥2 cấu hình GLM cloud đo trên golden corpus (`runtime=glm-cloud-interim`,
+  `G0-RET-BEST-MODEL-GAP` evidence); ADR 0005 Accepted + product-owner sign-off;
+  target GPU/vLLM capacity deferred (`G0-RET-VLLM-CUTOVER`, không chặn Phase 1B).
 - **Objective:** Chốt provider/model/revision/dimension/normalization đủ để lập
   trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
 - **Plan:** Interim: so GLM `embedding-3` (và `embedding-2` nếu cần) qua
