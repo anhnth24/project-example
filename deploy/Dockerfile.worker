@@ -1,0 +1,53 @@
+ARG RUST_IMAGE=rust:1.88.0-bookworm
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+
+FROM ${RUST_IMAGE} AS builder
+
+ENV CC=cc \
+    CXX=c++
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY . .
+
+RUN cargo build --release -p fileconv-server --bin fileconv-worker \
+    && cargo build --release -p fileconv-cli --bin fileconv
+
+FROM ${RUNTIME_IMAGE} AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libssl3 \
+        libstdc++6 \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-vie \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system markhand \
+    && useradd --system --gid markhand --create-home --home-dir /var/lib/markhand --shell /usr/sbin/nologin markhand \
+    && mkdir -p /opt/fileconv/pdfium/lib /opt/fileconv/tessdata_best /opt/fileconv/models \
+    && chown -R markhand:markhand /var/lib/markhand /opt/fileconv
+
+COPY --from=builder /workspace/target/release/fileconv-worker /usr/local/bin/fileconv-worker
+COPY --from=builder /workspace/target/release/fileconv /usr/local/bin/fileconv
+
+ENV FILECONV_PDFIUM_LIB=/opt/fileconv/pdfium/lib
+
+USER markhand
+WORKDIR /var/lib/markhand
+VOLUME ["/opt/fileconv/pdfium/lib", "/opt/fileconv/tessdata_best", "/opt/fileconv/models"]
+
+# Workers are long-running pollers without an HTTP listener; health is process supervision.
+HEALTHCHECK NONE
+
+ENTRYPOINT ["/usr/local/bin/fileconv-worker"]
