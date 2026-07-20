@@ -15,15 +15,19 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::embedding_batches::{self, EmbeddingBatch};
 use crate::db::error::DbError;
-use crate::db::models::{Job, JobStatus, JobType};
+use crate::db::models::{DocumentState, Job, JobStatus, JobType};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{chunks, documents, index_metadata, jobs as job_repo};
 use crate::jobs::{self, JobError};
 use crate::services::embedding::{
     canonical_inputs_sha256, ApprovedEmbeddingRuntime, EmbeddingError,
 };
+use crate::services::index_signature::collection_name_for_digest;
 use crate::services::indexing::{self, IndexingError};
-use crate::storage::qdrant::{ChunkPointPayload, QdrantClient, UpsertPoint, VectorScope};
+use crate::storage::qdrant::{
+    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, UpsertPoint,
+    VectorScope,
+};
 use crate::storage::StorageError;
 
 const DEFAULT_CLAIM_LIMIT: u32 = 1;
@@ -232,6 +236,17 @@ impl EmbeddingWorker {
             )
             .await?;
         let scope = VectorScope::new(ctx.org_id(), [source.collection_id]);
+        let point_ids = source
+            .chunks
+            .iter()
+            .map(|chunk| {
+                point_id_from_org_collection_and_chunk(
+                    ctx.org_id(),
+                    source.collection_id,
+                    &chunk.chunk_identity_sha256,
+                )
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?;
         let points = source
             .chunks
             .iter()
@@ -265,8 +280,55 @@ impl EmbeddingWorker {
             self.qdrant.upsert_points(&collection_name, &scope, &points),
         )
         .await?;
-        self.complete_batch(ctx, job, lease_token, attempts, batch_id)
+        // Qdrant is durable before PG batch completion; compensate if the document
+        // was tombstoned/purged between upsert and the fenced complete txn.
+        match self
+            .complete_batch(ctx, job, lease_token, attempts, batch_id)
             .await
+        {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(
+                    error,
+                    EmbeddingWorkerError::Indexing(IndexingError::DocumentDeleted)
+                ) || (matches!(error, EmbeddingWorkerError::Job(JobError::LeaseLost))
+                    && indexing::document_is_deleted(
+                        &self.db_pool,
+                        ctx,
+                        source.batch.document_id,
+                    )
+                    .await
+                    .unwrap_or(false)) =>
+            {
+                let digest = source.metadata.index_signature_sha256.clone();
+                let collection = collection_name_for_digest(&digest)?;
+                match indexing::compensate_batch_points(
+                    &self.qdrant,
+                    &collection,
+                    &scope,
+                    source.batch.document_id,
+                    &point_ids,
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(_) => {
+                        eprintln!("fileconv-server: embedding vector compensation failed");
+                        indexing::enqueue_compensation_reconcile(
+                            &self.db_pool,
+                            ctx,
+                            source.batch.document_id,
+                            job.id,
+                            attempts,
+                            usize::try_from(source.batch.start_ordinal).unwrap_or(0),
+                        )
+                        .await;
+                    }
+                }
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn load_batch_source(
@@ -291,6 +353,14 @@ impl EmbeddingWorker {
                         .await?
                         .ok_or(crate::db::error::DbError::NotFound)?;
                     let document = documents::get_by_id(txn, &ctx, batch.document_id).await?;
+                    if matches!(
+                        document.state,
+                        DocumentState::Tombstoned | DocumentState::Purged
+                    ) {
+                        return Err(EmbeddingWorkerError::Indexing(
+                            IndexingError::DocumentDeleted,
+                        ));
+                    }
                     let chunks = chunks::list_generation_range(
                         txn,
                         &ctx,
@@ -348,6 +418,14 @@ impl EmbeddingWorker {
                         .ok_or(EmbeddingWorkerError::InvalidPayload)?;
                     let document =
                         documents::get_by_id_for_update(txn, &ctx, batch.document_id).await?;
+                    if matches!(
+                        document.state,
+                        DocumentState::Tombstoned | DocumentState::Purged
+                    ) {
+                        return Err(EmbeddingWorkerError::Indexing(
+                            IndexingError::DocumentDeleted,
+                        ));
+                    }
                     let version = crate::db::document_versions::find_by_id(
                         txn,
                         &ctx,
@@ -386,6 +464,16 @@ impl EmbeddingWorker {
                         .ok_or(crate::db::error::DbError::NotFound)?;
                     if batch.job_id != job_id {
                         return Err(EmbeddingWorkerError::InvalidPayload);
+                    }
+                    let document =
+                        documents::get_by_id_for_update(txn, &ctx, batch.document_id).await?;
+                    if matches!(
+                        document.state,
+                        DocumentState::Tombstoned | DocumentState::Purged
+                    ) {
+                        return Err(EmbeddingWorkerError::Indexing(
+                            IndexingError::DocumentDeleted,
+                        ));
                     }
                     let completed =
                         jobs::complete_within_txn(txn, &ctx, job_id, &lease_token, attempts)

@@ -138,6 +138,27 @@ async fn insert_generation(
         .ok_or(DbError::NotFound)
 }
 
+/// Lists all known signature digests for a collection, including inactive generations.
+pub async fn list_signatures_by_collection(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+) -> Result<Vec<String>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT DISTINCT index_signature_sha256
+             FROM index_metadata
+             WHERE org_id = $1 AND collection_id = $2
+             ORDER BY index_signature_sha256",
+            &[&ctx.org_id(), &collection_id],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| row.get("index_signature_sha256"))
+        .collect())
+}
+
 async fn find_active_for_update(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

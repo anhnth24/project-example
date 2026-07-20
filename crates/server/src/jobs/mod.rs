@@ -13,6 +13,7 @@ use deadpool_postgres::Pool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use thiserror::Error;
+use tokio::time::{interval_at, sleep_until, timeout, Instant as TokioInstant, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
@@ -199,6 +200,71 @@ pub trait OutboxSink: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<EventLogEntry, JobError>> + Send + 'a>>;
 }
 
+#[derive(Clone, Copy)]
+pub struct HeartbeatClaim<'a> {
+    pub db_pool: &'a Pool,
+    pub ctx: &'a OrgContext,
+    pub job_id: Uuid,
+    pub lease_token: &'a str,
+    pub attempts: i32,
+    pub lease_ttl: Duration,
+    pub heartbeat_interval: Duration,
+    pub deadline: TokioInstant,
+}
+
+#[derive(Debug, Error)]
+pub enum HeartbeatError {
+    #[error("job error")]
+    Job(#[from] JobError),
+    #[error("job exceeded configured maximum duration")]
+    TimedOut,
+}
+
+pub async fn heartbeat_once_claimed(claim: HeartbeatClaim<'_>) -> Result<(), HeartbeatError> {
+    match timeout(
+        heartbeat_call_timeout(claim.lease_ttl, claim.deadline),
+        heartbeat(
+            claim.db_pool,
+            claim.ctx,
+            claim.job_id,
+            claim.lease_token,
+            claim.attempts,
+            claim.lease_ttl,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(HeartbeatError::Job(error)),
+        Err(_) => Err(HeartbeatError::TimedOut),
+    }
+}
+
+pub async fn heartbeat_while_claimed<T, E, Fut>(
+    claim: HeartbeatClaim<'_>,
+    future: Fut,
+) -> Result<T, E>
+where
+    Fut: Future<Output = Result<T, E>>,
+    E: From<HeartbeatError>,
+{
+    heartbeat_once_claimed(claim).await.map_err(E::from)?;
+    tokio::pin!(future);
+    let mut heartbeat = interval_at(
+        TokioInstant::now() + claim.heartbeat_interval,
+        claim.heartbeat_interval,
+    );
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut future => return result,
+            _ = sleep_until(claim.deadline) => return Err(E::from(HeartbeatError::TimedOut)),
+            _ = heartbeat.tick() => heartbeat_once_claimed(claim).await.map_err(E::from)?,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct EventLogOutboxSink;
 
@@ -374,6 +440,39 @@ pub async fn claim_type(
                 repo::claim_pending_of_type(txn, &ctx, job_type, &worker_id, limit, lease_ttl_secs)
                     .await
                     .map_err(Into::into)
+            })
+        }
+    })
+    .await
+}
+
+/// Claims reconcile jobs for either conversion cleanup or document-drift workers.
+pub async fn claim_reconcile(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    worker_id: &str,
+    limit: u32,
+    lease_ttl: Duration,
+    require_cleanup_target: bool,
+) -> Result<Vec<Job>, JobError> {
+    validate_worker_id(worker_id)?;
+    let limit = checked_limit(limit)?;
+    let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let worker_id = worker_id.to_string();
+        move |txn| {
+            Box::pin(async move {
+                repo::claim_pending_reconcile(
+                    txn,
+                    &ctx,
+                    &worker_id,
+                    limit,
+                    lease_ttl_secs,
+                    require_cleanup_target,
+                )
+                .await
+                .map_err(Into::into)
             })
         }
     })
@@ -923,6 +1022,15 @@ fn checked_duration_secs(duration: Duration) -> Result<i64, JobError> {
         return Err(JobError::InvalidDuration);
     }
     i64::try_from(secs).map_err(|_| JobError::InvalidDuration)
+}
+
+fn heartbeat_call_timeout(lease_ttl: Duration, deadline: TokioInstant) -> Duration {
+    let mut lease_bound = lease_ttl / 3;
+    if lease_bound.is_zero() {
+        lease_bound = Duration::from_millis(1);
+    }
+    let remaining = deadline.saturating_duration_since(TokioInstant::now());
+    remaining.min(lease_bound)
 }
 
 fn backoff_for_attempt(attempts: i32) -> Result<i64, JobError> {

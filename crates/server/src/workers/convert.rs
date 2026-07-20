@@ -184,15 +184,29 @@ impl ConvertWorker {
             [JobType::Convert, JobType::Reconcile]
         };
         for job_type in claim_order {
-            let jobs = jobs::claim_type(
-                &self.db_pool,
-                ctx,
-                job_type,
-                &self.config.worker_id,
-                DEFAULT_CLAIM_LIMIT,
-                self.config.lease_ttl,
-            )
-            .await?;
+            let jobs = if job_type == JobType::Convert {
+                jobs::claim_type(
+                    &self.db_pool,
+                    ctx,
+                    JobType::Convert,
+                    &self.config.worker_id,
+                    DEFAULT_CLAIM_LIMIT,
+                    self.config.lease_ttl,
+                )
+                .await?
+            } else {
+                // Only conversion-cleanup reconcile jobs (cleanup_target_job_id set).
+                // Document-drift I07 reconcile jobs are claimed by ReconcileWorker.
+                jobs::claim_reconcile(
+                    &self.db_pool,
+                    ctx,
+                    &self.config.worker_id,
+                    DEFAULT_CLAIM_LIMIT,
+                    self.config.lease_ttl,
+                    true,
+                )
+                .await?
+            };
             if let Some(job) = jobs.into_iter().next() {
                 return if job_type == JobType::Convert {
                     self.process_claimed_job(ctx, job).await
@@ -1141,8 +1155,8 @@ impl ConvertWorker {
             eprintln!(
                 "fileconv-server: injected conversion quota refund failure; reservation_key={quota_reservation_key}"
             );
-            // TODO(I07): durable dead-letter GC/reconciliation should consume the
-            // checkpointed staging keys and quota marker if retries are exhausted.
+            // I07 reconciliation consumes checkpointed staging keys after dead-letter;
+            // quota markers remain bounded by the I02 expiry sweep.
             deferred = true;
         } else if let Err(error) = quota::refund(&self.db_pool, ctx, quota_reservation_key).await {
             eprintln!(
@@ -1152,8 +1166,8 @@ impl ConvertWorker {
             );
             // I02 quota reservations are bounded by expires_at; the sweep path is
             // the durable backstop if inline refund cannot settle this attempt.
-            // TODO(I07): emit/consume a durable conversion-cleanup marker for
-            // permanently dead-lettered conversion attempts.
+            // Future cleanup markers can make quota refunds explicit for permanently
+            // dead-lettered conversion attempts; I02 expiry is the current backstop.
             deferred = true;
         }
         if deferred {
