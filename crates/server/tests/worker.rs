@@ -530,6 +530,25 @@ async fn document_current_version(
     .expect("current version query")
 }
 
+async fn document_state(pool: &Pool, ctx: &OrgContext, document_id: Uuid) -> String {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT state FROM documents WHERE org_id = $1 AND id = $2",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("document state query")
+}
+
 async fn count_published_versions(pool: &Pool, ctx: &OrgContext, document_id: Uuid) -> i64 {
     with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
@@ -1549,6 +1568,94 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
         .object_exists(ctx.org_id(), &staged)
         .await
         .expect("terminal cleanup removed staged object"));
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_tombstone_before_promotion_does_not_regress_document_state() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"tombstone before promotion\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let pause = ConvertWorkerPause {
+        staged: Arc::new(Notify::new()),
+        release: Arc::new(Notify::new()),
+    };
+    let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    config.pause_after_staging = Some(pause.clone());
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let staged_signal = Arc::clone(&pause.staged);
+    let worker_ctx = ctx.clone();
+    let worker_handle = tokio::spawn(async move { worker.run_once(&worker_ctx).await });
+
+    staged_signal.notified().await;
+    with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE documents
+                     SET state = 'tombstoned', deleted_at = clock_timestamp()
+                     WHERE org_id = $1 AND id = $2",
+                    &[&ctx.org_id(), &document_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("concurrent tombstone");
+    pause.release.notify_waiters();
+
+    assert!(matches!(
+        worker_handle.await.expect("worker join").expect("worker run"),
+        ConvertWorkerRun::Failed {
+            job_id,
+            terminal: false
+        } if job_id == job.id
+    ));
+    assert_eq!(document_state(&pool, &ctx, document_id).await, "tombstoned");
+    assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 0);
+    assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 0);
+    assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 0);
+    for staged_key in checkpoint_staged_keys(&pool, &ctx, job.id).await {
+        let staged_key = fileconv_server::storage::parse_key_for_org(&staged_key, ctx.org_id())
+            .expect("staged key");
+        assert!(!storage
+            .object_exists(ctx.org_id(), &staged_key)
+            .await
+            .expect("staged object cleaned"));
+    }
     ephemeral.drop().await;
 }
 

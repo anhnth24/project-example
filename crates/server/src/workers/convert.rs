@@ -590,7 +590,8 @@ impl ConvertWorker {
                 biased;
                 result = &mut promotion => {
                     return match result {
-                        Err(PromotionError::Db(_)) | Err(PromotionError::CommittedOutcomeUnknown) => {
+                        Err(PromotionError::Db(DbError::Pool(_) | DbError::Query(_)))
+                        | Err(PromotionError::CommittedOutcomeUnknown) => {
                             PromotionWait::ReconciliationNeeded
                         }
                         result => PromotionWait::Finished(result),

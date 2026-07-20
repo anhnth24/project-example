@@ -170,7 +170,7 @@ pub async fn promote_conversion(
                     document_versions::promote_current_if_needed(
                         txn,
                         &ctx,
-                        input.source.document_id,
+                        &document,
                         promoted_version_id,
                     )
                     .await?;

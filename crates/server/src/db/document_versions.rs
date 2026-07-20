@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
-use crate::db::models::{ArtifactKind, DocumentVersion, PublicationState};
+use crate::db::models::{ArtifactKind, Document, DocumentState, DocumentVersion, PublicationState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionSourceVersion {
@@ -241,7 +241,7 @@ pub async fn find_markdown_artifact(
 pub async fn promote_current_if_needed(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
-    document_id: Uuid,
+    document: &Document,
     version_id: Uuid,
 ) -> Result<(), DbError> {
     let row = txn
@@ -250,19 +250,28 @@ pub async fn promote_current_if_needed(
              FROM document_versions
              WHERE org_id = $1 AND document_id = $2 AND id = $3
              FOR UPDATE",
-            &[&ctx.org_id(), &document_id, &version_id],
+            &[&ctx.org_id(), &document.id, &version_id],
         )
         .await?;
     let already_current: bool = row.get("is_current");
     if already_current {
-        txn.execute(
-            "UPDATE documents
-             SET current_version_id = $3, state = 'converted', updated_at = clock_timestamp()
-             WHERE org_id = $1 AND id = $2",
-            &[&ctx.org_id(), &document_id, &version_id],
-        )
-        .await?;
-        return Ok(());
+        return if document.current_version_id == Some(version_id) {
+            Ok(())
+        } else {
+            Err(DbError::StaleState {
+                expected: version_id.to_string(),
+                observed: document
+                    .current_version_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "none".into()),
+            })
+        };
+    }
+    if !is_eligible_for_conversion_promotion(document) {
+        return Err(DbError::StaleState {
+            expected: "uploaded, converting, or converted and not deleted".into(),
+            observed: document.state.to_string(),
+        });
     }
 
     let effective_to = txn
@@ -276,24 +285,43 @@ pub async fn promote_current_if_needed(
            AND document_id = $2
            AND is_current
            AND effective_to IS NULL",
-        &[&ctx.org_id(), &document_id, &effective_to],
+        &[&ctx.org_id(), &document.id, &effective_to],
     )
     .await?;
     txn.execute(
         "UPDATE document_versions
          SET is_current = true
          WHERE org_id = $1 AND document_id = $2 AND id = $3",
-        &[&ctx.org_id(), &document_id, &version_id],
+        &[&ctx.org_id(), &document.id, &version_id],
     )
     .await?;
-    txn.execute(
-        "UPDATE documents
+    let expected_state = document.state.as_str();
+    let updated = txn
+        .execute(
+            "UPDATE documents
          SET current_version_id = $3, state = 'converted', updated_at = clock_timestamp()
-         WHERE org_id = $1 AND id = $2",
-        &[&ctx.org_id(), &document_id, &version_id],
-    )
-    .await?;
+         WHERE org_id = $1
+           AND id = $2
+           AND state = $4
+           AND deleted_at IS NULL",
+            &[&ctx.org_id(), &document.id, &version_id, &expected_state],
+        )
+        .await?;
+    if updated != 1 {
+        return Err(DbError::StaleState {
+            expected: expected_state.into(),
+            observed: "missing_or_changed".into(),
+        });
+    }
     Ok(())
+}
+
+fn is_eligible_for_conversion_promotion(document: &Document) -> bool {
+    document.deleted_at.is_none()
+        && matches!(
+            document.state,
+            DocumentState::Uploaded | DocumentState::Converting | DocumentState::Converted
+        )
 }
 
 fn map_version(row: &Row) -> Result<DocumentVersion, DbError> {
