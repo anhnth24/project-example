@@ -115,31 +115,40 @@ export FILECONV_LLM_API_KEY=...
 Baseline luôn là FTS5 + local feature hashing 256D. Người dùng có thể bật neural
 embeddings riêng với chat provider:
 
-- Local: Ollama (`nomic-embed-text`, `mxbai-embed-large`, `bge-m3`), LM Studio,
-  vLLM.
-- Cloud interim (POC/DEMO): GLM/Zhipu (`embedding-3`, `embedding-2`) qua
-  OpenAI-compatible API — xem ADR 0004.
-- Cloud khác: OpenAI (`text-embedding-3-*`) hoặc Gemini
-  (`gemini-embedding-001`).
+- **Markhand Web server (POC/1B):** on-prem `AITeamVN/Vietnamese_Embedding`
+  (`local-neural`, Compose `embedding-cpu` @ `:8088`) — ADR 0005.
+- Local desktop/server presets: Ollama (`nomic-embed-text`, `mxbai-embed-large`,
+  `bge-m3`), LM Studio, vLLM.
+- Cloud (desktop optional only; **not** Markhand Web server default): GLM/Zhipu
+  (`embedding-3`, `embedding-2`), OpenAI (`text-embedding-3-*`), Gemini
+  (`gemini-embedding-001`) — xem ADR 0004 (superseded for web server).
 
-### GLM cloud interim (Markhand Web Phase 0→1B)
+### Markhand Web — embedding vs Q&A
+
+| Path | Runtime | Egress |
+|---|---|---|
+| Index / hybrid search | AITeamVN local CPU (`local-neural`) | Không (on-prem) |
+| Grounded Q&A | GLM cloud (hoặc local LLM) | Chỉ top-K citation |
 
 ```bash
-export FILECONV_EMBEDDING_API_KEY=...   # Cursor secret / env; không commit
-# Preset desktop: "GLM embeddings (Zhipu cloud)"
-# Base URL mặc định: https://open.bigmodel.cn/api/paas/v4
-# Model: embedding-3 (so sánh thêm embedding-2 nếu cần)
+# Server embedding (dev/POC) — see deploy/dev/.env.example
+MARKHAND_EMBEDDING_BASE_URL=http://127.0.0.1:8088/v1
+MARKHAND_EMBEDDING_MODEL=AITeamVN/Vietnamese_Embedding
+
+# Q&A only (cloud)
+export FILECONV_LLM_API_KEY=...
 ```
 
-Chỉ gửi synthetic/de-identified corpus. Target production vẫn là on-prem vLLM
-(`BAAI/bge-m3` / multilingual-e5); cắt sang vLLM phải rebuild index generation.
+Target production embedding cutover vẫn là on-prem vLLM (`BAAI/bge-m3` /
+multilingual-e5); cắt sang vLLM phải rebuild index generation.
 
 Index lưu mode/provider/model/dimensions/signature. Đổi model hoặc số chiều sẽ
 rebuild; mixed dimensions bị từ chối. Provider lỗi có thể rebuild toàn scope
 bằng local hash, còn query-time lỗi tự hạ xuống FTS lexical.
 
-Khác với Q&A top-K, **cloud embedding gửi toàn bộ chunk text khi build index**.
-UI cảnh báo riêng trước khi bật. API key embedding cũng chỉ giữ trong memory.
+Khác với Q&A top-K, **cloud embedding gửi toàn bộ chunk text khi build index** —
+lý do Markhand Web server không dùng GLM cho embedding. Desktop vẫn có preset
+GLM embedding tùy chọn với cảnh báo riêng.
 
 ## Luồng Q&A
 

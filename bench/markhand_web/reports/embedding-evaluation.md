@@ -112,13 +112,17 @@
 - Gating protocol (≥2 families / ≥3 runs): **YES**
 - Both quality gates satisfied by selected draft: **YES**
 - Selected draft (quality-only): `AITeamVN/Vietnamese_Embedding`
-- P0-05 fully closed: **NO**
+- P0-05 fully closed: **YES** (quality + product selection, 2026-07-20 — ADR 0005;
+  capacity/Profile B GPU still deferred)
 
 - Quality track executed with independent model loads per run.
 - Gate thresholds/statistics loaded from catalog YAML.
 - Selection requires both Recall@5 and best-model-gap gates under gating protocol.
 - Per-query rankings retained in run-*.json with rankingSha256 fingerprints.
 - Golden markdown/queries validated against manifest.lock.json.
-- Capacity evidence (VRAM, saturation, queue depth, target GPU) still required.
-- ADR remains Proposed until capacity + approver sign-off.
-- Restricted corpus must not leave to cloud providers; local/self-host only.
+- Capacity evidence (VRAM, saturation, queue depth, target GPU) still required for
+  production cutover (`G0-RET-VLLM-CUTOVER`); does not block POC/1B embedding path.
+- ~~ADR remains Proposed until capacity + approver sign-off.~~ ADR 0005 Accepted
+  2026-07-20 for POC/1B local runtime; GLM embedding superseded for server.
+- Restricted corpus must not leave to cloud providers for embedding; local/self-host
+  only on Markhand Web server. GLM retained for Q&A top-K only.

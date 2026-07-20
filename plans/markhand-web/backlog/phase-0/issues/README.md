@@ -98,36 +98,33 @@ P1A-01 ──────────> P0-03
 
 ## P0-05 — Đánh giá embedding tiếng Việt
 
-- **Status:** Ready — **chưa Done** (Phase 0 issue duy nhất còn mở). Đã có:
-  local dense quality smoke (AITeamVN Recall@5 0.9261 PASS, BKAI 0.7962 FAIL;
-  `bench/markhand_web/reports/embedding-evaluation.md`; ADR 0005 Proposed). Còn
-  thiếu để đóng: ≥2 cấu hình GLM cloud đo trên golden corpus (`runtime=glm-cloud-interim`,
-  `G0-RET-BEST-MODEL-GAP` evidence); ADR 0005 Accepted + product-owner sign-off;
-  target GPU/vLLM capacity deferred (`G0-RET-VLLM-CUTOVER`, không chặn Phase 1B).
+- **Status:** Done — closed 2026-07-20 on local AITeamVN CPU evidence (ADR 0005
+  Accepted). Selected: `AITeamVN/Vietnamese_Embedding` Recall@5 **0.9261**, nDCG
+  gap **0.0** vs BKAI comparator; `runtime_path=local-neural` on
+  `local-cpu-quality`. GLM cloud embedding path (ADR 0004) superseded — GLM
+  retained for Q&A only. GPU/vLLM capacity deferred (`G0-RET-VLLM-CUTOVER`,
+  không chặn Phase 1B).
 - **Objective:** Chốt provider/model/revision/dimension/normalization đủ để lập
   trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
-- **Plan:** Interim: so GLM `embedding-3` (và `embedding-2` nếu cần) qua
-  OpenAI-compatible API + `FILECONV_EMBEDDING_API_KEY`; pin tokenizer/batch/
-  truncation/dimensions/normalize; đo theo category và API latency. Parallel local
-  dense evidence: `AITeamVN/Vietnamese_Embedding` vs `bkai` bi-encoder.
-  Target (sau): so `bge-m3` và multilingual-e5 trên Profile B GPU/vLLM.
+- **Plan:** So hai family local trên golden corpus: `AITeamVN/Vietnamese_Embedding`
+  vs `bkai` bi-encoder; pin tokenizer/batch/truncation/dimensions/normalize; đo
+  theo category. Target (sau): so `bge-m3` và multilingual-e5 trên Profile B
+  GPU/vLLM. ~~Interim GLM cloud compare~~ superseded by local selection (journal
+  2026-07-20).
 - **Files:** `bench/markhand_web/embedding/`, `scripts/run_embedding_eval.py`,
-  `reports/embedding-evaluation.md`, `docs/adr/0004-interim-glm-cloud-embedding.md`,
-  `docs/adr/0005-vietnamese-embedding-model-quality.md`.
-- **Dependencies/blocks:** Corpus + spike + GLM credential; không còn bắt buộc
-  target GPU để đóng interim. Cutover vLLM vẫn cần Profile B + approved model download.
-- **Acceptance (interim — đủ đóng P0-05 cho coding/POC/DEMO):** ≥2 cấu hình GLM
-  (model hoặc dimension) cùng golden corpus; cấu hình chọn đạt gate quality và không
-  kém best vượt margin đã duyệt; config/signature immutable trong report; ghi rõ
-  runtime=`glm-cloud-interim`.
-- **Acceptance (target — deferred cutover, không chặn Phase 1B):** ≥2 model family
-  local trên cùng Profile B hardware; có VRAM/throughput/saturation.
-- **Tests/evidence:** Interim: Recall/MRR/nDCG, API P50/P95/P99, vectors/s ước lượng,
-  failure rate; ≥2 runs. Target: thêm VRAM/saturation/cold-warm ≥3 runs.
-- **Security/migration:** Chỉ synthetic/de-identified corpus lên GLM; customer/
-  restricted data không ra cloud. Index signature phân biệt `glm-cloud` vs
-  `vllm-local`; cắt sang vLLM = rebuild generation mới. License trước khi bundle
-  local weights.
+  `reports/embedding-evaluation.md`, `docs/adr/0005-vietnamese-embedding-model-quality.md`,
+  `docs/adr/0004-interim-glm-cloud-embedding.md` (superseded).
+- **Dependencies/blocks:** Corpus + spike; target GPU không bắt buộc để đóng POC/1B.
+- **Acceptance (POC/1B — đạt):** ≥2 local model families; cấu hình chọn đạt gate
+  quality và best-model-gap; config/signature immutable trong report;
+  `runtime_path=local-neural`.
+- **Acceptance (target — deferred cutover):** ≥2 model family local trên Profile B
+  GPU; có VRAM/throughput/saturation.
+- **Tests/evidence:** Recall/MRR/nDCG trên `embedding/results/summary.json`;
+  hybrid retrieval `retrieval/summary.json`; dev stack `embedding-cpu` @ `:8088`.
+- **Security/migration:** Embedding on-prem; không gửi customer/restricted corpus
+  lên cloud cho index. GLM chỉ Q&A top-K. Index signature phân biệt
+  `local-neural` vs `vllm-local`; cắt sang vLLM = rebuild generation mới.
 - **Out of scope:** Autoscaling; đổi desktop local-hash fallback mặc định.
 
 ## P0-06 — Chunking, hybrid tuning và index signature

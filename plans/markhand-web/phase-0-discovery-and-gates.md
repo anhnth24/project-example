@@ -46,21 +46,25 @@ không phụ thuộc thao tác tay.
 
 ## P0.3 — Embedding và retrieval evaluation
 
-Hai tầng runtime (ADR 0004):
+Hai tầng runtime (ADR 0005; ADR 0004 superseded):
 
-1. **Interim (dev / POC / DEMO / Phase 1B):** GLM cloud embeddings
-   (`embedding-3` / `embedding-2`) qua OpenAI-compatible API và
-   `FILECONV_EMBEDDING_API_KEY`. Đủ để đóng P0-05 quality gate sớm và mở coding.
+1. **POC / DEMO / Phase 1B (selected):** on-prem **local-neural** embedding —
+   `AITeamVN/Vietnamese_Embedding` via CPU OpenAI-compatible server
+   (`runtime_path=local-neural`, Compose `:8088`). Quality gates closed on
+   `local-cpu-quality` (Recall@5 0.9261, gap 0.0 vs BKAI).
 2. **Target (on-prem cutover):** vLLM trên Profile B GPU; so ít nhất `bge-m3` và
-   một model multilingual-e5 phù hợp VRAM. Bắt buộc trước production scale, không
-   chặn Phase 1B.
+   một model multilingual-e5 phù hợp VRAM. Bắt buộc trước production aggregate
+   scale, không chặn Phase 1B.
+
+**GLM cloud** is **not** the Markhand Web server embedding runtime. GLM remains
+approved for grounded Q&A / summarize (top-K citation handoff only).
 
 Đo trên golden corpus:
 
 - Recall@5/10, MRR, nDCG;
 - chất lượng theo từng loại tài liệu và truy vấn;
 - dimension, normalization, batch size, token truncation;
-- interim: API latency/throughput/failure rate; target: VRAM, queue saturation;
+- interim: local CPU throughput / queue saturation on dev stack; target: VRAM, queue saturation;
 - hybrid PG FTS + vector so với từng leg riêng.
 - current-version accuracy, temporal/as-of accuracy, change accuracy và
   version-citation precision/recall.
@@ -69,15 +73,16 @@ Hai tầng runtime (ADR 0004):
 
 Kết quả chốt:
 
-- runtime path (`glm-cloud-interim` hoặc `vllm-local`) + model + revision;
+- runtime path (`local-neural` cho POC/1B hoặc `vllm-local` sau cutover) + model + revision;
 - dimension;
 - normalization;
 - chunking version/size;
 - index signature canonical (không trộn generation giữa hai runtime);
 - hybrid weights/rerank baseline.
 
-Không chọn model chỉ theo latency. Chất lượng tiếng Việt là ưu tiên. Chỉ
-synthetic/de-identified corpus được gửi lên GLM trong giai đoạn interim.
+Không chọn model chỉ theo latency. Chất lượng tiếng Việt là ưu tiên. Markhand Web
+server không gửi corpus chunk lên cloud cho embedding; GLM chỉ nhận top-K citation
+cho Q&A.
 
 ## P0.4 — Qdrant/PG scale spike
 

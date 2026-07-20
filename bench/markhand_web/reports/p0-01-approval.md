@@ -54,8 +54,16 @@ The implementation runner observed 8 CPU, approximately 47 GB RAM, approximately
 196 GB free disk and no visible GPU. It may run validators and reduced smoke tests,
 but it cannot produce target-hardware, GPU or 20M-vector acceptance evidence.
 
-## Embedding interim exception (2026-07-18)
+## Embedding runtime (2026-07-20)
 
-Product approved ADR 0004: P0-05 / early G0-RET quality evidence may use GLM cloud
-embeddings on `glm-cloud-interim` for coding/POC/DEMO. Profile B GPU + vLLM remains
-required for production cutover (`G0-RET-VLLM-CUTOVER`), not for Phase 1B unblock.
+Supersedes interim exception below. ADR 0005 Accepted: Markhand Web POC/1B uses
+**AITeamVN local CPU embedding** (`local-neural`). GLM cloud is **Q&A only**.
+Profile B GPU + vLLM remains required for production cutover
+(`G0-RET-VLLM-CUTOVER`), not for Phase 1B unblock.
+
+## Embedding interim exception (2026-07-18, superseded)
+
+~~Product approved ADR 0004: P0-05 / early G0-RET quality evidence may use GLM cloud
+embeddings on `glm-cloud-interim` for coding/POC/DEMO.~~ Superseded 2026-07-20 by
+local AITeamVN path (ADR 0005). Profile B GPU + vLLM remains required for
+production cutover (`G0-RET-VLLM-CUTOVER`), not for Phase 1B unblock.

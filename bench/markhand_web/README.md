@@ -27,12 +27,16 @@ traceability.
 Every measured report must include its actual environment fingerprint; smoke results
 from smaller hardware cannot satisfy target-scale gates.
 
-### Interim embedding runtime
+### POC/1B embedding runtime
 
-ADR 0004 allows **GLM cloud embeddings** on environment `glm-cloud-interim` for
-coding, POC and DEMO (Phase 0→1B). Credentials come from
-`FILECONV_EMBEDDING_API_KEY`. Only synthetic/de-identified golden corpus may be
-sent. On-prem vLLM on Profile B remains the production cutover
+ADR 0005 (Accepted 2026-07-20): Markhand Web uses **AITeamVN local CPU**
+(`local-neural`, environment `local-cpu-quality`) for index/retrieval quality
+evidence and dev stack. GLM cloud is **Q&A only** — not server embedding.
+ADR 0004 (GLM cloud embedding interim) is superseded.
+
+Optional desktop-only cloud embedding presets may still use `glm-cloud-interim`;
+Markhand Web server must not send customer corpus chunks to cloud embed APIs.
+On-prem vLLM on Profile B remains the production cutover
 (`G0-RET-VLLM-CUTOVER`).
 
 Fixtures/corpus must be synthetic or de-identified, versioned and license-reviewed.

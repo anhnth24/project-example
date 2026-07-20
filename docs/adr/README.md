@@ -21,8 +21,8 @@ native, security/egress và migration strategy.
 | [0001](0001-web-boundaries.md) | Accepted | Dependency boundaries của Markhand Web |
 | [0002](0002-version-aware-citations.md) | Accepted | Version-aware retrieval and citations |
 | [0003](0003-cross-document-conflict-lifecycle.md) | Proposed | Cross-document claim/conflict lifecycle |
-| [0004](0004-interim-glm-cloud-embedding.md) | Accepted | Interim GLM cloud embedding; target on-prem vLLM |
-| [0005](0005-vietnamese-embedding-model-quality.md) | Proposed | Local dense quality candidates for P0-05 |
+| [0004](0004-interim-glm-cloud-embedding.md) | Superseded by 0005 | GLM cloud embedding interim (historical; superseded 2026-07-20) |
+| [0005](0005-vietnamese-embedding-model-quality.md) | Accepted | AITeamVN local embedding for POC/1B; GLM chat-only |
 | [0006](0006-index-signature.md) | Accepted | Canonical index signature and chunk identity (P0-06) |
 | [0007](0007-tenant-isolation-rls.md) | Accepted | Tenant isolation and RLS boundary |
 | [0008](0008-pg-partition-strategy.md) | Accepted | PG partition strategy for Phase 1B POC and Profile B revalidation |

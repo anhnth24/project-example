@@ -39,5 +39,5 @@
     "fixtureManifestSha256",
     "hardware"
   ],
-  "notes": "CPU-only quality track for P0-05/P0-06 neural embedding and hybrid retrieval (sentence-transformers / AITeamVN). gpu.count=0 matches measured hardware (no accelerator). Not Profile B capacity evidence and not glm-cloud-interim API evidence."
+  "notes": "CPU-only quality track for P0-05/P0-06 neural embedding and hybrid retrieval (sentence-transformers / AITeamVN). Selected Markhand Web POC/1B runtime. gpu.count=0 matches measured hardware (no accelerator). Not Profile B capacity evidence."
 }

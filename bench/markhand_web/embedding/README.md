@@ -2,6 +2,10 @@
 
 Quality-track harness for Vietnamese dense retrieval on the Phase 0 golden corpus.
 
+**Selected for Markhand Web POC/1B:** `AITeamVN/Vietnamese_Embedding`
+(`runtime_path=local-neural`, ADR 0005). GLM cloud is not the server embedding
+path; see `docs/journals/2026-07-20-aiteamvn-local-embedding-decision.md`.
+
 ## Candidates
 
 Pinned in [`models.yaml`](models.yaml):

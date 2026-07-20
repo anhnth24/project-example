@@ -919,7 +919,7 @@
     };
 
     /* ROADMAP_DATA_START */
-    const ROADMAP_SOURCE_HASH = "611391ca6bda51a9";
+    const ROADMAP_SOURCE_HASH = "c9c3fa10d8f0ab0f";
     const phases = [
       {
         "id": "phase-f",
@@ -1022,7 +1022,7 @@
           [
             "P0-05",
             "Đánh giá embedding tiếng Việt",
-            "ready"
+            "done"
           ],
           [
             "P0-06",
@@ -1612,14 +1612,14 @@
       },
       {
         "layer": "Embeddings",
-        "technology": "GLM cloud interim → on-prem vLLM",
-        "responsibility": "Interim: GLM embedding-3 (API key) cho coding/POC/DEMO; target: vLLM GPU self-host, pin model/dimension/normalize; cắt sang vLLM = rebuild index",
-        "delivery": "Phase 0 → 1B (interim); cutover trước production"
+        "technology": "AITeamVN local → on-prem vLLM",
+        "responsibility": "POC/1B: AITeamVN/Vietnamese_Embedding on-prem CPU (local-neural, Compose :8088); target: vLLM GPU self-host; cắt sang vLLM = rebuild index",
+        "delivery": "Phase 0 → 1B (local); cutover trước production"
       },
       {
         "layer": "Chat and extraction",
         "technology": "GLM via LLM client",
-        "responsibility": "Grounded Q&A, summarize và structured extraction theo policy",
+        "responsibility": "Grounded Q&A, summarize và structured extraction theo policy (**không** dùng cho embedding/index)",
         "delivery": "Phase 1B → 3"
       },
       {

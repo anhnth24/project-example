@@ -1,12 +1,23 @@
 # ADR 0004: Interim GLM cloud embedding; target remains on-prem vLLM
 
-- Status: Accepted
+- Status: Superseded by [ADR 0005](0005-vietnamese-embedding-model-quality.md)
 - Date: 2026-07-18
+- Superseded: 2026-07-20
 - Decision key: `embedding-runtime-path`
 - Owners: `product-owner`, `infrastructure-owner`, `retrieval-owner`
 - Approver: product-owner (interim path); infrastructure-owner (on-prem cutover)
 - Supersedes: N/A
 - Related issues/PRs: `P0-05`, Phase 1B POC/DEMO
+
+## Supersession (2026-07-20)
+
+Quality evidence and Phase 1B implementation use **local on-prem embedding**
+(`AITeamVN/Vietnamese_Embedding`, `runtime_path=local-neural`) instead of GLM
+cloud for index build. GLM remains approved for **chat/Q&A only** (top-K
+citation handoff). See ADR 0005 and
+[`docs/journals/2026-07-20-aiteamvn-local-embedding-decision.md`](../journals/2026-07-20-aiteamvn-local-embedding-decision.md).
+
+The decision text below is retained for history.
 
 ## Context
 

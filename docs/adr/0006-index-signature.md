@@ -24,10 +24,11 @@ and query accent-fold into one `text_version` while the fixture still said
 3. **Index signature** is the length-delimited SHA-256 of:
    - `runtime_path`: `local-hash` | `local-neural` | `glm-cloud-interim` |
      `vllm-local` | `provider-cloud` — **explicit field** on `EmbeddingPlan` and
-     `EmbeddingConfig` (not inferred from the coarse `Provider` enum). Desktop
-     presets pin this (e.g. vLLM `127.0.0.1:8000` + `BAAI/bge-m3` →
-     `vllm-local`, GLM → `glm-cloud-interim`). CPU sentence-transformers quality
-     track uses `local-neural`. Host/model inference via
+     `EmbeddingPlan` and `EmbeddingConfig` (not inferred from the coarse `Provider`
+     enum). Markhand Web POC/1B pins **`local-neural`** with
+     `AITeamVN/Vietnamese_Embedding` (ADR 0005). Desktop presets may still set
+     `vllm-local` or `glm-cloud-interim`; CPU sentence-transformers quality track
+     uses `local-neural`. Host/model inference via
      `infer_embedding_runtime_path` is only a fallback for unknown/custom
      endpoints — real vLLM preset URLs do not contain the string `"vllm"`.
    - `embedding_family` (provider/model/deployment digest)
