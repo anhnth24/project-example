@@ -1,0 +1,31 @@
+# Markhand converter worker image sketch.
+#
+# Runtime aggregate isolation is enforced by the container runtime (F02 deploy),
+# because this dev VM has cgroup v2 mounted but no unprivileged delegation.
+# Recommended run options:
+#
+#   docker run --rm \
+#     --network none \
+#     --read-only \
+#     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=256m \
+#     --pids-limit 512 \
+#     --memory 768m \
+#     --cpus 1.0 \
+#     --cap-drop ALL \
+#     --security-opt no-new-privileges \
+#     markhand-worker
+#
+# The in-process sandbox still applies per-process rlimits, unprivileged
+# user/net/mount/pid namespaces, Landlock, env_clear, and per-job temp cleanup.
+
+FROM debian:bookworm-slim
+
+RUN useradd --system --create-home --home-dir /var/lib/markhand markhand
+
+COPY target/release/fileconv-worker /usr/local/bin/fileconv-worker
+COPY target/release/fileconv /usr/local/bin/fileconv
+
+USER markhand
+WORKDIR /var/lib/markhand
+
+ENTRYPOINT ["/usr/local/bin/fileconv-worker"]

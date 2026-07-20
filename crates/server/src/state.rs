@@ -1,12 +1,24 @@
 //! Shared validated runtime state for API and worker processes.
 
+use std::fmt;
+
 use crate::config::{RuntimeEndpoints, ServerConfig};
 use crate::error::AppError;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RuntimeState {
     config: ServerConfig,
     endpoints: RuntimeEndpoints,
+}
+
+impl fmt::Debug for RuntimeState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeState")
+            .field("config", &self.config)
+            .field("endpoints", &self.endpoints)
+            .finish()
+    }
 }
 
 impl RuntimeState {

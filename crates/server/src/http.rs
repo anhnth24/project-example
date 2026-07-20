@@ -1,4 +1,4 @@
-//! HTTP liveness and readiness routes backed by real POC dependencies.
+//! HTTP liveness, readiness, and API routes backed by real POC dependencies.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,12 +8,19 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use deadpool_postgres::Pool;
 use serde::Serialize;
 use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::api::ApiError;
+use crate::auth::jwt::JwtKeys;
+use crate::auth::provider::PasswordAuthProvider;
+use crate::config::QuotaSweepConfig;
 use crate::database;
+use crate::db::pool::create_pool;
+use crate::routes;
+use crate::services::quota;
 use crate::state::RuntimeState;
 
 const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -23,6 +30,10 @@ pub struct AppState {
     runtime: RuntimeState,
     http_client: reqwest::Client,
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
+    pool: Pool,
+    auth_provider: Option<PasswordAuthProvider>,
+    /// Object store adapter (optional when credentials are absent in tests).
+    object_store: Option<crate::storage::MinioClient>,
 }
 
 struct CachedReadiness {
@@ -39,12 +50,109 @@ impl AppState {
             .timeout(DEPENDENCY_TIMEOUT)
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        let pool = create_pool(runtime.endpoints().database_url.expose())
+            .map_err(|error| format!("cannot create database pool: {error}"))?;
+        let auth_provider = match JwtKeys::from_auth(runtime.config().auth()) {
+            Ok(keys) => Some(PasswordAuthProvider::new(
+                pool.clone(),
+                runtime.config().auth().clone(),
+                keys,
+            )),
+            Err(crate::auth::jwt::JwtError::NotConfigured) => None,
+            Err(error) => return Err(format!("cannot configure authentication: {error}")),
+        };
+        let object_store = match runtime.config().storage_config() {
+            Ok(storage) => Some(
+                crate::storage::MinioClient::from_config(storage.minio())
+                    .map_err(|error| format!("cannot configure object store: {error}"))?,
+            ),
+            Err(_) => None,
+        };
+        start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
         Ok(Self {
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
+            pool,
+            auth_provider,
+            object_store,
         })
     }
+
+    /// Builds state for tests with an explicit pool and optional auth provider.
+    pub fn from_parts(
+        runtime: RuntimeState,
+        pool: Pool,
+        auth_provider: Option<PasswordAuthProvider>,
+    ) -> Result<Self, String> {
+        Self::from_parts_with_store(runtime, pool, auth_provider, None)
+    }
+
+    /// Builds state for tests that exercise object-store-backed routes.
+    pub fn from_parts_with_store(
+        runtime: RuntimeState,
+        pool: Pool,
+        auth_provider: Option<PasswordAuthProvider>,
+        object_store: Option<crate::storage::MinioClient>,
+    ) -> Result<Self, String> {
+        if !runtime.is_api_role() {
+            return Err("HTTP application requires API runtime configuration".into());
+        }
+        let http_client = reqwest::Client::builder()
+            .timeout(DEPENDENCY_TIMEOUT)
+            .build()
+            .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        Ok(Self {
+            runtime,
+            http_client,
+            readiness: tokio::sync::Mutex::new(None),
+            pool,
+            auth_provider,
+            object_store,
+        })
+    }
+
+    pub fn auth_provider(&self) -> Option<&PasswordAuthProvider> {
+        self.auth_provider.as_ref()
+    }
+
+    pub fn pool(&self) -> &Pool {
+        &self.pool
+    }
+
+    pub fn runtime(&self) -> &RuntimeState {
+        &self.runtime
+    }
+
+    pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
+        self.object_store.as_ref()
+    }
+}
+
+fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            // Admission itself is time-correct (it filters `expires_at` against a
+            // lock-scoped `clock_timestamp()` in SQL). This bounded sweep is hygiene
+            // so expired reservations become terminal and operational gauges stop
+            // showing stale reserved rows.
+            match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
+                Ok(expired) if expired > 0 => {
+                    eprintln!("fileconv-server: quota expiry sweep marked {expired} reservations");
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!(
+                        "fileconv-server: quota expiry sweep failed: {}",
+                        error.code()
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[derive(Debug, Serialize)]
@@ -55,9 +163,12 @@ struct Health {
 }
 
 pub fn router(state: AppState) -> Router {
+    let max_upload_bytes = state.runtime.config().upload().limits.max_upload_bytes as usize;
     Router::new()
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
+        .merge(routes::auth::router())
+        .merge(routes::uploads::router(max_upload_bytes))
         .with_state(Arc::new(state))
 }
 
@@ -157,21 +268,22 @@ mod tests {
 
     use super::{router, AppState};
     use crate::config::{RuntimeEndpoints, SecretString, ServerConfig};
+    use crate::db::pool::create_pool;
     use crate::state::RuntimeState;
 
     #[tokio::test]
     async fn liveness_has_a_contract_compliant_body() {
-        let app = router(
-            AppState::new(
-                RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
-                    database_url: SecretString::new("postgres://unused"),
-                    qdrant_url: "http://127.0.0.1:1".into(),
-                    minio_url: "http://127.0.0.1:1".into(),
-                }))
-                .unwrap(),
-            )
-            .unwrap(),
-        );
+        let runtime =
+            RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
+                database_url: SecretString::new("postgres://unused"),
+                qdrant_url: "http://127.0.0.1:1".into(),
+                minio_url: "http://127.0.0.1:1".into(),
+            }))
+            .unwrap();
+        // Pool construction is lazy; a dummy URL is enough for the liveness route.
+        let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
+            .expect("pool");
+        let app = router(AppState::from_parts(runtime, pool, None).unwrap());
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -197,8 +309,10 @@ mod tests {
                 minio_url: "http://127.0.0.1:1".into(),
             }))
             .unwrap();
+        let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
+            .expect("pool");
         assert_eq!(
-            AppState::new(state).err().as_deref(),
+            AppState::from_parts(state, pool, None).err().as_deref(),
             Some("HTTP application requires API runtime configuration")
         );
     }

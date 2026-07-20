@@ -151,6 +151,25 @@ pub enum CollectionVisibility {
     Groups,
 }
 
+impl CollectionVisibility {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Private => "private",
+            Self::Org => "org",
+            Self::Groups => "groups",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "private" => Ok(Self::Private),
+            "org" => Ok(Self::Org),
+            "groups" => Ok(Self::Groups),
+            other => Err(format!("unknown collection visibility: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Collection {
     pub id: Uuid,
@@ -216,6 +235,43 @@ pub enum DocumentState {
     Purged,
 }
 
+impl DocumentState {
+    /// PostgreSQL `documents.state` text value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Uploaded => "uploaded",
+            Self::Converting => "converting",
+            Self::Converted => "converted",
+            Self::Indexing => "indexing",
+            Self::Indexed => "indexed",
+            Self::Failed => "failed",
+            Self::Tombstoned => "tombstoned",
+            Self::Purged => "purged",
+        }
+    }
+
+    /// Parses a DB state string; unknown values are rejected.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "uploaded" => Ok(Self::Uploaded),
+            "converting" => Ok(Self::Converting),
+            "converted" => Ok(Self::Converted),
+            "indexing" => Ok(Self::Indexing),
+            "indexed" => Ok(Self::Indexed),
+            "failed" => Ok(Self::Failed),
+            "tombstoned" => Ok(Self::Tombstoned),
+            "purged" => Ok(Self::Purged),
+            other => Err(format!("unknown document state: {other}")),
+        }
+    }
+}
+
+impl std::fmt::Display for DocumentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     pub id: Uuid,
@@ -267,6 +323,18 @@ pub enum ArtifactKind {
     Thumbnail,
     ExtractedText,
     Other,
+}
+
+impl ArtifactKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Preview => "preview",
+            Self::Thumbnail => "thumbnail",
+            Self::ExtractedText => "extracted_text",
+            Self::Other => "other",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,6 +489,29 @@ pub enum JobType {
     EmbeddingBatch,
 }
 
+impl JobType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Convert => "convert",
+            Self::Index => "index",
+            Self::Delete => "delete",
+            Self::Reconcile => "reconcile",
+            Self::EmbeddingBatch => "embedding_batch",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "convert" => Ok(Self::Convert),
+            "index" => Ok(Self::Index),
+            "delete" => Ok(Self::Delete),
+            "reconcile" => Ok(Self::Reconcile),
+            "embedding_batch" => Ok(Self::EmbeddingBatch),
+            other => Err(format!("unknown job type: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobStatus {
@@ -431,6 +522,33 @@ pub enum JobStatus {
     Failed,
     Cancelled,
     DeadLetter,
+}
+
+impl JobStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Leased => "leased",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::DeadLetter => "dead_letter",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "leased" => Ok(Self::Leased),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            "dead_letter" => Ok(Self::DeadLetter),
+            other => Err(format!("unknown job status: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -515,6 +633,36 @@ pub enum ResourceKind {
     Tokens,
 }
 
+impl ResourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StorageBytes => "storage_bytes",
+            Self::Documents => "documents",
+            Self::ConcurrentJobs => "concurrent_jobs",
+            Self::Tokens => "tokens",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "storage_bytes" => Ok(Self::StorageBytes),
+            "documents" => Ok(Self::Documents),
+            "concurrent_jobs" => Ok(Self::ConcurrentJobs),
+            "tokens" => Ok(Self::Tokens),
+            other => Err(format!("unknown resource kind: {other}")),
+        }
+    }
+
+    pub const fn counter_key(self) -> Option<&'static str> {
+        match self {
+            Self::StorageBytes => Some("storage_bytes"),
+            Self::Documents => Some("documents"),
+            Self::Tokens => Some("tokens"),
+            Self::ConcurrentJobs => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReservationStatus {
@@ -522,6 +670,27 @@ pub enum ReservationStatus {
     Finalized,
     Refunded,
     Expired,
+}
+
+impl ReservationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reserved => "reserved",
+            Self::Finalized => "finalized",
+            Self::Refunded => "refunded",
+            Self::Expired => "expired",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "reserved" => Ok(Self::Reserved),
+            "finalized" => Ok(Self::Finalized),
+            "refunded" => Ok(Self::Refunded),
+            "expired" => Ok(Self::Expired),
+            other => Err(format!("unknown reservation status: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

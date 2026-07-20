@@ -163,7 +163,7 @@ async fn connect(database_url: &str) -> Result<Client, String> {
 }
 
 async fn connect_with_tls(database_url: &str) -> Result<Client, String> {
-    let connector = MakeRustlsConnect::new(tls_config()?);
+    let connector = make_rustls_connect()?;
     let (client, connection) = tokio_postgres::connect(database_url, connector)
         .await
         .map_err(|error| format!("PostgreSQL connection failed: {error}"))?;
@@ -173,12 +173,18 @@ async fn connect_with_tls(database_url: &str) -> Result<Client, String> {
     Ok(client)
 }
 
-fn database_requires_tls(database_url: &str) -> Result<bool, String> {
+/// Whether the URL requests TLS (`sslmode` present and not `disable`).
+pub fn database_requires_tls(database_url: &str) -> Result<bool, String> {
     let parsed = reqwest::Url::parse(database_url)
         .map_err(|_| "MARKHAND_DATABASE_URL must be an absolute URL".to_string())?;
     Ok(parsed
         .query_pairs()
         .any(|(key, value)| key == "sslmode" && value != "disable"))
+}
+
+/// Builds a rustls connector for tokio-postgres / deadpool-postgres.
+pub fn make_rustls_connect() -> Result<MakeRustlsConnect, String> {
+    Ok(MakeRustlsConnect::new(tls_config()?))
 }
 
 fn tls_config() -> Result<ClientConfig, String> {
