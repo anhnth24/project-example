@@ -24,6 +24,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F01 — Extend server skeleton với runtime POC
 
+- **Status:** done
 - **Plan:** Mở rộng `crates/server` API/worker skeleton từ F-02/F-07 với runtime
   dependencies, application state, graceful shutdown và các config fields đã được
   Phase 0 phê duyệt. Không tạo lại workspace/config conventions.
@@ -36,6 +37,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
+- **Status:** In progress — scaffold (Dockerfiles + compose.poc.yml) delivered in PR #240; images not docker-build/boot-verified in the agent sandbox (no daemon), verify on a Docker host.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`.
@@ -47,6 +49,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F03 — Multi-org-ready schema và immutable migrations
 
+- **Status:** done
 - **Plan:** Migrations org/auth/RBAC/groups/collections, immutable versions/artifacts,
   atomic current-published pointer, parent/version/effective lineage, chunks/FTS,
   normalized claims, conflict/evidence lifecycle, jobs/outbox, quota/audit/index;
@@ -60,6 +63,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F04 — OrgContext, repositories và state machine
 
+- **Status:** done
 - **Plan:** Tenant-scoped repos, transaction helpers, legal document transitions;
   transaction-local RLS context nếu chọn.
 - **Files:** `src/auth/context.rs`, `src/db/{orgs,collections,documents,chunks}.rs`,
@@ -71,6 +75,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F05 — Password auth, rotating sessions và browser refresh transport
 
+- **Status:** done
 - **Plan:** Argon2; pinned JWT issuer/audience/alg/KID; short access; hashed rotating
   refresh family; provider interface; POC guards/audit; chốt transport theo auth ADR.
   Nếu dùng browser cookie: issue/rotate/clear `HttpOnly Secure SameSite`, CSRF token
@@ -86,6 +91,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F06 — Fail-closed PG/Qdrant/MinIO adapters
 
+- **Status:** done
 - **Plan:** Pools, opaque key builder, quarantine/trusted namespace, deterministic
   points, versioned collection, mandatory org/collection filters, typed errors.
 - **Files:** `src/storage/{keys,minio,qdrant}.rs`, `src/db/pool.rs`,
@@ -99,6 +105,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I01 — Streaming quarantine upload validation
 
+- **Status:** done
 - **Plan:** Multipart stream+hash; magic/extension canonical format; OOXML limits;
   PDF/audio limits; retention disposition.
 - **Files:** `routes/uploads.rs`, `services/upload/{stream,sniff,archive,limits}.rs`.
@@ -109,6 +116,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I02 — Atomic quota admission
 
+- **Status:** done
 - **Plan:** Transactional reserve/finalize/refund, expiry, concurrent-job admission,
   quota headers/errors.
 - **Files:** `src/db/quota.rs`, `services/quota.rs`, quota middleware.
@@ -119,6 +127,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I03 — Durable jobs, outbox và event log
 
+- **Status:** done
 - **Plan:** Versioned payload, transactional outbox, leased SKIP LOCKED claims,
   heartbeat/retry/checkpoint/cancel/dead-letter/idempotency/sequenced events.
 - **Files:** `src/jobs/**`, `src/db/jobs.rs`.
@@ -130,6 +139,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I04 — Isolated converter worker
 
+- **Status:** done
 - **Plan:** Download quarantine; materialize server-derived canonical extension;
   process/cgroup limits and kill descendants; ephemeral cleanup/heartbeat/cancel.
 - **Files:** `src/workers/{convert,sandbox,limits}.rs`, worker image/config.
@@ -140,6 +150,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I05 — Idempotent conversion promotion saga
 
+- **Status:** done
 - **Plan:** Checkpoint download/convert/stage/promote/DB/cleanup; immutable version;
   publish/current pointer riêng với draft/latest upload; index outbox;
   compensation/refund.
@@ -152,6 +163,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I06 — Chunk/embedding/index worker
 
+- **Status:** done
 - **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
   chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
   extract typed claim key/value/unit/scope; incremental conflict candidate outbox;
@@ -165,6 +177,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I07 — Tombstone delete và reconcile
 
+- **Status:** done
 - **Plan:** PG tombstone first; idempotent vector/object cleanup; dry-run/repair
   missing/orphan/stale across three stores.
 - **Files:** `workers/{delete,reconcile}.rs`, `services/{deletion,reconciliation}.rs`.
@@ -177,6 +190,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
+- **Status:** done
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
@@ -189,6 +203,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
+- **Status:** done
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
@@ -201,6 +216,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
+- **Status:** done
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
@@ -216,6 +232,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
+- **Status:** done — PR #234 (security review PASS, live-tested, rust CI green).
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -227,6 +244,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
+- **Status:** done — PR #235 (security review PASS 3 rounds, live-tested, rust CI green).
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`.
@@ -237,6 +255,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
+- **Status:** done — PR #236 (security review PASS, live-tested, rust + web `check-web` CI green).
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
@@ -249,6 +268,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
+- **Status:** done — PR #237 (security review PASS, live-tested). Structured tracing, bounded Prometheus `/metrics`, redacted append-only audit. Live OTLP export deferred.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`, OTel config.
@@ -259,6 +279,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
+- **Status:** In progress — alert rules + Grafana dashboard + 7 runbooks delivered in PR #241 (metrics cross-checked vs O01); alert-firing/dashboard rendering need a live Prometheus/Grafana stack, disk/backup-age series pending an O01 emitter.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
 - **Files:** `deploy/observability/**`, `docs/runbooks/**`.
@@ -269,6 +290,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
+- **Status:** In progress — reconcile-before-ready readiness fence done in PR #239 (migration 0012 + `/health/ready` gate + ops toggle; review PASS, live-tested); backup/PITR/snapshot scripts + restore-order runbook + RPO/RTO drill evidence still need real DR infra.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, restore/migration runbooks, restore guard.
@@ -280,6 +302,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
+- **Status:** done — PR #238 (security review PASS 4 rounds, live-tested). e2e suite (`tests/e2e/**`) for full slice + authz/lifecycle/adversarial/fault-injection; **found + fixed a real convert-metadata bug** in the upload→create→convert path.
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `crates/server/tests/e2e/**`, POC manifest, deploy test script.
@@ -290,6 +313,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
+- **Status:** In progress — soak harness + workload profiles + aggregate gate-report generator delivered in PR #242 (renders pending/targetMatch=false with no evidence); numeric G0-SLO/G0-CAP/DR pass-fail needs sustained real infra.
 - **Plan:** Ingest/query/delete/reconcile mixed load + failures; monitor leaks/queue;
   restore; aggregate gate report.
 - **Files:** `bench/markhand_web/{soak,workloads,reports/phase-1b-gate}*`.
