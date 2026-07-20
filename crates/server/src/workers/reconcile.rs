@@ -188,7 +188,14 @@ impl ReconcileWorker {
             self.config.mode,
         )
         .await?;
+        report.orphan_objects = report
+            .orphan_objects
+            .saturating_add(gc_report.orphan_objects);
         report.repaired.staged_objects = gc_report.repaired.staged_objects;
+        report.repaired.orphan_objects = report
+            .repaired
+            .orphan_objects
+            .saturating_add(gc_report.repaired.orphan_objects);
         Ok(report)
     }
 

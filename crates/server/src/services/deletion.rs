@@ -14,7 +14,9 @@ use crate::auth::session::{write_audit, AuditEvent};
 use crate::db::error::DbError;
 use crate::db::models::{Document, DocumentState, Job, JobStatus};
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, document_versions, documents, index_metadata, jobs as repo};
+use crate::db::{
+    chunks, document_versions, documents, index_metadata, jobs as repo, vector_cleanup_intents,
+};
 use crate::jobs::{
     self, CheckpointPayload, EventPayload, HeartbeatClaim, HeartbeatError, JobError,
 };
@@ -28,6 +30,7 @@ use crate::storage::StorageError;
 const PURGE_STEP_QDRANT: u64 = 1;
 const PURGE_STEP_MINIO: u64 = 2;
 const PURGE_STEP_CHUNKS: u64 = 3;
+const OBJECT_DELETE_BATCH: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeleteRequestOutcome {
@@ -55,6 +58,16 @@ struct PurgePlan {
     document: Document,
     signatures: Vec<String>,
     object_keys: Vec<String>,
+}
+
+/// Fence condition before marking Purged (hermetic / unit-tested).
+pub fn writers_are_quiesced(active_writers: bool, pending_cleanup_intents: bool) -> bool {
+    !active_writers && !pending_cleanup_intents
+}
+
+/// Immediate read suppression after tombstone (hermetic / unit-tested).
+pub fn document_reads_suppressed(state: DocumentState, deleted_at_set: bool) -> bool {
+    matches!(state, DocumentState::Tombstoned | DocumentState::Purged) || deleted_at_set
 }
 
 pub async fn request_delete(
@@ -189,7 +202,7 @@ pub async fn purge_document(
             pool,
             ctx,
             input,
-            delete_minio_objects(storage, ctx, &plan.object_keys),
+            delete_minio_objects_audited(pool, storage, ctx, document_id, &plan.object_keys),
         )
         .await?;
         save_checkpoint(pool, ctx, input, PURGE_STEP_MINIO).await?;
@@ -206,6 +219,15 @@ pub async fn purge_document(
     };
 
     check_deadline(input.deadline)?;
+    // Drain any vector-write intents left by a killed embedding worker, then
+    // re-sweep Qdrant before the quiesce fence.
+    heartbeat_while(
+        pool,
+        ctx,
+        input,
+        drain_vector_cleanup_intents(pool, qdrant, ctx, &plan, document_id),
+    )
+    .await?;
     heartbeat_while(
         pool,
         ctx,
@@ -273,7 +295,74 @@ async fn delete_qdrant_points(
     Ok(())
 }
 
-async fn delete_minio_objects(
+async fn drain_vector_cleanup_intents(
+    pool: &Pool,
+    qdrant: &QdrantClient,
+    ctx: &OrgContext,
+    plan: &PurgePlan,
+    document_id: Uuid,
+) -> Result<(), DeletionError> {
+    let intents = with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                Ok::<_, DeletionError>(
+                    vector_cleanup_intents::list_pending_for_document(txn, &ctx, document_id)
+                        .await?,
+                )
+            })
+        }
+    })
+    .await?;
+    let scope = VectorScope::new(ctx.org_id(), [plan.document.collection_id]);
+    for intent in intents {
+        let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
+        let document_filter = [json!({
+            "key": "document_id",
+            "match": { "value": document_id.to_string() }
+        })];
+        qdrant
+            .delete_points_by_ids(&collection, &scope, &document_filter, &intent.point_ids)
+            .await?;
+        with_org_txn_typed(pool, ctx, {
+            let ctx = ctx.clone();
+            let job_id = intent.job_id;
+            move |txn| {
+                Box::pin(async move {
+                    vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
+                    Ok::<_, DeletionError>(())
+                })
+            }
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+async fn delete_minio_objects_audited(
+    pool: &Pool,
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    object_keys: &[String],
+) -> Result<(), DeletionError> {
+    for batch in object_keys.chunks(OBJECT_DELETE_BATCH) {
+        let batch_keys = batch.to_vec();
+        write_object_cleanup_audit(pool, ctx, document_id, "intent", &batch_keys).await?;
+        match delete_minio_object_batch(storage, ctx, &batch_keys).await {
+            Ok(()) => {
+                write_object_cleanup_audit(pool, ctx, document_id, "success", &batch_keys).await?;
+            }
+            Err(error) => {
+                write_object_cleanup_audit(pool, ctx, document_id, "error", &batch_keys).await?;
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn delete_minio_object_batch(
     storage: &MinioClient,
     ctx: &OrgContext,
     object_keys: &[String],
@@ -286,6 +375,50 @@ async fn delete_minio_objects(
         }
     }
     Ok(())
+}
+
+async fn write_object_cleanup_audit(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    phase: &'static str,
+    object_keys: &[String],
+) -> Result<(), DeletionError> {
+    let outcome = match phase {
+        "error" => "error",
+        _ => "success",
+    };
+    let object_keys = object_keys.to_vec();
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let resource_id = document_id.to_string();
+                let request_id = format!("purge-objects-{document_id}-{phase}");
+                write_audit(
+                    txn,
+                    AuditEvent {
+                        org_id: ctx.org_id(),
+                        actor_user_id: Some(ctx.user_id()),
+                        action: "document.purge_objects",
+                        resource_type: "document",
+                        resource_id: Some(&resource_id),
+                        outcome,
+                        request_id: &request_id,
+                        metadata: json!({
+                            "document_id": document_id,
+                            "phase": phase,
+                            "object_count": object_keys.len(),
+                            "object_keys": object_keys,
+                        }),
+                    },
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
 }
 
 async fn delete_chunks(
@@ -317,6 +450,21 @@ async fn finalize_purged(
         move |txn| {
             Box::pin(async move {
                 verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
+                // Quiesce fence: cancel any resurrected writers and refuse Purged
+                // while cleanup intents or active writers remain.
+                let cancelled = repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
+                for cancelled in &cancelled {
+                    crate::services::indexing::handle_terminal_index_job(txn, &ctx, cancelled)
+                        .await
+                        .map_err(DeletionError::Job)?;
+                }
+                let active_writers = repo::has_active_writer_job(txn, &ctx, document_id).await?;
+                let pending_intents =
+                    vector_cleanup_intents::has_pending_for_document(txn, &ctx, document_id)
+                        .await?;
+                if !writers_are_quiesced(active_writers, pending_intents) {
+                    return Err(DeletionError::WritersNotQuiesced);
+                }
                 document_state::apply_transition(
                     txn,
                     &ctx,
@@ -492,6 +640,8 @@ pub enum DeletionError {
     UnexpectedState(DocumentState),
     #[error("delete job exceeded configured maximum duration")]
     JobTimedOut,
+    #[error("writers or cleanup intents are not quiesced for purge")]
+    WritersNotQuiesced,
 }
 
 impl From<HeartbeatError> for DeletionError {
@@ -513,10 +663,73 @@ impl DeletionError {
             Self::InvalidCheckpoint => "delete checkpoint invalid",
             Self::UnexpectedState(_) => "delete document state invalid",
             Self::JobTimedOut => "delete job timed out",
+            Self::WritersNotQuiesced => "delete writers not quiesced",
         }
     }
 
     pub fn is_retryable_job_failure(&self) -> bool {
         !matches!(self, Self::Job(JobError::LeaseLost))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn quiesce_fence_blocks_purge_while_writers_or_intents_remain() {
+        assert!(writers_are_quiesced(false, false));
+        assert!(!writers_are_quiesced(true, false));
+        assert!(!writers_are_quiesced(false, true));
+        assert!(!writers_are_quiesced(true, true));
+    }
+
+    #[test]
+    fn tombstone_suppresses_reads_immediately() {
+        assert!(document_reads_suppressed(DocumentState::Tombstoned, true));
+        assert!(document_reads_suppressed(DocumentState::Purged, true));
+        assert!(document_reads_suppressed(DocumentState::Indexed, true));
+        assert!(!document_reads_suppressed(DocumentState::Indexed, false));
+    }
+
+    #[tokio::test]
+    async fn kill_resume_fence_is_concurrent_safe() {
+        let purged = Arc::new(AtomicBool::new(false));
+        let pending_intents = Arc::new(AtomicUsize::new(1));
+        let active_writers = Arc::new(AtomicBool::new(true));
+
+        let purge = {
+            let purged = Arc::clone(&purged);
+            let pending_intents = Arc::clone(&pending_intents);
+            let active_writers = Arc::clone(&active_writers);
+            async move {
+                // Simulate delete worker finalizing only after quiesce.
+                for _ in 0..20 {
+                    if writers_are_quiesced(
+                        active_writers.load(Ordering::SeqCst),
+                        pending_intents.load(Ordering::SeqCst) > 0,
+                    ) {
+                        purged.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }
+        };
+        let writer = {
+            let pending_intents = Arc::clone(&pending_intents);
+            let active_writers = Arc::clone(&active_writers);
+            async move {
+                // Embedding upsert race: intent exists, then compensate clears it.
+                tokio::task::yield_now().await;
+                active_writers.store(false, Ordering::SeqCst);
+                pending_intents.fetch_sub(1, Ordering::SeqCst);
+            }
+        };
+        tokio::join!(purge, writer);
+        assert!(purged.load(Ordering::SeqCst));
+        assert_eq!(pending_intents.load(Ordering::SeqCst), 0);
     }
 }

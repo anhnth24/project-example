@@ -17,7 +17,7 @@ use crate::db::embedding_batches::{self, EmbeddingBatch};
 use crate::db::error::DbError;
 use crate::db::models::{DocumentState, Job, JobStatus, JobType};
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, documents, index_metadata, jobs as job_repo};
+use crate::db::{chunks, documents, index_metadata, jobs as job_repo, vector_cleanup_intents};
 use crate::jobs::{self, JobError};
 use crate::services::embedding::{
     canonical_inputs_sha256, ApprovedEmbeddingRuntime, EmbeddingError,
@@ -221,20 +221,6 @@ impl EmbeddingWorker {
                 self.qdrant.ensure_collection_for_signature(&signature),
             )
             .await?;
-        // The provider call can take long enough for a newer version to be
-        // promoted. Re-read the lifecycle under the document row lock
-        // immediately before the external write; never reuse the stale flags
-        // captured while loading the batch source.
-        let lifecycle = self
-            .heartbeat_while(
-                ctx,
-                job,
-                lease_token,
-                attempts,
-                deadline,
-                self.load_lifecycle_fence(ctx, job, lease_token, attempts, batch_id),
-            )
-            .await?;
         let scope = VectorScope::new(ctx.org_id(), [source.collection_id]);
         let point_ids = source
             .chunks
@@ -247,6 +233,26 @@ impl EmbeddingWorker {
                 )
             })
             .collect::<Result<Vec<_>, StorageError>>()?;
+        // Persist cleanup intent in the same fenced txn that observes lifecycle,
+        // before the external Qdrant write, so a kill after upsert remains recoverable.
+        let lifecycle = self
+            .heartbeat_while(
+                ctx,
+                job,
+                lease_token,
+                attempts,
+                deadline,
+                self.load_lifecycle_fence_with_write_intent(
+                    ctx,
+                    job,
+                    lease_token,
+                    attempts,
+                    batch_id,
+                    &source.metadata.index_signature_sha256,
+                    &point_ids,
+                ),
+            )
+            .await?;
         let points = source
             .chunks
             .iter()
@@ -311,9 +317,12 @@ impl EmbeddingWorker {
                 )
                 .await
                 {
-                    Ok(()) => {}
-                    Err(_) => {
+                    Ok(()) => {
+                        self.clear_vector_write_intent(ctx, job.id).await?;
+                    }
+                    Err(compensate_error) => {
                         eprintln!("fileconv-server: embedding vector compensation failed");
+                        // Intent stays pending; reconcile enqueue must not be ignored.
                         indexing::enqueue_compensation_reconcile(
                             &self.db_pool,
                             ctx,
@@ -322,7 +331,8 @@ impl EmbeddingWorker {
                             attempts,
                             usize::try_from(source.batch.start_ordinal).unwrap_or(0),
                         )
-                        .await;
+                        .await?;
+                        return Err(compensate_error.into());
                     }
                 }
                 Err(error)
@@ -383,20 +393,24 @@ impl EmbeddingWorker {
         .await
     }
 
-    /// Fences lifecycle markers immediately before the Qdrant upsert. The
-    /// document lock serializes this observation with conversion promotion,
-    /// while the leased-job and pending-batch checks prevent a cancelled or
-    /// superseded worker from publishing stale lifecycle flags.
-    async fn load_lifecycle_fence(
+    /// Fences lifecycle markers and persists a vector-write cleanup intent
+    /// immediately before the Qdrant upsert. The document lock serializes this
+    /// observation with conversion/tombstone, while the leased-job and pending
+    /// batch checks prevent a cancelled worker from publishing stale flags.
+    async fn load_lifecycle_fence_with_write_intent(
         &self,
         ctx: &OrgContext,
         job: &Job,
         lease_token: &str,
         attempts: i32,
         batch_id: Uuid,
+        index_signature_sha256: &str,
+        point_ids: &[Uuid],
     ) -> Result<PointLifecycle, EmbeddingWorkerError> {
         let job_id = job.id;
         let lease_token = lease_token.to_string();
+        let index_signature_sha256 = index_signature_sha256.to_string();
+        let point_ids = point_ids.to_vec();
         with_org_txn_typed(&self.db_pool, ctx, {
             let ctx = ctx.clone();
             move |txn| {
@@ -434,11 +448,39 @@ impl EmbeddingWorker {
                     )
                     .await?
                     .ok_or(crate::db::error::DbError::NotFound)?;
+                    vector_cleanup_intents::upsert_pending(
+                        txn,
+                        &ctx,
+                        vector_cleanup_intents::NewVectorCleanupIntent {
+                            document_id: batch.document_id,
+                            job_id,
+                            index_signature_sha256: &index_signature_sha256,
+                            point_ids: &point_ids,
+                        },
+                    )
+                    .await?;
                     Ok(point_lifecycle(
                         document.current_version_id,
                         batch.version_id,
                         version.effective_to.is_none(),
                     ))
+                })
+            }
+        })
+        .await
+    }
+
+    async fn clear_vector_write_intent(
+        &self,
+        ctx: &OrgContext,
+        job_id: Uuid,
+    ) -> Result<(), EmbeddingWorkerError> {
+        with_org_txn_typed(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
+                    Ok(())
                 })
             }
         })
@@ -487,6 +529,7 @@ impl EmbeddingWorker {
                         batch.version_id,
                     )
                     .await?;
+                    vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
                     Ok(completed)
                 })
             }

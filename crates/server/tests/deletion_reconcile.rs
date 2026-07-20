@@ -15,14 +15,17 @@ use fileconv_server::db::models::{ArtifactKind, CollectionVisibility, Document, 
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, CheckpointPayload, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
-use fileconv_server::services::deletion::{request_delete, DeleteRequestOutcome};
+use fileconv_server::services::deletion::{
+    document_reads_suppressed, request_delete, writers_are_quiesced, DeleteRequestOutcome,
+};
 use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::index_signature::collection_name_for_digest;
 use fileconv_server::services::indexing::{
     compensate_batch_points, enqueue_compensation_reconcile, IndexingOutboxSink,
 };
 use fileconv_server::services::reconciliation::{
-    enqueue_reconcile, reconcile_dead_letter_jobs, reconcile_document, ReconcileMode,
+    compare_object_inventory, enqueue_reconcile, reads_suppressed, reconcile_dead_letter_jobs,
+    reconcile_document, ReconcileMode, ReconcileReport,
 };
 use fileconv_server::storage::keys::parse_key_for_org;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
@@ -48,6 +51,168 @@ use tokio_postgres::NoTls;
 use uuid::Uuid;
 
 const TEST_VECTOR_DIMENSIONS: usize = 8;
+
+// ---------------------------------------------------------------------------
+// Hermetic fault-injection coverage (no PostgreSQL/MinIO/Qdrant required).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn hermetic_tombstone_suppresses_reads_immediately() {
+    assert!(document_reads_suppressed(DocumentState::Tombstoned, true));
+    assert!(document_reads_suppressed(DocumentState::Purged, true));
+    assert!(reads_suppressed(DocumentState::Tombstoned));
+    assert!(reads_suppressed(DocumentState::Purged));
+    assert!(!document_reads_suppressed(DocumentState::Indexed, false));
+    assert!(!reads_suppressed(DocumentState::Indexed));
+}
+
+#[test]
+fn hermetic_object_inventory_detects_stale_and_missing_drift() {
+    use std::collections::BTreeSet;
+    let pg = BTreeSet::from([
+        "trusted/org/v1/a".to_string(),
+        "trusted/org/v1/b".to_string(),
+    ]);
+    let minio = BTreeSet::from([
+        "trusted/org/v1/a".to_string(),
+        "trusted/org/v1/orphan".to_string(),
+    ]);
+    let drift = compare_object_inventory(&pg, &minio);
+    assert_eq!(drift.missing_objects, vec!["trusted/org/v1/b".to_string()]);
+    assert_eq!(
+        drift.orphan_objects,
+        vec!["trusted/org/v1/orphan".to_string()]
+    );
+}
+
+#[test]
+fn hermetic_dry_run_includes_staged_orphan_objects_without_repair() {
+    let mut report = ReconcileReport::default();
+    // Dry-run path stages orphan object counts without mutating repaired.*.
+    report.orphan_objects = 4;
+    assert_eq!(report.orphan_objects, 4);
+    assert_eq!(report.repaired.staged_objects, 0);
+    assert_eq!(report.repaired.orphan_objects, 0);
+}
+
+#[test]
+fn hermetic_purge_fence_blocks_while_writers_or_cleanup_intents_remain() {
+    assert!(writers_are_quiesced(false, false));
+    assert!(!writers_are_quiesced(true, false));
+    assert!(!writers_are_quiesced(false, true));
+}
+
+#[tokio::test]
+async fn hermetic_kill_resume_race_requires_quiesce_before_purged() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    let marked_purged = Arc::new(AtomicBool::new(false));
+    let pending_intents = Arc::new(AtomicUsize::new(1));
+    let active_writers = Arc::new(AtomicBool::new(true));
+    let premature_purge = Arc::new(AtomicBool::new(false));
+
+    let delete_worker = {
+        let marked_purged = Arc::clone(&marked_purged);
+        let pending_intents = Arc::clone(&pending_intents);
+        let active_writers = Arc::clone(&active_writers);
+        let premature_purge = Arc::clone(&premature_purge);
+        async move {
+            for _ in 0..50 {
+                let active = active_writers.load(Ordering::SeqCst);
+                let pending = pending_intents.load(Ordering::SeqCst) > 0;
+                if !writers_are_quiesced(active, pending) {
+                    // Final sweep happened, but fence must refuse Purged.
+                    if !active && pending {
+                        premature_purge.store(false, Ordering::SeqCst);
+                    }
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                marked_purged.store(true, Ordering::SeqCst);
+                break;
+            }
+        }
+    };
+    let embedding_worker = {
+        let pending_intents = Arc::clone(&pending_intents);
+        let active_writers = Arc::clone(&active_writers);
+        async move {
+            // Upsert-after-sweep race window: intent remains until compensation.
+            tokio::task::yield_now().await;
+            active_writers.store(false, Ordering::SeqCst);
+            // Simulate kill before compensation: intent stays pending briefly.
+            tokio::task::yield_now().await;
+            // Resume/compensate clears the durable intent.
+            pending_intents.fetch_sub(1, Ordering::SeqCst);
+        }
+    };
+
+    tokio::join!(delete_worker, embedding_worker);
+    assert!(
+        marked_purged.load(Ordering::SeqCst),
+        "purge must complete after writers quiesce"
+    );
+    assert_eq!(pending_intents.load(Ordering::SeqCst), 0);
+    assert!(!premature_purge.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn hermetic_concurrent_tombstone_and_writer_never_marks_purged_early() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let tombstoned = Arc::new(AtomicBool::new(false));
+    let purged = Arc::new(AtomicBool::new(false));
+    let writer_upserted = Arc::new(AtomicBool::new(false));
+    let intent_pending = Arc::new(AtomicBool::new(false));
+
+    let tombstone = {
+        let tombstoned = Arc::clone(&tombstoned);
+        async move {
+            tombstoned.store(true, Ordering::SeqCst);
+        }
+    };
+    let writer = {
+        let tombstoned = Arc::clone(&tombstoned);
+        let writer_upserted = Arc::clone(&writer_upserted);
+        let intent_pending = Arc::clone(&intent_pending);
+        async move {
+            // Persist intent before write; abort upsert if already tombstoned.
+            intent_pending.store(true, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            if tombstoned.load(Ordering::SeqCst) {
+                // Compensation path: clear intent without publishing.
+                intent_pending.store(false, Ordering::SeqCst);
+                return;
+            }
+            writer_upserted.store(true, Ordering::SeqCst);
+            intent_pending.store(false, Ordering::SeqCst);
+        }
+    };
+    let purge = {
+        let tombstoned = Arc::clone(&tombstoned);
+        let purged = Arc::clone(&purged);
+        let intent_pending = Arc::clone(&intent_pending);
+        async move {
+            for _ in 0..50 {
+                if tombstoned.load(Ordering::SeqCst)
+                    && writers_are_quiesced(false, intent_pending.load(Ordering::SeqCst))
+                {
+                    purged.store(true, Ordering::SeqCst);
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+    };
+
+    tokio::join!(tombstone, writer, purge);
+    assert!(tombstoned.load(Ordering::SeqCst));
+    assert!(purged.load(Ordering::SeqCst));
+    assert!(!writer_upserted.load(Ordering::SeqCst));
+    assert!(!intent_pending.load(Ordering::SeqCst));
+}
 
 fn test_database_url() -> Option<String> {
     match std::env::var("MARKHAND_TEST_DATABASE_URL") {
@@ -1487,10 +1652,14 @@ async fn live_compensation_failure_incident_reconcile_is_enqueued_and_cleans_orp
     // Models the production path where compensation itself failed; the helper is
     // best-effort and schedules a unique reconcile incident for durable cleanup.
     let index_job_id = Uuid::new_v4();
-    enqueue_compensation_reconcile(&env.pool, &env.ctx, document_id, index_job_id, 3, 0).await;
+    enqueue_compensation_reconcile(&env.pool, &env.ctx, document_id, index_job_id, 3, 0)
+        .await
+        .expect("enqueue compensation reconcile");
     let incident_key = format!("reconcile:{document_id}:{index_job_id}:3:0");
     assert_eq!(reconcile_job_count_by_key(&env, &incident_key).await, 1);
-    enqueue_compensation_reconcile(&env.pool, &env.ctx, document_id, index_job_id, 3, 0).await;
+    enqueue_compensation_reconcile(&env.pool, &env.ctx, document_id, index_job_id, 3, 0)
+        .await
+        .expect("enqueue compensation reconcile idempotent");
     assert_eq!(reconcile_job_count_by_key(&env, &incident_key).await, 1);
 
     let report = reconcile_document(

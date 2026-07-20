@@ -408,6 +408,63 @@ impl MinioClient {
         }
     }
 
+    /// Lists object keys under an org-authorized prefix (bounded inventory scan).
+    pub async fn list_keys_with_prefix(
+        &self,
+        org_id: Uuid,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        if org_id.is_nil() || prefix.trim().is_empty() || limit == 0 {
+            return Err(StorageError::MissingScope);
+        }
+        let org_opaque = crate::storage::keys::opaque_identity("org", org_id);
+        let trusted = format!("trusted/{org_opaque}/");
+        let quarantine = format!("quarantine/{org_opaque}/");
+        if !(prefix.starts_with(&trusted) || prefix.starts_with(&quarantine)) {
+            return Err(StorageError::OwnershipConflict);
+        }
+        let mut out = Vec::new();
+        let mut continuation = None;
+        loop {
+            let (page, status) = self
+                .with_s3_timeout(
+                    self.bucket.list_page(
+                        prefix.to_string(),
+                        None,
+                        continuation.clone(),
+                        None,
+                        Some(limit.saturating_sub(out.len()).max(1)),
+                    ),
+                    map_s3_get_error,
+                )
+                .await?;
+            if !(200..300).contains(&status) {
+                return Err(StorageError::Backend);
+            }
+            for object in page.contents {
+                let key = object.key;
+                if key.is_empty() {
+                    continue;
+                }
+                let parsed = parse_key_structure(&key)?;
+                authorize_key_for_org(&parsed, org_id)?;
+                out.push(key);
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+            if !page.is_truncated {
+                break;
+            }
+            continuation = page.next_continuation_token;
+            if continuation.is_none() {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn delete_object(&self, org_id: Uuid, key: &ObjectKey) -> Result<(), StorageError> {
         authorize_key_for_org(key, org_id)?;
         self.verify_stored_org(org_id, key).await?;

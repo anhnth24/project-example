@@ -136,7 +136,7 @@ pub type OutboxJobSink = IndexingOutboxSink;
 /// The relay and staged-backfill paths must derive this key identically:
 /// otherwise a normal index request and a staged request for the same target
 /// generation can run concurrently and each create a different parent job.
-fn index_job_idempotency_key(index_metadata_id: Uuid, version_id: Uuid) -> String {
+pub(crate) fn index_job_idempotency_key(index_metadata_id: Uuid, version_id: Uuid) -> String {
     format!("index:{index_metadata_id}:{version_id}")
 }
 
@@ -1432,7 +1432,10 @@ pub async fn compensate_batch_points(
     Ok(())
 }
 
-/// Best-effort incident reconcile when vector compensation itself fails.
+/// Enqueues an incident reconcile when vector compensation itself fails.
+///
+/// Failures are returned to the caller — never ignored — so a killed worker
+/// cannot leave orphan vectors without a durable cleanup job.
 pub async fn enqueue_compensation_reconcile(
     db_pool: &Pool,
     ctx: &OrgContext,
@@ -1440,14 +1443,10 @@ pub async fn enqueue_compensation_reconcile(
     job_id: Uuid,
     attempts: i32,
     batch_start: usize,
-) {
+) -> Result<(), IndexingError> {
     let reason = format!("{job_id}:{attempts}:{batch_start}");
-    if reconciliation::enqueue_reconcile(db_pool, ctx, document_id, &reason)
-        .await
-        .is_err()
-    {
-        eprintln!("fileconv-server: incident reconcile enqueue failed");
-    }
+    reconciliation::enqueue_reconcile(db_pool, ctx, document_id, &reason).await?;
+    Ok(())
 }
 
 pub async fn document_is_deleted(

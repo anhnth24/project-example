@@ -58,6 +58,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0013_expand_index_generation_rls.sql",
         include_str!("../migrations/0013_expand_index_generation_rls.sql"),
     ),
+    (
+        "0014_vector_cleanup_intents.sql",
+        include_str!("../migrations/0014_vector_cleanup_intents.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -254,5 +258,18 @@ mod tests {
                 "{table} must have an org-isolation policy"
             );
         }
+    }
+
+    #[test]
+    fn vector_cleanup_intents_have_mandatory_tenant_rls() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0014_vector_cleanup_intents.sql")
+            .expect("vector cleanup intents migration")
+            .1;
+        let table = "vector_cleanup_intents";
+        assert!(source.contains(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")));
+        assert!(source.contains(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")));
+        assert!(source.contains(&format!("CREATE POLICY {table}_org_isolation ON {table}")));
     }
 }

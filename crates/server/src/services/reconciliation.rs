@@ -12,10 +12,13 @@ use crate::auth::session::{write_audit, AuditEvent};
 use crate::db::error::DbError;
 use crate::db::models::{Chunk, Document, DocumentState, DocumentVersion, JobType};
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, document_versions, documents, index_metadata, jobs as repo};
+use crate::db::{
+    chunks, document_versions, documents, index_metadata, jobs as repo, vector_cleanup_intents,
+};
 use crate::jobs::{self, CheckpointPayload, EnqueueJob, EnqueueOutcome, JobError, JobPayload};
 use crate::services::index_signature::collection_name_for_digest;
-use crate::storage::keys::parse_key_for_org;
+use crate::services::indexing::index_job_idempotency_key;
+use crate::storage::keys::{parse_key_for_org, trusted_version_prefix};
 use crate::storage::minio::MinioClient;
 use crate::storage::qdrant::{
     point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, VectorScope,
@@ -26,6 +29,8 @@ const DEAD_LETTER_PAGE_LIMIT: i64 = 500;
 const QDRANT_SCROLL_PAGE_LIMIT: usize = 1024;
 const QDRANT_SCROLL_TOTAL_LIMIT: usize = 100_000;
 const POINT_DELETE_BATCH: usize = 128;
+const OBJECT_DELETE_BATCH: usize = 32;
+const MINIO_INVENTORY_LIMIT: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconcileMode {
@@ -48,6 +53,8 @@ pub struct ReconcileRepairCounts {
     pub orphan_vectors: usize,
     pub stale_vectors: usize,
     pub staged_objects: usize,
+    pub orphan_objects: usize,
+    pub rebuilt_vector_jobs: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -57,7 +64,30 @@ pub struct ReconcileReport {
     pub stale_vectors: usize,
     pub in_flight_vectors: usize,
     pub missing_objects: usize,
+    pub orphan_objects: usize,
     pub repaired: ReconcileRepairCounts,
+}
+
+/// Pure inventory comparison used by reconcile and hermetic tests.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObjectInventoryDrift {
+    pub missing_objects: Vec<String>,
+    pub orphan_objects: Vec<String>,
+}
+
+pub fn compare_object_inventory(
+    pg_keys: &BTreeSet<String>,
+    minio_keys: &BTreeSet<String>,
+) -> ObjectInventoryDrift {
+    ObjectInventoryDrift {
+        missing_objects: pg_keys.difference(minio_keys).cloned().collect(),
+        orphan_objects: minio_keys.difference(pg_keys).cloned().collect(),
+    }
+}
+
+/// Tombstoned/purged documents suppress reads immediately.
+pub fn reads_suppressed(state: DocumentState) -> bool {
+    matches!(state, DocumentState::Tombstoned | DocumentState::Purged)
 }
 
 struct DocumentInventory {
@@ -111,10 +141,14 @@ pub async fn reconcile_document(
         scroll_document_points(qdrant, &scope, &inventory.signatures, document_id).await?;
     let mut report = ReconcileReport::default();
 
-    if matches!(
-        inventory.document.state,
-        DocumentState::Tombstoned | DocumentState::Purged
-    ) {
+    // Drain any kill-window vector-write intents before other repair decisions.
+    drain_pending_vector_intents(pool, qdrant, ctx, document_id, &scope, mode, &mut report).await?;
+
+    let object_drift = compare_document_minio_inventory(storage, ctx, &inventory).await?;
+    report.missing_objects = object_drift.missing_objects.len();
+    report.orphan_objects = object_drift.orphan_objects.len();
+
+    if reads_suppressed(inventory.document.state) {
         let candidates = all_point_candidates(
             &points_by_signature,
             ctx.org_id(),
@@ -122,13 +156,43 @@ pub async fn reconcile_document(
             document_id,
         )?;
         report.orphan_vectors = candidates.len();
-        if mode == ReconcileMode::Repair && report.orphan_vectors > 0 {
-            report.repaired.orphan_vectors = report.orphan_vectors;
-            // Audit the planned destructive repair BEFORE deleting so a crash
-            // between the vector delete and the audit can never leave an
-            // unaudited deletion (audit_log.outcome is limited to success/deny/error).
-            write_repair_audit(pool, ctx, document_id, &report, "success").await?;
-            delete_exact_point_candidates(qdrant, &scope, document_id, &candidates).await?;
+        // Tombstone/purged: every still-present PG-referenced object is leftover inventory.
+        let leftover_objects = existing_object_keys(storage, ctx, &inventory.object_keys).await?;
+        let mut orphan_object_keys = object_drift.orphan_objects;
+        for key in leftover_objects {
+            if !orphan_object_keys.iter().any(|existing| existing == &key) {
+                orphan_object_keys.push(key);
+            }
+        }
+        report.orphan_objects = orphan_object_keys.len();
+
+        if mode == ReconcileMode::Repair {
+            if report.orphan_vectors > 0 {
+                report.repaired.orphan_vectors = report.orphan_vectors;
+                write_repair_audit(pool, ctx, document_id, &report, "intent").await?;
+                match delete_exact_point_candidates(qdrant, &scope, document_id, &candidates).await
+                {
+                    Ok(()) => {
+                        write_repair_audit(pool, ctx, document_id, &report, "success").await?
+                    }
+                    Err(error) => {
+                        write_repair_audit(pool, ctx, document_id, &report, "error").await?;
+                        return Err(error);
+                    }
+                }
+            }
+            if !orphan_object_keys.is_empty() {
+                delete_objects_with_audit(
+                    pool,
+                    storage,
+                    ctx,
+                    document_id,
+                    &orphan_object_keys,
+                    "reconcile.object_cleanup",
+                )
+                .await?;
+                report.repaired.orphan_objects = orphan_object_keys.len();
+            }
         }
         return Ok(report);
     }
@@ -188,14 +252,14 @@ pub async fn reconcile_document(
         }
     }
 
-    report.missing_vectors = count_missing_vectors(
+    let missing_vector_chunks = missing_vector_chunks(
         qdrant,
         &scope,
         inventory.document.collection_id,
         &inventory.chunks,
     )
     .await?;
-    report.missing_objects = count_missing_objects(storage, ctx, &inventory.object_keys).await?;
+    report.missing_vectors = missing_vector_chunks.len();
 
     if mode == ReconcileMode::Repair {
         let can_repair_indexed = inventory.document.state == DocumentState::Indexed
@@ -205,12 +269,41 @@ pub async fn reconcile_document(
             if repair_count > 0 {
                 report.repaired.orphan_vectors = orphan_candidates.len();
                 report.repaired.stale_vectors = stale_candidates.len();
-                // Durable audit before the destructive delete (see note above).
-                write_repair_audit(pool, ctx, document_id, &report, "success").await?;
-                delete_exact_point_candidates(qdrant, &scope, document_id, &orphan_candidates)
-                    .await?;
-                delete_exact_point_candidates(qdrant, &scope, document_id, &stale_candidates)
-                    .await?;
+                write_repair_audit(pool, ctx, document_id, &report, "intent").await?;
+                match async {
+                    delete_exact_point_candidates(qdrant, &scope, document_id, &orphan_candidates)
+                        .await?;
+                    delete_exact_point_candidates(qdrant, &scope, document_id, &stale_candidates)
+                        .await?;
+                    Ok::<_, ReconciliationError>(())
+                }
+                .await
+                {
+                    Ok(()) => {
+                        write_repair_audit(pool, ctx, document_id, &report, "success").await?
+                    }
+                    Err(error) => {
+                        write_repair_audit(pool, ctx, document_id, &report, "error").await?;
+                        return Err(error);
+                    }
+                }
+            }
+            if report.missing_vectors > 0 {
+                if enqueue_missing_vector_rebuild(pool, ctx, &inventory).await? {
+                    report.repaired.rebuilt_vector_jobs = 1;
+                }
+            }
+            if !object_drift.orphan_objects.is_empty() {
+                delete_objects_with_audit(
+                    pool,
+                    storage,
+                    ctx,
+                    document_id,
+                    &object_drift.orphan_objects,
+                    "reconcile.object_cleanup",
+                )
+                .await?;
+                report.repaired.orphan_objects = object_drift.orphan_objects.len();
             }
         } else {
             report.in_flight_vectors += orphan_candidates.len();
@@ -228,28 +321,26 @@ pub async fn reconcile_dead_letter_jobs(
 ) -> Result<ReconcileReport, ReconciliationError> {
     let mut report = ReconcileReport::default();
     let mut after_id = None;
+    let mut staged_orphans = Vec::new();
     loop {
         let jobs = list_dead_letter_convert_page(pool, ctx, after_id).await?;
         if jobs.is_empty() {
             break;
         }
         after_id = jobs.last().map(|job| job.id);
-        if mode == ReconcileMode::Repair {
-            for job in &jobs {
-                let Some(checkpoint) = job.checkpoint.clone() else {
+        for job in &jobs {
+            let Some(checkpoint) = job.checkpoint.clone() else {
+                continue;
+            };
+            let checkpoint = serde_json::from_value::<CheckpointPayload>(checkpoint)
+                .map_err(|_| ReconciliationError::InvalidCheckpoint)?;
+            for raw_key in checkpoint.staged_object_keys {
+                if object_key_is_referenced(pool, ctx, &raw_key).await? {
                     continue;
-                };
-                let checkpoint = serde_json::from_value::<CheckpointPayload>(checkpoint)
-                    .map_err(|_| ReconciliationError::InvalidCheckpoint)?;
-                for raw_key in checkpoint.staged_object_keys {
-                    if object_key_is_referenced(pool, ctx, &raw_key).await? {
-                        continue;
-                    }
-                    let key = parse_key_for_org(&raw_key, ctx.org_id())?;
-                    if storage.object_exists(ctx.org_id(), &key).await? {
-                        storage.cleanup_generated_object(ctx.org_id(), &key).await?;
-                        report.repaired.staged_objects += 1;
-                    }
+                }
+                let key = parse_key_for_org(&raw_key, ctx.org_id())?;
+                if storage.object_exists(ctx.org_id(), &key).await? {
+                    staged_orphans.push(raw_key);
                 }
             }
         }
@@ -257,10 +348,268 @@ pub async fn reconcile_dead_letter_jobs(
             break;
         }
     }
-    if mode == ReconcileMode::Repair && report.repaired.staged_objects > 0 {
-        write_dead_letter_audit(pool, ctx, report.repaired.staged_objects).await?;
+
+    // Dry-run must surface staged orphan objects; repair deletes them with audit.
+    report.orphan_objects = staged_orphans.len();
+    if mode == ReconcileMode::Repair && !staged_orphans.is_empty() {
+        delete_objects_with_audit(
+            pool,
+            storage,
+            ctx,
+            Uuid::nil(),
+            &staged_orphans,
+            "reconcile.dead_letter_gc",
+        )
+        .await?;
+        report.repaired.staged_objects = staged_orphans.len();
+        report.repaired.orphan_objects = staged_orphans.len();
     }
     Ok(report)
+}
+
+async fn drain_pending_vector_intents(
+    pool: &Pool,
+    qdrant: &QdrantClient,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    scope: &VectorScope,
+    mode: ReconcileMode,
+    report: &mut ReconcileReport,
+) -> Result<(), ReconciliationError> {
+    let intents = list_pending_intents(pool, ctx, document_id).await?;
+    if intents.is_empty() {
+        return Ok(());
+    }
+    report.orphan_vectors = report.orphan_vectors.saturating_add(
+        intents
+            .iter()
+            .map(|intent| intent.point_ids.len())
+            .sum::<usize>(),
+    );
+    if mode != ReconcileMode::Repair {
+        return Ok(());
+    }
+    for intent in intents {
+        let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
+        let document_filter = [json!({
+            "key": "document_id",
+            "match": { "value": document_id.to_string() }
+        })];
+        write_intent_audit(
+            pool,
+            ctx,
+            document_id,
+            "vector.cleanup_intent",
+            "intent",
+            json!({
+                "job_id": intent.job_id,
+                "point_count": intent.point_ids.len(),
+            }),
+        )
+        .await?;
+        match qdrant
+            .delete_points_by_ids(&collection, scope, &document_filter, &intent.point_ids)
+            .await
+        {
+            Ok(()) => {
+                mark_intent_completed(pool, ctx, intent.job_id).await?;
+                write_intent_audit(
+                    pool,
+                    ctx,
+                    document_id,
+                    "vector.cleanup_intent",
+                    "success",
+                    json!({
+                        "job_id": intent.job_id,
+                        "point_count": intent.point_ids.len(),
+                    }),
+                )
+                .await?;
+                report.repaired.orphan_vectors = report
+                    .repaired
+                    .orphan_vectors
+                    .saturating_add(intent.point_ids.len());
+            }
+            Err(error) => {
+                write_intent_audit(
+                    pool,
+                    ctx,
+                    document_id,
+                    "vector.cleanup_intent",
+                    "error",
+                    json!({
+                        "job_id": intent.job_id,
+                        "point_count": intent.point_ids.len(),
+                    }),
+                )
+                .await?;
+                return Err(error.into());
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn compare_document_minio_inventory(
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    inventory: &DocumentInventory,
+) -> Result<ObjectInventoryDrift, ReconciliationError> {
+    let pg_keys = inventory
+        .object_keys
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut minio_keys = BTreeSet::new();
+    for version in &inventory.versions {
+        let prefix = trusted_version_prefix(ctx.org_id(), version.id)?;
+        let listed = storage
+            .list_keys_with_prefix(ctx.org_id(), &prefix, MINIO_INVENTORY_LIMIT)
+            .await?;
+        for key in listed {
+            minio_keys.insert(key);
+        }
+    }
+    // Also observe existence of PG keys that may live outside version prefixes
+    // (quarantine originals).
+    for raw_key in &inventory.object_keys {
+        let key = parse_key_for_org(raw_key, ctx.org_id())?;
+        if storage.object_exists(ctx.org_id(), &key).await? {
+            minio_keys.insert(raw_key.clone());
+        }
+    }
+    Ok(compare_object_inventory(&pg_keys, &minio_keys))
+}
+
+async fn existing_object_keys(
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    object_keys: &[String],
+) -> Result<Vec<String>, ReconciliationError> {
+    let mut existing = Vec::new();
+    for raw_key in object_keys {
+        let key = parse_key_for_org(raw_key, ctx.org_id())?;
+        if storage.object_exists(ctx.org_id(), &key).await? {
+            existing.push(raw_key.clone());
+        }
+    }
+    Ok(existing)
+}
+
+async fn delete_objects_with_audit(
+    pool: &Pool,
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    object_keys: &[String],
+    action: &'static str,
+) -> Result<(), ReconciliationError> {
+    for batch in object_keys.chunks(OBJECT_DELETE_BATCH) {
+        let batch_keys = batch.to_vec();
+        write_intent_audit(
+            pool,
+            ctx,
+            document_id,
+            action,
+            "intent",
+            json!({
+                "document_id": document_id,
+                "object_count": batch_keys.len(),
+                "object_keys": batch_keys,
+            }),
+        )
+        .await?;
+        match delete_object_batch(storage, ctx, &batch_keys).await {
+            Ok(()) => {
+                write_intent_audit(
+                    pool,
+                    ctx,
+                    document_id,
+                    action,
+                    "success",
+                    json!({
+                        "document_id": document_id,
+                        "object_count": batch_keys.len(),
+                        "object_keys": batch_keys,
+                    }),
+                )
+                .await?;
+            }
+            Err(error) => {
+                write_intent_audit(
+                    pool,
+                    ctx,
+                    document_id,
+                    action,
+                    "error",
+                    json!({
+                        "document_id": document_id,
+                        "object_count": batch_keys.len(),
+                        "object_keys": batch_keys,
+                    }),
+                )
+                .await?;
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn delete_object_batch(
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    object_keys: &[String],
+) -> Result<(), ReconciliationError> {
+    for raw_key in object_keys {
+        let key = parse_key_for_org(raw_key, ctx.org_id())?;
+        match storage.cleanup_generated_object(ctx.org_id(), &key).await {
+            Ok(()) | Err(StorageError::NotFound) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+async fn enqueue_missing_vector_rebuild(
+    pool: &Pool,
+    ctx: &OrgContext,
+    inventory: &DocumentInventory,
+) -> Result<bool, ReconciliationError> {
+    let Some(version_id) = inventory.document.current_version_id else {
+        return Ok(false);
+    };
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        let collection_id = inventory.document.collection_id;
+        let document_id = inventory.document.id;
+        move |txn| {
+            Box::pin(async move {
+                let Some(metadata) =
+                    index_metadata::find_active(txn, &ctx, Some(collection_id)).await?
+                else {
+                    return Ok(false);
+                };
+                let outcome = jobs::enqueue_within_txn(
+                    txn,
+                    &ctx,
+                    EnqueueJob::new(
+                        JobType::Index,
+                        JobPayload {
+                            document_id: Some(document_id),
+                            version_id: Some(version_id),
+                            index_metadata_id: Some(metadata.id),
+                            ..JobPayload::default()
+                        },
+                        index_job_idempotency_key(metadata.id, version_id),
+                    ),
+                )
+                .await?;
+                Ok(outcome.created)
+            })
+        }
+    })
+    .await
 }
 
 async fn list_dead_letter_convert_page(
@@ -323,6 +672,42 @@ async fn load_inventory(
                     signatures: signatures.into_iter().collect(),
                     active_writer_job,
                 })
+            })
+        }
+    })
+    .await
+}
+
+async fn list_pending_intents(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Vec<vector_cleanup_intents::VectorCleanupIntent>, ReconciliationError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                Ok::<_, ReconciliationError>(
+                    vector_cleanup_intents::list_pending_for_document(txn, &ctx, document_id)
+                        .await?,
+                )
+            })
+        }
+    })
+    .await
+}
+
+async fn mark_intent_completed(
+    pool: &Pool,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<(), ReconciliationError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
+                Ok(())
             })
         }
     })
@@ -487,12 +872,12 @@ async fn object_key_is_referenced(
     .await
 }
 
-async fn count_missing_vectors(
+async fn missing_vector_chunks(
     qdrant: &QdrantClient,
     scope: &VectorScope,
     collection_id: Uuid,
     chunks: &[Chunk],
-) -> Result<usize, ReconciliationError> {
+) -> Result<Vec<String>, ReconciliationError> {
     let mut by_signature: BTreeMap<String, Vec<&Chunk>> = BTreeMap::new();
     for chunk in chunks {
         by_signature
@@ -500,7 +885,7 @@ async fn count_missing_vectors(
             .or_default()
             .push(chunk);
     }
-    let mut missing = 0;
+    let mut missing = Vec::new();
     for (digest, chunks) in by_signature {
         let collection = collection_name_for_digest(&digest)?;
         let ids = chunks
@@ -515,21 +900,10 @@ async fn count_missing_vectors(
             .collect::<Result<Vec<_>, StorageError>>()?;
         let found = qdrant.get_points(&collection, scope, &ids).await?;
         let found_ids = found.into_iter().map(|(id, _)| id).collect::<BTreeSet<_>>();
-        missing += ids.iter().filter(|id| !found_ids.contains(id)).count();
-    }
-    Ok(missing)
-}
-
-async fn count_missing_objects(
-    storage: &MinioClient,
-    ctx: &OrgContext,
-    object_keys: &[String],
-) -> Result<usize, ReconciliationError> {
-    let mut missing = 0;
-    for raw_key in object_keys {
-        let key = parse_key_for_org(raw_key, ctx.org_id())?;
-        if !storage.object_exists(ctx.org_id(), &key).await? {
-            missing += 1;
+        for (chunk, id) in chunks.iter().zip(ids.iter()) {
+            if !found_ids.contains(id) {
+                missing.push(chunk.chunk_identity_sha256.clone());
+            }
         }
     }
     Ok(missing)
@@ -540,63 +914,63 @@ async fn write_repair_audit(
     ctx: &OrgContext,
     document_id: Uuid,
     report: &ReconcileReport,
-    outcome: &'static str,
+    phase: &'static str,
 ) -> Result<(), ReconciliationError> {
-    with_org_txn_typed(pool, ctx, {
-        let ctx = ctx.clone();
-        let repaired = report.repaired.clone();
-        move |txn| {
-            Box::pin(async move {
-                let resource_id = document_id.to_string();
-                let request_id = format!("reconcile-{document_id}");
-                write_audit(
-                    txn,
-                    AuditEvent {
-                        org_id: ctx.org_id(),
-                        actor_user_id: Some(ctx.user_id()),
-                        action: "reconcile.repair",
-                        resource_type: "document",
-                        resource_id: Some(&resource_id),
-                        outcome,
-                        request_id: &request_id,
-                        metadata: json!({
-                            "document_id": document_id,
-                            "orphan_vectors": repaired.orphan_vectors,
-                            "stale_vectors": repaired.stale_vectors,
-                        }),
-                    },
-                )
-                .await?;
-                Ok(())
-            })
-        }
-    })
+    let outcome = match phase {
+        "error" => "error",
+        _ => "success",
+    };
+    write_intent_audit(
+        pool,
+        ctx,
+        document_id,
+        "reconcile.repair",
+        outcome,
+        json!({
+            "document_id": document_id,
+            "phase": phase,
+            "orphan_vectors": report.repaired.orphan_vectors,
+            "stale_vectors": report.repaired.stale_vectors,
+            "orphan_objects": report.repaired.orphan_objects,
+            "rebuilt_vector_jobs": report.repaired.rebuilt_vector_jobs,
+        }),
+    )
     .await
 }
 
-async fn write_dead_letter_audit(
+async fn write_intent_audit(
     pool: &Pool,
     ctx: &OrgContext,
-    staged_objects: usize,
+    document_id: Uuid,
+    action: &'static str,
+    outcome: &'static str,
+    metadata: serde_json::Value,
 ) -> Result<(), ReconciliationError> {
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
+                let resource_id = if document_id.is_nil() {
+                    None
+                } else {
+                    Some(document_id.to_string())
+                };
+                let request_id = format!("{action}-{document_id}-{outcome}");
                 write_audit(
                     txn,
                     AuditEvent {
                         org_id: ctx.org_id(),
                         actor_user_id: Some(ctx.user_id()),
-                        action: "reconcile.repair",
-                        resource_type: "jobs",
-                        resource_id: None,
-                        outcome: "success",
-                        request_id: "reconcile-gc",
-                        metadata: json!({
-                            "dead_letter_staged_objects": staged_objects,
-                            "quota_marker_cleanup": "todo_i02_expiry_sweep",
-                        }),
+                        action,
+                        resource_type: if document_id.is_nil() {
+                            "jobs"
+                        } else {
+                            "document"
+                        },
+                        resource_id: resource_id.as_deref(),
+                        outcome,
+                        request_id: &request_id,
+                        metadata,
                     },
                 )
                 .await?;
@@ -643,6 +1017,7 @@ impl ReconciliationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
 
     #[test]
     fn parses_reconcile_modes() {
@@ -658,5 +1033,36 @@ mod tests {
             ReconcileMode::parse("delete"),
             Err(ReconciliationError::InvalidMode)
         ));
+    }
+
+    #[test]
+    fn object_inventory_comparison_classifies_missing_and_orphan() {
+        let pg = BTreeSet::from([
+            "trusted/a/v1/obj1".to_string(),
+            "trusted/a/v1/obj2".to_string(),
+        ]);
+        let minio = BTreeSet::from([
+            "trusted/a/v1/obj1".to_string(),
+            "trusted/a/v1/extra".to_string(),
+        ]);
+        let drift = compare_object_inventory(&pg, &minio);
+        assert_eq!(drift.missing_objects, vec!["trusted/a/v1/obj2".to_string()]);
+        assert_eq!(drift.orphan_objects, vec!["trusted/a/v1/extra".to_string()]);
+    }
+
+    #[test]
+    fn tombstone_and_purge_suppress_reads() {
+        assert!(reads_suppressed(DocumentState::Tombstoned));
+        assert!(reads_suppressed(DocumentState::Purged));
+        assert!(!reads_suppressed(DocumentState::Indexed));
+        assert!(!reads_suppressed(DocumentState::Indexing));
+    }
+
+    #[test]
+    fn dry_run_report_includes_staged_orphan_count_without_repair() {
+        let mut report = ReconcileReport::default();
+        report.orphan_objects = 3;
+        assert_eq!(report.repaired.staged_objects, 0);
+        assert_eq!(report.orphan_objects, 3);
     }
 }
