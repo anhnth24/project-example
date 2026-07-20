@@ -10,6 +10,7 @@ async fn main() {
     }
     match fileconv_server::config::ServerConfig::from_env() {
         Ok(config) if args.iter().any(|argument| argument == "--check-config") => {
+            fileconv_server::telemetry::logging::init_tracing(&config);
             match config.runtime_endpoints() {
                 Ok(_) => println!(
                     "configuration valid: profile={:?}, bind={}",
@@ -20,6 +21,7 @@ async fn main() {
             }
         }
         Ok(config) => {
+            fileconv_server::telemetry::logging::init_tracing(&config);
             let state = match fileconv_server::state::RuntimeState::from_config(config) {
                 Ok(state) => state,
                 Err(error) => exit_with_error(error.to_string()),
@@ -38,9 +40,9 @@ async fn main() {
                 Ok(listener) => listener,
                 Err(error) => exit_with_error(format!("cannot bind server: {error}")),
             };
-            println!(
-                "fileconv-server listening on http://{}",
-                state.config().bind_addr()
+            tracing::info!(
+                bind_addr = %state.config().bind_addr(),
+                "fileconv-server listening"
             );
             if let Err(error) = axum::serve(
                 listener,
@@ -70,7 +72,7 @@ async fn shutdown_signal() {
                     signal.recv().await;
                 }
                 Err(error) => {
-                    eprintln!("fileconv-server: cannot register SIGTERM handler: {error}");
+                    tracing::warn!(error = %error, "cannot register SIGTERM handler");
                 }
             }
         };

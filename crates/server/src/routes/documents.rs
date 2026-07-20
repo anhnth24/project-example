@@ -28,6 +28,7 @@ use crate::routes::common::{
     require_collection_or_404, require_permission_or_403, validate_idempotency_header,
     ListResponse, PageParams, RestError, TxnRestError,
 };
+use crate::services::audit::{self, SafeAuditEvent};
 use crate::services::citation::{self, CitationPin};
 use crate::services::deletion::{self, DeleteRequestOutcome, DeletionError};
 use crate::services::download::{self, DownloadError};
@@ -539,8 +540,29 @@ async fn resolve_citation(
     Json(pin): Json<CitationPin>,
 ) -> Result<Response, DocumentRouteError> {
     let request_id = auth.request_id.clone();
-    require_permission(&auth.context, "qa.query")
-        .map_err(|_| DocumentRouteError::forbidden(request_id.clone()))?;
+    if require_permission(&auth.context, "qa.query").is_err() {
+        let action = "document.citation.resolve";
+        warn_audit_failure(
+            audit_download(
+                &state,
+                &auth.context,
+                action,
+                "deny",
+                Some(path.version_id.to_string()),
+                &request_id,
+                serde_json::json!({
+                    "reason": "permission_denied",
+                    "documentId": path.document_id.to_string(),
+                    "versionId": path.version_id.to_string()
+                }),
+            )
+            .await,
+            action,
+            "deny",
+            &request_id,
+        );
+        return Err(DocumentRouteError::forbidden(request_id.clone()));
+    }
     if path.document_id != pin.document_id || path.version_id != pin.version_id {
         return Err(DocumentRouteError::validation(
             "Citation pin does not match the requested document version",
@@ -599,7 +621,7 @@ async fn authorize_download(
     let key = state
         .download_capability_key()
         .ok_or_else(|| DocumentRouteError::service_unavailable(request_id.clone()))?;
-    let capability = download::authorize_download(
+    let capability = match download::authorize_download(
         state.pool(),
         storage,
         &auth.context,
@@ -609,7 +631,51 @@ async fn authorize_download(
         Utc::now(),
     )
     .await
-    .map_err(|error| DocumentRouteError::download(error, request_id.clone()))?;
+    {
+        Ok(capability) => capability,
+        Err(error) => {
+            let outcome = download_audit_outcome(&error);
+            warn_audit_failure(
+                audit_download(
+                    &state,
+                    &auth.context,
+                    "document.download.mint",
+                    outcome,
+                    Some(path.version_id.to_string()),
+                    &request_id,
+                    serde_json::json!({
+                        "reason": download_audit_reason(&error),
+                        "documentId": path.document_id.to_string(),
+                        "versionId": path.version_id.to_string()
+                    }),
+                )
+                .await,
+                "document.download.mint",
+                outcome,
+                &request_id,
+            );
+            return Err(DocumentRouteError::download(error, request_id.clone()));
+        }
+    };
+    warn_audit_failure(
+        audit_download(
+            &state,
+            &auth.context,
+            "document.download.mint",
+            "success",
+            Some(path.version_id.to_string()),
+            &request_id,
+            serde_json::json!({
+                "documentId": path.document_id.to_string(),
+                "versionId": path.version_id.to_string(),
+                "byteSize": capability.byte_size
+            }),
+        )
+        .await,
+        "document.download.mint",
+        "success",
+        &request_id,
+    );
     Ok(Json(capability).into_response())
 }
 
@@ -630,6 +696,7 @@ async fn redeem_download(
         key,
         state.consumed_download_nonces(),
         &path.token,
+        &request_id,
         Utc::now(),
     )
     .await
@@ -651,6 +718,73 @@ async fn redeem_download(
         HeaderValue::from_static("nosniff"),
     );
     Ok((headers, Body::from(stream.bytes)).into_response())
+}
+
+async fn audit_download(
+    state: &Arc<AppState>,
+    ctx: &OrgContext,
+    action: &'static str,
+    outcome: &'static str,
+    resource_id: Option<String>,
+    request_id: &str,
+    metadata: serde_json::Value,
+) -> Result<(), crate::db::error::DbError> {
+    audit::record_audit_event(
+        state.pool(),
+        ctx,
+        SafeAuditEvent {
+            action,
+            resource_type: "document_version",
+            resource_id,
+            outcome,
+            request_id: request_id.into(),
+            metadata,
+        },
+    )
+    .await
+}
+
+fn warn_audit_failure(
+    result: Result<(), crate::db::error::DbError>,
+    action: &'static str,
+    outcome: &'static str,
+    request_id: &str,
+) {
+    if let Err(error) = result {
+        tracing::warn!(
+            action = action,
+            outcome = outcome,
+            request_id = %request_id,
+            error_code = error.code(),
+            "audit write failed"
+        );
+    }
+}
+
+fn download_audit_outcome(error: &DownloadError) -> &'static str {
+    match error {
+        DownloadError::NotFound
+        | DownloadError::InvalidToken
+        | DownloadError::Expired
+        | DownloadError::Replay => "deny",
+        DownloadError::CapabilityUnavailable
+        | DownloadError::Db(_)
+        | DownloadError::Storage(_)
+        | DownloadError::Integrity => "error",
+    }
+}
+
+fn download_audit_reason(error: &DownloadError) -> &'static str {
+    match error {
+        DownloadError::NotFound => "source_not_found",
+        DownloadError::CapabilityUnavailable => "capability_unavailable",
+        DownloadError::InvalidToken => "invalid_token",
+        DownloadError::Expired => "expired",
+        DownloadError::Replay => "replay",
+        DownloadError::Db(_) => "database_error",
+        DownloadError::Storage(_) => "storage_error",
+        DownloadError::Integrity => "integrity_failed",
+    }
 }
 
 async fn load_visible_document(

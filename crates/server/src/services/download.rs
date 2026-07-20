@@ -21,6 +21,7 @@ use crate::auth::permissions::{require_permission, resolve_org_context_in_txn};
 use crate::config::SecretString;
 use crate::db::error::DbError;
 use crate::db::pool::with_org_txn_typed;
+use crate::services::audit::{record_audit_event, SafeAuditEvent};
 use crate::storage::keys::parse_key_for_org;
 use crate::storage::minio::MinioClient;
 use crate::storage::{ObjectNamespace, StorageError};
@@ -224,20 +225,98 @@ pub async fn redeem_download(
     capability_key: &CapabilityKey,
     consumed_nonces: &ConsumedDownloadNonces,
     token: &str,
+    request_id: &str,
     now: DateTime<Utc>,
 ) -> Result<DownloadStream, DownloadError> {
     let verified = verify_token(capability_key, token, now)?;
     consumed_nonces
         .consume_once(verified.nonce, verified.expires_at, now)
         .await?;
-    let ctx = resolve_org_context_in_txn(pool, verified.org_id, verified.user_id)
-        .await
-        .map_err(|_| DownloadError::NotFound)?;
-    require_permission(&ctx, "qa.query").map_err(|_| DownloadError::NotFound)?;
-    let source =
-        authorize_original_source(pool, &ctx, verified.document_id, verified.version_id).await?;
+    let ctx = match resolve_org_context_in_txn(pool, verified.org_id, verified.user_id).await {
+        Ok(ctx) => ctx,
+        Err(_) => {
+            if let Ok(ctx) =
+                OrgContext::try_new(verified.org_id, verified.user_id, [] as [&str; 0], [])
+            {
+                warn_audit_failure(
+                    audit_redeem(
+                        pool,
+                        &ctx,
+                        &verified,
+                        "deny",
+                        Some("identity_not_authorized"),
+                        request_id,
+                        None,
+                    )
+                    .await,
+                    "deny",
+                    request_id,
+                );
+            }
+            return Err(DownloadError::NotFound);
+        }
+    };
+    if require_permission(&ctx, "qa.query").is_err() {
+        warn_audit_failure(
+            audit_redeem(
+                pool,
+                &ctx,
+                &verified,
+                "deny",
+                Some("permission_denied"),
+                request_id,
+                None,
+            )
+            .await,
+            "deny",
+            request_id,
+        );
+        return Err(DownloadError::NotFound);
+    }
+    let source = match authorize_original_source(
+        pool,
+        &ctx,
+        verified.document_id,
+        verified.version_id,
+    )
+    .await
+    {
+        Ok(source) => source,
+        Err(error) => {
+            let outcome = download_audit_outcome(&error);
+            warn_audit_failure(
+                audit_redeem(
+                    pool,
+                    &ctx,
+                    &verified,
+                    outcome,
+                    Some(download_audit_reason(&error)),
+                    request_id,
+                    None,
+                )
+                .await,
+                outcome,
+                request_id,
+            );
+            return Err(error);
+        }
+    };
     let key = parse_key_for_org(&source.original_object_key, ctx.org_id())?;
     if key.namespace() != ObjectNamespace::Quarantine {
+        warn_audit_failure(
+            audit_redeem(
+                pool,
+                &ctx,
+                &verified,
+                "deny",
+                Some("source_not_found"),
+                request_id,
+                None,
+            )
+            .await,
+            "deny",
+            request_id,
+        );
         return Err(DownloadError::NotFound);
     }
     let metadata = storage.head_metadata(ctx.org_id(), &key).await?;
@@ -249,15 +328,116 @@ pub async fn redeem_download(
     let bytes = storage.get_object(ctx.org_id(), &key).await?;
     let actual_sha256 = hex::encode(Sha256::digest(&bytes));
     if actual_sha256 != expected_sha256 {
+        warn_audit_failure(
+            audit_redeem(
+                pool,
+                &ctx,
+                &verified,
+                "error",
+                Some("integrity_failed"),
+                request_id,
+                None,
+            )
+            .await,
+            "error",
+            request_id,
+        );
         return Err(DownloadError::Integrity);
     }
+    let byte_size = bytes.len() as u64;
+    warn_audit_failure(
+        audit_redeem(
+            pool,
+            &ctx,
+            &verified,
+            "success",
+            None,
+            request_id,
+            Some(byte_size),
+        )
+        .await,
+        "success",
+        request_id,
+    );
     Ok(DownloadStream {
-        byte_size: bytes.len() as u64,
+        byte_size,
         bytes,
         content_type,
         filename,
         content_sha256: actual_sha256,
     })
+}
+
+async fn audit_redeem(
+    pool: &Pool,
+    ctx: &OrgContext,
+    verified: &VerifiedToken,
+    outcome: &'static str,
+    reason: Option<&'static str>,
+    request_id: &str,
+    byte_size: Option<u64>,
+) -> Result<(), DbError> {
+    let mut metadata = serde_json::json!({
+        "documentId": verified.document_id.to_string(),
+        "versionId": verified.version_id.to_string()
+    });
+    if let Some(reason) = reason {
+        metadata["reason"] = serde_json::Value::String(reason.into());
+    }
+    if let Some(byte_size) = byte_size {
+        metadata["byteSize"] = serde_json::Value::Number(byte_size.into());
+    }
+    record_audit_event(
+        pool,
+        ctx,
+        SafeAuditEvent {
+            action: "document.download.redeem",
+            resource_type: "document_version",
+            resource_id: Some(verified.version_id.to_string()),
+            outcome,
+            request_id: request_id.into(),
+            metadata,
+        },
+    )
+    .await
+}
+
+fn warn_audit_failure(result: Result<(), DbError>, outcome: &'static str, request_id: &str) {
+    if let Err(error) = result {
+        tracing::warn!(
+            action = "document.download.redeem",
+            outcome = outcome,
+            request_id = %request_id,
+            error_code = error.code(),
+            "audit write failed"
+        );
+    }
+}
+
+fn download_audit_outcome(error: &DownloadError) -> &'static str {
+    match error {
+        DownloadError::NotFound
+        | DownloadError::InvalidToken
+        | DownloadError::Expired
+        | DownloadError::Replay => "deny",
+        DownloadError::CapabilityUnavailable
+        | DownloadError::Db(_)
+        | DownloadError::Storage(_)
+        | DownloadError::Integrity => "error",
+    }
+}
+
+fn download_audit_reason(error: &DownloadError) -> &'static str {
+    match error {
+        DownloadError::NotFound => "source_not_found",
+        DownloadError::CapabilityUnavailable => "capability_unavailable",
+        DownloadError::InvalidToken => "invalid_token",
+        DownloadError::Expired => "expired",
+        DownloadError::Replay => "replay",
+        DownloadError::Db(_) => "database_error",
+        DownloadError::Storage(_) => "storage_error",
+        DownloadError::Integrity => "integrity_failed",
+    }
 }
 
 async fn authorize_original_source(

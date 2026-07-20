@@ -17,6 +17,7 @@ use crate::routes;
 use crate::services::download::{CapabilityKey, ConsumedDownloadNonces};
 use crate::services::quota;
 use crate::state::RuntimeState;
+use crate::telemetry::metrics::MetricsRegistry;
 
 pub(crate) const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -34,6 +35,7 @@ pub struct AppState {
     ask_streams: AskStreamRegistry,
     download_capability_key: Option<CapabilityKey>,
     consumed_download_nonces: ConsumedDownloadNonces,
+    metrics: MetricsRegistry,
 }
 
 impl AppState {
@@ -98,6 +100,7 @@ impl AppState {
             ask_streams: AskStreamRegistry::new(),
             download_capability_key,
             consumed_download_nonces: ConsumedDownloadNonces::new(),
+            metrics: MetricsRegistry::new(),
         })
     }
 
@@ -156,6 +159,7 @@ impl AppState {
             ask_streams: AskStreamRegistry::new(),
             download_capability_key,
             consumed_download_nonces: ConsumedDownloadNonces::new(),
+            metrics: MetricsRegistry::new(),
         })
     }
 
@@ -215,6 +219,10 @@ impl AppState {
     pub fn consumed_download_nonces(&self) -> &ConsumedDownloadNonces {
         &self.consumed_download_nonces
     }
+
+    pub fn metrics(&self) -> &MetricsRegistry {
+        &self.metrics
+    }
 }
 
 fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
@@ -229,14 +237,14 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
             // showing stale reserved rows.
             match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
                 Ok(expired) if expired > 0 => {
-                    eprintln!("fileconv-server: quota expiry sweep marked {expired} reservations");
+                    tracing::info!(
+                        expired_reservations = expired,
+                        "quota expiry sweep marked expired reservations"
+                    );
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    eprintln!(
-                        "fileconv-server: quota expiry sweep failed: {}",
-                        error.code()
-                    );
+                    tracing::warn!(error_code = error.code(), "quota expiry sweep failed");
                 }
             }
         }
@@ -255,10 +263,15 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::search::router())
         .merge(routes::ask::router())
         .merge(routes::events::router())
+        .merge(routes::metrics::router())
         .merge(routes::uploads::router(max_upload_bytes))
         .with_state(state.clone())
         .layer(from_fn_with_state(state.clone(), rate_limit::rate_limit))
-        .layer(from_fn_with_state(state, cors::cors))
+        .layer(from_fn_with_state(state.clone(), cors::cors))
+        .layer(from_fn_with_state(
+            state,
+            crate::telemetry::http::record_http_metrics,
+        ))
         .layer(from_fn(request_id::ensure_request_id))
 }
 
@@ -431,6 +444,86 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), axum::http::StatusCode::OK);
         }
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_is_config_gated_and_rate_limit_exempt() {
+        let disabled = test_app(
+            config_for_middleware_tests()
+                .with_test_rate_limits(test_rate_limits(1))
+                .with_test_metrics_enabled(false),
+        );
+        let response = disabled
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let enabled = test_app(
+            config_for_middleware_tests()
+                .with_test_rate_limits(test_rate_limits(1))
+                .with_test_metrics_enabled(true),
+        );
+        for _ in 0..3 {
+            let response = enabled
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/metrics")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            assert_eq!(
+                response
+                    .headers()
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .unwrap(),
+                "text/plain; version=0.0.4"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn metrics_use_route_pattern_not_raw_identifier_path() {
+        let document_id = "d4010000-0000-4000-8000-000000000001";
+        let app = test_app(config_for_middleware_tests());
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/documents/{document_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(response.status(), axum::http::StatusCode::OK);
+
+        let metrics = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        let metrics = String::from_utf8(metrics.to_vec()).unwrap();
+        assert!(metrics.contains(r#"route="/api/v1/documents/{documentId}""#));
+        assert!(!metrics.contains(document_id));
     }
 
     #[tokio::test]

@@ -1,10 +1,14 @@
-//! In-memory observability and audit contracts; no exporter or durable storage.
+//! In-memory observability and audit contracts.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-const SENSITIVE_FRAGMENTS: &[&str] = &[
+pub mod http;
+pub mod logging;
+pub mod metrics;
+
+pub const SENSITIVE_FRAGMENTS: &[&str] = &[
     "authorization",
     "cookie",
     "database_url",
@@ -17,7 +21,7 @@ const SENSITIVE_FRAGMENTS: &[&str] = &[
     "token",
 ];
 
-const FORBIDDEN_METRIC_LABELS: &[&str] = &[
+pub const FORBIDDEN_METRIC_LABELS: &[&str] = &[
     "actor_id",
     "document_id",
     "filename",
@@ -64,11 +68,7 @@ pub fn redacted_fields(fields: &BTreeMap<String, String>) -> BTreeMap<String, St
     fields
         .iter()
         .map(|(key, value)| {
-            let normalized = key.to_ascii_lowercase();
-            let value = if SENSITIVE_FRAGMENTS
-                .iter()
-                .any(|fragment| normalized.contains(fragment))
-            {
+            let value = if is_sensitive_field_name(key) {
                 "[REDACTED]".to_string()
             } else {
                 value.clone()
@@ -76,6 +76,54 @@ pub fn redacted_fields(fields: &BTreeMap<String, String>) -> BTreeMap<String, St
             (key.clone(), value)
         })
         .collect()
+}
+
+pub fn redacted_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(object) => serde_json::Value::Object(
+            object
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = if is_sensitive_field_name(&key) {
+                        serde_json::Value::String("[REDACTED]".into())
+                    } else {
+                        redacted_json_value(value)
+                    };
+                    (key, value)
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(redacted_json_value).collect())
+        }
+        other => other,
+    }
+}
+
+pub fn redacted_field_value(key: &str, value: impl Into<String>) -> String {
+    if is_sensitive_field_name(key) {
+        "[REDACTED]".into()
+    } else {
+        value.into()
+    }
+}
+
+fn is_sensitive_field_name(key: &str) -> bool {
+    let normalized = key.to_ascii_lowercase();
+    let compact = normalized
+        .bytes()
+        .filter(|byte| byte.is_ascii_alphanumeric())
+        .collect::<Vec<_>>();
+    SENSITIVE_FRAGMENTS.iter().any(|fragment| {
+        let fragment_compact = fragment
+            .bytes()
+            .filter(|byte| byte.is_ascii_alphanumeric())
+            .collect::<Vec<_>>();
+        normalized.contains(fragment)
+            || compact
+                .windows(fragment_compact.len())
+                .any(|window| window == fragment_compact.as_slice())
+    })
 }
 
 pub fn validate_metric(name: &str, labels: &[&str]) -> Result<(), String> {
@@ -98,7 +146,9 @@ pub fn validate_metric(name: &str, labels: &[&str]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{redacted_fields, validate_metric, AuditEvent, CorrelationContext};
+    use super::{
+        redacted_fields, redacted_json_value, validate_metric, AuditEvent, CorrelationContext,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -142,6 +192,21 @@ mod tests {
         assert!(validate_metric("markhand_job_duration_seconds", &["job_type", "outcome"]).is_ok());
         assert!(validate_metric("markhand_job_total", &["org_id"]).is_err());
         assert!(validate_metric("Bad-Metric", &[]).is_err());
+    }
+
+    #[test]
+    fn redacts_camel_case_sensitive_metadata() {
+        let metadata = serde_json::json!({
+            "documentContent": "never expose this private text",
+            "safeId": "safe",
+            "nested": { "signedUrl": "https://example.test/token" }
+        });
+        let redacted = redacted_json_value(metadata);
+        let rendered = redacted.to_string();
+        assert!(!rendered.contains("private text"));
+        assert!(!rendered.contains("example.test/token"));
+        assert!(rendered.contains("safe"));
+        assert!(rendered.contains("[REDACTED]"));
     }
 
     #[test]

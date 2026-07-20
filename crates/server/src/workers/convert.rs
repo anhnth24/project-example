@@ -1127,7 +1127,7 @@ impl ConvertWorkerError {
         )
     }
 
-    fn safe_job_error(&self) -> &'static str {
+    pub fn safe_job_error(&self) -> &'static str {
         match self {
             Self::Db(_) => "convert database error",
             Self::Storage(_) => "convert storage error",

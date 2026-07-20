@@ -8,5 +8,6 @@ pub mod documents;
 pub mod events;
 pub mod health;
 pub mod jobs;
+pub mod metrics;
 pub mod search;
 pub mod uploads;

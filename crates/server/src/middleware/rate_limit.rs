@@ -167,7 +167,7 @@ pub async fn rate_limit(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if is_health_path(request.uri().path()) {
+    if is_exempt_path(request.uri().path()) {
         return next.run(request).await;
     }
 
@@ -181,10 +181,10 @@ pub async fn rate_limit(
     }
 }
 
-fn is_health_path(path: &str) -> bool {
+fn is_exempt_path(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/health/live" | "/api/v1/health/ready" | "/api/v1/health/start"
+        "/api/v1/health/live" | "/api/v1/health/ready" | "/api/v1/health/start" | "/api/v1/metrics"
     )
 }
 
