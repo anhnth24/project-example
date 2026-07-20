@@ -12,8 +12,8 @@ fn main() {
             eprintln!("usage: dev-hash-password <password>");
             std::process::exit(2);
         });
-    let hash = password::hash_password(&password, &Argon2Config::defaults())
-        .unwrap_or_else(|error| {
+    let hash =
+        password::hash_password(&password, &Argon2Config::defaults()).unwrap_or_else(|error| {
             eprintln!("dev-hash-password: {error}");
             std::process::exit(1);
         });
