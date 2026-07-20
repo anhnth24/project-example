@@ -356,6 +356,45 @@ impl OutboxSink for FailingOnceSink {
     }
 }
 
+/// Always fails for one specific job's outbox event, delegates for the rest.
+struct PoisonJobSink {
+    poison_job_id: Uuid,
+    delegate: EventLogOutboxSink,
+}
+
+impl PoisonJobSink {
+    fn new(poison_job_id: Uuid) -> Self {
+        Self {
+            poison_job_id,
+            delegate: EventLogOutboxSink,
+        }
+    }
+}
+
+impl OutboxSink for PoisonJobSink {
+    fn publish<'a>(
+        &'a self,
+        txn: &'a tokio_postgres::Transaction<'_>,
+        ctx: &'a OrgContext,
+        event: &'a fileconv_server::db::models::OutboxEvent,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<fileconv_server::db::models::EventLogEntry, JobError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            if event.job_id == Some(self.poison_job_id) {
+                return Err(JobError::Database(DbError::Config(
+                    "intentional poison event".into(),
+                )));
+            }
+            self.delegate.publish(txn, ctx, event).await
+        })
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
@@ -1235,10 +1274,12 @@ async fn outbox_sink_failure_leaves_unpublished_and_retry_publishes_once() {
     assert_eq!(unpublished_outbox_count(&pool, &context).await, 1);
 
     let sink = Arc::new(FailingOnceSink::default());
-    assert!(matches!(
-        jobs::relay_outbox_with_sink(&pool, &context, 10, &sink).await,
-        Err(JobError::Database(_))
-    ));
+    // A publish failure no longer aborts/errors the whole relay; the event is isolated
+    // in its savepoint and left unpublished for the next pass.
+    let first = jobs::relay_outbox_with_sink(&pool, &context, 10, &sink)
+        .await
+        .expect("relay tolerates a failing event");
+    assert!(first.is_empty());
     assert_eq!(unpublished_outbox_count(&pool, &context).await, 1);
     assert_eq!(event_count(&pool, &context, "outbox.published").await, 0);
 
@@ -1253,6 +1294,36 @@ async fn outbox_sink_failure_leaves_unpublished_and_retry_publishes_once() {
         .expect("replay")
         .is_empty());
     assert_eq!(event_count(&pool, &context, "outbox.published").await, 1);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn poison_outbox_event_does_not_block_healthy_events() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(&pool, Uuid::new_v4(), Uuid::new_v4(), "jobs-outbox-poison").await;
+    // Enqueue order becomes created_at order: healthy, poison (middle), healthy.
+    enqueue_one(&pool, &context, "healthy-before").await;
+    let poison = enqueue_one(&pool, &context, "poison").await;
+    enqueue_one(&pool, &context, "healthy-after").await;
+    assert_eq!(unpublished_outbox_count(&pool, &context).await, 3);
+
+    let sink = Arc::new(PoisonJobSink::new(poison.id));
+    let published = jobs::relay_outbox_with_sink(&pool, &context, 10, &sink)
+        .await
+        .expect("relay isolates the poison event");
+
+    // The poison event in the middle must not block the healthy event after it.
+    assert_eq!(published.len(), 2);
+    assert!(published
+        .iter()
+        .all(|publication| publication.outbox.job_id != Some(poison.id)));
+    assert_eq!(unpublished_outbox_count(&pool, &context).await, 1);
+    assert_eq!(event_count(&pool, &context, "outbox.published").await, 2);
 
     ephemeral.drop().await;
 }
