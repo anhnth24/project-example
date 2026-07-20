@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
-use fileconv_knowledge::embedding::{EmbeddingPlan, LOCAL_VECTOR_DIMENSIONS};
+use fileconv_knowledge::embedding::{EmbeddingPlan, RUNTIME_LOCAL_HASH};
 use thiserror::Error;
 use tokio::time::{timeout_at, Instant as TokioInstant};
 use uuid::Uuid;
@@ -11,10 +11,10 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::models::{Job, JobStatus, JobType};
 use crate::jobs::{self, JobError};
+use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::indexing::{self, IndexVersionInput, IndexVersionOutcome, IndexingError};
 use crate::storage::minio::MinioClient;
 use crate::storage::qdrant::QdrantClient;
-use crate::workers::embedding::EmbeddingWorker;
 
 const DEFAULT_CLAIM_LIMIT: u32 = 1;
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -66,7 +66,7 @@ pub struct IndexWorker {
     qdrant: QdrantClient,
     config: IndexWorkerConfig,
     approved_signature: Option<String>,
-    embedding_worker: EmbeddingWorker,
+    embedding_plan: EmbeddingPlan,
 }
 
 impl IndexWorker {
@@ -77,10 +77,36 @@ impl IndexWorker {
         config: IndexWorkerConfig,
         approved_signature: Option<String>,
     ) -> Result<Self, IndexWorkerError> {
+        let runtime = ApprovedEmbeddingRuntime::from_env(approved_signature.as_deref())
+            .map_err(IndexWorkerError::Embedding)?;
+        Self::new_with_plan(
+            db_pool,
+            storage,
+            qdrant,
+            config,
+            approved_signature,
+            runtime.plan().clone(),
+        )
+    }
+
+    pub fn new_with_plan(
+        db_pool: Pool,
+        storage: MinioClient,
+        qdrant: QdrantClient,
+        config: IndexWorkerConfig,
+        approved_signature: Option<String>,
+        embedding_plan: EmbeddingPlan,
+    ) -> Result<Self, IndexWorkerError> {
         config.validate()?;
+        if embedding_plan.runtime_path() == RUNTIME_LOCAL_HASH {
+            return Err(IndexWorkerError::UnapprovedEmbeddingRuntime);
+        }
+        let dimensions = embedding_plan
+            .expected_dimensions()
+            .ok_or(IndexWorkerError::EmbeddingDimensionsUnknown)?;
         if let Some(signature) = approved_signature.as_deref() {
-            let approved = EmbeddingPlan::local_hash_v1()
-                .index_signature(LOCAL_VECTOR_DIMENSIONS)
+            let approved = embedding_plan
+                .index_signature(dimensions)
                 .map_err(IndexWorkerError::Knowledge)?
                 .digest();
             if signature != approved {
@@ -93,7 +119,7 @@ impl IndexWorker {
             qdrant,
             config,
             approved_signature,
-            embedding_worker: EmbeddingWorker::new(),
+            embedding_plan,
         })
     }
 
@@ -133,8 +159,8 @@ impl IndexWorker {
             heartbeat_interval: self.config.heartbeat_interval,
             embedding_batch_size: self.config.embedding_batch_size,
             approved_signature: self.approved_signature.as_deref(),
+            embedding_plan: &self.embedding_plan,
             deadline,
-            embedding_worker: &self.embedding_worker,
         };
         let result = timeout_at(
             deadline,
@@ -194,22 +220,17 @@ impl IndexWorker {
         attempts: i32,
         last_error: &str,
     ) -> Result<IndexWorkerRun, IndexWorkerError> {
-        match jobs::fail(
-            &self.db_pool,
-            ctx,
-            job.id,
-            lease_token,
-            attempts,
-            last_error,
-        )
-        .await
+        match indexing::fail_index_job(&self.db_pool, ctx, job, lease_token, attempts, last_error)
+            .await
         {
             Ok(failed) => Ok(IndexWorkerRun::Failed {
                 job_id: failed.id,
                 terminal: failed.status == JobStatus::DeadLetter,
             }),
-            Err(JobError::LeaseLost) => Ok(IndexWorkerRun::LeaseLost { job_id: job.id }),
-            Err(error) => Err(IndexWorkerError::Job(error)),
+            Err(IndexingError::Job(JobError::LeaseLost)) => {
+                Ok(IndexWorkerRun::LeaseLost { job_id: job.id })
+            }
+            Err(error) => Err(IndexWorkerError::Indexing(error)),
         }
     }
 }
@@ -240,6 +261,12 @@ pub enum IndexWorkerError {
     SignatureMismatch,
     #[error("knowledge error")]
     Knowledge(fileconv_knowledge::KnowledgeError),
+    #[error("embedding runtime error")]
+    Embedding(#[from] crate::services::embedding::EmbeddingError),
+    #[error("approved embedding runtime did not declare vector dimensions")]
+    EmbeddingDimensionsUnknown,
+    #[error("the local hash runtime is not approved for server indexing")]
+    UnapprovedEmbeddingRuntime,
     #[error("index job exceeded configured maximum duration")]
     JobTimedOut,
 }
@@ -255,6 +282,9 @@ impl IndexWorkerError {
             Self::InvalidBatchSize => "index batch size invalid",
             Self::SignatureMismatch => "index signature mismatch",
             Self::Knowledge(_) => "index knowledge error",
+            Self::Embedding(_) => "index embedding runtime error",
+            Self::EmbeddingDimensionsUnknown => "index embedding dimensions missing",
+            Self::UnapprovedEmbeddingRuntime => "index embedding runtime not approved",
             Self::JobTimedOut => "index job timed out",
         }
     }

@@ -1,11 +1,12 @@
 //! Live tests for the durable index worker.
 //!
-//! These tests skip cleanly unless PostgreSQL, MinIO, and Qdrant test endpoints
-//! are provided in the environment.
+//! These tests require PostgreSQL, MinIO, Qdrant, and an approved embedding
+//! endpoint. They are explicitly ignored outside the integration environment;
+//! non-skipping unit coverage lives beside the worker/runtime modules.
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
-use fileconv_knowledge::embedding::LOCAL_VECTOR_DIMENSIONS;
+use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::config::{MinioConfig, SecretString};
 use fileconv_server::database::apply_migrations;
@@ -16,7 +17,6 @@ use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
 use fileconv_server::services::chunking::prepare_chunks;
-use fileconv_server::services::embedding::{approved_plan, embed_bodies};
 use fileconv_server::services::indexing::IndexingOutboxSink;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
@@ -80,6 +80,19 @@ fn test_qdrant_client() -> Option<QdrantClient> {
         .filter(|value| !value.trim().is_empty())
         .map(SecretString::new);
     Some(QdrantClient::with_api_key(url, api_key).expect("qdrant client"))
+}
+
+fn test_embedding_plan() -> EmbeddingPlan {
+    EmbeddingPlan::provider(
+        "test",
+        "test-embedding",
+        "r1",
+        ProviderDeployment::from_base_url(Some("http://embedding.test/v1"))
+            .expect("test deployment"),
+        Some(8),
+        RUNTIME_VLLM_LOCAL,
+    )
+    .expect("test embedding plan")
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -484,12 +497,13 @@ fn index_worker(
     config.heartbeat_interval = Duration::from_secs(5);
     config.max_job_duration = Duration::from_secs(60);
     config.embedding_batch_size = 2;
-    IndexWorker::new(
+    IndexWorker::new_with_plan(
         env.pool.clone(),
         env.storage.clone(),
         env.qdrant.clone(),
         config,
         approved_signature,
+        test_embedding_plan(),
     )
 }
 
@@ -573,8 +587,8 @@ async fn fetched_points(
     markdown: &str,
 ) -> Vec<(Uuid, ChunkPointPayload)> {
     let chunks = prepare_chunks(document_id, version_id, markdown);
-    let plan = approved_plan();
-    let signature = plan.index_signature(LOCAL_VECTOR_DIMENSIONS).unwrap();
+    let plan = test_embedding_plan();
+    let signature = plan.index_signature(8).unwrap();
     let collection_name = env
         .qdrant
         .ensure_collection_for_signature(&signature)
@@ -690,19 +704,15 @@ async fn seed_first_batch_and_checkpoint(
     let chunks = prepare_chunks(document_id, version_id, markdown);
     assert!(chunks.len() > 1);
     let first = &chunks[0];
-    let plan = approved_plan();
-    let signature = plan.index_signature(LOCAL_VECTOR_DIMENSIONS).unwrap();
+    let plan = test_embedding_plan();
+    let signature = plan.index_signature(8).unwrap();
     let signature_digest = signature.digest();
     let collection_name = env
         .qdrant
         .ensure_collection_for_signature(&signature)
         .await
         .expect("ensure collection");
-    let vector = embed_bodies(std::slice::from_ref(&first.body))
-        .expect("embed")
-        .into_iter()
-        .next()
-        .expect("vector");
+    let vector = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     let metadata = with_org_txn(&env.pool, &env.ctx, {
         let ctx = env.ctx.clone();
         let signature_digest = signature_digest.clone();
@@ -725,9 +735,9 @@ async fn seed_first_batch_and_checkpoint(
                         query_normalization_version: &query_normalization_version,
                         embedding_family: &embedding_family,
                         embedding_revision: &embedding_revision,
-                        dimensions: LOCAL_VECTOR_DIMENSIONS as i32,
+                        dimensions: 8,
                         normalized,
-                        runtime_path: fileconv_server::db::models::EmbeddingRuntimePath::LocalHash,
+                        runtime_path: fileconv_server::db::models::EmbeddingRuntimePath::VllmLocal,
                     },
                 )
                 .await
@@ -808,6 +818,7 @@ fn sample_markdown() -> &'static str {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_indexes_converted_document() {
     let Some(env) = LiveEnv::boot().await else {
         return;
@@ -833,10 +844,7 @@ async fn live_index_worker_indexes_converted_document() {
         DocumentState::Indexed
     );
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
-    let signature = approved_plan()
-        .index_signature(LOCAL_VECTOR_DIMENSIONS)
-        .unwrap()
-        .digest();
+    let signature = test_embedding_plan().index_signature(8).unwrap().digest();
     assert_eq!(active_signature(&env, collection_id).await, Some(signature));
     let points = fetched_points(&env, collection_id, document_id, version_id, markdown).await;
     assert_eq!(points.len(), expected.len());
@@ -852,6 +860,7 @@ async fn live_index_worker_indexes_converted_document() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_replay_is_idempotent() {
     let Some(env) = LiveEnv::boot().await else {
         return;
@@ -886,6 +895,7 @@ async fn live_index_worker_replay_is_idempotent() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_signature_mismatch_fails_closed() {
     let Some(env) = LiveEnv::boot().await else {
         return;
@@ -911,6 +921,7 @@ async fn live_index_worker_signature_mismatch_fails_closed() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
     let Some(env) = LiveEnv::boot().await else {
         return;
@@ -973,6 +984,7 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_resumes_from_indexing_state() {
     let Some(env) = LiveEnv::boot().await else {
         return;

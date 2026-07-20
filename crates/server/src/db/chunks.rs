@@ -161,6 +161,43 @@ pub async fn count_by_version(
     Ok(row.get(0))
 }
 
+/// Loads one immutable ordinal range for a particular vector generation.
+pub async fn list_generation_range(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    index_metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    start_ordinal: i32,
+    end_ordinal: i32,
+) -> Result<Vec<Chunk>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT id, org_id, document_id, version_id, ordinal, heading_path, body,
+                    body_text_version, chunk_identity_sha256, index_metadata_id,
+                    index_signature, page, slide, sheet, span_start, span_end,
+                    tsv::text AS tsv, created_at
+             FROM chunks
+             WHERE org_id = $1
+               AND index_metadata_id = $2
+               AND document_id = $3
+               AND version_id = $4
+               AND ordinal >= $5
+               AND ordinal < $6
+             ORDER BY ordinal",
+            &[
+                &ctx.org_id(),
+                &index_metadata_id,
+                &document_id,
+                &version_id,
+                &start_ordinal,
+                &end_ordinal,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_chunk).collect()
+}
+
 fn map_chunk(row: &Row) -> Result<Chunk, DbError> {
     Ok(Chunk {
         id: row.get("id"),

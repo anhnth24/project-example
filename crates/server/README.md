@@ -26,3 +26,31 @@ an explicit `OrgContext`.
 
 Run `cargo run -p fileconv-server -- --check-config` to validate typed configuration
 without starting a listener. See [`docs/conventions/config-secrets.md`](../../docs/conventions/config-secrets.md).
+
+## Index and embedding workers
+
+Run `fileconv-worker` separately for `MARKHAND_WORKER_KIND=index` and
+`MARKHAND_WORKER_KIND=embedding`. The embedding worker has no hash fallback and
+requires an approved OpenAI-compatible runtime:
+
+```bash
+export MARKHAND_EMBEDDING_BASE_URL=https://embedding.internal/v1
+export MARKHAND_EMBEDDING_API_KEY=...
+export MARKHAND_EMBEDDING_MODEL=BAAI/bge-m3
+export MARKHAND_EMBEDDING_REVISION=<pinned-revision>
+export MARKHAND_EMBEDDING_DIMENSIONS=1024
+export MARKHAND_EMBEDDING_RUNTIME_PATH=vllm-local
+# Required in prod; must equal the runtime-derived signature.
+export MARKHAND_INDEX_SIGNATURE=<64-lowercase-hex>
+```
+
+`crates/server/tests/index_worker.rs` is explicitly ignored by the normal test
+command because it needs PostgreSQL, MinIO, Qdrant, and that embedding runtime.
+CI that runs it must provide `MARKHAND_TEST_DATABASE_URL`,
+`MARKHAND_TEST_MINIO_ENDPOINT`, `MARKHAND_TEST_MINIO_ACCESS_KEY`,
+`MARKHAND_TEST_MINIO_SECRET_KEY`, `MARKHAND_TEST_QDRANT_URL`, and the
+`MARKHAND_EMBEDDING_*` variables above, then run:
+
+```bash
+cargo test -p fileconv-server --test index_worker -- --ignored
+```

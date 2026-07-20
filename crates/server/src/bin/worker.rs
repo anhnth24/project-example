@@ -6,6 +6,9 @@ use fileconv_server::jobs;
 use fileconv_server::services::indexing::IndexingOutboxSink;
 use fileconv_server::storage::{MinioClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig};
+use fileconv_server::workers::embedding::{
+    EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
+};
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::SandboxConfig;
@@ -83,6 +86,14 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             )
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
             run_index_worker(state, pool, storage, qdrant, worker_id, ctx).await
+        }
+        "embedding" => {
+            let qdrant = QdrantClient::with_api_key(
+                storage_config.qdrant_url(),
+                storage_config.qdrant_api_key().cloned(),
+            )
+            .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
+            run_embedding_worker(state, pool, qdrant, worker_id, ctx).await
         }
         other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
     }
@@ -192,6 +203,54 @@ async fn run_index_worker(
                     Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
                     Err(error) => {
                         eprintln!("fileconv-worker: index worker error: {error}");
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_embedding_worker(
+    state: fileconv_server::state::RuntimeState,
+    pool: deadpool_postgres::Pool,
+    qdrant: QdrantClient,
+    worker_id: String,
+    ctx: OrgContext,
+) -> Result<(), String> {
+    let mut config = EmbeddingWorkerConfig::new(worker_id);
+    config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
+        config.heartbeat_interval = Duration::from_secs(value.parse().map_err(|_| {
+            "MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS must be an integer".to_string()
+        })?);
+    }
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_MAX_JOB_SECS") {
+        config.max_job_duration = Duration::from_secs(
+            value
+                .parse()
+                .map_err(|_| "MARKHAND_WORKER_MAX_JOB_SECS must be an integer".to_string())?,
+        );
+    }
+    let runtime = fileconv_server::services::embedding::ApprovedEmbeddingRuntime::from_env(
+        state.config().index_signature(),
+    )
+    .map_err(|error| format!("embedding runtime initialization failed: {error}"))?;
+    let worker = EmbeddingWorker::new(pool, qdrant, config, runtime)
+        .map_err(|error| format!("embedding worker initialization failed: {error}"))?;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("fileconv-worker: shutdown requested");
+                break;
+            }
+            result = worker.run_once(&ctx) => {
+                match result {
+                    Ok(EmbeddingWorkerRun::NoJob) => tokio::time::sleep(Duration::from_secs(2)).await,
+                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
+                    Err(error) => {
+                        eprintln!("fileconv-worker: embedding worker error: {error}");
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }

@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
-use fileconv_knowledge::embedding::LOCAL_VECTOR_DIMENSIONS;
+use fileconv_knowledge::embedding::{EmbeddingPlan, RUNTIME_LOCAL_HASH};
 use fileconv_knowledge::identity::BODY_TEXT_VERSION;
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
@@ -20,7 +20,8 @@ use crate::db::models::{
 };
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{
-    chunks, claims as claim_repo, document_versions, documents, index_metadata, jobs as repo,
+    chunks, claims as claim_repo, document_versions, documents, embedding_batches, index_metadata,
+    jobs as repo,
 };
 use crate::jobs::{
     self, CheckpointPayload, EnqueueJob, EventPayload, JobError, JobPayload,
@@ -32,9 +33,8 @@ use crate::services::document_state;
 use crate::services::embedding::{self, EmbeddingError};
 use crate::storage::keys::{authorize_key_for_version, parse_key_for_org};
 use crate::storage::minio::MinioClient;
-use crate::storage::qdrant::{ChunkPointPayload, QdrantClient, UpsertPoint, VectorScope};
+use crate::storage::qdrant::QdrantClient;
 use crate::storage::{ObjectNamespace, StorageError};
-use crate::workers::embedding::{EmbeddingWorker, EmbeddingWorkerError};
 
 #[derive(Debug, Default)]
 pub struct IndexingOutboxSink;
@@ -131,24 +131,26 @@ pub struct IndexVersionInput<'a> {
     pub heartbeat_interval: Duration,
     pub embedding_batch_size: usize,
     pub approved_signature: Option<&'a str>,
+    pub embedding_plan: &'a EmbeddingPlan,
     pub deadline: TokioInstant,
-    pub embedding_worker: &'a EmbeddingWorker,
 }
 
 pub async fn index_version(
     db_pool: &Pool,
     storage: &MinioClient,
-    qdrant: &QdrantClient,
+    _qdrant: &QdrantClient,
     ctx: &OrgContext,
     input: IndexVersionInput<'_>,
 ) -> Result<IndexVersionOutcome, IndexingError> {
+    if input.embedding_plan.runtime_path() == RUNTIME_LOCAL_HASH {
+        return Err(IndexingError::UnapprovedEmbeddingRuntime);
+    }
     let payload = jobs::decode_job_payload(input.job.payload_version, input.job.payload.clone())?;
     let document_id = payload.document_id.ok_or(IndexingError::InvalidPayload)?;
     let version_id = payload.version_id.ok_or(IndexingError::InvalidPayload)?;
     let (document, version, artifact) =
         load_index_source(db_pool, ctx, document_id, version_id).await?;
     let is_current = document.current_version_id == Some(version_id);
-    let is_effective = version.effective_to.is_none();
 
     let trusted_key = parse_key_for_org(&artifact.object_key, ctx.org_id())?;
     if trusted_key.namespace() != ObjectNamespace::Trusted {
@@ -164,8 +166,11 @@ pub async fn index_version(
     let markdown = String::from_utf8(bytes.to_vec()).map_err(|_| IndexingError::MarkdownUtf8)?;
     let prepared_chunks = prepare_chunks(document_id, version_id, &markdown);
 
-    let plan = embedding::approved_plan();
-    let signature = plan.index_signature(LOCAL_VECTOR_DIMENSIONS)?;
+    let dimensions = input
+        .embedding_plan
+        .expected_dimensions()
+        .ok_or(IndexingError::EmbeddingDimensionsUnknown)?;
+    let signature = input.embedding_plan.index_signature(dimensions)?;
     let signature_digest = signature.digest();
     if let Some(approved) = input.approved_signature {
         if approved != signature_digest {
@@ -177,7 +182,7 @@ pub async fn index_version(
     let dimensions = i32::try_from(signature.dimensions).map_err(|_| {
         DbError::Config("embedding dimensions are out of range for database".into())
     })?;
-    let metadata = ensure_generation(
+    let ensured_metadata = ensure_generation(
         db_pool,
         ctx,
         index_metadata::EnsureGeneration {
@@ -194,26 +199,33 @@ pub async fn index_version(
         },
     )
     .await?;
+    let metadata = if let Some(target_metadata_id) = payload.index_metadata_id {
+        let target = load_generation(db_pool, ctx, target_metadata_id).await?;
+        if target.index_signature_sha256 != signature_digest {
+            return Err(IndexingError::SignatureMismatch);
+        }
+        target
+    } else {
+        ensured_metadata
+    };
+    if metadata.state == crate::db::models::IndexGenerationState::Building
+        && payload.index_metadata_id.is_none()
+    {
+        enqueue_staged_backfill(db_pool, ctx, input, &metadata, version_id).await?;
+    }
     heartbeat_once(db_pool, ctx, input).await?;
 
     if is_current {
         match document.state {
-            DocumentState::Indexed => return Ok(IndexVersionOutcome::AlreadyIndexed),
             DocumentState::Converted => {
                 transition_current_to_indexing(db_pool, ctx, input, document_id, version_id)
                     .await?;
             }
-            DocumentState::Indexing => {}
+            DocumentState::Indexing | DocumentState::Indexed => {}
             other => return Err(IndexingError::UnexpectedDocumentState(other)),
         }
     }
 
-    let scope = VectorScope::new(ctx.org_id(), [document.collection_id]);
-    let collection_name = if prepared_chunks.is_empty() {
-        None
-    } else {
-        Some(qdrant.ensure_collection_for_signature(&signature).await?)
-    };
     let mut offset = checkpoint_offset(input.job)?;
     if offset > prepared_chunks.len() {
         return Err(IndexingError::InvalidCheckpoint);
@@ -224,43 +236,7 @@ pub async fn index_version(
             .saturating_add(input.embedding_batch_size)
             .min(prepared_chunks.len());
         let batch = &prepared_chunks[offset..batch_end];
-        let collection_name = collection_name
-            .as_ref()
-            .ok_or(IndexingError::MissingQdrantCollection)?;
         heartbeat_while(db_pool, ctx, input, async {
-            let vectors = embed_batch(batch, input.embedding_worker).await?;
-            let points = batch
-                .iter()
-                .zip(vectors)
-                .map(|(chunk, vector)| {
-                    Ok(UpsertPoint {
-                        chunk_identity: chunk.chunk_identity.clone(),
-                        vector,
-                        payload: ChunkPointPayload {
-                            org_id: ctx.org_id(),
-                            collection_id: document.collection_id,
-                            document_id,
-                            version_id,
-                            chunk_id: chunk.chunk_identity.clone(),
-                            ordinal: u64::try_from(chunk.ordinal)
-                                .map_err(|_| IndexingError::ChunkOrdinal)?,
-                            is_current,
-                            is_effective,
-                            index_generation: u32::try_from(metadata.generation)
-                                .map_err(|_| IndexingError::IndexGeneration)?,
-                        },
-                    })
-                })
-                .collect::<Result<Vec<_>, IndexingError>>()?;
-            // TODO(I07): superseded-version point flags need reconciliation when a
-            // newer version changes which version is current/effective.
-            // TODO(I07): retrieval must filter on committed PG version state and
-            // document indexed state, not solely on these Qdrant payload flags.
-            qdrant
-                .upsert_points(collection_name, &scope, &points)
-                .await?;
-            // TODO(I07): Qdrant is durable before the PG chunk/checkpoint commit;
-            // dead-lettered attempts may leave orphan vectors for reconcile/GC.
             persist_chunk_batch(
                 db_pool,
                 ctx,
@@ -271,6 +247,7 @@ pub async fn index_version(
                     document_id,
                     version_id,
                     batch,
+                    batch_start: offset,
                     batch_end,
                     effective_from: version.effective_from,
                     effective_to: version.effective_to,
@@ -283,17 +260,15 @@ pub async fn index_version(
         offset = batch_end;
     }
 
-    if is_current {
-        let job = finalize_indexed(db_pool, ctx, input, document_id, version_id).await?;
-        Ok(IndexVersionOutcome::Finalized {
-            job_id: job.id,
-            chunks: prepared_chunks.len(),
-        })
-    } else {
-        Ok(IndexVersionOutcome::CompleteOnly {
-            chunks: prepared_chunks.len(),
-        })
+    if prepared_chunks.is_empty() {
+        mark_empty_backfill_complete(db_pool, ctx, input, &metadata, document_id, version_id)
+            .await?;
     }
+    let job = finalize_indexed(db_pool, ctx, input, document_id, version_id).await?;
+    Ok(IndexVersionOutcome::Finalized {
+        job_id: job.id,
+        chunks: prepared_chunks.len(),
+    })
 }
 
 async fn load_index_source(
@@ -346,6 +321,158 @@ async fn ensure_generation(
     .await
 }
 
+async fn load_generation(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+) -> Result<crate::db::models::IndexMetadata, IndexingError> {
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                index_metadata::find_by_id(txn, &ctx, metadata_id)
+                    .await?
+                    .ok_or(DbError::NotFound)
+                    .map_err(IndexingError::from)
+            })
+        }
+    })
+    .await
+}
+
+/// Expands a signature change into durable index jobs for every current version
+/// in the collection. The active generation stays unchanged; this only fills
+/// the immutable staging generation.
+async fn enqueue_staged_backfill(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    input: IndexVersionInput<'_>,
+    metadata: &crate::db::models::IndexMetadata,
+    current_version_id: Uuid,
+) -> Result<(), IndexingError> {
+    let metadata_id = metadata.id;
+    let collection_id = metadata
+        .collection_id
+        .ok_or(IndexingError::MissingCollection)?;
+    let job_id = input.job.id;
+    let lease_token = input.lease_token.to_string();
+    let attempts = input.attempts;
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
+                let targets = embedding_batches::seed_generation_backfills(
+                    txn,
+                    &ctx,
+                    metadata_id,
+                    collection_id,
+                )
+                .await?;
+                for (document_id, version_id) in targets {
+                    if version_id == current_version_id {
+                        continue;
+                    }
+                    jobs::enqueue_within_txn(
+                        txn,
+                        &ctx,
+                        EnqueueJob::new(
+                            JobType::Index,
+                            JobPayload {
+                                document_id: Some(document_id),
+                                version_id: Some(version_id),
+                                index_metadata_id: Some(metadata_id),
+                                ..JobPayload::default()
+                            },
+                            format!("index:{metadata_id}:{version_id}"),
+                        ),
+                    )
+                    .await?;
+                }
+                Ok::<_, IndexingError>(())
+            })
+        }
+    })
+    .await
+}
+
+async fn mark_empty_backfill_complete(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    input: IndexVersionInput<'_>,
+    metadata: &crate::db::models::IndexMetadata,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<(), IndexingError> {
+    let metadata_id = metadata.id;
+    let lease_token = input.lease_token.to_string();
+    let job_id = input.job.id;
+    let attempts = input.attempts;
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
+                embedding_batches::mark_generation_backfilled(
+                    txn,
+                    &ctx,
+                    metadata_id,
+                    document_id,
+                    version_id,
+                )
+                .await?;
+                mark_generation_shadow_if_complete(txn, &ctx, metadata_id).await?;
+                let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                if document.current_version_id == Some(version_id)
+                    && document.state == DocumentState::Indexing
+                {
+                    document_state::apply_transition(
+                        txn,
+                        &ctx,
+                        document_id,
+                        DocumentState::Indexing,
+                        DocumentState::Indexed,
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        }
+    })
+    .await
+}
+
+pub(crate) async fn mark_generation_shadow_if_complete(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+) -> Result<(), IndexingError> {
+    if embedding_batches::generation_backfill_complete(txn, ctx, metadata_id).await? {
+        let _ = index_metadata::mark_shadow(txn, ctx, metadata_id).await?;
+    }
+    Ok(())
+}
+
+/// Operator/verification-gated cutover. Callers must validate shadow retrieval
+/// and citation evidence before making the staged generation visible.
+pub async fn cut_over_shadow_generation(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+) -> Result<crate::db::models::IndexMetadata, IndexingError> {
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                index_metadata::cut_over_shadow_generation(txn, &ctx, metadata_id)
+                    .await
+                    .map_err(IndexingError::from)
+            })
+        }
+    })
+    .await
+}
+
 async fn transition_current_to_indexing(
     db_pool: &Pool,
     ctx: &OrgContext,
@@ -384,8 +511,8 @@ pub async fn finalize_indexed(
     db_pool: &Pool,
     ctx: &OrgContext,
     input: IndexVersionInput<'_>,
-    document_id: Uuid,
-    version_id: Uuid,
+    _document_id: Uuid,
+    _version_id: Uuid,
 ) -> Result<Job, IndexingError> {
     let lease_token = input.lease_token.to_string();
     let job_id = input.job.id;
@@ -395,23 +522,91 @@ pub async fn finalize_indexed(
         move |txn| {
             Box::pin(async move {
                 verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
-                let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
-                if document.current_version_id != Some(version_id) {
-                    return Err(IndexingError::CurrentVersionChanged);
-                }
-                document_state::apply_transition(
-                    txn,
-                    &ctx,
-                    document_id,
-                    DocumentState::Indexing,
-                    DocumentState::Indexed,
-                )
-                .await?;
                 let completed = repo::complete_owned(txn, &ctx, job_id, &lease_token, attempts)
                     .await?
                     .ok_or(IndexingError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
                 Ok::<_, IndexingError>(completed)
+            })
+        }
+    })
+    .await
+}
+
+/// Fails an index-related job and, only when it has exhausted its retry budget,
+/// moves its still-current document to `failed` in the *same* transaction.
+/// This prevents a terminal job/document split-brain state.
+pub async fn fail_index_job(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    job: &Job,
+    lease_token: &str,
+    attempts: i32,
+    last_error: &str,
+) -> Result<Job, IndexingError> {
+    let job_id = job.id;
+    let document_id = job.document_id;
+    let version_id = job.version_id;
+    let lease_token = lease_token.to_string();
+    let last_error = last_error.to_string();
+    let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let failed =
+                    jobs::fail_within_txn(txn, &ctx, job_id, &lease_token, attempts, &last_error)
+                        .await?;
+                if failed.status != JobStatus::DeadLetter {
+                    return Ok::<_, IndexingError>(failed);
+                }
+
+                if let Some(batch_id) = payload.batch_id {
+                    let batch = embedding_batches::mark_failed(txn, &ctx, batch_id).await?;
+                    embedding_batches::mark_generation_failed(
+                        txn,
+                        &ctx,
+                        batch.index_metadata_id,
+                        batch.document_id,
+                        batch.version_id,
+                    )
+                    .await?;
+                } else if let (Some(metadata_id), Some(document_id), Some(version_id)) = (
+                    payload.index_metadata_id,
+                    payload.document_id,
+                    payload.version_id,
+                ) {
+                    embedding_batches::mark_generation_failed(
+                        txn,
+                        &ctx,
+                        metadata_id,
+                        document_id,
+                        version_id,
+                    )
+                    .await?;
+                }
+
+                if let (Some(document_id), Some(version_id)) = (document_id, version_id) {
+                    let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                    if document.current_version_id == Some(version_id)
+                        && matches!(
+                            document.state,
+                            DocumentState::Converted
+                                | DocumentState::Indexing
+                                | DocumentState::Indexed
+                        )
+                    {
+                        document_state::apply_transition(
+                            txn,
+                            &ctx,
+                            document_id,
+                            document.state,
+                            DocumentState::Failed,
+                        )
+                        .await?;
+                    }
+                }
+                Ok(failed)
             })
         }
     })
@@ -518,20 +713,6 @@ impl EnsureGenerationOwned {
     }
 }
 
-async fn embed_batch(
-    batch: &[PreparedChunk],
-    embedding_worker: &EmbeddingWorker,
-) -> Result<Vec<Vec<f32>>, IndexingError> {
-    let bodies = batch
-        .iter()
-        .map(|chunk| chunk.body.clone())
-        .collect::<Vec<_>>();
-    embedding_worker
-        .embed_bodies(bodies)
-        .await
-        .map_err(Into::into)
-}
-
 struct PersistBatchInput<'a> {
     claim: IndexVersionInput<'a>,
     metadata_id: Uuid,
@@ -539,6 +720,7 @@ struct PersistBatchInput<'a> {
     document_id: Uuid,
     version_id: Uuid,
     batch: &'a [PreparedChunk],
+    batch_start: usize,
     batch_end: usize,
     effective_from: chrono::DateTime<chrono::Utc>,
     effective_to: Option<chrono::DateTime<chrono::Utc>>,
@@ -552,7 +734,11 @@ async fn persist_chunk_batch(
     let batch = input.batch.to_vec();
     let signature_digest = input.signature_digest.to_string();
     let metadata_id = input.metadata_id;
+    let batch_start =
+        i32::try_from(input.batch_start).map_err(|_| IndexingError::CheckpointOffset)?;
     let batch_end = u64::try_from(input.batch_end).map_err(|_| IndexingError::CheckpointOffset)?;
+    let batch_end_ordinal =
+        i32::try_from(input.batch_end).map_err(|_| IndexingError::CheckpointOffset)?;
     let lease_token = input.claim.lease_token.to_string();
     let job_id = input.claim.job.id;
     let attempts = input.claim.attempts;
@@ -595,6 +781,70 @@ async fn persist_chunk_batch(
                     )
                     .await?;
                 }
+                let inputs = batch
+                    .iter()
+                    .map(|chunk| {
+                        embedding::ApprovedEmbeddingRuntime::canonical_input(
+                            &chunk.heading_joined,
+                            &chunk.body,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let input_sha256 = embedding::canonical_inputs_sha256(&inputs);
+                let batch_id = Uuid::new_v4();
+                let embedding_job = EnqueueJob::new(
+                    JobType::EmbeddingBatch,
+                    JobPayload {
+                        document_id: Some(document_id),
+                        version_id: Some(version_id),
+                        batch_id: Some(batch_id),
+                        index_metadata_id: Some(metadata_id),
+                        ..JobPayload::default()
+                    },
+                    format!(
+                        "embedding:{metadata_id}:{version_id}:{batch_start}:{batch_end_ordinal}"
+                    ),
+                );
+                let outcome = jobs::enqueue_within_txn(txn, &ctx, embedding_job).await?;
+                if outcome.created {
+                    embedding_batches::insert(
+                        txn,
+                        &ctx,
+                        embedding_batches::NewEmbeddingBatch {
+                            id: batch_id,
+                            index_job_id: job_id,
+                            job_id: outcome.job.id,
+                            index_metadata_id: metadata_id,
+                            document_id,
+                            version_id,
+                            start_ordinal: batch_start,
+                            end_ordinal: batch_end_ordinal,
+                            input_sha256: &input_sha256,
+                        },
+                    )
+                    .await?;
+                } else {
+                    let existing = embedding_batches::find_by_job_id(txn, &ctx, outcome.job.id)
+                        .await?
+                        .ok_or(IndexingError::EmbeddingBatchMissing)?;
+                    if existing.index_metadata_id != metadata_id
+                        || existing.document_id != document_id
+                        || existing.version_id != version_id
+                        || existing.start_ordinal != batch_start
+                        || existing.end_ordinal != batch_end_ordinal
+                        || existing.input_sha256 != input_sha256
+                    {
+                        return Err(IndexingError::EmbeddingBatchMismatch);
+                    }
+                }
+                embedding_batches::mark_generation_indexing(
+                    txn,
+                    &ctx,
+                    metadata_id,
+                    document_id,
+                    version_id,
+                )
+                .await?;
                 jobs::checkpoint_within_txn(
                     txn,
                     &ctx,
@@ -814,8 +1064,6 @@ pub enum IndexingError {
     Knowledge(#[from] fileconv_knowledge::KnowledgeError),
     #[error("embedding error")]
     Embedding(#[from] EmbeddingError),
-    #[error("embedding worker error")]
-    EmbeddingWorker(#[from] EmbeddingWorkerError),
     #[error("index payload is missing document_id or version_id")]
     InvalidPayload,
     #[error("document is in unexpected state {0:?}")]
@@ -830,6 +1078,10 @@ pub enum IndexingError {
     MarkdownUtf8,
     #[error("configured index signature does not match approved local signature")]
     SignatureMismatch,
+    #[error("approved embedding runtime did not declare vector dimensions")]
+    EmbeddingDimensionsUnknown,
+    #[error("the local hash runtime is not approved for server indexing")]
+    UnapprovedEmbeddingRuntime,
     #[error("index checkpoint is invalid")]
     InvalidCheckpoint,
     #[error("checkpoint offset is out of range")]
@@ -840,6 +1092,12 @@ pub enum IndexingError {
     IndexGeneration,
     #[error("qdrant collection was not initialized")]
     MissingQdrantCollection,
+    #[error("index generation is missing its collection scope")]
+    MissingCollection,
+    #[error("existing embedding job is missing its durable batch record")]
+    EmbeddingBatchMissing,
+    #[error("existing embedding batch does not match its immutable range or input")]
+    EmbeddingBatchMismatch,
     #[error("document current version changed while indexing")]
     CurrentVersionChanged,
     #[error("index job exceeded configured maximum duration")]
@@ -854,7 +1112,6 @@ impl IndexingError {
             Self::Storage(_) => "index storage error",
             Self::Knowledge(_) => "index knowledge error",
             Self::Embedding(_) => "index embedding error",
-            Self::EmbeddingWorker(_) => "index embedding worker error",
             Self::InvalidPayload => "index payload invalid",
             Self::UnexpectedDocumentState(_) => "index document state invalid",
             Self::MarkdownNotTrusted => "index markdown key invalid",
@@ -862,11 +1119,16 @@ impl IndexingError {
             Self::MarkdownIntegrity => "index markdown integrity failed",
             Self::MarkdownUtf8 => "index markdown utf8 invalid",
             Self::SignatureMismatch => "index signature mismatch",
+            Self::EmbeddingDimensionsUnknown => "index embedding dimensions missing",
+            Self::UnapprovedEmbeddingRuntime => "index embedding runtime not approved",
             Self::InvalidCheckpoint => "index checkpoint invalid",
             Self::CheckpointOffset => "index checkpoint offset invalid",
             Self::ChunkOrdinal => "index chunk ordinal invalid",
             Self::IndexGeneration => "index generation invalid",
             Self::MissingQdrantCollection => "index qdrant collection missing",
+            Self::MissingCollection => "index collection missing",
+            Self::EmbeddingBatchMissing => "embedding batch missing",
+            Self::EmbeddingBatchMismatch => "embedding batch mismatch",
             Self::CurrentVersionChanged => "index current version changed",
             Self::JobTimedOut => "index job timed out",
         }

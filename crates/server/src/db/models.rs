@@ -763,6 +763,40 @@ impl EmbeddingRuntimePath {
     }
 }
 
+/// Lifecycle state for an immutable vector generation (ADR 0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexGenerationState {
+    Building,
+    Shadow,
+    Active,
+    Draining,
+    Retired,
+}
+
+impl IndexGenerationState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Building => "building",
+            Self::Shadow => "shadow",
+            Self::Active => "active",
+            Self::Draining => "draining",
+            Self::Retired => "retired",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "building" => Ok(Self::Building),
+            "shadow" => Ok(Self::Shadow),
+            "active" => Ok(Self::Active),
+            "draining" => Ok(Self::Draining),
+            "retired" => Ok(Self::Retired),
+            other => Err(format!("unknown index generation state: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexMetadata {
     pub id: Uuid,
@@ -780,6 +814,7 @@ pub struct IndexMetadata {
     pub runtime_path: EmbeddingRuntimePath,
     pub generation: i32,
     pub is_active: bool,
+    pub state: IndexGenerationState,
     pub created_at: DateTime<Utc>,
 }
 
@@ -983,7 +1018,39 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
                 "runtime_path",
                 "generation",
                 "is_active",
+                "state",
                 "created_at",
+            ],
+        ),
+        (
+            "index_generation_backfills",
+            &[
+                "id",
+                "org_id",
+                "index_metadata_id",
+                "document_id",
+                "version_id",
+                "status",
+                "created_at",
+                "completed_at",
+            ],
+        ),
+        (
+            "embedding_batches",
+            &[
+                "id",
+                "org_id",
+                "index_job_id",
+                "job_id",
+                "index_metadata_id",
+                "document_id",
+                "version_id",
+                "start_ordinal",
+                "end_ordinal",
+                "input_sha256",
+                "status",
+                "created_at",
+                "completed_at",
             ],
         ),
         (
@@ -1182,12 +1249,27 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
 
 #[cfg(test)]
 mod tests {
-    use super::SecretHash;
+    use super::{IndexGenerationState, SecretHash};
 
     #[test]
     fn secret_hash_debug_is_redacted() {
         let hash = SecretHash::new("super-secret-token-hash-value");
         assert_eq!(format!("{hash:?}"), "[REDACTED]");
         assert!(hash.expose().contains("super-secret"));
+    }
+
+    #[test]
+    fn index_generation_lifecycle_labels_round_trip() {
+        for (state, label) in [
+            (IndexGenerationState::Building, "building"),
+            (IndexGenerationState::Shadow, "shadow"),
+            (IndexGenerationState::Active, "active"),
+            (IndexGenerationState::Draining, "draining"),
+            (IndexGenerationState::Retired, "retired"),
+        ] {
+            assert_eq!(state.as_str(), label);
+            assert_eq!(IndexGenerationState::parse(label).unwrap(), state);
+        }
+        assert!(IndexGenerationState::parse("mixed").is_err());
     }
 }

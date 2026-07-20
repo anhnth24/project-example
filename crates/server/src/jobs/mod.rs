@@ -21,7 +21,7 @@ use crate::db::error::DbError;
 use crate::db::models::{EventLogEntry, Job, JobStatus, JobType, OutboxEvent};
 use crate::db::{jobs as repo, pool};
 
-pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 2;
+pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 3;
 pub const CURRENT_EVENT_PAYLOAD_VERSION: i32 = 2;
 
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 160;
@@ -40,6 +40,8 @@ pub struct JobPayload {
     pub collection_id: Option<Uuid>,
     pub upload_id: Option<Uuid>,
     pub batch_id: Option<Uuid>,
+    /// Target immutable index generation for a staged backfill.
+    pub index_metadata_id: Option<Uuid>,
     /// Parent conversion job for an independent reconciliation job.
     pub cleanup_target_job_id: Option<Uuid>,
 }
@@ -69,6 +71,7 @@ impl From<JobPayloadV1> for JobPayload {
             collection_id: None,
             upload_id: None,
             batch_id: None,
+            index_metadata_id: None,
             cleanup_target_job_id: None,
         }
     }
@@ -505,16 +508,29 @@ pub async fn complete(
         let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
-                let job = repo::complete_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
-                    .await?
-                    .ok_or(JobError::LeaseLost)?;
-                let outbox_key = transition_key(&job, "job.succeeded");
-                write_job_event(txn, &ctx, &job, "job.succeeded", &outbox_key).await?;
-                Ok(job)
+                complete_within_txn(txn, &ctx, job_id, &lease_token, claimed_attempts).await
             })
         }
     })
     .await
+}
+
+/// Fenced completion plus its event/outbox record, for workflows that must
+/// atomically finalize their own durable state alongside a job.
+pub(crate) async fn complete_within_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    claimed_attempts: i32,
+) -> Result<Job, JobError> {
+    validate_lease_identifier(lease_token)?;
+    let job = repo::complete_owned(txn, ctx, job_id, lease_token, claimed_attempts)
+        .await?
+        .ok_or(JobError::LeaseLost)?;
+    let outbox_key = transition_key(&job, "job.succeeded");
+    write_job_event(txn, ctx, &job, "job.succeeded", &outbox_key).await?;
+    Ok(job)
 }
 
 pub async fn complete_with_markdown_artifact(
@@ -573,43 +589,66 @@ pub async fn fail(
         let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
-                let current = repo::get_by_id_for_update(txn, &ctx, job_id)
-                    .await?
-                    .filter(|job| {
-                        job.status == JobStatus::Leased
-                            && job.lease_owner.as_deref() == Some(lease_token.as_str())
-                            && job.attempts == claimed_attempts
-                    })
-                    .ok_or(JobError::LeaseLost)?;
-                let backoff_secs = backoff_for_attempt(current.attempts)?;
-                let job = repo::fail_owned(
+                fail_within_txn(
                     txn,
                     &ctx,
                     job_id,
                     &lease_token,
                     claimed_attempts,
                     &last_error,
-                    backoff_secs,
                 )
-                .await?
-                .ok_or(JobError::LeaseLost)?;
-                let event_type = match job.status {
-                    JobStatus::Pending => "job.retry_scheduled",
-                    JobStatus::DeadLetter => "job.dead_lettered",
-                    _ => {
-                        return Err(JobError::Database(DbError::Config(format!(
-                            "unexpected failure status: {:?}",
-                            job.status
-                        ))));
-                    }
-                };
-                let outbox_key = transition_key(&job, event_type);
-                write_job_event(txn, &ctx, &job, event_type, &outbox_key).await?;
-                Ok(job)
+                .await
             })
         }
     })
     .await
+}
+
+/// Fenced job failure plus its event/outbox record, for a caller that needs to
+/// update another system-of-record row in the same transaction.
+pub(crate) async fn fail_within_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    claimed_attempts: i32,
+    last_error: &str,
+) -> Result<Job, JobError> {
+    validate_lease_identifier(lease_token)?;
+    let last_error = sanitize_last_error(last_error);
+    let current = repo::get_by_id_for_update(txn, ctx, job_id)
+        .await?
+        .filter(|job| {
+            job.status == JobStatus::Leased
+                && job.lease_owner.as_deref() == Some(lease_token)
+                && job.attempts == claimed_attempts
+        })
+        .ok_or(JobError::LeaseLost)?;
+    let backoff_secs = backoff_for_attempt(current.attempts)?;
+    let job = repo::fail_owned(
+        txn,
+        ctx,
+        job_id,
+        lease_token,
+        claimed_attempts,
+        &last_error,
+        backoff_secs,
+    )
+    .await?
+    .ok_or(JobError::LeaseLost)?;
+    let event_type = match job.status {
+        JobStatus::Pending => "job.retry_scheduled",
+        JobStatus::DeadLetter => "job.dead_lettered",
+        _ => {
+            return Err(JobError::Database(DbError::Config(format!(
+                "unexpected failure status: {:?}",
+                job.status
+            ))));
+        }
+    };
+    let outbox_key = transition_key(&job, event_type);
+    write_job_event(txn, ctx, &job, event_type, &outbox_key).await?;
+    Ok(job)
 }
 
 pub async fn cancel(
@@ -731,7 +770,7 @@ pub fn decode_job_payload(version: i32, payload: JsonValue) -> Result<JobPayload
         1 => serde_json::from_value::<JobPayloadV1>(payload)
             .map(Into::into)
             .map_err(|error| JobError::InvalidPayload(format!("v1 decode failed: {error}"))),
-        2 => serde_json::from_value::<JobPayload>(payload)
+        2 | 3 => serde_json::from_value::<JobPayload>(payload)
             .map_err(|error| JobError::InvalidPayload(format!("v2 decode failed: {error}"))),
         other => Err(JobError::InvalidPayload(format!(
             "unsupported payload version: {other}"
@@ -904,6 +943,23 @@ mod tests {
         assert_eq!(decoded.document_id, Some(document_id));
         assert_eq!(decoded.version_id, None);
         assert_eq!(decoded.collection_id, None);
+    }
+
+    #[test]
+    fn embedding_batch_payload_keeps_only_durable_ids() {
+        let batch_id = Uuid::new_v4();
+        let metadata_id = Uuid::new_v4();
+        let payload = JobPayload {
+            document_id: Some(Uuid::new_v4()),
+            version_id: Some(Uuid::new_v4()),
+            batch_id: Some(batch_id),
+            index_metadata_id: Some(metadata_id),
+            ..JobPayload::default()
+        };
+        let decoded = decode_job_payload(CURRENT_JOB_PAYLOAD_VERSION, payload.to_json().unwrap())
+            .expect("embedding payload should be valid");
+        assert_eq!(decoded.batch_id, Some(batch_id));
+        assert_eq!(decoded.index_metadata_id, Some(metadata_id));
     }
 
     #[test]
