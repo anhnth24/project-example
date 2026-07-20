@@ -13,6 +13,7 @@ use serde::Serialize;
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use crate::api::sse::AskStreamRegistry;
 use crate::api::ApiError;
 use crate::auth::jwt::JwtKeys;
 use crate::auth::provider::PasswordAuthProvider;
@@ -35,6 +36,8 @@ pub struct AppState {
     auth_provider: Option<PasswordAuthProvider>,
     /// Object store adapter (optional when credentials are absent in tests).
     object_store: Option<crate::storage::MinioClient>,
+    qdrant: crate::storage::QdrantClient,
+    ask_streams: AskStreamRegistry,
     download_capability_key: Option<CapabilityKey>,
     consumed_download_nonces: ConsumedDownloadNonces,
 }
@@ -64,12 +67,27 @@ impl AppState {
             Err(crate::auth::jwt::JwtError::NotConfigured) => None,
             Err(error) => return Err(format!("cannot configure authentication: {error}")),
         };
-        let object_store = match runtime.config().storage_config() {
-            Ok(storage) => Some(
-                crate::storage::MinioClient::from_config(storage.minio())
-                    .map_err(|error| format!("cannot configure object store: {error}"))?,
-            ),
-            Err(_) => None,
+        let (object_store, qdrant) = match runtime.config().storage_config() {
+            Ok(storage) => {
+                let qdrant = crate::storage::QdrantClient::with_api_key(
+                    storage.qdrant_url(),
+                    storage.qdrant_api_key().cloned(),
+                )
+                .map_err(|error| format!("cannot configure qdrant client: {}", error.code()))?;
+                let object_store = Some(
+                    crate::storage::MinioClient::from_config(storage.minio())
+                        .map_err(|error| format!("cannot configure object store: {error}"))?,
+                );
+                (object_store, qdrant)
+            }
+            Err(error) => {
+                let qdrant = crate::storage::QdrantClient::new(&runtime.endpoints().qdrant_url)
+                    .map_err(|error| format!("cannot configure qdrant client: {}", error.code()))?;
+                if runtime.config().profile() == crate::config::Profile::Prod {
+                    return Err(error);
+                }
+                (None, qdrant)
+            }
         };
         start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
         let download_capability_key = runtime
@@ -85,6 +103,8 @@ impl AppState {
             pool,
             auth_provider,
             object_store,
+            qdrant,
+            ask_streams: AskStreamRegistry::new(),
             download_capability_key,
             consumed_download_nonces: ConsumedDownloadNonces::new(),
         })
@@ -106,6 +126,19 @@ impl AppState {
         auth_provider: Option<PasswordAuthProvider>,
         object_store: Option<crate::storage::MinioClient>,
     ) -> Result<Self, String> {
+        let qdrant = crate::storage::QdrantClient::new(&runtime.endpoints().qdrant_url)
+            .map_err(|error| format!("cannot configure qdrant client: {}", error.code()))?;
+        Self::from_parts_with_clients(runtime, pool, auth_provider, object_store, qdrant)
+    }
+
+    /// Builds state for tests with explicit object-store and vector clients.
+    pub fn from_parts_with_clients(
+        runtime: RuntimeState,
+        pool: Pool,
+        auth_provider: Option<PasswordAuthProvider>,
+        object_store: Option<crate::storage::MinioClient>,
+        qdrant: crate::storage::QdrantClient,
+    ) -> Result<Self, String> {
         if !runtime.is_api_role() {
             return Err("HTTP application requires API runtime configuration".into());
         }
@@ -126,6 +159,8 @@ impl AppState {
             pool,
             auth_provider,
             object_store,
+            qdrant,
+            ask_streams: AskStreamRegistry::new(),
             download_capability_key,
             consumed_download_nonces: ConsumedDownloadNonces::new(),
         })
@@ -145,6 +180,14 @@ impl AppState {
 
     pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
         self.object_store.as_ref()
+    }
+
+    pub fn vector_store(&self) -> &crate::storage::QdrantClient {
+        &self.qdrant
+    }
+
+    pub(crate) fn ask_streams(&self) -> AskStreamRegistry {
+        self.ask_streams.clone()
     }
 
     pub fn download_capability_key(&self) -> Option<&CapabilityKey> {
@@ -198,6 +241,9 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::collections::router())
         .merge(routes::documents::router())
         .merge(routes::jobs::router())
+        .merge(routes::search::router())
+        .merge(routes::ask::router())
+        .merge(routes::events::router())
         .merge(routes::uploads::router(max_upload_bytes))
         .with_state(Arc::new(state))
 }

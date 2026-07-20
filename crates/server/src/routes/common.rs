@@ -44,6 +44,15 @@ impl RestError {
         }
     }
 
+    pub(crate) fn empty_scope(request_id: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "empty_scope",
+            message: "No authorized collections are available".into(),
+            request_id: request_id.into(),
+        }
+    }
+
     pub(crate) fn not_found(request_id: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -76,6 +85,18 @@ impl RestError {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "dependency_unavailable",
             message: "A required service is unavailable".into(),
+            request_id: request_id.into(),
+        }
+    }
+
+    pub(crate) fn too_many_requests(
+        message: impl Into<String>,
+        request_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "rate_limited",
+            message: message.into(),
             request_id: request_id.into(),
         }
     }

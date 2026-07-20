@@ -78,6 +78,26 @@ impl OrgContext {
     pub fn allows_collection(&self, collection_id: Uuid) -> bool {
         self.allowed_collection_ids.contains(&collection_id)
     }
+
+    /// Returns a context whose collection allow-list is the intersection of the
+    /// current allow-list and `requested_collection_ids`.
+    pub fn with_narrowed_collections(
+        &self,
+        requested_collection_ids: impl IntoIterator<Item = Uuid>,
+    ) -> Self {
+        let requested: BTreeSet<Uuid> = requested_collection_ids.into_iter().collect();
+        let allowed_collection_ids = self
+            .allowed_collection_ids
+            .intersection(&requested)
+            .copied()
+            .collect();
+        Self {
+            org_id: self.org_id,
+            user_id: self.user_id,
+            permissions: self.permissions.clone(),
+            allowed_collection_ids,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +128,20 @@ mod tests {
         assert_eq!(ctx.user_id(), user);
         assert!(ctx.has_permission("doc.upload"));
         assert!(ctx.allows_collection(collection));
+    }
+
+    #[test]
+    fn narrowed_context_can_only_shrink_collection_scope() {
+        let org = Uuid::new_v4();
+        let user = Uuid::new_v4();
+        let allowed = Uuid::new_v4();
+        let denied = Uuid::new_v4();
+        let ctx = OrgContext::try_new(org, user, ["qa.query"], [allowed]).unwrap();
+
+        let narrowed = ctx.with_narrowed_collections([allowed, denied]);
+
+        assert!(narrowed.allows_collection(allowed));
+        assert!(!narrowed.allows_collection(denied));
+        assert!(narrowed.has_permission("qa.query"));
     }
 }
