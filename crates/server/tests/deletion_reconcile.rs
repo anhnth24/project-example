@@ -14,6 +14,9 @@ use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{ArtifactKind, CollectionVisibility, Document, DocumentState};
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
+use fileconv_server::db::vector_cleanup_intents::{
+    apply_intent_event, IntentEvent, IntentTransitionError, VectorCleanupIntentStatus,
+};
 use fileconv_server::jobs::{self, CheckpointPayload, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
 use fileconv_server::services::deletion::{
     document_reads_suppressed, request_delete, writers_are_quiesced, DeleteRequestOutcome,
@@ -21,13 +24,16 @@ use fileconv_server::services::deletion::{
 use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::index_signature::collection_name_for_digest;
 use fileconv_server::services::indexing::{
-    compensate_batch_points, enqueue_compensation_reconcile, IndexingOutboxSink,
+    batch_covers_missing_ordinals, compensate_batch_points, enqueue_compensation_reconcile,
+    missing_chunks_fingerprint, repair_embedding_job_idempotency_key, IndexingOutboxSink,
 };
 use fileconv_server::services::reconciliation::{
-    compare_object_inventory, enqueue_reconcile, reads_suppressed, reconcile_dead_letter_jobs,
-    reconcile_document, ReconcileMode, ReconcileReport,
+    classify_minio_drift, compare_object_inventory, enqueue_reconcile, object_identity_matches,
+    reads_suppressed, reconcile_dead_letter_jobs, reconcile_document, ExpectedObjectIdentity,
+    ObjectObservation, ReconcileMode, ReconcileReport,
 };
 use fileconv_server::storage::keys::parse_key_for_org;
+use fileconv_server::storage::minio::ObservedObjectIdentity;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
     point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, UpsertPoint,
@@ -41,6 +47,7 @@ use fileconv_server::workers::embedding::{
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,8 +60,95 @@ use uuid::Uuid;
 const TEST_VECTOR_DIMENSIONS: usize = 8;
 
 // ---------------------------------------------------------------------------
-// Hermetic fault-injection coverage (no PostgreSQL/MinIO/Qdrant required).
+// Hermetic service-level fakes (production transition/repair/purge helpers).
 // ---------------------------------------------------------------------------
+
+/// In-memory stand-in for `vector_cleanup_intents` CAS transitions.
+#[derive(Debug, Default)]
+struct FakeIntentStore {
+    by_job: HashMap<Uuid, VectorCleanupIntentStatus>,
+}
+
+impl FakeIntentStore {
+    fn upsert_pending(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
+        match self.by_job.get(&job_id).copied() {
+            None
+            | Some(VectorCleanupIntentStatus::Pending)
+            | Some(VectorCleanupIntentStatus::Writing) => {
+                self.by_job
+                    .insert(job_id, VectorCleanupIntentStatus::Pending);
+                Ok(())
+            }
+            Some(VectorCleanupIntentStatus::Cleaned) => Err(IntentTransitionError::AlreadyCleaned),
+            Some(VectorCleanupIntentStatus::Committed) => Err(IntentTransitionError::InvalidState),
+        }
+    }
+
+    fn begin_write(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
+        let status = self
+            .by_job
+            .get(&job_id)
+            .copied()
+            .ok_or(IntentTransitionError::InvalidState)?;
+        let next = apply_intent_event(status, IntentEvent::BeginWrite)?;
+        self.by_job.insert(job_id, next);
+        Ok(())
+    }
+
+    fn mark_cleaned(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
+        let status = self
+            .by_job
+            .get(&job_id)
+            .copied()
+            .ok_or(IntentTransitionError::InvalidState)?;
+        let next = apply_intent_event(status, IntentEvent::MarkCleaned)?;
+        self.by_job.insert(job_id, next);
+        Ok(())
+    }
+
+    fn mark_committed(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
+        let status = self
+            .by_job
+            .get(&job_id)
+            .copied()
+            .ok_or(IntentTransitionError::InvalidState)?;
+        let next = apply_intent_event(status, IntentEvent::MarkCommitted)?;
+        self.by_job.insert(job_id, next);
+        Ok(())
+    }
+
+    fn open_for_document(&self) -> bool {
+        self.by_job.values().any(|status| status.blocks_purge())
+    }
+}
+
+/// Fake repair enqueue that mirrors dedicated repair idempotency keys.
+#[derive(Debug, Default)]
+struct FakeRepairQueue {
+    jobs: BTreeSet<String>,
+}
+
+impl FakeRepairQueue {
+    fn enqueue_repair_batches(
+        &mut self,
+        batches: &[(Uuid, i32, i32)],
+        missing_chunk_ids: &[String],
+        missing_ordinals: &[i32],
+    ) -> usize {
+        let fingerprint = missing_chunks_fingerprint(missing_chunk_ids);
+        let mut created = 0usize;
+        for (batch_id, start, end) in batches {
+            if !batch_covers_missing_ordinals(*start, *end, missing_ordinals) {
+                continue;
+            }
+            let key = repair_embedding_job_idempotency_key(*batch_id, &fingerprint);
+            if self.jobs.insert(key) {
+                created += 1;
+            }
+        }
+        created
+    }
+}
 
 #[test]
 fn hermetic_tombstone_suppresses_reads_immediately() {
@@ -68,7 +162,6 @@ fn hermetic_tombstone_suppresses_reads_immediately() {
 
 #[test]
 fn hermetic_object_inventory_detects_stale_and_missing_drift() {
-    use std::collections::BTreeSet;
     let pg = BTreeSet::from([
         "trusted/org/v1/a".to_string(),
         "trusted/org/v1/b".to_string(),
@@ -86,9 +179,41 @@ fn hermetic_object_inventory_detects_stale_and_missing_drift() {
 }
 
 #[test]
+fn hermetic_purged_inventory_ignores_intentional_absences() {
+    let doc = Uuid::new_v4();
+    let expected = vec![ExpectedObjectIdentity {
+        key: "trusted/org/v1/a".into(),
+        document_id: doc,
+        version_id: Some(Uuid::new_v4()),
+        content_sha256: Some("abc".into()),
+        byte_size: Some(3),
+    }];
+    let mut observations = BTreeMap::new();
+    observations.insert("trusted/org/v1/a".into(), ObjectObservation::Missing);
+    let listed = BTreeSet::from(["trusted/org/v1/leftover".to_string()]);
+    let drift = classify_minio_drift(DocumentState::Purged, &expected, &observations, &listed);
+    assert!(drift.missing_objects.is_empty());
+    assert_eq!(
+        drift.orphan_objects,
+        vec!["trusted/org/v1/leftover".to_string()]
+    );
+    let org = Uuid::new_v4();
+    assert!(!object_identity_matches(
+        &expected[0],
+        &ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: Some(doc),
+            version_id: expected[0].version_id,
+            content_sha256: Some("zzz".into()),
+            content_length: Some(3),
+        },
+        org
+    ));
+}
+
+#[test]
 fn hermetic_dry_run_includes_staged_orphan_objects_without_repair() {
     let mut report = ReconcileReport::default();
-    // Dry-run path stages orphan object counts without mutating repaired.*.
     report.orphan_objects = 4;
     assert_eq!(report.orphan_objects, 4);
     assert_eq!(report.repaired.staged_objects, 0);
@@ -96,122 +221,62 @@ fn hermetic_dry_run_includes_staged_orphan_objects_without_repair() {
 }
 
 #[test]
-fn hermetic_purge_fence_blocks_while_writers_or_cleanup_intents_remain() {
-    assert!(writers_are_quiesced(false, false));
-    assert!(!writers_are_quiesced(true, false));
-    assert!(!writers_are_quiesced(false, true));
-}
-
-#[tokio::test]
-async fn hermetic_kill_resume_race_requires_quiesce_before_purged() {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    let marked_purged = Arc::new(AtomicBool::new(false));
-    let pending_intents = Arc::new(AtomicUsize::new(1));
-    let active_writers = Arc::new(AtomicBool::new(true));
-    let premature_purge = Arc::new(AtomicBool::new(false));
-
-    let delete_worker = {
-        let marked_purged = Arc::clone(&marked_purged);
-        let pending_intents = Arc::clone(&pending_intents);
-        let active_writers = Arc::clone(&active_writers);
-        let premature_purge = Arc::clone(&premature_purge);
-        async move {
-            for _ in 0..50 {
-                let active = active_writers.load(Ordering::SeqCst);
-                let pending = pending_intents.load(Ordering::SeqCst) > 0;
-                if !writers_are_quiesced(active, pending) {
-                    // Final sweep happened, but fence must refuse Purged.
-                    if !active && pending {
-                        premature_purge.store(false, Ordering::SeqCst);
-                    }
-                    tokio::task::yield_now().await;
-                    continue;
-                }
-                marked_purged.store(true, Ordering::SeqCst);
-                break;
-            }
-        }
-    };
-    let embedding_worker = {
-        let pending_intents = Arc::clone(&pending_intents);
-        let active_writers = Arc::clone(&active_writers);
-        async move {
-            // Upsert-after-sweep race window: intent remains until compensation.
-            tokio::task::yield_now().await;
-            active_writers.store(false, Ordering::SeqCst);
-            // Simulate kill before compensation: intent stays pending briefly.
-            tokio::task::yield_now().await;
-            // Resume/compensate clears the durable intent.
-            pending_intents.fetch_sub(1, Ordering::SeqCst);
-        }
-    };
-
-    tokio::join!(delete_worker, embedding_worker);
-    assert!(
-        marked_purged.load(Ordering::SeqCst),
-        "purge must complete after writers quiesce"
+fn hermetic_intent_transitions_fence_upsert_after_cleanup() {
+    let mut store = FakeIntentStore::default();
+    let job_id = Uuid::new_v4();
+    store.upsert_pending(job_id).expect("pending");
+    store.begin_write(job_id).expect("writing");
+    // Deletion drain wins.
+    store.mark_cleaned(job_id).expect("cleaned");
+    assert!(!store.open_for_document());
+    assert_eq!(
+        store.begin_write(job_id),
+        Err(IntentTransitionError::AlreadyCleaned)
     );
-    assert_eq!(pending_intents.load(Ordering::SeqCst), 0);
-    assert!(!premature_purge.load(Ordering::SeqCst));
+    assert_eq!(
+        store.mark_committed(job_id),
+        Err(IntentTransitionError::AlreadyCleaned)
+    );
+    // Revival via upsert_pending must also fail.
+    assert_eq!(
+        store.upsert_pending(job_id),
+        Err(IntentTransitionError::AlreadyCleaned)
+    );
 }
 
-#[tokio::test]
-async fn hermetic_concurrent_tombstone_and_writer_never_marks_purged_early() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+#[test]
+fn hermetic_repair_enqueue_uses_dedicated_key_not_original_index_key() {
+    let batch_id = Uuid::new_v4();
+    let missing = vec![format!("{:064x}", 1_u8)];
+    let fingerprint = missing_chunks_fingerprint(&missing);
+    let repair_key = repair_embedding_job_idempotency_key(batch_id, &fingerprint);
+    assert!(repair_key.starts_with("embedding-repair:"));
+    assert!(!repair_key.starts_with("index:"));
+    assert!(!repair_key.starts_with("embedding:"));
 
-    let tombstoned = Arc::new(AtomicBool::new(false));
-    let purged = Arc::new(AtomicBool::new(false));
-    let writer_upserted = Arc::new(AtomicBool::new(false));
-    let intent_pending = Arc::new(AtomicBool::new(false));
+    let mut queue = FakeRepairQueue::default();
+    let first = queue.enqueue_repair_batches(&[(batch_id, 0, 10)], &missing, &[3]);
+    let second = queue.enqueue_repair_batches(&[(batch_id, 0, 10)], &missing, &[3]);
+    assert_eq!(first, 1);
+    assert_eq!(second, 0, "same missing set must be idempotent");
+    // Unrelated ordinal range is skipped.
+    let other = Uuid::new_v4();
+    assert_eq!(
+        queue.enqueue_repair_batches(&[(other, 20, 30)], &missing, &[3]),
+        0
+    );
+}
 
-    let tombstone = {
-        let tombstoned = Arc::clone(&tombstoned);
-        async move {
-            tombstoned.store(true, Ordering::SeqCst);
-        }
-    };
-    let writer = {
-        let tombstoned = Arc::clone(&tombstoned);
-        let writer_upserted = Arc::clone(&writer_upserted);
-        let intent_pending = Arc::clone(&intent_pending);
-        async move {
-            // Persist intent before write; abort upsert if already tombstoned.
-            intent_pending.store(true, Ordering::SeqCst);
-            tokio::task::yield_now().await;
-            if tombstoned.load(Ordering::SeqCst) {
-                // Compensation path: clear intent without publishing.
-                intent_pending.store(false, Ordering::SeqCst);
-                return;
-            }
-            writer_upserted.store(true, Ordering::SeqCst);
-            intent_pending.store(false, Ordering::SeqCst);
-        }
-    };
-    let purge = {
-        let tombstoned = Arc::clone(&tombstoned);
-        let purged = Arc::clone(&purged);
-        let intent_pending = Arc::clone(&intent_pending);
-        async move {
-            for _ in 0..50 {
-                if tombstoned.load(Ordering::SeqCst)
-                    && writers_are_quiesced(false, intent_pending.load(Ordering::SeqCst))
-                {
-                    purged.store(true, Ordering::SeqCst);
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        }
-    };
-
-    tokio::join!(tombstone, writer, purge);
-    assert!(tombstoned.load(Ordering::SeqCst));
-    assert!(purged.load(Ordering::SeqCst));
-    assert!(!writer_upserted.load(Ordering::SeqCst));
-    assert!(!intent_pending.load(Ordering::SeqCst));
+#[test]
+fn hermetic_purge_finalization_requires_quiesced_writers_and_intents() {
+    let mut store = FakeIntentStore::default();
+    let job_id = Uuid::new_v4();
+    store.upsert_pending(job_id).unwrap();
+    store.begin_write(job_id).unwrap();
+    assert!(!writers_are_quiesced(false, store.open_for_document()));
+    store.mark_cleaned(job_id).unwrap();
+    assert!(writers_are_quiesced(false, store.open_for_document()));
+    assert!(!writers_are_quiesced(true, false));
 }
 
 fn test_database_url() -> Option<String> {

@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
-use crate::db::models::{ArtifactKind, Document, DocumentState, DocumentVersion, PublicationState};
+use crate::db::models::{
+    ArtifactKind, DerivedArtifact, Document, DocumentState, DocumentVersion, PublicationState,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionSourceVersion {
@@ -268,6 +270,42 @@ pub async fn list_object_keys_by_document(
         )
         .await?;
     Ok(rows.iter().map(|row| row.get("key")).collect())
+}
+
+/// Lists derived artifact inventory rows for reconcile identity validation.
+pub async fn list_artifacts_by_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Vec<DerivedArtifact>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT id, org_id, document_id, version_id, artifact_kind, object_key,
+                    content_sha256, content_type, byte_size, created_at
+             FROM derived_artifacts
+             WHERE org_id = $1 AND document_id = $2
+             ORDER BY version_id, artifact_kind, id",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    rows.iter().map(map_artifact).collect()
+}
+
+fn map_artifact(row: &Row) -> Result<DerivedArtifact, DbError> {
+    let kind =
+        ArtifactKind::parse(row.get("artifact_kind")).map_err(|error| DbError::Config(error))?;
+    Ok(DerivedArtifact {
+        id: row.get("id"),
+        org_id: row.get("org_id"),
+        document_id: row.get("document_id"),
+        version_id: row.get("version_id"),
+        artifact_kind: kind,
+        object_key: row.get("object_key"),
+        content_sha256: row.get("content_sha256"),
+        content_type: row.get("content_type"),
+        byte_size: row.get("byte_size"),
+        created_at: row.get("created_at"),
+    })
 }
 
 pub async fn object_key_is_referenced(

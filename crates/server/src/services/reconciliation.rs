@@ -13,13 +13,16 @@ use crate::db::error::DbError;
 use crate::db::models::{Chunk, Document, DocumentState, DocumentVersion, JobType};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{
-    chunks, document_versions, documents, index_metadata, jobs as repo, vector_cleanup_intents,
+    chunks, document_versions, documents, embedding_batches, index_metadata, jobs as repo,
+    vector_cleanup_intents,
 };
 use crate::jobs::{self, CheckpointPayload, EnqueueJob, EnqueueOutcome, JobError, JobPayload};
 use crate::services::index_signature::collection_name_for_digest;
-use crate::services::indexing::index_job_idempotency_key;
+use crate::services::indexing::{
+    batch_covers_missing_ordinals, missing_chunks_fingerprint, repair_embedding_job_idempotency_key,
+};
 use crate::storage::keys::{parse_key_for_org, trusted_version_prefix};
-use crate::storage::minio::MinioClient;
+use crate::storage::minio::{MinioClient, ObservedObjectIdentity};
 use crate::storage::qdrant::{
     point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, VectorScope,
 };
@@ -75,6 +78,98 @@ pub struct ObjectInventoryDrift {
     pub orphan_objects: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedObjectIdentity {
+    pub key: String,
+    pub document_id: Uuid,
+    pub version_id: Option<Uuid>,
+    pub content_sha256: Option<String>,
+    pub byte_size: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectObservation {
+    Missing,
+    Present { identity_ok: bool },
+}
+
+/// Validate observed MinIO identity against PG expectations.
+pub fn object_identity_matches(
+    expected: &ExpectedObjectIdentity,
+    observed: &ObservedObjectIdentity,
+    org_id: Uuid,
+) -> bool {
+    if observed.org_id != Some(org_id) {
+        return false;
+    }
+    if observed.document_id != Some(expected.document_id) {
+        return false;
+    }
+    if let Some(version_id) = expected.version_id {
+        if observed.version_id != Some(version_id) {
+            return false;
+        }
+    }
+    if let Some(sha) = expected.content_sha256.as_deref() {
+        if observed.content_sha256.as_deref() != Some(sha) {
+            return false;
+        }
+    }
+    if let Some(len) = expected.byte_size {
+        if observed.content_length != Some(len) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Classify MinIO drift. Purged/tombstoned docs do not treat intentional
+/// absences as missing — only leftovers count as orphans.
+pub fn classify_minio_drift(
+    state: DocumentState,
+    expected: &[ExpectedObjectIdentity],
+    observations: &BTreeMap<String, ObjectObservation>,
+    listed_keys: &BTreeSet<String>,
+) -> ObjectInventoryDrift {
+    let expected_keys = expected
+        .iter()
+        .map(|item| item.key.clone())
+        .collect::<BTreeSet<_>>();
+    let mut missing = Vec::new();
+    let mut orphan = Vec::new();
+    let suppressed = reads_suppressed(state);
+
+    for item in expected {
+        match observations.get(&item.key) {
+            Some(ObjectObservation::Present { identity_ok: true }) if !suppressed => {}
+            Some(ObjectObservation::Present { identity_ok: false }) if !suppressed => {
+                missing.push(item.key.clone());
+            }
+            Some(ObjectObservation::Present { .. }) if suppressed => {
+                // Intentionally deleted inventory that still exists is orphan leftover.
+                orphan.push(item.key.clone());
+            }
+            Some(ObjectObservation::Missing) | None if suppressed => {
+                // Absence after purge/tombstone cleanup is expected — not missing.
+            }
+            Some(ObjectObservation::Missing) | None => missing.push(item.key.clone()),
+            _ => {}
+        }
+    }
+    for key in listed_keys {
+        if !expected_keys.contains(key) {
+            orphan.push(key.clone());
+        }
+    }
+    orphan.sort();
+    orphan.dedup();
+    missing.sort();
+    ObjectInventoryDrift {
+        missing_objects: missing,
+        orphan_objects: orphan,
+    }
+}
+
 pub fn compare_object_inventory(
     pg_keys: &BTreeSet<String>,
     minio_keys: &BTreeSet<String>,
@@ -94,7 +189,7 @@ struct DocumentInventory {
     document: Document,
     versions: Vec<DocumentVersion>,
     chunks: Vec<Chunk>,
-    object_keys: Vec<String>,
+    expected_objects: Vec<ExpectedObjectIdentity>,
     signatures: Vec<String>,
     active_writer_job: bool,
 }
@@ -156,14 +251,9 @@ pub async fn reconcile_document(
             document_id,
         )?;
         report.orphan_vectors = candidates.len();
-        // Tombstone/purged: every still-present PG-referenced object is leftover inventory.
-        let leftover_objects = existing_object_keys(storage, ctx, &inventory.object_keys).await?;
-        let mut orphan_object_keys = object_drift.orphan_objects;
-        for key in leftover_objects {
-            if !orphan_object_keys.iter().any(|existing| existing == &key) {
-                orphan_object_keys.push(key);
-            }
-        }
+        // Purged/tombstoned: absence is expected; only leftovers are actionable.
+        report.missing_objects = 0;
+        let orphan_object_keys = object_drift.orphan_objects.clone();
         report.orphan_objects = orphan_object_keys.len();
 
         if mode == ReconcileMode::Repair {
@@ -289,9 +379,10 @@ pub async fn reconcile_document(
                 }
             }
             if report.missing_vectors > 0 {
-                if enqueue_missing_vector_rebuild(pool, ctx, &inventory).await? {
-                    report.repaired.rebuilt_vector_jobs = 1;
-                }
+                let rebuilt =
+                    requeue_missing_vector_batches(pool, ctx, &inventory, &missing_vector_chunks)
+                        .await?;
+                report.repaired.rebuilt_vector_jobs = rebuilt;
             }
             if !object_drift.orphan_objects.is_empty() {
                 delete_objects_with_audit(
@@ -376,7 +467,7 @@ async fn drain_pending_vector_intents(
     mode: ReconcileMode,
     report: &mut ReconcileReport,
 ) -> Result<(), ReconciliationError> {
-    let intents = list_pending_intents(pool, ctx, document_id).await?;
+    let intents = list_open_intents(pool, ctx, document_id).await?;
     if intents.is_empty() {
         return Ok(());
     }
@@ -412,7 +503,7 @@ async fn drain_pending_vector_intents(
             .await
         {
             Ok(()) => {
-                mark_intent_completed(pool, ctx, intent.job_id).await?;
+                mark_intent_cleaned(pool, ctx, intent.job_id).await?;
                 write_intent_audit(
                     pool,
                     ctx,
@@ -455,45 +546,36 @@ async fn compare_document_minio_inventory(
     ctx: &OrgContext,
     inventory: &DocumentInventory,
 ) -> Result<ObjectInventoryDrift, ReconciliationError> {
-    let pg_keys = inventory
-        .object_keys
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut minio_keys = BTreeSet::new();
+    let mut listed_keys = BTreeSet::new();
     for version in &inventory.versions {
         let prefix = trusted_version_prefix(ctx.org_id(), version.id)?;
         let listed = storage
             .list_keys_with_prefix(ctx.org_id(), &prefix, MINIO_INVENTORY_LIMIT)
             .await?;
         for key in listed {
-            minio_keys.insert(key);
+            listed_keys.insert(key);
         }
     }
-    // Also observe existence of PG keys that may live outside version prefixes
-    // (quarantine originals).
-    for raw_key in &inventory.object_keys {
-        let key = parse_key_for_org(raw_key, ctx.org_id())?;
-        if storage.object_exists(ctx.org_id(), &key).await? {
-            minio_keys.insert(raw_key.clone());
-        }
+    let mut observations = BTreeMap::new();
+    for expected in &inventory.expected_objects {
+        let key = parse_key_for_org(&expected.key, ctx.org_id())?;
+        let observation = match storage.observe_object_identity(ctx.org_id(), &key).await? {
+            None => ObjectObservation::Missing,
+            Some(observed) => {
+                listed_keys.insert(expected.key.clone());
+                ObjectObservation::Present {
+                    identity_ok: object_identity_matches(expected, &observed, ctx.org_id()),
+                }
+            }
+        };
+        observations.insert(expected.key.clone(), observation);
     }
-    Ok(compare_object_inventory(&pg_keys, &minio_keys))
-}
-
-async fn existing_object_keys(
-    storage: &MinioClient,
-    ctx: &OrgContext,
-    object_keys: &[String],
-) -> Result<Vec<String>, ReconciliationError> {
-    let mut existing = Vec::new();
-    for raw_key in object_keys {
-        let key = parse_key_for_org(raw_key, ctx.org_id())?;
-        if storage.object_exists(ctx.org_id(), &key).await? {
-            existing.push(raw_key.clone());
-        }
-    }
-    Ok(existing)
+    Ok(classify_minio_drift(
+        inventory.document.state,
+        &inventory.expected_objects,
+        &observations,
+        &listed_keys,
+    ))
 }
 
 async fn delete_objects_with_audit(
@@ -571,14 +653,26 @@ async fn delete_object_batch(
     Ok(())
 }
 
-async fn enqueue_missing_vector_rebuild(
+async fn requeue_missing_vector_batches(
     pool: &Pool,
     ctx: &OrgContext,
     inventory: &DocumentInventory,
-) -> Result<bool, ReconciliationError> {
+    missing_chunk_ids: &[String],
+) -> Result<usize, ReconciliationError> {
     let Some(version_id) = inventory.document.current_version_id else {
-        return Ok(false);
+        return Ok(0);
     };
+    let missing_set = missing_chunk_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let missing_ordinals = inventory
+        .chunks
+        .iter()
+        .filter(|chunk| missing_set.contains(&chunk.chunk_identity_sha256))
+        .map(|chunk| chunk.ordinal)
+        .collect::<Vec<_>>();
+    if missing_ordinals.is_empty() {
+        return Ok(0);
+    }
+    let fingerprint = missing_chunks_fingerprint(missing_chunk_ids);
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         let collection_id = inventory.document.collection_id;
@@ -588,24 +682,55 @@ async fn enqueue_missing_vector_rebuild(
                 let Some(metadata) =
                     index_metadata::find_active(txn, &ctx, Some(collection_id)).await?
                 else {
-                    return Ok(false);
+                    return Ok(0usize);
                 };
-                let outcome = jobs::enqueue_within_txn(
+                let batches = embedding_batches::list_by_document_version(
                     txn,
                     &ctx,
-                    EnqueueJob::new(
-                        JobType::Index,
-                        JobPayload {
-                            document_id: Some(document_id),
-                            version_id: Some(version_id),
-                            index_metadata_id: Some(metadata.id),
-                            ..JobPayload::default()
-                        },
-                        index_job_idempotency_key(metadata.id, version_id),
-                    ),
+                    metadata.id,
+                    document_id,
+                    version_id,
                 )
                 .await?;
-                Ok(outcome.created)
+                let mut rebuilt = 0usize;
+                for batch in batches {
+                    if !batch_covers_missing_ordinals(
+                        batch.start_ordinal,
+                        batch.end_ordinal,
+                        &missing_ordinals,
+                    ) {
+                        continue;
+                    }
+                    let repair_key = repair_embedding_job_idempotency_key(batch.id, &fingerprint);
+                    let outcome = jobs::enqueue_within_txn(
+                        txn,
+                        &ctx,
+                        EnqueueJob::new(
+                            JobType::EmbeddingBatch,
+                            JobPayload {
+                                document_id: Some(document_id),
+                                version_id: Some(version_id),
+                                batch_id: Some(batch.id),
+                                index_metadata_id: Some(metadata.id),
+                                ..JobPayload::default()
+                            },
+                            repair_key,
+                        ),
+                    )
+                    .await?;
+                    if outcome.created {
+                        embedding_batches::requeue_for_repair(txn, &ctx, batch.id, outcome.job.id)
+                            .await?;
+                        rebuilt += 1;
+                    } else if outcome.job.status == crate::db::models::JobStatus::Pending
+                        || outcome.job.status == crate::db::models::JobStatus::Leased
+                    {
+                        // Idempotent repair job already open; ensure batch points at it.
+                        embedding_batches::requeue_for_repair(txn, &ctx, batch.id, outcome.job.id)
+                            .await?;
+                    }
+                }
+                Ok(rebuilt)
             })
         }
     })
@@ -649,9 +774,48 @@ async fn load_inventory(
                 let document = documents::get_by_id(txn, &ctx, document_id).await?;
                 let versions = document_versions::list_by_document(txn, &ctx, document_id).await?;
                 let chunks = chunks::list_by_document(txn, &ctx, document_id).await?;
-                let object_keys =
-                    document_versions::list_object_keys_by_document(txn, &ctx, document_id).await?;
+                let artifacts =
+                    document_versions::list_artifacts_by_document(txn, &ctx, document_id).await?;
                 let active_writer_job = repo::has_active_writer_job(txn, &ctx, document_id).await?;
+                let mut expected_objects = Vec::new();
+                for version in &versions {
+                    expected_objects.push(ExpectedObjectIdentity {
+                        key: version.original_object_key.clone(),
+                        document_id,
+                        version_id: Some(version.id),
+                        content_sha256: Some(version.content_sha256.clone()),
+                        byte_size: version.byte_size.and_then(|v| u64::try_from(v).ok()),
+                    });
+                    if let Some(markdown_key) = version.markdown_object_key.clone() {
+                        let artifact = artifacts
+                            .iter()
+                            .find(|item| item.object_key == markdown_key);
+                        expected_objects.push(ExpectedObjectIdentity {
+                            key: markdown_key,
+                            document_id,
+                            version_id: Some(version.id),
+                            content_sha256: artifact.map(|item| item.content_sha256.clone()),
+                            byte_size: artifact
+                                .and_then(|item| item.byte_size)
+                                .and_then(|v| u64::try_from(v).ok()),
+                        });
+                    }
+                }
+                for artifact in &artifacts {
+                    if expected_objects
+                        .iter()
+                        .any(|item| item.key == artifact.object_key)
+                    {
+                        continue;
+                    }
+                    expected_objects.push(ExpectedObjectIdentity {
+                        key: artifact.object_key.clone(),
+                        document_id,
+                        version_id: Some(artifact.version_id),
+                        content_sha256: Some(artifact.content_sha256.clone()),
+                        byte_size: artifact.byte_size.and_then(|v| u64::try_from(v).ok()),
+                    });
+                }
                 let mut signatures = BTreeSet::new();
                 for signature in
                     chunks::distinct_index_signatures_by_document(txn, &ctx, document_id).await?
@@ -668,7 +832,7 @@ async fn load_inventory(
                     document,
                     versions,
                     chunks,
-                    object_keys,
+                    expected_objects,
                     signatures: signatures.into_iter().collect(),
                     active_writer_job,
                 })
@@ -678,7 +842,7 @@ async fn load_inventory(
     .await
 }
 
-async fn list_pending_intents(
+async fn list_open_intents(
     pool: &Pool,
     ctx: &OrgContext,
     document_id: Uuid,
@@ -688,8 +852,7 @@ async fn list_pending_intents(
         move |txn| {
             Box::pin(async move {
                 Ok::<_, ReconciliationError>(
-                    vector_cleanup_intents::list_pending_for_document(txn, &ctx, document_id)
-                        .await?,
+                    vector_cleanup_intents::list_open_for_document(txn, &ctx, document_id).await?,
                 )
             })
         }
@@ -697,7 +860,7 @@ async fn list_pending_intents(
     .await
 }
 
-async fn mark_intent_completed(
+async fn mark_intent_cleaned(
     pool: &Pool,
     ctx: &OrgContext,
     job_id: Uuid,
@@ -706,8 +869,13 @@ async fn mark_intent_completed(
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
-                vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
-                Ok(())
+                match vector_cleanup_intents::cas_mark_cleaned(txn, &ctx, job_id).await {
+                    Ok(_) => Ok(()),
+                    Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                        Err(ReconciliationError::Db(error))
+                    }
+                    Err(_) => Ok(()),
+                }
             })
         }
     })
@@ -1048,6 +1216,46 @@ mod tests {
         let drift = compare_object_inventory(&pg, &minio);
         assert_eq!(drift.missing_objects, vec!["trusted/a/v1/obj2".to_string()]);
         assert_eq!(drift.orphan_objects, vec!["trusted/a/v1/extra".to_string()]);
+    }
+
+    #[test]
+    fn purged_docs_do_not_report_intentional_absences_as_missing() {
+        let doc_id = Uuid::new_v4();
+        let expected = vec![ExpectedObjectIdentity {
+            key: "trusted/a/v1/obj1".into(),
+            document_id: doc_id,
+            version_id: Some(Uuid::new_v4()),
+            content_sha256: Some("abc".into()),
+            byte_size: Some(3),
+        }];
+        let mut observations = BTreeMap::new();
+        observations.insert("trusted/a/v1/obj1".into(), ObjectObservation::Missing);
+        let listed = BTreeSet::from(["trusted/a/v1/extra".to_string()]);
+        let drift = classify_minio_drift(DocumentState::Purged, &expected, &observations, &listed);
+        assert!(drift.missing_objects.is_empty());
+        assert_eq!(drift.orphan_objects, vec!["trusted/a/v1/extra".to_string()]);
+    }
+
+    #[test]
+    fn identity_mismatch_counts_as_missing_for_indexed_docs() {
+        let org = Uuid::new_v4();
+        let doc = Uuid::new_v4();
+        let version = Uuid::new_v4();
+        let expected = ExpectedObjectIdentity {
+            key: "k".into(),
+            document_id: doc,
+            version_id: Some(version),
+            content_sha256: Some("deadbeef".into()),
+            byte_size: Some(4),
+        };
+        let observed = ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: Some(doc),
+            version_id: Some(version),
+            content_sha256: Some("cafebabe".into()),
+            content_length: Some(4),
+        };
+        assert!(!object_identity_matches(&expected, &observed, org));
     }
 
     #[test]

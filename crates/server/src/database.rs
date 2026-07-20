@@ -62,6 +62,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0014_vector_cleanup_intents.sql",
         include_str!("../migrations/0014_vector_cleanup_intents.sql"),
     ),
+    (
+        "0015_expand_vector_cleanup_intent_states.sql",
+        include_str!("../migrations/0015_expand_vector_cleanup_intent_states.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -271,5 +275,16 @@ mod tests {
         assert!(source.contains(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")));
         assert!(source.contains(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")));
         assert!(source.contains(&format!("CREATE POLICY {table}_org_isolation ON {table}")));
+    }
+
+    #[test]
+    fn vector_cleanup_intent_states_expand_to_cas_lifecycle() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0015_expand_vector_cleanup_intent_states.sql")
+            .expect("intent state migration")
+            .1;
+        assert!(source.contains("'pending', 'writing', 'cleaned', 'committed'"));
+        assert!(source.contains("status = 'committed'"));
     }
 }

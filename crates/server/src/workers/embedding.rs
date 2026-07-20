@@ -448,7 +448,7 @@ impl EmbeddingWorker {
                     )
                     .await?
                     .ok_or(crate::db::error::DbError::NotFound)?;
-                    vector_cleanup_intents::upsert_pending(
+                    match vector_cleanup_intents::upsert_pending(
                         txn,
                         &ctx,
                         vector_cleanup_intents::NewVectorCleanupIntent {
@@ -458,7 +458,37 @@ impl EmbeddingWorker {
                             point_ids: &point_ids,
                         },
                     )
-                    .await?;
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
+                            return Err(EmbeddingWorkerError::Indexing(
+                                IndexingError::DocumentDeleted,
+                            ));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            return Err(EmbeddingWorkerError::Db(error));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                            return Err(EmbeddingWorkerError::InvalidPayload);
+                        }
+                    }
+                    // CAS pending → writing so a concurrent drain cannot leave a
+                    // cleaned intent followed by this upsert.
+                    match vector_cleanup_intents::cas_begin_write(txn, &ctx, job_id).await {
+                        Ok(_) => {}
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
+                            return Err(EmbeddingWorkerError::Indexing(
+                                IndexingError::DocumentDeleted,
+                            ));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            return Err(EmbeddingWorkerError::Db(error));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                            return Err(EmbeddingWorkerError::InvalidPayload);
+                        }
+                    }
                     Ok(point_lifecycle(
                         document.current_version_id,
                         batch.version_id,
@@ -479,8 +509,13 @@ impl EmbeddingWorker {
             let ctx = ctx.clone();
             move |txn| {
                 Box::pin(async move {
-                    vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
-                    Ok(())
+                    match vector_cleanup_intents::cas_mark_cleaned(txn, &ctx, job_id).await {
+                        Ok(_) => Ok(()),
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            Err(EmbeddingWorkerError::Db(error))
+                        }
+                        Err(_) => Ok(()),
+                    }
                 })
             }
         })
@@ -529,7 +564,21 @@ impl EmbeddingWorker {
                         batch.version_id,
                     )
                     .await?;
-                    vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
+                    match vector_cleanup_intents::cas_mark_committed(txn, &ctx, job_id).await {
+                        Ok(_) => {}
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
+                            // Cleanup won the race after upsert — force compensation.
+                            return Err(EmbeddingWorkerError::Indexing(
+                                IndexingError::DocumentDeleted,
+                            ));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            return Err(EmbeddingWorkerError::Db(error));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                            return Err(EmbeddingWorkerError::InvalidPayload);
+                        }
+                    }
                     Ok(completed)
                 })
             }

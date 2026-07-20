@@ -14,6 +14,7 @@
     "0011_expand_poc_seed.sql": "fcef18e8a7a3344c6aadc94b6d9e8a87d2f3b95a4d0ad3d0e51161de2e8565bb",
     "0012_index_generation_embedding_batches.sql": "7877b38debfcf09bcc7a2cf9774964d5518c9d329e63a312f19352bc41f05591",
     "0013_expand_index_generation_rls.sql": "0a433b0cfe7fdb291e2420e2fa6e41412ab900281a1354ac1fb6f6621ebd924d",
-    "0014_vector_cleanup_intents.sql": "fb9ae5f06cbcd5f438eaac6b9b0464627b47aa90e3115717d76c3656e0350932"
+    "0014_vector_cleanup_intents.sql": "fb9ae5f06cbcd5f438eaac6b9b0464627b47aa90e3115717d76c3656e0350932",
+    "0015_expand_vector_cleanup_intent_states.sql": "f5f5cdcee30a96f3541a6635efaf1147f8595b09b03b1a919c916ee09e4706a5"
   }
 }

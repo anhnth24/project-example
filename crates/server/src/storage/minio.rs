@@ -36,6 +36,16 @@ use crate::storage::keys::{
     ObjectNamespace,
 };
 
+/// Observed identity fields from a stored object HEAD (reconcile validation).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ObservedObjectIdentity {
+    pub org_id: Option<Uuid>,
+    pub document_id: Option<Uuid>,
+    pub version_id: Option<Uuid>,
+    pub content_sha256: Option<String>,
+    pub content_length: Option<u64>,
+}
+
 /// Identity fields stored as S3 object metadata (never in the key path).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectIdentityMeta {
@@ -404,6 +414,42 @@ impl MinioClient {
         match self.head_for_org(org_id, key).await {
             Ok(_) => Ok(true),
             Err(StorageError::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Observe stored identity metadata for reconcile validation (HEAD only).
+    pub async fn observe_object_identity(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+    ) -> Result<Option<ObservedObjectIdentity>, StorageError> {
+        authorize_key_for_org(key, org_id)?;
+        match self.head_for_org(org_id, key).await {
+            Ok((head, _)) => {
+                let meta = metadata_map(&head);
+                let content_length = head
+                    .content_length
+                    .and_then(|len| u64::try_from(len).ok())
+                    .or_else(|| {
+                        meta.get("content-length-bytes")
+                            .and_then(|value| value.parse().ok())
+                    });
+                Ok(Some(ObservedObjectIdentity {
+                    org_id: meta
+                        .get("org-id")
+                        .and_then(|value| Uuid::parse_str(value).ok()),
+                    document_id: meta
+                        .get("document-id")
+                        .and_then(|value| Uuid::parse_str(value).ok()),
+                    version_id: meta
+                        .get("version-id")
+                        .and_then(|value| Uuid::parse_str(value).ok()),
+                    content_sha256: meta.get("content-sha256").cloned(),
+                    content_length,
+                }))
+            }
+            Err(StorageError::NotFound) => Ok(None),
             Err(error) => Err(error),
         }
     }

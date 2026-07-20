@@ -302,14 +302,30 @@ async fn drain_vector_cleanup_intents(
     plan: &PurgePlan,
     document_id: Uuid,
 ) -> Result<(), DeletionError> {
+    // CAS open intents to cleaned BEFORE deleting points so a concurrent
+    // embedding fence cannot revive the intent and upsert after cleanup.
     let intents = with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
-                Ok::<_, DeletionError>(
-                    vector_cleanup_intents::list_pending_for_document(txn, &ctx, document_id)
-                        .await?,
-                )
+                let open =
+                    vector_cleanup_intents::list_open_for_document(txn, &ctx, document_id).await?;
+                let mut drained = Vec::new();
+                for intent in open {
+                    if vector_cleanup_intents::cas_mark_cleaned(txn, &ctx, intent.job_id)
+                        .await
+                        .map_err(|error| match error {
+                            vector_cleanup_intents::VectorCleanupIntentError::Db(db) => {
+                                DeletionError::Db(db)
+                            }
+                            _ => DeletionError::WritersNotQuiesced,
+                        })?
+                        .is_some()
+                    {
+                        drained.push(intent);
+                    }
+                }
+                Ok::<_, DeletionError>(drained)
             })
         }
     })
@@ -324,17 +340,6 @@ async fn drain_vector_cleanup_intents(
         qdrant
             .delete_points_by_ids(&collection, &scope, &document_filter, &intent.point_ids)
             .await?;
-        with_org_txn_typed(pool, ctx, {
-            let ctx = ctx.clone();
-            let job_id = intent.job_id;
-            move |txn| {
-                Box::pin(async move {
-                    vector_cleanup_intents::mark_completed(txn, &ctx, job_id).await?;
-                    Ok::<_, DeletionError>(())
-                })
-            }
-        })
-        .await?;
     }
     Ok(())
 }
@@ -459,10 +464,9 @@ async fn finalize_purged(
                         .map_err(DeletionError::Job)?;
                 }
                 let active_writers = repo::has_active_writer_job(txn, &ctx, document_id).await?;
-                let pending_intents =
-                    vector_cleanup_intents::has_pending_for_document(txn, &ctx, document_id)
-                        .await?;
-                if !writers_are_quiesced(active_writers, pending_intents) {
+                let open_intents =
+                    vector_cleanup_intents::has_open_for_document(txn, &ctx, document_id).await?;
+                if !writers_are_quiesced(active_writers, open_intents) {
                     return Err(DeletionError::WritersNotQuiesced);
                 }
                 document_state::apply_transition(
@@ -675,8 +679,9 @@ impl DeletionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::db::vector_cleanup_intents::{
+        apply_intent_event, IntentEvent, IntentTransitionError, VectorCleanupIntentStatus,
+    };
 
     #[test]
     fn quiesce_fence_blocks_purge_while_writers_or_intents_remain() {
@@ -694,42 +699,19 @@ mod tests {
         assert!(!document_reads_suppressed(DocumentState::Indexed, false));
     }
 
-    #[tokio::test]
-    async fn kill_resume_fence_is_concurrent_safe() {
-        let purged = Arc::new(AtomicBool::new(false));
-        let pending_intents = Arc::new(AtomicUsize::new(1));
-        let active_writers = Arc::new(AtomicBool::new(true));
-
-        let purge = {
-            let purged = Arc::clone(&purged);
-            let pending_intents = Arc::clone(&pending_intents);
-            let active_writers = Arc::clone(&active_writers);
-            async move {
-                // Simulate delete worker finalizing only after quiesce.
-                for _ in 0..20 {
-                    if writers_are_quiesced(
-                        active_writers.load(Ordering::SeqCst),
-                        pending_intents.load(Ordering::SeqCst) > 0,
-                    ) {
-                        purged.store(true, Ordering::SeqCst);
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            }
-        };
-        let writer = {
-            let pending_intents = Arc::clone(&pending_intents);
-            let active_writers = Arc::clone(&active_writers);
-            async move {
-                // Embedding upsert race: intent exists, then compensate clears it.
-                tokio::task::yield_now().await;
-                active_writers.store(false, Ordering::SeqCst);
-                pending_intents.fetch_sub(1, Ordering::SeqCst);
-            }
-        };
-        tokio::join!(purge, writer);
-        assert!(purged.load(Ordering::SeqCst));
-        assert_eq!(pending_intents.load(Ordering::SeqCst), 0);
+    #[test]
+    fn purge_finalization_waits_for_open_intent_then_allows_cleaned() {
+        let writing =
+            apply_intent_event(VectorCleanupIntentStatus::Pending, IntentEvent::BeginWrite)
+                .unwrap();
+        assert!(writing.blocks_purge());
+        assert!(!writers_are_quiesced(false, writing.blocks_purge()));
+        let cleaned = apply_intent_event(writing, IntentEvent::MarkCleaned).unwrap();
+        assert!(!cleaned.blocks_purge());
+        assert!(writers_are_quiesced(false, cleaned.blocks_purge()));
+        assert_eq!(
+            apply_intent_event(cleaned, IntentEvent::MarkCommitted),
+            Err(IntentTransitionError::AlreadyCleaned)
+        );
     }
 }

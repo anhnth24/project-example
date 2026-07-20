@@ -140,6 +140,34 @@ pub(crate) fn index_job_idempotency_key(index_metadata_id: Uuid, version_id: Uui
     format!("index:{index_metadata_id}:{version_id}")
 }
 
+/// Dedicated repair lifecycle key — never reuse the original succeeded index key.
+pub fn repair_embedding_job_idempotency_key(batch_id: Uuid, missing_fingerprint: &str) -> String {
+    format!("embedding-repair:{batch_id}:{missing_fingerprint}")
+}
+
+/// Stable fingerprint of the missing chunk set for idempotent repair requeues.
+pub fn missing_chunks_fingerprint(missing_chunk_ids: &[String]) -> String {
+    let mut hasher = Sha256::new();
+    let mut ids = missing_chunk_ids.to_vec();
+    ids.sort();
+    for id in ids {
+        hasher.update(id.as_bytes());
+        hasher.update([0]);
+    }
+    hex::encode(&hasher.finalize()[..16])
+}
+
+/// Whether a batch ordinal range covers any missing chunk ordinal.
+pub fn batch_covers_missing_ordinals(
+    start_ordinal: i32,
+    end_ordinal: i32,
+    missing_ordinals: &[i32],
+) -> bool {
+    missing_ordinals
+        .iter()
+        .any(|ordinal| *ordinal >= start_ordinal && *ordinal <= end_ordinal)
+}
+
 async fn append_outbox_published(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
