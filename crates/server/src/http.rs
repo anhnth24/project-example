@@ -141,14 +141,11 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
             // showing stale reserved rows.
             match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
                 Ok(expired) if expired > 0 => {
-                    eprintln!("fileconv-server: quota expiry sweep marked {expired} reservations");
+                    tracing::info!(target: "quota", expired, "quota expiry sweep marked reservations");
                 }
                 Ok(_) => {}
                 Err(error) => {
-                    eprintln!(
-                        "fileconv-server: quota expiry sweep failed: {}",
-                        error.code()
-                    );
+                    tracing::warn!(target: "quota", code = error.code(), "quota expiry sweep failed");
                 }
             }
         }
@@ -194,6 +191,11 @@ async fn check_dependencies(state: Arc<AppState>) -> Result<(), ReadinessError> 
     }
 
     let result = check_dependencies_uncached(&state).await;
+    if let Err(reason) = result.as_ref() {
+        // Operator-facing detail only; the HTTP body stays a generic 503 so we never
+        // disclose which dependency failed to unauthenticated callers.
+        tracing::warn!(target: "readiness", reason = %reason, "dependency readiness check failed");
+    }
     *cached = Some(CachedReadiness {
         checked_at: tokio::time::Instant::now(),
         result: result.as_ref().map(|_| ()).map_err(|_| ()),
