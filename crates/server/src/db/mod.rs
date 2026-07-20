@@ -2,6 +2,7 @@
 
 pub mod chunks;
 pub mod collections;
+pub mod document_versions;
 pub mod documents;
 pub mod error;
 pub(crate) mod jobs;

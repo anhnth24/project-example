@@ -40,6 +40,8 @@ pub struct JobPayload {
     pub collection_id: Option<Uuid>,
     pub upload_id: Option<Uuid>,
     pub batch_id: Option<Uuid>,
+    /// Parent conversion job for an independent reconciliation job.
+    pub cleanup_target_job_id: Option<Uuid>,
 }
 
 impl JobPayload {
@@ -67,6 +69,7 @@ impl From<JobPayloadV1> for JobPayload {
             collection_id: None,
             upload_id: None,
             batch_id: None,
+            cleanup_target_job_id: None,
         }
     }
 }
@@ -112,6 +115,7 @@ impl EventPayload {
 pub struct CheckpointPayload {
     pub cursor_id: Option<Uuid>,
     pub completed_ids: Vec<Uuid>,
+    pub staged_object_keys: Vec<String>,
     pub offset: Option<u64>,
 }
 
@@ -901,6 +905,7 @@ mod tests {
         let checkpoint = CheckpointPayload {
             cursor_id: Some(Uuid::new_v4()),
             completed_ids: vec![Uuid::new_v4()],
+            staged_object_keys: vec![],
             offset: Some(42),
         };
         assert!(checkpoint.to_json().is_ok());

@@ -45,7 +45,9 @@ mod tests {
         assert_eq!(error.code, "validation_failed");
         assert_eq!(
             serde_json::to_string_pretty(&error).unwrap(),
-            include_str!("../openapi/fixtures/error.json").trim()
+            include_str!("../openapi/fixtures/error.json")
+                .trim()
+                .replace("\r\n", "\n")
         );
 
         let page: PageInfo =
