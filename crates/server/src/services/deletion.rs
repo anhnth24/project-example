@@ -302,105 +302,89 @@ async fn drain_vector_cleanup_intents(
     plan: &PurgePlan,
     document_id: Uuid,
 ) -> Result<(), DeletionError> {
-    // Production orchestration (mirrored by hermetic IntentDrainBackend tests):
+    // Shared document lock spans PG finalize/cancel and Qdrant deletes so a
+    // writer cannot authorize+upsert between cleanup steps.
+    // Orchestration (mirrored by hermetic IntentDrainBackend tests):
     // - pending: finalize cleaned first (fence begin_write), then delete
     // - writing: cancel writers, delete possible write, then finalize cleaned
-    let intents = with_org_txn_typed(pool, ctx, {
+    let collection_id = plan.document.collection_id;
+    let qdrant = qdrant.clone();
+    vector_cleanup_intents::with_vector_mutation_lock(pool, ctx, document_id, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
-                Ok::<_, DeletionError>(
-                    vector_cleanup_intents::list_open_for_document(txn, &ctx, document_id).await?,
-                )
-            })
-        }
-    })
-    .await?;
-    let scope = VectorScope::new(ctx.org_id(), [plan.document.collection_id]);
-    let mut cancelled_writers = false;
-    for intent in intents {
-        let Some(cleanup_plan) = vector_cleanup_intents::plan_intent_cleanup(intent.status) else {
-            continue;
-        };
-        let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
-        let document_filter = [json!({
-            "key": "document_id",
-            "match": { "value": document_id.to_string() }
-        })];
-        match cleanup_plan {
-            vector_cleanup_intents::IntentCleanupPlan::CleanThenDelete => {
-                mark_intent_cleaned_from(
-                    pool,
-                    ctx,
-                    intent.job_id,
-                    vector_cleanup_intents::VectorCleanupIntentStatus::Pending,
-                )
-                .await?;
-                qdrant
-                    .delete_points_by_ids(&collection, &scope, &document_filter, &intent.point_ids)
-                    .await?;
-            }
-            vector_cleanup_intents::IntentCleanupPlan::CancelDeleteThenClean => {
-                if !cancelled_writers {
-                    cancel_document_writers(pool, ctx, document_id).await?;
-                    cancelled_writers = true;
-                }
-                qdrant
-                    .delete_points_by_ids(&collection, &scope, &document_filter, &intent.point_ids)
-                    .await?;
-                mark_intent_cleaned_from(
-                    pool,
-                    ctx,
-                    intent.job_id,
-                    vector_cleanup_intents::VectorCleanupIntentStatus::Writing,
-                )
-                .await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-async fn mark_intent_cleaned_from(
-    pool: &Pool,
-    ctx: &OrgContext,
-    job_id: Uuid,
-    from: vector_cleanup_intents::VectorCleanupIntentStatus,
-) -> Result<(), DeletionError> {
-    with_org_txn_typed(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                vector_cleanup_intents::cas_mark_cleaned_from(txn, &ctx, job_id, from)
-                    .await
-                    .map_err(|error| match error {
-                        vector_cleanup_intents::VectorCleanupIntentError::Db(db) => {
-                            DeletionError::Db(db)
+                let intents =
+                    vector_cleanup_intents::list_open_for_document(txn, &ctx, document_id).await?;
+                let scope = VectorScope::new(ctx.org_id(), [collection_id]);
+                let mut cancelled_writers = false;
+                for intent in intents {
+                    let Some(cleanup_plan) =
+                        vector_cleanup_intents::plan_intent_cleanup(intent.status)
+                    else {
+                        continue;
+                    };
+                    let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
+                    let document_filter = [json!({
+                        "key": "document_id",
+                        "match": { "value": document_id.to_string() }
+                    })];
+                    match cleanup_plan {
+                        vector_cleanup_intents::IntentCleanupPlan::CleanThenDelete => {
+                            vector_cleanup_intents::cas_mark_cleaned_from(
+                                txn,
+                                &ctx,
+                                intent.job_id,
+                                vector_cleanup_intents::VectorCleanupIntentStatus::Pending,
+                            )
+                            .await
+                            .map_err(map_intent_drain_error)?;
+                            qdrant
+                                .delete_points_by_ids(
+                                    &collection,
+                                    &scope,
+                                    &document_filter,
+                                    &intent.point_ids,
+                                )
+                                .await?;
                         }
-                        _ => DeletionError::WritersNotQuiesced,
-                    })?;
-                Ok::<_, DeletionError>(())
+                        vector_cleanup_intents::IntentCleanupPlan::CancelDeleteThenClean => {
+                            if !cancelled_writers {
+                                repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
+                                cancelled_writers = true;
+                            }
+                            qdrant
+                                .delete_points_by_ids(
+                                    &collection,
+                                    &scope,
+                                    &document_filter,
+                                    &intent.point_ids,
+                                )
+                                .await?;
+                            vector_cleanup_intents::cas_mark_cleaned_from(
+                                txn,
+                                &ctx,
+                                intent.job_id,
+                                vector_cleanup_intents::VectorCleanupIntentStatus::Writing,
+                            )
+                            .await
+                            .map_err(map_intent_drain_error)?;
+                        }
+                    }
+                }
+                Ok(())
             })
         }
     })
     .await
 }
 
-async fn cancel_document_writers(
-    pool: &Pool,
-    ctx: &OrgContext,
-    document_id: Uuid,
-) -> Result<(), DeletionError> {
-    with_org_txn_typed(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
-                Ok::<_, DeletionError>(())
-            })
-        }
-    })
-    .await
+fn map_intent_drain_error(
+    error: vector_cleanup_intents::VectorCleanupIntentError,
+) -> DeletionError {
+    match error {
+        vector_cleanup_intents::VectorCleanupIntentError::Db(db) => DeletionError::Db(db),
+        _ => DeletionError::WritersNotQuiesced,
+    }
 }
 
 async fn delete_minio_objects_audited(

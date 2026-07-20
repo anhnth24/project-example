@@ -1,12 +1,14 @@
 //! Durable vector-write cleanup intents (P1B-I07 kill/race safety).
 
 use chrono::{DateTime, Utc};
+use deadpool_postgres::Pool;
 use thiserror::Error;
 use tokio_postgres::{Row, Transaction};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
+use crate::db::pool::{apply_org_context, OrgTxnTypedFuture};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VectorCleanupIntentStatus {
@@ -139,6 +141,10 @@ pub struct IntentDrainReport {
 }
 
 /// Production cleanup orchestration shared by the delete worker and hermetic tests.
+///
+/// Callers must hold [`with_vector_mutation_lock`] (or an equivalent shared lock)
+/// across both this plan and the external Qdrant delete so a writer cannot upsert
+/// between authorize and cleanup finalize.
 pub fn drain_cleanup_intents_orchestrated<B: IntentDrainBackend>(
     backend: &mut B,
 ) -> Result<IntentDrainReport, String> {
@@ -176,6 +182,51 @@ pub fn drain_cleanup_intents_orchestrated<B: IntentDrainBackend>(
         }
     }
     Ok(report)
+}
+
+fn vector_mutation_lock_key(org_id: Uuid, document_id: Uuid) -> String {
+    format!("vector-mutation:{org_id}:{document_id}")
+}
+
+/// Serialize vector upsert and cleanup for one document.
+///
+/// Holds a transaction-scoped advisory lock for the full closure, including any
+/// external Qdrant I/O inside `f`. Writers should CAS `pending → writing` inside
+/// this lock immediately before upsert and only commit after the upsert returns,
+/// so a kill rolls back `writing` while the durable `pending` intent (recorded
+/// earlier) still covers any orphaned points.
+pub async fn with_vector_mutation_lock<T, F, E>(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    f: F,
+) -> Result<T, E>
+where
+    F: for<'c> FnOnce(&'c Transaction<'c>) -> OrgTxnTypedFuture<'c, T, E>,
+    E: From<DbError>,
+{
+    let mut client = pool.get().await.map_err(DbError::from).map_err(E::from)?;
+    let txn = client
+        .transaction()
+        .await
+        .map_err(DbError::from)
+        .map_err(E::from)?;
+    apply_org_context(&txn, ctx).await.map_err(E::from)?;
+    let lock_key = vector_mutation_lock_key(ctx.org_id(), document_id);
+    txn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", &[&lock_key])
+        .await
+        .map_err(DbError::from)
+        .map_err(E::from)?;
+    match f(&txn).await {
+        Ok(value) => {
+            txn.commit().await.map_err(DbError::from).map_err(E::from)?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = txn.rollback().await;
+            Err(error)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

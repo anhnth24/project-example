@@ -10,7 +10,9 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::auth::session::{write_audit, AuditEvent};
 use crate::db::error::DbError;
-use crate::db::models::{Chunk, Document, DocumentState, DocumentVersion, JobType};
+use crate::db::models::{
+    Chunk, DerivedArtifact, Document, DocumentState, DocumentVersion, JobType,
+};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{
     chunks, document_versions, documents, embedding_batches, index_metadata, jobs as repo,
@@ -81,9 +83,9 @@ pub struct ObjectInventoryDrift {
 /// Object-type-specific identity expectations for MinIO HEAD validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpectedObjectKind {
-    /// Quarantine intake originals: org + source hash/size only (no document/version IDs).
+    /// Quarantine originals bound for conversion (I06): org + source document/version + hash/size.
     QuarantineOriginal,
-    /// Trusted artifacts/originals after promotion: org + document/version + hash/size.
+    /// Trusted artifacts after promotion: org + document/version + hash/size.
     TrustedArtifact,
 }
 
@@ -113,20 +115,14 @@ pub fn object_identity_matches(
         return false;
     }
     match expected.kind {
-        ExpectedObjectKind::QuarantineOriginal => {
-            // Quarantine uploads intentionally omit document/version metadata.
-            if observed.document_id.is_some() || observed.version_id.is_some() {
-                return false;
-            }
-        }
-        ExpectedObjectKind::TrustedArtifact => {
+        ExpectedObjectKind::QuarantineOriginal | ExpectedObjectKind::TrustedArtifact => {
+            // Quarantine originals must carry source document/version metadata
+            // (same invariants as convert::verify_quarantine_metadata).
             if observed.document_id != expected.document_id {
                 return false;
             }
-            if let Some(version_id) = expected.version_id {
-                if observed.version_id != Some(version_id) {
-                    return false;
-                }
+            if observed.version_id != expected.version_id {
+                return false;
             }
         }
     }
@@ -157,8 +153,8 @@ pub fn expected_object_identity(
         ObjectNamespace::Quarantine => ExpectedObjectIdentity {
             key,
             kind: ExpectedObjectKind::QuarantineOriginal,
-            document_id: None,
-            version_id: None,
+            document_id: Some(document_id),
+            version_id,
             content_sha256,
             byte_size,
         },
@@ -171,6 +167,100 @@ pub fn expected_object_identity(
             byte_size,
         },
     })
+}
+
+/// Prefer the upload/source version for a shared `original_object_key`.
+///
+/// Promoted Markdown versions reuse the quarantine original key but store the
+/// Markdown hash/size in `content_sha256`/`byte_size` — those must not be used
+/// as the original object identity.
+pub fn authoritative_original_source<'a>(
+    versions: &'a [DocumentVersion],
+    original_key: &str,
+) -> Option<&'a DocumentVersion> {
+    let related = versions
+        .iter()
+        .filter(|version| version.original_object_key == original_key)
+        .collect::<Vec<_>>();
+    if related.is_empty() {
+        return None;
+    }
+    for candidate in &related {
+        if related
+            .iter()
+            .any(|child| child.parent_version_id == Some(candidate.id))
+        {
+            return Some(candidate);
+        }
+    }
+    if let Some(source) = related
+        .iter()
+        .find(|version| version.markdown_object_key.is_none())
+    {
+        return Some(source);
+    }
+    related
+        .into_iter()
+        .min_by_key(|version| (version.version_number, version.id))
+}
+
+/// Deduplicate originals and attach per-version Markdown/artifact expectations.
+pub fn build_expected_objects_for_document(
+    org_id: Uuid,
+    document_id: Uuid,
+    versions: &[DocumentVersion],
+    artifacts: &[DerivedArtifact],
+) -> Result<Vec<ExpectedObjectIdentity>, ReconciliationError> {
+    let mut expected_objects = Vec::new();
+    let mut seen_originals = BTreeSet::new();
+    for version in versions {
+        if seen_originals.insert(version.original_object_key.clone()) {
+            let source = authoritative_original_source(versions, &version.original_object_key)
+                .unwrap_or(version);
+            expected_objects.push(expected_object_identity(
+                source.original_object_key.clone(),
+                org_id,
+                document_id,
+                Some(source.id),
+                Some(source.content_sha256.clone()),
+                source.byte_size.and_then(|value| u64::try_from(value).ok()),
+            )?);
+        }
+        if let Some(markdown_key) = version.markdown_object_key.clone() {
+            let artifact = artifacts
+                .iter()
+                .find(|item| item.object_key == markdown_key);
+            expected_objects.push(expected_object_identity(
+                markdown_key,
+                org_id,
+                document_id,
+                Some(version.id),
+                artifact.map(|item| item.content_sha256.clone()),
+                artifact
+                    .and_then(|item| item.byte_size)
+                    .and_then(|value| u64::try_from(value).ok()),
+            )?);
+        }
+    }
+    for artifact in artifacts {
+        if expected_objects
+            .iter()
+            .any(|item| item.key == artifact.object_key)
+        {
+            continue;
+        }
+        expected_objects.push(expected_object_identity(
+            artifact.object_key.clone(),
+            org_id,
+            document_id,
+            Some(artifact.version_id),
+            Some(artifact.content_sha256.clone()),
+            artifact
+                .byte_size
+                .and_then(|value| u64::try_from(value).ok()),
+        )?);
+    }
+    Ok(expected_objects)
 }
 
 /// After stale/orphan point deletes, stale chunk identities become missing and
@@ -555,75 +645,80 @@ async fn drain_pending_vector_intents(
     if mode != ReconcileMode::Repair {
         return Ok(());
     }
-    let mut cancelled_writers = false;
-    for intent in intents {
-        let Some(plan) = vector_cleanup_intents::plan_intent_cleanup(intent.status) else {
-            continue;
-        };
-        let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
-        let document_filter = [json!({
-            "key": "document_id",
-            "match": { "value": document_id.to_string() }
-        })];
-        write_intent_audit(
-            pool,
-            ctx,
-            document_id,
-            "vector.cleanup_intent",
-            "intent",
-            json!({
-                "job_id": intent.job_id,
-                "point_count": intent.point_ids.len(),
-                "status": intent.status.as_str(),
-            }),
-        )
-        .await?;
-        let delete_result = async {
-            match plan {
-                vector_cleanup_intents::IntentCleanupPlan::CleanThenDelete => {
-                    mark_intent_cleaned_from(
-                        pool,
-                        ctx,
-                        intent.job_id,
-                        vector_cleanup_intents::VectorCleanupIntentStatus::Pending,
-                    )
-                    .await?;
-                    qdrant
-                        .delete_points_by_ids(
-                            &collection,
-                            scope,
-                            &document_filter,
-                            &intent.point_ids,
-                        )
-                        .await?;
-                }
-                vector_cleanup_intents::IntentCleanupPlan::CancelDeleteThenClean => {
-                    if !cancelled_writers {
-                        cancel_document_writers(pool, ctx, document_id).await?;
-                        cancelled_writers = true;
+    let scope = scope.clone();
+    let qdrant = qdrant.clone();
+    let drained = vector_cleanup_intents::with_vector_mutation_lock(pool, ctx, document_id, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let intents =
+                    vector_cleanup_intents::list_open_for_document(txn, &ctx, document_id).await?;
+                let mut cancelled_writers = false;
+                let mut repaired = 0usize;
+                for intent in intents {
+                    let Some(plan) = vector_cleanup_intents::plan_intent_cleanup(intent.status)
+                    else {
+                        continue;
+                    };
+                    let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
+                    let document_filter = [json!({
+                        "key": "document_id",
+                        "match": { "value": document_id.to_string() }
+                    })];
+                    match plan {
+                        vector_cleanup_intents::IntentCleanupPlan::CleanThenDelete => {
+                            vector_cleanup_intents::cas_mark_cleaned_from(
+                                txn,
+                                &ctx,
+                                intent.job_id,
+                                vector_cleanup_intents::VectorCleanupIntentStatus::Pending,
+                            )
+                            .await
+                            .map_err(map_reconcile_intent_error)?;
+                            qdrant
+                                .delete_points_by_ids(
+                                    &collection,
+                                    &scope,
+                                    &document_filter,
+                                    &intent.point_ids,
+                                )
+                                .await?;
+                        }
+                        vector_cleanup_intents::IntentCleanupPlan::CancelDeleteThenClean => {
+                            if !cancelled_writers {
+                                repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
+                                cancelled_writers = true;
+                            }
+                            qdrant
+                                .delete_points_by_ids(
+                                    &collection,
+                                    &scope,
+                                    &document_filter,
+                                    &intent.point_ids,
+                                )
+                                .await?;
+                            vector_cleanup_intents::cas_mark_cleaned_from(
+                                txn,
+                                &ctx,
+                                intent.job_id,
+                                vector_cleanup_intents::VectorCleanupIntentStatus::Writing,
+                            )
+                            .await
+                            .map_err(map_reconcile_intent_error)?;
+                        }
                     }
-                    qdrant
-                        .delete_points_by_ids(
-                            &collection,
-                            scope,
-                            &document_filter,
-                            &intent.point_ids,
-                        )
-                        .await?;
-                    mark_intent_cleaned_from(
-                        pool,
-                        ctx,
-                        intent.job_id,
-                        vector_cleanup_intents::VectorCleanupIntentStatus::Writing,
-                    )
-                    .await?;
+                    repaired = repaired.saturating_add(intent.point_ids.len());
                 }
-            }
-            Ok::<_, ReconciliationError>(())
+                Ok(repaired)
+            })
         }
-        .await;
-        match delete_result {
-            Ok(()) => {
+    })
+    .await;
+    match drained {
+        Ok(repaired) => {
+            report.repaired.orphan_vectors =
+                report.repaired.orphan_vectors.saturating_add(repaired);
+            if repaired > 0 {
                 write_intent_audit(
                     pool,
                     ctx,
@@ -631,34 +726,38 @@ async fn drain_pending_vector_intents(
                     "vector.cleanup_intent",
                     "success",
                     json!({
-                        "job_id": intent.job_id,
-                        "point_count": intent.point_ids.len(),
+                        "document_id": document_id,
+                        "point_count": repaired,
                     }),
                 )
                 .await?;
-                report.repaired.orphan_vectors = report
-                    .repaired
-                    .orphan_vectors
-                    .saturating_add(intent.point_ids.len());
             }
-            Err(error) => {
-                write_intent_audit(
-                    pool,
-                    ctx,
-                    document_id,
-                    "vector.cleanup_intent",
-                    "error",
-                    json!({
-                        "job_id": intent.job_id,
-                        "point_count": intent.point_ids.len(),
-                    }),
-                )
-                .await?;
-                return Err(error);
-            }
+            Ok(())
+        }
+        Err(error) => {
+            write_intent_audit(
+                pool,
+                ctx,
+                document_id,
+                "vector.cleanup_intent",
+                "error",
+                json!({
+                    "document_id": document_id,
+                }),
+            )
+            .await?;
+            Err(error)
         }
     }
-    Ok(())
+}
+
+fn map_reconcile_intent_error(
+    error: vector_cleanup_intents::VectorCleanupIntentError,
+) -> ReconciliationError {
+    match error {
+        vector_cleanup_intents::VectorCleanupIntentError::Db(db) => ReconciliationError::Db(db),
+        _ => ReconciliationError::InvalidCheckpoint,
+    }
 }
 
 async fn compare_document_minio_inventory(
@@ -897,48 +996,12 @@ async fn load_inventory(
                 let artifacts =
                     document_versions::list_artifacts_by_document(txn, &ctx, document_id).await?;
                 let active_writer_job = repo::has_active_writer_job(txn, &ctx, document_id).await?;
-                let mut expected_objects = Vec::new();
-                for version in &versions {
-                    expected_objects.push(expected_object_identity(
-                        version.original_object_key.clone(),
-                        ctx.org_id(),
-                        document_id,
-                        Some(version.id),
-                        Some(version.content_sha256.clone()),
-                        version.byte_size.and_then(|v| u64::try_from(v).ok()),
-                    )?);
-                    if let Some(markdown_key) = version.markdown_object_key.clone() {
-                        let artifact = artifacts
-                            .iter()
-                            .find(|item| item.object_key == markdown_key);
-                        expected_objects.push(expected_object_identity(
-                            markdown_key,
-                            ctx.org_id(),
-                            document_id,
-                            Some(version.id),
-                            artifact.map(|item| item.content_sha256.clone()),
-                            artifact
-                                .and_then(|item| item.byte_size)
-                                .and_then(|v| u64::try_from(v).ok()),
-                        )?);
-                    }
-                }
-                for artifact in &artifacts {
-                    if expected_objects
-                        .iter()
-                        .any(|item| item.key == artifact.object_key)
-                    {
-                        continue;
-                    }
-                    expected_objects.push(expected_object_identity(
-                        artifact.object_key.clone(),
-                        ctx.org_id(),
-                        document_id,
-                        Some(artifact.version_id),
-                        Some(artifact.content_sha256.clone()),
-                        artifact.byte_size.and_then(|v| u64::try_from(v).ok()),
-                    )?);
-                }
+                let expected_objects = build_expected_objects_for_document(
+                    ctx.org_id(),
+                    document_id,
+                    &versions,
+                    &artifacts,
+                )?;
                 let mut signatures = BTreeSet::new();
                 for signature in
                     chunks::distinct_index_signatures_by_document(txn, &ctx, document_id).await?
@@ -977,46 +1040,6 @@ async fn list_open_intents(
                 Ok::<_, ReconciliationError>(
                     vector_cleanup_intents::list_open_for_document(txn, &ctx, document_id).await?,
                 )
-            })
-        }
-    })
-    .await
-}
-
-async fn mark_intent_cleaned_from(
-    pool: &Pool,
-    ctx: &OrgContext,
-    job_id: Uuid,
-    from: vector_cleanup_intents::VectorCleanupIntentStatus,
-) -> Result<(), ReconciliationError> {
-    with_org_txn_typed(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                match vector_cleanup_intents::cas_mark_cleaned_from(txn, &ctx, job_id, from).await {
-                    Ok(_) => Ok(()),
-                    Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
-                        Err(ReconciliationError::Db(error))
-                    }
-                    Err(_) => Ok(()),
-                }
-            })
-        }
-    })
-    .await
-}
-
-async fn cancel_document_writers(
-    pool: &Pool,
-    ctx: &OrgContext,
-    document_id: Uuid,
-) -> Result<(), ReconciliationError> {
-    with_org_txn_typed(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
-                Ok::<_, ReconciliationError>(())
             })
         }
     })
@@ -1402,32 +1425,79 @@ mod tests {
     }
 
     #[test]
-    fn quarantine_original_matches_org_hash_size_without_document_ids() {
+    fn quarantine_original_matches_i06_source_document_version_and_hash() {
         let org = Uuid::new_v4();
+        let doc = Uuid::new_v4();
+        let source_version = Uuid::new_v4();
         let expected = ExpectedObjectIdentity {
             key: "quarantine/x/y".into(),
             kind: ExpectedObjectKind::QuarantineOriginal,
-            document_id: None,
-            version_id: None,
+            document_id: Some(doc),
+            version_id: Some(source_version),
             content_sha256: Some("abc".into()),
             byte_size: Some(3),
         };
         let observed = ObservedObjectIdentity {
             org_id: Some(org),
+            document_id: Some(doc),
+            version_id: Some(source_version),
+            content_sha256: Some("abc".into()),
+            content_length: Some(3),
+        };
+        assert!(object_identity_matches(&expected, &observed, org));
+        let missing_ids = ObservedObjectIdentity {
+            org_id: Some(org),
             document_id: None,
             version_id: None,
             content_sha256: Some("abc".into()),
             content_length: Some(3),
         };
-        assert!(object_identity_matches(&expected, &observed, org));
-        let with_doc = ObservedObjectIdentity {
-            org_id: Some(org),
-            document_id: Some(Uuid::new_v4()),
-            version_id: None,
-            content_sha256: Some("abc".into()),
-            content_length: Some(3),
+        assert!(!object_identity_matches(&expected, &missing_ids, org));
+    }
+
+    #[test]
+    fn authoritative_original_ignores_promoted_markdown_hash() {
+        let doc = Uuid::new_v4();
+        let source_id = Uuid::new_v4();
+        let promoted_id = Uuid::new_v4();
+        let original_key = "quarantine/org/obj".to_string();
+        let source = DocumentVersion {
+            id: source_id,
+            org_id: Uuid::new_v4(),
+            document_id: doc,
+            version_number: 1,
+            parent_version_id: None,
+            publication_state: crate::db::models::PublicationState::Draft,
+            is_current: false,
+            content_sha256: "original-hash".into(),
+            original_object_key: original_key.clone(),
+            markdown_object_key: None,
+            source_filename: None,
+            source_content_type: None,
+            byte_size: Some(10),
+            effective_from: chrono::Utc::now(),
+            effective_to: None,
+            change_summary: None,
+            created_by_user_id: Uuid::new_v4(),
+            created_at: chrono::Utc::now(),
         };
-        assert!(!object_identity_matches(&expected, &with_doc, org));
+        let promoted = DocumentVersion {
+            id: promoted_id,
+            version_number: 2,
+            parent_version_id: Some(source_id),
+            publication_state: crate::db::models::PublicationState::Published,
+            is_current: true,
+            content_sha256: "markdown-hash".into(),
+            original_object_key: original_key.clone(),
+            markdown_object_key: Some("trusted/org/v/md".into()),
+            byte_size: Some(99),
+            ..source.clone()
+        };
+        let versions = vec![source, promoted];
+        let chosen = authoritative_original_source(&versions, &original_key).unwrap();
+        assert_eq!(chosen.id, source_id);
+        assert_eq!(chosen.content_sha256, "original-hash");
+        assert_eq!(chosen.byte_size, Some(10));
     }
 
     #[test]

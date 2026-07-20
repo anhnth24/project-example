@@ -277,24 +277,69 @@ impl EmbeddingWorker {
                 })
             })
             .collect::<Result<Vec<_>, EmbeddingWorkerError>>()?;
-        // Fence immediately before the external write. If purge cleanup already
-        // cancelled this intent (`cleaned`), refuse to upsert.
+        // Shared document lock spans authorize + Qdrant upsert so purge cleanup
+        // cannot finalize between a committed `writing` fence and a delayed write.
+        // `pending` was committed earlier: if this process dies after upsert but
+        // before commit, `writing` rolls back and the open pending intent still
+        // covers any orphaned points for cleanup/reconcile.
+        let job_id = job.id;
+        let document_id = source.batch.document_id;
         self.heartbeat_while(
             ctx,
             job,
             lease_token,
             attempts,
             deadline,
-            self.authorize_vector_upsert_fence(ctx, job.id),
-        )
-        .await?;
-        self.heartbeat_while(
-            ctx,
-            job,
-            lease_token,
-            attempts,
-            deadline,
-            self.qdrant.upsert_points(&collection_name, &scope, &points),
+            vector_cleanup_intents::with_vector_mutation_lock(&self.db_pool, ctx, document_id, {
+                let ctx = ctx.clone();
+                let qdrant = self.qdrant.clone();
+                let collection_name = collection_name.clone();
+                let scope = scope.clone();
+                let points = points.clone();
+                move |txn| {
+                    Box::pin(async move {
+                        match vector_cleanup_intents::cas_begin_write(txn, &ctx, job_id).await {
+                            Ok(_) => {}
+                            Err(
+                                vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned,
+                            ) => {
+                                return Err(EmbeddingWorkerError::Indexing(
+                                    IndexingError::DocumentDeleted,
+                                ));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                                return Err(EmbeddingWorkerError::Db(error));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                                return Err(EmbeddingWorkerError::InvalidPayload);
+                            }
+                        }
+                        match vector_cleanup_intents::require_writing_for_upsert(txn, &ctx, job_id)
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(
+                                vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned,
+                            ) => {
+                                return Err(EmbeddingWorkerError::Indexing(
+                                    IndexingError::DocumentDeleted,
+                                ));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                                return Err(EmbeddingWorkerError::Db(error));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                                return Err(EmbeddingWorkerError::InvalidPayload);
+                            }
+                        }
+                        qdrant
+                            .upsert_points(&collection_name, &scope, &points)
+                            .await
+                            .map_err(EmbeddingWorkerError::from)?;
+                        Ok(())
+                    })
+                }
+            }),
         )
         .await?;
         // Qdrant is durable before PG batch completion; compensate if the document
@@ -492,53 +537,6 @@ impl EmbeddingWorker {
                         batch.version_id,
                         version.effective_to.is_none(),
                     ))
-                })
-            }
-        })
-        .await
-    }
-
-    /// CAS pending → writing and authorize the external upsert. A concurrent
-    /// cleanup that already finalized `cleaned` must not proceed to upsert.
-    async fn authorize_vector_upsert_fence(
-        &self,
-        ctx: &OrgContext,
-        job_id: Uuid,
-    ) -> Result<(), EmbeddingWorkerError> {
-        with_org_txn_typed(&self.db_pool, ctx, {
-            let ctx = ctx.clone();
-            move |txn| {
-                Box::pin(async move {
-                    match vector_cleanup_intents::cas_begin_write(txn, &ctx, job_id).await {
-                        Ok(_) => {}
-                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
-                            return Err(EmbeddingWorkerError::Indexing(
-                                IndexingError::DocumentDeleted,
-                            ));
-                        }
-                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
-                            return Err(EmbeddingWorkerError::Db(error));
-                        }
-                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
-                            return Err(EmbeddingWorkerError::InvalidPayload);
-                        }
-                    }
-                    match vector_cleanup_intents::require_writing_for_upsert(txn, &ctx, job_id)
-                        .await
-                    {
-                        Ok(_) => Ok(()),
-                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
-                            Err(EmbeddingWorkerError::Indexing(
-                                IndexingError::DocumentDeleted,
-                            ))
-                        }
-                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
-                            Err(EmbeddingWorkerError::Db(error))
-                        }
-                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
-                            Err(EmbeddingWorkerError::InvalidPayload)
-                        }
-                    }
                 })
             }
         })

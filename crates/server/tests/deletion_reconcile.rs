@@ -54,7 +54,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tokio_postgres::NoTls;
@@ -253,17 +253,30 @@ fn hermetic_purged_inventory_ignores_intentional_absences() {
 }
 
 #[test]
-fn hermetic_quarantine_upload_identity_uses_source_hash_size() {
+fn hermetic_quarantine_upload_identity_requires_i06_source_ids() {
     let org = Uuid::new_v4();
+    let doc = Uuid::new_v4();
+    let source_version = Uuid::new_v4();
     let expected = ExpectedObjectIdentity {
         key: "quarantine/org/obj".into(),
         kind: ExpectedObjectKind::QuarantineOriginal,
-        document_id: None,
-        version_id: None,
+        document_id: Some(doc),
+        version_id: Some(source_version),
         content_sha256: Some("deadbeef".into()),
         byte_size: Some(12),
     };
     assert!(object_identity_matches(
+        &expected,
+        &ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: Some(doc),
+            version_id: Some(source_version),
+            content_sha256: Some("deadbeef".into()),
+            content_length: Some(12),
+        },
+        org
+    ));
+    assert!(!object_identity_matches(
         &expected,
         &ObservedObjectIdentity {
             org_id: Some(org),
@@ -274,17 +287,39 @@ fn hermetic_quarantine_upload_identity_uses_source_hash_size() {
         },
         org
     ));
-    assert!(!object_identity_matches(
-        &expected,
-        &ObservedObjectIdentity {
-            org_id: Some(org),
-            document_id: Some(Uuid::new_v4()),
-            version_id: None,
-            content_sha256: Some("deadbeef".into()),
-            content_length: Some(12),
-        },
-        org
-    ));
+}
+
+#[test]
+fn hermetic_shared_lock_serializes_authorize_upsert_and_cleanup() {
+    // Models production `with_vector_mutation_lock`: authorize + external upsert
+    // and cleanup delete/finalize share one critical section.
+    let lock = Arc::new(Mutex::new(()));
+    let mut backend = FakeIntentDrainBackend::default();
+    let job_id = Uuid::new_v4();
+    let point = Uuid::new_v4();
+    backend
+        .upsert_pending(job_id, vec![point])
+        .expect("pending intent before locked write");
+
+    {
+        let _guard = lock.lock().expect("writer lock");
+        backend.begin_write(job_id).expect("writing");
+        backend
+            .authorize_upsert(job_id)
+            .expect("authorized upsert under lock");
+        // Upsert happens while still holding the lock; cleanup cannot interleave.
+        assert!(backend.open_for_document());
+    }
+
+    {
+        let _guard = lock.lock().expect("cleanup lock");
+        let report = drain_cleanup_intents_orchestrated(&mut backend).expect("drain");
+        assert!(report.writers_cancelled);
+        assert_eq!(
+            backend.authorize_upsert(job_id),
+            Err(IntentTransitionError::AlreadyCleaned)
+        );
+    }
 }
 
 #[test]
