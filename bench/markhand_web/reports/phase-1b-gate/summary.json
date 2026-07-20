@@ -1,0 +1,503 @@
+{
+  "version": 1,
+  "reportId": "phase-1b-gate-qualification",
+  "generatedAt": "2026-07-20T00:44:24.980717Z",
+  "command": "python3 bench/markhand_web/reports/phase-1b-gate.py",
+  "targetMatch": false,
+  "statusCounts": {
+    "pass": 0,
+    "fail": 0,
+    "pending": 16
+  },
+  "git": {
+    "commit": "2395b2ba8c9249181d79529b86e4981d081d6331",
+    "branch": "cursor/p1b-o05-soak-qualification-f084",
+    "dirty": true,
+    "dirtyPaths": [
+      "bench/markhand_web/reports/phase-1b-gate.py",
+      "bench/markhand_web/reports/phase-1b-gate/",
+      "bench/markhand_web/soak/",
+      "bench/markhand_web/workloads/"
+    ]
+  },
+  "gatesPath": "bench/markhand_web/gates.yaml",
+  "evidenceRoot": ".",
+  "evidenceInputs": {
+    "soak": {
+      "path": "bench/markhand_web/soak/summary.json",
+      "present": true,
+      "targetMatch": false,
+      "targetResultsValidForGate": false,
+      "reportId": "p1b-o05-mixed-load-soak"
+    },
+    "query_load": {
+      "path": "bench/markhand_web/query_load/summary.json",
+      "present": true,
+      "targetMatch": false,
+      "targetResultsValidForGate": false,
+      "reportId": "p0-10-query-load-smoke"
+    },
+    "ingest": {
+      "path": "bench/markhand_web/ingest/summary.json",
+      "present": true,
+      "targetMatch": false,
+      "targetResultsValidForGate": false,
+      "reportId": "p0-08-ingest-capacity"
+    },
+    "restore": {
+      "path": "bench/markhand_web/restore/summary.json",
+      "present": true,
+      "targetMatch": false,
+      "targetResultsValidForGate": false,
+      "reportId": "p0-10-restore-drill"
+    }
+  },
+  "gates": [
+    {
+      "gateId": "G0-ARCH-DECISIONS",
+      "externalGate": "G0-ARCH",
+      "metric": {
+        "name": "approved_architecture_decisions",
+        "unit": "count",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 7
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-RECALL-AT-5",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "recall_at_5",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 0.85
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-BEST-MODEL-GAP",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "best_model_ndcg_gap",
+        "unit": "ratio",
+        "statistic": "max"
+      },
+      "threshold": {
+        "operator": "<=",
+        "value": 0.02
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-VLLM-CUTOVER",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "onprem_embedding_cutover_ready",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-TEMPORAL-ACCURACY",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "temporal_answer_accuracy",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 0.95
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-CHANGE-ACCURACY",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "version_change_accuracy",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 0.95
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-VERSION-CITATION-PRECISION",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "version_citation_precision",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-RET-VERSION-CITATION-RECALL",
+      "externalGate": "G0-RET",
+      "metric": {
+        "name": "version_citation_recall",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-SEC-UPLOAD-DENIAL",
+      "externalGate": "G0-SEC",
+      "metric": {
+        "name": "blocked_attack_fixtures",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 1.0
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    },
+    {
+      "gateId": "G0-CAP-INGEST-THROUGHPUT",
+      "externalGate": "G0-CAP",
+      "metric": {
+        "name": "ingest_documents_per_hour",
+        "unit": "count_per_hour",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": ">=",
+        "value": 1200
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [
+        {
+          "source": "soak",
+          "path": "bench/markhand_web/soak/summary.json",
+          "jsonPath": "operations.ingest.successfulDocumentsPerHour",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p1b-o05-mixed-load-soak"
+        },
+        {
+          "source": "ingest",
+          "path": "bench/markhand_web/ingest/summary.json",
+          "jsonPath": "docsPerHour",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 40359.4,
+          "reportId": "p0-08-ingest-capacity"
+        },
+        {
+          "source": "ingest",
+          "path": "bench/markhand_web/ingest/summary.json",
+          "jsonPath": "headroomEstimate.effectiveCapacityDocsPerHourForGate",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 0.0,
+          "reportId": "p0-08-ingest-capacity"
+        }
+      ],
+      "pendingReason": "evidence is present but not target-valid (targetMatch=false or targetResultsValidForGate=false)",
+      "supportedByPhase1BReport": true
+    },
+    {
+      "gateId": "G0-SLO-QUERY-P95",
+      "externalGate": "G0-SLO",
+      "metric": {
+        "name": "query_latency",
+        "unit": "milliseconds",
+        "statistic": "p95"
+      },
+      "threshold": {
+        "operator": "<=",
+        "value": 500
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [
+        {
+          "source": "soak",
+          "path": "bench/markhand_web/soak/summary.json",
+          "jsonPath": "operations.query_search.durationMs.p95",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p1b-o05-mixed-load-soak"
+        },
+        {
+          "source": "query_load",
+          "path": "bench/markhand_web/query_load/summary.json",
+          "jsonPath": "metrics.queryLatencyP95Ms",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p0-10-query-load-smoke"
+        },
+        {
+          "source": "query_load",
+          "path": "bench/markhand_web/query_load/summary.json",
+          "jsonPath": "metrics.queryLatencyP95MsSynthetic",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 296.008,
+          "reportId": "p0-10-query-load-smoke"
+        }
+      ],
+      "pendingReason": "evidence is present but not target-valid (targetMatch=false or targetResultsValidForGate=false)",
+      "supportedByPhase1BReport": true
+    },
+    {
+      "gateId": "G0-SLO-QUERY-P99",
+      "externalGate": "G0-SLO",
+      "metric": {
+        "name": "filtered_query_latency",
+        "unit": "milliseconds",
+        "statistic": "p99"
+      },
+      "threshold": {
+        "operator": "<=",
+        "value": 1000
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [
+        {
+          "source": "soak",
+          "path": "bench/markhand_web/soak/summary.json",
+          "jsonPath": "operations.query_search.durationMs.p99",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p1b-o05-mixed-load-soak"
+        },
+        {
+          "source": "query_load",
+          "path": "bench/markhand_web/query_load/summary.json",
+          "jsonPath": "metrics.filteredQueryLatencyP99Ms",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p0-10-query-load-smoke"
+        },
+        {
+          "source": "query_load",
+          "path": "bench/markhand_web/query_load/summary.json",
+          "jsonPath": "metrics.filteredQueryLatencyP99MsSynthetic",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 820.854,
+          "reportId": "p0-10-query-load-smoke"
+        }
+      ],
+      "pendingReason": "evidence is present but not target-valid (targetMatch=false or targetResultsValidForGate=false)",
+      "supportedByPhase1BReport": true
+    },
+    {
+      "gateId": "G0-DR-RPO",
+      "externalGate": "G0-SLO",
+      "metric": {
+        "name": "recovery_point",
+        "unit": "minutes",
+        "statistic": "max"
+      },
+      "threshold": {
+        "operator": "<=",
+        "value": 15
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [
+        {
+          "source": "restore",
+          "path": "bench/markhand_web/restore/summary.json",
+          "jsonPath": "timings.rpoMinutes",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p0-10-restore-drill"
+        },
+        {
+          "source": "restore",
+          "path": "bench/markhand_web/restore/summary.json",
+          "jsonPath": "timings.rpoMinutesSynthetic",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 5.381,
+          "reportId": "p0-10-restore-drill"
+        }
+      ],
+      "pendingReason": "evidence is present but not target-valid (targetMatch=false or targetResultsValidForGate=false)",
+      "supportedByPhase1BReport": true
+    },
+    {
+      "gateId": "G0-DR-QUERY-READY-RTO",
+      "externalGate": "G0-SLO",
+      "metric": {
+        "name": "query_ready_recovery_time",
+        "unit": "minutes",
+        "statistic": "max"
+      },
+      "threshold": {
+        "operator": "<=",
+        "value": 60
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [
+        {
+          "source": "restore",
+          "path": "bench/markhand_web/restore/summary.json",
+          "jsonPath": "timings.queryReadyRtoMinutes",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p0-10-restore-drill"
+        },
+        {
+          "source": "restore",
+          "path": "bench/markhand_web/restore/summary.json",
+          "jsonPath": "timings.queryReadyRtoMinutesSynthetic",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 30.828,
+          "reportId": "p0-10-restore-drill"
+        }
+      ],
+      "pendingReason": "evidence is present but not target-valid (targetMatch=false or targetResultsValidForGate=false)",
+      "supportedByPhase1BReport": true
+    },
+    {
+      "gateId": "G0-DR-FULL-VECTOR-RTO",
+      "externalGate": "G0-SLO",
+      "metric": {
+        "name": "full_vector_recovery_time",
+        "unit": "minutes",
+        "statistic": "max"
+      },
+      "threshold": {
+        "operator": "<=",
+        "value": 240
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [
+        {
+          "source": "restore",
+          "path": "bench/markhand_web/restore/summary.json",
+          "jsonPath": "timings.fullVectorRtoMinutes",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": null,
+          "reportId": "p0-10-restore-drill"
+        },
+        {
+          "source": "restore",
+          "path": "bench/markhand_web/restore/summary.json",
+          "jsonPath": "timings.fullVectorRtoMinutesSynthetic",
+          "targetValid": false,
+          "targetMatch": false,
+          "rawValue": 153.647,
+          "reportId": "p0-10-restore-drill"
+        }
+      ],
+      "pendingReason": "evidence is present but not target-valid (targetMatch=false or targetResultsValidForGate=false)",
+      "supportedByPhase1BReport": true
+    },
+    {
+      "gateId": "G0-LIC-INVENTORY",
+      "externalGate": "G0-LIC",
+      "metric": {
+        "name": "approved_runtime_licenses",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "threshold": {
+        "operator": "==",
+        "value": 1.0
+      },
+      "status": "pending",
+      "measuredValue": null,
+      "evidence": null,
+      "candidateEvidence": [],
+      "pendingReason": "not part of the P1B-O05 numeric soak/query/ingest/restore evidence set",
+      "supportedByPhase1BReport": false
+    }
+  ],
+  "caveat": "Numeric G0-SLO/G0-CAP/DR/soak gates require sustained real infrastructure with targetMatch=true; pending/null rows are expected in this sandbox."
+}

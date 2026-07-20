@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "profileId": "phase-1b-soak-smoke",
+  "description": "Short synthetic/redacted mixed-load smoke for validating the soak harness shape before a real sustained run.",
+  "baseWorkloadProfile": "../workload-profile.yaml",
+  "targetEnvironmentId": "on-prem-reference",
+  "targetMatchRequiredForNumericGates": true,
+  "durationSeconds": 60,
+  "rampSeconds": 10,
+  "concurrency": 4,
+  "sampleIntervalSeconds": 5,
+  "operationTimeoutSeconds": 30,
+  "jobPollTimeoutSeconds": 60,
+  "jobPollIntervalSeconds": 2,
+  "operationWeights": {
+    "ingest": 25,
+    "query_search": 35,
+    "ask": 20,
+    "delete": 10,
+    "reconcile": 10
+  },
+  "targetRatesPerHour": {
+    "ingest": 60,
+    "delete": 12
+  },
+  "api": {
+    "baseUrlEnv": "MARKHAND_BASE_URL",
+    "bearerTokenEnv": "MARKHAND_BEARER_TOKEN",
+    "collectionIdEnv": "MARKHAND_COLLECTION_ID",
+    "defaultBaseUrl": "http://127.0.0.1:8787"
+  },
+  "data": {
+    "classification": "synthetic-redacted",
+    "fixturePrefix": "P1B-O05-SOAK-SMOKE",
+    "uploadContentType": "text/plain",
+    "queries": [
+      "P1B-O05 smoke budget marker",
+      "P1B-O05 smoke design marker",
+      "Markhand single org POC soak"
+    ]
+  },
+  "gateMappings": [
+    {
+      "gateId": "G0-SLO-QUERY-P95",
+      "soakMetric": "operations.query_search.durationMs.p95"
+    },
+    {
+      "gateId": "G0-SLO-QUERY-P99",
+      "soakMetric": "operations.query_search.durationMs.p99"
+    },
+    {
+      "gateId": "G0-CAP-INGEST-THROUGHPUT",
+      "soakMetric": "operations.ingest.successfulDocumentsPerHour"
+    },
+    {
+      "gateId": "G0-DR-RPO",
+      "soakMetric": "restore.rpoMinutes"
+    },
+    {
+      "gateId": "G0-DR-QUERY-READY-RTO",
+      "soakMetric": "restore.queryReadyRtoMinutes"
+    },
+    {
+      "gateId": "G0-DR-FULL-VECTOR-RTO",
+      "soakMetric": "restore.fullVectorRtoMinutes"
+    }
+  ],
+  "failureInjections": [
+    {
+      "id": "pause-convert-worker",
+      "mode": "documented-manual-step",
+      "command": "docker compose -f deploy/compose.poc.yml stop worker-convert",
+      "restoreCommand": "docker compose -f deploy/compose.poc.yml up -d worker-convert",
+      "expectedSignal": "markhand_jobs_queue_depth remains bounded after worker recovery"
+    },
+    {
+      "id": "readiness-fence-reconciling",
+      "mode": "documented-manual-step",
+      "command": "docker compose -f deploy/compose.poc.yml run --rm worker-reconcile readiness-fence reconciling \"soak smoke fence\"",
+      "restoreCommand": "docker compose -f deploy/compose.poc.yml run --rm worker-reconcile readiness-fence ready",
+      "expectedSignal": "/api/v1/health/ready reports not_reconciled until fence is ready"
+    }
+  ]
+}
