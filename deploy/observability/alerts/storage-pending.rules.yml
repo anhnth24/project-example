@@ -1,0 +1,51 @@
+# TODO(P1B-O01 follow-up): O01 does not currently emit the storage metrics below.
+# Keep this file separate from emitted-metric rules until the server or deployment
+# exporter provides these aggregate, low-cardinality series:
+# - markhand_disk_free_bytes{component}
+# - markhand_disk_capacity_bytes{component}
+# - markhand_backup_last_success_timestamp_seconds{component}
+groups:
+  - name: markhand-storage-pending-emitters
+    rules:
+      - alert: MarkhandDiskFreeSpaceLowPendingEmitter
+        expr: |
+          (
+            markhand_disk_free_bytes{component=~"postgres|qdrant|minio"}
+            /
+            markhand_disk_capacity_bytes{component=~"postgres|qdrant|minio"}
+          ) < 0.30
+        for: 15m
+        labels:
+          severity: warning
+          slo: PROFILE-B-DISK-HEADROOM
+          pending_emitter: "true"
+        annotations:
+          summary: "Disk free space is below the 30% headroom target"
+          description: "Pending emitter: alert when PostgreSQL, Qdrant, or MinIO disk free ratio stays below 30% for 15m. The threshold comes from bench/markhand_web/workload-profile.yaml hardware.headroomPercent.disk."
+          runbook_url: "docs/runbooks/disk-pressure.md"
+
+      - alert: MarkhandBackupAgeRpoAtRiskPendingEmitter
+        expr: |
+          time() - markhand_backup_last_success_timestamp_seconds{component=~"postgres|qdrant|minio"} > 10 * 60
+        for: 5m
+        labels:
+          severity: warning
+          slo: G0-DR-RPO
+          pending_emitter: "true"
+        annotations:
+          summary: "Backup age is approaching the 15-minute RPO"
+          description: "Pending emitter: alert when the latest successful PostgreSQL, Qdrant, or MinIO backup is older than 10 minutes. The critical RPO target is <=15 minutes in docs/markhand-web-sla-targets.md and bench/markhand_web/gates.yaml gate G0-DR-RPO."
+          runbook_url: "docs/runbooks/disk-pressure.md"
+
+      - alert: MarkhandBackupAgeRpoExceededPendingEmitter
+        expr: |
+          time() - markhand_backup_last_success_timestamp_seconds{component=~"postgres|qdrant|minio"} > 15 * 60
+        for: 5m
+        labels:
+          severity: critical
+          slo: G0-DR-RPO
+          pending_emitter: "true"
+        annotations:
+          summary: "Backup age exceeds the 15-minute RPO"
+          description: "Pending emitter: alert when the latest successful PostgreSQL, Qdrant, or MinIO backup is older than 15 minutes. The threshold is gate G0-DR-RPO in bench/markhand_web/gates.yaml and docs/markhand-web-sla-targets.md."
+          runbook_url: "docs/runbooks/disk-pressure.md"

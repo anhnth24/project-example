@@ -1,0 +1,66 @@
+groups:
+  - name: markhand-job-backlog
+    rules:
+      - alert: MarkhandJobQueueBacklogWarning
+        expr: markhand_jobs_queue_depth > 600
+        for: 30m
+        labels:
+          severity: warning
+          slo: QUEUE-AGE-RECOVERY
+        annotations:
+          summary: "Job queue backlog is at risk of missing the recovery target"
+          description: "Queue depth has stayed above 600 for 30m. The workload profile sets recovery load to 2x normal ingest, or 600 documents/hour; this is roughly one hour of recovery work and should be drained before it approaches the 120-minute queue-age target."
+          runbook_url: "docs/runbooks/job-backlog-dead-letter.md"
+
+      - alert: MarkhandJobQueueBacklogOverRecoveryTarget
+        expr: markhand_jobs_queue_depth > 1200
+        for: 15m
+        labels:
+          severity: critical
+          slo: QUEUE-AGE-RECOVERY
+        annotations:
+          summary: "Job queue backlog implies more than 120 minutes of recovery work"
+          description: "Queue depth has stayed above 1200 for 15m. At the approved recovery load of 600 documents/hour (2x normal from bench/markhand_web/workload-profile.yaml), this exceeds the <=120 minute oldest ingest queue-age target in docs/markhand-web-sla-targets.md."
+          runbook_url: "docs/runbooks/job-backlog-dead-letter.md"
+
+      - alert: MarkhandJobThroughputBelowPeakGate
+        expr: |
+          (
+            sum by (job_type) (
+              rate(markhand_jobs_processed_total{job_type=~"convert|index",outcome="success"}[30m])
+            ) * 3600 < 1200
+          )
+          and on() markhand_jobs_queue_depth > 0
+        for: 30m
+        labels:
+          severity: warning
+          slo: G0-CAP-INGEST-THROUGHPUT
+        annotations:
+          summary: "Ingest worker throughput is below the 1200 documents/hour gate"
+          description: "{{ $labels.job_type }} success throughput is below 1200/hour while queue depth is non-zero. The threshold is gate G0-CAP-INGEST-THROUGHPUT in bench/markhand_web/gates.yaml and docs/markhand-web-sla-targets.md."
+          runbook_url: "docs/runbooks/job-backlog-dead-letter.md"
+
+      - alert: MarkhandJobsInFlightSaturatedWithBacklog
+        expr: markhand_jobs_in_flight >= 8 and markhand_jobs_queue_depth > 0
+        for: 30m
+        labels:
+          severity: warning
+          slo: G0-CAP-INGEST-THROUGHPUT
+        annotations:
+          summary: "Worker concurrency is saturated while backlog remains"
+          description: "In-flight jobs have stayed at or above the approved aggregate ingest concurrency of 8 while queue depth remains non-zero for 30m. See bench/markhand_web/workload-profile.yaml loads.aggregate.concurrentIngest."
+          runbook_url: "docs/runbooks/job-backlog-dead-letter.md"
+
+      - alert: MarkhandJobDeadLetterOrFailedGrowth
+        expr: |
+          sum by (job_type, outcome) (
+            increase(markhand_jobs_processed_total{outcome=~"dead_letter|failed"}[15m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+          slo: G0-CAP-INGEST-THROUGHPUT
+        annotations:
+          summary: "Background jobs are failing or entering dead letter"
+          description: "{{ $labels.job_type }} jobs recorded outcome={{ $labels.outcome }} in the last 15m. Drain or requeue only after the failed dependency/parser cause is contained."
+          runbook_url: "docs/runbooks/job-backlog-dead-letter.md"
