@@ -152,6 +152,55 @@ pub async fn mark_succeeded(
     map_batch(&row)
 }
 
+/// Resets a succeeded/failed batch so a repair embedding job can replay it.
+pub async fn requeue_for_repair(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    batch_id: Uuid,
+    new_job_id: Uuid,
+) -> Result<EmbeddingBatch, DbError> {
+    let row = txn
+        .query_opt(
+            &format!(
+                "UPDATE embedding_batches
+                 SET status = 'pending',
+                     job_id = $3,
+                     completed_at = NULL
+                 WHERE org_id = $1 AND id = $2
+                 RETURNING {COLUMNS}"
+            ),
+            &[&ctx.org_id(), &batch_id, &new_job_id],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    map_batch(&row)
+}
+
+pub async fn list_by_document_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    index_metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<Vec<EmbeddingBatch>, DbError> {
+    let rows = txn
+        .query(
+            &format!(
+                "SELECT {COLUMNS}
+                 FROM embedding_batches
+                 WHERE org_id = $1
+                   AND index_metadata_id = $2
+                   AND document_id = $3
+                   AND version_id = $4
+                 ORDER BY start_ordinal, id
+                 FOR UPDATE"
+            ),
+            &[&ctx.org_id(), &index_metadata_id, &document_id, &version_id],
+        )
+        .await?;
+    rows.iter().map(map_batch).collect()
+}
+
 pub async fn mark_failed(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

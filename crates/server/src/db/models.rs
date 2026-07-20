@@ -335,6 +335,17 @@ impl ArtifactKind {
             Self::Other => "other",
         }
     }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "markdown" => Ok(Self::Markdown),
+            "preview" => Ok(Self::Preview),
+            "thumbnail" => Ok(Self::Thumbnail),
+            "extracted_text" => Ok(Self::ExtractedText),
+            "other" => Ok(Self::Other),
+            other => Err(format!("unknown artifact kind: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -128,6 +128,7 @@ def default_env_file() -> Path:
 def compose_command(
     env_file: Path | None = None,
     nested_enabled: bool = False,
+    mock_enabled: bool = False,
     gpu_enabled: bool = False,
 ) -> list[str]:
     env_file = env_file or default_env_file()
@@ -146,6 +147,8 @@ def compose_command(
     ]
     if nested_enabled:
         command.extend(["-f", str(ROOT / "deploy/spike/compose.nested.yml")])
+    if mock_enabled:
+        command.extend(["--profile", "mock"])
     if gpu_enabled:
         command.extend(["--profile", "gpu"])
     return command
@@ -230,27 +233,50 @@ def validate_config(env_file: Path | None = None) -> list[str]:
     if len(ports) != len(set(ports)):
         errors.append("spike host ports must be unique")
     if shutil.which("docker"):
-        completed = subprocess.run(
-            [*compose_command(env_file, gpu_enabled=True), "config"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            errors.append(f"docker compose config failed: {completed.stderr}")
-        else:
+        for profile_name, mock_enabled, gpu_enabled in (
+            ("cpu-mock", True, False),
+            ("gpu", False, True),
+        ):
+            completed = subprocess.run(
+                [
+                    *compose_command(
+                        env_file,
+                        mock_enabled=mock_enabled,
+                        gpu_enabled=gpu_enabled,
+                    ),
+                    "config",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                errors.append(
+                    f"docker compose config failed ({profile_name}): {completed.stderr}"
+                )
+                continue
             rendered_images = subprocess.check_output(
                 [
-                    *compose_command(env_file, gpu_enabled=True),
+                    *compose_command(
+                        env_file,
+                        mock_enabled=mock_enabled,
+                        gpu_enabled=gpu_enabled,
+                    ),
                     "config",
                     "--images",
                 ],
                 cwd=ROOT,
                 text=True,
             ).splitlines()
-            if set(rendered_images) != set(image_lock.values()):
-                errors.append("rendered spike images differ from image lock")
+            optional = "vllm" if mock_enabled else "mock-embedding"
+            expected_images = {
+                image for service, image in image_lock.items() if service != optional
+            }
+            if set(rendered_images) != expected_images:
+                errors.append(
+                    f"rendered spike images differ from image lock ({profile_name})"
+                )
     return errors
 
 

@@ -141,6 +141,17 @@ pub fn trusted_key(
     })
 }
 
+/// Org-scoped prefix for listing trusted objects under one version.
+pub fn trusted_version_prefix(org_id: Uuid, version_id: Uuid) -> Result<String, StorageError> {
+    reject_nil_ids(&[org_id, version_id])?;
+    Ok(format!(
+        "{}/{}/{}/",
+        ObjectNamespace::Trusted.as_str(),
+        opaque_identity("org", org_id),
+        opaque_identity("version", version_id)
+    ))
+}
+
 /// Parse a key and authorize it for `org_id` (fail closed on org mismatch).
 ///
 /// There is no public unbound parse that yields a usable cross-org key.

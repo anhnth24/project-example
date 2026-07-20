@@ -15,15 +15,19 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::embedding_batches::{self, EmbeddingBatch};
 use crate::db::error::DbError;
-use crate::db::models::{Job, JobStatus, JobType};
+use crate::db::models::{DocumentState, Job, JobStatus, JobType};
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, documents, index_metadata, jobs as job_repo};
+use crate::db::{chunks, documents, index_metadata, jobs as job_repo, vector_cleanup_intents};
 use crate::jobs::{self, JobError};
 use crate::services::embedding::{
     canonical_inputs_sha256, ApprovedEmbeddingRuntime, EmbeddingError,
 };
+use crate::services::index_signature::collection_name_for_digest;
 use crate::services::indexing::{self, IndexingError};
-use crate::storage::qdrant::{ChunkPointPayload, QdrantClient, UpsertPoint, VectorScope};
+use crate::storage::qdrant::{
+    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, UpsertPoint,
+    VectorScope,
+};
 use crate::storage::StorageError;
 
 const DEFAULT_CLAIM_LIMIT: u32 = 1;
@@ -217,10 +221,20 @@ impl EmbeddingWorker {
                 self.qdrant.ensure_collection_for_signature(&signature),
             )
             .await?;
-        // The provider call can take long enough for a newer version to be
-        // promoted. Re-read the lifecycle under the document row lock
-        // immediately before the external write; never reuse the stale flags
-        // captured while loading the batch source.
+        let scope = VectorScope::new(ctx.org_id(), [source.collection_id]);
+        let point_ids = source
+            .chunks
+            .iter()
+            .map(|chunk| {
+                point_id_from_org_collection_and_chunk(
+                    ctx.org_id(),
+                    source.collection_id,
+                    &chunk.chunk_identity_sha256,
+                )
+            })
+            .collect::<Result<Vec<_>, StorageError>>()?;
+        // Persist cleanup intent in the same fenced txn that observes lifecycle,
+        // before the external Qdrant write, so a kill after upsert remains recoverable.
         let lifecycle = self
             .heartbeat_while(
                 ctx,
@@ -228,10 +242,17 @@ impl EmbeddingWorker {
                 lease_token,
                 attempts,
                 deadline,
-                self.load_lifecycle_fence(ctx, job, lease_token, attempts, batch_id),
+                self.load_lifecycle_fence_with_write_intent(
+                    ctx,
+                    job,
+                    lease_token,
+                    attempts,
+                    batch_id,
+                    &source.metadata.index_signature_sha256,
+                    &point_ids,
+                ),
             )
             .await?;
-        let scope = VectorScope::new(ctx.org_id(), [source.collection_id]);
         let points = source
             .chunks
             .iter()
@@ -256,17 +277,124 @@ impl EmbeddingWorker {
                 })
             })
             .collect::<Result<Vec<_>, EmbeddingWorkerError>>()?;
+        // Shared document lock spans authorize + Qdrant upsert so purge cleanup
+        // cannot finalize between a committed `writing` fence and a delayed write.
+        // `pending` was committed earlier: if this process dies after upsert but
+        // before commit, `writing` rolls back and the open pending intent still
+        // covers any orphaned points for cleanup/reconcile.
+        let job_id = job.id;
+        let document_id = source.batch.document_id;
         self.heartbeat_while(
             ctx,
             job,
             lease_token,
             attempts,
             deadline,
-            self.qdrant.upsert_points(&collection_name, &scope, &points),
+            vector_cleanup_intents::with_vector_mutation_lock(&self.db_pool, ctx, document_id, {
+                let ctx = ctx.clone();
+                let qdrant = self.qdrant.clone();
+                let collection_name = collection_name.clone();
+                let scope = scope.clone();
+                let points = points.clone();
+                move |txn| {
+                    Box::pin(async move {
+                        match vector_cleanup_intents::cas_begin_write(txn, &ctx, job_id).await {
+                            Ok(_) => {}
+                            Err(
+                                vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned,
+                            ) => {
+                                return Err(EmbeddingWorkerError::Indexing(
+                                    IndexingError::DocumentDeleted,
+                                ));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                                return Err(EmbeddingWorkerError::Db(error));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                                return Err(EmbeddingWorkerError::InvalidPayload);
+                            }
+                        }
+                        match vector_cleanup_intents::require_writing_for_upsert(txn, &ctx, job_id)
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(
+                                vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned,
+                            ) => {
+                                return Err(EmbeddingWorkerError::Indexing(
+                                    IndexingError::DocumentDeleted,
+                                ));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                                return Err(EmbeddingWorkerError::Db(error));
+                            }
+                            Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                                return Err(EmbeddingWorkerError::InvalidPayload);
+                            }
+                        }
+                        qdrant
+                            .upsert_points(&collection_name, &scope, &points)
+                            .await
+                            .map_err(EmbeddingWorkerError::from)?;
+                        Ok(())
+                    })
+                }
+            }),
         )
         .await?;
-        self.complete_batch(ctx, job, lease_token, attempts, batch_id)
+        // Qdrant is durable before PG batch completion; compensate if the document
+        // was tombstoned/purged between upsert and the fenced complete txn.
+        match self
+            .complete_batch(ctx, job, lease_token, attempts, batch_id)
             .await
+        {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(
+                    error,
+                    EmbeddingWorkerError::Indexing(IndexingError::DocumentDeleted)
+                ) || (matches!(error, EmbeddingWorkerError::Job(JobError::LeaseLost))
+                    && indexing::document_is_deleted(
+                        &self.db_pool,
+                        ctx,
+                        source.batch.document_id,
+                    )
+                    .await
+                    .unwrap_or(false)) =>
+            {
+                let digest = source.metadata.index_signature_sha256.clone();
+                let collection = collection_name_for_digest(&digest)?;
+                match indexing::compensate_batch_points(
+                    &self.qdrant,
+                    &collection,
+                    &scope,
+                    source.batch.document_id,
+                    &point_ids,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        self.clear_vector_write_intent(ctx, job.id).await?;
+                    }
+                    Err(compensate_error) => {
+                        eprintln!("fileconv-server: embedding vector compensation failed");
+                        // Intent stays pending; reconcile enqueue must not be ignored.
+                        indexing::enqueue_compensation_reconcile(
+                            &self.db_pool,
+                            ctx,
+                            source.batch.document_id,
+                            job.id,
+                            attempts,
+                            usize::try_from(source.batch.start_ordinal).unwrap_or(0),
+                        )
+                        .await?;
+                        return Err(compensate_error.into());
+                    }
+                }
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn load_batch_source(
@@ -291,6 +419,14 @@ impl EmbeddingWorker {
                         .await?
                         .ok_or(crate::db::error::DbError::NotFound)?;
                     let document = documents::get_by_id(txn, &ctx, batch.document_id).await?;
+                    if matches!(
+                        document.state,
+                        DocumentState::Tombstoned | DocumentState::Purged
+                    ) {
+                        return Err(EmbeddingWorkerError::Indexing(
+                            IndexingError::DocumentDeleted,
+                        ));
+                    }
                     let chunks = chunks::list_generation_range(
                         txn,
                         &ctx,
@@ -313,20 +449,25 @@ impl EmbeddingWorker {
         .await
     }
 
-    /// Fences lifecycle markers immediately before the Qdrant upsert. The
-    /// document lock serializes this observation with conversion promotion,
-    /// while the leased-job and pending-batch checks prevent a cancelled or
-    /// superseded worker from publishing stale lifecycle flags.
-    async fn load_lifecycle_fence(
+    /// Fences lifecycle markers and persists a vector-write cleanup intent
+    /// immediately before the Qdrant upsert. The document lock serializes this
+    /// observation with conversion/tombstone, while the leased-job and pending
+    /// batch checks prevent a cancelled worker from publishing stale flags.
+    #[allow(clippy::too_many_arguments)]
+    async fn load_lifecycle_fence_with_write_intent(
         &self,
         ctx: &OrgContext,
         job: &Job,
         lease_token: &str,
         attempts: i32,
         batch_id: Uuid,
+        index_signature_sha256: &str,
+        point_ids: &[Uuid],
     ) -> Result<PointLifecycle, EmbeddingWorkerError> {
         let job_id = job.id;
         let lease_token = lease_token.to_string();
+        let index_signature_sha256 = index_signature_sha256.to_string();
+        let point_ids = point_ids.to_vec();
         with_org_txn_typed(&self.db_pool, ctx, {
             let ctx = ctx.clone();
             move |txn| {
@@ -348,6 +489,14 @@ impl EmbeddingWorker {
                         .ok_or(EmbeddingWorkerError::InvalidPayload)?;
                     let document =
                         documents::get_by_id_for_update(txn, &ctx, batch.document_id).await?;
+                    if matches!(
+                        document.state,
+                        DocumentState::Tombstoned | DocumentState::Purged
+                    ) {
+                        return Err(EmbeddingWorkerError::Indexing(
+                            IndexingError::DocumentDeleted,
+                        ));
+                    }
                     let version = crate::db::document_versions::find_by_id(
                         txn,
                         &ctx,
@@ -356,11 +505,61 @@ impl EmbeddingWorker {
                     )
                     .await?
                     .ok_or(crate::db::error::DbError::NotFound)?;
+                    // Record pending intent under the document fence. Begin-write
+                    // happens immediately before upsert so cleanup can still mark
+                    // pending intents cleaned without racing a writing authorizer.
+                    match vector_cleanup_intents::upsert_pending(
+                        txn,
+                        &ctx,
+                        vector_cleanup_intents::NewVectorCleanupIntent {
+                            document_id: batch.document_id,
+                            job_id,
+                            index_signature_sha256: &index_signature_sha256,
+                            point_ids: &point_ids,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(_) => {}
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
+                            return Err(EmbeddingWorkerError::Indexing(
+                                IndexingError::DocumentDeleted,
+                            ));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            return Err(EmbeddingWorkerError::Db(error));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                            return Err(EmbeddingWorkerError::InvalidPayload);
+                        }
+                    }
                     Ok(point_lifecycle(
                         document.current_version_id,
                         batch.version_id,
                         version.effective_to.is_none(),
                     ))
+                })
+            }
+        })
+        .await
+    }
+
+    async fn clear_vector_write_intent(
+        &self,
+        ctx: &OrgContext,
+        job_id: Uuid,
+    ) -> Result<(), EmbeddingWorkerError> {
+        with_org_txn_typed(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    match vector_cleanup_intents::cas_mark_cleaned(txn, &ctx, job_id).await {
+                        Ok(_) => Ok(()),
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            Err(EmbeddingWorkerError::Db(error))
+                        }
+                        Err(_) => Ok(()),
+                    }
                 })
             }
         })
@@ -387,6 +586,16 @@ impl EmbeddingWorker {
                     if batch.job_id != job_id {
                         return Err(EmbeddingWorkerError::InvalidPayload);
                     }
+                    let document =
+                        documents::get_by_id_for_update(txn, &ctx, batch.document_id).await?;
+                    if matches!(
+                        document.state,
+                        DocumentState::Tombstoned | DocumentState::Purged
+                    ) {
+                        return Err(EmbeddingWorkerError::Indexing(
+                            IndexingError::DocumentDeleted,
+                        ));
+                    }
                     let completed =
                         jobs::complete_within_txn(txn, &ctx, job_id, &lease_token, attempts)
                             .await?;
@@ -399,6 +608,21 @@ impl EmbeddingWorker {
                         batch.version_id,
                     )
                     .await?;
+                    match vector_cleanup_intents::cas_mark_committed(txn, &ctx, job_id).await {
+                        Ok(_) => {}
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
+                            // Cleanup won the race after upsert — force compensation.
+                            return Err(EmbeddingWorkerError::Indexing(
+                                IndexingError::DocumentDeleted,
+                            ));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            return Err(EmbeddingWorkerError::Db(error));
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                            return Err(EmbeddingWorkerError::InvalidPayload);
+                        }
+                    }
                     Ok(completed)
                 })
             }

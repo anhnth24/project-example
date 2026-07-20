@@ -422,6 +422,136 @@ pub async fn reclaim_expired(
     rows.iter().map(map_job).collect()
 }
 
+pub async fn list_dead_letter_of_type(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_type: JobType,
+    after_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<Job>, DbError> {
+    let job_type = job_type.as_str();
+    let rows = txn
+        .query(
+            &format!(
+                "SELECT {JOB_COLUMNS}
+                 FROM jobs
+                 WHERE org_id = $1 AND job_type = $2 AND status = 'dead_letter'
+                   AND ($3::uuid IS NULL OR id > $3)
+                 ORDER BY id
+                 LIMIT $4"
+            ),
+            &[&ctx.org_id(), &job_type, &after_id, &limit],
+        )
+        .await?;
+    rows.iter().map(map_job).collect()
+}
+
+pub async fn has_active_writer_job(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<bool, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM jobs
+                WHERE org_id = $1
+                  AND document_id = $2
+                  AND job_type IN ('index', 'embedding_batch')
+                  AND status IN ('pending', 'leased', 'running')
+             )",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+/// Cancels in-flight index/embedding writers for a document and returns them.
+pub async fn cancel_active_writer_jobs(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Vec<Job>, DbError> {
+    let rows = txn
+        .query(
+            &format!(
+                "UPDATE jobs
+                 SET status = 'cancelled',
+                     lease_owner = NULL,
+                     lease_expires_at = NULL,
+                     heartbeat_at = NULL,
+                     finished_at = clock_timestamp(),
+                     updated_at = clock_timestamp()
+                 WHERE org_id = $1
+                   AND document_id = $2
+                   AND job_type IN ('index', 'embedding_batch')
+                   AND status IN ('pending', 'leased', 'running')
+                 RETURNING {JOB_COLUMNS}"
+            ),
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    rows.iter().map(map_job).collect()
+}
+
+/// Claims reconcile jobs that either require or exclude conversion cleanup targets.
+///
+/// Conversion cleanup (I05) and document-drift reconcile (I07) share `job_type =
+/// reconcile` but are consumed by different workers. The payload key
+/// `cleanup_target_job_id` is the durable discriminator.
+pub async fn claim_pending_reconcile(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    worker_id: &str,
+    limit: i64,
+    lease_ttl_secs: i64,
+    require_cleanup_target: bool,
+) -> Result<Vec<Job>, DbError> {
+    let rows = txn
+        .query(
+            &format!(
+                "WITH candidates AS (
+                    SELECT id
+                    FROM jobs
+                    WHERE org_id = $1
+                      AND job_type = 'reconcile'
+                      AND status = 'pending'
+                      AND available_at <= clock_timestamp()
+                      AND (
+                        CASE
+                          WHEN $5 THEN payload->>'cleanup_target_job_id' IS NOT NULL
+                          ELSE payload->>'cleanup_target_job_id' IS NULL
+                        END
+                      )
+                    ORDER BY available_at, created_at, id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT $2
+                 )
+                 UPDATE jobs j
+                 SET status = 'leased',
+                     lease_owner = $3 || ':' || gen_random_uuid()::text,
+                     lease_expires_at = clock_timestamp() + ($4::bigint * interval '1 second'),
+                     heartbeat_at = clock_timestamp(),
+                     started_at = COALESCE(started_at, clock_timestamp()),
+                     attempts = attempts + 1,
+                     updated_at = clock_timestamp()
+                 FROM candidates
+                 WHERE j.org_id = $1 AND j.id = candidates.id
+                 RETURNING {JOB_COLUMNS_J}"
+            ),
+            &[
+                &ctx.org_id(),
+                &limit,
+                &worker_id,
+                &lease_ttl_secs,
+                &require_cleanup_target,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_job).collect()
+}
+
 pub async fn complete_owned(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
