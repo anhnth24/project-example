@@ -3,6 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/deploy/dev"
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+export COMPOSE_PROFILES="${COMPOSE_PROFILES:-aiteamvn}"
 docker compose up -d
 
 for _ in $(seq 1 30); do

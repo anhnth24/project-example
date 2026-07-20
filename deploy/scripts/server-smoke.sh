@@ -6,7 +6,7 @@ ENV_FILE="$ROOT/deploy/dev/.env"
 
 created_env=false
 if [[ ! -f "$ENV_FILE" ]]; then
-  cp "$ROOT/deploy/dev/.env.example" "$ENV_FILE"
+  "$ROOT/deploy/scripts/init-dev-env.sh"
   created_env=true
 fi
 
@@ -34,7 +34,7 @@ trap cleanup EXIT
 for _ in $(seq 1 60); do
   if curl --fail --silent --show-error \
     "http://${MARKHAND_BIND_ADDR:-127.0.0.1:8787}/api/v1/health/ready" >/dev/null; then
-    "$ROOT/deploy/scripts/seed-poc-org.sh"
+    "$ROOT/deploy/scripts/seed-dev-all.sh" --skip-init
     echo "healthy: fileconv-server"
     exit 0
   fi

@@ -1,0 +1,28 @@
+# CPU embedding server image for local dev and on-prem CPU inference (AITeamVN P0-05 pin).
+FROM python:3.12.12-bookworm-slim
+
+WORKDIR /opt
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY deploy/dev/requirements-embedding-server.txt /opt/requirements.txt
+RUN pip install --no-cache-dir -r /opt/requirements.txt
+
+COPY deploy/scripts/aiteamvn-embedding-server.py /opt/server.py
+
+ENV MARKHAND_EMBEDDING_HUB_ID=AITeamVN/Vietnamese_Embedding \
+    MARKHAND_EMBEDDING_REVISION=dea33aa1ab339f38d66ae0a40e6c40e0a9249568 \
+    MARKHAND_EMBEDDING_MODEL_ID=AITeamVN/Vietnamese_Embedding \
+    MARKHAND_EMBEDDING_DIMENSIONS=1024 \
+    MARKHAND_EMBEDDING_MAX_SEQ_LENGTH=2048 \
+    MARKHAND_EMBEDDING_BATCH_SIZE=16 \
+    MARKHAND_EMBEDDING_DEVICE=cpu \
+    MARKHAND_EMBEDDING_SERVER_API_KEY=dev-embedding-key \
+    MARKHAND_EMBEDDING_LISTEN_HOST=0.0.0.0 \
+    MARKHAND_EMBEDDING_LISTEN_PORT=8080
+
+EXPOSE 8080
+
+CMD ["python", "/opt/server.py"]

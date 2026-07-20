@@ -6,7 +6,7 @@ SHELL := /bin/bash
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
 	check-spike spike-up spike-health spike-down spike-reset spike-lifecycle \
 	check-desktop-baseline p0-desktop-baseline bundle-linux dev-up dev-health dev-down dev-reset \
-	dev-server-smoke
+	dev-server-smoke dev-init dev-seed-all dev-seed-password dev-print-defaults dev-download-embedding
 
 install:
 	pnpm install --frozen-lockfile
@@ -127,6 +127,21 @@ dev-health:
 
 dev-server-smoke:
 	deploy/scripts/server-smoke.sh
+
+dev-init:
+	deploy/scripts/init-dev-env.sh
+
+dev-seed-all:
+	deploy/scripts/seed-dev-all.sh
+
+dev-seed-password:
+	deploy/scripts/seed-dev-password.sh
+
+dev-print-defaults:
+	deploy/scripts/print-dev-defaults.sh
+
+dev-download-embedding:
+	deploy/scripts/download-aiteamvn-embedding.sh
 
 dev-down:
 	deploy/scripts/down.sh

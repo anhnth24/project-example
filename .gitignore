@@ -5,6 +5,7 @@ node_modules/
 
 web/dist/
 /deploy/dev/.env
+/deploy/dev/worker.env
 /deploy/spike/.env
 **/*.rs.bk
 # Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng

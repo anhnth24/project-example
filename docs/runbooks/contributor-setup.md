@@ -12,7 +12,8 @@
 ## Clean checkout
 
 Toolchain và quality gate đầy đủ. **Chạy backend local nhanh** (stack + health):
-[`local-development.md`](local-development.md#quick-start--health-check-5-phút).
+[`local-development.md`](local-development.md) (Compose, embedding, workers, E2E).
+Quick health check: [Quick start](local-development.md#quick-start--health-check-5-phút).
 
 ```bash
 git clone <repository>

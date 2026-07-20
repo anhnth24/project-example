@@ -3,4 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/deploy/dev"
-docker compose down --remove-orphans
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+docker compose --profile aiteamvn --profile mock --profile gpu down --remove-orphans

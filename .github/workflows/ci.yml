@@ -142,6 +142,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       MARKHAND_SPIKE_REPORT: /tmp/markhand-spike-environment.json
+      COMPOSE_PROFILES: mock
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate and smoke-test local services

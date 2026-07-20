@@ -1,0 +1,6 @@
+# CPU OpenAI-compatible embedding server (AITeamVN / P0-05 pin).
+# Versions aligned with bench/markhand_web/requirements-embedding.txt (no pyvi).
+sentence-transformers==5.6.0
+torch==2.13.0
+numpy==2.4.4
+huggingface-hub==1.24.0

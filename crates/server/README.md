@@ -31,7 +31,12 @@ without starting a listener. See [`docs/conventions/config-secrets.md`](../../do
 
 Run `fileconv-worker` separately for `MARKHAND_WORKER_KIND=index` and
 `MARKHAND_WORKER_KIND=embedding`. The embedding worker has no hash fallback and
-requires an approved local OpenAI-compatible runtime:
+requires an approved local OpenAI-compatible runtime.
+
+**Local dev (AITeamVN CPU embedding):** see
+[`docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md#embedding-runtime-index--embedding-workers).
+Compose profile `aiteamvn` serves `http://127.0.0.1:8088/v1` (1024-d). CI uses profile
+`mock`. Compute `MARKHAND_INDEX_SIGNATURE` with `python3 deploy/scripts/print-index-signature.py`.
 
 ```bash
 export MARKHAND_EMBEDDING_BASE_URL=https://embedding.internal/v1

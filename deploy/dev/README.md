@@ -1,17 +1,24 @@
 # Local development stack
 
-CPU-only PostgreSQL, Qdrant, MinIO, telemetry and mock embedding services for local
-development.
+PostgreSQL, Qdrant, MinIO, telemetry and **AITeamVN CPU embedding** (same runtime as
+on-prem CPU production).
 
-**Hướng dẫn từng bước (quick start, env, worker, web, troubleshooting):**
-[`../../docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md)
+**Runbook:** [`../../docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md)
 
-Lệnh rút gọn:
+## First time
 
 ```bash
-cp deploy/dev/.env.example deploy/dev/.env
-make dev-up && make dev-health
+make dev-init
+make dev-up && make dev-health    # first run: model download (~15 min possible)
+# optional: deploy/scripts/download-aiteamvn-embedding.sh
 set -a && source deploy/dev/.env && set +a
 deploy/scripts/bootstrap-server-role.sh
 cargo run -p fileconv-server
+deploy/scripts/seed-dev-all.sh --skip-init
 ```
+
+Embedding: `http://127.0.0.1:8088/v1` · model `AITeamVN/Vietnamese_Embedding` · 1024-d.
+
+CI fast path: `COMPOSE_PROFILES=mock` (8-dim stub).
+
+Compose: [`compose.yml`](compose.yml) · Dockerfile: [`Dockerfile.embedding-cpu`](Dockerfile.embedding-cpu)

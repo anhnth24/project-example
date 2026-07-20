@@ -73,7 +73,39 @@ services:
     networks: [private]
     restart: unless-stopped
 
+  embedding-cpu:
+    profiles: ["aiteamvn"]
+    build:
+      context: ../..
+      dockerfile: deploy/dev/Dockerfile.embedding-cpu
+    environment:
+      MARKHAND_EMBEDDING_HUB_ID: ${MARKHAND_EMBEDDING_HUB_ID:-AITeamVN/Vietnamese_Embedding}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-dea33aa1ab339f38d66ae0a40e6c40e0a9249568}
+      MARKHAND_EMBEDDING_MODEL_ID: ${MARKHAND_EMBEDDING_MODEL:-AITeamVN/Vietnamese_Embedding}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-1024}
+      MARKHAND_EMBEDDING_MAX_SEQ_LENGTH: ${MARKHAND_EMBEDDING_MAX_SEQ_LENGTH:-2048}
+      MARKHAND_EMBEDDING_BATCH_SIZE: ${MARKHAND_EMBEDDING_BATCH_SIZE:-16}
+      MARKHAND_EMBEDDING_DEVICE: cpu
+      MARKHAND_EMBEDDING_SERVER_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-dev-embedding-key}
+    volumes:
+      - embedding_model_cache:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:${MARKHAND_EMBEDDING_PORT:-8088}:8080"
+    networks: [private]
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')\"",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 600s
+
   mock-embedding:
+    profiles: ["mock"]
     image: python:3.12.12-alpine
     command: ["python", "/opt/mock-embedding.py"]
     volumes:
@@ -81,7 +113,7 @@ services:
     environment:
       MARKHAND_MOCK_EMBEDDING_DIMENSIONS: ${MARKHAND_MOCK_EMBEDDING_DIMENSIONS:-8}
     ports:
-      - "127.0.0.1:${MARKHAND_MOCK_EMBEDDING_PORT:-8088}:8080"
+      - "127.0.0.1:${MARKHAND_EMBEDDING_PORT:-8088}:8080"
     networks: [private]
     restart: unless-stopped
 
@@ -103,3 +135,4 @@ volumes:
   postgres_data:
   qdrant_data:
   minio_data:
+  embedding_model_cache:
