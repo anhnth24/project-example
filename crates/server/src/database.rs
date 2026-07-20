@@ -50,6 +50,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0011_expand_poc_seed.sql",
         include_str!("../migrations/0011_expand_poc_seed.sql"),
     ),
+    (
+        "0012_expand_readiness_fence.sql",
+        include_str!("../migrations/0012_expand_readiness_fence.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

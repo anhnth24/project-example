@@ -11,6 +11,7 @@
     "0008_expand_jobs_outbox_events.sql": "80c9a2af951f72b4937a45e655ce524a73a7cda09d5f810fee1b3bb111757149",
     "0009_expand_quota_audit_index.sql": "141741a45e40929ac3ae6b28005e8fd3dadeb126029e2381cad2959bff120dd4",
     "0010_expand_tenant_rls.sql": "6f45a6bfef356c16248aad2fb2d6996070a88b3c17de43a8799f6e17f239bca8",
-    "0011_expand_poc_seed.sql": "fcef18e8a7a3344c6aadc94b6d9e8a87d2f3b95a4d0ad3d0e51161de2e8565bb"
+    "0011_expand_poc_seed.sql": "fcef18e8a7a3344c6aadc94b6d9e8a87d2f3b95a4d0ad3d0e51161de2e8565bb",
+    "0012_expand_readiness_fence.sql": "7bd25549c199ef3cd638420b2df033c8d618357d6a6b1c82bb72dda99979ad59"
   }
 }

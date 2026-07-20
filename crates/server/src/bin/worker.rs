@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::pool::create_pool;
+use fileconv_server::db::readiness_fence::ReadinessFenceState;
 use fileconv_server::jobs;
 use fileconv_server::services::indexing::OutboxJobSink;
 use fileconv_server::services::reconciliation::ReconcileMode;
@@ -23,11 +24,20 @@ use uuid::Uuid;
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args
+        .get(1)
+        .is_some_and(|argument| argument == "readiness-fence")
+    {
+        if let Err(error) = run_readiness_fence_command(&args[2..]).await {
+            exit_with_error(error);
+        }
+        return;
+    }
+    if args
         .iter()
         .any(|argument| argument == "--help" || argument == "-h")
     {
         println!(
-            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON."
+            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nCommands:\n  readiness-fence <ready|reconciling|restoring> [reason]"
         );
         return;
     }
@@ -58,6 +68,33 @@ async fn main() {
             exit_with_error(format!("invalid worker configuration: {error}"));
         }
     }
+}
+
+async fn run_readiness_fence_command(args: &[String]) -> Result<(), String> {
+    if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
+        return Err(
+            "usage: fileconv-worker readiness-fence <ready|reconciling|restoring> [reason]".into(),
+        );
+    }
+    let state = ReadinessFenceState::parse(args[0].as_str()).map_err(|_| {
+        "readiness-fence state must be ready, reconciling, or restoring".to_string()
+    })?;
+    let reason = if args.len() > 1 {
+        Some(args[1..].join(" "))
+    } else {
+        None
+    };
+    let config = fileconv_server::config::ServerConfig::from_worker_env()
+        .map_err(|error| format!("invalid worker configuration: {error}"))?;
+    let runtime = fileconv_server::state::RuntimeState::from_config(config)
+        .map_err(|error| format!("invalid worker configuration: {error}"))?;
+    let pool = create_pool(runtime.endpoints().database_url.expose())
+        .map_err(|error| format!("database pool failed: {error}"))?;
+    fileconv_server::services::health::set_readiness_fence(&pool, state, reason.as_deref())
+        .await
+        .map_err(|error| format!("readiness fence update failed: {}", error.code()))?;
+    println!("readiness fence set to {}", state.as_str());
+    Ok(())
 }
 
 async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), String> {

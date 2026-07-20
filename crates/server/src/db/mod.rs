@@ -11,4 +11,5 @@ pub mod models;
 pub mod orgs;
 pub mod pool;
 pub mod quota;
+pub mod readiness_fence;
 pub mod search;
