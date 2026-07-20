@@ -233,15 +233,17 @@ fn parse_decimal(raw: &str) -> Option<Decimal> {
     let dot_count = compact.matches('.').count();
     let decimal_separator = match (comma_count, dot_count) {
         (0, 0) => None,
-        // Vietnamese convention uses a comma as the decimal separator. Keep a
-        // lone comma as a decimal marker instead of silently turning 1,5 into
-        // 15. Repeated separators that form three-digit groups stay grouping.
-        (1, 0) => compact.rfind(','),
+        // A single separator followed by exactly three digits has no reliable
+        // locale: `1.000` can mean one thousand or one with three decimal
+        // places. Claims must fail closed rather than changing their meaning.
+        (1, 0) if !is_ambiguous_single_separator(&compact, ',') => compact.rfind(','),
+        (1, 0) => return None,
         (count, 0) if count > 1 && !separators_are_three_digit_groups(&compact, ',') => {
             compact.rfind(',')
         }
         (count, 0) if count > 1 => None,
-        (0, 1) => compact.rfind('.'),
+        (0, 1) if !is_ambiguous_single_separator(&compact, '.') => compact.rfind('.'),
+        (0, 1) => return None,
         (0, count) if count > 1 && !separators_are_three_digit_groups(&compact, '.') => {
             compact.rfind('.')
         }
@@ -261,6 +263,19 @@ fn parse_decimal(raw: &str) -> Option<Decimal> {
         })
         .collect::<String>();
     normalized.parse().ok()
+}
+
+fn is_ambiguous_single_separator(value: &str, separator: char) -> bool {
+    let Some((whole, fractional)) = value.split_once(separator) else {
+        return false;
+    };
+    let whole = whole.trim_start_matches(['+', '-']);
+    !whole.is_empty()
+        && whole.chars().all(|character| character.is_ascii_digit())
+        && fractional.len() == 3
+        && fractional
+            .chars()
+            .all(|character| character.is_ascii_digit())
 }
 
 fn separators_are_three_digit_groups(value: &str, separator: char) -> bool {
@@ -409,5 +424,12 @@ budget is one million
         assert_eq!(parse_decimal("1,5"), Some(Decimal::new(15, 1)));
         assert_eq!(parse_decimal("1.234,56"), Some(Decimal::new(123_456, 2)));
         assert_eq!(parse_decimal("1,000,000"), Some(Decimal::new(1_000_000, 0)));
+    }
+
+    #[test]
+    fn rejects_single_three_digit_separator_with_ambiguous_locale() {
+        assert_eq!(parse_decimal("1.000"), None);
+        assert_eq!(parse_decimal("1,000"), None);
+        assert_eq!(parse_decimal("1.00"), Some(Decimal::new(100, 2)));
     }
 }

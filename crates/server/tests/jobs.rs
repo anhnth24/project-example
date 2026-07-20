@@ -357,6 +357,7 @@ impl OutboxSink for FailingOnceSink {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -432,6 +433,7 @@ async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn duplicate_enqueue_returns_existing_job_and_single_outbox() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -455,6 +457,7 @@ async fn duplicate_enqueue_returns_existing_job_and_single_outbox() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_duplicate_enqueue_same_key_creates_one_job_and_one_outbox() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -493,6 +496,7 @@ async fn concurrent_duplicate_enqueue_same_key_creates_one_job_and_one_outbox() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_claimers_do_not_double_claim_with_skip_locked() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -542,6 +546,7 @@ async fn concurrent_claimers_do_not_double_claim_with_skip_locked() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn reclaim_expired_leases_preserves_live_heartbeat_and_dead_letters_exhausted() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -593,6 +598,7 @@ async fn reclaim_expired_leases_preserves_live_heartbeat_and_dead_letters_exhaus
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn heartbeat_vs_reclaim_race_has_one_winner_and_no_lost_update() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -658,6 +664,7 @@ async fn heartbeat_vs_reclaim_race_has_one_winner_and_no_lost_update() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn stale_same_worker_reclaim_reclaim_token_cannot_mutate_new_lease() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -724,6 +731,7 @@ async fn stale_same_worker_reclaim_reclaim_token_cannot_mutate_new_lease() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -771,6 +779,7 @@ async fn checkpoint_survives_kill_reclaim_and_resume_claim() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn max_length_worker_id_yields_usable_lease_tokens_for_all_worker_mutations() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -862,6 +871,7 @@ async fn max_length_worker_id_yields_usable_lease_tokens_for_all_worker_mutation
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn over_limit_worker_id_is_rejected_before_claiming() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -890,6 +900,7 @@ async fn over_limit_worker_id_is_rejected_before_claiming() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn non_owner_checkpoint_is_rejected_without_mutating_checkpoint() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -931,6 +942,7 @@ async fn non_owner_checkpoint_is_rejected_without_mutating_checkpoint() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn fail_retries_with_future_backoff_then_dead_letters_when_exhausted() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -979,6 +991,7 @@ async fn fail_retries_with_future_backoff_then_dead_letters_when_exhausted() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn cancel_is_idempotent_and_owner_guards_in_flight_mutations() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1097,6 +1110,7 @@ async fn cancel_is_idempotent_and_owner_guards_in_flight_mutations() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_event_appends_are_per_org_gapless_and_unique() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1160,6 +1174,7 @@ async fn concurrent_event_appends_are_per_org_gapless_and_unique() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn outbox_relay_is_concurrent_safe_and_replay_idempotent() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1209,6 +1224,7 @@ async fn outbox_relay_is_concurrent_safe_and_replay_idempotent() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn outbox_sink_failure_leaves_unpublished_and_retry_publishes_once() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1260,6 +1276,7 @@ async fn older_payload_deserializes_and_payloads_reject_content_or_secrets() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn org_isolation_prevents_cross_org_claim_see_and_mutate() {
     let Some(base_url) = test_database_url() else {
         return;

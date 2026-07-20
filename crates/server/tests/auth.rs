@@ -250,6 +250,7 @@ fn assert_no_secrets(value: &Value, password: &str, refresh: Option<&str>, acces
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn login_me_refresh_logout_and_audit() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -500,6 +501,7 @@ async fn login_me_refresh_logout_and_audit() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn refresh_reuse_revokes_family_under_concurrency() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -613,6 +615,7 @@ async fn refresh_reuse_revokes_family_under_concurrency() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn rotated_token_vs_active_successor_revokes_family() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -730,6 +733,7 @@ async fn rotated_token_vs_active_successor_revokes_family() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn disabled_user_and_removed_membership_deny_org_context() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -826,6 +830,7 @@ async fn disabled_user_and_removed_membership_deny_org_context() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_refresh_and_revoke_all_leaves_no_usable_token() {
     let Some(base_url) = test_database_url() else {
         return;

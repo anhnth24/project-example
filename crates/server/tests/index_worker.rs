@@ -1,8 +1,8 @@
 //! Live tests for the durable index worker.
 //!
 //! These tests require PostgreSQL, MinIO, and Qdrant. They use a local
-//! OpenAI-compatible mock for embeddings and return early when the live
-//! storage environment is unavailable.
+//! OpenAI-compatible mock for embeddings and are explicitly ignored unless
+//! the live storage environment is configured.
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
@@ -663,11 +663,7 @@ async fn run_embedding_jobs(env: &LiveEnv, worker: &EmbeddingWorker) {
 }
 
 async fn relay(env: &LiveEnv, embedding_plan: &EmbeddingPlan) {
-    let signature = embedding_plan
-        .index_signature(8)
-        .expect("test index signature")
-        .digest();
-    let sink = Arc::new(IndexingOutboxSink::new(signature));
+    let sink = Arc::new(IndexingOutboxSink::new(embedding_plan).expect("indexing outbox sink"));
     jobs::relay_outbox_with_sink(&env.pool, &env.ctx, 32, &sink)
         .await
         .expect("relay outbox");
@@ -977,6 +973,7 @@ fn sample_markdown() -> &'static str {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_indexes_converted_document() {
     let env = match LiveEnv::boot().await {
         Ok(env) => env,
@@ -1034,6 +1031,7 @@ async fn live_index_worker_indexes_converted_document() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_replay_is_idempotent() {
     let env = match LiveEnv::boot().await {
         Ok(env) => env,
@@ -1083,6 +1081,7 @@ async fn live_index_worker_replay_is_idempotent() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_signature_mismatch_fails_closed() {
     let env = match LiveEnv::boot().await {
         Ok(env) => env,
@@ -1118,6 +1117,7 @@ async fn live_index_worker_signature_mismatch_fails_closed() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
     let env = match LiveEnv::boot().await {
         Ok(env) => env,
@@ -1205,6 +1205,7 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_resumes_from_indexing_state() {
     let env = match LiveEnv::boot().await {
         Ok(env) => env,

@@ -1124,6 +1124,7 @@ fn real_fileconv_smoke_for_simple_formats_when_built() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_promotes_immutable_markdown_version() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1215,6 +1216,7 @@ async fn live_convert_worker_promotes_immutable_markdown_version() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1280,6 +1282,7 @@ async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1399,6 +1402,7 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1478,6 +1482,7 @@ async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact()
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1575,6 +1580,7 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1722,6 +1728,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_tombstone_before_promotion_does_not_regress_document_state() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1810,6 +1817,7 @@ async fn live_convert_worker_tombstone_before_promotion_does_not_regress_documen
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_present() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1916,6 +1924,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_keeps_committed_object(
 ) {
     let Some(base_url) = test_database_url() else {
@@ -2049,6 +2058,7 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2118,6 +2128,7 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2199,6 +2210,7 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2284,6 +2296,7 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_second_promotion_demotes_current_and_preserves_original() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2392,6 +2405,7 @@ async fn live_convert_worker_second_promotion_demotes_current_and_preserves_orig
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_converter_error_retries_job() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2461,6 +2475,7 @@ async fn live_convert_worker_converter_error_retries_job() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_cancel_loses_lease_and_kills_sandbox() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2537,6 +2552,7 @@ else:
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_reconciliation() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -2615,6 +2631,7 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_rec
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_resource_failures_are_bounded_job_failures() {
     let Some(base_url) = test_database_url() else {
         return;

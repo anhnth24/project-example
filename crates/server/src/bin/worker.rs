@@ -189,11 +189,10 @@ async fn run_index_worker(
     let approved_signature = state.config().index_signature().map(str::to_string);
     let worker = IndexWorker::new(pool.clone(), storage, qdrant, config, approved_signature)
         .map_err(|error| format!("index worker initialization failed: {error}"))?;
-    let sink = std::sync::Arc::new(IndexingOutboxSink::new(
-        worker
-            .generation_signature()
-            .map_err(|error| format!("index worker generation signature failed: {error}"))?,
-    ));
+    let sink = std::sync::Arc::new(
+        IndexingOutboxSink::new(worker.embedding_plan())
+            .map_err(|error| format!("index worker generation setup failed: {error}"))?,
+    );
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {

@@ -1016,6 +1016,7 @@ async fn property_filename_and_magic_never_panic() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn quota_hook_is_callable() {
     let Some(db_url) = test_database_url() else {
         return;
@@ -1042,6 +1043,7 @@ async fn quota_hook_is_callable() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
     let Some(db_url) = test_database_url() else {
         return;
@@ -1118,6 +1120,7 @@ async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn happy_path_persists_to_quarantine_with_metadata() {
     let Some((client, _bucket)) = test_minio_client() else {
         return;
@@ -1169,6 +1172,7 @@ async fn happy_path_persists_to_quarantine_with_metadata() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn rejected_upload_is_not_stored() {
     let Some((client, _bucket)) = test_minio_client() else {
         return;
@@ -1196,6 +1200,7 @@ async fn rejected_upload_is_not_stored() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn verification_failed_upload_is_cleaned_by_generated_key() {
     let Some((client, _bucket)) = test_minio_client() else {
         return;
@@ -1240,6 +1245,7 @@ async fn verification_failed_upload_is_cleaned_by_generated_key() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn cancelled_stream_upload_finishes_verify_or_cleanup() {
     let Some((client, _bucket)) = test_minio_client() else {
         return;
@@ -1310,6 +1316,7 @@ async fn cancelled_stream_upload_finishes_verify_or_cleanup() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn http_upload_happy_and_spoof() {
     let Some(db_url) = test_database_url() else {
         return;
@@ -1540,6 +1547,7 @@ async fn http_upload_happy_and_spoof() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn cancelled_http_upload_settles_quota_consistently() {
     let Some(db_url) = test_database_url() else {
         return;

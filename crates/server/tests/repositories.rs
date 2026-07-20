@@ -179,6 +179,7 @@ fn org_context_fail_closed_on_empty_scope() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn cross_org_deny_via_predicate_and_rls() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -288,6 +289,7 @@ async fn cross_org_deny_via_predicate_and_rls() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn pool_does_not_leak_tenant_gucs() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -437,6 +439,7 @@ async fn pool_does_not_leak_tenant_gucs() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn document_state_machine_legal_illegal_and_concurrent() {
     let Some(base_url) = test_database_url() else {
         return;

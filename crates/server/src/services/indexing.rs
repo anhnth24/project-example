@@ -38,14 +38,14 @@ use crate::storage::{ObjectNamespace, StorageError};
 
 #[derive(Debug)]
 pub struct IndexingOutboxSink {
-    index_signature: String,
+    generation: EnsureGenerationOwned,
 }
 
 impl IndexingOutboxSink {
-    pub fn new(index_signature: impl Into<String>) -> Self {
-        Self {
-            index_signature: index_signature.into(),
-        }
+    pub fn new(embedding_plan: &EmbeddingPlan) -> Result<Self, IndexingError> {
+        Ok(Self {
+            generation: EnsureGenerationOwned::from_embedding_plan(embedding_plan)?,
+        })
     }
 }
 
@@ -68,9 +68,18 @@ impl jobs::OutboxSink for IndexingOutboxSink {
                 let version_id = payload.version_id.ok_or_else(|| {
                     JobError::InvalidPayload("index event missing version_id".into())
                 })?;
+                let document = documents::get_by_id(txn, ctx, document_id).await?;
+                let metadata = index_metadata::ensure_active_generation(
+                    txn,
+                    ctx,
+                    self.generation
+                        .as_input_for_collection(Some(document.collection_id)),
+                )
+                .await?;
                 let job_payload = JobPayload {
                     document_id: Some(document_id),
                     version_id: Some(version_id),
+                    index_metadata_id: Some(metadata.id),
                     ..JobPayload::default()
                 };
                 jobs::enqueue_within_txn(
@@ -79,7 +88,7 @@ impl jobs::OutboxSink for IndexingOutboxSink {
                     EnqueueJob::new(
                         JobType::Index,
                         job_payload,
-                        index_job_idempotency_key(&self.index_signature, version_id),
+                        index_job_idempotency_key(metadata.id, version_id),
                     ),
                 )
                 .await?;
@@ -90,13 +99,13 @@ impl jobs::OutboxSink for IndexingOutboxSink {
     }
 }
 
-/// One version can have one index job per embedding-generation signature.
+/// One version can have one index job per immutable embedding generation.
 ///
 /// The relay and staged-backfill paths must derive this key identically:
 /// otherwise a normal index request and a staged request for the same target
 /// generation can run concurrently and each create a different parent job.
-fn index_job_idempotency_key(index_signature: &str, version_id: Uuid) -> String {
-    format!("index:{index_signature}:{version_id}")
+fn index_job_idempotency_key(index_metadata_id: Uuid, version_id: Uuid) -> String {
+    format!("index:{index_metadata_id}:{version_id}")
 }
 
 async fn append_outbox_published(
@@ -225,9 +234,7 @@ pub async fn index_version(
     } else {
         ensured_metadata
     };
-    if metadata.state == crate::db::models::IndexGenerationState::Building
-        && payload.index_metadata_id.is_none()
-    {
+    if metadata.state == crate::db::models::IndexGenerationState::Building {
         enqueue_staged_backfill(db_pool, ctx, input, &metadata, version_id).await?;
     }
     heartbeat_once(db_pool, ctx, input).await?;
@@ -368,7 +375,6 @@ async fn enqueue_staged_backfill(
     current_version_id: Uuid,
 ) -> Result<(), IndexingError> {
     let metadata_id = metadata.id;
-    let metadata_signature = metadata.index_signature_sha256.clone();
     let collection_id = metadata
         .collection_id
         .ok_or(IndexingError::MissingCollection)?;
@@ -402,7 +408,7 @@ async fn enqueue_staged_backfill(
                                 index_metadata_id: Some(metadata_id),
                                 ..JobPayload::default()
                             },
-                            index_job_idempotency_key(&metadata_signature, version_id),
+                            index_job_idempotency_key(metadata_id, version_id),
                         ),
                     )
                     .await?;
@@ -465,9 +471,25 @@ pub(crate) async fn mark_generation_shadow_if_complete(
     ctx: &OrgContext,
     metadata_id: Uuid,
 ) -> Result<(), IndexingError> {
+    lock_generation_completion(txn, ctx, metadata_id).await?;
     if embedding_batches::generation_backfill_complete(txn, ctx, metadata_id).await? {
         let _ = index_metadata::mark_shadow(txn, ctx, metadata_id).await?;
     }
+    Ok(())
+}
+
+/// Serializes the final "all backfills complete" observation across documents.
+/// Each worker may already hold a distinct document row lock; this generation
+/// lock prevents two finalizers from both missing the other's uncommitted
+/// `backfilled` transition.
+async fn lock_generation_completion(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+) -> Result<(), DbError> {
+    let key = format!("index_generation_completion:{}:{metadata_id}", ctx.org_id());
+    txn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", &[&key])
+        .await?;
     Ok(())
 }
 
@@ -611,11 +633,8 @@ pub async fn fail_index_job(
     last_error: &str,
 ) -> Result<Job, IndexingError> {
     let job_id = job.id;
-    let document_id = job.document_id;
-    let version_id = job.version_id;
     let lease_token = lease_token.to_string();
     let last_error = last_error.to_string();
-    let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
     with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -626,52 +645,62 @@ pub async fn fail_index_job(
                 if failed.status != JobStatus::DeadLetter {
                     return Ok::<_, IndexingError>(failed);
                 }
-
-                if let Some(batch_id) = payload.batch_id {
-                    let batch = embedding_batches::mark_failed(txn, &ctx, batch_id).await?;
-                    embedding_batches::mark_generation_failed(
-                        txn,
-                        &ctx,
-                        batch.index_metadata_id,
-                        batch.document_id,
-                        batch.version_id,
-                    )
-                    .await?;
-                } else if let (Some(metadata_id), Some(document_id), Some(version_id)) = (
-                    payload.index_metadata_id,
-                    payload.document_id,
-                    payload.version_id,
-                ) {
-                    embedding_batches::mark_generation_failed(
-                        txn,
-                        &ctx,
-                        metadata_id,
-                        document_id,
-                        version_id,
-                    )
-                    .await?;
-                }
-
-                if let (Some(document_id), Some(version_id)) = (document_id, version_id) {
-                    let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
-                    if document.current_version_id == Some(version_id)
-                        && should_fail_current_document(document.state)
-                    {
-                        document_state::apply_transition(
-                            txn,
-                            &ctx,
-                            document_id,
-                            document.state,
-                            DocumentState::Failed,
-                        )
-                        .await?;
-                    }
-                }
+                handle_dead_letter_index_job(txn, &ctx, &failed).await?;
                 Ok(failed)
             })
         }
     })
     .await
+}
+
+/// Applies the durable failure side effects for a terminal index or embedding
+/// job. This is shared by owned-worker failures and lease reclamation so they
+/// cannot leave a dead-letter job with a still-indexing document or backfill.
+pub(crate) async fn handle_dead_letter_index_job(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job: &Job,
+) -> Result<(), JobError> {
+    if !matches!(job.job_type, JobType::Index | JobType::EmbeddingBatch) {
+        return Ok(());
+    }
+
+    let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+    if let Some(batch_id) = payload.batch_id {
+        let batch = embedding_batches::mark_failed(txn, ctx, batch_id).await?;
+        embedding_batches::mark_generation_failed(
+            txn,
+            ctx,
+            batch.index_metadata_id,
+            batch.document_id,
+            batch.version_id,
+        )
+        .await?;
+    } else if let (Some(metadata_id), Some(document_id), Some(version_id)) = (
+        payload.index_metadata_id,
+        payload.document_id,
+        payload.version_id,
+    ) {
+        embedding_batches::mark_generation_failed(txn, ctx, metadata_id, document_id, version_id)
+            .await?;
+    }
+
+    if let (Some(document_id), Some(version_id)) = (job.document_id, job.version_id) {
+        let document = documents::get_by_id_for_update(txn, ctx, document_id).await?;
+        if document.current_version_id == Some(version_id)
+            && should_fail_current_document(document.state)
+        {
+            document_state::apply_transition(
+                txn,
+                ctx,
+                document_id,
+                document.state,
+                DocumentState::Failed,
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 fn should_fail_current_document(state: DocumentState) -> bool {
@@ -731,6 +760,7 @@ fn validated_event_payload(
         .map_err(|error| IndexingError::Job(JobError::InvalidPayload(error.to_string())))
 }
 
+#[derive(Debug)]
 struct EnsureGenerationOwned {
     collection_id: Option<Uuid>,
     signature_sha256: String,
@@ -762,9 +792,40 @@ impl From<index_metadata::EnsureGeneration<'_>> for EnsureGenerationOwned {
 }
 
 impl EnsureGenerationOwned {
+    fn from_embedding_plan(embedding_plan: &EmbeddingPlan) -> Result<Self, IndexingError> {
+        let dimensions = embedding_plan
+            .expected_dimensions()
+            .ok_or(IndexingError::EmbeddingDimensionsUnknown)?;
+        let signature = embedding_plan.index_signature(dimensions)?;
+        let dimensions = i32::try_from(signature.dimensions).map_err(|_| {
+            DbError::Config("embedding dimensions are out of range for database".into())
+        })?;
+        let runtime_path =
+            EmbeddingRuntimePath::parse(signature.runtime_path).map_err(DbError::Config)?;
+        Ok(Self {
+            collection_id: None,
+            signature_sha256: signature.digest(),
+            chunking_version: signature.chunking_version.to_string(),
+            body_text_version: signature.body_text_version.to_string(),
+            query_normalization_version: signature.query_normalization_version.to_string(),
+            embedding_family: signature.embedding_family.to_string(),
+            embedding_revision: signature.embedding_revision.to_string(),
+            dimensions,
+            normalized: signature.normalized,
+            runtime_path,
+        })
+    }
+
     fn as_input(&self) -> index_metadata::EnsureGeneration<'_> {
+        self.as_input_for_collection(self.collection_id)
+    }
+
+    fn as_input_for_collection(
+        &self,
+        collection_id: Option<Uuid>,
+    ) -> index_metadata::EnsureGeneration<'_> {
         index_metadata::EnsureGeneration {
-            collection_id: self.collection_id,
+            collection_id,
             signature_sha256: &self.signature_sha256,
             chunking_version: &self.chunking_version,
             body_text_version: &self.body_text_version,
@@ -1220,14 +1281,14 @@ mod tests {
     #[test]
     fn normal_and_staged_requests_share_a_generation_scoped_key() {
         let version_id = Uuid::new_v4();
-        let signature = "a".repeat(64);
+        let generation_id = Uuid::new_v4();
         assert_eq!(
-            index_job_idempotency_key(&signature, version_id),
-            index_job_idempotency_key(&signature, version_id)
+            index_job_idempotency_key(generation_id, version_id),
+            index_job_idempotency_key(generation_id, version_id)
         );
         assert_ne!(
-            index_job_idempotency_key(&signature, version_id),
-            index_job_idempotency_key(&"b".repeat(64), version_id)
+            index_job_idempotency_key(generation_id, version_id),
+            index_job_idempotency_key(Uuid::new_v4(), version_id)
         );
     }
 }

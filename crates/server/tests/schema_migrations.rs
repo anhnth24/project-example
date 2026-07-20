@@ -186,6 +186,7 @@ async fn publish<C: GenericClient>(client: &C, org: Uuid, document_id: Uuid, ver
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn schema_migrations_fresh_apply_idempotent_and_exact_columns() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -260,6 +261,7 @@ async fn schema_migrations_fresh_apply_idempotent_and_exact_columns() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn supported_upgrade_from_0001_0002_then_remainder() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -295,6 +297,7 @@ async fn supported_upgrade_from_0001_0002_then_remainder() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn legal_transitions_reject_illegal_publication_mutations() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -387,6 +390,7 @@ async fn legal_transitions_reject_illegal_publication_mutations() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn two_currents_rejected_even_if_org_context_cleared() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -471,6 +475,7 @@ async fn two_currents_rejected_even_if_org_context_cleared() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn acl_cascade_and_lineage_fks() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -624,6 +629,7 @@ async fn acl_cascade_and_lineage_fks() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn set_null_preserves_org_id_on_optional_fk() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -775,6 +781,7 @@ async fn set_null_preserves_org_id_on_optional_fk() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_publish_and_lineage_as_of() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -914,6 +921,7 @@ async fn concurrent_publish_and_lineage_as_of() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn rls_all_tenant_tables_and_pool_context_reset() {
     let Some(base_url) = test_database_url() else {
         return;

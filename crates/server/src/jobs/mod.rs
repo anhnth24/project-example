@@ -487,6 +487,10 @@ pub async fn reclaim_expired(
                     };
                     let outbox_key = transition_key(job, event_type);
                     write_job_event(txn, &ctx, job, event_type, &outbox_key).await?;
+                    if job.status == JobStatus::DeadLetter {
+                        crate::services::indexing::handle_dead_letter_index_job(txn, &ctx, job)
+                            .await?;
+                    }
                 }
                 Ok(jobs)
             })

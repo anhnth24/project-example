@@ -150,6 +150,7 @@ async fn missing_scope_rejects_without_network_side_effects() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_QDRANT_URL"]
 async fn qdrant_tenant_isolation_and_deterministic_points() {
     let Some(url) = test_qdrant_url() else {
         return;
@@ -291,6 +292,7 @@ async fn qdrant_tenant_isolation_and_deterministic_points() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_QDRANT_URL"]
 async fn cross_org_point_overwrite_rejected() {
     let Some(url) = test_qdrant_url() else {
         return;
@@ -408,6 +410,7 @@ async fn cross_org_point_overwrite_rejected() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_QDRANT_URL"]
 async fn same_org_different_collection_cannot_overwrite() {
     let Some(url) = test_qdrant_url() else {
         return;
@@ -522,6 +525,7 @@ async fn same_org_different_collection_cannot_overwrite() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_QDRANT_URL"]
 async fn existing_collection_dimension_mismatch_rejected() {
     let Some(url) = test_qdrant_url() else {
         return;
@@ -562,6 +566,7 @@ async fn existing_collection_dimension_mismatch_rejected() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn minio_put_exists_get_delete_round_trip() {
     let Some(env) = test_minio_env() else {
         return;
@@ -639,6 +644,7 @@ async fn minio_put_exists_get_delete_round_trip() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn cross_org_object_key_operation_rejected() {
     let Some(env) = test_minio_env() else {
         return;

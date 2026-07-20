@@ -243,6 +243,7 @@ async fn force_expire(pool: &Pool, context: &OrgContext, key: &str) {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_reserve_does_not_over_reserve() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -302,6 +303,7 @@ async fn concurrent_reserve_does_not_over_reserve() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn terminal_settlement_is_idempotent_and_typed() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -409,6 +411,7 @@ async fn terminal_settlement_is_idempotent_and_typed() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn idempotency_key_retries_create_one_reservation() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -489,6 +492,7 @@ async fn idempotency_key_retries_create_one_reservation() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn mismatched_and_terminal_key_reuse_is_rejected() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -610,6 +614,7 @@ async fn mismatched_and_terminal_key_reuse_is_rejected() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_finalize_and_refund_do_not_double_apply() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -670,6 +675,7 @@ async fn concurrent_finalize_and_refund_do_not_double_apply() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn upload_two_resource_settlement_is_atomic() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -720,6 +726,7 @@ async fn upload_two_resource_settlement_is_atomic() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn concurrent_jobs_admission_respects_limit() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -776,6 +783,7 @@ async fn concurrent_jobs_admission_respects_limit() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn expired_crash_reservation_does_not_block_and_sweeps() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -847,6 +855,7 @@ async fn expired_crash_reservation_does_not_block_and_sweeps() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn finalize_waiting_on_quota_lock_uses_fresh_post_lock_clock() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -956,6 +965,7 @@ async fn finalize_waiting_on_quota_lock_uses_fresh_post_lock_clock() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn overflow_paths_reject_without_wrap_or_panic() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1029,6 +1039,7 @@ async fn overflow_paths_reject_without_wrap_or_panic() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn quota_rows_are_org_scoped_by_predicate_and_rls() {
     let Some(base_url) = test_database_url() else {
         return;
