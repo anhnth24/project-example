@@ -63,6 +63,28 @@ pub fn migration_checksum(source: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddedMigrationChecksum {
+    pub version: &'static str,
+    pub name: &'static str,
+    pub checksum: String,
+}
+
+pub fn embedded_migration_checksums() -> Vec<EmbeddedMigrationChecksum> {
+    MIGRATIONS
+        .iter()
+        .map(|&(name, source)| EmbeddedMigrationChecksum {
+            version: name
+                .split_once('_')
+                .map(|(version, _)| version)
+                .unwrap_or(name),
+            name,
+            checksum: migration_checksum(source),
+        })
+        .collect()
+}
+
 pub async fn apply_migrations(database_url: &str) -> Result<(), String> {
     let mut client = connect(database_url).await?;
     client

@@ -1,0 +1,23 @@
+{
+  "answer": "Payment is due within 30 days. [1]",
+  "citations": [
+    {
+      "documentId": "d4010000-0000-4000-8000-000000000001",
+      "versionId": "e5010000-0000-4000-8000-000000000001",
+      "versionNumber": 3,
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "chunkId": "c3010000-0000-4000-8000-000000000001",
+      "headingPath": [
+        "Contract",
+        "Payment"
+      ],
+      "snippet": "Payment is due within 30 days.",
+      "page": 4,
+      "slide": null,
+      "sheet": null,
+      "isCurrent": true
+    }
+  ],
+  "warnings": [],
+  "mode": "offline_extractive"
+}

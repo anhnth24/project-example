@@ -3,35 +3,29 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::middleware::{from_fn, from_fn_with_state};
+use axum::Router;
 use deadpool_postgres::Pool;
-use serde::Serialize;
-use tokio::time::timeout;
-use uuid::Uuid;
 
 use crate::api::sse::AskStreamRegistry;
-use crate::api::ApiError;
 use crate::auth::jwt::JwtKeys;
 use crate::auth::provider::PasswordAuthProvider;
 use crate::config::QuotaSweepConfig;
-use crate::database;
 use crate::db::pool::create_pool;
+use crate::middleware::{cors, rate_limit, request_id};
 use crate::routes;
 use crate::services::download::{CapabilityKey, ConsumedDownloadNonces};
 use crate::services::quota;
 use crate::state::RuntimeState;
 
-const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
-const READINESS_CACHE_TTL: Duration = Duration::from_secs(1);
+pub(crate) const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct AppState {
     runtime: RuntimeState,
     http_client: reqwest::Client,
-    readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
+    readiness: tokio::sync::Mutex<Option<crate::services::health::CachedReadiness>>,
+    startup_complete: std::sync::atomic::AtomicBool,
+    rate_limiter: rate_limit::RateLimiter,
     pool: Pool,
     auth_provider: Option<PasswordAuthProvider>,
     /// Object store adapter (optional when credentials are absent in tests).
@@ -40,11 +34,6 @@ pub struct AppState {
     ask_streams: AskStreamRegistry,
     download_capability_key: Option<CapabilityKey>,
     consumed_download_nonces: ConsumedDownloadNonces,
-}
-
-struct CachedReadiness {
-    checked_at: tokio::time::Instant,
-    result: Result<(), ()>,
 }
 
 impl AppState {
@@ -97,9 +86,11 @@ impl AppState {
             .as_ref()
             .map(CapabilityKey::derive_from_auth_signing_key);
         Ok(Self {
+            rate_limiter: rate_limit::RateLimiter::new(runtime.config().rate_limits()),
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
             pool,
             auth_provider,
             object_store,
@@ -153,9 +144,11 @@ impl AppState {
             .as_ref()
             .map(CapabilityKey::derive_from_auth_signing_key);
         Ok(Self {
+            rate_limiter: rate_limit::RateLimiter::new(runtime.config().rate_limits()),
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
+            startup_complete: std::sync::atomic::AtomicBool::new(true),
             pool,
             auth_provider,
             object_store,
@@ -176,6 +169,31 @@ impl AppState {
 
     pub fn runtime(&self) -> &RuntimeState {
         &self.runtime
+    }
+
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
+        &self.http_client
+    }
+
+    pub(crate) fn readiness_cache(
+        &self,
+    ) -> &tokio::sync::Mutex<Option<crate::services::health::CachedReadiness>> {
+        &self.readiness
+    }
+
+    pub(crate) fn startup_complete(&self) -> bool {
+        self.startup_complete
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn rate_limiter(&self) -> &rate_limit::RateLimiter {
+        &self.rate_limiter
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_startup_complete_for_test(&self, value: bool) {
+        self.startup_complete
+            .store(value, std::sync::atomic::Ordering::Release);
     }
 
     pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
@@ -225,18 +243,11 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
     });
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Health {
-    status: &'static str,
-    request_id: String,
-}
-
 pub fn router(state: AppState) -> Router {
     let max_upload_bytes = state.runtime.config().upload().limits.max_upload_bytes as usize;
+    let state = Arc::new(state);
     Router::new()
-        .route("/api/v1/health/live", get(liveness))
-        .route("/api/v1/health/ready", get(readiness))
+        .merge(routes::health::router())
         .merge(routes::auth::router())
         .merge(routes::collections::router())
         .merge(routes::documents::router())
@@ -245,107 +256,73 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::ask::router())
         .merge(routes::events::router())
         .merge(routes::uploads::router(max_upload_bytes))
-        .with_state(Arc::new(state))
-}
-
-async fn liveness() -> Json<Health> {
-    Json(healthy())
-}
-
-async fn readiness(State(state): State<Arc<AppState>>) -> Result<Json<Health>, ReadinessError> {
-    check_dependencies(state).await?;
-    Ok(Json(healthy()))
-}
-
-async fn check_dependencies(state: Arc<AppState>) -> Result<(), ReadinessError> {
-    let mut cached = state.readiness.lock().await;
-    if let Some(previous) = cached.as_ref() {
-        if previous.checked_at.elapsed() < READINESS_CACHE_TTL {
-            return previous
-                .result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|_| ReadinessError);
-        }
-    }
-
-    let result = check_dependencies_uncached(&state).await;
-    *cached = Some(CachedReadiness {
-        checked_at: tokio::time::Instant::now(),
-        result: result.as_ref().map(|_| ()).map_err(|_| ()),
-    });
-    result.map_err(|_| ReadinessError)
-}
-
-async fn check_dependencies_uncached(state: &AppState) -> Result<(), String> {
-    let database = timeout(
-        DEPENDENCY_TIMEOUT,
-        database::check_connection(state.runtime.endpoints().database_url.expose()),
-    );
-    let qdrant = state
-        .http_client
-        .get(format!("{}/healthz", state.runtime.endpoints().qdrant_url))
-        .send();
-    let minio = state
-        .http_client
-        .get(format!(
-            "{}/minio/health/live",
-            state.runtime.endpoints().minio_url
-        ))
-        .send();
-
-    let (database, qdrant, minio) = tokio::join!(database, qdrant, minio);
-    database.map_err(|_| "PostgreSQL readiness timed out".to_string())??;
-    ensure_success(qdrant, "Qdrant").await?;
-    ensure_success(minio, "MinIO").await
-}
-
-async fn ensure_success(
-    response: Result<reqwest::Response, reqwest::Error>,
-    dependency: &str,
-) -> Result<(), String> {
-    let response = response.map_err(|_| format!("{dependency} readiness request failed"))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("{dependency} returned {}", response.status()))
-    }
-}
-
-fn healthy() -> Health {
-    Health {
-        status: "ok",
-        request_id: Uuid::new_v4().to_string(),
-    }
-}
-
-struct ReadinessError;
-
-impl IntoResponse for ReadinessError {
-    fn into_response(self) -> Response {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                code: "dependency_unavailable".into(),
-                message: "A required service is unavailable".into(),
-                request_id: Uuid::new_v4().to_string(),
-                details: None,
-            }),
-        )
-            .into_response()
-    }
+        .with_state(state.clone())
+        .layer(from_fn_with_state(state.clone(), rate_limit::rate_limit))
+        .layer(from_fn_with_state(state, cors::cors))
+        .layer(from_fn(request_id::ensure_request_id))
 }
 
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ORIGIN, RETRY_AFTER, VARY};
+    use axum::http::{Method, Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     use super::{router, AppState};
-    use crate::config::{RuntimeEndpoints, SecretString, ServerConfig};
+    use crate::api::ApiError;
+    use crate::config::{RateLimitConfig, RuntimeEndpoints, SecretString, ServerConfig};
     use crate::db::pool::create_pool;
+    use crate::middleware::request_id::X_REQUEST_ID;
     use crate::state::RuntimeState;
+
+    fn test_rate_limits(limit: u32) -> RateLimitConfig {
+        RateLimitConfig {
+            auth_per_ip_per_minute: limit,
+            llm_per_user_per_minute: limit,
+            authenticated_per_user_per_minute: limit,
+            fallback_per_ip_per_minute: limit,
+            max_entries: 64,
+        }
+    }
+
+    fn test_app(config: ServerConfig) -> axum::Router {
+        let runtime = RuntimeState::from_config(config).unwrap();
+        let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
+            .expect("pool");
+        router(AppState::from_parts(runtime, pool, None).unwrap())
+    }
+
+    fn config_for_middleware_tests() -> ServerConfig {
+        ServerConfig::test_with_endpoints(RuntimeEndpoints {
+            database_url: SecretString::new("postgres://unused"),
+            qdrant_url: "http://127.0.0.1:1".into(),
+            minio_url: "http://127.0.0.1:1".into(),
+        })
+    }
+
+    fn login_request(ip: &str, forwarded_for: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/auth/login")
+            .header("content-type", "application/json");
+        if let Some(forwarded_for) = forwarded_for {
+            builder = builder.header("x-forwarded-for", forwarded_for);
+        }
+        let mut request = builder
+            .body(Body::from(
+                r#"{"email":"a@example.com","password":"secret"}"#,
+            ))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            format!("{ip}:12345")
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        ));
+        request
+    }
 
     #[tokio::test]
     async fn liveness_has_a_contract_compliant_body() {
@@ -391,5 +368,194 @@ mod tests {
             AppState::from_parts(state, pool, None).err().as_deref(),
             Some("HTTP application requires API runtime configuration")
         );
+    }
+
+    #[tokio::test]
+    async fn rate_limit_returns_429_with_retry_after_and_api_error() {
+        let app =
+            test_app(config_for_middleware_tests().with_test_rate_limits(test_rate_limits(2)));
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(login_request("192.0.2.10", None))
+                .await
+                .unwrap();
+            assert_ne!(response.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        }
+        let response = app
+            .oneshot(login_request("192.0.2.10", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(RETRY_AFTER));
+        assert!(response.headers().contains_key(&X_REQUEST_ID));
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let error: ApiError = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error.code, "rate_limited");
+        assert!(!error.request_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rate_limit_keys_are_isolated_and_health_is_exempt() {
+        let app =
+            test_app(config_for_middleware_tests().with_test_rate_limits(test_rate_limits(1)));
+        let first = app
+            .clone()
+            .oneshot(login_request("192.0.2.10", None))
+            .await
+            .unwrap();
+        assert_ne!(first.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let limited = app
+            .clone()
+            .oneshot(login_request("192.0.2.10", None))
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let isolated = app
+            .clone()
+            .oneshot(login_request("192.0.2.11", None))
+            .await
+            .unwrap();
+        assert_ne!(isolated.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+        for _ in 0..3 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/health/live")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_connect_info_falls_back_without_panicking() {
+        let app =
+            test_app(config_for_middleware_tests().with_test_rate_limits(test_rate_limits(1)));
+        for expected in [
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/v1/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"email":"a@example.com","password":"secret"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn forwarded_for_is_ignored_unless_trusted_proxy_is_enabled() {
+        let untrusted = test_app(
+            config_for_middleware_tests()
+                .with_test_rate_limits(test_rate_limits(1))
+                .with_test_http_hardening(false, Vec::new()),
+        );
+        let first = untrusted
+            .clone()
+            .oneshot(login_request("192.0.2.1", Some("198.51.100.1")))
+            .await
+            .unwrap();
+        assert_ne!(first.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let limited = untrusted
+            .oneshot(login_request("192.0.2.1", Some("198.51.100.2")))
+            .await
+            .unwrap();
+        assert_eq!(limited.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+
+        let trusted = test_app(
+            config_for_middleware_tests()
+                .with_test_rate_limits(test_rate_limits(1))
+                .with_test_http_hardening(true, Vec::new()),
+        );
+        let first = trusted
+            .clone()
+            .oneshot(login_request("192.0.2.1", Some("198.51.100.1")))
+            .await
+            .unwrap();
+        assert_ne!(first.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+        let isolated = trusted
+            .oneshot(login_request("192.0.2.1", Some("198.51.100.2")))
+            .await
+            .unwrap();
+        assert_ne!(isolated.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn cors_preflight_and_request_id_headers_are_conservative() {
+        let app = test_app(
+            config_for_middleware_tests()
+                .with_test_http_hardening(false, vec!["https://app.example.test".into()]),
+        );
+        let allowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health/live")
+                    .header(ORIGIN, "https://app.example.test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            allowed.headers().get(ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+            "https://app.example.test"
+        );
+        assert!(allowed.headers().contains_key(VARY));
+        assert!(allowed.headers().contains_key(&X_REQUEST_ID));
+
+        let disallowed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health/live")
+                    .header(ORIGIN, "https://evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!disallowed
+            .headers()
+            .contains_key(ACCESS_CONTROL_ALLOW_ORIGIN));
+        assert!(disallowed.headers().contains_key(&X_REQUEST_ID));
+
+        let preflight = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/v1/health/live")
+                    .header(ORIGIN, "https://app.example.test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), axum::http::StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight
+                .headers()
+                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+                .unwrap(),
+            "https://app.example.test"
+        );
+        assert!(preflight.headers().contains_key(&X_REQUEST_ID));
     }
 }

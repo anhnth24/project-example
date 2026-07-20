@@ -42,9 +42,12 @@ async fn main() {
                 "fileconv-server listening on http://{}",
                 state.config().bind_addr()
             );
-            if let Err(error) = axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await
+            if let Err(error) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
             {
                 exit_with_error(format!("server failed: {error}"));
             }

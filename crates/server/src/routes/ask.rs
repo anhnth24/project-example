@@ -351,4 +351,31 @@ mod tests {
 
         assert!(validate_ask_request(body, &ctx, "req").is_err());
     }
+
+    #[test]
+    fn ask_response_fixture_matches_wire_dto() {
+        let response = AskResponse {
+            answer: "Payment is due within 30 days. [1]".into(),
+            citations: vec![QaCitation {
+                document_id: uuid::Uuid::parse_str("d4010000-0000-4000-8000-000000000001").unwrap(),
+                version_id: uuid::Uuid::parse_str("e5010000-0000-4000-8000-000000000001").unwrap(),
+                version_number: 3,
+                content_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .into(),
+                chunk_id: uuid::Uuid::parse_str("c3010000-0000-4000-8000-000000000001").unwrap(),
+                heading_path: vec!["Contract".into(), "Payment".into()],
+                snippet: "Payment is due within 30 days.".into(),
+                page: Some(4),
+                slide: None,
+                sheet: None,
+                is_current: true,
+            }],
+            warnings: Vec::new(),
+            mode: QaAnswerMode::OfflineExtractive,
+        };
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../../openapi/fixtures/ask_response.json")).unwrap();
+
+        assert_eq!(serde_json::to_value(response).unwrap(), expected);
+    }
 }

@@ -2,12 +2,22 @@ openapi: 3.1.0
 info:
   title: Markhand Web API
   version: 0.1.0
-  description: Phase 1B POC API contract.
+  description: Phase 1B POC API contract for shipped `/api/v1` routes.
 servers:
   - url: /api/v1
+tags:
+  - name: Health
+  - name: Auth
+  - name: Uploads
+  - name: Collections
+  - name: Documents
+  - name: Jobs
+  - name: Search
+  - name: Ask
 paths:
   /health/live:
     get:
+      tags: [Health]
       operationId: healthLive
       responses:
         "200":
@@ -18,6 +28,7 @@ paths:
                 $ref: "#/components/schemas/Health"
   /health/ready:
     get:
+      tags: [Health]
       operationId: healthReady
       responses:
         "200":
@@ -28,10 +39,847 @@ paths:
                 $ref: "#/components/schemas/Health"
         "503":
           $ref: "#/components/responses/ApiError"
+  /health/start:
+    get:
+      tags: [Health]
+      operationId: healthStart
+      responses:
+        "200":
+          description: Startup has completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Password login succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: authRefresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Refresh token rotation succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: authLogout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutRequest"
+      responses:
+        "204":
+          description: Refresh token family logout accepted.
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: authMe
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current authenticated principal and authorization context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /uploads:
+    post:
+      tags: [Uploads]
+      operationId: createUpload
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Upload accepted or quarantined.
+          headers:
+            x-quota-resource:
+              $ref: "#/components/headers/QuotaResource"
+            x-quota-limit:
+              $ref: "#/components/headers/QuotaLimit"
+            x-quota-used:
+              $ref: "#/components/headers/QuotaUsed"
+            x-quota-reserved:
+              $ref: "#/components/headers/QuotaReserved"
+            x-quota-remaining:
+              $ref: "#/components/headers/QuotaRemaining"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "413":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/QuotaOrRateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /collections:
+    get:
+      tags: [Collections]
+      operationId: listCollections
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Authorized collections page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectionListResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+    post:
+      tags: [Collections]
+      operationId: createCollection
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCollectionRequest"
+      responses:
+        "201":
+          description: Collection created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collection"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /collections/{collectionId}:
+    get:
+      tags: [Collections]
+      operationId: getCollection
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CollectionId"
+      responses:
+        "200":
+          description: Collection metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collection"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /collections/{collectionId}/documents:
+    get:
+      tags: [Documents]
+      operationId: listCollectionDocuments
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CollectionId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Documents in the collection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentListResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+    post:
+      tags: [Documents]
+      operationId: createDocumentFromUpload
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CollectionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDocumentRequest"
+      responses:
+        "201":
+          description: Document and source version created; conversion job enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateDocumentResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}:
+    get:
+      tags: [Documents]
+      operationId: getDocument
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "200":
+          description: Document metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+    delete:
+      tags: [Documents]
+      operationId: deleteDocument
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Delete was already requested.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteDocumentResponse"
+        "202":
+          description: Delete requested and job enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteDocumentResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}:reindex:
+    post:
+      tags: [Documents]
+      operationId: reindexDocument
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+      responses:
+        "202":
+          description: Index job enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobSummary"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions:
+    get:
+      tags: [Documents]
+      operationId: listDocumentVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Document versions page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentVersionListResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions/{versionId}/citations:resolve:
+    post:
+      tags: [Documents]
+      operationId: resolveCitation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CitationPin"
+      responses:
+        "200":
+          description: Citation resolved against live authorization and source content.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolvedCitation"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions/{versionId}/preview:
+    get:
+      tags: [Documents]
+      operationId: getMarkdownPreview
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "200":
+          description: Markdown preview bytes.
+          headers:
+            x-content-type-options:
+              schema:
+                type: string
+                enum: [nosniff]
+          content:
+            text/markdown; charset=utf-8:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions/{versionId}/download:
+    post:
+      tags: [Documents]
+      operationId: authorizeDownload
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/DocumentId"
+        - $ref: "#/components/parameters/VersionId"
+      responses:
+        "200":
+          description: Short-lived, one-time download capability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadCapability"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /documents/download/{token}:
+    get:
+      tags: [Documents]
+      operationId: redeemDownload
+      parameters:
+        - $ref: "#/components/parameters/DownloadToken"
+      responses:
+        "200":
+          description: Original uploaded object bytes.
+          headers:
+            content-disposition:
+              schema:
+                type: string
+            x-content-type-options:
+              schema:
+                type: string
+                enum: [nosniff]
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /jobs/{jobId}:
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Job snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /jobs/{jobId}/events:
+    get:
+      tags: [Jobs]
+      operationId: streamJobEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Server-sent job status events. Event names are `job.status`, `job.done`, and `job.close`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SseEnvelope"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /search:
+    post:
+      tags: [Search]
+      operationId: search
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Grounded retrieval hits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /ask:
+    post:
+      tags: [Ask]
+      operationId: ask
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "200":
+          description: Grounded answer collected from the QA stream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
+  /ask/stream:
+    post:
+      tags: [Ask]
+      operationId: streamAsk
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/LastEventId"
+      requestBody:
+        required: false
+        description: Required when starting a stream. Omitted on replay requests that provide `Last-Event-ID`.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "200":
+          description: Server-sent QA events. Event names are `ask.token`, `ask.citations`, `ask.warning`, and `ask.done`.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SseEnvelope"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ApiError"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    CollectionId:
+      name: collectionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DownloadToken:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 256
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size; defaults to 25 and must be between 1 and 100.
+      schema:
+        type: string
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor returned as `pageInfo.nextCursor`.
+      schema:
+        type: string
+        maxLength: 512
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Optional visible-ASCII idempotency key, 1-128 bytes, using alphanumeric characters plus `.`, `_`, `-`, and `:`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: SSE replay cursor formatted as `{streamUuid}:{sequence}`.
+      schema:
+        type: string
+  headers:
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema:
+        type: string
+    QuotaResource:
+      description: Quota resource kind that was checked.
+      schema:
+        type: string
+        enum: [storage_bytes, documents]
+    QuotaLimit:
+      description: Resource limit.
+      schema:
+        type: string
+    QuotaUsed:
+      description: Committed resource usage.
+      schema:
+        type: string
+    QuotaReserved:
+      description: Currently reserved resource usage.
+      schema:
+        type: string
+    QuotaRemaining:
+      description: Remaining resource budget.
+      schema:
+        type: string
   responses:
     ApiError:
-      description: Canonical API error
+      description: Canonical API error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    RateLimited:
+      description: Request rate limit exceeded. `ApiError.code` is `rate_limited`.
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    QuotaOrRateLimited:
+      description: Request rate limit exceeded (`rate_limited`) or upload quota exceeded (`quota_exceeded`).
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+        x-quota-resource:
+          $ref: "#/components/headers/QuotaResource"
+        x-quota-limit:
+          $ref: "#/components/headers/QuotaLimit"
+        x-quota-used:
+          $ref: "#/components/headers/QuotaUsed"
+        x-quota-reserved:
+          $ref: "#/components/headers/QuotaReserved"
+        x-quota-remaining:
+          $ref: "#/components/headers/QuotaRemaining"
       content:
         application/json:
           schema:
@@ -49,6 +897,19 @@ components:
           format: uuid
     ApiError:
       type: object
+      description: |
+        Canonical API error. Stable `code` values currently returned by shipped routes include
+        `validation_failed`, `unauthorized`, `invalid_credentials`, `invalid_refresh`,
+        `refresh_reuse`, `user_disabled`, `membership_missing`, `auth_unavailable`,
+        `permission_denied`, `collection_denied`, `empty_scope`, `not_found`,
+        `state_conflict`, `rate_limited`, `dependency_unavailable`,
+        `configuration_invalid`, `storage_unavailable`, `multipart_invalid`,
+        `upload_rejected`, `upload_too_large`, `quota_exceeded`,
+        `quota_not_configured`, `quota_invalid_key`, `quota_invalid_amount`,
+        `quota_arithmetic_overflow`, `quota_reservation_not_found`,
+        `quota_reservation_resource_mismatch`, `quota_reservation_conflict`,
+        `quota_refunded_cannot_finalize`, `quota_expired_cannot_finalize`,
+        `quota_finalized_cannot_refund`, `quota_database_error`, and `internal_error`.
       required: [code, message, requestId]
       properties:
         code:
@@ -64,6 +925,764 @@ components:
       required: [hasMore]
       properties:
         nextCursor:
-          type: [string, "null"]
+          type: string
         hasMore:
           type: boolean
+    SseEnvelope:
+      type: object
+      required: [version, sequence, event, requestId, data]
+      properties:
+        version:
+          type: integer
+          format: int32
+          enum: [1]
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+        event:
+          type: string
+          description: Stable event name, for example `job.status`, `job.done`, `job.close`, `ask.token`, `ask.citations`, `ask.warning`, or `ask.done`.
+        requestId:
+          type: string
+        data: {}
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          maxLength: 320
+        password:
+          type: string
+          maxLength: 1024
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          maxLength: 512
+    LogoutRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          maxLength: 512
+    TokenResponse:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresIn, orgId, userId]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresIn:
+          type: integer
+          format: int64
+          minimum: 0
+        orgId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+    MeResponse:
+      type: object
+      required: [userId, orgId, email, displayName, permissions, allowedCollectionIds, sessionId]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        allowedCollectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        sessionId:
+          type: string
+          format: uuid
+    UploadResponse:
+      type: object
+      required: [disposition, objectKey, objectId, sha256, sizeBytes, canonicalFormat, requestId]
+      properties:
+        disposition:
+          type: string
+          enum: [accepted, quarantined, rejected]
+        threatClass:
+          type: string
+          enum:
+            - extension_spoof
+            - mime_mismatch
+            - unsupported_format
+            - archive_bomb
+            - archive_path_traversal
+            - nested_archive
+            - malformed_ooxml
+            - parser_corruption
+            - oversize
+            - truncated_upload
+            - pdf_page_bomb
+            - image_pixel_bomb
+            - audio_duration_limit
+            - csv_formula
+            - prompt_injection
+            - active_content
+            - permission_denied
+            - storage_failure
+            - multipart_invalid
+            - internal
+        reasonCode:
+          type: string
+          enum:
+            - extension_magic_mismatch
+            - magic_unrecognized
+            - upload_too_large
+            - stream_interrupted
+            - archive_entry_limit
+            - archive_uncompressed_limit
+            - archive_compression_ratio
+            - archive_path_traversal
+            - nested_archive_entry
+            - missing_content_types
+            - missing_format_paths
+            - malformed_archive
+            - malformed_xml
+            - pdf_missing_eof
+            - pdf_page_limit
+            - image_pixel_limit
+            - audio_duration_review
+            - csv_formula_review
+            - prompt_injection_review
+            - html_active_content
+            - permission_denied
+            - storage_unavailable
+            - multipart_missing_file
+            - multipart_too_many_files
+            - multipart_too_many_parts
+            - multipart_header_too_large
+            - multipart_timeout
+            - fail_closed
+        objectKey:
+          type: string
+        objectId:
+          type: string
+          format: uuid
+        sha256:
+          type: string
+        sizeBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        canonicalFormat:
+          type: string
+        originalFilename:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+    CreateCollectionRequest:
+      type: object
+      required: [name, slug, visibility]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: [string, "null"]
+        visibility:
+          type: string
+          enum: [private, org]
+    Collection:
+      type: object
+      required: [id, name, slug, description, ownerUserId, visibility, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: [string, "null"]
+        ownerUserId:
+          type: string
+          format: uuid
+        visibility:
+          type: string
+          enum: [private, org, groups]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CollectionListResponse:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Collection"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+    CreateDocumentRequest:
+      type: object
+      required: [title]
+      properties:
+        objectKey:
+          type: [string, "null"]
+        objectId:
+          type: [string, "null"]
+          format: uuid
+        title:
+          type: string
+    Document:
+      type: object
+      required: [id, collectionId, title, state, currentVersionId, createdByUserId, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        collectionId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        state:
+          $ref: "#/components/schemas/DocumentState"
+        currentVersionId:
+          type: [string, "null"]
+          format: uuid
+        createdByUserId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DocumentState:
+      type: string
+      enum: [uploaded, converting, converted, indexing, indexed, failed, tombstoned, purged]
+    DocumentListResponse:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+    DocumentVersion:
+      type: object
+      required:
+        - id
+        - documentId
+        - versionNumber
+        - parentVersionId
+        - publicationState
+        - isCurrent
+        - contentSha256
+        - sourceFilename
+        - sourceContentType
+        - byteSize
+        - effectiveFrom
+        - effectiveTo
+        - changeSummary
+        - createdByUserId
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+          format: int32
+        parentVersionId:
+          type: [string, "null"]
+          format: uuid
+        publicationState:
+          type: string
+          enum: [draft, published]
+        isCurrent:
+          type: boolean
+        contentSha256:
+          type: string
+        sourceFilename:
+          type: [string, "null"]
+        sourceContentType:
+          type: [string, "null"]
+        byteSize:
+          type: [integer, "null"]
+          format: int64
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: [string, "null"]
+          format: date-time
+        changeSummary:
+          type: [string, "null"]
+        createdByUserId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    DocumentVersionListResponse:
+      type: object
+      required: [items, pageInfo]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentVersion"
+        pageInfo:
+          $ref: "#/components/schemas/PageInfo"
+    CreateDocumentResponse:
+      type: object
+      required: [document, version, jobId, jobStatus]
+      properties:
+        document:
+          $ref: "#/components/schemas/Document"
+        version:
+          $ref: "#/components/schemas/DocumentVersion"
+        jobId:
+          type: string
+          format: uuid
+        jobStatus:
+          $ref: "#/components/schemas/JobStatus"
+    DeleteDocumentResponse:
+      type: object
+      required: [document, deleteRequested]
+      properties:
+        document:
+          $ref: "#/components/schemas/Document"
+        deleteRequested:
+          type: boolean
+    JobSummary:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/JobStatus"
+    Job:
+      type: object
+      required:
+        - id
+        - jobType
+        - status
+        - attempts
+        - maxAttempts
+        - documentId
+        - versionId
+        - availableAt
+        - startedAt
+        - finishedAt
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobType:
+          $ref: "#/components/schemas/JobType"
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        attempts:
+          type: integer
+          format: int32
+        maxAttempts:
+          type: integer
+          format: int32
+        documentId:
+          type: [string, "null"]
+          format: uuid
+        versionId:
+          type: [string, "null"]
+          format: uuid
+        availableAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    JobType:
+      type: string
+      enum: [convert, index, delete, reconcile, embedding_batch]
+    JobStatus:
+      type: string
+      enum: [pending, leased, running, succeeded, failed, cancelled, dead_letter]
+    CitationPin:
+      type: object
+      required: [documentId, versionId, versionNumber, contentSha256, chunkId]
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+          format: int32
+        contentSha256:
+          type: string
+        chunkId:
+          type: string
+          format: uuid
+        spanStart:
+          type: [integer, "null"]
+          format: int32
+        spanEnd:
+          type: [integer, "null"]
+          format: int32
+        quote:
+          type: [string, "null"]
+    ResolvedCitation:
+      type: object
+      required:
+        - orgId
+        - documentId
+        - versionId
+        - versionNumber
+        - contentSha256
+        - chunkId
+        - collectionId
+        - headingPath
+        - snippet
+        - page
+        - slide
+        - sheet
+        - spanStart
+        - spanEnd
+        - quote
+        - effectiveFrom
+        - effectiveTo
+        - isCurrent
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+          format: int32
+        contentSha256:
+          type: string
+        chunkId:
+          type: string
+          format: uuid
+        collectionId:
+          type: string
+          format: uuid
+        headingPath:
+          type: array
+          items:
+            type: string
+        snippet:
+          type: string
+        page:
+          type: [integer, "null"]
+          format: int32
+        slide:
+          type: [integer, "null"]
+          format: int32
+        sheet:
+          type: [string, "null"]
+        spanStart:
+          type: [integer, "null"]
+          format: int32
+        spanEnd:
+          type: [integer, "null"]
+          format: int32
+        quote:
+          type: [string, "null"]
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: [string, "null"]
+          format: date-time
+        isCurrent:
+          type: boolean
+    DownloadCapability:
+      type: object
+      required: [token, downloadPath, expiresAt, filename, contentType, byteSize, contentSha256]
+      properties:
+        token:
+          type: string
+        downloadPath:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        filename:
+          type: string
+        contentType:
+          type: string
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 0
+        contentSha256:
+          type: string
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          maxLength: 4096
+        limit:
+          type: [integer, "null"]
+          format: int32
+          minimum: 1
+        collectionIds:
+          type: [array, "null"]
+          maxItems: 512
+          items:
+            type: string
+            format: uuid
+    SearchResponse:
+      type: object
+      required: [hits, degraded]
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchHit"
+        degraded:
+          type: [string, "null"]
+          enum: [vector_unavailable, lexical_unavailable, null]
+    SearchHit:
+      type: object
+      required:
+        - chunkId
+        - documentId
+        - versionId
+        - collectionId
+        - versionNumber
+        - snippet
+        - lexicalScore
+        - vectorScore
+        - rerankScore
+        - isCurrent
+      properties:
+        chunkId:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        collectionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+          format: int32
+        snippet:
+          type: string
+        headingPath:
+          type: array
+          items:
+            type: string
+        lexicalScore:
+          type: number
+          format: float
+        vectorScore:
+          type: number
+          format: float
+        rerankScore:
+          type: number
+          format: float
+        page:
+          type: integer
+          format: int32
+        slide:
+          type: integer
+          format: int32
+        sheet:
+          type: string
+        isCurrent:
+          type: boolean
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+          maxLength: 4096
+        limit:
+          type: [integer, "null"]
+          format: int32
+          minimum: 1
+          maximum: 20
+        collectionIds:
+          type: [array, "null"]
+          maxItems: 512
+          items:
+            type: string
+            format: uuid
+    AskResponse:
+      type: object
+      required: [answer, citations, warnings, mode]
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/QaCitation"
+        warnings:
+          type: array
+          items:
+            type: string
+        mode:
+          $ref: "#/components/schemas/QaAnswerMode"
+    QaAnswerMode:
+      type: string
+      enum: [cloud_llm, fallback_extractive, offline_extractive]
+    QaCitation:
+      type: object
+      required:
+        - documentId
+        - versionId
+        - versionNumber
+        - contentSha256
+        - chunkId
+        - headingPath
+        - snippet
+        - page
+        - slide
+        - sheet
+        - isCurrent
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+          format: int32
+        contentSha256:
+          type: string
+        chunkId:
+          type: string
+          format: uuid
+        headingPath:
+          type: array
+          items:
+            type: string
+        snippet:
+          type: string
+        page:
+          type: [integer, "null"]
+          format: int32
+        slide:
+          type: [integer, "null"]
+          format: int32
+        sheet:
+          type: [string, "null"]
+        isCurrent:
+          type: boolean
+    QaEvent:
+      description: Direct serde representation of the QA service event enum (`snake_case` variant names). `/ask/stream` wraps mapped event data in `SseEnvelope`.
+      oneOf:
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+        - type: object
+          required: [citations]
+          properties:
+            citations:
+              type: array
+              items:
+                $ref: "#/components/schemas/QaCitation"
+        - type: object
+          required: [warning]
+          properties:
+            warning:
+              type: string
+        - type: object
+          required: [done]
+          properties:
+            done:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  $ref: "#/components/schemas/QaAnswerMode"
+    AskSseData:
+      description: Data payloads emitted inside `SseEnvelope.data` by `/ask/stream`.
+      oneOf:
+        - type: object
+          required: [token]
+          properties:
+            token:
+              type: string
+        - type: object
+          required: [citations]
+          properties:
+            citations:
+              type: array
+              items:
+                $ref: "#/components/schemas/QaCitation"
+        - type: object
+          required: [warning]
+          properties:
+            warning:
+              type: string
+        - type: object
+          required: [mode]
+          properties:
+            mode:
+              $ref: "#/components/schemas/QaAnswerMode"
