@@ -59,8 +59,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/0013_expand_index_generation_rls.sql"),
     ),
     (
-        "0014_vector_cleanup_intents.sql",
-        include_str!("../migrations/0014_vector_cleanup_intents.sql"),
+        "0014_expand_vector_cleanup_intents.sql",
+        include_str!("../migrations/0014_expand_vector_cleanup_intents.sql"),
     ),
     (
         "0015_expand_vector_cleanup_intent_states.sql",
@@ -268,7 +268,7 @@ mod tests {
     fn vector_cleanup_intents_have_mandatory_tenant_rls() {
         let source = MIGRATIONS
             .iter()
-            .find(|(name, _)| *name == "0014_vector_cleanup_intents.sql")
+            .find(|(name, _)| *name == "0014_expand_vector_cleanup_intents.sql")
             .expect("vector cleanup intents migration")
             .1;
         let table = "vector_cleanup_intents";
