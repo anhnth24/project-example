@@ -1,0 +1,279 @@
+name: ${MARKHAND_POC_COMPOSE_PROJECT:-markhand-poc}
+
+x-server-environment: &server-environment
+  MARKHAND_PROFILE: "${MARKHAND_PROFILE:-dev}"
+  MARKHAND_BIND_ADDR: "${MARKHAND_BIND_ADDR:-0.0.0.0:8787}"
+  MARKHAND_DATABASE_URL: "${MARKHAND_DATABASE_URL:-postgres://markhand:markhand_poc_change_me@postgres:5432/markhand}"
+  MARKHAND_QDRANT_URL: "${MARKHAND_QDRANT_URL:-http://qdrant:6333}"
+  MARKHAND_QDRANT_API_KEY: "${MARKHAND_QDRANT_API_KEY:-}"
+  MARKHAND_MINIO_URL: "${MARKHAND_MINIO_URL:-http://minio:9000}"
+  MARKHAND_MINIO_ACCESS_KEY: "${MARKHAND_MINIO_ACCESS_KEY:-markhand}"
+  # CHANGE IN PROD: this dev-only object-store secret is for isolated POC runs only.
+  MARKHAND_MINIO_SECRET_KEY: "${MARKHAND_MINIO_SECRET_KEY:-markhand_poc_change_me}"
+  MARKHAND_MINIO_BUCKET: "${MARKHAND_MINIO_BUCKET:-markhand-documents}"
+  MARKHAND_MINIO_REGION: "${MARKHAND_MINIO_REGION:-us-east-1}"
+  MARKHAND_MINIO_PATH_STYLE: "${MARKHAND_MINIO_PATH_STYLE:-true}"
+  MARKHAND_MINIO_OPERATION_TIMEOUT_SECS: "${MARKHAND_MINIO_OPERATION_TIMEOUT_SECS:-30}"
+  MARKHAND_AUTH_ISSUER: "${MARKHAND_AUTH_ISSUER:-http://127.0.0.1:8787/dev-issuer}"
+  MARKHAND_AUTH_AUDIENCE: "${MARKHAND_AUTH_AUDIENCE:-markhand-poc}"
+  # CHANGE IN PROD: this dev-only JWT key also derives the download capability key.
+  MARKHAND_AUTH_SIGNING_KEY: "${MARKHAND_AUTH_SIGNING_KEY:-CHANGE-ME-dev-only-poc-signing-key-32b}"
+  MARKHAND_AUTH_ALG: "${MARKHAND_AUTH_ALG:-HS256}"
+  MARKHAND_AUTH_KID: "${MARKHAND_AUTH_KID:-dev-poc}"
+  MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS: "${MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS:-900}"
+  MARKHAND_AUTH_REFRESH_TOKEN_TTL_SECS: "${MARKHAND_AUTH_REFRESH_TOKEN_TTL_SECS:-604800}"
+  MARKHAND_AUTH_ARGON2_MEMORY_KIB: "${MARKHAND_AUTH_ARGON2_MEMORY_KIB:-19456}"
+  MARKHAND_AUTH_ARGON2_TIME_COST: "${MARKHAND_AUTH_ARGON2_TIME_COST:-2}"
+  MARKHAND_AUTH_ARGON2_PARALLELISM: "${MARKHAND_AUTH_ARGON2_PARALLELISM:-1}"
+  MARKHAND_MAX_UPLOAD_BYTES: "${MARKHAND_MAX_UPLOAD_BYTES:-209715200}"
+  MARKHAND_JOB_LEASE_SECONDS: "${MARKHAND_JOB_LEASE_SECONDS:-60}"
+  MARKHAND_MAX_ARCHIVE_ENTRIES: "${MARKHAND_MAX_ARCHIVE_ENTRIES:-4096}"
+  MARKHAND_MAX_ARCHIVE_UNCOMPRESSED_BYTES: "${MARKHAND_MAX_ARCHIVE_UNCOMPRESSED_BYTES:-1073741824}"
+  MARKHAND_MAX_ARCHIVE_COMPRESSION_RATIO: "${MARKHAND_MAX_ARCHIVE_COMPRESSION_RATIO:-100}"
+  MARKHAND_MAX_PDF_PAGES: "${MARKHAND_MAX_PDF_PAGES:-500}"
+  MARKHAND_MAX_IMAGE_PIXELS: "${MARKHAND_MAX_IMAGE_PIXELS:-80000000}"
+  MARKHAND_MAX_AUDIO_DURATION_SECS: "${MARKHAND_MAX_AUDIO_DURATION_SECS:-3600}"
+  MARKHAND_MAX_MULTIPART_PARTS: "${MARKHAND_MAX_MULTIPART_PARTS:-8}"
+  MARKHAND_MAX_PART_HEADER_BYTES: "${MARKHAND_MAX_PART_HEADER_BYTES:-8192}"
+  MARKHAND_UPLOAD_TIMEOUT_SECS: "${MARKHAND_UPLOAD_TIMEOUT_SECS:-120}"
+  MARKHAND_UPLOAD_IDLE_TIMEOUT_SECS: "${MARKHAND_UPLOAD_IDLE_TIMEOUT_SECS:-15}"
+  MARKHAND_QUOTA_SWEEP_INTERVAL_SECS: "${MARKHAND_QUOTA_SWEEP_INTERVAL_SECS:-60}"
+  MARKHAND_QUOTA_SWEEP_BATCH_SIZE: "${MARKHAND_QUOTA_SWEEP_BATCH_SIZE:-500}"
+  MARKHAND_RATE_LIMIT_AUTH_PER_MINUTE: "${MARKHAND_RATE_LIMIT_AUTH_PER_MINUTE:-20}"
+  MARKHAND_RATE_LIMIT_LLM_PER_MINUTE: "${MARKHAND_RATE_LIMIT_LLM_PER_MINUTE:-60}"
+  MARKHAND_RATE_LIMIT_AUTHENTICATED_PER_MINUTE: "${MARKHAND_RATE_LIMIT_AUTHENTICATED_PER_MINUTE:-300}"
+  MARKHAND_RATE_LIMIT_FALLBACK_PER_MINUTE: "${MARKHAND_RATE_LIMIT_FALLBACK_PER_MINUTE:-120}"
+  MARKHAND_RATE_LIMIT_MAX_ENTRIES: "${MARKHAND_RATE_LIMIT_MAX_ENTRIES:-8192}"
+  MARKHAND_TRUSTED_PROXY: "${MARKHAND_TRUSTED_PROXY:-false}"
+  MARKHAND_CORS_ALLOWED_ORIGINS: "${MARKHAND_CORS_ALLOWED_ORIGINS:-}"
+  MARKHAND_INDEX_SIGNATURE: "${MARKHAND_INDEX_SIGNATURE:-}"
+  MARKHAND_LOG_FORMAT: "${MARKHAND_LOG_FORMAT:-json}"
+  MARKHAND_LOG_LEVEL: "${MARKHAND_LOG_LEVEL:-info}"
+  MARKHAND_METRICS_ENABLED: "${MARKHAND_METRICS_ENABLED:-true}"
+  MARKHAND_OTLP_ENDPOINT: "${MARKHAND_OTLP_ENDPOINT:-}"
+  FILECONV_LLM_PROVIDER: "${FILECONV_LLM_PROVIDER:-openai}"
+  FILECONV_LLM_MODEL: "${FILECONV_LLM_MODEL:-gpt-4o}"
+  FILECONV_LLM_BASE_URL: "${FILECONV_LLM_BASE_URL:-https://api.openai.com/v1}"
+  FILECONV_LLM_API_KEY: "${FILECONV_LLM_API_KEY:-}"
+
+x-worker-environment: &worker-environment
+  MARKHAND_PROFILE: "${MARKHAND_PROFILE:-dev}"
+  MARKHAND_BIND_ADDR: "${MARKHAND_WORKER_BIND_ADDR:-127.0.0.1:8787}"
+  MARKHAND_DATABASE_URL: "${MARKHAND_DATABASE_URL:-postgres://markhand:markhand_poc_change_me@postgres:5432/markhand}"
+  MARKHAND_QDRANT_URL: "${MARKHAND_QDRANT_URL:-http://qdrant:6333}"
+  MARKHAND_QDRANT_API_KEY: "${MARKHAND_QDRANT_API_KEY:-}"
+  MARKHAND_MINIO_URL: "${MARKHAND_MINIO_URL:-http://minio:9000}"
+  MARKHAND_MINIO_ACCESS_KEY: "${MARKHAND_MINIO_ACCESS_KEY:-markhand}"
+  MARKHAND_MINIO_SECRET_KEY: "${MARKHAND_MINIO_SECRET_KEY:-markhand_poc_change_me}"
+  MARKHAND_MINIO_BUCKET: "${MARKHAND_MINIO_BUCKET:-markhand-documents}"
+  MARKHAND_MINIO_REGION: "${MARKHAND_MINIO_REGION:-us-east-1}"
+  MARKHAND_MINIO_PATH_STYLE: "${MARKHAND_MINIO_PATH_STYLE:-true}"
+  MARKHAND_MINIO_OPERATION_TIMEOUT_SECS: "${MARKHAND_MINIO_OPERATION_TIMEOUT_SECS:-30}"
+  MARKHAND_MAX_UPLOAD_BYTES: "${MARKHAND_MAX_UPLOAD_BYTES:-209715200}"
+  MARKHAND_JOB_LEASE_SECONDS: "${MARKHAND_JOB_LEASE_SECONDS:-60}"
+  MARKHAND_MAX_ARCHIVE_ENTRIES: "${MARKHAND_MAX_ARCHIVE_ENTRIES:-4096}"
+  MARKHAND_MAX_ARCHIVE_UNCOMPRESSED_BYTES: "${MARKHAND_MAX_ARCHIVE_UNCOMPRESSED_BYTES:-1073741824}"
+  MARKHAND_MAX_ARCHIVE_COMPRESSION_RATIO: "${MARKHAND_MAX_ARCHIVE_COMPRESSION_RATIO:-100}"
+  MARKHAND_MAX_PDF_PAGES: "${MARKHAND_MAX_PDF_PAGES:-500}"
+  MARKHAND_MAX_IMAGE_PIXELS: "${MARKHAND_MAX_IMAGE_PIXELS:-80000000}"
+  MARKHAND_MAX_AUDIO_DURATION_SECS: "${MARKHAND_MAX_AUDIO_DURATION_SECS:-3600}"
+  MARKHAND_MAX_MULTIPART_PARTS: "${MARKHAND_MAX_MULTIPART_PARTS:-8}"
+  MARKHAND_MAX_PART_HEADER_BYTES: "${MARKHAND_MAX_PART_HEADER_BYTES:-8192}"
+  MARKHAND_UPLOAD_TIMEOUT_SECS: "${MARKHAND_UPLOAD_TIMEOUT_SECS:-120}"
+  MARKHAND_UPLOAD_IDLE_TIMEOUT_SECS: "${MARKHAND_UPLOAD_IDLE_TIMEOUT_SECS:-15}"
+  MARKHAND_QUOTA_SWEEP_INTERVAL_SECS: "${MARKHAND_QUOTA_SWEEP_INTERVAL_SECS:-60}"
+  MARKHAND_QUOTA_SWEEP_BATCH_SIZE: "${MARKHAND_QUOTA_SWEEP_BATCH_SIZE:-500}"
+  MARKHAND_RATE_LIMIT_AUTH_PER_MINUTE: "${MARKHAND_RATE_LIMIT_AUTH_PER_MINUTE:-20}"
+  MARKHAND_RATE_LIMIT_LLM_PER_MINUTE: "${MARKHAND_RATE_LIMIT_LLM_PER_MINUTE:-60}"
+  MARKHAND_RATE_LIMIT_AUTHENTICATED_PER_MINUTE: "${MARKHAND_RATE_LIMIT_AUTHENTICATED_PER_MINUTE:-300}"
+  MARKHAND_RATE_LIMIT_FALLBACK_PER_MINUTE: "${MARKHAND_RATE_LIMIT_FALLBACK_PER_MINUTE:-120}"
+  MARKHAND_RATE_LIMIT_MAX_ENTRIES: "${MARKHAND_RATE_LIMIT_MAX_ENTRIES:-8192}"
+  MARKHAND_TRUSTED_PROXY: "${MARKHAND_TRUSTED_PROXY:-false}"
+  MARKHAND_CORS_ALLOWED_ORIGINS: "${MARKHAND_CORS_ALLOWED_ORIGINS:-}"
+  MARKHAND_INDEX_SIGNATURE: "${MARKHAND_INDEX_SIGNATURE:-}"
+  MARKHAND_LOG_FORMAT: "${MARKHAND_LOG_FORMAT:-json}"
+  MARKHAND_LOG_LEVEL: "${MARKHAND_LOG_LEVEL:-info}"
+  MARKHAND_METRICS_ENABLED: "${MARKHAND_METRICS_ENABLED:-true}"
+  MARKHAND_OTLP_ENDPOINT: "${MARKHAND_OTLP_ENDPOINT:-}"
+  MARKHAND_WORKER_ORG_ID: "${MARKHAND_WORKER_ORG_ID:-11111111-1111-4111-8111-111111111111}"
+  MARKHAND_WORKER_USER_ID: "${MARKHAND_WORKER_USER_ID:-22222222-2222-4222-8222-222222222222}"
+  MARKHAND_WORKER_CLAIM_LIMIT: "${MARKHAND_WORKER_CLAIM_LIMIT:-1}"
+  MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS: "${MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS:-5}"
+  MARKHAND_WORKER_MAX_JOB_SECS: "${MARKHAND_WORKER_MAX_JOB_SECS:-150}"
+  MARKHAND_INDEX_EMBEDDING_BATCH_SIZE: "${MARKHAND_INDEX_EMBEDDING_BATCH_SIZE:-64}"
+  MARKHAND_CONVERTER_ARGV_JSON: '${MARKHAND_CONVERTER_ARGV_JSON:-["/usr/local/bin/fileconv","one","{input}"]}'
+  MARKHAND_CONVERTER_TIMEOUT_SECS: "${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}"
+  MARKHAND_CONVERTER_MEMORY_BYTES: "${MARKHAND_CONVERTER_MEMORY_BYTES:-805306368}"
+  MARKHAND_CONVERTER_CPU_SECONDS: "${MARKHAND_CONVERTER_CPU_SECONDS:-60}"
+  MARKHAND_CONVERTER_FILE_SIZE_BYTES: "${MARKHAND_CONVERTER_FILE_SIZE_BYTES:-67108864}"
+  MARKHAND_CONVERTER_MAX_PROCESSES: "${MARKHAND_CONVERTER_MAX_PROCESSES:-512}"
+  MARKHAND_CONVERTER_MAX_OPEN_FILES: "${MARKHAND_CONVERTER_MAX_OPEN_FILES:-256}"
+  FILECONV_PDFIUM_LIB: "${FILECONV_PDFIUM_LIB:-/opt/fileconv/pdfium/lib}"
+  FILECONV_WHISPER_MODEL: "${FILECONV_WHISPER_MODEL:-}"
+
+x-app-security: &app-security
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=256m
+  cap_drop: ["ALL"]
+  security_opt:
+    - no-new-privileges:true
+
+x-worker-service: &worker-service
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.worker
+  depends_on:
+    postgres:
+      condition: service_healthy
+    qdrant:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+    minio-init:
+      condition: service_completed_successfully
+    server:
+      condition: service_healthy
+  networks: [private]
+  restart: unless-stopped
+  <<: *app-security
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    environment:
+      POSTGRES_DB: "${MARKHAND_POSTGRES_DB:-markhand}"
+      POSTGRES_USER: "${MARKHAND_POSTGRES_USER:-markhand}"
+      # CHANGE IN PROD: this dev-only database password is for isolated POC runs only.
+      POSTGRES_PASSWORD: "${MARKHAND_POSTGRES_PASSWORD:-markhand_poc_change_me}"
+    ports:
+      - "127.0.0.1:${MARKHAND_POC_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports:
+      - "127.0.0.1:${MARKHAND_POC_QDRANT_HTTP_PORT:-16333}:6333"
+      - "127.0.0.1:${MARKHAND_POC_QDRANT_GRPC_PORT:-16334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:6333/healthz >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MARKHAND_MINIO_ACCESS_KEY:-markhand}"
+      # CHANGE IN PROD: this dev-only MinIO root secret is for isolated POC runs only.
+      MINIO_ROOT_PASSWORD: "${MARKHAND_MINIO_SECRET_KEY:-markhand_poc_change_me}"
+    ports:
+      - "127.0.0.1:${MARKHAND_POC_MINIO_API_PORT:-19000}:9000"
+      - "127.0.0.1:${MARKHAND_POC_MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - minio_data:/data
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: "http://${MARKHAND_MINIO_ACCESS_KEY:-markhand}:${MARKHAND_MINIO_SECRET_KEY:-markhand_poc_change_me}@minio:9000"
+    command:
+      [
+        "mb",
+        "--ignore-existing",
+        "local/markhand-quarantine",
+        "local/markhand-documents",
+        "local/markhand-artifacts"
+      ]
+    networks: [private]
+    restart: on-failure
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    environment:
+      <<: *server-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${MARKHAND_POC_SERVER_PORT:-8787}:8787"
+    networks: [private]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8787/api/v1/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+    restart: unless-stopped
+    <<: *app-security
+
+  worker-convert:
+    <<: *worker-service
+    environment:
+      <<: *worker-environment
+      MARKHAND_WORKER_ID: "${MARKHAND_WORKER_CONVERT_ID:-fileconv-worker-convert}"
+      MARKHAND_WORKER_KIND: "convert"
+
+  worker-index:
+    <<: *worker-service
+    environment:
+      <<: *worker-environment
+      MARKHAND_WORKER_ID: "${MARKHAND_WORKER_INDEX_ID:-fileconv-worker-index}"
+      MARKHAND_WORKER_KIND: "index"
+
+  worker-delete:
+    <<: *worker-service
+    environment:
+      <<: *worker-environment
+      MARKHAND_WORKER_ID: "${MARKHAND_WORKER_DELETE_ID:-fileconv-worker-delete}"
+      MARKHAND_WORKER_KIND: "delete"
+
+  worker-reconcile:
+    <<: *worker-service
+    environment:
+      <<: *worker-environment
+      MARKHAND_WORKER_ID: "${MARKHAND_WORKER_RECONCILE_ID:-fileconv-worker-reconcile}"
+      MARKHAND_WORKER_KIND: "reconcile"
+      MARKHAND_RECONCILE_MODE: "${MARKHAND_RECONCILE_MODE:-repair}"
+
+networks:
+  private:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  minio_data:

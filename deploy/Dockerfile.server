@@ -1,0 +1,45 @@
+ARG RUST_IMAGE=rust:1.88.0-bookworm
+ARG RUNTIME_IMAGE=debian:bookworm-slim
+
+FROM ${RUST_IMAGE} AS builder
+
+ENV CC=cc \
+    CXX=c++
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        clang \
+        cmake \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY . .
+
+RUN cargo build --release -p fileconv-server --bin fileconv-server
+
+FROM ${RUNTIME_IMAGE} AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libssl3 \
+        libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system markhand \
+    && useradd --system --gid markhand --create-home --home-dir /var/lib/markhand --shell /usr/sbin/nologin markhand
+
+COPY --from=builder /workspace/target/release/fileconv-server /usr/local/bin/fileconv-server
+
+USER markhand
+WORKDIR /var/lib/markhand
+
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8787/api/v1/health/live >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/fileconv-server"]

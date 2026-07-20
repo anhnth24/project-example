@@ -6,6 +6,8 @@ use deadpool_postgres::Pool;
 use tokio::time::timeout;
 
 use crate::database;
+use crate::db::error::DbError;
+use crate::db::readiness_fence::{self, ReadinessFenceState};
 use crate::http::{AppState, DEPENDENCY_TIMEOUT};
 use crate::services::index_signature::validate_signature_digest;
 
@@ -21,6 +23,7 @@ pub(crate) struct CachedReadiness {
 pub(crate) enum HealthErrorKind {
     DependencyUnavailable,
     ConfigurationInvalid,
+    NotReconciled,
 }
 
 pub(crate) async fn check_dependencies(state: Arc<AppState>) -> Result<(), HealthErrorKind> {
@@ -41,12 +44,15 @@ pub(crate) async fn check_dependencies(state: Arc<AppState>) -> Result<(), Healt
 
 async fn check_dependencies_uncached(state: &AppState) -> Result<(), HealthErrorKind> {
     validate_index_signature_config(state)?;
-    // TODO(O03): reconciliation-backlog readiness.
     let database = timeout(
         DEPENDENCY_TIMEOUT,
         database::check_connection(state.runtime().endpoints().database_url.expose()),
     );
     let migrations = timeout(DEPENDENCY_TIMEOUT, check_migrations_applied(state.pool()));
+    let readiness_fence = timeout(
+        DEPENDENCY_TIMEOUT,
+        readiness_fence::current_state(state.pool()),
+    );
     let qdrant = state
         .http_client()
         .get(format!(
@@ -62,15 +68,31 @@ async fn check_dependencies_uncached(state: &AppState) -> Result<(), HealthError
         ))
         .send();
 
-    let (database, migrations, qdrant, minio) = tokio::join!(database, migrations, qdrant, minio);
+    let (database, migrations, readiness_fence, qdrant, minio) =
+        tokio::join!(database, migrations, readiness_fence, qdrant, minio);
     database
         .map_err(|_| HealthErrorKind::DependencyUnavailable)?
         .map_err(|_| HealthErrorKind::DependencyUnavailable)?;
     migrations
         .map_err(|_| HealthErrorKind::DependencyUnavailable)?
         .map_err(|_| HealthErrorKind::DependencyUnavailable)?;
+    let readiness_fence = readiness_fence
+        .map_err(|_| HealthErrorKind::NotReconciled)?
+        .map_err(|_| HealthErrorKind::NotReconciled)?;
+    if readiness_fence != ReadinessFenceState::Ready {
+        return Err(HealthErrorKind::NotReconciled);
+    }
     ensure_success(qdrant).await?;
     ensure_success(minio).await
+}
+
+pub async fn set_readiness_fence(
+    pool: &Pool,
+    state: ReadinessFenceState,
+    reason: Option<&str>,
+) -> Result<(), DbError> {
+    // TODO: restore flow sets reconciling before restore and ready after reconcile completes.
+    readiness_fence::set_state(pool, state, reason).await
 }
 
 fn validate_index_signature_config(state: &AppState) -> Result<(), HealthErrorKind> {

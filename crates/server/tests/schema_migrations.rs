@@ -39,7 +39,8 @@ const BUSINESS_TABLES: &[&str] = &[
     "audit_log",
 ];
 
-const GLOBAL_TABLES: &[&str] = &["orgs", "users", "permissions"];
+const GLOBAL_TABLES: &[&str] = &["orgs", "users", "permissions", "readiness_fence"];
+const SYSTEM_TABLES: &[&str] = &["readiness_fence"];
 
 const POC_ORG: &str = "11111111-1111-1111-1111-111111111111";
 const POC_USER: &str = "22222222-2222-2222-2222-222222222201";
@@ -225,6 +226,56 @@ async fn schema_migrations_fresh_apply_idempotent_and_exact_columns() {
             .unwrap()
             .get(0);
         assert_eq!(count, 0, "{table} is global");
+    }
+    for table in SYSTEM_TABLES {
+        let row = client
+            .query_one(
+                "SELECT c.relrowsecurity, c.relforcerowsecurity FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname = 'public' AND c.relname = $1",
+                &[table],
+            )
+            .await
+            .unwrap_or_else(|_| panic!("missing system table {table}"));
+        assert!(
+            !row.get::<_, bool>(0) && !row.get::<_, bool>(1),
+            "{table} must not use RLS"
+        );
+    }
+    let fence: (String, Option<String>) = {
+        let row = client
+            .query_one(
+                "SELECT state, reason FROM readiness_fence WHERE id = 1",
+                &[],
+            )
+            .await
+            .expect("readiness fence singleton");
+        (row.get(0), row.get(1))
+    };
+    assert_eq!(fence, ("ready".to_string(), None));
+    let app_role_exists: bool = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'markhand_app')",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    if app_role_exists {
+        for privilege in ["SELECT", "UPDATE"] {
+            let allowed: bool = client
+                .query_one(
+                    "SELECT has_table_privilege('markhand_app', 'readiness_fence', $1)",
+                    &[&privilege],
+                )
+                .await
+                .unwrap()
+                .get(0);
+            assert!(
+                allowed,
+                "markhand_app must have {privilege} on readiness_fence"
+            );
+        }
     }
 
     // Exact-set both-directions drift guard for every modeled table.

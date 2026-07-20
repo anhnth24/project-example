@@ -72,6 +72,10 @@ impl From<HealthErrorKind> for HealthError {
                 code: "configuration_invalid",
                 message: "Server configuration is invalid",
             },
+            HealthErrorKind::NotReconciled => Self {
+                code: "not_reconciled",
+                message: "Restore or reconciliation is still in progress",
+            },
         }
     }
 }
