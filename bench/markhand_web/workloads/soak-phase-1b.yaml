@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "profileId": "phase-1b-soak-full",
+  "description": "Full Phase-1B mixed-load qualification profile. Numeric G0 gates require sustained real infrastructure with targetMatch=true.",
+  "baseWorkloadProfile": "../workload-profile.yaml",
+  "targetEnvironmentId": "on-prem-reference",
+  "targetMatchRequiredForNumericGates": true,
+  "durationSeconds": 14400,
+  "rampSeconds": 300,
+  "concurrency": 96,
+  "sampleIntervalSeconds": 10,
+  "operationTimeoutSeconds": 60,
+  "jobPollTimeoutSeconds": 600,
+  "jobPollIntervalSeconds": 5,
+  "operationWeights": {
+    "ingest": 18,
+    "query_search": 52,
+    "ask": 15,
+    "delete": 8,
+    "reconcile": 7
+  },
+  "targetRatesPerHour": {
+    "ingest": 1200,
+    "delete": 120
+  },
+  "api": {
+    "baseUrlEnv": "MARKHAND_BASE_URL",
+    "bearerTokenEnv": "MARKHAND_BEARER_TOKEN",
+    "collectionIdEnv": "MARKHAND_COLLECTION_ID",
+    "defaultBaseUrl": "http://127.0.0.1:8787"
+  },
+  "data": {
+    "classification": "synthetic-redacted",
+    "fixturePrefix": "P1B-O05-SOAK-FULL",
+    "uploadContentType": "text/plain",
+    "queries": [
+      "P1B-O05 capacity budget marker",
+      "P1B-O05 recovery design marker",
+      "Markhand single org POC retrieval",
+      "current effective document version",
+      "delete tombstone purge reconcile",
+      "restore readiness fence"
+    ]
+  },
+  "gateMappings": [
+    {
+      "gateId": "G0-SLO-QUERY-P95",
+      "soakMetric": "operations.query_search.durationMs.p95"
+    },
+    {
+      "gateId": "G0-SLO-QUERY-P99",
+      "soakMetric": "operations.query_search.durationMs.p99"
+    },
+    {
+      "gateId": "G0-CAP-INGEST-THROUGHPUT",
+      "soakMetric": "operations.ingest.successfulDocumentsPerHour"
+    },
+    {
+      "gateId": "G0-DR-RPO",
+      "soakMetric": "restore.rpoMinutes"
+    },
+    {
+      "gateId": "G0-DR-QUERY-READY-RTO",
+      "soakMetric": "restore.queryReadyRtoMinutes"
+    },
+    {
+      "gateId": "G0-DR-FULL-VECTOR-RTO",
+      "soakMetric": "restore.fullVectorRtoMinutes"
+    }
+  ],
+  "failureInjections": [
+    {
+      "id": "pause-convert-worker",
+      "mode": "documented-manual-step",
+      "command": "docker compose -f deploy/compose.poc.yml stop worker-convert",
+      "restoreCommand": "docker compose -f deploy/compose.poc.yml up -d worker-convert",
+      "expectedSignal": "convert backlog increases, then markhand_jobs_queue_depth returns to baseline without dead-letter growth"
+    },
+    {
+      "id": "pause-index-worker",
+      "mode": "documented-manual-step",
+      "command": "docker compose -f deploy/compose.poc.yml stop worker-index",
+      "restoreCommand": "docker compose -f deploy/compose.poc.yml up -d worker-index",
+      "expectedSignal": "search degrades safely while index jobs catch up after worker recovery"
+    },
+    {
+      "id": "dependency-blip-qdrant",
+      "mode": "documented-manual-step",
+      "command": "docker compose -f deploy/compose.poc.yml stop qdrant",
+      "restoreCommand": "docker compose -f deploy/compose.poc.yml up -d qdrant worker-index worker-reconcile",
+      "expectedSignal": "readiness and query failures are bounded; reconciliation is required before ready"
+    },
+    {
+      "id": "restore-fence-reconcile",
+      "mode": "documented-manual-step",
+      "command": "docker compose -f deploy/compose.poc.yml run --rm worker-reconcile readiness-fence reconciling \"soak restore leg\"",
+      "restoreCommand": "docker compose -f deploy/compose.poc.yml run --rm worker-reconcile readiness-fence ready",
+      "expectedSignal": "/api/v1/health/ready remains false until O03 reconcile completes"
+    }
+  ],
+  "restoreLeg": {
+    "command": "python3 bench/markhand_web/scripts/run_restore_drill.py",
+    "evidence": "bench/markhand_web/restore/summary.json",
+    "requiresRealInfra": true,
+    "notes": [
+      "Run after a component-loss backup/restore on the same stack.",
+      "Numeric RPO/RTO gates are pending until real PostgreSQL, MinIO, Qdrant and reconciliation evidence is recorded with targetMatch=true."
+    ]
+  }
+}
