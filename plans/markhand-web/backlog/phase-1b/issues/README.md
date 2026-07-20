@@ -36,6 +36,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
+- **Status:** done (scaffold) — PR #240; Dockerfiles + `compose.poc.yml` delivered, but images not `docker build`/boot-verified in the agent sandbox (no daemon) — verify on a Docker host.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`.
@@ -216,6 +217,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
+- **Status:** done — PR #234 (security review PASS, live-tested, rust CI green).
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -227,6 +229,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
+- **Status:** done — PR #235 (security review PASS 3 rounds, live-tested, rust CI green).
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`.
@@ -237,6 +240,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
+- **Status:** done — PR #236 (security review PASS, live-tested, rust + web `check-web` CI green).
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
@@ -249,6 +253,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
+- **Status:** done — PR #237 (security review PASS, live-tested). Structured tracing, bounded Prometheus `/metrics`, redacted append-only audit. Live OTLP export deferred.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`, OTel config.
@@ -259,6 +264,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
+- **Status:** done (artifacts) — PR #241; alert rules + Grafana dashboard + 7 runbooks (metrics cross-checked vs O01). Alert-firing/dashboard rendering need a live Prometheus/Grafana stack; disk/backup-age series pending an O01 emitter.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
 - **Files:** `deploy/observability/**`, `docs/runbooks/**`.
@@ -269,6 +275,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
+- **Status:** partial — PR #239 delivers the reconcile-before-ready readiness fence (migration 0012 + `/health/ready` gate + ops toggle; review PASS, live-tested). Backup/PITR/snapshot scripts + restore-order runbook + RPO/RTO drill evidence still need real DR infra.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, restore/migration runbooks, restore guard.
@@ -280,6 +287,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
+- **Status:** done — PR #238 (security review PASS 4 rounds, live-tested). e2e suite (`tests/e2e/**`) for full slice + authz/lifecycle/adversarial/fault-injection; **found + fixed a real convert-metadata bug** in the upload→create→convert path.
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `crates/server/tests/e2e/**`, POC manifest, deploy test script.
@@ -290,6 +298,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
+- **Status:** done (harness) — PR #242; mixed-load soak driver + workload profiles + aggregate gate-report generator (renders `pending`/`targetMatch=false` with no evidence). Numeric G0-SLO/G0-CAP/DR pass-fail needs sustained real infra.
 - **Plan:** Ingest/query/delete/reconcile mixed load + failures; monitor leaks/queue;
   restore; aggregate gate report.
 - **Files:** `bench/markhand_web/{soak,workloads,reports/phase-1b-gate}*`.
