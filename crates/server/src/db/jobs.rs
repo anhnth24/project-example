@@ -529,6 +529,42 @@ pub async fn cancel_job(
     row.map(|row| map_job(&row)).transpose()
 }
 
+/// Cancels pending or leased embedding jobs owned by an index parent. The
+/// caller writes the corresponding events and compensates the durable batches
+/// in the same transaction.
+pub async fn cancel_embedding_children(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    index_job_id: Uuid,
+) -> Result<Vec<Job>, DbError> {
+    let rows = txn
+        .query(
+            &format!(
+                "WITH children AS (
+                    SELECT batch.job_id
+                    FROM embedding_batches AS batch
+                    WHERE batch.org_id = $1
+                      AND batch.index_job_id = $2
+                 )
+                 UPDATE jobs AS job
+                 SET status = 'cancelled',
+                     lease_owner = NULL,
+                     lease_expires_at = NULL,
+                     heartbeat_at = NULL,
+                     finished_at = clock_timestamp(),
+                     updated_at = clock_timestamp()
+                 FROM children
+                 WHERE job.org_id = $1
+                   AND job.id = children.job_id
+                   AND job.status IN ('pending', 'leased')
+                 RETURNING {JOB_COLUMNS_J}"
+            ),
+            &[&ctx.org_id(), &index_job_id],
+        )
+        .await?;
+    rows.iter().map(map_job).collect()
+}
+
 pub async fn insert_outbox_event(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

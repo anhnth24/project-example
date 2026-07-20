@@ -16,7 +16,8 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
 use crate::db::models::{
-    DocumentState, EmbeddingRuntimePath, EventLogEntry, Job, JobStatus, JobType, OutboxEvent,
+    DocumentState, EmbeddingRuntimePath, EventLogEntry, IndexGenerationState, IndexMetadata, Job,
+    JobStatus, JobType, OutboxEvent,
 };
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{
@@ -148,6 +149,22 @@ pub enum IndexVersionOutcome {
     AlreadyIndexed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackfillCompletion {
+    Empty,
+    Batches,
+}
+
+impl BackfillCompletion {
+    fn from_chunk_count(chunk_count: usize) -> Self {
+        if chunk_count == 0 {
+            Self::Empty
+        } else {
+            Self::Batches
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct IndexVersionInput<'a> {
     pub job: &'a Job,
@@ -208,33 +225,30 @@ pub async fn index_version(
     let dimensions = i32::try_from(signature.dimensions).map_err(|_| {
         DbError::Config("embedding dimensions are out of range for database".into())
     })?;
-    let ensured_metadata = ensure_generation(
-        db_pool,
-        ctx,
-        index_metadata::EnsureGeneration {
-            collection_id: Some(document.collection_id),
-            signature_sha256: &signature_digest,
-            chunking_version: signature.chunking_version,
-            body_text_version: signature.body_text_version,
-            query_normalization_version: signature.query_normalization_version,
-            embedding_family: signature.embedding_family,
-            embedding_revision: signature.embedding_revision,
-            dimensions,
-            normalized: signature.normalized,
-            runtime_path,
-        },
-    )
-    .await?;
     let metadata = if let Some(target_metadata_id) = payload.index_metadata_id {
         let target = load_generation(db_pool, ctx, target_metadata_id).await?;
-        if target.index_signature_sha256 != signature_digest {
-            return Err(IndexingError::SignatureMismatch);
-        }
+        validate_target_generation(&target, document.collection_id, &signature_digest)?;
         target
     } else {
-        ensured_metadata
+        ensure_generation(
+            db_pool,
+            ctx,
+            index_metadata::EnsureGeneration {
+                collection_id: Some(document.collection_id),
+                signature_sha256: &signature_digest,
+                chunking_version: signature.chunking_version,
+                body_text_version: signature.body_text_version,
+                query_normalization_version: signature.query_normalization_version,
+                embedding_family: signature.embedding_family,
+                embedding_revision: signature.embedding_revision,
+                dimensions,
+                normalized: signature.normalized,
+                runtime_path,
+            },
+        )
+        .await?
     };
-    if metadata.state == crate::db::models::IndexGenerationState::Building {
+    if metadata.state == IndexGenerationState::Building {
         enqueue_staged_backfill(db_pool, ctx, input, &metadata, version_id).await?;
     }
     heartbeat_once(db_pool, ctx, input).await?;
@@ -284,11 +298,16 @@ pub async fn index_version(
         offset = batch_end;
     }
 
-    if prepared_chunks.is_empty() {
-        mark_empty_backfill_complete(db_pool, ctx, input, &metadata, document_id, version_id)
-            .await?;
-    }
-    let job = finalize_indexed(db_pool, ctx, input, metadata.id, document_id, version_id).await?;
+    let job = finalize_indexed(
+        db_pool,
+        ctx,
+        input,
+        metadata.id,
+        document_id,
+        version_id,
+        BackfillCompletion::from_chunk_count(prepared_chunks.len()),
+    )
+    .await?;
     Ok(IndexVersionOutcome::Finalized {
         job_id: job.id,
         chunks: prepared_chunks.len(),
@@ -364,6 +383,29 @@ async fn load_generation(
     .await
 }
 
+/// Targeted jobs must be bound to an existing, routable generation. In
+/// particular, never call `ensure_active_generation` first: doing so can create
+/// an unrelated phantom generation before an invalid target is rejected.
+pub(crate) fn validate_target_generation(
+    target: &IndexMetadata,
+    collection_id: Uuid,
+    signature_digest: &str,
+) -> Result<(), IndexingError> {
+    if target.collection_id != Some(collection_id) {
+        return Err(IndexingError::TargetGenerationCollectionMismatch);
+    }
+    if target.index_signature_sha256 != signature_digest {
+        return Err(IndexingError::SignatureMismatch);
+    }
+    match target.state {
+        IndexGenerationState::Building | IndexGenerationState::Shadow if !target.is_active => {
+            Ok(())
+        }
+        IndexGenerationState::Active if target.is_active => Ok(()),
+        _ => Err(IndexingError::TargetGenerationState),
+    }
+}
+
 /// Expands a signature change into durable index jobs for every current version
 /// in the collection. The active generation stays unchanged; this only fills
 /// the immutable staging generation.
@@ -420,62 +462,27 @@ async fn enqueue_staged_backfill(
     .await
 }
 
-async fn mark_empty_backfill_complete(
-    db_pool: &Pool,
-    ctx: &OrgContext,
-    input: IndexVersionInput<'_>,
-    metadata: &crate::db::models::IndexMetadata,
-    document_id: Uuid,
-    version_id: Uuid,
-) -> Result<(), IndexingError> {
-    let metadata_id = metadata.id;
-    let lease_token = input.lease_token.to_string();
-    let job_id = input.job.id;
-    let attempts = input.attempts;
-    with_org_txn_typed(db_pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                verify_claimed_job(txn, &ctx, job_id, &lease_token, attempts).await?;
-                embedding_batches::mark_generation_backfilled(
-                    txn,
-                    &ctx,
-                    metadata_id,
-                    document_id,
-                    version_id,
-                )
-                .await?;
-                mark_generation_shadow_if_complete(txn, &ctx, metadata_id).await?;
-                let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
-                if document.current_version_id == Some(version_id)
-                    && document.state == DocumentState::Indexing
-                {
-                    document_state::apply_transition(
-                        txn,
-                        &ctx,
-                        document_id,
-                        DocumentState::Indexing,
-                        DocumentState::Indexed,
-                    )
-                    .await?;
-                }
-                Ok(())
-            })
-        }
-    })
-    .await
-}
-
 pub(crate) async fn mark_generation_shadow_if_complete(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     metadata_id: Uuid,
 ) -> Result<(), IndexingError> {
     lock_generation_completion(txn, ctx, metadata_id).await?;
-    if embedding_batches::generation_backfill_complete(txn, ctx, metadata_id).await? {
+    let metadata = index_metadata::find_by_id(txn, ctx, metadata_id)
+        .await?
+        .ok_or(DbError::NotFound)?;
+    if generation_completion_promotes_shadow(metadata.state)
+        && embedding_batches::generation_backfill_complete(txn, ctx, metadata_id).await?
+    {
         let _ = index_metadata::mark_shadow(txn, ctx, metadata_id).await?;
     }
     Ok(())
+}
+
+/// A replay that finishes after cutover must not try to transition the active
+/// generation back to shadow. Only the initial `building` lifecycle may do so.
+fn generation_completion_promotes_shadow(state: IndexGenerationState) -> bool {
+    state == IndexGenerationState::Building
 }
 
 /// Serializes the final "all backfills complete" observation across documents.
@@ -518,7 +525,12 @@ pub(crate) async fn complete_document_backfill_if_ready(
         .await?;
     mark_generation_shadow_if_complete(txn, ctx, metadata_id).await?;
 
-    if document.current_version_id == Some(version_id) && document.state == DocumentState::Indexing
+    let metadata = index_metadata::find_by_id(txn, ctx, metadata_id)
+        .await?
+        .ok_or(DbError::NotFound)?;
+    if document.current_version_id == Some(version_id)
+        && document.state == DocumentState::Indexing
+        && generation_can_mark_document_indexed(&metadata)
     {
         document_state::apply_transition(
             txn,
@@ -530,6 +542,45 @@ pub(crate) async fn complete_document_backfill_if_ready(
         .await?;
     }
     Ok(true)
+}
+
+/// Empty documents have no child embedding batches. The parent index job and
+/// its backfill record must therefore complete together in the finalization
+/// transaction rather than in two independently committed transactions.
+async fn complete_empty_document_backfill(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<(), IndexingError> {
+    let document = documents::get_by_id_for_update(txn, ctx, document_id).await?;
+    embedding_batches::mark_generation_backfilled(txn, ctx, metadata_id, document_id, version_id)
+        .await?;
+    mark_generation_shadow_if_complete(txn, ctx, metadata_id).await?;
+    let metadata = index_metadata::find_by_id(txn, ctx, metadata_id)
+        .await?
+        .ok_or(DbError::NotFound)?;
+    if document.current_version_id == Some(version_id)
+        && document.state == DocumentState::Indexing
+        && generation_can_mark_document_indexed(&metadata)
+    {
+        document_state::apply_transition(
+            txn,
+            ctx,
+            document_id,
+            DocumentState::Indexing,
+            DocumentState::Indexed,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// A staged generation can be fully backfilled without becoming the document's
+/// visible index. The state is a promise about the active generation only.
+fn generation_can_mark_document_indexed(metadata: &IndexMetadata) -> bool {
+    metadata.is_active && metadata.state == IndexGenerationState::Active
 }
 
 /// Operator/verification-gated cutover. Callers must validate shadow retrieval
@@ -586,13 +637,14 @@ async fn transition_current_to_indexing(
     .await
 }
 
-pub async fn finalize_indexed(
+async fn finalize_indexed(
     db_pool: &Pool,
     ctx: &OrgContext,
     input: IndexVersionInput<'_>,
     metadata_id: Uuid,
     document_id: Uuid,
     version_id: Uuid,
+    backfill_completion: BackfillCompletion,
 ) -> Result<Job, IndexingError> {
     let lease_token = input.lease_token.to_string();
     let job_id = input.job.id;
@@ -606,14 +658,28 @@ pub async fn finalize_indexed(
                     .await?
                     .ok_or(IndexingError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
-                complete_document_backfill_if_ready(
-                    txn,
-                    &ctx,
-                    metadata_id,
-                    document_id,
-                    version_id,
-                )
-                .await?;
+                match backfill_completion {
+                    BackfillCompletion::Empty => {
+                        complete_empty_document_backfill(
+                            txn,
+                            &ctx,
+                            metadata_id,
+                            document_id,
+                            version_id,
+                        )
+                        .await?
+                    }
+                    BackfillCompletion::Batches => {
+                        complete_document_backfill_if_ready(
+                            txn,
+                            &ctx,
+                            metadata_id,
+                            document_id,
+                            version_id,
+                        )
+                        .await?;
+                    }
+                }
                 Ok::<_, IndexingError>(completed)
             })
         }
@@ -645,7 +711,7 @@ pub async fn fail_index_job(
                 if failed.status != JobStatus::DeadLetter {
                     return Ok::<_, IndexingError>(failed);
                 }
-                handle_dead_letter_index_job(txn, &ctx, &failed).await?;
+                handle_terminal_index_job(txn, &ctx, &failed).await?;
                 Ok(failed)
             })
         }
@@ -653,15 +719,15 @@ pub async fn fail_index_job(
     .await
 }
 
-/// Applies the durable failure side effects for a terminal index or embedding
-/// job. This is shared by owned-worker failures and lease reclamation so they
-/// cannot leave a dead-letter job with a still-indexing document or backfill.
-pub(crate) async fn handle_dead_letter_index_job(
+/// Applies compensation for a terminal index or embedding job. Dead letters
+/// and administrative cancellation share this path so neither can leave a
+/// still-indexing document or a backfill that could later be cut over.
+pub(crate) async fn handle_terminal_index_job(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     job: &Job,
 ) -> Result<(), JobError> {
-    if !matches!(job.job_type, JobType::Index | JobType::EmbeddingBatch) {
+    if !requires_backfill_compensation(job.job_type) {
         return Ok(());
     }
 
@@ -701,6 +767,10 @@ pub(crate) async fn handle_dead_letter_index_job(
         }
     }
     Ok(())
+}
+
+fn requires_backfill_compensation(job_type: JobType) -> bool {
+    matches!(job_type, JobType::Index | JobType::EmbeddingBatch)
 }
 
 fn should_fail_current_document(state: DocumentState) -> bool {
@@ -1216,6 +1286,10 @@ pub enum IndexingError {
     ChunkOrdinal,
     #[error("index generation is out of range")]
     IndexGeneration,
+    #[error("target index generation belongs to another collection")]
+    TargetGenerationCollectionMismatch,
+    #[error("target index generation is not routable")]
+    TargetGenerationState,
     #[error("qdrant collection was not initialized")]
     MissingQdrantCollection,
     #[error("index generation is missing its collection scope")]
@@ -1251,6 +1325,10 @@ impl IndexingError {
             Self::CheckpointOffset => "index checkpoint offset invalid",
             Self::ChunkOrdinal => "index chunk ordinal invalid",
             Self::IndexGeneration => "index generation invalid",
+            Self::TargetGenerationCollectionMismatch => {
+                "index target generation collection invalid"
+            }
+            Self::TargetGenerationState => "index target generation state invalid",
             Self::MissingQdrantCollection => "index qdrant collection missing",
             Self::MissingCollection => "index collection missing",
             Self::EmbeddingBatchMissing => "embedding batch missing",
@@ -1267,15 +1345,62 @@ impl IndexingError {
 
 #[cfg(test)]
 mod tests {
-    use super::{index_job_idempotency_key, should_fail_current_document};
-    use crate::db::models::DocumentState;
+    use super::{
+        generation_can_mark_document_indexed, generation_completion_promotes_shadow,
+        index_job_idempotency_key, requires_backfill_compensation, should_fail_current_document,
+        validate_target_generation, BackfillCompletion, IndexingError,
+    };
+    use crate::db::models::{
+        DocumentState, EmbeddingRuntimePath, IndexGenerationState, IndexMetadata,
+    };
+    use chrono::Utc;
     use uuid::Uuid;
+
+    fn metadata(
+        collection_id: Uuid,
+        signature: &str,
+        state: IndexGenerationState,
+        is_active: bool,
+    ) -> IndexMetadata {
+        IndexMetadata {
+            id: Uuid::new_v4(),
+            org_id: Uuid::new_v4(),
+            collection_id: Some(collection_id),
+            index_signature_sha256: signature.into(),
+            identity_version: 1,
+            chunking_version: "v1".into(),
+            body_text_version: "v1".into(),
+            query_normalization_version: "v1".into(),
+            embedding_family: "test".into(),
+            embedding_revision: "r1".into(),
+            dimensions: 8,
+            normalized: true,
+            runtime_path: EmbeddingRuntimePath::VllmLocal,
+            generation: 1,
+            is_active,
+            state,
+            created_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn staged_backfill_failure_does_not_fail_an_indexed_active_document() {
         assert!(should_fail_current_document(DocumentState::Converted));
         assert!(should_fail_current_document(DocumentState::Indexing));
         assert!(!should_fail_current_document(DocumentState::Indexed));
+    }
+
+    #[test]
+    fn cancellation_compensates_index_parents_and_embedding_children_only() {
+        assert!(requires_backfill_compensation(
+            crate::db::models::JobType::Index
+        ));
+        assert!(requires_backfill_compensation(
+            crate::db::models::JobType::EmbeddingBatch
+        ));
+        assert!(!requires_backfill_compensation(
+            crate::db::models::JobType::Convert
+        ));
     }
 
     #[test]
@@ -1290,5 +1415,95 @@ mod tests {
             index_job_idempotency_key(generation_id, version_id),
             index_job_idempotency_key(Uuid::new_v4(), version_id)
         );
+    }
+
+    #[test]
+    fn post_cutover_completion_only_promotes_building_generations() {
+        assert!(generation_completion_promotes_shadow(
+            IndexGenerationState::Building
+        ));
+        assert!(!generation_completion_promotes_shadow(
+            IndexGenerationState::Shadow
+        ));
+        assert!(!generation_completion_promotes_shadow(
+            IndexGenerationState::Active
+        ));
+    }
+
+    #[test]
+    fn empty_documents_use_the_parent_completion_transaction_path() {
+        assert_eq!(
+            BackfillCompletion::from_chunk_count(0),
+            BackfillCompletion::Empty
+        );
+        assert_eq!(
+            BackfillCompletion::from_chunk_count(1),
+            BackfillCompletion::Batches
+        );
+    }
+
+    #[test]
+    fn only_active_generation_can_mark_document_indexed() {
+        let collection = Uuid::new_v4();
+        let signature = "signature";
+        assert!(generation_can_mark_document_indexed(&metadata(
+            collection,
+            signature,
+            IndexGenerationState::Active,
+            true,
+        )));
+        assert!(!generation_can_mark_document_indexed(&metadata(
+            collection,
+            signature,
+            IndexGenerationState::Shadow,
+            false,
+        )));
+        assert!(!generation_can_mark_document_indexed(&metadata(
+            collection,
+            signature,
+            IndexGenerationState::Building,
+            false,
+        )));
+    }
+
+    #[test]
+    fn targeted_job_requires_matching_collection_signature_and_routable_state() {
+        let collection = Uuid::new_v4();
+        let signature = "signature";
+        assert!(validate_target_generation(
+            &metadata(collection, signature, IndexGenerationState::Shadow, false,),
+            collection,
+            signature,
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_target_generation(
+                &metadata(
+                    Uuid::new_v4(),
+                    signature,
+                    IndexGenerationState::Building,
+                    false,
+                ),
+                collection,
+                signature,
+            ),
+            Err(IndexingError::TargetGenerationCollectionMismatch)
+        ));
+        assert!(matches!(
+            validate_target_generation(
+                &metadata(collection, "other", IndexGenerationState::Building, false),
+                collection,
+                signature,
+            ),
+            Err(IndexingError::SignatureMismatch)
+        ));
+        assert!(matches!(
+            validate_target_generation(
+                &metadata(collection, signature, IndexGenerationState::Draining, false),
+                collection,
+                signature,
+            ),
+            Err(IndexingError::TargetGenerationState)
+        ));
     }
 }

@@ -488,7 +488,7 @@ pub async fn reclaim_expired(
                     let outbox_key = transition_key(job, event_type);
                     write_job_event(txn, &ctx, job, event_type, &outbox_key).await?;
                     if job.status == JobStatus::DeadLetter {
-                        crate::services::indexing::handle_dead_letter_index_job(txn, &ctx, job)
+                        crate::services::indexing::handle_terminal_index_job(txn, &ctx, job)
                             .await?;
                     }
                 }
@@ -676,8 +676,17 @@ pub async fn cancel(
                         let job = repo::cancel_job(txn, &ctx, job_id)
                             .await?
                             .ok_or(JobError::NotFound)?;
+                        let children = repo::cancel_embedding_children(txn, &ctx, job.id).await?;
                         let outbox_key = transition_key(&job, "job.cancelled");
                         write_job_event(txn, &ctx, &job, "job.cancelled", &outbox_key).await?;
+                        crate::services::indexing::handle_terminal_index_job(txn, &ctx, &job)
+                            .await?;
+                        for child in &children {
+                            let outbox_key = transition_key(child, "job.cancelled");
+                            write_job_event(txn, &ctx, child, "job.cancelled", &outbox_key).await?;
+                            crate::services::indexing::handle_terminal_index_job(txn, &ctx, child)
+                                .await?;
+                        }
                         Ok(CancelOutcome::Cancelled(job))
                     }
                     JobStatus::Cancelled => Ok(CancelOutcome::AlreadyCancelled(current)),

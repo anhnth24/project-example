@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::config::Profile;
+
 const ENV_BASE_URL: &str = "MARKHAND_EMBEDDING_BASE_URL";
 const ENV_API_KEY: &str = "MARKHAND_EMBEDDING_API_KEY";
 const ENV_PROVIDER: &str = "MARKHAND_EMBEDDING_PROVIDER";
@@ -21,6 +23,7 @@ const ENV_MODEL: &str = "MARKHAND_EMBEDDING_MODEL";
 const ENV_REVISION: &str = "MARKHAND_EMBEDDING_REVISION";
 const ENV_DIMENSIONS: &str = "MARKHAND_EMBEDDING_DIMENSIONS";
 const ENV_RUNTIME_PATH: &str = "MARKHAND_EMBEDDING_RUNTIME_PATH";
+const ENV_ALLOW_CLOUD_EMBEDDINGS: &str = "MARKHAND_ALLOW_CLOUD_EMBEDDINGS";
 
 #[derive(Clone)]
 pub struct ApprovedEmbeddingRuntime {
@@ -43,7 +46,10 @@ impl std::fmt::Debug for ApprovedEmbeddingRuntime {
 impl ApprovedEmbeddingRuntime {
     /// Reads the explicitly approved worker runtime. No provider/model defaults
     /// are permitted because those values are part of the index signature.
-    pub fn from_env(approved_signature: Option<&str>) -> Result<Self, EmbeddingError> {
+    pub fn from_env(
+        approved_signature: Option<&str>,
+        profile: Profile,
+    ) -> Result<Self, EmbeddingError> {
         let base_url = required_env(ENV_BASE_URL)?;
         let api_key = required_env(ENV_API_KEY)?;
         let provider = env::var(ENV_PROVIDER).unwrap_or_else(|_| "openai-compatible".into());
@@ -53,6 +59,7 @@ impl ApprovedEmbeddingRuntime {
             .parse::<usize>()
             .map_err(|_| EmbeddingError::InvalidConfiguration(ENV_DIMENSIONS))?;
         let runtime_path = required_env(ENV_RUNTIME_PATH)?;
+        let allow_cloud_embeddings = allow_cloud_embeddings_from_env()?;
         Self::new(
             base_url,
             api_key,
@@ -61,6 +68,8 @@ impl ApprovedEmbeddingRuntime {
             revision,
             dimensions,
             runtime_path,
+            profile,
+            allow_cloud_embeddings,
             approved_signature,
         )
     }
@@ -74,6 +83,8 @@ impl ApprovedEmbeddingRuntime {
         revision: String,
         dimensions: usize,
         runtime_path: String,
+        profile: Profile,
+        allow_cloud_embeddings: bool,
         approved_signature: Option<&str>,
     ) -> Result<Self, EmbeddingError> {
         if api_key.trim().is_empty() {
@@ -82,6 +93,7 @@ impl ApprovedEmbeddingRuntime {
         if runtime_path == RUNTIME_LOCAL_HASH {
             return Err(EmbeddingError::UnapprovedRuntime);
         }
+        validate_runtime_policy(&runtime_path, profile, allow_cloud_embeddings)?;
         let deployment = ProviderDeployment::from_base_url(Some(&base_url))?;
         let plan = EmbeddingPlan::provider(
             provider,
@@ -142,6 +154,33 @@ impl ApprovedEmbeddingRuntime {
             .map_err(|_| EmbeddingError::InvalidResponse)?;
         validate_response(response, inputs.len(), &self.plan)
     }
+}
+
+fn allow_cloud_embeddings_from_env() -> Result<bool, EmbeddingError> {
+    match env::var(ENV_ALLOW_CLOUD_EMBEDDINGS) {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" | "" => Ok(false),
+            _ => Err(EmbeddingError::InvalidConfiguration(
+                ENV_ALLOW_CLOUD_EMBEDDINGS,
+            )),
+        },
+        Err(_) => Ok(false),
+    }
+}
+
+fn validate_runtime_policy(
+    runtime_path: &str,
+    profile: Profile,
+    allow_cloud_embeddings: bool,
+) -> Result<(), EmbeddingError> {
+    if matches!(runtime_path, "vllm-local" | "local-neural") {
+        return Ok(());
+    }
+    if profile == Profile::Dev && allow_cloud_embeddings {
+        return Ok(());
+    }
+    Err(EmbeddingError::CloudRuntimeNotAllowed)
 }
 
 /// Stable checksum persisted with an embedding-batch job. It covers input
@@ -235,6 +274,10 @@ pub enum EmbeddingError {
     SignatureMismatch,
     #[error("the local hash embedding runtime is not approved for server indexing")]
     UnapprovedRuntime,
+    #[error(
+        "cloud embedding runtimes require MARKHAND_PROFILE=dev and MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true"
+    )]
+    CloudRuntimeNotAllowed,
     #[error("embedding provider request failed")]
     Http,
     #[error("embedding provider returned an invalid response")]
@@ -250,6 +293,7 @@ pub enum EmbeddingError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Profile;
     use fileconv_knowledge::embedding::{ProviderDeployment, RUNTIME_VLLM_LOCAL};
 
     #[test]
@@ -329,9 +373,72 @@ mod tests {
                 "r1".into(),
                 8,
                 RUNTIME_LOCAL_HASH.into(),
+                Profile::Test,
+                false,
                 None,
             ),
             Err(EmbeddingError::UnapprovedRuntime)
         ));
+    }
+
+    #[test]
+    fn cloud_embedding_runtime_requires_an_explicit_development_override() {
+        let config = || {
+            (
+                "http://embedding.test/v1".into(),
+                "key".into(),
+                "mock".into(),
+                "model".into(),
+                "r1".into(),
+                8,
+                "provider-cloud".into(),
+            )
+        };
+        let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
+        assert!(matches!(
+            ApprovedEmbeddingRuntime::new(
+                base_url,
+                api_key,
+                provider,
+                model,
+                revision,
+                dimensions,
+                runtime_path,
+                Profile::Prod,
+                true,
+                None,
+            ),
+            Err(EmbeddingError::CloudRuntimeNotAllowed)
+        ));
+        let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
+        assert!(matches!(
+            ApprovedEmbeddingRuntime::new(
+                base_url,
+                api_key,
+                provider,
+                model,
+                revision,
+                dimensions,
+                runtime_path,
+                Profile::Dev,
+                false,
+                None,
+            ),
+            Err(EmbeddingError::CloudRuntimeNotAllowed)
+        ));
+        let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
+        assert!(ApprovedEmbeddingRuntime::new(
+            base_url,
+            api_key,
+            provider,
+            model,
+            revision,
+            dimensions,
+            runtime_path,
+            Profile::Dev,
+            true,
+            None,
+        )
+        .is_ok());
     }
 }

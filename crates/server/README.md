@@ -31,7 +31,7 @@ without starting a listener. See [`docs/conventions/config-secrets.md`](../../do
 
 Run `fileconv-worker` separately for `MARKHAND_WORKER_KIND=index` and
 `MARKHAND_WORKER_KIND=embedding`. The embedding worker has no hash fallback and
-requires an approved OpenAI-compatible runtime:
+requires an approved local OpenAI-compatible runtime:
 
 ```bash
 export MARKHAND_EMBEDDING_BASE_URL=https://embedding.internal/v1
@@ -43,6 +43,19 @@ export MARKHAND_EMBEDDING_RUNTIME_PATH=vllm-local
 # Required in prod; must equal the runtime-derived signature.
 export MARKHAND_INDEX_SIGNATURE=<64-lowercase-hex>
 ```
+
+Production and test profiles accept only local runtime paths (`vllm-local` or
+`local-neural`). A cloud runtime is permitted solely for development when
+`MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` is set explicitly; production rejects it
+even if that flag is present.
+
+### CI test strategy
+
+`cargo test -p fileconv-server` is the required hermetic gate. Unit tests cover
+the index-generation lifecycle (including post-cutover no-ops), empty-document
+completion selection, active-generation document visibility, targeted-generation
+collection/signature/state validation, pre-upsert lifecycle fencing, cancellation
+compensation for index/embedding work, and embedding runtime policy.
 
 `crates/server/tests/index_worker.rs` is explicitly ignored by the normal test
 command because it needs PostgreSQL, MinIO, Qdrant, and that embedding runtime.

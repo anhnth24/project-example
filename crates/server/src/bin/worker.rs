@@ -187,8 +187,15 @@ async fn run_index_worker(
             .map_err(|_| "MARKHAND_INDEX_EMBEDDING_BATCH_SIZE must be an integer".to_string())?;
     }
     let approved_signature = state.config().index_signature().map(str::to_string);
-    let worker = IndexWorker::new(pool.clone(), storage, qdrant, config, approved_signature)
-        .map_err(|error| format!("index worker initialization failed: {error}"))?;
+    let worker = IndexWorker::new(
+        pool.clone(),
+        storage,
+        qdrant,
+        config,
+        state.config().profile(),
+        approved_signature,
+    )
+    .map_err(|error| format!("index worker initialization failed: {error}"))?;
     let sink = std::sync::Arc::new(
         IndexingOutboxSink::new(worker.embedding_plan())
             .map_err(|error| format!("index worker generation setup failed: {error}"))?,
@@ -245,6 +252,7 @@ async fn run_embedding_worker(
     }
     let runtime = fileconv_server::services::embedding::ApprovedEmbeddingRuntime::from_env(
         state.config().index_signature(),
+        state.config().profile(),
     )
     .map_err(|error| format!("embedding runtime initialization failed: {error}"))?;
     let worker = EmbeddingWorker::new(pool.clone(), qdrant, config, runtime)

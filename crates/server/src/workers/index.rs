@@ -9,6 +9,7 @@ use tokio::time::{timeout_at, Instant as TokioInstant};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::config::Profile;
 use crate::db::models::{Job, JobStatus, JobType};
 use crate::jobs::{self, JobError};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
@@ -75,9 +76,10 @@ impl IndexWorker {
         storage: MinioClient,
         qdrant: QdrantClient,
         config: IndexWorkerConfig,
+        profile: Profile,
         approved_signature: Option<String>,
     ) -> Result<Self, IndexWorkerError> {
-        let runtime = ApprovedEmbeddingRuntime::from_env(approved_signature.as_deref())
+        let runtime = ApprovedEmbeddingRuntime::from_env(approved_signature.as_deref(), profile)
             .map_err(IndexWorkerError::Embedding)?;
         Self::new_with_plan(
             db_pool,

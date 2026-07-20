@@ -8,7 +8,7 @@ use bytes::Bytes;
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{MinioConfig, SecretString};
+use fileconv_server::config::{MinioConfig, Profile, SecretString};
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
@@ -645,6 +645,8 @@ fn embedding_worker(
         "r1".into(),
         8,
         RUNTIME_VLLM_LOCAL.into(),
+        Profile::Test,
+        false,
         None,
     )
     .expect("mock embedding runtime");

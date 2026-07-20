@@ -17,7 +17,7 @@ use crate::db::embedding_batches::{self, EmbeddingBatch};
 use crate::db::error::DbError;
 use crate::db::models::{Job, JobStatus, JobType};
 use crate::db::pool::with_org_txn_typed;
-use crate::db::{chunks, documents, index_metadata};
+use crate::db::{chunks, documents, index_metadata, jobs as job_repo};
 use crate::jobs::{self, JobError};
 use crate::services::embedding::{
     canonical_inputs_sha256, ApprovedEmbeddingRuntime, EmbeddingError,
@@ -158,12 +158,14 @@ impl EmbeddingWorker {
             .expected_dimensions()
             .ok_or(EmbeddingWorkerError::EmbeddingDimensionsUnknown)?;
         let signature = self.runtime.plan().index_signature(expected_dimensions)?;
-        if signature.digest() != source.metadata.index_signature_sha256 {
-            // This must be checked before sending chunk text to a provider.
-            // A stale or misrouted batch otherwise leaks work into a generation
-            // it can never validly complete.
-            return Err(EmbeddingWorkerError::SignatureMismatch);
-        }
+        // Check every immutable target-generation property before sending chunk
+        // text to a provider. A stale, cross-collection, or retired batch must
+        // not create vectors or a phantom collection.
+        indexing::validate_target_generation(
+            &source.metadata,
+            source.collection_id,
+            &signature.digest(),
+        )?;
         let inputs = source
             .chunks
             .iter()
@@ -215,6 +217,20 @@ impl EmbeddingWorker {
                 self.qdrant.ensure_collection_for_signature(&signature),
             )
             .await?;
+        // The provider call can take long enough for a newer version to be
+        // promoted. Re-read the lifecycle under the document row lock
+        // immediately before the external write; never reuse the stale flags
+        // captured while loading the batch source.
+        let lifecycle = self
+            .heartbeat_while(
+                ctx,
+                job,
+                lease_token,
+                attempts,
+                deadline,
+                self.load_lifecycle_fence(ctx, job, lease_token, attempts, batch_id),
+            )
+            .await?;
         let scope = VectorScope::new(ctx.org_id(), [source.collection_id]);
         let points = source
             .chunks
@@ -232,8 +248,8 @@ impl EmbeddingWorker {
                         chunk_id: chunk.chunk_identity_sha256.clone(),
                         ordinal: u64::try_from(chunk.ordinal)
                             .map_err(|_| EmbeddingWorkerError::InvalidPayload)?,
-                        is_current: source.is_current,
-                        is_effective: source.is_effective,
+                        is_current: lifecycle.is_current,
+                        is_effective: lifecycle.is_effective,
                         index_generation: u32::try_from(source.metadata.generation)
                             .map_err(|_| EmbeddingWorkerError::InvalidPayload)?,
                     },
@@ -285,6 +301,53 @@ impl EmbeddingWorker {
                         batch.end_ordinal,
                     )
                     .await?;
+                    Ok(EmbeddingBatchSource {
+                        collection_id: document.collection_id,
+                        batch,
+                        metadata,
+                        chunks,
+                    })
+                })
+            }
+        })
+        .await
+    }
+
+    /// Fences lifecycle markers immediately before the Qdrant upsert. The
+    /// document lock serializes this observation with conversion promotion,
+    /// while the leased-job and pending-batch checks prevent a cancelled or
+    /// superseded worker from publishing stale lifecycle flags.
+    async fn load_lifecycle_fence(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        batch_id: Uuid,
+    ) -> Result<PointLifecycle, EmbeddingWorkerError> {
+        let job_id = job.id;
+        let lease_token = lease_token.to_string();
+        with_org_txn_typed(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    let claimed = job_repo::get_by_id_for_update(txn, &ctx, job_id)
+                        .await?
+                        .filter(|claimed| {
+                            claimed.status == JobStatus::Leased
+                                && claimed.lease_owner.as_deref() == Some(lease_token.as_str())
+                                && claimed.attempts == attempts
+                        })
+                        .ok_or(EmbeddingWorkerError::LeaseLost)?;
+                    let batch = embedding_batches::find_by_id_for_update(txn, &ctx, batch_id)
+                        .await?
+                        .filter(|batch| {
+                            batch.job_id == claimed.id
+                                && batch.status == embedding_batches::EmbeddingBatchStatus::Pending
+                        })
+                        .ok_or(EmbeddingWorkerError::InvalidPayload)?;
+                    let document =
+                        documents::get_by_id_for_update(txn, &ctx, batch.document_id).await?;
                     let version = crate::db::document_versions::find_by_id(
                         txn,
                         &ctx,
@@ -293,14 +356,11 @@ impl EmbeddingWorker {
                     )
                     .await?
                     .ok_or(crate::db::error::DbError::NotFound)?;
-                    Ok(EmbeddingBatchSource {
-                        collection_id: document.collection_id,
-                        is_current: document.current_version_id == Some(batch.version_id),
-                        is_effective: version.effective_to.is_none(),
-                        batch,
-                        metadata,
-                        chunks,
-                    })
+                    Ok(point_lifecycle(
+                        document.current_version_id,
+                        batch.version_id,
+                        version.effective_to.is_none(),
+                    ))
                 })
             }
         })
@@ -427,11 +487,26 @@ impl EmbeddingWorker {
 
 struct EmbeddingBatchSource {
     collection_id: Uuid,
-    is_current: bool,
-    is_effective: bool,
     batch: EmbeddingBatch,
     metadata: crate::db::models::IndexMetadata,
     chunks: Vec<crate::db::models::Chunk>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PointLifecycle {
+    is_current: bool,
+    is_effective: bool,
+}
+
+fn point_lifecycle(
+    current_version_id: Option<Uuid>,
+    version_id: Uuid,
+    is_effective: bool,
+) -> PointLifecycle {
+    PointLifecycle {
+        is_current: current_version_id == Some(version_id),
+        is_effective,
+    }
 }
 
 fn heartbeat_interval(interval: Duration) -> tokio::time::Interval {
@@ -516,5 +591,24 @@ impl EmbeddingWorkerError {
             Self::JobTimedOut => "embedding job timed out",
             Self::LeaseLost => "embedding lease lost",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::point_lifecycle;
+    use uuid::Uuid;
+
+    #[test]
+    fn pre_upsert_lifecycle_fence_does_not_reuse_a_superseded_version_flag() {
+        let current = Uuid::new_v4();
+        let stale = Uuid::new_v4();
+        let lifecycle = point_lifecycle(Some(current), stale, false);
+        assert!(!lifecycle.is_current);
+        assert!(!lifecycle.is_effective);
+
+        let lifecycle = point_lifecycle(Some(current), current, true);
+        assert!(lifecycle.is_current);
+        assert!(lifecycle.is_effective);
     }
 }
