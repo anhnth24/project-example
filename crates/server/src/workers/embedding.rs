@@ -277,6 +277,17 @@ impl EmbeddingWorker {
                 })
             })
             .collect::<Result<Vec<_>, EmbeddingWorkerError>>()?;
+        // Fence immediately before the external write. If purge cleanup already
+        // cancelled this intent (`cleaned`), refuse to upsert.
+        self.heartbeat_while(
+            ctx,
+            job,
+            lease_token,
+            attempts,
+            deadline,
+            self.authorize_vector_upsert_fence(ctx, job.id),
+        )
+        .await?;
         self.heartbeat_while(
             ctx,
             job,
@@ -448,6 +459,9 @@ impl EmbeddingWorker {
                     )
                     .await?
                     .ok_or(crate::db::error::DbError::NotFound)?;
+                    // Record pending intent under the document fence. Begin-write
+                    // happens immediately before upsert so cleanup can still mark
+                    // pending intents cleaned without racing a writing authorizer.
                     match vector_cleanup_intents::upsert_pending(
                         txn,
                         &ctx,
@@ -473,8 +487,28 @@ impl EmbeddingWorker {
                             return Err(EmbeddingWorkerError::InvalidPayload);
                         }
                     }
-                    // CAS pending → writing so a concurrent drain cannot leave a
-                    // cleaned intent followed by this upsert.
+                    Ok(point_lifecycle(
+                        document.current_version_id,
+                        batch.version_id,
+                        version.effective_to.is_none(),
+                    ))
+                })
+            }
+        })
+        .await
+    }
+
+    /// CAS pending → writing and authorize the external upsert. A concurrent
+    /// cleanup that already finalized `cleaned` must not proceed to upsert.
+    async fn authorize_vector_upsert_fence(
+        &self,
+        ctx: &OrgContext,
+        job_id: Uuid,
+    ) -> Result<(), EmbeddingWorkerError> {
+        with_org_txn_typed(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
                     match vector_cleanup_intents::cas_begin_write(txn, &ctx, job_id).await {
                         Ok(_) => {}
                         Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
@@ -489,11 +523,22 @@ impl EmbeddingWorker {
                             return Err(EmbeddingWorkerError::InvalidPayload);
                         }
                     }
-                    Ok(point_lifecycle(
-                        document.current_version_id,
-                        batch.version_id,
-                        version.effective_to.is_none(),
-                    ))
+                    match vector_cleanup_intents::require_writing_for_upsert(txn, &ctx, job_id)
+                        .await
+                    {
+                        Ok(_) => Ok(()),
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::AlreadyCleaned) => {
+                            Err(EmbeddingWorkerError::Indexing(
+                                IndexingError::DocumentDeleted,
+                            ))
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
+                            Err(EmbeddingWorkerError::Db(error))
+                        }
+                        Err(vector_cleanup_intents::VectorCleanupIntentError::InvalidState) => {
+                            Err(EmbeddingWorkerError::InvalidPayload)
+                        }
+                    }
                 })
             }
         })

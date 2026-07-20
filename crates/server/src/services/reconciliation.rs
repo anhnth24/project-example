@@ -21,7 +21,7 @@ use crate::services::index_signature::collection_name_for_digest;
 use crate::services::indexing::{
     batch_covers_missing_ordinals, missing_chunks_fingerprint, repair_embedding_job_idempotency_key,
 };
-use crate::storage::keys::{parse_key_for_org, trusted_version_prefix};
+use crate::storage::keys::{parse_key_for_org, trusted_version_prefix, ObjectNamespace};
 use crate::storage::minio::{MinioClient, ObservedObjectIdentity};
 use crate::storage::qdrant::{
     point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, VectorScope,
@@ -78,10 +78,20 @@ pub struct ObjectInventoryDrift {
     pub orphan_objects: Vec<String>,
 }
 
+/// Object-type-specific identity expectations for MinIO HEAD validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedObjectKind {
+    /// Quarantine intake originals: org + source hash/size only (no document/version IDs).
+    QuarantineOriginal,
+    /// Trusted artifacts/originals after promotion: org + document/version + hash/size.
+    TrustedArtifact,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedObjectIdentity {
     pub key: String,
-    pub document_id: Uuid,
+    pub kind: ExpectedObjectKind,
+    pub document_id: Option<Uuid>,
     pub version_id: Option<Uuid>,
     pub content_sha256: Option<String>,
     pub byte_size: Option<u64>,
@@ -102,12 +112,22 @@ pub fn object_identity_matches(
     if observed.org_id != Some(org_id) {
         return false;
     }
-    if observed.document_id != Some(expected.document_id) {
-        return false;
-    }
-    if let Some(version_id) = expected.version_id {
-        if observed.version_id != Some(version_id) {
-            return false;
+    match expected.kind {
+        ExpectedObjectKind::QuarantineOriginal => {
+            // Quarantine uploads intentionally omit document/version metadata.
+            if observed.document_id.is_some() || observed.version_id.is_some() {
+                return false;
+            }
+        }
+        ExpectedObjectKind::TrustedArtifact => {
+            if observed.document_id != expected.document_id {
+                return false;
+            }
+            if let Some(version_id) = expected.version_id {
+                if observed.version_id != Some(version_id) {
+                    return false;
+                }
+            }
         }
     }
     if let Some(sha) = expected.content_sha256.as_deref() {
@@ -121,6 +141,52 @@ pub fn object_identity_matches(
         }
     }
     true
+}
+
+/// Build object-type-specific HEAD expectations from authoritative PG metadata.
+pub fn expected_object_identity(
+    key: String,
+    org_id: Uuid,
+    document_id: Uuid,
+    version_id: Option<Uuid>,
+    content_sha256: Option<String>,
+    byte_size: Option<u64>,
+) -> Result<ExpectedObjectIdentity, ReconciliationError> {
+    let parsed = parse_key_for_org(&key, org_id)?;
+    Ok(match parsed.namespace() {
+        ObjectNamespace::Quarantine => ExpectedObjectIdentity {
+            key,
+            kind: ExpectedObjectKind::QuarantineOriginal,
+            document_id: None,
+            version_id: None,
+            content_sha256,
+            byte_size,
+        },
+        ObjectNamespace::Trusted => ExpectedObjectIdentity {
+            key,
+            kind: ExpectedObjectKind::TrustedArtifact,
+            document_id: Some(document_id),
+            version_id,
+            content_sha256,
+            byte_size,
+        },
+    })
+}
+
+/// After stale/orphan point deletes, stale chunk identities become missing and
+/// must be included in repair requeue (pre-delete missing set is insufficient).
+pub fn chunk_ids_needing_vector_repair(
+    missing_chunk_ids: &[String],
+    stale_chunk_ids: &[String],
+) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    for chunk_id in missing_chunk_ids {
+        ids.insert(chunk_id.clone());
+    }
+    for chunk_id in stale_chunk_ids {
+        ids.insert(chunk_id.clone());
+    }
+    ids.into_iter().collect()
 }
 
 /// Classify MinIO drift. Purged/tombstoned docs do not treat intentional
@@ -378,9 +444,18 @@ pub async fn reconcile_document(
                     }
                 }
             }
-            if report.missing_vectors > 0 {
+            // Stale deletes leave those chunk identities without vectors; union
+            // them into the repair set (pre-delete missing set alone is wrong).
+            let stale_chunk_ids = stale_candidates
+                .iter()
+                .map(|candidate| candidate.payload.chunk_id.clone())
+                .collect::<Vec<_>>();
+            let repair_chunk_ids =
+                chunk_ids_needing_vector_repair(&missing_vector_chunks, &stale_chunk_ids);
+            report.missing_vectors = repair_chunk_ids.len();
+            if !repair_chunk_ids.is_empty() {
                 let rebuilt =
-                    requeue_missing_vector_batches(pool, ctx, &inventory, &missing_vector_chunks)
+                    requeue_missing_vector_batches(pool, ctx, &inventory, &repair_chunk_ids)
                         .await?;
                 report.repaired.rebuilt_vector_jobs = rebuilt;
             }
@@ -480,7 +555,11 @@ async fn drain_pending_vector_intents(
     if mode != ReconcileMode::Repair {
         return Ok(());
     }
+    let mut cancelled_writers = false;
     for intent in intents {
+        let Some(plan) = vector_cleanup_intents::plan_intent_cleanup(intent.status) else {
+            continue;
+        };
         let collection = collection_name_for_digest(&intent.index_signature_sha256)?;
         let document_filter = [json!({
             "key": "document_id",
@@ -495,15 +574,56 @@ async fn drain_pending_vector_intents(
             json!({
                 "job_id": intent.job_id,
                 "point_count": intent.point_ids.len(),
+                "status": intent.status.as_str(),
             }),
         )
         .await?;
-        match qdrant
-            .delete_points_by_ids(&collection, scope, &document_filter, &intent.point_ids)
-            .await
-        {
+        let delete_result = async {
+            match plan {
+                vector_cleanup_intents::IntentCleanupPlan::CleanThenDelete => {
+                    mark_intent_cleaned_from(
+                        pool,
+                        ctx,
+                        intent.job_id,
+                        vector_cleanup_intents::VectorCleanupIntentStatus::Pending,
+                    )
+                    .await?;
+                    qdrant
+                        .delete_points_by_ids(
+                            &collection,
+                            scope,
+                            &document_filter,
+                            &intent.point_ids,
+                        )
+                        .await?;
+                }
+                vector_cleanup_intents::IntentCleanupPlan::CancelDeleteThenClean => {
+                    if !cancelled_writers {
+                        cancel_document_writers(pool, ctx, document_id).await?;
+                        cancelled_writers = true;
+                    }
+                    qdrant
+                        .delete_points_by_ids(
+                            &collection,
+                            scope,
+                            &document_filter,
+                            &intent.point_ids,
+                        )
+                        .await?;
+                    mark_intent_cleaned_from(
+                        pool,
+                        ctx,
+                        intent.job_id,
+                        vector_cleanup_intents::VectorCleanupIntentStatus::Writing,
+                    )
+                    .await?;
+                }
+            }
+            Ok::<_, ReconciliationError>(())
+        }
+        .await;
+        match delete_result {
             Ok(()) => {
-                mark_intent_cleaned(pool, ctx, intent.job_id).await?;
                 write_intent_audit(
                     pool,
                     ctx,
@@ -534,7 +654,7 @@ async fn drain_pending_vector_intents(
                     }),
                 )
                 .await?;
-                return Err(error.into());
+                return Err(error);
             }
         }
     }
@@ -779,26 +899,28 @@ async fn load_inventory(
                 let active_writer_job = repo::has_active_writer_job(txn, &ctx, document_id).await?;
                 let mut expected_objects = Vec::new();
                 for version in &versions {
-                    expected_objects.push(ExpectedObjectIdentity {
-                        key: version.original_object_key.clone(),
+                    expected_objects.push(expected_object_identity(
+                        version.original_object_key.clone(),
+                        ctx.org_id(),
                         document_id,
-                        version_id: Some(version.id),
-                        content_sha256: Some(version.content_sha256.clone()),
-                        byte_size: version.byte_size.and_then(|v| u64::try_from(v).ok()),
-                    });
+                        Some(version.id),
+                        Some(version.content_sha256.clone()),
+                        version.byte_size.and_then(|v| u64::try_from(v).ok()),
+                    )?);
                     if let Some(markdown_key) = version.markdown_object_key.clone() {
                         let artifact = artifacts
                             .iter()
                             .find(|item| item.object_key == markdown_key);
-                        expected_objects.push(ExpectedObjectIdentity {
-                            key: markdown_key,
+                        expected_objects.push(expected_object_identity(
+                            markdown_key,
+                            ctx.org_id(),
                             document_id,
-                            version_id: Some(version.id),
-                            content_sha256: artifact.map(|item| item.content_sha256.clone()),
-                            byte_size: artifact
+                            Some(version.id),
+                            artifact.map(|item| item.content_sha256.clone()),
+                            artifact
                                 .and_then(|item| item.byte_size)
                                 .and_then(|v| u64::try_from(v).ok()),
-                        });
+                        )?);
                     }
                 }
                 for artifact in &artifacts {
@@ -808,13 +930,14 @@ async fn load_inventory(
                     {
                         continue;
                     }
-                    expected_objects.push(ExpectedObjectIdentity {
-                        key: artifact.object_key.clone(),
+                    expected_objects.push(expected_object_identity(
+                        artifact.object_key.clone(),
+                        ctx.org_id(),
                         document_id,
-                        version_id: Some(artifact.version_id),
-                        content_sha256: Some(artifact.content_sha256.clone()),
-                        byte_size: artifact.byte_size.and_then(|v| u64::try_from(v).ok()),
-                    });
+                        Some(artifact.version_id),
+                        Some(artifact.content_sha256.clone()),
+                        artifact.byte_size.and_then(|v| u64::try_from(v).ok()),
+                    )?);
                 }
                 let mut signatures = BTreeSet::new();
                 for signature in
@@ -860,22 +983,40 @@ async fn list_open_intents(
     .await
 }
 
-async fn mark_intent_cleaned(
+async fn mark_intent_cleaned_from(
     pool: &Pool,
     ctx: &OrgContext,
     job_id: Uuid,
+    from: vector_cleanup_intents::VectorCleanupIntentStatus,
 ) -> Result<(), ReconciliationError> {
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
-                match vector_cleanup_intents::cas_mark_cleaned(txn, &ctx, job_id).await {
+                match vector_cleanup_intents::cas_mark_cleaned_from(txn, &ctx, job_id, from).await {
                     Ok(_) => Ok(()),
                     Err(vector_cleanup_intents::VectorCleanupIntentError::Db(error)) => {
                         Err(ReconciliationError::Db(error))
                     }
                     Err(_) => Ok(()),
                 }
+            })
+        }
+    })
+    .await
+}
+
+async fn cancel_document_writers(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<(), ReconciliationError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
+                Ok::<_, ReconciliationError>(())
             })
         }
     })
@@ -1223,7 +1364,8 @@ mod tests {
         let doc_id = Uuid::new_v4();
         let expected = vec![ExpectedObjectIdentity {
             key: "trusted/a/v1/obj1".into(),
-            document_id: doc_id,
+            kind: ExpectedObjectKind::TrustedArtifact,
+            document_id: Some(doc_id),
             version_id: Some(Uuid::new_v4()),
             content_sha256: Some("abc".into()),
             byte_size: Some(3),
@@ -1243,7 +1385,8 @@ mod tests {
         let version = Uuid::new_v4();
         let expected = ExpectedObjectIdentity {
             key: "k".into(),
-            document_id: doc,
+            kind: ExpectedObjectKind::TrustedArtifact,
+            document_id: Some(doc),
             version_id: Some(version),
             content_sha256: Some("deadbeef".into()),
             byte_size: Some(4),
@@ -1256,6 +1399,45 @@ mod tests {
             content_length: Some(4),
         };
         assert!(!object_identity_matches(&expected, &observed, org));
+    }
+
+    #[test]
+    fn quarantine_original_matches_org_hash_size_without_document_ids() {
+        let org = Uuid::new_v4();
+        let expected = ExpectedObjectIdentity {
+            key: "quarantine/x/y".into(),
+            kind: ExpectedObjectKind::QuarantineOriginal,
+            document_id: None,
+            version_id: None,
+            content_sha256: Some("abc".into()),
+            byte_size: Some(3),
+        };
+        let observed = ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: None,
+            version_id: None,
+            content_sha256: Some("abc".into()),
+            content_length: Some(3),
+        };
+        assert!(object_identity_matches(&expected, &observed, org));
+        let with_doc = ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: Some(Uuid::new_v4()),
+            version_id: None,
+            content_sha256: Some("abc".into()),
+            content_length: Some(3),
+        };
+        assert!(!object_identity_matches(&expected, &with_doc, org));
+    }
+
+    #[test]
+    fn stale_chunk_ids_are_unioned_into_vector_repair_set() {
+        let missing = vec!["aa".into(), "bb".into()];
+        let stale = vec!["bb".into(), "cc".into()];
+        assert_eq!(
+            chunk_ids_needing_vector_repair(&missing, &stale),
+            vec!["aa".to_string(), "bb".to_string(), "cc".to_string()]
+        );
     }
 
     #[test]

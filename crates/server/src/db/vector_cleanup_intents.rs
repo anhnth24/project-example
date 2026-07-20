@@ -86,6 +86,98 @@ pub fn apply_intent_event(
     }
 }
 
+/// Writer may call the external upsert only while the intent is still `writing`.
+pub fn authorize_vector_upsert(
+    status: VectorCleanupIntentStatus,
+) -> Result<(), IntentTransitionError> {
+    match status {
+        VectorCleanupIntentStatus::Writing => Ok(()),
+        VectorCleanupIntentStatus::Cleaned => Err(IntentTransitionError::AlreadyCleaned),
+        _ => Err(IntentTransitionError::InvalidState),
+    }
+}
+
+/// How cleanup must treat an open intent (production orchestration plan).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntentCleanupPlan {
+    /// Safe to finalize first: writer has not entered the upsert window.
+    CleanThenDelete,
+    /// Writer holds `writing`: fence/cancel, delete possible write, then finalize.
+    CancelDeleteThenClean,
+}
+
+pub fn plan_intent_cleanup(status: VectorCleanupIntentStatus) -> Option<IntentCleanupPlan> {
+    match status {
+        VectorCleanupIntentStatus::Pending => Some(IntentCleanupPlan::CleanThenDelete),
+        VectorCleanupIntentStatus::Writing => Some(IntentCleanupPlan::CancelDeleteThenClean),
+        VectorCleanupIntentStatus::Cleaned | VectorCleanupIntentStatus::Committed => None,
+    }
+}
+
+/// Open intent view for fake-backed drain orchestration tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCleanupIntent {
+    pub job_id: Uuid,
+    pub status: VectorCleanupIntentStatus,
+    pub point_ids: Vec<Uuid>,
+    pub index_signature_sha256: String,
+}
+
+/// Backend used by production drain orchestration (real PG/Qdrant or hermetic fake).
+pub trait IntentDrainBackend {
+    fn list_open(&mut self) -> Vec<OpenCleanupIntent>;
+    fn cancel_writers(&mut self) -> Result<(), String>;
+    fn delete_points(&mut self, intent: &OpenCleanupIntent) -> Result<(), String>;
+    fn mark_cleaned(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IntentDrainReport {
+    pub cleaned: usize,
+    pub points_deleted: usize,
+    pub writers_cancelled: bool,
+}
+
+/// Production cleanup orchestration shared by the delete worker and hermetic tests.
+pub fn drain_cleanup_intents_orchestrated<B: IntentDrainBackend>(
+    backend: &mut B,
+) -> Result<IntentDrainReport, String> {
+    let open = backend.list_open();
+    let mut report = IntentDrainReport::default();
+    let mut cancelled = false;
+    for intent in open {
+        let Some(plan) = plan_intent_cleanup(intent.status) else {
+            continue;
+        };
+        match plan {
+            IntentCleanupPlan::CleanThenDelete => {
+                backend
+                    .mark_cleaned(intent.job_id)
+                    .map_err(|error| format!("mark_cleaned: {error:?}"))?;
+                let count = intent.point_ids.len();
+                backend.delete_points(&intent)?;
+                report.cleaned += 1;
+                report.points_deleted += count;
+            }
+            IntentCleanupPlan::CancelDeleteThenClean => {
+                if !cancelled {
+                    backend.cancel_writers()?;
+                    cancelled = true;
+                    report.writers_cancelled = true;
+                }
+                let count = intent.point_ids.len();
+                backend.delete_points(&intent)?;
+                backend
+                    .mark_cleaned(intent.job_id)
+                    .map_err(|error| format!("mark_cleaned: {error:?}"))?;
+                report.cleaned += 1;
+                report.points_deleted += count;
+            }
+        }
+    }
+    Ok(report)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VectorCleanupIntent {
     pub id: Uuid,
@@ -120,6 +212,15 @@ pub enum VectorCleanupIntentError {
     InvalidState,
 }
 
+impl From<IntentTransitionError> for VectorCleanupIntentError {
+    fn from(value: IntentTransitionError) -> Self {
+        match value {
+            IntentTransitionError::AlreadyCleaned => Self::AlreadyCleaned,
+            IntentTransitionError::InvalidState => Self::InvalidState,
+        }
+    }
+}
+
 /// Upserts a pending cleanup intent. Refuses to revive cleaned/committed intents.
 pub async fn upsert_pending(
     txn: &Transaction<'_>,
@@ -143,7 +244,7 @@ pub async fn upsert_pending(
                     point_ids = EXCLUDED.point_ids,
                     status = 'pending',
                     updated_at = clock_timestamp()
-                 WHERE vector_cleanup_intents.status IN ('pending', 'writing')
+                 WHERE vector_cleanup_intents.status = 'pending'
                  RETURNING {COLUMNS}"
             ),
             &[
@@ -156,11 +257,30 @@ pub async fn upsert_pending(
         )
         .await
         .map_err(DbError::from)?;
-    let Some(row) = row else {
-        // Conflict row exists but is cleaned/committed — fence the upsert.
-        return Err(VectorCleanupIntentError::AlreadyCleaned);
-    };
-    Ok(map_intent(&row)?)
+    if let Some(row) = row {
+        return Ok(map_intent(&row)?);
+    }
+    // Conflict row exists but was not pending — do not revive writing/cleaned.
+    match find_by_job(txn, ctx, input.job_id).await? {
+        Some(intent) if intent.status == VectorCleanupIntentStatus::Writing => Ok(intent),
+        Some(intent) if intent.status == VectorCleanupIntentStatus::Cleaned => {
+            Err(VectorCleanupIntentError::AlreadyCleaned)
+        }
+        _ => Err(VectorCleanupIntentError::InvalidState),
+    }
+}
+
+/// Returns the intent only when it is still `writing` (pre-upsert authorization).
+pub async fn require_writing_for_upsert(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<VectorCleanupIntent, VectorCleanupIntentError> {
+    let intent = find_by_job(txn, ctx, job_id)
+        .await?
+        .ok_or(VectorCleanupIntentError::InvalidState)?;
+    authorize_vector_upsert(intent.status)?;
+    Ok(intent)
 }
 
 /// CAS pending → writing immediately before the external upsert.
@@ -195,12 +315,14 @@ pub async fn cas_begin_write(
     }
 }
 
-/// CAS pending|writing → cleaned after a successful scoped vector delete.
-pub async fn cas_mark_cleaned(
+/// CAS a specific open status → cleaned (pending before delete, writing after delete).
+pub async fn cas_mark_cleaned_from(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     job_id: Uuid,
+    from: VectorCleanupIntentStatus,
 ) -> Result<Option<VectorCleanupIntent>, VectorCleanupIntentError> {
+    let from_status = from.as_str();
     let row = txn
         .query_opt(
             &format!(
@@ -208,16 +330,30 @@ pub async fn cas_mark_cleaned(
                  SET status = 'cleaned', updated_at = clock_timestamp()
                  WHERE org_id = $1
                    AND job_id = $2
-                   AND status IN ('pending', 'writing')
+                   AND status = $3
                  RETURNING {COLUMNS}"
             ),
-            &[&ctx.org_id(), &job_id],
+            &[&ctx.org_id(), &job_id, &from_status],
         )
         .await
         .map_err(DbError::from)?;
     row.map(|row| map_intent(&row))
         .transpose()
         .map_err(Into::into)
+}
+
+/// Convenience: mark cleaned from whichever open state is present.
+pub async fn cas_mark_cleaned(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<Option<VectorCleanupIntent>, VectorCleanupIntentError> {
+    if let Some(intent) =
+        cas_mark_cleaned_from(txn, ctx, job_id, VectorCleanupIntentStatus::Pending).await?
+    {
+        return Ok(Some(intent));
+    }
+    cas_mark_cleaned_from(txn, ctx, job_id, VectorCleanupIntentStatus::Writing).await
 }
 
 /// CAS writing → committed after a successful batch complete.
@@ -377,5 +513,26 @@ mod tests {
         assert!(VectorCleanupIntentStatus::Writing.blocks_purge());
         assert!(!VectorCleanupIntentStatus::Cleaned.blocks_purge());
         assert!(!VectorCleanupIntentStatus::Committed.blocks_purge());
+    }
+
+    #[test]
+    fn cleaned_writer_must_not_upsert() {
+        assert!(authorize_vector_upsert(VectorCleanupIntentStatus::Writing).is_ok());
+        assert_eq!(
+            authorize_vector_upsert(VectorCleanupIntentStatus::Cleaned),
+            Err(IntentTransitionError::AlreadyCleaned)
+        );
+    }
+
+    #[test]
+    fn writing_cleanup_plans_cancel_before_finalize() {
+        assert_eq!(
+            plan_intent_cleanup(VectorCleanupIntentStatus::Pending),
+            Some(IntentCleanupPlan::CleanThenDelete)
+        );
+        assert_eq!(
+            plan_intent_cleanup(VectorCleanupIntentStatus::Writing),
+            Some(IntentCleanupPlan::CancelDeleteThenClean)
+        );
     }
 }

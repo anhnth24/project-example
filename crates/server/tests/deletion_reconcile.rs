@@ -15,7 +15,9 @@ use fileconv_server::db::models::{ArtifactKind, CollectionVisibility, Document, 
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::db::vector_cleanup_intents::{
-    apply_intent_event, IntentEvent, IntentTransitionError, VectorCleanupIntentStatus,
+    apply_intent_event, authorize_vector_upsert, drain_cleanup_intents_orchestrated,
+    plan_intent_cleanup, IntentCleanupPlan, IntentDrainBackend, IntentEvent, IntentTransitionError,
+    OpenCleanupIntent, VectorCleanupIntentStatus,
 };
 use fileconv_server::jobs::{self, CheckpointPayload, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
 use fileconv_server::services::deletion::{
@@ -28,9 +30,10 @@ use fileconv_server::services::indexing::{
     missing_chunks_fingerprint, repair_embedding_job_idempotency_key, IndexingOutboxSink,
 };
 use fileconv_server::services::reconciliation::{
-    classify_minio_drift, compare_object_inventory, enqueue_reconcile, object_identity_matches,
-    reads_suppressed, reconcile_dead_letter_jobs, reconcile_document, ExpectedObjectIdentity,
-    ObjectObservation, ReconcileMode, ReconcileReport,
+    chunk_ids_needing_vector_repair, classify_minio_drift, compare_object_inventory,
+    enqueue_reconcile, object_identity_matches, reads_suppressed, reconcile_dead_letter_jobs,
+    reconcile_document, ExpectedObjectIdentity, ExpectedObjectKind, ObjectObservation,
+    ReconcileMode, ReconcileReport,
 };
 use fileconv_server::storage::keys::parse_key_for_org;
 use fileconv_server::storage::minio::ObservedObjectIdentity;
@@ -60,65 +63,102 @@ use uuid::Uuid;
 const TEST_VECTOR_DIMENSIONS: usize = 8;
 
 // ---------------------------------------------------------------------------
-// Hermetic service-level fakes (production transition/repair/purge helpers).
+// Hermetic fakes backed by production cleanup/requeue helpers.
 // ---------------------------------------------------------------------------
 
-/// In-memory stand-in for `vector_cleanup_intents` CAS transitions.
+/// Fake IntentDrainBackend that exercises `drain_cleanup_intents_orchestrated`.
 #[derive(Debug, Default)]
-struct FakeIntentStore {
-    by_job: HashMap<Uuid, VectorCleanupIntentStatus>,
+struct FakeIntentDrainBackend {
+    intents: HashMap<Uuid, OpenCleanupIntent>,
+    deleted_point_ids: Vec<Uuid>,
+    mark_cleaned_order: Vec<(Uuid, VectorCleanupIntentStatus)>,
+    delete_order: Vec<Uuid>,
+    writers_cancelled: bool,
 }
 
-impl FakeIntentStore {
-    fn upsert_pending(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
-        match self.by_job.get(&job_id).copied() {
-            None
-            | Some(VectorCleanupIntentStatus::Pending)
-            | Some(VectorCleanupIntentStatus::Writing) => {
-                self.by_job
-                    .insert(job_id, VectorCleanupIntentStatus::Pending);
+impl FakeIntentDrainBackend {
+    fn insert(&mut self, intent: OpenCleanupIntent) {
+        self.intents.insert(intent.job_id, intent);
+    }
+
+    fn status(&self, job_id: Uuid) -> Option<VectorCleanupIntentStatus> {
+        self.intents.get(&job_id).map(|intent| intent.status)
+    }
+
+    fn upsert_pending(
+        &mut self,
+        job_id: Uuid,
+        point_ids: Vec<Uuid>,
+    ) -> Result<(), IntentTransitionError> {
+        match self.status(job_id) {
+            None | Some(VectorCleanupIntentStatus::Pending) => {
+                self.insert(OpenCleanupIntent {
+                    job_id,
+                    status: VectorCleanupIntentStatus::Pending,
+                    point_ids,
+                    index_signature_sha256: "sig".into(),
+                });
                 Ok(())
             }
+            Some(VectorCleanupIntentStatus::Writing) => Ok(()),
             Some(VectorCleanupIntentStatus::Cleaned) => Err(IntentTransitionError::AlreadyCleaned),
             Some(VectorCleanupIntentStatus::Committed) => Err(IntentTransitionError::InvalidState),
         }
     }
 
     fn begin_write(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
-        let status = self
-            .by_job
-            .get(&job_id)
-            .copied()
+        let intent = self
+            .intents
+            .get_mut(&job_id)
             .ok_or(IntentTransitionError::InvalidState)?;
-        let next = apply_intent_event(status, IntentEvent::BeginWrite)?;
-        self.by_job.insert(job_id, next);
+        intent.status = apply_intent_event(intent.status, IntentEvent::BeginWrite)?;
+        Ok(())
+    }
+
+    fn authorize_upsert(&self, job_id: Uuid) -> Result<(), IntentTransitionError> {
+        let status = self
+            .status(job_id)
+            .ok_or(IntentTransitionError::InvalidState)?;
+        authorize_vector_upsert(status)
+    }
+
+    fn open_for_document(&self) -> bool {
+        self.intents
+            .values()
+            .any(|intent| intent.status.blocks_purge())
+    }
+}
+
+impl IntentDrainBackend for FakeIntentDrainBackend {
+    fn list_open(&mut self) -> Vec<OpenCleanupIntent> {
+        self.intents
+            .values()
+            .filter(|intent| intent.status.blocks_purge())
+            .cloned()
+            .collect()
+    }
+
+    fn cancel_writers(&mut self) -> Result<(), String> {
+        self.writers_cancelled = true;
+        Ok(())
+    }
+
+    fn delete_points(&mut self, intent: &OpenCleanupIntent) -> Result<(), String> {
+        self.delete_order.push(intent.job_id);
+        self.deleted_point_ids
+            .extend(intent.point_ids.iter().copied());
         Ok(())
     }
 
     fn mark_cleaned(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
-        let status = self
-            .by_job
-            .get(&job_id)
-            .copied()
+        let intent = self
+            .intents
+            .get_mut(&job_id)
             .ok_or(IntentTransitionError::InvalidState)?;
-        let next = apply_intent_event(status, IntentEvent::MarkCleaned)?;
-        self.by_job.insert(job_id, next);
+        let from = intent.status;
+        intent.status = apply_intent_event(intent.status, IntentEvent::MarkCleaned)?;
+        self.mark_cleaned_order.push((job_id, from));
         Ok(())
-    }
-
-    fn mark_committed(&mut self, job_id: Uuid) -> Result<(), IntentTransitionError> {
-        let status = self
-            .by_job
-            .get(&job_id)
-            .copied()
-            .ok_or(IntentTransitionError::InvalidState)?;
-        let next = apply_intent_event(status, IntentEvent::MarkCommitted)?;
-        self.by_job.insert(job_id, next);
-        Ok(())
-    }
-
-    fn open_for_document(&self) -> bool {
-        self.by_job.values().any(|status| status.blocks_purge())
     }
 }
 
@@ -183,7 +223,8 @@ fn hermetic_purged_inventory_ignores_intentional_absences() {
     let doc = Uuid::new_v4();
     let expected = vec![ExpectedObjectIdentity {
         key: "trusted/org/v1/a".into(),
-        document_id: doc,
+        kind: ExpectedObjectKind::TrustedArtifact,
+        document_id: Some(doc),
         version_id: Some(Uuid::new_v4()),
         content_sha256: Some("abc".into()),
         byte_size: Some(3),
@@ -212,6 +253,41 @@ fn hermetic_purged_inventory_ignores_intentional_absences() {
 }
 
 #[test]
+fn hermetic_quarantine_upload_identity_uses_source_hash_size() {
+    let org = Uuid::new_v4();
+    let expected = ExpectedObjectIdentity {
+        key: "quarantine/org/obj".into(),
+        kind: ExpectedObjectKind::QuarantineOriginal,
+        document_id: None,
+        version_id: None,
+        content_sha256: Some("deadbeef".into()),
+        byte_size: Some(12),
+    };
+    assert!(object_identity_matches(
+        &expected,
+        &ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: None,
+            version_id: None,
+            content_sha256: Some("deadbeef".into()),
+            content_length: Some(12),
+        },
+        org
+    ));
+    assert!(!object_identity_matches(
+        &expected,
+        &ObservedObjectIdentity {
+            org_id: Some(org),
+            document_id: Some(Uuid::new_v4()),
+            version_id: None,
+            content_sha256: Some("deadbeef".into()),
+            content_length: Some(12),
+        },
+        org
+    ));
+}
+
+#[test]
 fn hermetic_dry_run_includes_staged_orphan_objects_without_repair() {
     let mut report = ReconcileReport::default();
     report.orphan_objects = 4;
@@ -221,26 +297,88 @@ fn hermetic_dry_run_includes_staged_orphan_objects_without_repair() {
 }
 
 #[test]
-fn hermetic_intent_transitions_fence_upsert_after_cleanup() {
-    let mut store = FakeIntentStore::default();
+fn hermetic_production_drain_pending_cleans_before_delete() {
+    let mut backend = FakeIntentDrainBackend::default();
     let job_id = Uuid::new_v4();
-    store.upsert_pending(job_id).expect("pending");
-    store.begin_write(job_id).expect("writing");
-    // Deletion drain wins.
-    store.mark_cleaned(job_id).expect("cleaned");
-    assert!(!store.open_for_document());
+    let point = Uuid::new_v4();
+    backend
+        .upsert_pending(job_id, vec![point])
+        .expect("pending");
     assert_eq!(
-        store.begin_write(job_id),
+        plan_intent_cleanup(VectorCleanupIntentStatus::Pending),
+        Some(IntentCleanupPlan::CleanThenDelete)
+    );
+    let report = drain_cleanup_intents_orchestrated(&mut backend).expect("drain");
+    assert_eq!(report.cleaned, 1);
+    assert_eq!(report.points_deleted, 1);
+    assert!(!report.writers_cancelled);
+    assert_eq!(
+        backend.mark_cleaned_order,
+        vec![(job_id, VectorCleanupIntentStatus::Pending)]
+    );
+    assert_eq!(backend.delete_order, vec![job_id]);
+    assert_eq!(
+        backend.status(job_id),
+        Some(VectorCleanupIntentStatus::Cleaned)
+    );
+    assert_eq!(
+        backend.authorize_upsert(job_id),
+        Err(IntentTransitionError::AlreadyCleaned)
+    );
+}
+
+#[test]
+fn hermetic_authorized_writer_upserts_until_writing_cleanup_finalizes() {
+    let mut backend = FakeIntentDrainBackend::default();
+    let job_id = Uuid::new_v4();
+    let point = Uuid::new_v4();
+    backend
+        .upsert_pending(job_id, vec![point])
+        .expect("pending");
+    backend.begin_write(job_id).expect("writing");
+    // Authorized writer may proceed to upsert while still writing.
+    backend.authorize_upsert(job_id).expect("authorized upsert");
+    assert_eq!(
+        plan_intent_cleanup(VectorCleanupIntentStatus::Writing),
+        Some(IntentCleanupPlan::CancelDeleteThenClean)
+    );
+
+    let report = drain_cleanup_intents_orchestrated(&mut backend).expect("drain writing");
+    assert!(report.writers_cancelled);
+    assert_eq!(backend.delete_order, vec![job_id]);
+    assert_eq!(
+        backend.mark_cleaned_order,
+        vec![(job_id, VectorCleanupIntentStatus::Writing)]
+    );
+    // After cleanup finalizes, the same writer must not upsert.
+    assert_eq!(
+        backend.authorize_upsert(job_id),
         Err(IntentTransitionError::AlreadyCleaned)
     );
     assert_eq!(
-        store.mark_committed(job_id),
+        backend.begin_write(job_id),
         Err(IntentTransitionError::AlreadyCleaned)
     );
-    // Revival via upsert_pending must also fail.
     assert_eq!(
-        store.upsert_pending(job_id),
+        backend.upsert_pending(job_id, vec![point]),
         Err(IntentTransitionError::AlreadyCleaned)
+    );
+}
+
+#[test]
+fn hermetic_stale_vector_chunk_ids_are_included_in_repair_requeue() {
+    let missing = vec![format!("{:064x}", 1_u8)];
+    let stale = vec![format!("{:064x}", 2_u8)];
+    let repair = chunk_ids_needing_vector_repair(&missing, &stale);
+    assert_eq!(repair.len(), 2);
+
+    let mut queue = FakeRepairQueue::default();
+    let batch_id = Uuid::new_v4();
+    let created = queue.enqueue_repair_batches(&[(batch_id, 0, 10)], &repair, &[1, 2]);
+    assert_eq!(created, 1);
+    assert_eq!(
+        queue.enqueue_repair_batches(&[(batch_id, 0, 10)], &repair, &[1, 2]),
+        0
     );
 }
 
@@ -269,13 +407,15 @@ fn hermetic_repair_enqueue_uses_dedicated_key_not_original_index_key() {
 
 #[test]
 fn hermetic_purge_finalization_requires_quiesced_writers_and_intents() {
-    let mut store = FakeIntentStore::default();
+    let mut backend = FakeIntentDrainBackend::default();
     let job_id = Uuid::new_v4();
-    store.upsert_pending(job_id).unwrap();
-    store.begin_write(job_id).unwrap();
-    assert!(!writers_are_quiesced(false, store.open_for_document()));
-    store.mark_cleaned(job_id).unwrap();
-    assert!(writers_are_quiesced(false, store.open_for_document()));
+    backend
+        .upsert_pending(job_id, vec![Uuid::new_v4()])
+        .unwrap();
+    backend.begin_write(job_id).unwrap();
+    assert!(!writers_are_quiesced(false, backend.open_for_document()));
+    drain_cleanup_intents_orchestrated(&mut backend).expect("drain");
+    assert!(writers_are_quiesced(false, backend.open_for_document()));
     assert!(!writers_are_quiesced(true, false));
 }
 
