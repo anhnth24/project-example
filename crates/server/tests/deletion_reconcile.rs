@@ -324,8 +324,10 @@ fn hermetic_shared_lock_serializes_authorize_upsert_and_cleanup() {
 
 #[test]
 fn hermetic_dry_run_includes_staged_orphan_objects_without_repair() {
-    let mut report = ReconcileReport::default();
-    report.orphan_objects = 4;
+    let report = ReconcileReport {
+        orphan_objects: 4,
+        ..Default::default()
+    };
     assert_eq!(report.orphan_objects, 4);
     assert_eq!(report.repaired.staged_objects, 0);
     assert_eq!(report.repaired.orphan_objects, 0);

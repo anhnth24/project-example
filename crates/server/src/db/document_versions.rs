@@ -292,8 +292,7 @@ pub async fn list_artifacts_by_document(
 }
 
 fn map_artifact(row: &Row) -> Result<DerivedArtifact, DbError> {
-    let kind =
-        ArtifactKind::parse(row.get("artifact_kind")).map_err(|error| DbError::Config(error))?;
+    let kind = ArtifactKind::parse(row.get("artifact_kind")).map_err(DbError::Config)?;
     Ok(DerivedArtifact {
         id: row.get("id"),
         org_id: row.get("org_id"),

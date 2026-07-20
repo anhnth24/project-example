@@ -122,19 +122,6 @@ pub async fn insert_if_absent(
     map_chunk(&row)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::GENERATION_IDENTITY_CONFLICT_TARGET;
-
-    #[test]
-    fn idempotency_conflict_target_is_generation_scoped() {
-        assert_eq!(
-            GENERATION_IDENTITY_CONFLICT_TARGET,
-            "org_id, index_metadata_id, chunk_identity_sha256"
-        );
-    }
-}
-
 /// Lists chunks for a document within the tenant.
 pub async fn list_by_document(
     txn: &Transaction<'_>,
@@ -272,4 +259,17 @@ fn map_chunk(row: &Row) -> Result<Chunk, DbError> {
         tsv: row.get("tsv"),
         created_at: row.get("created_at"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GENERATION_IDENTITY_CONFLICT_TARGET;
+
+    #[test]
+    fn idempotency_conflict_target_is_generation_scoped() {
+        assert_eq!(
+            GENERATION_IDENTITY_CONFLICT_TARGET,
+            "org_id, index_metadata_id, chunk_identity_sha256"
+        );
+    }
 }

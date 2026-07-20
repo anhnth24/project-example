@@ -1520,8 +1520,10 @@ mod tests {
 
     #[test]
     fn dry_run_report_includes_staged_orphan_count_without_repair() {
-        let mut report = ReconcileReport::default();
-        report.orphan_objects = 3;
+        let report = ReconcileReport {
+            orphan_objects: 3,
+            ..Default::default()
+        };
         assert_eq!(report.repaired.staged_objects, 0);
         assert_eq!(report.orphan_objects, 3);
     }

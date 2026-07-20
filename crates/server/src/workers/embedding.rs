@@ -453,6 +453,7 @@ impl EmbeddingWorker {
     /// immediately before the Qdrant upsert. The document lock serializes this
     /// observation with conversion/tombstone, while the leased-job and pending
     /// batch checks prevent a cancelled worker from publishing stale flags.
+    #[allow(clippy::too_many_arguments)]
     async fn load_lifecycle_fence_with_write_intent(
         &self,
         ctx: &OrgContext,

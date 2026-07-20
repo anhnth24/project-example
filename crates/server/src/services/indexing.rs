@@ -1147,6 +1147,7 @@ async fn persist_chunk_batch(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn persist_claims_for_chunk(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
@@ -1200,15 +1201,15 @@ async fn persist_claims_for_chunk(
     Ok(())
 }
 
-fn claim_value_fields(
-    value: &ClaimValue,
-) -> (
+type ClaimValueFields<'a> = (
     Option<rust_decimal::Decimal>,
-    Option<&str>,
+    Option<&'a str>,
     Option<bool>,
     Option<chrono::NaiveDate>,
     Option<rust_decimal::Decimal>,
-) {
+);
+
+fn claim_value_fields(value: &ClaimValue) -> ClaimValueFields<'_> {
     match value {
         ClaimValue::Number(value) => (Some(*value), None, None, None, None),
         ClaimValue::Money(value) => (None, None, None, None, Some(*value)),
