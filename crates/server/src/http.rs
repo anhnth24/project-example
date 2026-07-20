@@ -195,7 +195,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
+        .merge(routes::collections::router())
         .merge(routes::documents::router())
+        .merge(routes::jobs::router())
         .merge(routes::uploads::router(max_upload_bytes))
         .with_state(Arc::new(state))
 }

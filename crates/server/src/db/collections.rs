@@ -79,6 +79,51 @@ pub async fn list(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<Vec<Collect
     rows.iter().map(map_collection).collect()
 }
 
+/// Lists non-deleted collections the resolved caller context may access.
+pub async fn list_authorized(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    allowed_ids: &[Uuid],
+    after: Option<(String, Uuid)>,
+    limit: i64,
+) -> Result<Vec<Collection>, DbError> {
+    if allowed_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = match after {
+        Some((after_name, after_id)) => {
+            txn.query(
+                "SELECT id, org_id, name, slug, description, owner_user_id,
+                        visibility, created_at, updated_at, deleted_at
+                 FROM collections
+                 WHERE org_id = $1
+                   AND id = ANY($2)
+                   AND deleted_at IS NULL
+                   AND (name, id) > ($3, $4)
+                 ORDER BY name, id
+                 LIMIT $5",
+                &[&ctx.org_id(), &allowed_ids, &after_name, &after_id, &limit],
+            )
+            .await?
+        }
+        None => {
+            txn.query(
+                "SELECT id, org_id, name, slug, description, owner_user_id,
+                        visibility, created_at, updated_at, deleted_at
+                 FROM collections
+                 WHERE org_id = $1
+                   AND id = ANY($2)
+                   AND deleted_at IS NULL
+                 ORDER BY name, id
+                 LIMIT $3",
+                &[&ctx.org_id(), &allowed_ids, &limit],
+            )
+            .await?
+        }
+    };
+    rows.iter().map(map_collection).collect()
+}
+
 fn map_collection(row: &Row) -> Result<Collection, DbError> {
     let visibility: String = row.get("visibility");
     Ok(Collection {

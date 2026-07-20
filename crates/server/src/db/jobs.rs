@@ -211,6 +211,24 @@ pub async fn get_by_id_for_update(
     row.map(|row| map_job(&row)).transpose()
 }
 
+pub async fn get_by_id(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<Option<Job>, DbError> {
+    let row = txn
+        .query_opt(
+            &format!(
+                "SELECT {JOB_COLUMNS}
+                 FROM jobs
+                 WHERE org_id = $1 AND id = $2"
+            ),
+            &[&ctx.org_id(), &job_id],
+        )
+        .await?;
+    row.map(|row| map_job(&row)).transpose()
+}
+
 pub async fn claim_pending(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
