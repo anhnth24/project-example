@@ -7,6 +7,9 @@ use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
 use crate::db::models::Chunk;
 
+const GENERATION_IDENTITY_CONFLICT_TARGET: &str =
+    "org_id, index_metadata_id, chunk_identity_sha256";
+
 /// Input for inserting a retrieval chunk under the tenant.
 #[derive(Debug, Clone)]
 pub struct NewChunk<'a> {
@@ -70,7 +73,8 @@ pub async fn insert_if_absent(
     let heading_path: Vec<&str> = input.heading_path.iter().map(String::as_str).collect();
     let row = txn
         .query_one(
-            "WITH inserted AS (
+            &format!(
+                "WITH inserted AS (
                 INSERT INTO chunks (
                     id, org_id, document_id, version_id, ordinal, heading_path, body,
                     body_text_version, chunk_identity_sha256, index_metadata_id,
@@ -78,7 +82,7 @@ pub async fn insert_if_absent(
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
                 )
-                ON CONFLICT (chunk_identity_sha256) DO NOTHING
+                ON CONFLICT ({GENERATION_IDENTITY_CONFLICT_TARGET}) DO NOTHING
                 RETURNING id, org_id, document_id, version_id, ordinal, heading_path, body,
                           body_text_version, chunk_identity_sha256, index_metadata_id,
                           index_signature, page, slide, sheet, span_start, span_end,
@@ -95,8 +99,11 @@ pub async fn insert_if_absent(
                     index_signature, page, slide, sheet, span_start, span_end,
                     tsv::text AS tsv, created_at
              FROM chunks
-             WHERE org_id = $2 AND chunk_identity_sha256 = $9
-             LIMIT 1",
+             WHERE org_id = $2
+               AND index_metadata_id = $10
+               AND chunk_identity_sha256 = $9
+             LIMIT 1"
+            ),
             &[
                 &input.id,
                 &ctx.org_id(),
@@ -113,6 +120,19 @@ pub async fn insert_if_absent(
         )
         .await?;
     map_chunk(&row)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GENERATION_IDENTITY_CONFLICT_TARGET;
+
+    #[test]
+    fn idempotency_conflict_target_is_generation_scoped() {
+        assert_eq!(
+            GENERATION_IDENTITY_CONFLICT_TARGET,
+            "org_id, index_metadata_id, chunk_identity_sha256"
+        );
+    }
 }
 
 /// Lists chunks for a document within the tenant.

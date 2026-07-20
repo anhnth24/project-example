@@ -54,6 +54,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0012_index_generation_embedding_batches.sql",
         include_str!("../migrations/0012_index_generation_embedding_batches.sql"),
     ),
+    (
+        "0013_expand_index_generation_rls.sql",
+        include_str!("../migrations/0013_expand_index_generation_rls.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -227,5 +231,28 @@ mod tests {
             .map(|(name, _)| (*name).to_string())
             .collect::<BTreeSet<_>>();
         assert_eq!(embedded_names, manifest_names);
+    }
+
+    #[test]
+    fn generation_tables_have_mandatory_tenant_rls() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0013_expand_index_generation_rls.sql")
+            .expect("generation RLS migration")
+            .1;
+        for table in ["index_generation_backfills", "embedding_batches"] {
+            assert!(
+                source.contains(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")),
+                "{table} must enable RLS"
+            );
+            assert!(
+                source.contains(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")),
+                "{table} must force RLS"
+            );
+            assert!(
+                source.contains(&format!("CREATE POLICY {table}_org_isolation ON {table}")),
+                "{table} must have an org-isolation policy"
+            );
+        }
     }
 }

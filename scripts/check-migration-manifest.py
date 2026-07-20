@@ -15,11 +15,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DIRECTORY = ROOT / "crates/server/migrations"
-NAME = re.compile(r"^(?P<number>\d{4})_(?:expand|backfill|cutover|contract)_[a-z0-9_]+\.sql$")
+NAME = re.compile(r"^(?P<number>\d{4})_(?:expand|backfill|cutover|contract|index)_[a-z0-9_]+\.sql$")
 
 
 def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Migrations are stored canonically with LF in Git. Normalize a Windows
+    # checkout before hashing so the immutable manifest is portable across CI
+    # and local contributors using core.autocrlf.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def migration_files(directory: Path) -> list[Path]:

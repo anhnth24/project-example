@@ -281,17 +281,26 @@ pub async fn document_batches_complete(
 ) -> Result<bool, DbError> {
     let row = txn
         .query_one(
-            "SELECT count(*)::bigint > 0
-                    AND bool_and(status = 'succeeded')
-             FROM embedding_batches
-             WHERE org_id = $1
-               AND index_metadata_id = $2
-               AND document_id = $3
-               AND version_id = $4",
+            "SELECT count(*)::bigint > 0 AS has_batches,
+                    COALESCE(bool_and(batch.status = 'succeeded'), false) AS all_batches_succeeded,
+                    COALESCE(bool_and(index_job.status = 'succeeded'), false)
+                        AS all_index_jobs_succeeded
+             FROM embedding_batches AS batch
+             INNER JOIN jobs AS index_job
+                ON index_job.org_id = batch.org_id
+               AND index_job.id = batch.index_job_id
+             WHERE batch.org_id = $1
+               AND batch.index_metadata_id = $2
+               AND batch.document_id = $3
+               AND batch.version_id = $4",
             &[&ctx.org_id(), &index_metadata_id, &document_id, &version_id],
         )
         .await?;
-    Ok(row.get(0))
+    Ok(all_document_batches_complete(
+        row.get("has_batches"),
+        row.get("all_batches_succeeded"),
+        row.get("all_index_jobs_succeeded"),
+    ))
 }
 
 pub async fn generation_backfill_complete(
@@ -327,4 +336,25 @@ fn map_batch(row: &Row) -> Result<EmbeddingBatch, DbError> {
         created_at: row.get("created_at"),
         completed_at: row.get("completed_at"),
     })
+}
+
+fn all_document_batches_complete(
+    has_batches: bool,
+    all_batches_succeeded: bool,
+    all_index_jobs_succeeded: bool,
+) -> bool {
+    has_batches && all_batches_succeeded && all_index_jobs_succeeded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::all_document_batches_complete;
+
+    #[test]
+    fn document_finalization_waits_for_parent_index_job_and_all_batches() {
+        assert!(!all_document_batches_complete(false, true, true));
+        assert!(!all_document_batches_complete(true, false, true));
+        assert!(!all_document_batches_complete(true, true, false));
+        assert!(all_document_batches_complete(true, true, true));
+    }
 }

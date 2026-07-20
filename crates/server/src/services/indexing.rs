@@ -264,7 +264,7 @@ pub async fn index_version(
         mark_empty_backfill_complete(db_pool, ctx, input, &metadata, document_id, version_id)
             .await?;
     }
-    let job = finalize_indexed(db_pool, ctx, input, document_id, version_id).await?;
+    let job = finalize_indexed(db_pool, ctx, input, metadata.id, document_id, version_id).await?;
     Ok(IndexVersionOutcome::Finalized {
         job_id: job.id,
         chunks: prepared_chunks.len(),
@@ -453,6 +453,40 @@ pub(crate) async fn mark_generation_shadow_if_complete(
     Ok(())
 }
 
+/// Completes one document's generation backfill only after the parent index job
+/// has published its full batch set and every batch has succeeded.
+pub(crate) async fn complete_document_backfill_if_ready(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<bool, IndexingError> {
+    if !embedding_batches::document_batches_complete(txn, ctx, metadata_id, document_id, version_id)
+        .await?
+    {
+        return Ok(false);
+    }
+
+    embedding_batches::mark_generation_backfilled(txn, ctx, metadata_id, document_id, version_id)
+        .await?;
+    mark_generation_shadow_if_complete(txn, ctx, metadata_id).await?;
+
+    let document = documents::get_by_id_for_update(txn, ctx, document_id).await?;
+    if document.current_version_id == Some(version_id) && document.state == DocumentState::Indexing
+    {
+        document_state::apply_transition(
+            txn,
+            ctx,
+            document_id,
+            DocumentState::Indexing,
+            DocumentState::Indexed,
+        )
+        .await?;
+    }
+    Ok(true)
+}
+
 /// Operator/verification-gated cutover. Callers must validate shadow retrieval
 /// and citation evidence before making the staged generation visible.
 pub async fn cut_over_shadow_generation(
@@ -511,8 +545,9 @@ pub async fn finalize_indexed(
     db_pool: &Pool,
     ctx: &OrgContext,
     input: IndexVersionInput<'_>,
-    _document_id: Uuid,
-    _version_id: Uuid,
+    metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
 ) -> Result<Job, IndexingError> {
     let lease_token = input.lease_token.to_string();
     let job_id = input.job.id;
@@ -526,6 +561,14 @@ pub async fn finalize_indexed(
                     .await?
                     .ok_or(IndexingError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
+                complete_document_backfill_if_ready(
+                    txn,
+                    &ctx,
+                    metadata_id,
+                    document_id,
+                    version_id,
+                )
+                .await?;
                 Ok::<_, IndexingError>(completed)
             })
         }
@@ -589,12 +632,7 @@ pub async fn fail_index_job(
                 if let (Some(document_id), Some(version_id)) = (document_id, version_id) {
                     let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
                     if document.current_version_id == Some(version_id)
-                        && matches!(
-                            document.state,
-                            DocumentState::Converted
-                                | DocumentState::Indexing
-                                | DocumentState::Indexed
-                        )
+                        && should_fail_current_document(document.state)
                     {
                         document_state::apply_transition(
                             txn,
@@ -611,6 +649,10 @@ pub async fn fail_index_job(
         }
     })
     .await
+}
+
+fn should_fail_current_document(state: DocumentState) -> bool {
+    matches!(state, DocumentState::Converted | DocumentState::Indexing)
 }
 
 async fn verify_claimed_job(
@@ -1136,5 +1178,18 @@ impl IndexingError {
 
     pub fn is_retryable_job_failure(&self) -> bool {
         !matches!(self, Self::Job(JobError::LeaseLost))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_fail_current_document;
+    use crate::db::models::DocumentState;
+
+    #[test]
+    fn staged_backfill_failure_does_not_fail_an_indexed_active_document() {
+        assert!(should_fail_current_document(DocumentState::Converted));
+        assert!(should_fail_current_document(DocumentState::Indexing));
+        assert!(!should_fail_current_document(DocumentState::Indexed));
     }
 }

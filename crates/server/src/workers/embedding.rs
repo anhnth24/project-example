@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::embedding_batches::{self, EmbeddingBatch};
 use crate::db::error::DbError;
-use crate::db::models::{DocumentState, Job, JobStatus, JobType};
+use crate::db::models::{Job, JobStatus, JobType};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{chunks, documents, index_metadata};
 use crate::jobs::{self, JobError};
@@ -317,44 +317,14 @@ impl EmbeddingWorker {
                         jobs::complete_within_txn(txn, &ctx, job_id, &lease_token, attempts)
                             .await?;
                     embedding_batches::mark_succeeded(txn, &ctx, batch_id).await?;
-                    if embedding_batches::document_batches_complete(
+                    indexing::complete_document_backfill_if_ready(
                         txn,
                         &ctx,
                         batch.index_metadata_id,
                         batch.document_id,
                         batch.version_id,
                     )
-                    .await?
-                    {
-                        embedding_batches::mark_generation_backfilled(
-                            txn,
-                            &ctx,
-                            batch.index_metadata_id,
-                            batch.document_id,
-                            batch.version_id,
-                        )
-                        .await?;
-                        indexing::mark_generation_shadow_if_complete(
-                            txn,
-                            &ctx,
-                            batch.index_metadata_id,
-                        )
-                        .await?;
-                        let document =
-                            documents::get_by_id_for_update(txn, &ctx, batch.document_id).await?;
-                        if document.current_version_id == Some(batch.version_id)
-                            && document.state == DocumentState::Indexing
-                        {
-                            crate::services::document_state::apply_transition(
-                                txn,
-                                &ctx,
-                                batch.document_id,
-                                DocumentState::Indexing,
-                                DocumentState::Indexed,
-                            )
-                            .await?;
-                        }
-                    }
+                    .await?;
                     Ok(completed)
                 })
             }

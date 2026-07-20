@@ -32,26 +32,22 @@ use std::time::Duration;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
-fn test_database_url() -> Option<String> {
+fn test_database_url() -> Result<String, String> {
     match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
+        Ok(url) if !url.trim().is_empty() => Ok(url),
+        _ => Err("MARKHAND_TEST_DATABASE_URL is required".into()),
     }
 }
 
-fn test_minio_client() -> Option<MinioClient> {
+fn test_minio_client() -> Result<MinioClient, String> {
     let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
         Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
+        _ => return Err("MARKHAND_TEST_MINIO_ENDPOINT is required".into()),
     };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY").ok()?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY").ok()?;
+    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY")
+        .map_err(|_| "MARKHAND_TEST_MINIO_ACCESS_KEY is required".to_string())?;
+    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY")
+        .map_err(|_| "MARKHAND_TEST_MINIO_SECRET_KEY is required".to_string())?;
     let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
     let bucket = format!("markhand-index-worker-{}", Uuid::new_v4().simple());
     std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
@@ -63,23 +59,20 @@ fn test_minio_client() -> Option<MinioClient> {
         region,
         true,
     )
-    .expect("minio config");
-    Some(MinioClient::from_config(&config).expect("minio client"))
+    .map_err(|error| format!("invalid test MinIO configuration: {error}"))?;
+    MinioClient::from_config(&config).map_err(|error| format!("test MinIO client: {error}"))
 }
 
-fn test_qdrant_client() -> Option<QdrantClient> {
+fn test_qdrant_client() -> Result<QdrantClient, String> {
     let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
         Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
-            return None;
-        }
+        _ => return Err("MARKHAND_TEST_QDRANT_URL is required".into()),
     };
     let api_key = std::env::var("MARKHAND_TEST_QDRANT_API_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map(SecretString::new);
-    Some(QdrantClient::with_api_key(url, api_key).expect("qdrant client"))
+    QdrantClient::with_api_key(url, api_key).map_err(|error| format!("test Qdrant client: {error}"))
 }
 
 fn test_embedding_plan() -> EmbeddingPlan {
@@ -164,17 +157,22 @@ struct LiveEnv {
 }
 
 impl LiveEnv {
-    async fn boot() -> Option<Self> {
+    async fn boot() -> Result<Self, String> {
         let base_url = test_database_url()?;
         let storage = test_minio_client()?;
         let qdrant = test_qdrant_client()?;
-        storage.ensure_bucket().await.expect("ensure bucket");
+        storage
+            .ensure_bucket()
+            .await
+            .map_err(|error| format!("ensure test bucket: {error}"))?;
         let db = EphemeralDb::create(&base_url).await;
-        apply_migrations(&db.url).await.expect("apply migrations");
-        let pool = create_pool(&db.url).expect("pool");
+        apply_migrations(&db.url)
+            .await
+            .map_err(|error| format!("apply test migrations: {error}"))?;
+        let pool = create_pool(&db.url).map_err(|error| format!("create test pool: {error}"))?;
         let ctx = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], [])
-            .expect("org context");
-        Some(Self {
+            .map_err(|error| format!("create test org context: {error}"))?;
+        Ok(Self {
             db,
             pool,
             storage,
@@ -820,9 +818,9 @@ fn sample_markdown() -> &'static str {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_indexes_converted_document() {
-    let Some(env) = LiveEnv::boot().await else {
-        return;
-    };
+    let env = LiveEnv::boot()
+        .await
+        .expect("live index worker environment");
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
@@ -862,9 +860,9 @@ async fn live_index_worker_indexes_converted_document() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_replay_is_idempotent() {
-    let Some(env) = LiveEnv::boot().await else {
-        return;
-    };
+    let env = LiveEnv::boot()
+        .await
+        .expect("live index worker environment");
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
@@ -897,9 +895,9 @@ async fn live_index_worker_replay_is_idempotent() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_signature_mismatch_fails_closed() {
-    let Some(env) = LiveEnv::boot().await else {
-        return;
-    };
+    let env = LiveEnv::boot()
+        .await
+        .expect("live index worker environment");
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
@@ -923,9 +921,9 @@ async fn live_index_worker_signature_mismatch_fails_closed() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
-    let Some(env) = LiveEnv::boot().await else {
-        return;
-    };
+    let env = LiveEnv::boot()
+        .await
+        .expect("live index worker environment");
     let markdown_a = sample_markdown();
     let markdown_b = "# Chương II\n\nBản mới.\n\n## Điều 3\n\nNội dung điều 3.\n";
     let (document_id, version_a, collection_id) =
@@ -986,9 +984,9 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_resumes_from_indexing_state() {
-    let Some(env) = LiveEnv::boot().await else {
-        return;
-    };
+    let env = LiveEnv::boot()
+        .await
+        .expect("live index worker environment");
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
