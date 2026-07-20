@@ -20,10 +20,13 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
+      rust_crates: ${{ steps.changes.outputs.rust_crates }}
+      rust_desktop_deps: ${{ steps.changes.outputs.rust_desktop_deps }}
       knowledge: ${{ steps.changes.outputs.knowledge }}
       frontend: ${{ steps.changes.outputs.frontend }}
       web: ${{ steps.changes.outputs.web }}
       dev_stack: ${{ steps.changes.outputs.dev_stack }}
+      dev_stack_mode: ${{ steps.changes.outputs.dev_stack_mode }}
       bundle: ${{ steps.changes.outputs.bundle }}
       toolchain: ${{ steps.changes.outputs.toolchain }}
       corpus: ${{ steps.changes.outputs.corpus }}
@@ -46,29 +49,31 @@ jobs:
     needs: changes-and-static
     if: needs.changes-and-static.outputs.rust == 'true'
     runs-on: ubuntu-22.04
+    env:
+      RUST_CRATES: ${{ needs.changes-and-static.outputs.rust_crates }}
+      KNOWLEDGE_GATE: ${{ needs.changes-and-static.outputs.knowledge }}
+      RUST_INTEGRATION: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install native build dependencies
+        if: needs.changes-and-static.outputs.rust_desktop_deps == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             librsvg2-dev patchelf
+      - name: Install base build dependencies
+        if: needs.changes-and-static.outputs.rust_desktop_deps != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.88.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: make check-rust
-      - name: Run affected Rust test gate
-        env:
-          KNOWLEDGE_CHANGED: ${{ needs.changes-and-static.outputs.knowledge }}
-        run: |
-          if [[ "$KNOWLEDGE_CHANGED" == "true" ]]; then
-            make check-knowledge-extraction-rust
-          else
-            make check-rust-tests
-          fi
+      - name: Rust fmt, clippy, and tests
+        run: bash scripts/run-rust-ci-fast.sh
 
   toolchain:
     needs: changes-and-static
@@ -143,22 +148,17 @@ jobs:
     env:
       MARKHAND_SPIKE_REPORT: /tmp/markhand-spike-environment.json
       COMPOSE_PROFILES: mock
+      DEV_STACK_MODE: ${{ needs.changes-and-static.outputs.dev_stack_mode }}
+      DEV_STACK_RUST_SERVER: ${{ needs.changes-and-static.outputs.rust == 'true' && (needs.changes-and-static.outputs.rust_crates == 'full' || contains(needs.changes-and-static.outputs.rust_crates, 'server')) }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: 1.88.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        if: needs.changes-and-static.outputs.dev_stack_mode == 'full' && needs.changes-and-static.outputs.rust != 'true'
       - name: Validate and smoke-test local services
-        run: |
-          trap 'make dev-down || true; make spike-down || true' EXIT
-          docker compose -f deploy/dev/compose.yml config >/dev/null
-          python3 scripts/validate_spike.py --config-only
-          make dev-up
-          make dev-health
-          make dev-server-smoke
-          make dev-down
-          make spike-up
-          make spike-lifecycle
-          make spike-health
-          make check-spike
-          make spike-down
+        run: bash deploy/scripts/dev-stack-ci.sh
 
   linux-bundle:
     needs: changes-and-static
