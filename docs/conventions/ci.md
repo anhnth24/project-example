@@ -39,22 +39,29 @@ validation uses `make bundle-linux`.
 - Heavy Rust, desktop frontend, web and dev-stack jobs run only when their owned paths
   change, on both PR and `master`. This keeps direct pushes safe without running
   unrelated product gates.
-- The Rust job selects the smallest crate scope from the changed paths:
+- The Rust job runs `scripts/run-rust-ci-fast.sh` (fmt + clippy + tests in one step):
   - `server` PRs run `knowledge,server` **lib tests** (~2–3 min after cache warm).
-  - Workspace Clippy baseline runs only on the **full** Rust gate (`Cargo.lock`, CI
-    Makefile/classifier changes).
+  - Workspace Clippy baseline runs only on the **full** Rust gate (`Cargo.lock`,
+    workspace manifest changes).
   - Integration test binaries and the full workspace test matrix run on the full gate
-    and on `master` pushes that touch the matching paths.
+    and on every `master` push that touches Rust paths (`RUST_INTEGRATION=true`).
+- A Makefile or Rust-script change activates **rust + toolchain** only, not frontend,
+  web, corpus, bundle, or dev-stack.
 - Spike report/validator edits are checked in `changes-and-static` only; they no
   longer trigger the heavy `dev-stack` job by themselves.
-- `dev-stack` reuses `rust-cache` so `dev-server-smoke` can hit the same `target/`
-  cache as the Rust job on subsequent runs.
+- `dev-stack` uses tiered profiles via `deploy/scripts/dev-stack-ci.sh`:
+  - **lite** (`deploy/scripts/**`): compose config + `dev-up`/`dev-health` only.
+  - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`.
+  - Skips `dev-server-smoke` when the Rust job already validated `fileconv-server`.
+- `dev-stack` keeps `rust-cache` only when it may run `dev-server-smoke` without a
+  parallel Rust job.
 - Linux bundle smoke (including native-runtime preparation) runs only for
   packaging/runtime configuration changes; the full Linux/Windows/macOS installer
   matrix remains release-only.
 - Phase 0 corpus changes run a dedicated Python job that installs the pinned generator
   requirements, regenerates artifacts and enforces strict dual-review adjudication.
-- A CI/Makefile/classifier/toolchain change deliberately activates every group.
+- A CI workflow or classifier change deliberately activates every group; Makefile/Rust
+  script edits activate rust + toolchain only.
 - A new commit on the same PR cancels the older in-progress run. `master` runs are not
   grouped or canceled because each run classifies a different push delta.
 - Installer matrices run only for `markhand-v*` tags or manual dispatch, never for an

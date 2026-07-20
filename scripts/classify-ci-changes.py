@@ -10,21 +10,33 @@ import unittest
 from pathlib import Path
 
 
-SHARED = (
+CI_INFRA = (
     ".github/workflows/ci.yml",
-    "Makefile",
     "scripts/classify-ci-changes.py",
     "scripts/check-foundation-gate.sh",
+)
+RUST_INFRA = CI_INFRA + (
+    "Makefile",
     "scripts/check-rust*",
     "scripts/run-rust-ci-gate.sh",
+    "scripts/run-rust-ci-fast.sh",
 )
-FULL_RUST_MARKERS = SHARED + (
+FULL_RUST_MARKERS = RUST_INFRA + (
     "Cargo.lock",
     "Cargo.toml",
     "rust-toolchain.toml",
     "rustfmt.toml",
     "clippy.toml",
     "scripts/check-architecture-boundaries.py",
+)
+DEV_STACK_FULL = (
+    "deploy/dev/**",
+    "deploy/compose.spike.yml",
+    "deploy/spike/**",
+)
+DEV_STACK_LITE = (
+    "deploy/scripts/**",
+    "docs/runbooks/local-development.md",
 )
 CRATE_SCOPES = {
     "core": ("crates/core/**",),
@@ -46,7 +58,7 @@ GROUPS = {
         "crates/**",
         "app/src-tauri/**",
     ),
-    "knowledge": SHARED
+    "knowledge": CI_INFRA
     + (
         "Cargo.lock",
         "Cargo.toml",
@@ -62,7 +74,7 @@ GROUPS = {
         "scripts/check-knowledge*",
         "docs/runbooks/knowledge-index-compatibility.md",
     ),
-    "frontend": SHARED
+    "frontend": CI_INFRA
     + (
         "package.json",
         "pnpm-lock.yaml",
@@ -74,7 +86,7 @@ GROUPS = {
         "app/index.html",
         "app/src/**",
     ),
-    "web": SHARED
+    "web": CI_INFRA
     + (
         "package.json",
         "pnpm-lock.yaml",
@@ -82,15 +94,10 @@ GROUPS = {
         "web/**",
         "crates/server/openapi/**",
     ),
-    "dev_stack": SHARED
-    + (
-        "deploy/dev/**",
-        "deploy/compose.spike.yml",
-        "deploy/spike/**",
-        "deploy/scripts/**",
-        "docs/runbooks/local-development.md",
-    ),
-    "bundle": SHARED
+    "dev_stack": CI_INFRA
+    + DEV_STACK_FULL
+    + DEV_STACK_LITE,
+    "bundle": CI_INFRA
     + (
         ".github/workflows/release-desktop.yml",
         "package.json",
@@ -106,13 +113,14 @@ GROUPS = {
         "scripts/prepare-desktop-runtime.py",
         "scripts/validate-desktop-bundle.sh",
     ),
-    "toolchain": SHARED
+    "toolchain": CI_INFRA
+    + RUST_INFRA
     + (
         "rust-toolchain.toml",
         "scripts/check-web-toolchain.sh",
         "docs/runbooks/contributor-setup.md",
     ),
-    "corpus": SHARED
+    "corpus": CI_INFRA
     + (
         "bench/markhand_web/CORPUS.md",
         "bench/markhand_web/generator-environment.lock.json",
@@ -136,6 +144,24 @@ def classify(paths: list[str]) -> dict[str, bool]:
         )
         for name, patterns in GROUPS.items()
     }
+
+
+def dev_stack_mode_for(paths: list[str]) -> str:
+    full = any(
+        fnmatch.fnmatch(path, pattern)
+        for path in paths
+        for pattern in DEV_STACK_FULL
+    )
+    if full:
+        return "full"
+    lite = any(
+        fnmatch.fnmatch(path, pattern)
+        for path in paths
+        for pattern in DEV_STACK_LITE
+    )
+    if lite:
+        return "lite"
+    return "full"
 
 
 def rust_crates_for(paths: list[str]) -> tuple[str, bool]:
@@ -203,10 +229,30 @@ class ClassifierTests(unittest.TestCase):
             classify(["bench/markhand_web/reports/spike-environment.json"])["rust"]
         )
 
-    def test_ci_or_makefile_change_activates_every_group(self) -> None:
+    def test_ci_infra_change_activates_every_group(self) -> None:
         self.assertTrue(all(classify([".github/workflows/ci.yml"]).values()))
-        self.assertTrue(all(classify(["Makefile"]).values()))
         self.assertTrue(all(classify(["scripts/classify-ci-changes.py"]).values()))
+
+    def test_makefile_change_activates_rust_and_toolchain_only(self) -> None:
+        result = classify(["Makefile"])
+        self.assertTrue(result["rust"])
+        self.assertTrue(result["toolchain"])
+        self.assertFalse(result["frontend"])
+        self.assertFalse(result["web"])
+        self.assertFalse(result["dev_stack"])
+        self.assertFalse(result["bundle"])
+        self.assertFalse(result["corpus"])
+        self.assertFalse(result["knowledge"])
+
+    def test_deploy_scripts_use_lite_dev_stack(self) -> None:
+        result = classify(["deploy/scripts/init-dev-env.sh"])
+        self.assertTrue(result["dev_stack"])
+        self.assertEqual(dev_stack_mode_for(["deploy/scripts/init-dev-env.sh"]), "lite")
+
+    def test_deploy_compose_uses_full_dev_stack(self) -> None:
+        paths = ["deploy/dev/compose.yml"]
+        self.assertTrue(classify(paths)["dev_stack"])
+        self.assertEqual(dev_stack_mode_for(paths), "full")
 
     def test_root_lockfile_activates_both_frontends(self) -> None:
         result = classify(["pnpm-lock.yaml"])
@@ -274,16 +320,19 @@ def main() -> int:
     paths = changed_paths(args.base, args.head)
     result = classify(paths)
     rust_crates, rust_desktop_deps = rust_crates_for(paths)
+    dev_stack_mode = dev_stack_mode_for(paths) if result["dev_stack"] else "skip"
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as output:
             for name, enabled in result.items():
                 print(f"{name}={str(enabled).lower()}", file=output)
             print(f"rust_crates={rust_crates}", file=output)
             print(f"rust_desktop_deps={str(rust_desktop_deps).lower()}", file=output)
+            print(f"dev_stack_mode={dev_stack_mode}", file=output)
     for name, enabled in result.items():
         print(f"{name}={str(enabled).lower()}")
     print(f"rust_crates={rust_crates}")
     print(f"rust_desktop_deps={str(rust_desktop_deps).lower()}")
+    print(f"dev_stack_mode={dev_stack_mode}")
     if paths:
         print("Changed files:", *(f"- {path}" for path in paths), sep="\n")
     return 0
