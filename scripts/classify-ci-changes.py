@@ -89,9 +89,6 @@ GROUPS = {
         "deploy/spike/**",
         "deploy/scripts/**",
         "docs/runbooks/local-development.md",
-        "bench/markhand_web/scripts/fingerprint_spike.py",
-        "bench/markhand_web/reports/spike-environment.json",
-        "scripts/validate_spike.py",
     ),
     "bundle": SHARED
     + (
@@ -196,6 +193,15 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(result["dev_stack"])
         self.assertFalse(result["rust"])
         self.assertFalse(result["frontend"])
+
+    def test_spike_report_only_uses_static_gate(self) -> None:
+        self.assertFalse(
+            classify(["bench/markhand_web/reports/spike-environment.json"])["dev_stack"]
+        )
+        self.assertFalse(classify(["scripts/validate_spike.py"])["dev_stack"])
+        self.assertFalse(
+            classify(["bench/markhand_web/reports/spike-environment.json"])["rust"]
+        )
 
     def test_ci_or_makefile_change_activates_every_group(self) -> None:
         self.assertTrue(all(classify([".github/workflows/ci.yml"]).values()))

@@ -40,13 +40,15 @@ validation uses `make bundle-linux`.
   change, on both PR and `master`. This keeps direct pushes safe without running
   unrelated product gates.
 - The Rust job selects the smallest crate scope from the changed paths:
-  - `server` PRs run `knowledge,server` tests only (no desktop/core recompile).
-  - `core`, `cli`, `desktop`, and `mcp` changes run only their crate scopes.
-  - `Cargo.lock`, workspace manifests, or CI/Makefile/classifier changes run the
-    full Rust gate.
-  - Knowledge adapter/contract changes still run the Phase 1A extraction gate.
-- Rust desktop native packages (GTK/WebKit) install only when the scoped gate includes
-  `desktop`.
+  - `server` PRs run `knowledge,server` **lib tests** (~2–3 min after cache warm).
+  - Workspace Clippy baseline runs only on the **full** Rust gate (`Cargo.lock`, CI
+    Makefile/classifier changes).
+  - Integration test binaries and the full workspace test matrix run on the full gate
+    and on `master` pushes that touch the matching paths.
+- Spike report/validator edits are checked in `changes-and-static` only; they no
+  longer trigger the heavy `dev-stack` job by themselves.
+- `dev-stack` reuses `rust-cache` so `dev-server-smoke` can hit the same `target/`
+  cache as the Rust job on subsequent runs.
 - Linux bundle smoke (including native-runtime preparation) runs only for
   packaging/runtime configuration changes; the full Linux/Windows/macOS installer
   matrix remains release-only.

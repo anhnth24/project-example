@@ -53,8 +53,8 @@ for scope in "${ordered[@]}"; do
       cargo test -p fileconv-knowledge --all-features
       ;;
     server)
-      cargo test -p fileconv-knowledge --no-default-features
-      cargo test -p fileconv-server
+      # One compile graph; lib tests give fast PR signal. Integration tests run on full gate.
+      cargo test -p fileconv-knowledge --no-default-features -p fileconv-server --lib
       ;;
     mcp)
       cargo test -p fileconv-mcp
