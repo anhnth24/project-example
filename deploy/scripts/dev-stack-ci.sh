@@ -2,7 +2,7 @@
 # CI dev-stack smoke with a tiered profile to avoid duplicating Rust compile work.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MODE="${DEV_STACK_MODE:-full}"
 RUST_RAN_SERVER="${DEV_STACK_RUST_SERVER:-false}"
 
