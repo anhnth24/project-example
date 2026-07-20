@@ -19,7 +19,7 @@ if [[ "$RUST_CRATES" == "full" ]]; then
   python3 scripts/check-rust-lint-baseline.py --self-test
 fi
 
-if [[ "$KNOWLEDGE_GATE" == "true" ]]; then
+if [[ "$KNOWLEDGE_GATE" == "true" && "$RUST_CRATES" != "smoke" && "$RUST_CRATES" != "workspace" ]]; then
   make check-knowledge-extraction-rust
 elif [[ "$RUST_CRATES" == "smoke" ]]; then
   if [[ "$INTEGRATION" == "true" ]]; then

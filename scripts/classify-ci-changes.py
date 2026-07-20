@@ -66,8 +66,7 @@ GROUPS = {
         "crates/**",
         "app/src-tauri/**",
     ),
-    "knowledge": CI_INFRA
-    + (
+    "knowledge": (
         "Cargo.lock",
         "Cargo.toml",
         "crates/server/Cargo.toml",
@@ -251,9 +250,16 @@ class ClassifierTests(unittest.TestCase):
             classify(["bench/markhand_web/reports/spike-environment.json"])["rust"]
         )
 
-    def test_ci_infra_change_activates_every_group(self) -> None:
-        self.assertTrue(all(classify([".github/workflows/ci.yml"]).values()))
-        self.assertTrue(all(classify(["scripts/classify-ci-changes.py"]).values()))
+    def test_ci_infra_change_activates_product_gates(self) -> None:
+        result = classify([".github/workflows/ci.yml"])
+        self.assertTrue(result["rust"])
+        self.assertTrue(result["frontend"])
+        self.assertTrue(result["web"])
+        self.assertTrue(result["dev_stack"])
+        self.assertTrue(result["bundle"])
+        self.assertTrue(result["toolchain"])
+        self.assertTrue(result["corpus"])
+        self.assertFalse(result["knowledge"])
 
     def test_makefile_change_activates_rust_and_toolchain_only(self) -> None:
         result = classify(["Makefile"])
