@@ -122,19 +122,6 @@ pub async fn insert_if_absent(
     map_chunk(&row)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::GENERATION_IDENTITY_CONFLICT_TARGET;
-
-    #[test]
-    fn idempotency_conflict_target_is_generation_scoped() {
-        assert_eq!(
-            GENERATION_IDENTITY_CONFLICT_TARGET,
-            "org_id, index_metadata_id, chunk_identity_sha256"
-        );
-    }
-}
-
 /// Lists chunks for a document within the tenant.
 pub async fn list_by_document(
     txn: &Transaction<'_>,
@@ -154,6 +141,39 @@ pub async fn list_by_document(
         )
         .await?;
     rows.iter().map(map_chunk).collect()
+}
+
+/// Lists distinct index signature digests that may contain vector points for a document.
+pub async fn distinct_index_signatures_by_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Vec<String>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT DISTINCT index_signature
+             FROM chunks
+             WHERE org_id = $1 AND document_id = $2
+             ORDER BY index_signature",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get("index_signature")).collect())
+}
+
+/// Deletes retrieval chunks for a document. Immutable versions/artifacts are retained.
+pub async fn delete_by_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<u64, DbError> {
+    let deleted = txn
+        .execute(
+            "DELETE FROM chunks WHERE org_id = $1 AND document_id = $2",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?;
+    Ok(deleted)
 }
 
 /// Counts chunks visible under the tenant (cross-org denial evidence).
@@ -239,4 +259,17 @@ fn map_chunk(row: &Row) -> Result<Chunk, DbError> {
         tsv: row.get("tsv"),
         created_at: row.get("created_at"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GENERATION_IDENTITY_CONFLICT_TARGET;
+
+    #[test]
+    fn idempotency_conflict_target_is_generation_scoped() {
+        assert_eq!(
+            GENERATION_IDENTITY_CONFLICT_TARGET,
+            "org_id, index_metadata_id, chunk_identity_sha256"
+        );
+    }
 }

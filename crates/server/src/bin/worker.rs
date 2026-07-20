@@ -4,13 +4,18 @@ use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::pool::create_pool;
 use fileconv_server::jobs;
 use fileconv_server::services::indexing::IndexingOutboxSink;
+use fileconv_server::services::reconciliation::ReconcileMode;
 use fileconv_server::storage::{MinioClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig};
+use fileconv_server::workers::delete::{DeleteWorker, DeleteWorkerConfig, DeleteWorkerRun};
 use fileconv_server::workers::embedding::{
     EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
 };
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
+use fileconv_server::workers::reconcile::{
+    ReconcileWorker, ReconcileWorkerConfig, ReconcileWorkerRun,
+};
 use fileconv_server::workers::sandbox::SandboxConfig;
 use uuid::Uuid;
 
@@ -97,6 +102,26 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
             )
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
             run_embedding_worker(state, pool, qdrant, worker_id, ctx).await
+        }
+        "delete" => {
+            let storage = MinioClient::from_config(storage_config.minio())
+                .map_err(|error| format!("storage client failed: {}", error.code()))?;
+            let qdrant = QdrantClient::with_api_key(
+                storage_config.qdrant_url(),
+                storage_config.qdrant_api_key().cloned(),
+            )
+            .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
+            run_delete_worker(state, pool, storage, qdrant, worker_id, ctx).await
+        }
+        "reconcile" => {
+            let storage = MinioClient::from_config(storage_config.minio())
+                .map_err(|error| format!("storage client failed: {}", error.code()))?;
+            let qdrant = QdrantClient::with_api_key(
+                storage_config.qdrant_url(),
+                storage_config.qdrant_api_key().cloned(),
+            )
+            .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
+            run_reconcile_worker(state, pool, storage, qdrant, worker_id, ctx).await
         }
         other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
     }
@@ -220,6 +245,139 @@ async fn run_index_worker(
                     Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
                     Err(error) => {
                         eprintln!("fileconv-worker: index worker error: {error}");
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_delete_worker(
+    state: fileconv_server::state::RuntimeState,
+    pool: deadpool_postgres::Pool,
+    storage: MinioClient,
+    qdrant: QdrantClient,
+    worker_id: String,
+    ctx: OrgContext,
+) -> Result<(), String> {
+    let mut config = DeleteWorkerConfig::new(worker_id);
+    config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
+        config.heartbeat_interval = Duration::from_secs(value.parse().map_err(|_| {
+            "MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS must be an integer".to_string()
+        })?);
+    }
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_MAX_JOB_SECS") {
+        config.max_job_duration = Duration::from_secs(
+            value
+                .parse()
+                .map_err(|_| "MARKHAND_WORKER_MAX_JOB_SECS must be an integer".to_string())?,
+        );
+    }
+    let worker = DeleteWorker::new(pool.clone(), storage, qdrant, config)
+        .map_err(|error| format!("delete worker initialization failed: {error}"))?;
+    let approved_signature = state.config().index_signature().map(str::to_string);
+    let embedding_plan = fileconv_server::services::embedding::ApprovedEmbeddingRuntime::from_env(
+        approved_signature.as_deref(),
+        state.config().profile(),
+    )
+    .map_err(|error| format!("delete worker generation setup failed: {error}"))?
+    .plan()
+    .clone();
+    let sink = std::sync::Arc::new(
+        IndexingOutboxSink::new(&embedding_plan)
+            .map_err(|error| format!("delete worker outbox sink failed: {error}"))?,
+    );
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("fileconv-worker: shutdown requested");
+                break;
+            }
+            result = async {
+                reclaim_expired_leases(&pool, &ctx).await;
+                jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                worker.run_once(&ctx).await.map_err(|error| error.to_string())
+            } => {
+                match result {
+                    Ok(DeleteWorkerRun::NoJob) => {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
+                    Err(error) => {
+                        eprintln!("fileconv-worker: delete worker error: {error}");
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_reconcile_worker(
+    state: fileconv_server::state::RuntimeState,
+    pool: deadpool_postgres::Pool,
+    storage: MinioClient,
+    qdrant: QdrantClient,
+    worker_id: String,
+    ctx: OrgContext,
+) -> Result<(), String> {
+    let mut config = ReconcileWorkerConfig::new(worker_id);
+    config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
+        config.heartbeat_interval = Duration::from_secs(value.parse().map_err(|_| {
+            "MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS must be an integer".to_string()
+        })?);
+    }
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_MAX_JOB_SECS") {
+        config.max_job_duration = Duration::from_secs(
+            value
+                .parse()
+                .map_err(|_| "MARKHAND_WORKER_MAX_JOB_SECS must be an integer".to_string())?,
+        );
+    }
+    if let Ok(value) = std::env::var("MARKHAND_RECONCILE_MODE") {
+        config.mode = ReconcileMode::parse(value.trim()).map_err(|error| error.to_string())?;
+    }
+    let worker = ReconcileWorker::new(pool.clone(), storage, qdrant, config)
+        .map_err(|error| format!("reconcile worker initialization failed: {error}"))?;
+    let approved_signature = state.config().index_signature().map(str::to_string);
+    let embedding_plan = fileconv_server::services::embedding::ApprovedEmbeddingRuntime::from_env(
+        approved_signature.as_deref(),
+        state.config().profile(),
+    )
+    .map_err(|error| format!("reconcile worker generation setup failed: {error}"))?
+    .plan()
+    .clone();
+    let sink = std::sync::Arc::new(
+        IndexingOutboxSink::new(&embedding_plan)
+            .map_err(|error| format!("reconcile worker outbox sink failed: {error}"))?,
+    );
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("fileconv-worker: shutdown requested");
+                break;
+            }
+            result = async {
+                reclaim_expired_leases(&pool, &ctx).await;
+                jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                worker.run_once(&ctx).await.map_err(|error| error.to_string())
+            } => {
+                match result {
+                    Ok(ReconcileWorkerRun::NoJob) => {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
+                    Err(error) => {
+                        eprintln!("fileconv-worker: reconcile worker error: {error}");
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }

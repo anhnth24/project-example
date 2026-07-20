@@ -151,6 +151,27 @@ pub(crate) async fn cas_state(
     update_state_cas(txn, ctx, document_id, expected_state, new_state).await
 }
 
+/// Sets `deleted_at` exactly once for tombstoned documents.
+pub async fn mark_deleted_at(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<Document, DbError> {
+    let row = txn
+        .query_opt(
+            "UPDATE documents
+             SET deleted_at = COALESCE(deleted_at, clock_timestamp()),
+                 updated_at = clock_timestamp()
+             WHERE org_id = $1 AND id = $2
+             RETURNING id, org_id, collection_id, title, state, current_version_id,
+                       created_by_user_id, created_at, updated_at, deleted_at",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    map_document(&row)
+}
+
 /// Counts documents for the tenant (used by cross-org denial tests).
 pub async fn count(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbError> {
     let row = txn

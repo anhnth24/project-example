@@ -36,6 +36,16 @@ use crate::storage::keys::{
     ObjectNamespace,
 };
 
+/// Observed identity fields from a stored object HEAD (reconcile validation).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ObservedObjectIdentity {
+    pub org_id: Option<Uuid>,
+    pub document_id: Option<Uuid>,
+    pub version_id: Option<Uuid>,
+    pub content_sha256: Option<String>,
+    pub content_length: Option<u64>,
+}
+
 /// Identity fields stored as S3 object metadata (never in the key path).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectIdentityMeta {
@@ -301,8 +311,8 @@ impl MinioClient {
             return Err(StorageError::ConfigInvalid);
         }
         let generated_key = request.key.clone();
-        // TODO(I07): persist pending generated keys in the durable outbox/GC so crash
-        // recovery can reconcile objects beyond this live bounded task.
+        // I07 reconciles checkpointed dead-letter staging keys; uncheckpointed crash
+        // windows still need a future durable generated-object intent.
         let path = generated_key.as_str();
         let mut headers = identity_headers(&request.meta, &request.content_type)?;
         headers.insert(
@@ -406,6 +416,99 @@ impl MinioClient {
             Err(StorageError::NotFound) => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    /// Observe stored identity metadata for reconcile validation (HEAD only).
+    pub async fn observe_object_identity(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+    ) -> Result<Option<ObservedObjectIdentity>, StorageError> {
+        authorize_key_for_org(key, org_id)?;
+        match self.head_for_org(org_id, key).await {
+            Ok((head, _)) => {
+                let meta = metadata_map(&head);
+                let content_length = head
+                    .content_length
+                    .and_then(|len| u64::try_from(len).ok())
+                    .or_else(|| {
+                        meta.get("content-length-bytes")
+                            .and_then(|value| value.parse().ok())
+                    });
+                Ok(Some(ObservedObjectIdentity {
+                    org_id: meta
+                        .get("org-id")
+                        .and_then(|value| Uuid::parse_str(value).ok()),
+                    document_id: meta
+                        .get("document-id")
+                        .and_then(|value| Uuid::parse_str(value).ok()),
+                    version_id: meta
+                        .get("version-id")
+                        .and_then(|value| Uuid::parse_str(value).ok()),
+                    content_sha256: meta.get("content-sha256").cloned(),
+                    content_length,
+                }))
+            }
+            Err(StorageError::NotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Lists object keys under an org-authorized prefix (bounded inventory scan).
+    pub async fn list_keys_with_prefix(
+        &self,
+        org_id: Uuid,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<String>, StorageError> {
+        if org_id.is_nil() || prefix.trim().is_empty() || limit == 0 {
+            return Err(StorageError::MissingScope);
+        }
+        let org_opaque = crate::storage::keys::opaque_identity("org", org_id);
+        let trusted = format!("trusted/{org_opaque}/");
+        let quarantine = format!("quarantine/{org_opaque}/");
+        if !(prefix.starts_with(&trusted) || prefix.starts_with(&quarantine)) {
+            return Err(StorageError::OwnershipConflict);
+        }
+        let mut out = Vec::new();
+        let mut continuation = None;
+        loop {
+            let (page, status) = self
+                .with_s3_timeout(
+                    self.bucket.list_page(
+                        prefix.to_string(),
+                        None,
+                        continuation.clone(),
+                        None,
+                        Some(limit.saturating_sub(out.len()).max(1)),
+                    ),
+                    map_s3_get_error,
+                )
+                .await?;
+            if !(200..300).contains(&status) {
+                return Err(StorageError::Backend);
+            }
+            for object in page.contents {
+                let key = object.key;
+                if key.is_empty() {
+                    continue;
+                }
+                let parsed = parse_key_structure(&key)?;
+                authorize_key_for_org(&parsed, org_id)?;
+                out.push(key);
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+            if !page.is_truncated {
+                break;
+            }
+            continuation = page.next_continuation_token;
+            if continuation.is_none() {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     pub async fn delete_object(&self, org_id: Uuid, key: &ObjectKey) -> Result<(), StorageError> {
