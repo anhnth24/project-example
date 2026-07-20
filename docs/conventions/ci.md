@@ -39,6 +39,14 @@ validation uses `make bundle-linux`.
 - Heavy Rust, desktop frontend, web and dev-stack jobs run only when their owned paths
   change, on both PR and `master`. This keeps direct pushes safe without running
   unrelated product gates.
+- The Rust job selects the smallest crate scope from the changed paths:
+  - `server` PRs run `knowledge,server` tests only (no desktop/core recompile).
+  - `core`, `cli`, `desktop`, and `mcp` changes run only their crate scopes.
+  - `Cargo.lock`, workspace manifests, or CI/Makefile/classifier changes run the
+    full Rust gate.
+  - Knowledge adapter/contract changes still run the Phase 1A extraction gate.
+- Rust desktop native packages (GTK/WebKit) install only when the scoped gate includes
+  `desktop`.
 - Linux bundle smoke (including native-runtime preparation) runs only for
   packaging/runtime configuration changes; the full Linux/Windows/macOS installer
   matrix remains release-only.

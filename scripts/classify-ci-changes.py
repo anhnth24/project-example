@@ -15,21 +15,36 @@ SHARED = (
     "Makefile",
     "scripts/classify-ci-changes.py",
     "scripts/check-foundation-gate.sh",
+    "scripts/check-rust*",
+    "scripts/run-rust-ci-gate.sh",
 )
+FULL_RUST_MARKERS = SHARED + (
+    "Cargo.lock",
+    "Cargo.toml",
+    "rust-toolchain.toml",
+    "rustfmt.toml",
+    "clippy.toml",
+    "scripts/check-architecture-boundaries.py",
+)
+CRATE_SCOPES = {
+    "core": ("crates/core/**",),
+    "knowledge": (
+        "crates/knowledge/**",
+        "crates/server/tests/knowledge_consumer.rs",
+        "scripts/check-knowledge*",
+        "docs/runbooks/knowledge-index-compatibility.md",
+    ),
+    "server": ("crates/server/**",),
+    "cli": ("crates/cli/**",),
+    "desktop": ("app/src-tauri/**",),
+    "mcp": ("crates/mcp/**",),
+}
 GROUPS = {
-    "rust": SHARED
+    "rust": FULL_RUST_MARKERS
     + (
-        "Cargo.lock",
-        "Cargo.toml",
         "**/Cargo.toml",
         "crates/**",
         "app/src-tauri/**",
-        "rust-toolchain.toml",
-        "rustfmt.toml",
-        "clippy.toml",
-        "scripts/check-rust*",
-        "scripts/check-knowledge*",
-        "scripts/check-architecture-boundaries.py",
     ),
     "knowledge": SHARED
     + (
@@ -126,6 +141,32 @@ def classify(paths: list[str]) -> dict[str, bool]:
     }
 
 
+def rust_crates_for(paths: list[str]) -> tuple[str, bool]:
+    if any(
+        fnmatch.fnmatch(path, pattern)
+        for path in paths
+        for pattern in FULL_RUST_MARKERS
+    ):
+        return "full", True
+
+    scopes: list[str] = []
+    for scope, patterns in CRATE_SCOPES.items():
+        if any(
+            fnmatch.fnmatch(path, pattern)
+            for path in paths
+            for pattern in patterns
+        ):
+            scopes.append(scope)
+
+    if "server" in scopes and "knowledge" not in scopes:
+        scopes.insert(0, "knowledge")
+
+    desktop_deps = "desktop" in scopes
+    if not scopes:
+        return "full", True
+    return ",".join(scopes), desktop_deps
+
+
 def changed_paths(base: str, head: str) -> list[str]:
     if not base or set(base) == {"0"}:
         base = subprocess.check_output(
@@ -194,6 +235,21 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(result["corpus"])
         self.assertFalse(result["rust"])
 
+    def test_server_only_change_scopes_rust_tests(self) -> None:
+        crates, desktop = rust_crates_for(["crates/server/src/workers/delete.rs"])
+        self.assertEqual(crates, "knowledge,server")
+        self.assertFalse(desktop)
+
+    def test_cargo_lock_runs_full_rust_gate(self) -> None:
+        crates, desktop = rust_crates_for(["Cargo.lock"])
+        self.assertEqual(crates, "full")
+        self.assertTrue(desktop)
+
+    def test_desktop_change_requires_desktop_deps(self) -> None:
+        crates, desktop = rust_crates_for(["app/src-tauri/src/lib.rs"])
+        self.assertEqual(crates, "desktop")
+        self.assertTrue(desktop)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -211,12 +267,17 @@ def main() -> int:
 
     paths = changed_paths(args.base, args.head)
     result = classify(paths)
+    rust_crates, rust_desktop_deps = rust_crates_for(paths)
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as output:
             for name, enabled in result.items():
                 print(f"{name}={str(enabled).lower()}", file=output)
+            print(f"rust_crates={rust_crates}", file=output)
+            print(f"rust_desktop_deps={str(rust_desktop_deps).lower()}", file=output)
     for name, enabled in result.items():
         print(f"{name}={str(enabled).lower()}")
+    print(f"rust_crates={rust_crates}")
+    print(f"rust_desktop_deps={str(rust_desktop_deps).lower()}")
     if paths:
         print("Changed files:", *(f"- {path}" for path in paths), sep="\n")
     return 0
