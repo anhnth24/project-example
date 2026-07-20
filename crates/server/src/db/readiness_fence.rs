@@ -40,7 +40,7 @@ pub async fn current_state(pool: &Pool) -> Result<ReadinessFenceState, DbError> 
         .query_opt("SELECT state FROM readiness_fence WHERE id = 1", &[])
         .await?
         .ok_or(DbError::NotFound)?;
-    let state: String = row.get("state");
+    let state: String = row.try_get("state")?;
     ReadinessFenceState::parse(&state).map_err(DbError::Config)
 }
 
