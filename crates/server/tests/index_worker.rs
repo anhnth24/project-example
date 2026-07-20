@@ -744,7 +744,7 @@ async fn fetched_points(
     version_id: Uuid,
     markdown: &str,
 ) -> Vec<(Uuid, ChunkPointPayload)> {
-    let chunks = prepare_chunks(document_id, version_id, markdown);
+    let chunks = prepare_chunks(document_id, version_id, markdown, "");
     let signature = embedding_plan.index_signature(8).unwrap();
     let collection_name = env
         .qdrant
@@ -859,7 +859,7 @@ async fn seed_first_batch_and_checkpoint(
     version_id: Uuid,
     markdown: &str,
 ) {
-    let chunks = prepare_chunks(document_id, version_id, markdown);
+    let chunks = prepare_chunks(document_id, version_id, markdown, "");
     assert!(chunks.len() > 1);
     let first = &chunks[0];
     let signature = embedding_plan.index_signature(8).unwrap();
@@ -945,6 +945,11 @@ async fn seed_first_batch_and_checkpoint(
                         chunk_identity_sha256: &first.chunk_identity,
                         index_metadata_id: metadata.id,
                         index_signature: &signature_digest,
+                        page: first.page,
+                        slide: first.slide,
+                        sheet: first.sheet.as_deref(),
+                        span_start: Some(first.span_start),
+                        span_end: Some(first.span_end),
                     },
                 )
                 .await?;
@@ -1000,7 +1005,7 @@ async fn live_index_worker_indexes_converted_document() {
     let IndexWorkerRun::Completed { chunks, .. } = run else {
         panic!("unexpected run: {run:?}");
     };
-    let expected = prepare_chunks(document_id, version_id, markdown);
+    let expected = prepare_chunks(document_id, version_id, markdown, "");
     assert_eq!(chunks, expected.len());
     let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
     run_embedding_jobs(&env, &embedding_worker).await;
@@ -1055,7 +1060,7 @@ async fn live_index_worker_replay_is_idempotent() {
     ));
     let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
     run_embedding_jobs(&env, &embedding_worker).await;
-    let expected = prepare_chunks(document_id, version_id, markdown);
+    let expected = prepare_chunks(document_id, version_id, markdown, "");
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
     insert_duplicate_index_outbox(&env, document_id, version_id).await;
     relay(&env, &embedding_plan).await;
@@ -1156,7 +1161,7 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
     let stale_run = worker.run_once(&env.ctx).await.expect("stale run");
     assert!(matches!(
         stale_run,
-        IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_a, markdown_a).len()
+        IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_a, markdown_a, "").len()
     ));
     assert_eq!(
         document_state(&env, document_id).await,
@@ -1179,7 +1184,7 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
     let current_run = worker.run_once(&env.ctx).await.expect("current run");
     assert!(matches!(
         current_run,
-        IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_b, markdown_b).len()
+        IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_b, markdown_b, "").len()
     ));
     run_embedding_jobs(&env, &embedding_worker).await;
     assert_eq!(
@@ -1201,7 +1206,7 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
         .all(|(_, payload)| payload.is_current && payload.is_effective));
     assert_eq!(
         chunk_count(&env, version_b).await,
-        prepare_chunks(document_id, version_b, markdown_b).len() as i64
+        prepare_chunks(document_id, version_b, markdown_b, "").len() as i64
     );
     env.drop().await;
 }
@@ -1239,7 +1244,7 @@ async fn live_index_worker_resumes_from_indexing_state() {
     assert!(matches!(run, IndexWorkerRun::Completed { .. }));
     let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
     run_embedding_jobs(&env, &embedding_worker).await;
-    let expected = prepare_chunks(document_id, version_id, markdown);
+    let expected = prepare_chunks(document_id, version_id, markdown, "");
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
     assert_eq!(
         fetched_points(

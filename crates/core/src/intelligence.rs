@@ -391,7 +391,10 @@ fn tokens(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn page_before(markdown: &str, offset: usize) -> Option<u32> {
+/// Trang gần nhất trước `offset`, suy từ marker `<!-- Page N -->` hoặc
+/// `<!-- Trang N (OCR) -->` mà converter chèn cho mỗi trang PDF. Dùng chung cho
+/// citation anchor ở cả desktop lẫn index server.
+pub fn page_before(markdown: &str, offset: usize) -> Option<u32> {
     let prefix = &markdown[..offset.min(markdown.len())];
     prefix.lines().rev().find_map(|line| {
         let line = line.trim();
