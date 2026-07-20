@@ -1,8 +1,8 @@
 //! Live tests for the durable index worker.
 //!
-//! These tests require PostgreSQL, MinIO, Qdrant, and an approved embedding
-//! endpoint. They are explicitly ignored outside the integration environment;
-//! non-skipping unit coverage lives beside the worker/runtime modules.
+//! These tests require PostgreSQL, MinIO, and Qdrant. They use a local
+//! OpenAI-compatible mock for embeddings and return early when the live
+//! storage environment is unavailable.
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
@@ -17,6 +17,7 @@ use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::jobs::{self, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
 use fileconv_server::services::chunking::prepare_chunks;
+use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::indexing::IndexingOutboxSink;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
@@ -24,10 +25,17 @@ use fileconv_server::storage::qdrant::{
     VectorScope,
 };
 use fileconv_server::storage::trusted_key;
+use fileconv_server::workers::embedding::{
+    EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
+};
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
@@ -75,17 +83,132 @@ fn test_qdrant_client() -> Result<QdrantClient, String> {
     QdrantClient::with_api_key(url, api_key).map_err(|error| format!("test Qdrant client: {error}"))
 }
 
-fn test_embedding_plan() -> EmbeddingPlan {
+fn test_embedding_plan(base_url: &str) -> EmbeddingPlan {
     EmbeddingPlan::provider(
         "test",
         "test-embedding",
         "r1",
-        ProviderDeployment::from_base_url(Some("http://embedding.test/v1"))
-            .expect("test deployment"),
+        ProviderDeployment::from_base_url(Some(base_url)).expect("test deployment"),
         Some(8),
         RUNTIME_VLLM_LOCAL,
     )
     .expect("test embedding plan")
+}
+
+struct MockEmbeddingProvider {
+    base_url: String,
+    stopping: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl MockEmbeddingProvider {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock embedding provider");
+        listener
+            .set_nonblocking(true)
+            .expect("set mock listener nonblocking");
+        let base_url = format!(
+            "http://{}/v1",
+            listener.local_addr().expect("mock listener address")
+        );
+        let stopping = Arc::new(AtomicBool::new(false));
+        let thread_stopping = Arc::clone(&stopping);
+        let thread = thread::spawn(move || {
+            while !thread_stopping.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => respond_to_embedding_request(&mut stream),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("mock embedding provider accept failed: {error}"),
+                }
+            }
+        });
+        Self {
+            base_url,
+            stopping,
+            thread: Some(thread),
+        }
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+impl Drop for MockEmbeddingProvider {
+    fn drop(&mut self) {
+        self.stopping.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("join mock embedding provider");
+        }
+    }
+}
+
+fn respond_to_embedding_request(stream: &mut TcpStream) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set mock stream read timeout");
+    let request = read_http_request(stream);
+    let body_start = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("mock request header terminator")
+        + 4;
+    let request_body = &request[body_start..];
+    let input_count = serde_json::from_slice::<serde_json::Value>(request_body)
+        .expect("decode embedding request")
+        .get("input")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    let response = json!({
+        "data": (0..input_count)
+            .map(|index| json!({
+                "index": index,
+                "embedding": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let response = serde_json::to_vec(&response).expect("encode embedding response");
+    let headers = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        response.len()
+    );
+    stream
+        .write_all(headers.as_bytes())
+        .expect("write mock headers");
+    stream.write_all(&response).expect("write mock response");
+    stream.flush().expect("flush mock response");
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut buffer).expect("read mock request");
+        assert_ne!(read, 0, "mock client closed request before completion");
+        request.extend_from_slice(&buffer[..read]);
+        let Some(header_end) = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+        else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).expect("mock request headers");
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + content_length {
+            return request;
+        }
+    }
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -489,6 +612,7 @@ async fn seed_promoted_current_version(
 fn index_worker(
     env: &LiveEnv,
     approved_signature: Option<String>,
+    embedding_plan: EmbeddingPlan,
 ) -> Result<IndexWorker, fileconv_server::workers::index::IndexWorkerError> {
     let mut config = IndexWorkerConfig::new(format!("index-worker-{}", Uuid::new_v4()));
     config.lease_ttl = Duration::from_secs(30);
@@ -501,12 +625,49 @@ fn index_worker(
         env.qdrant.clone(),
         config,
         approved_signature,
-        test_embedding_plan(),
+        embedding_plan,
     )
 }
 
-async fn relay(env: &LiveEnv) {
-    let sink = Arc::new(IndexingOutboxSink::new());
+fn embedding_worker(
+    env: &LiveEnv,
+    provider: &MockEmbeddingProvider,
+) -> Result<EmbeddingWorker, fileconv_server::workers::embedding::EmbeddingWorkerError> {
+    let mut config = EmbeddingWorkerConfig::new(format!("embedding-worker-{}", Uuid::new_v4()));
+    config.lease_ttl = Duration::from_secs(30);
+    config.heartbeat_interval = Duration::from_secs(5);
+    config.max_job_duration = Duration::from_secs(60);
+    let runtime = ApprovedEmbeddingRuntime::new(
+        provider.base_url().to_string(),
+        "test-api-key".into(),
+        "test".into(),
+        "test-embedding".into(),
+        "r1".into(),
+        8,
+        RUNTIME_VLLM_LOCAL.into(),
+        None,
+    )
+    .expect("mock embedding runtime");
+    EmbeddingWorker::new(env.pool.clone(), env.qdrant.clone(), config, runtime)
+}
+
+async fn run_embedding_jobs(env: &LiveEnv, worker: &EmbeddingWorker) {
+    for _ in 0..32 {
+        match worker.run_once(&env.ctx).await.expect("embedding run") {
+            EmbeddingWorkerRun::Completed { .. } => {}
+            EmbeddingWorkerRun::NoJob => return,
+            outcome => panic!("unexpected embedding run: {outcome:?}"),
+        }
+    }
+    panic!("embedding worker did not drain its jobs");
+}
+
+async fn relay(env: &LiveEnv, embedding_plan: &EmbeddingPlan) {
+    let signature = embedding_plan
+        .index_signature(8)
+        .expect("test index signature")
+        .digest();
+    let sink = Arc::new(IndexingOutboxSink::new(signature));
     jobs::relay_outbox_with_sink(&env.pool, &env.ctx, 32, &sink)
         .await
         .expect("relay outbox");
@@ -579,14 +740,14 @@ async fn active_signature(env: &LiveEnv, collection_id: Uuid) -> Option<String> 
 
 async fn fetched_points(
     env: &LiveEnv,
+    embedding_plan: &EmbeddingPlan,
     collection_id: Uuid,
     document_id: Uuid,
     version_id: Uuid,
     markdown: &str,
 ) -> Vec<(Uuid, ChunkPointPayload)> {
     let chunks = prepare_chunks(document_id, version_id, markdown);
-    let plan = test_embedding_plan();
-    let signature = plan.index_signature(8).unwrap();
+    let signature = embedding_plan.index_signature(8).unwrap();
     let collection_name = env
         .qdrant
         .ensure_collection_for_signature(&signature)
@@ -694,6 +855,7 @@ async fn insert_duplicate_index_outbox(env: &LiveEnv, document_id: Uuid, version
 
 async fn seed_first_batch_and_checkpoint(
     env: &LiveEnv,
+    embedding_plan: &EmbeddingPlan,
     collection_id: Uuid,
     document_id: Uuid,
     version_id: Uuid,
@@ -702,8 +864,7 @@ async fn seed_first_batch_and_checkpoint(
     let chunks = prepare_chunks(document_id, version_id, markdown);
     assert!(chunks.len() > 1);
     let first = &chunks[0];
-    let plan = test_embedding_plan();
-    let signature = plan.index_signature(8).unwrap();
+    let signature = embedding_plan.index_signature(8).unwrap();
     let signature_digest = signature.digest();
     let collection_name = env
         .qdrant
@@ -816,18 +977,23 @@ fn sample_markdown() -> &'static str {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_indexes_converted_document() {
-    let env = LiveEnv::boot()
-        .await
-        .expect("live index worker environment");
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
-    relay(&env).await;
+    relay(&env, &embedding_plan).await;
     assert_eq!(index_job_count(&env).await, 1);
 
-    let run = index_worker(&env, None)
+    let run = index_worker(&env, None, embedding_plan.clone())
         .expect("worker")
         .run_once(&env.ctx)
         .await
@@ -837,14 +1003,24 @@ async fn live_index_worker_indexes_converted_document() {
     };
     let expected = prepare_chunks(document_id, version_id, markdown);
     assert_eq!(chunks, expected.len());
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
     assert_eq!(
         document_state(&env, document_id).await,
         DocumentState::Indexed
     );
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
-    let signature = test_embedding_plan().index_signature(8).unwrap().digest();
+    let signature = embedding_plan.index_signature(8).unwrap().digest();
     assert_eq!(active_signature(&env, collection_id).await, Some(signature));
-    let points = fetched_points(&env, collection_id, document_id, version_id, markdown).await;
+    let points = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_id,
+        markdown,
+    )
+    .await;
     assert_eq!(points.len(), expected.len());
     for (_, payload) in points {
         assert_eq!(payload.org_id, env.ctx.org_id());
@@ -858,24 +1034,31 @@ async fn live_index_worker_indexes_converted_document() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_replay_is_idempotent() {
-    let env = LiveEnv::boot()
-        .await
-        .expect("live index worker environment");
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
-    relay(&env).await;
-    let worker = index_worker(&env, None).expect("worker");
+    relay(&env, &embedding_plan).await;
+    let worker = index_worker(&env, None, embedding_plan.clone()).expect("worker");
     assert!(matches!(
         worker.run_once(&env.ctx).await.expect("first run"),
         IndexWorkerRun::Completed { .. }
     ));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
     let expected = prepare_chunks(document_id, version_id, markdown);
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
     insert_duplicate_index_outbox(&env, document_id, version_id).await;
-    relay(&env).await;
+    relay(&env, &embedding_plan).await;
     assert_eq!(index_job_count(&env).await, 1);
     reset_job_to_pending(&env).await;
     assert!(matches!(
@@ -884,56 +1067,79 @@ async fn live_index_worker_replay_is_idempotent() {
     ));
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
     assert_eq!(
-        fetched_points(&env, collection_id, document_id, version_id, markdown)
-            .await
-            .len(),
+        fetched_points(
+            &env,
+            &embedding_plan,
+            collection_id,
+            document_id,
+            version_id,
+            markdown,
+        )
+        .await
+        .len(),
         expected.len()
     );
     env.drop().await;
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_signature_mismatch_fails_closed() {
-    let env = LiveEnv::boot()
-        .await
-        .expect("live index worker environment");
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let embedding_plan = test_embedding_plan("http://embedding.test/v1");
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
-    relay(&env).await;
+    relay(&env, &embedding_plan).await;
     let bad_signature =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
-    assert!(index_worker(&env, Some(bad_signature)).is_err());
+    assert!(index_worker(&env, Some(bad_signature), embedding_plan.clone()).is_err());
     assert_eq!(chunk_count(&env, version_id).await, 0);
     assert_eq!(
         document_state(&env, document_id).await,
         DocumentState::Converted
     );
-    assert!(
-        fetched_points(&env, collection_id, document_id, version_id, markdown)
-            .await
-            .is_empty()
-    );
+    assert!(fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_id,
+        markdown,
+    )
+    .await
+    .is_empty());
     env.drop().await;
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
-    let env = LiveEnv::boot()
-        .await
-        .expect("live index worker environment");
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
     let markdown_a = sample_markdown();
     let markdown_b = "# Chương II\n\nBản mới.\n\n## Điều 3\n\nNội dung điều 3.\n";
     let (document_id, version_a, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown_a).await;
-    relay(&env).await;
-    let worker = index_worker(&env, None).expect("worker");
+    relay(&env, &embedding_plan).await;
+    let worker = index_worker(&env, None, embedding_plan.clone()).expect("worker");
     assert!(matches!(
         worker.run_once(&env.ctx).await.expect("index version a"),
         IndexWorkerRun::Completed { .. }
     ));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
     assert_eq!(
         document_state(&env, document_id).await,
         DocumentState::Indexed
@@ -943,7 +1149,7 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
         seed_promoted_current_version(&env, document_id, collection_id, version_a, markdown_b)
             .await;
     reset_index_job_for_version(&env, version_a).await;
-    relay(&env).await;
+    relay(&env, &embedding_plan).await;
 
     let stale_run = worker.run_once(&env.ctx).await.expect("stale run");
     assert!(matches!(
@@ -954,7 +1160,15 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
         document_state(&env, document_id).await,
         DocumentState::Converted
     );
-    let points_a = fetched_points(&env, collection_id, document_id, version_a, markdown_a).await;
+    let points_a = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_a,
+        markdown_a,
+    )
+    .await;
     assert!(!points_a.is_empty());
     assert!(points_a
         .iter()
@@ -965,11 +1179,20 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
         current_run,
         IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_b, markdown_b).len()
     ));
+    run_embedding_jobs(&env, &embedding_worker).await;
     assert_eq!(
         document_state(&env, document_id).await,
         DocumentState::Indexed
     );
-    let points_b = fetched_points(&env, collection_id, document_id, version_b, markdown_b).await;
+    let points_b = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_b,
+        markdown_b,
+    )
+    .await;
     assert!(!points_b.is_empty());
     assert!(points_b
         .iter()
@@ -982,28 +1205,50 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, MARKHAND_TEST_QDRANT_URL, and MARKHAND_EMBEDDING_*"]
 async fn live_index_worker_resumes_from_indexing_state() {
-    let env = LiveEnv::boot()
-        .await
-        .expect("live index worker environment");
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
     let markdown = sample_markdown();
     let (document_id, version_id, collection_id) =
         seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown).await;
-    relay(&env).await;
-    seed_first_batch_and_checkpoint(&env, collection_id, document_id, version_id, markdown).await;
-    let run = index_worker(&env, None)
+    relay(&env, &embedding_plan).await;
+    seed_first_batch_and_checkpoint(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_id,
+        markdown,
+    )
+    .await;
+    let run = index_worker(&env, None, embedding_plan.clone())
         .expect("worker")
         .run_once(&env.ctx)
         .await
         .expect("run");
     assert!(matches!(run, IndexWorkerRun::Completed { .. }));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
     let expected = prepare_chunks(document_id, version_id, markdown);
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
     assert_eq!(
-        fetched_points(&env, collection_id, document_id, version_id, markdown)
-            .await
-            .len(),
+        fetched_points(
+            &env,
+            &embedding_plan,
+            collection_id,
+            document_id,
+            version_id,
+            markdown,
+        )
+        .await
+        .len(),
         expected.len()
     );
     assert_eq!(

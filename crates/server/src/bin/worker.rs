@@ -14,6 +14,9 @@ use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::SandboxConfig;
 use uuid::Uuid;
 
+const RECLAIM_LIMIT: u32 = 32;
+const RECLAIM_BACKOFF: Duration = Duration::from_secs(1);
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -128,7 +131,7 @@ async fn run_convert_worker(
             return Err("MARKHAND_WORKER_CLAIM_LIMIT must be exactly 1".into());
         }
     }
-    let worker = ConvertWorker::new(pool, storage, config)
+    let worker = ConvertWorker::new(pool.clone(), storage, config)
         .map_err(|error| format!("converter worker initialization failed: {error}"))?;
     loop {
         tokio::select! {
@@ -136,7 +139,10 @@ async fn run_convert_worker(
                 println!("fileconv-worker: shutdown requested");
                 break;
             }
-            result = worker.run_once(&ctx) => {
+            result = async {
+                reclaim_expired_leases(&pool, &ctx).await;
+                worker.run_once(&ctx).await
+            } => {
                 match result {
                     Ok(fileconv_server::workers::convert::ConvertWorkerRun::NoJob) => {
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -183,7 +189,11 @@ async fn run_index_worker(
     let approved_signature = state.config().index_signature().map(str::to_string);
     let worker = IndexWorker::new(pool.clone(), storage, qdrant, config, approved_signature)
         .map_err(|error| format!("index worker initialization failed: {error}"))?;
-    let sink = std::sync::Arc::new(IndexingOutboxSink::new());
+    let sink = std::sync::Arc::new(IndexingOutboxSink::new(
+        worker
+            .generation_signature()
+            .map_err(|error| format!("index worker generation signature failed: {error}"))?,
+    ));
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -191,6 +201,7 @@ async fn run_index_worker(
                 break;
             }
             result = async {
+                reclaim_expired_leases(&pool, &ctx).await;
                 jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
                     .await
                     .map_err(|error| error.to_string())?;
@@ -237,7 +248,7 @@ async fn run_embedding_worker(
         state.config().index_signature(),
     )
     .map_err(|error| format!("embedding runtime initialization failed: {error}"))?;
-    let worker = EmbeddingWorker::new(pool, qdrant, config, runtime)
+    let worker = EmbeddingWorker::new(pool.clone(), qdrant, config, runtime)
         .map_err(|error| format!("embedding worker initialization failed: {error}"))?;
     loop {
         tokio::select! {
@@ -245,7 +256,10 @@ async fn run_embedding_worker(
                 println!("fileconv-worker: shutdown requested");
                 break;
             }
-            result = worker.run_once(&ctx) => {
+            result = async {
+                reclaim_expired_leases(&pool, &ctx).await;
+                worker.run_once(&ctx).await
+            } => {
                 match result {
                     Ok(EmbeddingWorkerRun::NoJob) => tokio::time::sleep(Duration::from_secs(2)).await,
                     Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
@@ -258,6 +272,21 @@ async fn run_embedding_worker(
         }
     }
     Ok(())
+}
+
+async fn reclaim_expired_leases(pool: &deadpool_postgres::Pool, ctx: &OrgContext) {
+    match jobs::reclaim_expired(pool, ctx, RECLAIM_LIMIT, RECLAIM_BACKOFF).await {
+        Ok(reclaimed) if !reclaimed.is_empty() => {
+            println!(
+                "fileconv-worker: reclaimed {} expired leases",
+                reclaimed.len()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("fileconv-worker: expired lease reclamation failed: {error}");
+        }
+    }
 }
 
 fn sandbox_config_from_env() -> Result<SandboxConfig, String> {

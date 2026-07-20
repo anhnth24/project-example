@@ -152,6 +152,18 @@ impl EmbeddingWorker {
             .batch_id
             .ok_or(EmbeddingWorkerError::InvalidPayload)?;
         let source = self.load_batch_source(ctx, job.id, batch_id).await?;
+        let expected_dimensions = self
+            .runtime
+            .plan()
+            .expected_dimensions()
+            .ok_or(EmbeddingWorkerError::EmbeddingDimensionsUnknown)?;
+        let signature = self.runtime.plan().index_signature(expected_dimensions)?;
+        if signature.digest() != source.metadata.index_signature_sha256 {
+            // This must be checked before sending chunk text to a provider.
+            // A stale or misrouted batch otherwise leaks work into a generation
+            // it can never validly complete.
+            return Err(EmbeddingWorkerError::SignatureMismatch);
+        }
         let inputs = source
             .chunks
             .iter()
@@ -186,9 +198,11 @@ impl EmbeddingWorker {
             .first()
             .map(Vec::len)
             .ok_or(EmbeddingWorkerError::ChunkRangeMismatch)?;
-        let signature = self.runtime.plan().index_signature(dimensions)?;
-        let signature_digest = signature.digest();
-        if signature_digest != source.metadata.index_signature_sha256 {
+        if dimensions != expected_dimensions
+            || vectors
+                .iter()
+                .any(|vector| vector.len() != expected_dimensions)
+        {
             return Err(EmbeddingWorkerError::SignatureMismatch);
         }
         let collection_name = self
@@ -464,6 +478,8 @@ pub enum EmbeddingWorkerError {
     InputChecksumMismatch,
     #[error("embedding batch does not match its stored chunk range")]
     ChunkRangeMismatch,
+    #[error("approved embedding runtime did not declare vector dimensions")]
+    EmbeddingDimensionsUnknown,
     #[error("embedding signature differs from target index generation")]
     SignatureMismatch,
     #[error("embedding worker heartbeat interval must be <= one third of lease ttl")]
@@ -493,6 +509,7 @@ impl EmbeddingWorkerError {
             Self::InvalidPayload => "embedding payload invalid",
             Self::InputChecksumMismatch => "embedding input checksum mismatch",
             Self::ChunkRangeMismatch => "embedding chunk range invalid",
+            Self::EmbeddingDimensionsUnknown => "embedding dimensions missing",
             Self::SignatureMismatch => "embedding signature mismatch",
             Self::InvalidHeartbeatConfig => "embedding heartbeat config invalid",
             Self::InvalidMaxJobDuration => "embedding max job duration invalid",

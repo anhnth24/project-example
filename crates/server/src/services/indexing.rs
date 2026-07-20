@@ -36,12 +36,16 @@ use crate::storage::minio::MinioClient;
 use crate::storage::qdrant::QdrantClient;
 use crate::storage::{ObjectNamespace, StorageError};
 
-#[derive(Debug, Default)]
-pub struct IndexingOutboxSink;
+#[derive(Debug)]
+pub struct IndexingOutboxSink {
+    index_signature: String,
+}
 
 impl IndexingOutboxSink {
-    pub fn new() -> Self {
-        Self
+    pub fn new(index_signature: impl Into<String>) -> Self {
+        Self {
+            index_signature: index_signature.into(),
+        }
     }
 }
 
@@ -72,7 +76,11 @@ impl jobs::OutboxSink for IndexingOutboxSink {
                 jobs::enqueue_within_txn(
                     txn,
                     ctx,
-                    EnqueueJob::new(JobType::Index, job_payload, format!("index:{version_id}")),
+                    EnqueueJob::new(
+                        JobType::Index,
+                        job_payload,
+                        index_job_idempotency_key(&self.index_signature, version_id),
+                    ),
                 )
                 .await?;
             }
@@ -80,6 +88,15 @@ impl jobs::OutboxSink for IndexingOutboxSink {
             append_outbox_published(txn, ctx, event).await
         })
     }
+}
+
+/// One version can have one index job per embedding-generation signature.
+///
+/// The relay and staged-backfill paths must derive this key identically:
+/// otherwise a normal index request and a staged request for the same target
+/// generation can run concurrently and each create a different parent job.
+fn index_job_idempotency_key(index_signature: &str, version_id: Uuid) -> String {
+    format!("index:{index_signature}:{version_id}")
 }
 
 async fn append_outbox_published(
@@ -351,6 +368,7 @@ async fn enqueue_staged_backfill(
     current_version_id: Uuid,
 ) -> Result<(), IndexingError> {
     let metadata_id = metadata.id;
+    let metadata_signature = metadata.index_signature_sha256.clone();
     let collection_id = metadata
         .collection_id
         .ok_or(IndexingError::MissingCollection)?;
@@ -384,7 +402,7 @@ async fn enqueue_staged_backfill(
                                 index_metadata_id: Some(metadata_id),
                                 ..JobPayload::default()
                             },
-                            format!("index:{metadata_id}:{version_id}"),
+                            index_job_idempotency_key(&metadata_signature, version_id),
                         ),
                     )
                     .await?;
@@ -462,6 +480,12 @@ pub(crate) async fn complete_document_backfill_if_ready(
     document_id: Uuid,
     version_id: Uuid,
 ) -> Result<bool, IndexingError> {
+    // The document row is the authoritative completion gate. An index job and
+    // multiple embedding jobs can all make the last-successful transition.
+    // Locking before observing batch/index-job state serializes those checks,
+    // so a concurrent finalizer cannot each observe another uncommitted batch
+    // and leave the generation permanently in `indexing`.
+    let document = documents::get_by_id_for_update(txn, ctx, document_id).await?;
     if !embedding_batches::document_batches_complete(txn, ctx, metadata_id, document_id, version_id)
         .await?
     {
@@ -472,7 +496,6 @@ pub(crate) async fn complete_document_backfill_if_ready(
         .await?;
     mark_generation_shadow_if_complete(txn, ctx, metadata_id).await?;
 
-    let document = documents::get_by_id_for_update(txn, ctx, document_id).await?;
     if document.current_version_id == Some(version_id) && document.state == DocumentState::Indexing
     {
         document_state::apply_transition(
@@ -1183,13 +1206,28 @@ impl IndexingError {
 
 #[cfg(test)]
 mod tests {
-    use super::should_fail_current_document;
+    use super::{index_job_idempotency_key, should_fail_current_document};
     use crate::db::models::DocumentState;
+    use uuid::Uuid;
 
     #[test]
     fn staged_backfill_failure_does_not_fail_an_indexed_active_document() {
         assert!(should_fail_current_document(DocumentState::Converted));
         assert!(should_fail_current_document(DocumentState::Indexing));
         assert!(!should_fail_current_document(DocumentState::Indexed));
+    }
+
+    #[test]
+    fn normal_and_staged_requests_share_a_generation_scoped_key() {
+        let version_id = Uuid::new_v4();
+        let signature = "a".repeat(64);
+        assert_eq!(
+            index_job_idempotency_key(&signature, version_id),
+            index_job_idempotency_key(&signature, version_id)
+        );
+        assert_ne!(
+            index_job_idempotency_key(&signature, version_id),
+            index_job_idempotency_key(&"b".repeat(64), version_id)
+        );
     }
 }

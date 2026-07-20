@@ -221,8 +221,59 @@ fn parse_boolean(raw: &str) -> Option<bool> {
 }
 
 fn parse_decimal(raw: &str) -> Option<Decimal> {
-    let normalized = raw.trim().replace([',', '_', ' '], "");
+    let compact = raw
+        .trim()
+        .chars()
+        .filter(|character| *character != '_' && !character.is_whitespace())
+        .collect::<String>();
+    if compact.is_empty() {
+        return None;
+    }
+    let comma_count = compact.matches(',').count();
+    let dot_count = compact.matches('.').count();
+    let decimal_separator = match (comma_count, dot_count) {
+        (0, 0) => None,
+        // Vietnamese convention uses a comma as the decimal separator. Keep a
+        // lone comma as a decimal marker instead of silently turning 1,5 into
+        // 15. Repeated separators that form three-digit groups stay grouping.
+        (1, 0) => compact.rfind(','),
+        (count, 0) if count > 1 && !separators_are_three_digit_groups(&compact, ',') => {
+            compact.rfind(',')
+        }
+        (count, 0) if count > 1 => None,
+        (0, 1) => compact.rfind('.'),
+        (0, count) if count > 1 && !separators_are_three_digit_groups(&compact, '.') => {
+            compact.rfind('.')
+        }
+        (0, count) if count > 1 => None,
+        (_, _) => compact
+            .rfind(',')
+            .into_iter()
+            .chain(compact.rfind('.'))
+            .max(),
+    };
+    let normalized = compact
+        .char_indices()
+        .filter_map(|(index, character)| match character {
+            ',' | '.' if Some(index) == decimal_separator => Some('.'),
+            ',' | '.' => None,
+            _ => Some(character),
+        })
+        .collect::<String>();
     normalized.parse().ok()
+}
+
+fn separators_are_three_digit_groups(value: &str, separator: char) -> bool {
+    let mut groups = value.split(separator);
+    let Some(first) = groups.next() else {
+        return false;
+    };
+    let first = first.trim_start_matches(['+', '-']);
+    !first.is_empty()
+        && first.chars().all(|character| character.is_ascii_digit())
+        && groups.all(|group| {
+            group.len() == 3 && group.chars().all(|character| character.is_ascii_digit())
+        })
 }
 
 fn is_money_unit(unit: Option<&str>) -> bool {
@@ -351,5 +402,12 @@ budget is one million
 | --- | --- | --- | --- | --- |
 | budget | | monthly_limit | 1000000 | money |";
         assert!(extract_typed_claims(markdown, Uuid::new_v4(), "chunk-a").is_empty());
+    }
+
+    #[test]
+    fn parses_vietnamese_decimal_commas_without_losing_the_fraction() {
+        assert_eq!(parse_decimal("1,5"), Some(Decimal::new(15, 1)));
+        assert_eq!(parse_decimal("1.234,56"), Some(Decimal::new(123_456, 2)));
+        assert_eq!(parse_decimal("1,000,000"), Some(Decimal::new(1_000_000, 0)));
     }
 }

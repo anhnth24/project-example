@@ -139,6 +139,20 @@ impl IndexWorker {
         self.process_claimed_job(ctx, job).await
     }
 
+    /// Returns the generation signature used to deduplicate index requests
+    /// before they are claimed by this worker.
+    pub fn generation_signature(&self) -> Result<String, IndexWorkerError> {
+        let dimensions = self
+            .embedding_plan
+            .expected_dimensions()
+            .ok_or(IndexWorkerError::EmbeddingDimensionsUnknown)?;
+        Ok(self
+            .embedding_plan
+            .index_signature(dimensions)
+            .map_err(IndexWorkerError::Knowledge)?
+            .digest())
+    }
+
     pub async fn process_claimed_job(
         &self,
         ctx: &OrgContext,
