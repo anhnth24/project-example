@@ -394,6 +394,7 @@ async fn enqueue_convert(
                 collection_id: None,
                 upload_id: None,
                 batch_id: None,
+                cleanup_target_job_id: None,
             },
             format!("convert-{version_id}"),
         ),
@@ -1311,6 +1312,7 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
                     collection_id: None,
                     upload_id: None,
                     batch_id: None,
+                    cleanup_target_job_id: None,
                 },
                 format!("convert-fault-{fault:?}-{version_id}"),
             ),
@@ -1376,6 +1378,181 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
 }
 
 #[tokio::test]
+async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"post commit acknowledgement loss\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
+    let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    config.promotion_fault = Some(PromotionFault::AfterCommit);
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("post-commit run"),
+        ConvertWorkerRun::ReconciliationNeeded { job_id } if job_id == job.id
+    ));
+    assert_eq!(
+        get_job(&pool, &ctx, job.id).await.status,
+        JobStatus::Succeeded
+    );
+    let promoted = published_version_for_source(&pool, &ctx, version_id)
+        .await
+        .expect("committed promoted version");
+    let artifact_key = markdown_artifact_key(&pool, &ctx, promoted)
+        .await
+        .expect("committed artifact");
+    let artifact = fileconv_server::storage::parse_key_for_org(&artifact_key, ctx.org_id())
+        .expect("artifact key");
+    assert_eq!(
+        storage
+            .get_object(ctx.org_id(), &artifact)
+            .await
+            .expect("committed object")
+            .as_ref(),
+        payload
+    );
+
+    assert!(matches!(
+        worker.run_once(&ctx).await.expect("reconciliation run"),
+        ConvertWorkerRun::Reconciled { .. }
+    ));
+    assert_eq!(
+        storage
+            .get_object(ctx.org_id(), &artifact)
+            .await
+            .expect("object survives reconciliation")
+            .as_ref(),
+        payload
+    );
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let quarantine = quarantine_key(ctx.org_id(), Uuid::new_v4(), None).expect("quarantine key");
+    let payload = b"terminal cleanup intent\n";
+    let sha256 = put_quarantine_object(
+        &storage,
+        &ctx,
+        &quarantine,
+        payload,
+        "txt",
+        document_id,
+        version_id,
+    )
+    .await;
+    let (document_id, version_id) = seed_org_collection_document_version(
+        &pool,
+        &ctx,
+        document_id,
+        version_id,
+        &quarantine.as_str(),
+        &sha256,
+        payload.len() as u64,
+    )
+    .await;
+    let mut enqueue = EnqueueJob::new(
+        JobType::Convert,
+        JobPayload {
+            document_id: Some(document_id),
+            version_id: Some(version_id),
+            collection_id: None,
+            upload_id: None,
+            batch_id: None,
+            cleanup_target_job_id: None,
+        },
+        format!("convert-terminal-cleanup-{version_id}"),
+    );
+    enqueue.max_attempts = 1;
+    let job = jobs::enqueue(&pool, &ctx, enqueue)
+        .await
+        .expect("enqueue")
+        .job;
+    let mut failing_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
+    failing_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
+    failing_config.fail_cleanup_delete = true;
+    let failing_worker =
+        ConvertWorker::new(pool.clone(), storage.clone(), failing_config).expect("worker");
+
+    assert!(matches!(
+        failing_worker.run_once(&ctx).await.expect("failed run"),
+        ConvertWorkerRun::Failed {
+            job_id,
+            terminal: true
+        } if job_id == job.id
+    ));
+    let staged_key = checkpoint_staged_keys(&pool, &ctx, job.id)
+        .await
+        .into_iter()
+        .next()
+        .expect("staged key");
+    let staged =
+        fileconv_server::storage::parse_key_for_org(&staged_key, ctx.org_id()).expect("staged key");
+    assert!(storage
+        .object_exists(ctx.org_id(), &staged)
+        .await
+        .expect("staged object remains before reconciliation"));
+
+    let cleanup_worker = ConvertWorker::new(
+        pool.clone(),
+        storage.clone(),
+        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
+    )
+    .expect("cleanup worker");
+    assert!(matches!(
+        cleanup_worker
+            .run_once(&ctx)
+            .await
+            .expect("terminal cleanup reconciliation"),
+        ConvertWorkerRun::Reconciled { .. }
+    ));
+    assert!(!storage
+        .object_exists(ctx.org_id(), &staged)
+        .await
+        .expect("terminal cleanup removed staged object"));
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
 async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_present() {
     let Some(base_url) = test_database_url() else {
         return;
@@ -1420,6 +1597,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
                 collection_id: None,
                 upload_id: None,
                 batch_id: None,
+                cleanup_target_job_id: None,
             },
             format!("convert-reclaim-race-{version_id}"),
         ),
@@ -1525,6 +1703,7 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
                 collection_id: None,
                 upload_id: None,
                 batch_id: None,
+                cleanup_target_job_id: None,
             },
             format!("convert-barrier-reclaim-{version_id}"),
         ),
@@ -2248,6 +2427,7 @@ while True:
                     collection_id: None,
                     upload_id: None,
                     batch_id: None,
+                    cleanup_target_job_id: None,
                 },
                 format!("convert-resource-{name}-{version_id}"),
             ),

@@ -23,6 +23,8 @@ pub enum PromotionFault {
     AfterVersionInsert,
     AfterPointerSwap,
     AfterOutboxInsert,
+    /// Simulates a lost response after the transaction has committed.
+    AfterCommit,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +62,8 @@ pub enum PromotionError {
     LeaseLost,
     #[error("promotion idempotency conflict")]
     IdempotencyConflict,
+    #[error("promotion may have committed but its result was not acknowledged")]
+    CommittedOutcomeUnknown,
     #[error("injected promotion fault at {0:?}")]
     Injected(PromotionFault),
 }
@@ -74,6 +78,9 @@ impl From<PromotionError> for JobError {
             PromotionError::IdempotencyConflict => {
                 JobError::Database(DbError::Config("promotion idempotency conflict".into()))
             }
+            PromotionError::CommittedOutcomeUnknown => JobError::Database(DbError::Config(
+                "promotion result was not acknowledged after commit".into(),
+            )),
             PromotionError::Injected(fault) => {
                 JobError::Database(DbError::Config(format!("promotion fault: {fault:?}")))
             }
@@ -86,7 +93,8 @@ pub async fn promote_conversion(
     ctx: &OrgContext,
     input: PromoteConversionInput,
 ) -> Result<PromoteConversionOutcome, PromotionError> {
-    pool::with_org_txn_typed(db_pool, ctx, {
+    let fault = input.fault;
+    let outcome = pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
@@ -240,7 +248,11 @@ pub async fn promote_conversion(
             })
         }
     })
-    .await
+    .await?;
+    if fault == Some(PromotionFault::AfterCommit) {
+        return Err(PromotionError::CommittedOutcomeUnknown);
+    }
+    Ok(outcome)
 }
 
 pub async fn promoted_version(

@@ -18,9 +18,10 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::document_versions::ConversionSourceVersion;
 use crate::db::error::DbError;
-use crate::db::models::{Job, JobType, ResourceKind};
+use crate::db::jobs as jobs_repo;
+use crate::db::models::{Job, JobStatus, JobType, ResourceKind};
 use crate::db::pool::with_org_txn;
-use crate::jobs::{self, JobError, JobPayload};
+use crate::jobs::{self, EnqueueJob, JobError, JobPayload};
 use crate::services::artifacts::{self, MarkdownStageInput, StagedMarkdown};
 use crate::services::conversion::{
     checkpoint_with_staged_key, checkpoint_with_step, staged_keys_from_checkpoint,
@@ -41,6 +42,7 @@ const DEFAULT_CLAIM_LIMIT: u32 = 1;
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const DEFAULT_JOB_GRACE_SECS: u64 = 30;
 const SANDBOX_CANCEL_REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const RECONCILIATION_MAX_ATTEMPTS: u32 = 32;
 
 #[derive(Debug, Clone)]
 pub struct ConvertWorkerConfig {
@@ -140,6 +142,11 @@ struct ClaimedJobScope<'a> {
     deadline: TokioInstant,
 }
 
+enum PromotionWait {
+    Finished(Result<promotion::PromoteConversionOutcome, PromotionError>),
+    ReconciliationNeeded,
+}
+
 #[derive(Clone)]
 pub struct ConvertWorker {
     db_pool: Pool,
@@ -172,10 +179,22 @@ impl ConvertWorker {
             self.config.lease_ttl,
         )
         .await?;
+        if let Some(job) = jobs.into_iter().next() {
+            return self.process_claimed_job(ctx, job).await;
+        }
+        let jobs = jobs::claim_type(
+            &self.db_pool,
+            ctx,
+            JobType::Reconcile,
+            &self.config.worker_id,
+            DEFAULT_CLAIM_LIMIT,
+            self.config.lease_ttl,
+        )
+        .await?;
         let Some(job) = jobs.into_iter().next() else {
             return Ok(ConvertWorkerRun::NoJob);
         };
-        self.process_claimed_job(ctx, job).await
+        self.process_reconciliation_job(ctx, job).await
     }
 
     pub async fn process_claimed_job(
@@ -210,6 +229,7 @@ impl ConvertWorker {
                     .cleanup_checkpointed_staging(ctx, &identity, checkpoint.as_ref(), None)
                     .await
                 {
+                    self.enqueue_conversion_reconciliation(ctx, &job).await?;
                     let failed = jobs::fail(
                         &self.db_pool,
                         ctx,
@@ -331,15 +351,13 @@ impl ConvertWorker {
                         })
                         .await?;
                     }
-                    self.heartbeat_while(
-                        ctx,
-                        &job,
-                        &lease_token,
-                        attempts,
-                        deadline,
-                        promotion::promote_conversion(
-                            &self.db_pool,
+                    Ok::<PromotionWait, ConvertWorkerError>(
+                        self.await_promotion_or_reconciliation(
                             ctx,
+                            &job,
+                            &lease_token,
+                            attempts,
+                            deadline,
                             PromoteConversionInput {
                                 job_id: job.id,
                                 lease_token: lease_token.to_string(),
@@ -353,29 +371,25 @@ impl ConvertWorker {
                                 quota_reservation_key: quota_reservation_key.clone(),
                                 fault: self.config.promotion_fault,
                             },
-                        ),
+                        )
+                        .await,
                     )
-                    .await
                 }
                 .await;
 
                 let completed = match promotion_result {
-                    Ok(outcome) => outcome,
-                    Err(ConvertWorkerError::Promotion(PromotionError::LeaseLost))
-                    | Err(ConvertWorkerError::Job(JobError::LeaseLost))
-                    | Err(ConvertWorkerError::LeaseLost) => {
-                        let _ = self
-                            .compensate_after_promotion_failure(
-                                ctx,
-                                &identity,
-                                checkpoint_for_compensation.as_ref(),
-                                staged.as_ref().map(|staged| staged.object_key.as_str()),
-                                &quota_reservation_key,
-                            )
-                            .await;
+                    Ok(PromotionWait::Finished(Ok(outcome))) => outcome,
+                    Ok(PromotionWait::ReconciliationNeeded) => {
+                        self.enqueue_conversion_reconciliation(ctx, &job).await?;
+                        return Ok(ConvertWorkerRun::ReconciliationNeeded { job_id: job.id });
+                    }
+                    Ok(PromotionWait::Finished(Err(PromotionError::LeaseLost)))
+                    | Err(ConvertWorkerError::LeaseLost)
+                    | Err(ConvertWorkerError::Job(JobError::LeaseLost)) => {
+                        self.enqueue_conversion_reconciliation(ctx, &job).await?;
                         return Ok(ConvertWorkerRun::LeaseLost { job_id: job.id });
                     }
-                    Err(error) if error.is_retryable_job_failure() => {
+                    Ok(PromotionWait::Finished(Err(error))) => {
                         let compensation = self
                             .compensate_after_promotion_failure(
                                 ctx,
@@ -385,7 +399,15 @@ impl ConvertWorker {
                                 &quota_reservation_key,
                             )
                             .await;
-                        let job_error = compensation.err().unwrap_or(error);
+                        if compensation.is_err() {
+                            self.enqueue_conversion_reconciliation(ctx, &job).await?;
+                        }
+                        let job_error = compensation
+                            .err()
+                            .unwrap_or_else(|| ConvertWorkerError::Promotion(error));
+                        if !job_error.is_retryable_job_failure() {
+                            return Err(job_error);
+                        }
                         let failed = jobs::fail(
                             &self.db_pool,
                             ctx,
@@ -401,7 +423,7 @@ impl ConvertWorker {
                         });
                     }
                     Err(error) => {
-                        let _ = self
+                        let compensation = self
                             .compensate_after_promotion_failure(
                                 ctx,
                                 &identity,
@@ -410,7 +432,26 @@ impl ConvertWorker {
                                 &quota_reservation_key,
                             )
                             .await;
-                        return Err(error);
+                        if compensation.is_err() {
+                            self.enqueue_conversion_reconciliation(ctx, &job).await?;
+                        }
+                        let job_error = compensation.err().unwrap_or(error);
+                        if !job_error.is_retryable_job_failure() {
+                            return Err(job_error);
+                        }
+                        let failed = jobs::fail(
+                            &self.db_pool,
+                            ctx,
+                            job.id,
+                            &lease_token,
+                            attempts,
+                            job_error.safe_job_error(),
+                        )
+                        .await?;
+                        return Ok(ConvertWorkerRun::Failed {
+                            job_id: failed.id,
+                            terminal: failed.status == crate::db::models::JobStatus::DeadLetter,
+                        });
                     }
                 };
                 Ok(ConvertWorkerRun::Completed {
@@ -441,6 +482,203 @@ impl ConvertWorker {
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn process_reconciliation_job(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let lease_token = job
+            .lease_owner
+            .as_deref()
+            .ok_or(ConvertWorkerError::MissingLease)?;
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+        let parent_job_id = payload
+            .cleanup_target_job_id
+            .ok_or(ConvertWorkerError::InvalidReconciliationPayload)?;
+        let parent = self.reconciliation_parent(ctx, parent_job_id).await?;
+        if parent.job_type != JobType::Convert {
+            return Err(ConvertWorkerError::InvalidReconciliationPayload);
+        }
+        if matches!(
+            parent.status,
+            JobStatus::Pending | JobStatus::Leased | JobStatus::Running
+        ) {
+            let failed = jobs::fail(
+                &self.db_pool,
+                ctx,
+                job.id,
+                lease_token,
+                job.attempts,
+                "conversion cleanup waiting for parent terminal state",
+            )
+            .await?;
+            return Ok(ConvertWorkerRun::Failed {
+                job_id: failed.id,
+                terminal: failed.status == JobStatus::DeadLetter,
+            });
+        }
+
+        let parent_payload =
+            jobs::decode_job_payload(parent.payload_version, parent.payload.clone())?;
+        let document_id = parent_payload
+            .document_id
+            .ok_or(ConvertWorkerError::InvalidReconciliationPayload)?;
+        let source_version_id = parent_payload
+            .version_id
+            .ok_or(ConvertWorkerError::InvalidReconciliationPayload)?;
+        let identity = ConversionIdentity::new(
+            ctx.org_id(),
+            document_id,
+            source_version_id,
+            parent.idempotency_key.clone(),
+        );
+        let cleanup_result = async {
+            self.cleanup_checkpointed_staging(ctx, &identity, parent.checkpoint.as_ref(), None)
+                .await?;
+            self.refund_attempt_reservations(ctx, &identity, &parent)
+                .await
+        }
+        .await;
+        if let Err(error) = cleanup_result {
+            let failed = jobs::fail(
+                &self.db_pool,
+                ctx,
+                job.id,
+                lease_token,
+                job.attempts,
+                error.safe_job_error(),
+            )
+            .await?;
+            return Ok(ConvertWorkerRun::Failed {
+                job_id: failed.id,
+                terminal: failed.status == JobStatus::DeadLetter,
+            });
+        }
+        let completed =
+            jobs::complete(&self.db_pool, ctx, job.id, lease_token, job.attempts).await?;
+        Ok(ConvertWorkerRun::Reconciled {
+            job_id: completed.id,
+        })
+    }
+
+    async fn await_promotion_or_reconciliation(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+        input: PromoteConversionInput,
+    ) -> PromotionWait {
+        // Once the promote transaction starts, dropping its future leaves commit
+        // status unknowable. Every cancellation/transport path therefore becomes
+        // reconciliation work rather than an immediate object deletion.
+        if self
+            .heartbeat_once(ctx, job, lease_token, attempts, deadline)
+            .await
+            .is_err()
+        {
+            return PromotionWait::ReconciliationNeeded;
+        }
+        let promotion = promotion::promote_conversion(&self.db_pool, ctx, input);
+        tokio::pin!(promotion);
+        let mut heartbeat = heartbeat_interval(self.config.heartbeat_interval);
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut promotion => {
+                    return match result {
+                        Err(PromotionError::Db(_)) | Err(PromotionError::CommittedOutcomeUnknown) => {
+                            PromotionWait::ReconciliationNeeded
+                        }
+                        result => PromotionWait::Finished(result),
+                    };
+                }
+                _ = sleep_until(deadline) => return PromotionWait::ReconciliationNeeded,
+                _ = heartbeat.tick() => {
+                    let heartbeat = timeout(
+                        heartbeat_call_timeout(self.config.lease_ttl, deadline),
+                        jobs::heartbeat(
+                            &self.db_pool,
+                            ctx,
+                            job.id,
+                            lease_token,
+                            attempts,
+                            self.config.lease_ttl,
+                        ),
+                    )
+                    .await;
+                    if !matches!(heartbeat, Ok(Ok(()))) {
+                        return PromotionWait::ReconciliationNeeded;
+                    }
+                }
+            }
+        }
+    }
+
+    async fn enqueue_conversion_reconciliation(
+        &self,
+        ctx: &OrgContext,
+        parent_job: &Job,
+    ) -> Result<(), ConvertWorkerError> {
+        let document_id = parent_job
+            .document_id
+            .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
+        let version_id = parent_job
+            .version_id
+            .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
+        let mut input = EnqueueJob::new(
+            JobType::Reconcile,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                collection_id: None,
+                upload_id: None,
+                batch_id: None,
+                cleanup_target_job_id: Some(parent_job.id),
+            },
+            format!("convert.cleanup:{}", parent_job.id),
+        );
+        input.max_attempts = RECONCILIATION_MAX_ATTEMPTS;
+        jobs::enqueue(&self.db_pool, ctx, input).await?;
+        Ok(())
+    }
+
+    async fn reconciliation_parent(
+        &self,
+        ctx: &OrgContext,
+        parent_job_id: Uuid,
+    ) -> Result<Job, ConvertWorkerError> {
+        with_org_txn(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    jobs_repo::get_by_id_for_update(txn, &ctx, parent_job_id)
+                        .await?
+                        .ok_or(DbError::NotFound)
+                })
+            }
+        })
+        .await
+        .map_err(ConvertWorkerError::Db)
+    }
+
+    async fn refund_attempt_reservations(
+        &self,
+        ctx: &OrgContext,
+        identity: &ConversionIdentity,
+        parent: &Job,
+    ) -> Result<(), ConvertWorkerError> {
+        for attempts in 1..=parent.attempts.max(0) {
+            let reservation_key = quota_reservation_key_for_attempt(identity, parent.id, attempts);
+            match quota::refund(&self.db_pool, ctx, &reservation_key).await {
+                Ok(_) | Err(QuotaError::ReservationNotFound) => {}
+                Err(error) => return Err(ConvertWorkerError::Quota(error)),
+            }
+        }
+        Ok(())
     }
 
     async fn convert_claimed(
@@ -1032,9 +1270,24 @@ fn quota_reservation_key_for_attempt(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConvertWorkerRun {
     NoJob,
-    Completed { job_id: Uuid, markdown_bytes: usize },
-    Failed { job_id: Uuid, terminal: bool },
-    LeaseLost { job_id: Uuid },
+    Completed {
+        job_id: Uuid,
+        markdown_bytes: usize,
+    },
+    Failed {
+        job_id: Uuid,
+        terminal: bool,
+    },
+    LeaseLost {
+        job_id: Uuid,
+    },
+    /// Promotion completion is uncertain; a durable reconciliation job was queued.
+    ReconciliationNeeded {
+        job_id: Uuid,
+    },
+    Reconciled {
+        job_id: Uuid,
+    },
 }
 
 #[derive(Debug)]
@@ -1081,6 +1334,8 @@ pub enum ConvertWorkerError {
     MissingLease,
     #[error("convert payload is missing document_id or version_id")]
     InvalidConvertPayload,
+    #[error("reconciliation payload is invalid")]
+    InvalidReconciliationPayload,
     #[error("quarantine object is missing canonical format metadata")]
     MissingCanonicalFormat,
     #[error("quarantine object has unsupported canonical format metadata")]
@@ -1117,6 +1372,7 @@ impl ConvertWorkerError {
                 | Self::SandboxOutputTruncated
                 | Self::ConverterFailed
                 | Self::InvalidConvertPayload
+                | Self::InvalidReconciliationPayload
                 | Self::MissingCanonicalFormat
                 | Self::UnsupportedCanonicalFormat
                 | Self::InvalidMarkdownLength
@@ -1145,6 +1401,7 @@ impl ConvertWorkerError {
             Self::Job(_) => "convert job error",
             Self::MissingLease => "convert missing lease",
             Self::InvalidConvertPayload => "convert payload invalid",
+            Self::InvalidReconciliationPayload => "convert reconciliation payload invalid",
             Self::MissingCanonicalFormat => "convert canonical format missing",
             Self::UnsupportedCanonicalFormat => "convert canonical format unsupported",
             Self::InvalidMarkdownLength => "convert markdown too large",
