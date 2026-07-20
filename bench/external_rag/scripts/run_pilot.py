@@ -365,6 +365,27 @@ def write_report(summary: dict) -> None:
             f"| {row['recallAt10']:.4f} | {row['mrr']:.4f} "
             f"| {row['ndcgAt10']:.4f} |"
         )
+    misses = [
+        row for row in retrieval["rows"] if row["recallAt5"] == 0
+    ]
+    lines.extend(
+        [
+            "",
+            "## Observed misses",
+            "",
+            f"- `{len(misses)}` queries missed the relevant document in top 5.",
+            f"- `{sum(row['recallAt10'] == 0 for row in misses)}` remained absent from top 10.",
+            "- Every top-5 miss was an identifier query. Numeric document codes are",
+            "  split into common tokens, OCR can alter the code, and repeated chunks",
+            "  from competing decrees can crowd the fixed chunk-level top-k.",
+            "",
+            "| Query | Relevant rank |",
+            "|---|---:|",
+        ]
+    )
+    for row in misses:
+        rank = row["firstRelevantRank"] if row["firstRelevantRank"] is not None else ">10"
+        lines.append(f"| `{row['queryId']}` | {rank} |")
     lines.extend(
         [
             "",

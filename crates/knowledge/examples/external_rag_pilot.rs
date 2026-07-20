@@ -12,7 +12,7 @@ use fileconv_knowledge::desktop::service::{
     hybrid_search, index_stats, rebuild_index, DesktopEmbeddingPlan, KnowledgePaths,
 };
 use fileconv_knowledge::types::{HybridSearchHit, IndexBuildResult, IndexStats};
-use fileconv_knowledge::{KnowledgeError, Result as KnowledgeResult};
+use fileconv_knowledge::KnowledgeError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -277,14 +277,17 @@ fn convert_sources(
                     error: None,
                 });
             }
-            Err(error) => rows.push(ConversionRow {
-                document_id: source.id.clone(),
-                filename: source.filename.clone(),
-                success: false,
-                elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
-                markdown_chars: 0,
-                error: Some(error.to_string()),
-            }),
+            Err(error) => {
+                eprintln!("conversion failed for {}: {error}", source.id);
+                rows.push(ConversionRow {
+                    document_id: source.id.clone(),
+                    filename: source.filename.clone(),
+                    success: false,
+                    elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    markdown_chars: 0,
+                    error: Some(error.to_string()),
+                });
+            }
         }
         let row = rows.last().expect("conversion row was appended");
         eprintln!(
@@ -313,7 +316,10 @@ fn query_subject(title: &str) -> String {
 }
 
 fn query_identifier(title: &str) -> String {
-    let prefix = title.split_once(':').map(|(prefix, _)| prefix).unwrap_or(title);
+    let prefix = title
+        .split_once(':')
+        .map(|(prefix, _)| prefix)
+        .unwrap_or(title);
     let prefix = prefix
         .split_once(" của ")
         .map(|(prefix, _)| prefix)
@@ -431,8 +437,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         fs::remove_dir_all(&index_root)?;
     }
     fs::create_dir_all(&index_root)?;
-    let (documents, conversion_rows) =
-        convert_sources(sources, &args.originals, &markdown_root)?;
+    let (documents, conversion_rows) = convert_sources(sources, &args.originals, &markdown_root)?;
     if documents.is_empty() {
         return Err("all document conversions failed".into());
     }
