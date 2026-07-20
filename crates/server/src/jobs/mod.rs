@@ -71,7 +71,8 @@ impl From<JobPayloadV1> for JobPayload {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct EventPayload {
     pub job_id: Option<Uuid>,
     pub document_id: Option<Uuid>,
@@ -112,6 +113,7 @@ impl EventPayload {
 pub struct CheckpointPayload {
     pub cursor_id: Option<Uuid>,
     pub completed_ids: Vec<Uuid>,
+    pub staged_object_keys: Vec<String>,
     pub offset: Option<u64>,
 }
 
@@ -270,53 +272,57 @@ pub async fn enqueue(
     ctx: &OrgContext,
     input: EnqueueJob,
 ) -> Result<EnqueueOutcome, JobError> {
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| Box::pin(async move { enqueue_within_txn(txn, &ctx, input).await })
+    })
+    .await
+}
+
+pub(crate) async fn enqueue_within_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    input: EnqueueJob,
+) -> Result<EnqueueOutcome, JobError> {
     validate_idempotency_key(&input.idempotency_key)?;
     let max_attempts = checked_max_attempts(input.max_attempts)?;
     let available_after = checked_duration(input.available_after)?;
     let payload = validated_job_payload(&input.payload)?;
     validate_job_payload_lineage(&input.payload)?;
 
-    pool::with_org_txn_typed(db_pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                let observed_at = repo::fresh_clock_timestamp(txn).await?;
-                let available_at = observed_at
-                    .checked_add_signed(available_after)
-                    .ok_or(JobError::InvalidDuration)?;
-                let event_payload = EventPayload {
-                    job_id: Some(input.id),
-                    document_id: input.payload.document_id,
-                    version_id: input.payload.version_id,
-                    outbox_event_id: None,
-                }
-                .to_validated()?;
-                let outbox_idempotency_key = format!("job.enqueued:{}", input.id);
-                let (job, created) = repo::insert_job_with_outbox(
-                    txn,
-                    &ctx,
-                    repo::NewJob {
-                        id: input.id,
-                        job_type: input.job_type,
-                        payload_version: CURRENT_JOB_PAYLOAD_VERSION,
-                        payload: &payload,
-                        max_attempts,
-                        idempotency_key: &input.idempotency_key,
-                        document_id: input.payload.document_id,
-                        version_id: input.payload.version_id,
-                        available_at,
-                        outbox_event_type: "job.enqueued",
-                        outbox_payload_version: CURRENT_EVENT_PAYLOAD_VERSION,
-                        outbox_payload: &event_payload,
-                        outbox_idempotency_key: &outbox_idempotency_key,
-                    },
-                )
-                .await?;
-                Ok(EnqueueOutcome { job, created })
-            })
-        }
-    })
-    .await
+    let observed_at = repo::fresh_clock_timestamp(txn).await?;
+    let available_at = observed_at
+        .checked_add_signed(available_after)
+        .ok_or(JobError::InvalidDuration)?;
+    let event_payload = EventPayload {
+        job_id: Some(input.id),
+        document_id: input.payload.document_id,
+        version_id: input.payload.version_id,
+        outbox_event_id: None,
+    }
+    .to_validated()?;
+    let outbox_idempotency_key = format!("job.enqueued:{}", input.id);
+    let (job, created) = repo::insert_job_with_outbox(
+        txn,
+        ctx,
+        repo::NewJob {
+            id: input.id,
+            job_type: input.job_type,
+            payload_version: CURRENT_JOB_PAYLOAD_VERSION,
+            payload: &payload,
+            max_attempts,
+            idempotency_key: &input.idempotency_key,
+            document_id: input.payload.document_id,
+            version_id: input.payload.version_id,
+            available_at,
+            outbox_event_type: "job.enqueued",
+            outbox_payload_version: CURRENT_EVENT_PAYLOAD_VERSION,
+            outbox_payload: &event_payload,
+            outbox_idempotency_key: &outbox_idempotency_key,
+        },
+    )
+    .await?;
+    Ok(EnqueueOutcome { job, created })
 }
 
 pub async fn claim(
@@ -432,6 +438,21 @@ pub async fn checkpoint(
         }
     })
     .await
+}
+
+pub(crate) async fn checkpoint_within_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    claimed_attempts: i32,
+    checkpoint: CheckpointPayload,
+) -> Result<Job, JobError> {
+    validate_lease_identifier(lease_token)?;
+    let checkpoint = validated_checkpoint_payload(checkpoint)?;
+    repo::save_checkpoint(txn, ctx, job_id, lease_token, claimed_attempts, &checkpoint)
+        .await?
+        .ok_or(JobError::LeaseLost)
 }
 
 pub async fn reclaim_expired(
@@ -901,6 +922,7 @@ mod tests {
         let checkpoint = CheckpointPayload {
             cursor_id: Some(Uuid::new_v4()),
             completed_ids: vec![Uuid::new_v4()],
+            staged_object_keys: vec![],
             offset: Some(42),
         };
         assert!(checkpoint.to_json().is_ok());

@@ -2,8 +2,11 @@ use std::time::Duration;
 
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::pool::create_pool;
-use fileconv_server::storage::MinioClient;
+use fileconv_server::jobs;
+use fileconv_server::services::indexing::IndexingOutboxSink;
+use fileconv_server::storage::{MinioClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig};
+use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::SandboxConfig;
 use uuid::Uuid;
@@ -57,12 +60,41 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
         .config()
         .storage_config()
         .map_err(|error| format!("invalid storage configuration: {error}"))?;
-    let storage = MinioClient::from_config(storage_config.minio())
-        .map_err(|error| format!("storage client failed: {}", error.code()))?;
     let worker_id = std::env::var("MARKHAND_WORKER_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("fileconv-worker-{}", std::process::id()));
+    let kind = std::env::var("MARKHAND_WORKER_KIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "convert".into());
+    match kind.as_str() {
+        "convert" => {
+            let storage = MinioClient::from_config(storage_config.minio())
+                .map_err(|error| format!("storage client failed: {}", error.code()))?;
+            run_convert_worker(state, pool, storage, worker_id, ctx).await
+        }
+        "index" => {
+            let storage = MinioClient::from_config(storage_config.minio())
+                .map_err(|error| format!("storage client failed: {}", error.code()))?;
+            let qdrant = QdrantClient::with_api_key(
+                storage_config.qdrant_url(),
+                storage_config.qdrant_api_key().cloned(),
+            )
+            .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
+            run_index_worker(state, pool, storage, qdrant, worker_id, ctx).await
+        }
+        other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
+    }
+}
+
+async fn run_convert_worker(
+    state: fileconv_server::state::RuntimeState,
+    pool: deadpool_postgres::Pool,
+    storage: MinioClient,
+    worker_id: String,
+    ctx: OrgContext,
+) -> Result<(), String> {
     let mut config = ConvertWorkerConfig::new(worker_id, sandbox_config_from_env()?);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
     if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
@@ -101,6 +133,65 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
                     Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
                     Err(error) => {
                         eprintln!("fileconv-worker: convert worker error: {error}");
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_index_worker(
+    state: fileconv_server::state::RuntimeState,
+    pool: deadpool_postgres::Pool,
+    storage: MinioClient,
+    qdrant: QdrantClient,
+    worker_id: String,
+    ctx: OrgContext,
+) -> Result<(), String> {
+    let mut config = IndexWorkerConfig::new(worker_id);
+    config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
+        config.heartbeat_interval = Duration::from_secs(value.parse().map_err(|_| {
+            "MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS must be an integer".to_string()
+        })?);
+    }
+    if let Ok(value) = std::env::var("MARKHAND_WORKER_MAX_JOB_SECS") {
+        config.max_job_duration = Duration::from_secs(
+            value
+                .parse()
+                .map_err(|_| "MARKHAND_WORKER_MAX_JOB_SECS must be an integer".to_string())?,
+        );
+    }
+    if let Ok(value) = std::env::var("MARKHAND_INDEX_EMBEDDING_BATCH_SIZE") {
+        config.embedding_batch_size = value
+            .parse()
+            .map_err(|_| "MARKHAND_INDEX_EMBEDDING_BATCH_SIZE must be an integer".to_string())?;
+    }
+    let approved_signature = state.config().index_signature().map(str::to_string);
+    let worker = IndexWorker::new(pool.clone(), storage, qdrant, config, approved_signature)
+        .map_err(|error| format!("index worker initialization failed: {error}"))?;
+    let sink = std::sync::Arc::new(IndexingOutboxSink::new());
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                println!("fileconv-worker: shutdown requested");
+                break;
+            }
+            result = async {
+                jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                worker.run_once(&ctx).await.map_err(|error| error.to_string())
+            } => {
+                match result {
+                    Ok(IndexWorkerRun::NoJob) => {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
+                    Err(error) => {
+                        eprintln!("fileconv-worker: index worker error: {error}");
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }

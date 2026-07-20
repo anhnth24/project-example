@@ -733,6 +733,10 @@ impl ServerConfig {
         self.limits
     }
 
+    pub fn index_signature(&self) -> Option<&str> {
+        self.index_signature.as_deref()
+    }
+
     pub(crate) fn is_api_role(&self) -> bool {
         self.role == RuntimeRole::Api
     }

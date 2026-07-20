@@ -1,0 +1,257 @@
+//! Durable index job worker.
+
+use std::time::Duration;
+
+use deadpool_postgres::Pool;
+use fileconv_knowledge::embedding::{EmbeddingPlan, LOCAL_VECTOR_DIMENSIONS};
+use thiserror::Error;
+use tokio::time::{timeout_at, Instant as TokioInstant};
+use uuid::Uuid;
+
+use crate::auth::context::OrgContext;
+use crate::db::models::{Job, JobStatus, JobType};
+use crate::jobs::{self, JobError};
+use crate::services::indexing::{self, IndexVersionInput, IndexVersionOutcome, IndexingError};
+use crate::storage::minio::MinioClient;
+use crate::storage::qdrant::QdrantClient;
+
+const DEFAULT_CLAIM_LIMIT: u32 = 1;
+const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
+const DEFAULT_MAX_JOB_DURATION_SECS: u64 = 300;
+const DEFAULT_EMBEDDING_BATCH_SIZE: usize = 64;
+const MAX_EMBEDDING_BATCH_SIZE: usize = 4096;
+
+#[derive(Debug, Clone)]
+pub struct IndexWorkerConfig {
+    pub worker_id: String,
+    pub lease_ttl: Duration,
+    pub heartbeat_interval: Duration,
+    pub max_job_duration: Duration,
+    pub embedding_batch_size: usize,
+}
+
+impl IndexWorkerConfig {
+    pub fn new(worker_id: impl Into<String>) -> Self {
+        Self {
+            worker_id: worker_id.into(),
+            lease_ttl: Duration::from_secs(60),
+            heartbeat_interval: Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECS),
+            max_job_duration: Duration::from_secs(DEFAULT_MAX_JOB_DURATION_SECS),
+            embedding_batch_size: DEFAULT_EMBEDDING_BATCH_SIZE,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), IndexWorkerError> {
+        if self.heartbeat_interval.is_zero()
+            || self.lease_ttl.is_zero()
+            || self.heartbeat_interval > self.lease_ttl / 3
+        {
+            return Err(IndexWorkerError::InvalidHeartbeatConfig);
+        }
+        if self.max_job_duration.is_zero() {
+            return Err(IndexWorkerError::InvalidMaxJobDuration);
+        }
+        if self.embedding_batch_size == 0 || self.embedding_batch_size > MAX_EMBEDDING_BATCH_SIZE {
+            return Err(IndexWorkerError::InvalidBatchSize);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct IndexWorker {
+    db_pool: Pool,
+    storage: MinioClient,
+    qdrant: QdrantClient,
+    config: IndexWorkerConfig,
+    approved_signature: Option<String>,
+}
+
+impl IndexWorker {
+    pub fn new(
+        db_pool: Pool,
+        storage: MinioClient,
+        qdrant: QdrantClient,
+        config: IndexWorkerConfig,
+        approved_signature: Option<String>,
+    ) -> Result<Self, IndexWorkerError> {
+        config.validate()?;
+        if let Some(signature) = approved_signature.as_deref() {
+            let approved = EmbeddingPlan::local_hash_v1()
+                .index_signature(LOCAL_VECTOR_DIMENSIONS)
+                .map_err(IndexWorkerError::Knowledge)?
+                .digest();
+            if signature != approved {
+                return Err(IndexWorkerError::SignatureMismatch);
+            }
+        }
+        Ok(Self {
+            db_pool,
+            storage,
+            qdrant,
+            config,
+            approved_signature,
+        })
+    }
+
+    pub async fn run_once(&self, ctx: &OrgContext) -> Result<IndexWorkerRun, IndexWorkerError> {
+        let jobs = jobs::claim_type(
+            &self.db_pool,
+            ctx,
+            JobType::Index,
+            &self.config.worker_id,
+            DEFAULT_CLAIM_LIMIT,
+            self.config.lease_ttl,
+        )
+        .await?;
+        let Some(job) = jobs.into_iter().next() else {
+            return Ok(IndexWorkerRun::NoJob);
+        };
+        self.process_claimed_job(ctx, job).await
+    }
+
+    pub async fn process_claimed_job(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+    ) -> Result<IndexWorkerRun, IndexWorkerError> {
+        let lease_token = job
+            .lease_owner
+            .as_deref()
+            .ok_or(IndexWorkerError::MissingLease)?
+            .to_string();
+        let attempts = job.attempts;
+        let deadline = TokioInstant::now() + self.config.max_job_duration;
+        let input = IndexVersionInput {
+            job: &job,
+            lease_token: &lease_token,
+            attempts,
+            lease_ttl: self.config.lease_ttl,
+            heartbeat_interval: self.config.heartbeat_interval,
+            embedding_batch_size: self.config.embedding_batch_size,
+            approved_signature: self.approved_signature.as_deref(),
+            deadline,
+        };
+        let result = timeout_at(
+            deadline,
+            indexing::index_version(&self.db_pool, &self.storage, &self.qdrant, ctx, input),
+        )
+        .await;
+        match result {
+            Ok(Ok(IndexVersionOutcome::Finalized { job_id, chunks })) => {
+                Ok(IndexWorkerRun::Completed { job_id, chunks })
+            }
+            Ok(Ok(IndexVersionOutcome::CompleteOnly { chunks })) => {
+                match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
+                    Ok(completed) => Ok(IndexWorkerRun::Completed {
+                        job_id: completed.id,
+                        chunks,
+                    }),
+                    Err(JobError::LeaseLost) => Ok(IndexWorkerRun::LeaseLost { job_id: job.id }),
+                    Err(error) => Err(IndexWorkerError::Job(error)),
+                }
+            }
+            Ok(Ok(IndexVersionOutcome::AlreadyIndexed)) => {
+                match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
+                    Ok(completed) => Ok(IndexWorkerRun::Completed {
+                        job_id: completed.id,
+                        chunks: 0,
+                    }),
+                    Err(JobError::LeaseLost) => Ok(IndexWorkerRun::LeaseLost { job_id: job.id }),
+                    Err(error) => Err(IndexWorkerError::Job(error)),
+                }
+            }
+            Ok(Err(IndexingError::Job(JobError::LeaseLost))) => {
+                Ok(IndexWorkerRun::LeaseLost { job_id: job.id })
+            }
+            Ok(Err(error)) if error.is_retryable_job_failure() => {
+                self.fail_claimed(ctx, &job, &lease_token, attempts, error.safe_job_error())
+                    .await
+            }
+            Ok(Err(error)) => Err(IndexWorkerError::Indexing(error)),
+            Err(_) => {
+                self.fail_claimed(
+                    ctx,
+                    &job,
+                    &lease_token,
+                    attempts,
+                    IndexWorkerError::JobTimedOut.safe_job_error(),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn fail_claimed(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        last_error: &str,
+    ) -> Result<IndexWorkerRun, IndexWorkerError> {
+        match jobs::fail(
+            &self.db_pool,
+            ctx,
+            job.id,
+            lease_token,
+            attempts,
+            last_error,
+        )
+        .await
+        {
+            Ok(failed) => Ok(IndexWorkerRun::Failed {
+                job_id: failed.id,
+                terminal: failed.status == JobStatus::DeadLetter,
+            }),
+            Err(JobError::LeaseLost) => Ok(IndexWorkerRun::LeaseLost { job_id: job.id }),
+            Err(error) => Err(IndexWorkerError::Job(error)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexWorkerRun {
+    NoJob,
+    Completed { job_id: Uuid, chunks: usize },
+    Failed { job_id: Uuid, terminal: bool },
+    LeaseLost { job_id: Uuid },
+}
+
+#[derive(Debug, Error)]
+pub enum IndexWorkerError {
+    #[error("job error")]
+    Job(#[from] JobError),
+    #[error("indexing error")]
+    Indexing(#[from] IndexingError),
+    #[error("claimed job is missing a lease token")]
+    MissingLease,
+    #[error("worker heartbeat interval must be <= one third of lease ttl")]
+    InvalidHeartbeatConfig,
+    #[error("worker max job duration must be positive")]
+    InvalidMaxJobDuration,
+    #[error("embedding batch size must be between 1 and 4096")]
+    InvalidBatchSize,
+    #[error("configured index signature does not match approved local signature")]
+    SignatureMismatch,
+    #[error("knowledge error")]
+    Knowledge(fileconv_knowledge::KnowledgeError),
+    #[error("index job exceeded configured maximum duration")]
+    JobTimedOut,
+}
+
+impl IndexWorkerError {
+    pub fn safe_job_error(&self) -> &'static str {
+        match self {
+            Self::Job(_) => "index job error",
+            Self::Indexing(error) => error.safe_job_error(),
+            Self::MissingLease => "index missing lease",
+            Self::InvalidHeartbeatConfig => "index heartbeat config invalid",
+            Self::InvalidMaxJobDuration => "index max job duration invalid",
+            Self::InvalidBatchSize => "index batch size invalid",
+            Self::SignatureMismatch => "index signature mismatch",
+            Self::Knowledge(_) => "index knowledge error",
+            Self::JobTimedOut => "index job timed out",
+        }
+    }
+}
