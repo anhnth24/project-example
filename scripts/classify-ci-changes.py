@@ -185,18 +185,19 @@ def rust_crates_for(paths: list[str]) -> tuple[str, bool]:
     # knowledge changes need the same GTK/WebKit native packages as direct
     # desktop changes.
     knowledge_gate = classify(paths)["knowledge"]
-    desktop_deps = "desktop" in scopes or (knowledge_gate and bool(scopes))
+    direct_desktop = "desktop" in scopes
+    desktop_deps = direct_desktop or (knowledge_gate and bool(scopes))
     workspace_touch = any(
         fnmatch.fnmatch(path, pattern)
         for path in paths
         for pattern in WORKSPACE_MARKERS
     )
     if scopes:
-        if desktop_deps and scopes == ["desktop"] and not workspace_touch:
+        if direct_desktop and scopes == ["desktop"] and not workspace_touch:
             return "desktop", True
-        if desktop_deps:
+        if direct_desktop:
             return "full", True
-        return ",".join(scopes), False
+        return ",".join(scopes), desktop_deps
 
     if any(
         fnmatch.fnmatch(path, pattern)
