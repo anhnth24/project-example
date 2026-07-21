@@ -101,3 +101,6 @@ requires recorded Docker runtime boot + convert sandbox preflight evidence.
 ### Out of scope (F02)
 
 Kubernetes/HA, production TLS termination, Profile B GPU capacity claims.
+
+<!-- ci: nudge after digest pins -->
+
