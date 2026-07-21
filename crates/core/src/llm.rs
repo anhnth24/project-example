@@ -22,7 +22,7 @@ pub enum Provider {
     CodexCli,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmConfig {
     pub provider: Provider,
@@ -31,6 +31,18 @@ pub struct LlmConfig {
     pub base_url: Option<String>,
     #[serde(default)]
     pub cli_binary: Option<String>,
+}
+
+impl std::fmt::Debug for LlmConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("cli_binary", &self.cli_binary)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -65,7 +77,7 @@ const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
     EMBEDDING_RUNTIME_PROVIDER_CLOUD,
 ];
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddingConfig {
     pub provider: Provider,
@@ -76,6 +88,19 @@ pub struct EmbeddingConfig {
     /// Explicit runtime path for index signature (ADR 0006). Prefer preset values
     /// over host/model inference for known deployments (e.g. vLLM → `vllm-local`).
     pub runtime_path: String,
+}
+
+impl std::fmt::Debug for EmbeddingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbeddingConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("dimensions", &self.dimensions)
+            .field("runtime_path", &self.runtime_path)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -116,6 +141,11 @@ fn embedding_host_hint(base_url: Option<&str>) -> String {
 }
 
 /// Fallback when no preset supplies `runtime_path` (custom endpoints).
+///
+/// Deferred (CORE-T3): `fileconv-knowledge` keeps a parallel `infer_runtime_path`
+/// so that crate stays usable without the `llm` feature / HTTP client. Unifying
+/// would cross knowledge↔core feature boundaries; leave both until a shared
+/// non-HTTP helper exists.
 pub fn infer_embedding_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
     let host = embedding_host_hint(base_url);
     let model = model.to_ascii_lowercase();
@@ -630,12 +660,84 @@ fn fail<E: std::fmt::Display>(e: E) -> ConvertError {
     ConvertError::Failed(e.to_string())
 }
 
+/// Bounded HTTP retries for transient LLM transport / rate-limit failures.
+const HTTP_MAX_ATTEMPTS: u32 = 3;
+const HTTP_BASE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(200);
+const HTTP_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn redact_secret(text: &str, secret: Option<&str>) -> String {
+    let Some(secret) = secret.filter(|value| !value.is_empty()) else {
+        return text.to_string();
+    };
+    text.replace(secret, "[REDACTED]")
+}
+
+fn fail_redacted(message: impl std::fmt::Display, secret: Option<&str>) -> ConvertError {
+    ConvertError::Failed(redact_secret(&message.to_string(), secret))
+}
+
+/// Parse `Retry-After` delta-seconds (HTTP-date forms are ignored).
+fn parse_retry_after_header(value: Option<&str>) -> Option<std::time::Duration> {
+    let value = value?.trim();
+    value
+        .parse::<u64>()
+        .ok()
+        .map(std::time::Duration::from_secs)
+}
+
+/// Delay before the next attempt (`attempt` is 0-based after the first failure).
+fn retry_backoff(attempt: u32, retry_after: Option<std::time::Duration>) -> std::time::Duration {
+    if let Some(after) = retry_after {
+        return after.min(HTTP_MAX_BACKOFF);
+    }
+    let shift = attempt.min(4);
+    let millis = HTTP_BASE_BACKOFF.as_millis() as u64;
+    std::time::Duration::from_millis(millis.saturating_mul(1u64 << shift)).min(HTTP_MAX_BACKOFF)
+}
+
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 503)
+}
+
+fn is_retryable_transport(error: &reqwest::Error) -> bool {
+    // Only transient network failures — not builder/decode/status mapping errors.
+    error.is_timeout() || error.is_connect()
+}
+
 fn openai_chat_url(base: &str) -> String {
     let base = base.trim_end_matches('/');
     if base.ends_with("/v1") {
         format!("{base}/chat/completions")
     } else {
         format!("{base}/v1/chat/completions")
+    }
+}
+
+fn gemini_generate_url(base: &str, model: &str) -> String {
+    format!(
+        "{}/v1beta/models/{}:generateContent",
+        base.trim_end_matches('/'),
+        model
+    )
+}
+
+fn gemini_embed_url(base: &str, model: &str) -> String {
+    format!(
+        "{}/v1beta/models/{}:embedContent",
+        base.trim_end_matches('/'),
+        model
+    )
+}
+
+fn gemini_auth(
+    request: reqwest::blocking::RequestBuilder,
+    api_key: &str,
+) -> reqwest::blocking::RequestBuilder {
+    // Prefer header auth so transport/error Display never embeds the key in a URL.
+    if api_key.trim().is_empty() {
+        request
+    } else {
+        request.header("x-goog-api-key", api_key)
     }
 }
 
@@ -664,7 +766,8 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
                     {"role": "user", "content": user}
                 ]
             });
-            let v = post_json(&client, &url, &body, |request| {
+            let secret = Some(cfg.api_key.as_str());
+            let v = post_json(&client, &url, &body, secret, |request| {
                 if cfg.api_key.trim().is_empty() {
                     request
                 } else {
@@ -688,7 +791,8 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
                 "system": system,
                 "messages": [{"role": "user", "content": user}]
             });
-            let v = post_json(&client, &url, &body, |r| {
+            let secret = Some(cfg.api_key.as_str());
+            let v = post_json(&client, &url, &body, secret, |r| {
                 r.header("x-api-key", &cfg.api_key)
                     .header("anthropic-version", "2023-06-01")
             })?;
@@ -702,17 +806,15 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
-            let url = format!(
-                "{}/v1beta/models/{}:generateContent?key={}",
-                base.trim_end_matches('/'),
-                cfg.model,
-                cfg.api_key
-            );
+            let url = gemini_generate_url(&base, &cfg.model);
             let body = serde_json::json!({
                 "systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"parts": [{"text": user}]}]
             });
-            let v = post_json(&client, &url, &body, |r| r)?;
+            let secret = Some(cfg.api_key.as_str());
+            let v = post_json(&client, &url, &body, secret, |r| {
+                gemini_auth(r, &cfg.api_key)
+            })?;
             v["candidates"][0]["content"]["parts"][0]["text"]
                 .as_str()
                 .map(str::to_string)
@@ -726,16 +828,48 @@ fn post_json(
     client: &reqwest::blocking::Client,
     url: &str,
     body: &serde_json::Value,
-    decorate: impl FnOnce(reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder,
+    secret: Option<&str>,
+    decorate: impl Fn(reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder,
 ) -> Result<serde_json::Value, ConvertError> {
-    let req = decorate(client.post(url).json(body));
-    let resp = req.send().map_err(fail)?;
-    let status = resp.status();
-    let text = resp.text().map_err(fail)?;
-    if !status.is_success() {
-        return Err(fail(format!("LLM HTTP {status}: {text}")));
+    let mut last_error: Option<ConvertError> = None;
+    for attempt in 0..HTTP_MAX_ATTEMPTS {
+        let request = decorate(client.post(url).json(body));
+        let response = match request.send() {
+            Ok(response) => response,
+            Err(error) => {
+                let retryable = is_retryable_transport(&error);
+                let message = redact_secret(&error.to_string(), secret);
+                if retryable && attempt + 1 < HTTP_MAX_ATTEMPTS {
+                    std::thread::sleep(retry_backoff(attempt, None));
+                    last_error = Some(ConvertError::Failed(message));
+                    continue;
+                }
+                return Err(ConvertError::Failed(message));
+            }
+        };
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| parse_retry_after_header(Some(value)));
+        let text = match response.text() {
+            Ok(text) => text,
+            Err(error) => return Err(fail_redacted(error, secret)),
+        };
+        if status.is_success() {
+            return serde_json::from_str(&text).map_err(|error| fail_redacted(error, secret));
+        }
+        let safe_text = redact_secret(&text, secret);
+        let error = ConvertError::Failed(format!("LLM HTTP {status}: {safe_text}"));
+        if is_retryable_status(status) && attempt + 1 < HTTP_MAX_ATTEMPTS {
+            std::thread::sleep(retry_backoff(attempt, retry_after));
+            last_error = Some(error);
+            continue;
+        }
+        return Err(error);
     }
-    serde_json::from_str(&text).map_err(fail)
+    Err(last_error.unwrap_or_else(|| fail("LLM HTTP retry exhausted")))
 }
 
 fn openai_embeddings_url(base: &str) -> String {
@@ -801,13 +935,20 @@ fn embed_openai_batch(
     if let Some(dimensions) = cfg.dimensions {
         body["dimensions"] = serde_json::json!(dimensions);
     }
-    let response = post_json(client, &openai_embeddings_url(&base), &body, |request| {
-        if cfg.api_key.trim().is_empty() {
-            request
-        } else {
-            request.bearer_auth(&cfg.api_key)
-        }
-    })?;
+    let secret = Some(cfg.api_key.as_str());
+    let response = post_json(
+        client,
+        &openai_embeddings_url(&base),
+        &body,
+        secret,
+        |request| {
+            if cfg.api_key.trim().is_empty() {
+                request
+            } else {
+                request.bearer_auth(&cfg.api_key)
+            }
+        },
+    )?;
     let data = response["data"]
         .as_array()
         .ok_or_else(|| fail(format!("phản hồi embedding không hợp lệ: {response}")))?;
@@ -852,12 +993,7 @@ fn embed_gemini_one(
         .base_url
         .clone()
         .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
-    let url = format!(
-        "{}/v1beta/models/{}:embedContent?key={}",
-        base.trim_end_matches('/'),
-        cfg.model,
-        cfg.api_key
-    );
+    let url = gemini_embed_url(&base, &cfg.model);
     let mut body = serde_json::json!({
         "model": format!("models/{}", cfg.model),
         "content": {"parts": [{"text": text}]},
@@ -866,7 +1002,10 @@ fn embed_gemini_one(
     if let Some(dimensions) = cfg.dimensions {
         body["outputDimensionality"] = serde_json::json!(dimensions);
     }
-    let response = post_json(client, &url, &body, |request| request)?;
+    let secret = Some(cfg.api_key.as_str());
+    let response = post_json(client, &url, &body, secret, |request| {
+        gemini_auth(request, &cfg.api_key)
+    })?;
     let values = response["embedding"]["values"].as_array().ok_or_else(|| {
         fail(format!(
             "phản hồi Gemini embedding không hợp lệ: {response}"
@@ -1005,7 +1144,8 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
                     ]}
                 ]
             });
-            let v = post_json(&client, &url, &body, |request| {
+            let secret = Some(cfg.api_key.as_str());
+            let v = post_json(&client, &url, &body, secret, |request| {
                 if cfg.api_key.trim().is_empty() {
                     request
                 } else {
@@ -1031,7 +1171,8 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
                     {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
                 ]}]
             });
-            let v = post_json(&client, &url, &body, |r| {
+            let secret = Some(cfg.api_key.as_str());
+            let v = post_json(&client, &url, &body, secret, |r| {
                 r.header("x-api-key", &cfg.api_key)
                     .header("anthropic-version", "2023-06-01")
             })?;
@@ -1045,19 +1186,17 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
                 .base_url
                 .clone()
                 .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
-            let url = format!(
-                "{}/v1beta/models/{}:generateContent?key={}",
-                base.trim_end_matches('/'),
-                cfg.model,
-                cfg.api_key
-            );
+            let url = gemini_generate_url(&base, &cfg.model);
             let body = serde_json::json!({
                 "systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"parts": [
                     {"inline_data": {"mime_type": mime, "data": b64}}
                 ]}]
             });
-            let v = post_json(&client, &url, &body, |r| r)?;
+            let secret = Some(cfg.api_key.as_str());
+            let v = post_json(&client, &url, &body, secret, |r| {
+                gemini_auth(r, &cfg.api_key)
+            })?;
             v["candidates"][0]["content"]["parts"][0]["text"]
                 .as_str()
                 .map(str::to_string)
@@ -1300,5 +1439,167 @@ mod tests {
             "not-a-runtime",
         )
         .is_err());
+    }
+
+    #[test]
+    fn config_debug_redacts_api_keys() {
+        let llm = LlmConfig::new(Provider::OpenAi, "super-secret-key", "model", None).unwrap();
+        let llm_debug = format!("{llm:?}");
+        assert!(!llm_debug.contains("super-secret-key"));
+        assert!(llm_debug.contains("[REDACTED]"));
+
+        let embedding = EmbeddingConfig::new(
+            Provider::OpenAi,
+            "embed-secret-key",
+            "text-embedding-3-small",
+            Some("https://api.openai.com".into()),
+            Some(1536),
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD,
+        )
+        .unwrap();
+        let embedding_debug = format!("{embedding:?}");
+        assert!(!embedding_debug.contains("embed-secret-key"));
+        assert!(embedding_debug.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn redact_secret_strips_key_from_transport_style_errors() {
+        let err = "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=abc123XYZ)";
+        assert_eq!(
+            redact_secret(err, Some("abc123XYZ")),
+            "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=[REDACTED])"
+        );
+        assert_eq!(redact_secret(err, None), err);
+        assert_eq!(redact_secret(err, Some("")), err);
+    }
+
+    #[test]
+    fn retry_backoff_is_deterministic_and_caps_retry_after() {
+        assert_eq!(
+            parse_retry_after_header(Some("2")),
+            Some(std::time::Duration::from_secs(2))
+        );
+        assert_eq!(
+            parse_retry_after_header(Some("Wed, 21 Oct 2015 07:28:00 GMT")),
+            None
+        );
+        assert_eq!(
+            retry_backoff(0, Some(std::time::Duration::from_secs(1))),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            retry_backoff(0, Some(std::time::Duration::from_secs(100))),
+            HTTP_MAX_BACKOFF
+        );
+        assert_eq!(
+            retry_backoff(0, None),
+            std::time::Duration::from_millis(200)
+        );
+        assert_eq!(
+            retry_backoff(1, None),
+            std::time::Duration::from_millis(400)
+        );
+        assert_eq!(
+            retry_backoff(2, None),
+            std::time::Duration::from_millis(800)
+        );
+    }
+
+    fn mock_status_sequence_server(
+        responses: Vec<(u16, &'static str, Option<&'static str>)>,
+    ) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut count = 0usize;
+            for (status, body, retry_after) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = vec![0u8; 32 * 1024];
+                let _ = stream.read(&mut request);
+                let reason = match status {
+                    200 => "OK",
+                    429 => "Too Many Requests",
+                    503 => "Service Unavailable",
+                    _ => "Error",
+                };
+                let retry_header = retry_after
+                    .map(|value| format!("Retry-After: {value}\r\n"))
+                    .unwrap_or_default();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{retry_header}Connection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+                count += 1;
+            }
+            count
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[test]
+    fn retries_429_with_retry_after_zero_then_succeeds() {
+        let ok = r#"{"choices":[{"message":{"content":"OK"}}]}"#;
+        let (base_url, server) = mock_status_sequence_server(vec![
+            (429, r#"{"error":"rate"}"#, Some("0")),
+            (200, ok, None),
+        ]);
+        let config =
+            LlmConfig::new(Provider::OpenAi, "secret-key", "model", Some(base_url)).unwrap();
+        assert_eq!(chat(&config, "system", "ping").unwrap(), "OK");
+        assert_eq!(server.join().unwrap(), 2);
+    }
+
+    #[test]
+    fn gives_up_after_bounded_503_retries() {
+        let (base_url, server) = mock_status_sequence_server(vec![
+            (503, "no", Some("0")),
+            (503, "no", Some("0")),
+            (503, "no", Some("0")),
+        ]);
+        let config =
+            LlmConfig::new(Provider::OpenAi, "secret-key", "model", Some(base_url)).unwrap();
+        let error = chat(&config, "system", "ping").unwrap_err();
+        assert!(error.to_string().contains("LLM HTTP 503"));
+        assert_eq!(server.join().unwrap(), 3);
+    }
+
+    #[test]
+    fn gemini_chat_uses_header_not_query_key() {
+        let body = r#"{"candidates":[{"content":{"parts":[{"text":"gemini-ok"}]}}]}"#;
+        let (base_url, server) = mock_json_server(body);
+        let config = LlmConfig::new(
+            Provider::Gemini,
+            "secret-gemini-key",
+            "gemini-2.0-flash",
+            Some(base_url),
+        )
+        .unwrap();
+        assert_eq!(chat(&config, "system", "ping").unwrap(), "gemini-ok");
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /v1beta/models/gemini-2.0-flash:generateContent "));
+        assert!(!request.contains("key=secret-gemini-key"));
+        assert!(request
+            .to_lowercase()
+            .contains("x-goog-api-key: secret-gemini-key"));
+    }
+
+    #[test]
+    fn gemini_transport_error_redacts_api_key() {
+        // Closed port → connect error. Even if a caller still embeds the key in the
+        // URL (legacy query style), the mapped error must not echo the secret.
+        let secret = "gemini-leak-canary-key";
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(100))
+            .timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let url = format!("http://127.0.0.1:9/v1beta/models/x:generateContent?key={secret}");
+        let body = serde_json::json!({});
+        let error = post_json(&client, &url, &body, Some(secret), |request| request).unwrap_err();
+        let message = error.to_string();
+        assert!(!message.contains(secret), "leaked key in: {message}");
+        assert!(message.contains("[REDACTED]") || !message.contains("key="));
     }
 }

@@ -109,28 +109,47 @@ fn read_pipe<T: Read + Send + 'static>(mut pipe: T) -> std::thread::JoinHandle<V
     })
 }
 
+/// Kill the spawned CLI and direct children so piped stdin/stdout cannot hang
+/// after timeout (e.g. `/bin/sh -c sleep` leaves `sleep` holding the pipes).
+fn terminate_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // Prefer parent-based kill: process-group signals are unreliable under
+        // some sandboxes, while `pkill -P` still reaps shell grandchildren.
+        let pid = child.id().to_string();
+        let _ = Command::new("pkill").args(["-KILL", "-P", &pid]).status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_command(
     mut command: Command,
     input: Option<&str>,
     timeout: Duration,
 ) -> Result<CliOutput, ConvertError> {
+    // Start the deadline before potentially blocking stdin writes (large prompts
+    // can fill the OS pipe if the child never reads).
+    let started = Instant::now();
     let mut child = command
         .spawn()
         .map_err(|error| fail(format!("không khởi chạy được CLI: {error}")))?;
     let stdout_reader = child.stdout.take().map(read_pipe);
     let stderr_reader = child.stderr.take().map(read_pipe);
-    if let Some(input) = input {
+    let stdin_writer = if let Some(input) = input {
         let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| fail("không mở được stdin cho CLI"))?;
-        stdin
-            .write_all(input.as_bytes())
-            .map_err(|error| fail(format!("không gửi được prompt tới CLI: {error}")))?;
-    }
-    drop(child.stdin.take());
+        let bytes = input.as_bytes().to_vec();
+        Some(std::thread::spawn(move || {
+            stdin.write_all(&bytes).and_then(|_| stdin.flush())
+        }))
+    } else {
+        drop(child.stdin.take());
+        None
+    };
 
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -138,20 +157,37 @@ fn run_command(
                 std::thread::sleep(Duration::from_millis(40));
             }
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_child(&mut child);
+                // Closing pipes unblocks a stuck stdin writer / readers.
+                let _ = stdin_writer.and_then(|handle| handle.join().ok());
+                let _ = stdout_reader.and_then(|reader| reader.join().ok());
+                let _ = stderr_reader.and_then(|reader| reader.join().ok());
                 return Err(fail(format!(
                     "subscription CLI timeout sau {} giây",
                     timeout.as_secs()
                 )));
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_child(&mut child);
+                let _ = stdin_writer.and_then(|handle| handle.join().ok());
+                let _ = stdout_reader.and_then(|reader| reader.join().ok());
+                let _ = stderr_reader.and_then(|reader| reader.join().ok());
                 return Err(fail(format!("không chờ được CLI: {error}")));
             }
         }
     };
+
+    if let Some(handle) = stdin_writer {
+        match handle.join() {
+            Ok(Err(error))
+                if status.success() && error.kind() != std::io::ErrorKind::BrokenPipe =>
+            {
+                return Err(fail(format!("không gửi được prompt tới CLI: {error}")));
+            }
+            _ => {}
+        }
+    }
+
     let stdout = stdout_reader
         .and_then(|reader| reader.join().ok())
         .unwrap_or_default();
@@ -440,5 +476,23 @@ printf '{"type":"result","result":"Grounded mock answer"}\n'
         let error = run_command(command, None, Duration::from_millis(30)).unwrap_err();
         assert!(error.to_string().contains("timeout"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_timeout_covers_blocking_large_stdin_write() {
+        // Child never reads stdin; a large write fills the pipe and would block
+        // forever if timeout only started after write_all returned.
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let input = "x".repeat(512 * 1024);
+        let started = Instant::now();
+        let error = run_command(command, Some(&input), Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 }
