@@ -776,6 +776,71 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
     }
 }
 
+/// Conservative email shape: reject price/version tokens like `price@100.00`.
+fn looks_like_email(token: &str) -> bool {
+    let Some((local, domain)) = token.split_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || local.contains('@')
+        || !domain.contains('.')
+        || token.starts_with('@')
+        || token.ends_with('.')
+    {
+        return false;
+    }
+    let local_ok = local
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '%' | '+' | '-'))
+        && local.chars().any(|ch| ch.is_ascii_alphabetic());
+    if !local_ok {
+        return false;
+    }
+    let labels: Vec<&str> = domain.split('.').collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    let tld = *labels.last().unwrap_or(&"");
+    if tld.len() < 2 || !tld.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return false;
+    }
+    labels.iter().all(|label| {
+        !label.is_empty()
+            && label
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            && label.chars().any(|ch| ch.is_ascii_alphabetic())
+    })
+}
+
+/// VN mobile national number after stripping leading `0` or country `84`.
+/// Keeps common 03x/05x/07x/08x/09x mobiles; rejects arbitrary 10-digit runs.
+fn looks_like_vn_mobile_national(national: &str) -> bool {
+    if national.len() != 9 || !national.chars().all(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+    matches!(national.as_bytes()[0], b'3' | b'5' | b'7' | b'8' | b'9')
+}
+
+fn looks_like_vn_phone(digits: &str) -> bool {
+    if digits.len() == 10 && digits.starts_with('0') {
+        looks_like_vn_mobile_national(&digits[1..])
+    } else if digits.len() == 11 && digits.starts_with("84") {
+        looks_like_vn_mobile_national(&digits[2..])
+    } else {
+        false
+    }
+}
+
+fn line_has_national_id_context(lower: &str) -> bool {
+    lower.contains("cccd") || lower.contains("cmnd") || lower.contains("can cuoc")
+}
+
+fn line_has_bank_context(lower: &str) -> bool {
+    lower.contains("tai khoan") || lower.contains("ngan hang")
+}
+
 pub fn detect_pii(documents: &[CorpusDocument]) -> PiiReport {
     let mut findings = Vec::new();
     for document in documents {
@@ -793,26 +858,18 @@ pub fn detect_pii(documents: &[CorpusDocument]) -> PiiReport {
                     matches!(ch, ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']')
                 });
                 let digits: String = clean.chars().filter(|ch| ch.is_ascii_digit()).collect();
-                let kind = if clean.contains('@')
-                    && clean.contains('.')
-                    && !clean.starts_with('@')
-                    && !clean.ends_with('.')
-                {
+                // Prefer labeled identity/bank over phone when a digit run is ambiguous
+                // (e.g. 10-digit account next to "tài khoản"), without dropping bare +84/0 phones.
+                let kind = if looks_like_email(clean) {
                     Some((PiiKind::Email, 0.98))
-                } else if (digits.len() == 10 && digits.starts_with('0'))
-                    || (digits.len() == 11 && digits.starts_with("84"))
-                {
-                    Some((PiiKind::Phone, 0.9))
                 } else if (digits.len() == 9 || digits.len() == 12)
-                    && (lower.contains("cccd")
-                        || lower.contains("cmnd")
-                        || lower.contains("can cuoc"))
+                    && line_has_national_id_context(&lower)
                 {
                     Some((PiiKind::NationalId, 0.95))
-                } else if (8..=19).contains(&digits.len())
-                    && (lower.contains("tai khoan") || lower.contains("ngan hang"))
-                {
+                } else if (8..=19).contains(&digits.len()) && line_has_bank_context(&lower) {
                     Some((PiiKind::BankAccount, 0.75))
+                } else if looks_like_vn_phone(&digits) {
+                    Some((PiiKind::Phone, 0.9))
                 } else {
                     None
                 };
@@ -850,6 +907,8 @@ pub fn redact_pii(markdown: &str, findings: &[PiiFinding]) -> String {
                 && finding.start < finding.end
                 && output.is_char_boundary(finding.start)
                 && output.is_char_boundary(finding.end)
+                // Stale findings (edited markdown / shifted spans) must not punch holes.
+                && output.get(finding.start..finding.end) == Some(finding.text.as_str())
         })
         .map(|finding| (finding.start, finding.end, &finding.kind))
         .collect();
@@ -1005,7 +1064,11 @@ pub fn update_markdown_table(
     table: &MarkdownTable,
     rows: &[Vec<String>],
 ) -> Result<String, ConvertError> {
-    if table.end > markdown.len() || table.start > table.end {
+    if table.end > markdown.len()
+        || table.start > table.end
+        || !markdown.is_char_boundary(table.start)
+        || !markdown.is_char_boundary(table.end)
+    {
         return Err(ConvertError::Failed("span bảng không hợp lệ".into()));
     }
     let rendered = render_markdown_table(rows);

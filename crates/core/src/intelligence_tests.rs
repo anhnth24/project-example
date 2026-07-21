@@ -232,6 +232,57 @@ fn pii_detects_plus84_phone() {
 }
 
 #[test]
+fn pii_detects_leading_zero_vn_mobile() {
+    let report = detect_pii(&[doc("phone0.md", "Gọi 0912345678 giúp tôi.")]);
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert_eq!(report.findings[0].text, "0912345678");
+}
+
+#[test]
+fn pii_rejects_price_at_numeric_as_email() {
+    let report = detect_pii(&[doc("price.md", "Giá price@100.00 không phải email.")]);
+    assert!(
+        !report.counts.contains_key(&PiiKind::Email),
+        "price@100.00 must not be email: {:?}",
+        report.findings
+    );
+    let real = detect_pii(&[doc("mail.md", "Liên hệ lan@example.com ngay.")]);
+    assert_eq!(real.counts.get(&PiiKind::Email), Some(&1));
+}
+
+#[test]
+fn pii_rejects_arbitrary_bare_ten_digit_numbers() {
+    let bare = detect_pii(&[doc(
+        "nums.md",
+        "Mã đơn 1234567890 và chuỗi 0123456789 không phải SĐT.",
+    )]);
+    assert!(
+        !bare.counts.contains_key(&PiiKind::Phone),
+        "bare 10-digit runs must not be phone: {:?}",
+        bare.findings
+    );
+    let mobile = detect_pii(&[doc("ok.md", "SĐT 0912345678")]);
+    assert_eq!(mobile.counts.get(&PiiKind::Phone), Some(&1));
+}
+
+#[test]
+fn pii_phone_vs_bank_prefers_bank_context() {
+    let bankish = detect_pii(&[doc(
+        "bank-phone.md",
+        "Tài khoản ngân hàng: 0912345678 cần đối soát.",
+    )]);
+    assert_eq!(bankish.counts.get(&PiiKind::BankAccount), Some(&1));
+    assert!(
+        !bankish.counts.contains_key(&PiiKind::Phone),
+        "bank label must win over phone shape: {:?}",
+        bankish.findings
+    );
+    let phone = detect_pii(&[doc("phone-only.md", "Điện thoại: 0912345678")]);
+    assert_eq!(phone.counts.get(&PiiKind::Phone), Some(&1));
+    assert!(!phone.counts.contains_key(&PiiKind::BankAccount));
+}
+
+#[test]
 fn pii_detects_identity_number_only_with_context() {
     let with_context = detect_pii(&[doc("id.md", "CCCD: 001234567890")]);
     let without_context = detect_pii(&[doc("number.md", "Mã: 001234567890")]);
@@ -260,6 +311,92 @@ fn redaction_ignores_out_of_range_findings() {
 }
 
 #[test]
+fn redaction_ignores_stale_finding_text() {
+    let markdown = "Email: lan@example.com còn nguyên";
+    let start = markdown.find("lan@example.com").unwrap();
+    let end = start + "lan@example.com".len();
+    let findings = [PiiFinding {
+        kind: PiiKind::Email,
+        // Offsets still point at the email, but text is stale after an edit.
+        text: "old@example.com".into(),
+        source_rel: "a.md".into(),
+        start,
+        end,
+        confidence: 1.0,
+    }];
+    assert_eq!(redact_pii(markdown, &findings), markdown);
+    assert!(markdown.contains("lan@example.com"));
+}
+
+#[test]
+fn redaction_coalesces_crossing_and_nested_spans_in_public_api() {
+    let markdown = "secret=ABCDEFGHtail and more";
+    let findings = [
+        PiiFinding {
+            kind: PiiKind::Phone,
+            text: "FGHtail".into(),
+            source_rel: "a.md".into(),
+            start: 12,
+            end: 19,
+            confidence: 1.0,
+        },
+        PiiFinding {
+            kind: PiiKind::Email,
+            text: "CDE".into(),
+            source_rel: "a.md".into(),
+            start: 9,
+            end: 12,
+            confidence: 1.0,
+        },
+        PiiFinding {
+            kind: PiiKind::BankAccount,
+            text: "ABCDEFGH".into(),
+            source_rel: "a.md".into(),
+            start: 7,
+            end: 15,
+            confidence: 1.0,
+        },
+    ];
+    let redacted = redact_pii(markdown, &findings);
+    assert!(!redacted.contains("ABCDEFGH"));
+    assert!(
+        !redacted.contains("tail"),
+        "crossing suffix must redact: {redacted}"
+    );
+    assert_eq!(redacted.matches("[REDACTED_").count(), 1);
+}
+
+#[test]
+fn redaction_ignores_non_utf8_boundary_offsets() {
+    let markdown = "Liên hệ: a@b.co và ệ";
+    let email_start = markdown.find("a@b.co").unwrap();
+    let email_end = email_start + "a@b.co".len();
+    let ye = markdown.find('ệ').unwrap();
+    assert!(!markdown.is_char_boundary(ye + 1));
+    let findings = [
+        PiiFinding {
+            kind: PiiKind::Email,
+            text: "a@b.co".into(),
+            source_rel: "a.md".into(),
+            start: email_start,
+            end: email_end,
+            confidence: 1.0,
+        },
+        PiiFinding {
+            kind: PiiKind::Phone,
+            text: "x".into(),
+            source_rel: "a.md".into(),
+            start: ye + 1,
+            end: ye + 2,
+            confidence: 1.0,
+        },
+    ];
+    let redacted = redact_pii(markdown, &findings);
+    assert!(redacted.contains("[REDACTED_Email]"));
+    assert!(redacted.contains('ệ'));
+}
+
+#[test]
 fn malformed_markdown_table_is_ignored() {
     let document = doc("bad-table.md", "| A | B |\n|--|---|\n| 1 | 2 |\n");
     assert!(parse_markdown_tables(&document).is_empty());
@@ -276,6 +413,22 @@ fn table_update_rejects_invalid_span() {
         rows: vec![],
     };
     assert!(update_markdown_table("short", &table, &[]).is_err());
+}
+
+#[test]
+fn table_update_rejects_non_utf8_boundary_offsets() {
+    let markdown = "trước ệ | A | B |\n|---|---|\n| 1 | 2 |\n sau";
+    let ye = markdown.find('ệ').unwrap();
+    assert!(!markdown.is_char_boundary(ye + 1));
+    let table = MarkdownTable {
+        id: "x".into(),
+        source_rel: "x.md".into(),
+        index: 0,
+        start: ye + 1,
+        end: ye + 4,
+        rows: vec![vec!["A".into(), "B".into()]],
+    };
+    assert!(update_markdown_table(markdown, &table, &[]).is_err());
 }
 
 #[test]
