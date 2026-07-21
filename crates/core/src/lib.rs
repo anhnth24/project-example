@@ -31,6 +31,7 @@ pub mod tables;
 pub mod viet_legacy;
 mod viet_legacy_maps;
 
+pub use image_ocr::OcrRunConfig;
 pub use probe::{probe, FileInfo};
 
 #[cfg(feature = "audio")]
@@ -162,6 +163,7 @@ impl Default for ConverterOptions {
 /// nên convert nhiều file audio không phải load lại model.
 pub struct Converter {
     opts: ConverterOptions,
+    ocr_config: OcrRunConfig,
     #[cfg(feature = "audio")]
     engine: OnceLock<AudioEngine>,
 }
@@ -178,8 +180,17 @@ impl Converter {
     }
 
     pub fn with_options(opts: ConverterOptions) -> Self {
+        Self::with_options_and_ocr_config(opts, OcrRunConfig::default())
+    }
+
+    /// Build a converter with additive OCR process overrides.
+    ///
+    /// Keeping these overrides separate preserves the public `ConverterOptions`
+    /// struct shape for downstream exhaustive struct literals.
+    pub fn with_options_and_ocr_config(opts: ConverterOptions, ocr_config: OcrRunConfig) -> Self {
         Self {
             opts,
+            ocr_config,
             #[cfg(feature = "audio")]
             engine: OnceLock::new(),
         }
@@ -210,37 +221,39 @@ impl Converter {
     /// Chuyển một file sang Markdown.
     pub fn convert_path(&self, path: &Path) -> Result<ConversionResult, ConvertError> {
         let format = FormatKind::from_path(path);
-        let md = image_ocr::with_ocr_engine(self.opts.ocr_engine, || match format {
-            FormatKind::Pdf => conv::pdf::to_markdown(
-                path,
-                &self.opts.ocr_langs,
-                self.opts.pdf_ocr,
-                self.opts.pdf_ocr_images,
-                self.opts.pdf_pages.as_deref(),
-            ),
-            FormatKind::Docx => conv::docx::to_markdown(path),
-            FormatKind::Pptx => conv::pptx::to_markdown(path),
-            FormatKind::Xlsx => conv::xlsx::to_markdown(path, self.opts.xlsx_sheet.as_deref()),
-            FormatKind::Csv => conv::csv_conv::to_markdown(path),
-            FormatKind::Html => conv::html::to_markdown(path),
-            FormatKind::Text => conv::text::to_markdown(path),
-            FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
-                .map_err(|e| ConvertError::Failed(e.to_string())),
-            FormatKind::Audio => {
-                #[cfg(feature = "audio")]
-                {
-                    self.engine()?
-                        .transcribe_file(path, Some(&self.opts.audio_lang))
-                        .map(|t| t.text)
+        let md = image_ocr::with_ocr_run_config(&self.ocr_config, || {
+            image_ocr::with_ocr_engine(self.opts.ocr_engine, || match format {
+                FormatKind::Pdf => conv::pdf::to_markdown(
+                    path,
+                    &self.opts.ocr_langs,
+                    self.opts.pdf_ocr,
+                    self.opts.pdf_ocr_images,
+                    self.opts.pdf_pages.as_deref(),
+                ),
+                FormatKind::Docx => conv::docx::to_markdown(path),
+                FormatKind::Pptx => conv::pptx::to_markdown(path),
+                FormatKind::Xlsx => conv::xlsx::to_markdown(path, self.opts.xlsx_sheet.as_deref()),
+                FormatKind::Csv => conv::csv_conv::to_markdown(path),
+                FormatKind::Html => conv::html::to_markdown(path),
+                FormatKind::Text => conv::text::to_markdown(path),
+                FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
+                    .map_err(|e| ConvertError::Failed(e.to_string())),
+                FormatKind::Audio => {
+                    #[cfg(feature = "audio")]
+                    {
+                        self.engine()?
+                            .transcribe_file(path, Some(&self.opts.audio_lang))
+                            .map(|t| t.text)
+                    }
+                    #[cfg(not(feature = "audio"))]
+                    {
+                        Err(ConvertError::Unsupported(
+                            "audio: build này không bật feature `audio`",
+                        ))
+                    }
                 }
-                #[cfg(not(feature = "audio"))]
-                {
-                    Err(ConvertError::Unsupported(
-                        "audio: build này không bật feature `audio`",
-                    ))
-                }
-            }
-            FormatKind::Unknown => Err(ConvertError::Unsupported("không rõ đuôi file")),
+                FormatKind::Unknown => Err(ConvertError::Unsupported("không rõ đuôi file")),
+            })
         })?;
 
         // Chuẩn hoá Unicode NFC: tài liệu tiếng Việt cũ (nhất là từ macOS/PDF legacy)
@@ -298,6 +311,23 @@ fn title_from_markdown(markdown: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_converter_options_exhaustive_literal_still_compiles() {
+        let _ = ConverterOptions {
+            ocr_langs: "vie+eng".to_string(),
+            ocr_engine: image_ocr::OcrEngine::Tesseract,
+            whisper_model: None,
+            audio_lang: "vi".to_string(),
+            audio_threads: 4,
+            audio_no_speech_threshold: 0.6,
+            pdf_ocr: true,
+            pdf_ocr_images: false,
+            pdf_pages: None,
+            xlsx_sheet: None,
+            max_chars: None,
+        };
+    }
 
     /// Tài liệu chứa tiếng Việt dạng NFD (dấu rời) phải ra NFC sau convert.
     #[test]

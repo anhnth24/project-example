@@ -1151,11 +1151,11 @@ mod tests {
         }
         let xref_at = out.len();
         out.push_str(&format!(
-            "xref\n0 {}\n0000000000 65535 f \n",
+            "xref\n0 {}\n0000000000 65535 f\n",
             objects.len() + 1
         ));
         for off in offsets {
-            out.push_str(&format!("{off:010} 00000 n \n"));
+            out.push_str(&format!("{off:010} 00000 n\n"));
         }
         out.push_str(&format!(
             "trailer\n<</Size {}/Root 1 0 R>>\nstartxref\n{xref_at}\n%%EOF\n",
@@ -1494,9 +1494,9 @@ mod tests {
         // Chống regression cho khóa serialize PDFium: nếu có nesting/lock-order
         // sai thì test này treo; nếu thiếu khóa thì đường chạy này chính là
         // kịch bản UB (watch-convert + convert tay đồng thời).
-        let dir = std::env::temp_dir();
-        let a_path = dir.join("fileconv_pdfium_lock_a.pdf");
-        let b_path = dir.join("fileconv_pdfium_lock_b.pdf");
+        let dir = tempfile::tempdir().expect("exclusive PDF fixture tempdir");
+        let a_path = dir.path().join("a.pdf");
+        let b_path = dir.path().join("b.pdf");
         std::fs::write(&a_path, minimal_pdf_bytes()).unwrap();
         std::fs::write(&b_path, minimal_pdf_bytes()).unwrap();
 
@@ -1520,8 +1520,6 @@ mod tests {
         } else {
             eprintln!("libpdfium không có — chỉ kiểm tra không deadlock, bỏ qua assert nội dung");
         }
-        let _ = std::fs::remove_file(&a_path);
-        let _ = std::fs::remove_file(&b_path);
     }
 
     #[test]

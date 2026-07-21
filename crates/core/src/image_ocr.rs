@@ -41,7 +41,17 @@ impl OcrEngine {
 
 thread_local! {
     static OCR_ENGINE: Cell<OcrEngine> = const { Cell::new(OcrEngine::Tesseract) };
+    static OCR_RUN_CONFIG: RefCell<OcrRunConfig> = RefCell::new(OcrRunConfig::default());
     static LAST_OCR_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Process-level overrides for one converter's OCR runs.
+///
+/// `None` preserves the production lookup order:
+/// `FILECONV_TESSERACT` (when non-empty), then `tesseract` from `PATH`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OcrRunConfig {
+    pub tesseract_binary: Option<PathBuf>,
 }
 
 pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T {
@@ -54,6 +64,20 @@ pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T
             }
         }
         let _reset = Reset(active, previous);
+        operation()
+    })
+}
+
+pub(crate) fn with_ocr_run_config<T>(config: &OcrRunConfig, operation: impl FnOnce() -> T) -> T {
+    OCR_RUN_CONFIG.with(|active| {
+        let previous = std::mem::replace(&mut *active.borrow_mut(), config.clone());
+        struct Reset<'a>(&'a RefCell<OcrRunConfig>, Option<OcrRunConfig>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                *self.0.borrow_mut() = self.1.take().expect("OCR run config reset value");
+            }
+        }
+        let _reset = Reset(active, Some(previous));
         operation()
     })
 }
@@ -502,16 +526,24 @@ fn run_tesseract_psm_with_binary(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Resolve binary: `FILECONV_TESSERACT` override (nếu non-empty) → `tesseract`.
-fn resolve_tesseract_binary(override_bin: Option<&std::ffi::OsStr>) -> PathBuf {
-    override_bin
+/// Resolve binary: explicit config → `FILECONV_TESSERACT` → `tesseract`.
+fn resolve_tesseract_binary(
+    config_override: Option<&std::ffi::OsStr>,
+    env_override: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    config_override
         .filter(|value| !value.is_empty())
+        .or_else(|| env_override.filter(|value| !value.is_empty()))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("tesseract"))
 }
 
 fn tesseract_binary() -> PathBuf {
-    resolve_tesseract_binary(std::env::var_os("FILECONV_TESSERACT").as_deref())
+    let configured = OCR_RUN_CONFIG.with(|config| config.borrow().tesseract_binary.clone());
+    resolve_tesseract_binary(
+        configured.as_deref().map(Path::as_os_str),
+        std::env::var_os("FILECONV_TESSERACT").as_deref(),
+    )
 }
 
 fn apply_ocr_runtime_env(command: &mut Command) {
@@ -534,6 +566,18 @@ fn apply_ocr_runtime_env(command: &mut Command) {
 
 /// Kiểm tra Tesseract hệ thống hoặc runtime desktop đi kèm có sẵn không.
 pub fn tesseract_available() -> bool {
+    let configured = OCR_RUN_CONFIG.with(|config| config.borrow().tesseract_binary.clone());
+    if configured
+        .as_deref()
+        .is_some_and(|binary| !binary.as_os_str().is_empty())
+    {
+        let mut command = Command::new(tesseract_binary());
+        apply_ocr_runtime_env(&mut command);
+        return command
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+    }
     *TESSERACT_AVAILABLE.get_or_init(|| {
         let binary = tesseract_binary();
         let mut command = Command::new(binary);
@@ -713,14 +757,24 @@ mod tests {
 
     #[test]
     fn resolve_tesseract_binary_honors_override_and_default() {
-        assert_eq!(resolve_tesseract_binary(None).as_os_str(), "tesseract");
         assert_eq!(
-            resolve_tesseract_binary(Some(std::ffi::OsStr::new(""))).as_os_str(),
+            resolve_tesseract_binary(None, None).as_os_str(),
             "tesseract"
         );
         assert_eq!(
-            resolve_tesseract_binary(Some(std::ffi::OsStr::new("/opt/custom-tess"))),
+            resolve_tesseract_binary(Some(std::ffi::OsStr::new("")), None).as_os_str(),
+            "tesseract"
+        );
+        assert_eq!(
+            resolve_tesseract_binary(
+                Some(std::ffi::OsStr::new("/opt/custom-tess")),
+                Some(std::ffi::OsStr::new("/opt/env-tess"))
+            ),
             PathBuf::from("/opt/custom-tess")
+        );
+        assert_eq!(
+            resolve_tesseract_binary(None, Some(std::ffi::OsStr::new("/opt/env-tess"))),
+            PathBuf::from("/opt/env-tess")
         );
     }
 
@@ -742,6 +796,24 @@ mod tests {
             text.contains("READ_OK"),
             "stub must confirm argv[1] was readable: {text:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_ocr_config_selects_binary_without_process_env_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = install_readable_tesseract_stub(dir.path());
+        let image_path = dir.path().join("sample.png");
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(64, 64, image::Luma([0])))
+            .save(&image_path)
+            .expect("sample png");
+        let config = OcrRunConfig {
+            tesseract_binary: Some(stub),
+        };
+
+        let text = with_ocr_run_config(&config, || ocr_image(&image_path, "eng"))
+            .expect("OCR via scoped config");
+        assert!(text.contains("FILECONV_TESSERACT_STUB_OK"));
     }
 
     /// Production `FILECONV_TESSERACT` override: set only on a child process via
