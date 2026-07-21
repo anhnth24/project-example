@@ -82,6 +82,15 @@ pub enum VersionVisibility {
     VersionIds(BTreeSet<Uuid>),
 }
 
+impl VersionVisibility {
+    fn required_permission(&self) -> &'static str {
+        match self {
+            Self::Current => "qa.query",
+            Self::VersionIds(_) => "qa.history",
+        }
+    }
+}
+
 /// Shadow/building/retired generations must not surface in retrieval.
 pub fn index_generation_visible_for_retrieval(
     is_active: bool,
@@ -314,10 +323,16 @@ pub async fn hydrate_chunks_by_identity(
                      JOIN org_memberships acl_m
                        ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
                      JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
                      WHERE acl_c.org_id = d.org_id
                        AND acl_c.id = d.collection_id
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $5
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $4
@@ -335,7 +350,13 @@ pub async fn hydrate_chunks_by_identity(
                    AND dv.is_current
                    AND im.is_active
                    AND im.state = 'active'",
-                &[&ctx.org_id(), &collection_ids, &identities, &ctx.user_id()],
+                &[
+                    &ctx.org_id(),
+                    &collection_ids,
+                    &identities,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                ],
             )
             .await?
         }
@@ -370,10 +391,16 @@ pub async fn hydrate_chunks_by_identity(
                      JOIN org_memberships acl_m
                        ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
                      JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
                      WHERE acl_c.org_id = d.org_id
                        AND acl_c.id = d.collection_id
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $6
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $5
@@ -396,6 +423,7 @@ pub async fn hydrate_chunks_by_identity(
                     &identities,
                     &versions,
                     &ctx.user_id(),
+                    &visibility.required_permission(),
                 ],
             )
             .await?
@@ -460,10 +488,16 @@ pub async fn load_authorized_conflict_evidence(
                      JOIN org_memberships acl_m
                        ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
                      JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
                      WHERE acl_c.org_id = da.org_id
                        AND acl_c.id = da.collection_id
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $5
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $4
@@ -481,10 +515,16 @@ pub async fn load_authorized_conflict_evidence(
                      JOIN org_memberships acl_m
                        ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
                      JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
                      WHERE acl_c.org_id = db.org_id
                        AND acl_c.id = db.collection_id
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $5
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $4
@@ -509,6 +549,7 @@ pub async fn load_authorized_conflict_evidence(
                     &conflict_ids,
                     &collection_ids,
                     &ctx.user_id(),
+                    &visibility.required_permission(),
                 ],
             )
             .await?
@@ -560,10 +601,16 @@ pub async fn load_authorized_conflict_evidence(
                      JOIN org_memberships acl_m
                        ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
                      JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
                      WHERE acl_c.org_id = da.org_id
                        AND acl_c.id = da.collection_id
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $6
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $5
@@ -581,10 +628,16 @@ pub async fn load_authorized_conflict_evidence(
                      JOIN org_memberships acl_m
                        ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
                      JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
                      WHERE acl_c.org_id = db.org_id
                        AND acl_c.id = db.collection_id
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $6
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $5
@@ -610,6 +663,7 @@ pub async fn load_authorized_conflict_evidence(
                     &collection_ids,
                     &versions,
                     &ctx.user_id(),
+                    &visibility.required_permission(),
                 ],
             )
             .await?
