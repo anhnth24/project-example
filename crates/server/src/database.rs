@@ -67,8 +67,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/0015_expand_vector_cleanup_intent_states.sql"),
     ),
     (
-        "0016_chunks_accent_fold_tsv.sql",
-        include_str!("../migrations/0016_chunks_accent_fold_tsv.sql"),
+        "0016_expand_chunks_accent_fold_tsv.sql",
+        include_str!("../migrations/0016_expand_chunks_accent_fold_tsv.sql"),
     ),
 ];
 
