@@ -818,7 +818,8 @@ fn normalized_margin_line(line: &str) -> Option<String> {
     (normalized.chars().count() >= 8 && normalized.chars().count() <= 400).then_some(normalized)
 }
 
-fn margin_indices(lines: &[&str]) -> HashSet<usize> {
+/// First/last nonempty line indices used for exact per-line margin matching.
+fn margin_line_indices(lines: &[&str]) -> HashSet<usize> {
     let nonempty: Vec<usize> = lines
         .iter()
         .enumerate()
@@ -832,100 +833,223 @@ fn margin_indices(lines: &[&str]) -> HashSet<usize> {
         .collect()
 }
 
-/// Remove headers/footers repeated on most pages. Matching is restricted to
-/// page margins and also handles a header represented as one combined line on
-/// structured pages but several lines on PDFium fallback pages.
+#[derive(Clone, Default)]
+struct PageMarginAnalysis {
+    /// Normalized lines at first-5 / last-3 nonempty positions (exact-line pool).
+    margin_lines: Vec<(usize, String)>,
+    /// Contiguous top margin block (ordered, stops at blank / non-margin line).
+    top_indices: Vec<usize>,
+    top_block: Vec<String>,
+    /// Contiguous bottom margin block (ordered, top-exclusive).
+    bottom_indices: Vec<usize>,
+    bottom_block: Vec<String>,
+}
+
+impl PageMarginAnalysis {
+    fn from_lines(lines: &[&str]) -> Self {
+        let margin_indices = margin_line_indices(lines);
+        let mut margin_lines = Vec::new();
+        for index in &margin_indices {
+            if let Some(normalized) = normalized_margin_line(lines[*index]) {
+                margin_lines.push((*index, normalized));
+            }
+        }
+
+        let (top_indices, top_block) = contiguous_top_block(lines);
+        let top_set: HashSet<usize> = top_indices.iter().copied().collect();
+        let (bottom_indices, bottom_block) = contiguous_bottom_block(lines, &top_set);
+
+        Self {
+            margin_lines,
+            top_indices,
+            top_block,
+            bottom_indices,
+            bottom_block,
+        }
+    }
+
+    fn top_signature(&self) -> Option<String> {
+        block_signature(&self.top_block)
+    }
+
+    fn bottom_signature(&self) -> Option<String> {
+        block_signature(&self.bottom_block)
+    }
+
+    fn indices_to_strip(
+        &self,
+        repeated_lines: &HashSet<String>,
+        repeated_tops: &HashSet<String>,
+        repeated_bottoms: &HashSet<String>,
+    ) -> HashSet<usize> {
+        let mut drop = HashSet::new();
+        if self
+            .top_signature()
+            .is_some_and(|sig| repeated_tops.contains(&sig))
+        {
+            drop.extend(self.top_indices.iter().copied());
+        }
+        if self
+            .bottom_signature()
+            .is_some_and(|sig| repeated_bottoms.contains(&sig))
+        {
+            drop.extend(self.bottom_indices.iter().copied());
+        }
+        for (index, normalized) in &self.margin_lines {
+            if repeated_lines.contains(normalized) {
+                drop.insert(*index);
+            }
+        }
+        drop
+    }
+}
+
+fn block_signature(block: &[String]) -> Option<String> {
+    if block.is_empty() {
+        return None;
+    }
+    Some(block.join(" "))
+}
+
+/// Ordered contiguous top block: leading nonempty normalizable lines until a
+/// blank, a non-margin line, or 5 lines. Never mixes in bottom-margin text.
+fn contiguous_top_block(lines: &[&str]) -> (Vec<usize>, Vec<String>) {
+    let mut indices = Vec::new();
+    let mut block = Vec::new();
+    let mut seen_content = false;
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            if seen_content {
+                break;
+            }
+            continue;
+        }
+        seen_content = true;
+        if block.len() >= 5 {
+            break;
+        }
+        match normalized_margin_line(line) {
+            Some(normalized) => {
+                indices.push(index);
+                block.push(normalized);
+            }
+            None => break,
+        }
+    }
+    (indices, block)
+}
+
+/// Ordered contiguous bottom block: trailing nonempty normalizable lines until
+/// a blank, a non-margin line, the top block, or 3 lines.
+fn contiguous_bottom_block(
+    lines: &[&str],
+    top_indices: &HashSet<usize>,
+) -> (Vec<usize>, Vec<String>) {
+    let mut indices_rev = Vec::new();
+    let mut block_rev = Vec::new();
+    let mut seen_content = false;
+    for (index, line) in lines.iter().enumerate().rev() {
+        if top_indices.contains(&index) {
+            break;
+        }
+        if line.trim().is_empty() {
+            if seen_content {
+                break;
+            }
+            continue;
+        }
+        seen_content = true;
+        if block_rev.len() >= 3 {
+            break;
+        }
+        match normalized_margin_line(line) {
+            Some(normalized) => {
+                indices_rev.push(index);
+                block_rev.push(normalized);
+            }
+            None => break,
+        }
+    }
+    indices_rev.reverse();
+    block_rev.reverse();
+    (indices_rev, block_rev)
+}
+
+/// Remove headers/footers repeated on most pages.
 ///
-/// A margin line is repeated only when its full normalized form appears as an
-/// exact margin line on enough pages. Removal is content-preserving:
-/// - exact normalized equality → drop the line
-/// - line is only a concatenation of repeated fragments → drop the line
-/// - line merely contains or is contained by a repeated phrase but still has
-///   other text → keep the original line
+/// Content-preserving rules:
+/// - individual margin lines drop only on exact normalized equality
+/// - combined/split forms match only via complete ordered contiguous top or
+///   bottom margin blocks (never by subtracting arbitrary global fragments)
+/// - uncertain margins are retained rather than risking body deletion
 fn strip_repeated_marginal_lines(pages: &mut [String]) {
     if pages.len() < 4 {
         return;
     }
 
-    let page_margin_lines: Vec<HashSet<String>> = pages
+    let threshold = (pages.len() * 3).div_ceil(5).max(3);
+    let analyses: Vec<PageMarginAnalysis> = pages
         .iter()
         .map(|page| {
             let lines: Vec<&str> = page.lines().collect();
-            margin_indices(&lines)
-                .into_iter()
-                .filter_map(|index| normalized_margin_line(lines[index]))
-                .collect()
+            PageMarginAnalysis::from_lines(&lines)
         })
         .collect();
 
-    let mut candidates: HashSet<String> = HashSet::new();
-    for margins in &page_margin_lines {
-        candidates.extend(margins.iter().cloned());
+    let mut line_page_counts: HashMap<String, usize> = HashMap::new();
+    let mut top_sig_counts: HashMap<String, usize> = HashMap::new();
+    let mut bottom_sig_counts: HashMap<String, usize> = HashMap::new();
+    for analysis in &analyses {
+        let unique_lines: HashSet<&str> = analysis
+            .margin_lines
+            .iter()
+            .map(|(_, line)| line.as_str())
+            .collect();
+        for line in unique_lines {
+            *line_page_counts.entry(line.to_string()).or_default() += 1;
+        }
+        if let Some(sig) = analysis.top_signature() {
+            *top_sig_counts.entry(sig).or_default() += 1;
+        }
+        if let Some(sig) = analysis.bottom_signature() {
+            *bottom_sig_counts.entry(sig).or_default() += 1;
+        }
     }
 
-    let threshold = (pages.len() * 3).div_ceil(5).max(3);
-    let repeated: HashSet<String> = candidates
+    let repeated_lines: HashSet<String> = line_page_counts
         .into_iter()
-        .filter(|line| {
-            page_margin_lines
-                .iter()
-                .filter(|margins| margins.contains(line))
-                .count()
-                >= threshold
-        })
+        .filter(|(_, count)| *count >= threshold)
+        .map(|(line, _)| line)
         .collect();
-    if repeated.is_empty() {
+    let repeated_tops: HashSet<String> = top_sig_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= threshold)
+        .map(|(sig, _)| sig)
+        .collect();
+    let repeated_bottoms: HashSet<String> = bottom_sig_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= threshold)
+        .map(|(sig, _)| sig)
+        .collect();
+    if repeated_lines.is_empty() && repeated_tops.is_empty() && repeated_bottoms.is_empty() {
         return;
     }
 
-    for page in pages.iter_mut() {
-        let lines: Vec<&str> = page.lines().collect();
-        let margins = margin_indices(&lines);
-        let retained = lines
-            .iter()
+    for (page, analysis) in pages.iter_mut().zip(analyses.iter()) {
+        let drop_indices =
+            analysis.indices_to_strip(&repeated_lines, &repeated_tops, &repeated_bottoms);
+        if drop_indices.is_empty() {
+            continue;
+        }
+        let retained = page
+            .lines()
             .enumerate()
-            .filter(|(index, line)| {
-                if !margins.contains(index) {
-                    return true;
-                }
-                let Some(normalized) = normalized_margin_line(line) else {
-                    return true;
-                };
-                !margin_line_is_repeated_header(&normalized, &repeated)
-            })
-            .map(|(_, line)| *line)
+            .filter(|(index, _)| !drop_indices.contains(index))
+            .map(|(_, line)| line)
             .collect::<Vec<_>>()
             .join("\n");
         *page = retained;
     }
-}
-
-/// True when `normalized` is an exact repeated margin header, or is composed
-/// only of such headers (combined single-line form). Body lines that contain or
-/// are contained by a header phrase keep their other text and are not removed.
-fn margin_line_is_repeated_header(normalized: &str, repeated: &HashSet<String>) -> bool {
-    if repeated.contains(normalized) {
-        return true;
-    }
-
-    let mut remainder = normalized.to_string();
-    let mut removed_any = false;
-    // Longer fragments first so a long header is preferred over its prefixes.
-    let mut fragments: Vec<&String> = repeated
-        .iter()
-        .filter(|candidate| candidate.chars().count() >= 12)
-        .collect();
-    fragments.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()));
-    for candidate in fragments {
-        if remainder.contains(candidate.as_str()) {
-            remainder = remainder.replace(candidate.as_str(), " ");
-            removed_any = true;
-        }
-    }
-    if !removed_any {
-        return false;
-    }
-    remainder.split_whitespace().next().is_none()
 }
 
 /// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
@@ -1272,27 +1396,67 @@ mod tests {
     fn strips_repeated_headers_in_combined_and_split_forms() {
         let combined = "Mã hiệu: ALPHA/LD/HDCV/FPT **PHƯƠNG PHÁP LUẬN FPT CASAN** \
             Lần ban hành/sửa đổi: 1/0 **TRONG CHUYỂN ĐỔI AI** Ngày hiệu lực: 19/5/2026";
+        // Original majority-combined / minority-split fixture. Split order differs
+        // from the combined line, so the minority page may retain its header
+        // rather than guess via global fragment subtraction.
+        let mut pages = vec![
+            format!("{combined}\n\nNội dung trang một"),
+            format!("{combined}\n\nNội dung trang hai"),
+            format!("{combined}\n\nNội dung trang ba"),
+            format!("{combined}\n\nNội dung trang bốn"),
+            "PHƯƠNG PHÁP LUẬN FPT CASAN\n\
+             TRONG CHUYỂN ĐỔI AI\n\
+             Mã hiệu: ALPHA/LD/HDCV/FPT\n\
+             Lần ban hành/sửa đổi: 1/0\n\
+             Ngày hiệu lực: 19/5/2026\n\
+             Nội dung trang năm"
+                .to_string(),
+        ];
+
+        strip_repeated_marginal_lines(&mut pages);
+
+        assert!(pages[..4].iter().all(|page| !page.contains("Mã hiệu:")));
+        assert!(pages[..4]
+            .iter()
+            .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(pages
+            .iter()
+            .enumerate()
+            .all(|(index, page)| page.contains(&format!(
+                "trang {}",
+                ["một", "hai", "ba", "bốn", "năm"][index]
+            ))));
+    }
+
+    #[test]
+    fn strips_repeated_headers_majority_split_minority_combined() {
+        // Combined line uses a different field order than the split block, so
+        // ordered block signatures diverge; minority page keeps its margin.
+        let combined = "Mã hiệu: ALPHA/LD/HDCV/FPT **PHƯƠNG PHÁP LUẬN FPT CASAN** \
+            Lần ban hành/sửa đổi: 1/0 **TRONG CHUYỂN ĐỔI AI** Ngày hiệu lực: 19/5/2026";
         let split = "PHƯƠNG PHÁP LUẬN FPT CASAN\n\
              TRONG CHUYỂN ĐỔI AI\n\
              Mã hiệu: ALPHA/LD/HDCV/FPT\n\
              Lần ban hành/sửa đổi: 1/0\n\
              Ngày hiệu lực: 19/5/2026";
-        // Majority split so each fragment is exact-repeated; the combined page
-        // is then dropped because it is only those fragments concatenated.
         let mut pages = vec![
-            format!("{split}\nNội dung trang một"),
-            format!("{split}\nNội dung trang hai"),
-            format!("{split}\nNội dung trang ba"),
-            format!("{split}\nNội dung trang bốn"),
+            format!("{split}\n\nNội dung trang một"),
+            format!("{split}\n\nNội dung trang hai"),
+            format!("{split}\n\nNội dung trang ba"),
+            format!("{split}\n\nNội dung trang bốn"),
             format!("{combined}\n\nNội dung trang năm"),
         ];
 
         strip_repeated_marginal_lines(&mut pages);
 
-        assert!(pages.iter().all(|page| !page.contains("Mã hiệu:")));
-        assert!(pages
+        assert!(pages[..4]
             .iter()
             .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(pages[..4].iter().all(|page| !page.contains("Mã hiệu:")));
+        assert!(
+            pages[4].contains("PHƯƠNG PHÁP LUẬN FPT CASAN"),
+            "uncertain minority combined margin must be retained, not guessed away"
+        );
         assert!(pages
             .iter()
             .enumerate()
@@ -1368,6 +1532,37 @@ mod tests {
             "short body line must not be dropped just because a longer repeated header contains it"
         );
         assert!(pages[4].contains("phần thân bài độc lập trên trang năm"));
+    }
+
+    #[test]
+    fn unrelated_top_and_bottom_repeats_do_not_delete_body() {
+        let top = "PHƯƠNG PHÁP LUẬN FPT CASAN";
+        let bottom = "Tài liệu nội bộ FPT - Chỉ lưu hành nội bộ";
+        // Concatenation of unrelated repeated top + bottom strings. Global
+        // fragment subtraction would clear this line and drop real body text.
+        let body = "PHƯƠNG PHÁP LUẬN FPT CASAN Tài liệu nội bộ FPT - Chỉ lưu hành nội bộ \
+            là đoạn thân bài cần giữ lại cho doanh nghiệp.";
+        let mut pages = vec![
+            format!("{top}\n\nNội dung trang một đủ dài.\n\n{bottom}"),
+            format!("{top}\n\nNội dung trang hai đủ dài.\n\n{bottom}"),
+            format!("{top}\n\nNội dung trang ba đủ dài.\n\n{bottom}"),
+            format!("{top}\n\nNội dung trang bốn đủ dài.\n\n{bottom}"),
+            format!("{body}\n\nNội dung trang năm đủ dài.\n\nFooter riêng trang năm"),
+        ];
+
+        strip_repeated_marginal_lines(&mut pages);
+
+        assert!(pages[..4]
+            .iter()
+            .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(pages[..4]
+            .iter()
+            .all(|page| !page.contains("Tài liệu nội bộ FPT")));
+        assert!(
+            pages[4].contains("là đoạn thân bài cần giữ lại cho doanh nghiệp"),
+            "body must survive when it only joins unrelated top/bottom repeats"
+        );
+        assert!(pages[4].contains("Nội dung trang năm đủ dài"));
     }
 
     #[test]
