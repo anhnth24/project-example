@@ -39,9 +39,12 @@ and query accent-fold into one `text_version` while the fixture still said
      `pub use … as infer_runtime_path`. HTTP(S) endpoints are parsed with
      `url::Url`; scheme-less values get an `https://` prefix only when
      syntactically plausible. Malformed / non-http endpoints silently yield an
-     empty host (model cues may still apply). Parsed DNS hosts drop **one**
-     terminal absolute root dot before domain / loopback / label matching
-     (`open.bigmodel.cn.` ≡ `open.bigmodel.cn`). Provider domains match at DNS
+     empty host (model cues may still apply). Parsed DNS hosts are
+     canonicalized **once**: lowercase, strip at most one terminal root dot,
+     then reject leading/trailing `.` or empty `..` labels
+     (`open.bigmodel.cn.` ≡ `open.bigmodel.cn`; `.bigmodel.cn`,
+     `open.bigmodel.cn..`, `vllm..internal` → empty host). Provider domains
+     match at DNS
      label boundaries (`z.ai` does not match `modelz.ai`). Cue order:
      official GLM host → vLLM host → known provider/loopback → anchored model
      cues → default `provider-cloud`. A vLLM host beats a GLM-named model;

@@ -46,13 +46,11 @@ const KNOWN_PROVIDER_DOMAINS: &[&str] = &["openai.com", "googleapis.com"];
 ///   plausible; otherwise empty host
 /// - Non-http(s) / malformed → empty host (silent)
 /// - Userinfo / path / query / fragment stripped by the URL parser
-/// - One terminal absolute-DNS root dot is stripped (`example.com.` → `example.com`)
+/// - Host is canonicalized **once**: lowercase, strip at most one terminal DNS
+///   root dot, then reject leading/trailing `.` or empty `..` labels
 pub fn embedding_host_hint(base_url: Option<&str>) -> String {
     parse_embedding_endpoint(base_url)
-        .and_then(|url| {
-            url.host_str()
-                .map(|host| strip_terminal_root_dot(&host.to_ascii_lowercase()).to_string())
-        })
+        .and_then(|url| url.host_str().and_then(canonicalize_dns_host))
         .unwrap_or_default()
 }
 
@@ -98,14 +96,37 @@ fn scheme_less_plausible(value: &str) -> bool {
     first.is_ascii_alphanumeric() || first == '['
 }
 
-/// Strip one absolute-DNS root dot (`example.com.` → `example.com`).
-fn strip_terminal_root_dot(host: &str) -> &str {
-    host.strip_suffix('.').unwrap_or(host)
+/// Canonicalize a parsed host once for inference matching.
+///
+/// 1. ASCII-lowercase
+/// 2. Strip at most one terminal DNS root dot (`example.com.` → `example.com`)
+/// 3. Reject hosts that still start/end with `.` or contain empty `..` labels
+fn canonicalize_dns_host(host: &str) -> Option<String> {
+    let lower = host.to_ascii_lowercase();
+    let stripped = lower.strip_suffix('.').unwrap_or(lower.as_str());
+    if stripped.is_empty() {
+        return None;
+    }
+    // Bracketed IPv6 literals are already validated by `url`; keep as-is.
+    if stripped.starts_with('[') {
+        return stripped
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .filter(|inner| !inner.is_empty())
+            .map(|_| stripped.to_string());
+    }
+    if stripped.starts_with('.') || stripped.ends_with('.') {
+        return None;
+    }
+    if stripped.split('.').any(|label| label.is_empty()) {
+        return None;
+    }
+    Some(stripped.to_string())
 }
 
-/// Host form used for domain / loopback / DNS-label matching.
+/// Bracket-strip only for domain / loopback / DNS-label matching.
+/// Root-dot canonicalization happens once in [`canonicalize_dns_host`].
 fn host_for_dns_match(host: &str) -> &str {
-    let host = strip_terminal_root_dot(host);
     host.strip_prefix('[')
         .and_then(|inner| inner.strip_suffix(']'))
         .unwrap_or(host)
@@ -309,7 +330,7 @@ mod tests {
             (None, "myglmmodel", "provider-cloud"),
             (None, "vllm-served-model", "vllm-local"),
             (None, "myvllmserved", "provider-cloud"),
-            // Absolute DNS root dot (one trailing '.') is canonicalized away
+            // Absolute DNS root dot (exactly one trailing '.') is canonicalized away
             (
                 Some("https://open.bigmodel.cn./api/paas/v4"),
                 "custom",
@@ -326,6 +347,19 @@ mod tests {
                 "provider-cloud",
             ),
             (Some("https://api.z.ai./v1"), "embed", "glm-cloud-interim"),
+            // Invalid DNS hosts after canonicalize → empty host (model cues may still apply)
+            (Some("https://.bigmodel.cn/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("https://open.bigmodel.cn../v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (Some("http://vllm..internal/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("https://.bigmodel.cn/v1"),
+                "embedding-3",
+                "glm-cloud-interim",
+            ),
             // vLLM hosts
             (Some("http://vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
             (Some("vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
@@ -461,6 +495,12 @@ mod tests {
             embedding_host_hint(Some("https://open.bigmodel.cn./api")),
             "open.bigmodel.cn"
         );
+        assert_eq!(embedding_host_hint(Some("https://.bigmodel.cn/v1")), "");
+        assert_eq!(
+            embedding_host_hint(Some("https://open.bigmodel.cn../v1")),
+            ""
+        );
+        assert_eq!(embedding_host_hint(Some("http://vllm..internal/v1")), "");
         assert_eq!(
             embedding_host_hint(Some("https://user:pass@vllm.internal:8000/v1")),
             "vllm.internal"
@@ -479,16 +519,33 @@ mod tests {
     #[test]
     fn dns_label_boundaries_reject_substring_hosts() {
         assert!(host_matches_domain("api.z.ai", "z.ai"));
-        assert!(host_matches_domain("api.z.ai.", "z.ai"));
         assert!(!host_matches_domain("modelz.ai", "z.ai"));
         assert!(host_matches_domain("open.bigmodel.cn", "bigmodel.cn"));
-        assert!(host_matches_domain("open.bigmodel.cn.", "bigmodel.cn"));
         assert!(!host_matches_domain("notbigmodel.cn", "bigmodel.cn"));
         assert!(host_has_dns_label("vllm.internal", "vllm"));
-        assert!(host_has_dns_label("vllm.internal.", "vllm"));
         assert!(!host_has_dns_label("myvllm.internal", "vllm"));
-        assert!(is_loopback_host("localhost."));
-        assert!(is_loopback_host("127.0.0.1."));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("127.0.0.1"));
+        // Matching helpers do not re-strip root dots (canonicalize once upstream).
+        assert!(!host_matches_domain("api.z.ai.", "z.ai"));
+        assert!(!host_matches_domain("open.bigmodel.cn.", "bigmodel.cn"));
+        assert!(!is_loopback_host("localhost."));
+    }
+
+    #[test]
+    fn canonicalize_dns_host_strips_one_root_dot_and_rejects_invalid_labels() {
+        assert_eq!(
+            canonicalize_dns_host("open.bigmodel.cn."),
+            Some("open.bigmodel.cn".into())
+        );
+        assert_eq!(
+            canonicalize_dns_host("Open.BigModel.CN."),
+            Some("open.bigmodel.cn".into())
+        );
+        assert_eq!(canonicalize_dns_host(".bigmodel.cn"), None);
+        assert_eq!(canonicalize_dns_host("open.bigmodel.cn.."), None);
+        assert_eq!(canonicalize_dns_host("vllm..internal"), None);
+        assert_eq!(canonicalize_dns_host("[::1]"), Some("[::1]".into()));
     }
 
     #[test]

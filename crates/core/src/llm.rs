@@ -1469,6 +1469,13 @@ mod tests {
                 "embedding-3",
                 "provider-cloud",
             ),
+            (Some("https://.bigmodel.cn/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("https://open.bigmodel.cn../v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (Some("http://vllm..internal/v1"), "bge-m3", "provider-cloud"),
             (Some("ftp://vllm.internal/v1"), "bge-m3", "provider-cloud"),
             (
                 Some("http://vllm.internal:8000/v1"),
