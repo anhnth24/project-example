@@ -780,27 +780,77 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
 ///
 /// - **Spans** are exact candidate bytes (email / phone / number run), never the
 ///   surrounding whitespace token, Markdown table pipes, link wrappers, or labels.
-/// - **Email**: allow numeric locals (`123@x.com`); reject `price@100.00`, leading /
-///   trailing / consecutive local dots, and domain labels with leading/trailing `-`.
-/// - **Phone**: validate against explicit VN mobile + landline prefix/length tables
-///   after normalizing `+84` / optional `(0)`; accept grouped digits with spaces /
-///   dashes / parentheses; reject invalid `030…` and arbitrary bare digit runs.
-/// - **Bank**: only with nearest explicit label (`STK` / `Số TK` / `tài khoản` / …)
-///   and account-length digit groups; bare `ngân hàng` prose does **not** classify
-///   transaction counts. Nearest explicit `SĐT` / phone label beats bank/generic.
-/// - **CCCD/CMND**: only with nearest identity label (9 or 12 digits).
+/// - **Email**: dot-atom local (incl. `'` / numeric); reject `price@100.00`, local-dot
+///   abuse, domain-label hyphen abuse; strict delimiter boundaries on both sides
+///   (no partial carve-outs from unsupported adjacent characters).
+/// - **Phone**: maintained active VN mobile prefixes (incl. `055`/`087`) + exact
+///   landline area/length tables; leading `+` preserved and must be `+84`; optional
+///   `(0)` trunk; grouped separators; alphanumeric boundaries; consecutive separated
+///   phones detected independently; reject `030…` and arbitrary bare digit runs.
+/// - **Labels**: nearest explicit label cannot cross newline, `|`, or sentence/clause
+///   boundary; Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
+/// - **Bank/CCCD**: nearest scoped label or table header only; bare `ngân hàng` prose
+///   does not classify transaction counts. Explicit phone header/label beats bank.
 /// - Bare valid VN mobiles/landlines remain in recall; exotic/foreign numbers,
 ///   unlabeled account-like runs, and invalid prefixes are out of scope (precision).
 ///
 /// Redaction keeps UTF-8 boundary checks, stale `finding.text` equality, and
 /// overlapping/crossing span coalescing.
 
+/// Intended dot-atom atext (RFC 5322 subset) plus `.` with separate dot rules.
+/// `|` is excluded so Markdown table delimiters stay outside the email span.
 fn is_email_local_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '%' | '+' | '-')
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '/'
+                | '='
+                | '?'
+                | '^'
+                | '_'
+                | '`'
+                | '{'
+                | '}'
+                | '~'
+                | '.'
+        )
 }
 
 fn is_email_domain_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-')
+}
+
+fn is_email_boundary_char(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '(' | ')'
+                | '<'
+                | '>'
+                | '['
+                | ']'
+                | ':'
+                | ';'
+                | ','
+                | '.'
+                | '"'
+                | '\''
+                | '|'
+                | '{'
+                | '}'
+                | '/'
+                | '\\'
+                | '!'
+                | '?'
+        )
 }
 
 /// Conservative email shape on an exact `local@domain` candidate.
@@ -817,10 +867,7 @@ fn looks_like_email(token: &str) -> bool {
     {
         return false;
     }
-    // Numeric locals are valid; reject leading/trailing/consecutive dots.
-    if !(local
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '%' | '+' | '-'))
+    if !(local.chars().all(is_email_local_char)
         && !local.starts_with('.')
         && !local.ends_with('.')
         && !local.contains(".."))
@@ -869,12 +916,27 @@ fn email_candidate_at(text: &str, at: usize) -> Option<(usize, usize)> {
             break;
         }
     }
-    // Drop a trailing '.' that is punctuation, not part of the domain.
     while end > at + 1 && text[..end].ends_with('.') {
         end -= 1;
     }
     let candidate = text.get(start..end)?;
-    if looks_like_email(candidate) {
+    if !looks_like_email(candidate) {
+        return None;
+    }
+    // Strict both-side delimiters — reject partial carve-outs.
+    let left_ok = start == 0
+        || text[..start]
+            .chars()
+            .last()
+            .map(is_email_boundary_char)
+            .unwrap_or(false);
+    let right_ok = end >= text.len()
+        || text[end..]
+            .chars()
+            .next()
+            .map(is_email_boundary_char)
+            .unwrap_or(false);
+    if left_ok && right_ok {
         Some((start, end))
     } else {
         None
@@ -887,7 +949,6 @@ fn scan_emails(text: &str) -> Vec<(usize, usize)> {
     while i < text.len() {
         if text.as_bytes()[i] == b'@' {
             if let Some((start, end)) = email_candidate_at(text, i) {
-                // Prefer longer locals if overlapping; skip nested `@` inside span.
                 if out
                     .last()
                     .map(|&(_, prev_end)| start >= prev_end)
@@ -907,17 +968,18 @@ fn scan_emails(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// Explicit VN mobile prefixes in national form with leading `0` (length 10).
+/// Maintained active VN mobile prefixes (national form with leading `0`, length 10).
+/// Includes MVNO `055` (Wintel) and `087` (iTel); omits obsolete `095`.
 const VN_MOBILE_PREFIXES: &[&str] = &[
-    "032", "033", "034", "035", "036", "037", "038", "039", "052", "056", "058", "059", "070",
-    "076", "077", "078", "079", "081", "082", "083", "084", "085", "086", "088", "089", "090",
-    "091", "092", "093", "094", "095", "096", "097", "098", "099",
+    "032", "033", "034", "035", "036", "037", "038", "039", "052", "055", "056", "058", "059",
+    "070", "076", "077", "078", "079", "081", "082", "083", "084", "085", "086", "087", "088",
+    "089", "090", "091", "092", "093", "094", "096", "097", "098", "099",
 ];
 
-/// 2-digit geographic area codes (after trunk `0`): Hanoi / HCMC.
+/// 2-digit geographic area codes (after trunk `0`): Hanoi / HCMC → subscriber len 8.
 const VN_LANDLINE_AREA_2: &[&str] = &["24", "28"];
 
-/// 3-digit geographic area codes (after trunk `0`). `030` is intentionally absent.
+/// 3-digit geographic area codes (after trunk `0`) → subscriber len 7. `030` absent.
 const VN_LANDLINE_AREA_3: &[&str] = &[
     "203", "204", "205", "206", "207", "208", "209", "210", "211", "212", "213", "214", "215",
     "216", "218", "219", "220", "221", "222", "225", "226", "227", "228", "229", "232", "233",
@@ -931,7 +993,6 @@ fn normalize_vn_phone_digits(digits: &str) -> Option<String> {
         return None;
     }
     if digits.starts_with("840") && digits.len() >= 12 {
-        // +84 (0) … → national with trunk 0
         Some(format!("0{}", &digits[3..]))
     } else if digits.starts_with("84") && digits.len() >= 11 {
         Some(format!("0{}", &digits[2..]))
@@ -950,24 +1011,18 @@ fn is_vn_mobile_national0(national0: &str) -> bool {
 }
 
 fn is_vn_landline_national0(national0: &str) -> bool {
-    if !national0.starts_with('0') || national0.starts_with("030") {
+    if !national0.starts_with('0') || national0.starts_with("030") || national0.len() != 11 {
         return false;
     }
     let rest = &national0[1..];
     for area in VN_LANDLINE_AREA_2 {
         if let Some(subscriber) = rest.strip_prefix(area) {
-            // 0 + 2-digit area + 7..=8 subscriber → length 10..=11
-            return (7..=8).contains(&subscriber.len())
-                && subscriber.chars().all(|ch| ch.is_ascii_digit())
-                && (10..=11).contains(&national0.len());
+            return subscriber.len() == 8 && subscriber.chars().all(|ch| ch.is_ascii_digit());
         }
     }
     for area in VN_LANDLINE_AREA_3 {
         if let Some(subscriber) = rest.strip_prefix(area) {
-            // 0 + 3-digit area + 6..=7 subscriber → length 10..=11
-            return (6..=7).contains(&subscriber.len())
-                && subscriber.chars().all(|ch| ch.is_ascii_digit())
-                && (10..=11).contains(&national0.len());
+            return subscriber.len() == 7 && subscriber.chars().all(|ch| ch.is_ascii_digit());
         }
     }
     false
@@ -984,50 +1039,58 @@ fn is_phone_separator(ch: char) -> bool {
     matches!(ch, ' ' | '\t' | '-' | '.' | '(' | ')')
 }
 
-/// Consume a phone-shaped candidate starting at `chars[start_idx]`.
-/// Returns exclusive char-index end and collected digits.
+fn first_valid_phone_prefix_len(digits: &str, require_plus84: bool) -> Option<usize> {
+    if require_plus84 && !digits.starts_with("84") {
+        return None;
+    }
+    // Shortest-first so consecutive phones split (`0912… 0987…`).
+    for len in 10..=digits.len().min(13) {
+        if looks_like_vn_phone_digits(&digits[..len]) {
+            return Some(len);
+        }
+    }
+    None
+}
+
+/// Consume one phone candidate starting at `chars[start_idx]`.
+/// Preserves leading `+` and requires `+84` when `+` is present.
 fn consume_phone_candidate(chars: &[(usize, char)], start_idx: usize) -> Option<(usize, String)> {
     let mut idx = start_idx;
-    let mut digits = String::new();
-    let mut last_was_digit = false;
-    if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
+    let require_plus84 = chars.get(idx).map(|(_, ch)| *ch) == Some('+');
+    if require_plus84 {
         idx += 1;
     }
+    let mut digits = String::new();
+    let mut digit_end_idx = Vec::new();
     while idx < chars.len() {
         let ch = chars[idx].1;
         if ch.is_ascii_digit() {
             digits.push(ch);
-            last_was_digit = true;
+            digit_end_idx.push(idx + 1);
             idx += 1;
-            if digits.len() > 15 {
-                return None;
+            if digits.len() > 13 {
+                break;
             }
         } else if is_phone_separator(ch) {
-            // Separators only between / around digit groups; keep scanning.
             idx += 1;
-            last_was_digit = false;
         } else {
             break;
         }
     }
-    if !last_was_digit {
-        // Trim trailing separators from the consumed range.
-        while idx > start_idx && is_phone_separator(chars[idx - 1].1) {
-            idx -= 1;
-        }
-    }
-    if digits.len() < 9 || !looks_like_vn_phone_digits(&digits) {
+    let len = first_valid_phone_prefix_len(&digits, require_plus84)?;
+    let end_idx = digit_end_idx[len - 1];
+    // Alphanumeric boundaries on both sides of the full span.
+    if start_idx > 0 && chars[start_idx - 1].1.is_ascii_alphanumeric() {
         return None;
     }
-    // Right boundary: must not continue into another digit.
     if chars
-        .get(idx)
-        .map(|(_, ch)| ch.is_ascii_digit())
+        .get(end_idx)
+        .map(|(_, ch)| ch.is_ascii_alphanumeric())
         .unwrap_or(false)
     {
         return None;
     }
-    Some((idx, digits))
+    Some((end_idx, digits[..len].to_string()))
 }
 
 fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
@@ -1036,9 +1099,8 @@ fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
     let mut i = 0usize;
     while i < chars.len() {
         let ch = chars[i].1;
-        let can_start = ch == '+'
-            || ch == '('
-            || (ch.is_ascii_digit() && (i == 0 || !chars[i - 1].1.is_ascii_alphanumeric()));
+        let left_ok = i == 0 || !chars[i - 1].1.is_ascii_alphanumeric();
+        let can_start = left_ok && (ch == '+' || ch == '(' || ch.is_ascii_digit());
         if can_start {
             if let Some((end_idx, _)) = consume_phone_candidate(&chars, i) {
                 let start = chars[i].0;
@@ -1053,7 +1115,7 @@ fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// Digit group with internal spaces/dashes (bank / CCCD / phone-shaped accounts).
+/// Digit group with internal spaces/dashes (bank / CCCD).
 fn scan_digit_group_spans(text: &str) -> Vec<(usize, usize, String)> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut out = Vec::new();
@@ -1080,13 +1142,17 @@ fn scan_digit_group_spans(text: &str) -> Vec<(usize, usize, String)> {
                 && i + 1 < chars.len()
                 && chars[i + 1].1.is_ascii_digit()
             {
-                // Keep internal grouping separators inside the candidate span.
                 i += 1;
             } else {
                 break;
             }
         }
-        if (8..=19).contains(&digits.len()) {
+        if (8..=19).contains(&digits.len())
+            && !chars
+                .get(end_idx)
+                .map(|(_, ch)| ch.is_ascii_alphanumeric())
+                .unwrap_or(false)
+        {
             let start = chars[start_idx].0;
             let end = chars[end_idx - 1].0 + chars[end_idx - 1].1.len_utf8();
             out.push((start, end, digits));
@@ -1118,9 +1184,7 @@ fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
     before_ok && after_ok
 }
 
-/// Nearest explicit label in `folded_prefix` (accent-folded text before a candidate).
-fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
-    // Longer phrases first in source order; rightmost match wins (nearest to number).
+fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
     const LABELS: &[(&str, ExplicitLabel)] = &[
         ("so dien thoai", ExplicitLabel::Phone),
         ("can cuoc cong dan", ExplicitLabel::NationalId),
@@ -1138,48 +1202,146 @@ fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
         ("tel", ExplicitLabel::Phone),
         ("stk", ExplicitLabel::Bank),
     ];
-    let mut best: Option<(usize, ExplicitLabel)> = None;
+    let mut best: Option<(usize, usize, ExplicitLabel)> = None;
     for &(pat, kind) in LABELS {
         let mut base = 0usize;
-        while base < folded_prefix.len() {
-            let Some(rel) = folded_prefix[base..].find(pat) else {
+        while base < folded.len() {
+            let Some(rel) = folded[base..].find(pat) else {
                 break;
             };
             let start = base + rel;
             let end = start + pat.len();
-            if label_char_boundary(folded_prefix, start, end)
-                && best.map(|(prev_end, _)| end >= prev_end).unwrap_or(true)
-            {
-                best = Some((end, kind));
+            if label_char_boundary(folded, start, end) {
+                let take = match best {
+                    None => true,
+                    Some((prev_start, prev_end, _)) => {
+                        end > prev_end || (end == prev_end && start >= prev_start)
+                    }
+                };
+                if take {
+                    best = Some((start, end, kind));
+                }
             }
             base = start + 1;
-            while base < folded_prefix.len() && !folded_prefix.is_char_boundary(base) {
+            while base < folded.len() && !folded.is_char_boundary(base) {
                 base += 1;
             }
         }
     }
-    best.map(|(_, kind)| kind)
+    best.map(|(_, _, kind)| kind)
+}
+
+/// Nearest explicit label in scoped (already boundary-trimmed) folded prefix.
+fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
+    classify_label_text(folded_prefix)
 }
 
 fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
     a.0 < b.1 && b.0 < a.1
 }
 
-/// Accent-fold a nearby prefix window from original markdown (do not index folded
-/// text with source byte offsets — folding shortens Vietnamese glyphs).
-fn label_window_before(markdown: &str, start: usize) -> String {
+fn is_label_scope_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\r' | '|' | '.' | '!' | '?' | ';' | '…' | '。' | '！' | '？'
+    )
+}
+
+/// Prefix for label association: cannot cross newline, table pipe, or clause boundary.
+fn label_scope_before<'a>(markdown: &'a str, start: usize) -> &'a str {
     let prefix_end = start.min(markdown.len());
     let prefix = markdown.get(..prefix_end).unwrap_or("");
-    let window = if prefix.len() > 96 {
-        let mut cut = prefix.len() - 96;
-        while cut < prefix.len() && !prefix.is_char_boundary(cut) {
-            cut += 1;
+    let mut cut = 0usize;
+    for (idx, ch) in prefix.char_indices() {
+        if is_label_scope_boundary(ch) {
+            cut = idx + ch.len_utf8();
         }
-        &prefix[cut..]
-    } else {
-        prefix
+    }
+    &prefix[cut..]
+}
+
+fn label_window_before(markdown: &str, start: usize) -> String {
+    accent_fold(label_scope_before(markdown, start))
+}
+
+/// Map a byte offset inside a Markdown table body cell to its column-header label.
+fn table_column_label_at(markdown: &str, offset: usize) -> Option<ExplicitLabel> {
+    let doc = CorpusDocument {
+        source_rel: "_pii_table_".into(),
+        md_rel: "_pii_table_.md".into(),
+        format: "markdown".into(),
+        markdown: markdown.to_string(),
     };
-    accent_fold(window)
+    for table in parse_markdown_tables(&doc) {
+        if offset < table.start || offset >= table.end || table.rows.len() < 2 {
+            continue;
+        }
+        let headers = &table.rows[0];
+        let region = &markdown[table.start..table.end];
+        let mut line_start = table.start;
+        let mut row_idx = 0usize;
+        for line in region.split_inclusive('\n') {
+            let line_end = line_start + line.len();
+            if offset >= line_start && offset < line_end {
+                // rows[0]=header, rows[1]=separator; data starts at row_idx>=2 in line walk
+                // when separator consumed as line 1.
+                if row_idx < 2 {
+                    return None;
+                }
+                let content = line.trim_end_matches('\n').trim_end_matches('\r');
+                let line_body_start = line_start + line.len() - line.trim_start().len();
+                if !content.trim_start().starts_with('|') {
+                    return None;
+                }
+                let mut i = line_body_start;
+                if markdown.as_bytes().get(i) == Some(&b'|') {
+                    i += 1;
+                }
+                let line_content_end = line_start + content.len();
+                let mut scan_end = line_content_end;
+                if content.trim_start().ends_with('|') {
+                    scan_end = line_content_end - 1;
+                }
+                let mut col = 0usize;
+                let mut cell_start = i;
+                let mut escaped = false;
+                let bytes = markdown.as_bytes();
+                while i < scan_end {
+                    let ch = bytes[i];
+                    if escaped {
+                        escaped = false;
+                        i += 1;
+                        continue;
+                    }
+                    if ch == b'\\' {
+                        escaped = true;
+                        i += 1;
+                        continue;
+                    }
+                    if ch == b'|' {
+                        if offset >= cell_start && offset < i {
+                            return classify_label_text(&accent_fold(headers.get(col)?.as_str()));
+                        }
+                        col += 1;
+                        cell_start = i + 1;
+                    }
+                    i += 1;
+                }
+                if offset >= cell_start && offset < line_end {
+                    return classify_label_text(&accent_fold(headers.get(col)?.as_str()));
+                }
+                return None;
+            }
+            line_start = line_end;
+            row_idx += 1;
+        }
+    }
+    None
+}
+
+fn resolve_label(markdown: &str, start: usize) -> Option<ExplicitLabel> {
+    table_column_label_at(markdown, start)
+        .or_else(|| nearest_explicit_label(&label_window_before(markdown, start)))
 }
 
 fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
@@ -1198,8 +1360,6 @@ fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
         });
     }
 
-    // Phone scanner owns phone-shaped spans (keeps '+', grouping, parentheses).
-    // Nearest explicit Bank label reclassifies phone-shaped account numbers.
     for (start, end) in scan_phone_spans(markdown) {
         if occupied
             .iter()
@@ -1207,7 +1367,7 @@ fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
         {
             continue;
         }
-        let label = nearest_explicit_label(&label_window_before(markdown, start));
+        let label = resolve_label(markdown, start);
         let (kind, confidence) = if label == Some(ExplicitLabel::Bank) {
             (PiiKind::BankAccount, 0.8)
         } else {
@@ -1229,7 +1389,6 @@ fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
         occupied.push((start, end));
     }
 
-    // Remaining labeled digit groups: STK / CCCD (and non-phone-shaped accounts).
     for (start, end, digits) in scan_digit_group_spans(markdown) {
         if occupied
             .iter()
@@ -1237,7 +1396,7 @@ fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
         {
             continue;
         }
-        let label = nearest_explicit_label(&label_window_before(markdown, start));
+        let label = resolve_label(markdown, start);
         let kind = match label {
             Some(ExplicitLabel::Bank) if (8..=19).contains(&digits.len()) => {
                 Some((PiiKind::BankAccount, 0.8))
@@ -1245,7 +1404,6 @@ fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
             Some(ExplicitLabel::NationalId) if digits.len() == 9 || digits.len() == 12 => {
                 Some((PiiKind::NationalId, 0.95))
             }
-            // No bare-"ngân hàng" path: unlabeled account-like runs stay undetected.
             _ => None,
         };
         if let Some((kind, confidence)) = kind {
@@ -1453,10 +1611,23 @@ pub fn update_markdown_table(
     {
         return Err(ConvertError::Failed("span bảng không hợp lệ".into()));
     }
-    // Stale span: edited markdown no longer looks like a table region.
-    let span = &markdown[table.start..table.end];
-    if !span.contains('|') {
-        return Err(ConvertError::Failed("span bảng không hợp lệ".into()));
+    // Reparse current markdown and require an exact table match (id/start/end/rows).
+    let doc = CorpusDocument {
+        source_rel: table.source_rel.clone(),
+        md_rel: table.source_rel.clone(),
+        format: "markdown".into(),
+        markdown: markdown.to_string(),
+    };
+    let matched = parse_markdown_tables(&doc).into_iter().any(|current| {
+        current.id == table.id
+            && current.start == table.start
+            && current.end == table.end
+            && current.rows == table.rows
+    });
+    if !matched {
+        return Err(ConvertError::Failed(
+            "conflict: bảng đã thay đổi hoặc span không khớp".into(),
+        ));
     }
     let rendered = render_markdown_table(rows);
     let mut updated = markdown.to_string();
