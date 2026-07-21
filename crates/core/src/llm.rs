@@ -37,67 +37,49 @@ where
     Ok(value)
 }
 
-fn is_sensitive_query_key(key: &str) -> bool {
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "key"
-            | "api_key"
-            | "apikey"
-            | "api-key"
-            | "token"
-            | "access_token"
-            | "access-token"
-            | "secret"
-            | "password"
-            | "passwd"
-            | "auth"
-            | "authorization"
-            | "client_secret"
-            | "client-secret"
-    )
+/// Conservative endpoint redaction: keep scheme + host[:port] only.
+/// Never surface userinfo, path, query, or fragment.
+fn redact_endpoint(url: &str) -> String {
+    let (scheme, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return REDACTED_SECRET_PLACEHOLDER.to_string();
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit('@').next().unwrap_or("");
+    if host_port.is_empty() {
+        return REDACTED_SECRET_PLACEHOLDER.to_string();
+    }
+    format!("{scheme}://{host_port}/[REDACTED]")
 }
 
-/// Redact userinfo and all sensitive query params (case-insensitive, duplicates).
-fn redact_url_for_debug(url: &str, api_key: &str) -> String {
-    let mut redacted = if api_key.is_empty() {
-        url.to_string()
-    } else {
-        url.replace(api_key, REDACTED_SECRET_PLACEHOLDER)
-    };
-    if let Some((scheme, rest)) = redacted.split_once("://") {
-        if let Some((_userinfo, host)) = rest.split_once('@') {
-            redacted = format!("{scheme}://{REDACTED_SECRET_PLACEHOLDER}@{host}");
-        }
+fn find_url_start(text: &str) -> Option<usize> {
+    match (text.find("https://"), text.find("http://")) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
     }
-    let (before_frag, frag) = match redacted.split_once('#') {
-        Some((head, tail)) => (head.to_string(), Some(tail.to_string())),
-        None => (redacted, None),
-    };
-    let rebuilt = if let Some((base, query)) = before_frag.split_once('?') {
-        let pairs: Vec<String> = query
-            .split('&')
-            .map(|pair| {
-                if pair.is_empty() {
-                    return pair.to_string();
-                }
-                let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
-                if is_sensitive_query_key(raw_key)
-                    || (!api_key.is_empty() && raw_value.contains(api_key))
-                {
-                    format!("{raw_key}={REDACTED_SECRET_PLACEHOLDER}")
-                } else {
-                    pair.to_string()
-                }
-            })
-            .collect();
-        format!("{base}?{}", pairs.join("&"))
-    } else {
-        before_frag
-    };
-    match frag {
-        Some(tail) => format!("{rebuilt}#{tail}"),
-        None => rebuilt,
+}
+
+/// Replace every `http(s)://…` span so path/query/fragment/userinfo cannot leak.
+fn redact_urls_in_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(rel) = find_url_start(&text[cursor..]) {
+        let start = cursor + rel;
+        out.push_str(&text[cursor..start]);
+        let rest = &text[start..];
+        let end_rel = rest
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '<' | '>' | '`'))
+            .unwrap_or(rest.len());
+        out.push_str(&redact_endpoint(&rest[..end_rel]));
+        cursor = start + end_rel;
     }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 /// Runtime LLM config — Deserialize only (no Serialize): secrets must not leave
@@ -120,13 +102,7 @@ impl std::fmt::Debug for LlmConfig {
             .field("provider", &self.provider)
             .field("api_key", &REDACTED_SECRET_PLACEHOLDER)
             .field("model", &self.model)
-            .field(
-                "base_url",
-                &self
-                    .base_url
-                    .as_deref()
-                    .map(|url| redact_url_for_debug(url, &self.api_key)),
-            )
+            .field("base_url", &self.base_url.as_deref().map(redact_endpoint))
             .field("cli_binary", &self.cli_binary)
             .finish()
     }
@@ -185,13 +161,7 @@ impl std::fmt::Debug for EmbeddingConfig {
             .field("provider", &self.provider)
             .field("api_key", &REDACTED_SECRET_PLACEHOLDER)
             .field("model", &self.model)
-            .field(
-                "base_url",
-                &self
-                    .base_url
-                    .as_deref()
-                    .map(|url| redact_url_for_debug(url, &self.api_key)),
-            )
+            .field("base_url", &self.base_url.as_deref().map(redact_endpoint))
             .field("dimensions", &self.dimensions)
             .field("runtime_path", &self.runtime_path)
             .finish()
@@ -762,15 +732,17 @@ const HTTP_BASE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(
 /// (never sleep less than the provider requested).
 const HTTP_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
-fn redact_secret(text: &str, secret: Option<&str>) -> String {
-    let Some(secret) = secret.filter(|value| !value.is_empty()) else {
-        return text.to_string();
-    };
-    text.replace(secret, REDACTED_SECRET_PLACEHOLDER)
+/// Redact endpoints and known API-key material from any surfaced error text.
+fn redact_surfaced_error(text: &str, secret: Option<&str>) -> String {
+    let mut out = redact_urls_in_text(text);
+    if let Some(secret) = secret.filter(|value| !value.is_empty()) {
+        out = out.replace(secret, REDACTED_SECRET_PLACEHOLDER);
+    }
+    out
 }
 
 fn fail_redacted(message: impl std::fmt::Display, secret: Option<&str>) -> ConvertError {
-    ConvertError::Failed(redact_secret(&message.to_string(), secret))
+    ConvertError::Failed(redact_surfaced_error(&message.to_string(), secret))
 }
 
 fn invalid_provider_response(
@@ -1003,7 +975,7 @@ fn post_json(
         let response = match request.send() {
             Ok(response) => response,
             Err(error) => {
-                let message = redact_secret(&error.to_string(), secret);
+                let message = redact_surfaced_error(&error.to_string(), secret);
                 if is_retryable_transport(&error) {
                     if let Some(wait) = plan_retry_wait(attempt, None) {
                         sleep_for(wait);
@@ -1027,7 +999,7 @@ fn post_json(
         if status.is_success() {
             return serde_json::from_str(&text).map_err(|error| fail_redacted(error, secret));
         }
-        let safe_text = redact_secret(&text, secret);
+        let safe_text = redact_surfaced_error(&text, secret);
         let error = ConvertError::Failed(format!("LLM HTTP {status}: {safe_text}"));
         if is_retryable_status(status) {
             if let Some(wait) = plan_retry_wait(attempt, retry_after) {
@@ -1609,27 +1581,30 @@ mod tests {
     }
 
     #[test]
-    fn config_debug_redacts_url_secrets_and_deserialize_rejects_placeholder() {
+    fn config_debug_redacts_entire_endpoint_canary() {
         let secret = "super-secret-key-canary";
-        let llm = LlmConfig::new(
+        let canary = "https://host/secret?sig=abc#access_token=def";
+        let llm = LlmConfig::new(Provider::OpenAi, secret, "model", Some(canary.into())).unwrap();
+        let llm_debug = format!("{llm:?}");
+        assert!(!llm_debug.contains(secret));
+        assert!(!llm_debug.contains("/secret"));
+        assert!(!llm_debug.contains("sig=abc"));
+        assert!(!llm_debug.contains("access_token=def"));
+        assert!(!llm_debug.contains('?'));
+        assert!(!llm_debug.contains('#'));
+        assert!(llm_debug.contains("https://host/[REDACTED]"));
+
+        let with_userinfo = LlmConfig::new(
             Provider::OpenAi,
             secret,
             "model",
-            Some(
-                "https://user:pass@api.example.com/v1?KEY=one&key=two&Api_Key=three&token=four&TOKEN=five#frag"
-                    .into(),
-            ),
+            Some("https://user:pass@api.example.com/v1/path?q=1#frag".into()),
         )
         .unwrap();
-        let llm_debug = format!("{llm:?}");
-        assert!(!llm_debug.contains(secret));
-        assert!(!llm_debug.contains("user:pass"));
-        assert!(!llm_debug.contains("=one"));
-        assert!(!llm_debug.contains("=two"));
-        assert!(!llm_debug.contains("=three"));
-        assert!(!llm_debug.contains("=four"));
-        assert!(!llm_debug.contains("=five"));
-        assert!(llm_debug.contains(REDACTED_SECRET_PLACEHOLDER));
+        let debug = format!("{with_userinfo:?}");
+        assert!(!debug.contains("user:pass"));
+        assert!(!debug.contains("/v1/path"));
+        assert!(debug.contains("https://api.example.com/[REDACTED]"));
 
         let restored: LlmConfig = serde_json::from_str(
             r#"{"provider":"open_ai","apiKey":"restored-from-disk","model":"m","baseUrl":null}"#,
@@ -1645,13 +1620,15 @@ mod tests {
             Provider::OpenAi,
             "embed-secret-key-canary",
             "text-embedding-3-small",
-            Some("https://api.openai.com".into()),
+            Some(canary.into()),
             Some(1536),
             EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         )
         .unwrap();
         let embedding_debug = format!("{embedding:?}");
         assert!(!embedding_debug.contains("embed-secret-key-canary"));
+        assert!(!embedding_debug.contains("/secret"));
+        assert!(embedding_debug.contains("https://host/[REDACTED]"));
         assert!(serde_json::from_str::<EmbeddingConfig>(
             r#"{"provider":"open_ai","apiKey":"[REDACTED]","model":"m","runtimePath":"provider-cloud"}"#
         )
@@ -1683,14 +1660,25 @@ mod tests {
     }
 
     #[test]
-    fn redact_secret_strips_key_from_transport_style_errors() {
-        let err = "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=abc123XYZ)";
-        assert_eq!(
-            redact_secret(err, Some("abc123XYZ")),
-            "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=[REDACTED])"
+    fn transport_error_redacts_entire_endpoint_path_query_fragment() {
+        let canary = "https://host/secret?sig=abc#access_token=def";
+        let err = format!("error sending request for url ({canary})");
+        let redacted = redact_surfaced_error(&err, Some("abc123XYZ"));
+        assert!(!redacted.contains("/secret"));
+        assert!(!redacted.contains("sig=abc"));
+        assert!(!redacted.contains("access_token=def"));
+        assert!(!redacted.contains('?'));
+        assert!(!redacted.contains('#'));
+        assert!(redacted.contains("https://host/[REDACTED]"));
+        assert_eq!(redact_endpoint(canary), "https://host/[REDACTED]");
+
+        let with_key = format!(
+            "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/x?key=abc123XYZ)"
         );
-        assert_eq!(redact_secret(err, None), err);
-        assert_eq!(redact_secret(err, Some("")), err);
+        let redacted_key = redact_surfaced_error(&with_key, Some("abc123XYZ"));
+        assert!(!redacted_key.contains("abc123XYZ"));
+        assert!(!redacted_key.contains("/v1beta"));
+        assert!(redacted_key.contains("https://generativelanguage.googleapis.com/[REDACTED]"));
     }
 
     #[test]
@@ -1905,20 +1893,33 @@ mod tests {
     }
 
     #[test]
-    fn gemini_transport_error_redacts_api_key() {
-        // Closed port → connect error. Even if a caller still embeds the key in the
-        // URL (legacy query style), the mapped error must not echo the secret.
+    fn transport_connect_error_redacts_endpoint_and_api_key() {
+        // Closed port → connect error. Path/query/fragment/userinfo must not surface.
         let secret = "gemini-leak-canary-key";
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(std::time::Duration::from_millis(100))
             .timeout(std::time::Duration::from_millis(200))
             .build()
             .unwrap();
-        let url = format!("http://127.0.0.1:9/v1beta/models/x:generateContent?key={secret}");
+        let url =
+            format!("http://user:pass@127.0.0.1:9/secret?sig=abc&key={secret}#access_token=def");
         let body = serde_json::json!({});
         let error = post_json(&client, &url, &body, Some(secret), |request| request).unwrap_err();
         let message = error.to_string();
         assert!(!message.contains(secret), "leaked key in: {message}");
-        assert!(message.contains("[REDACTED]") || !message.contains("key="));
+        assert!(
+            !message.contains("user:pass"),
+            "leaked userinfo in: {message}"
+        );
+        assert!(!message.contains("/secret"), "leaked path in: {message}");
+        assert!(!message.contains("sig=abc"), "leaked query in: {message}");
+        assert!(
+            !message.contains("access_token=def"),
+            "leaked fragment in: {message}"
+        );
+        assert!(
+            message.contains("http://127.0.0.1:9/[REDACTED]"),
+            "{message}"
+        );
     }
 }
