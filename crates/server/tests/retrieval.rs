@@ -186,15 +186,8 @@ async fn as_of_resolves_effective_version_from_postgres() {
                     "INSERT INTO role_permissions (org_id, role_id, permission_id)
                      SELECT $1, $2, id
                      FROM permissions
-                     WHERE code = ANY($3)",
-                    &[
-                        &ctx.org_id(),
-                        &role,
-                        &[
-                            PERMISSION_QA_QUERY.to_string(),
-                            PERMISSION_QA_HISTORY.to_string(),
-                        ],
-                    ],
+                     WHERE code IN ('qa.query', 'qa.history')",
+                    &[&ctx.org_id(), &role],
                 )
                 .await?;
                 txn.execute(
@@ -335,15 +328,8 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                     "INSERT INTO role_permissions (org_id, role_id, permission_id)
                      SELECT $1, $2, id
                      FROM permissions
-                     WHERE code = ANY($3)",
-                    &[
-                        &ctx.org_id(),
-                        &role,
-                        &[
-                            PERMISSION_QA_QUERY.to_string(),
-                            PERMISSION_QA_HISTORY.to_string(),
-                        ],
-                    ],
+                     WHERE code IN ('qa.query', 'qa.history')",
+                    &[&ctx.org_id(), &role],
                 )
                 .await?;
                 txn.execute(
