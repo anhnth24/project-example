@@ -835,39 +835,41 @@ fn margin_indices(lines: &[&str]) -> HashSet<usize> {
 /// Remove headers/footers repeated on most pages. Matching is restricted to
 /// page margins and also handles a header represented as one combined line on
 /// structured pages but several lines on PDFium fallback pages.
+///
+/// A margin line is repeated only when its full normalized form appears as an
+/// exact margin line on enough pages. Removal is content-preserving:
+/// - exact normalized equality → drop the line
+/// - line is only a concatenation of repeated fragments → drop the line
+/// - line merely contains or is contained by a repeated phrase but still has
+///   other text → keep the original line
 fn strip_repeated_marginal_lines(pages: &mut [String]) {
     if pages.len() < 4 {
         return;
     }
 
-    let mut candidates: HashSet<String> = HashSet::new();
-    let normalized_margins: Vec<String> = pages
+    let page_margin_lines: Vec<HashSet<String>> = pages
         .iter()
         .map(|page| {
             let lines: Vec<&str> = page.lines().collect();
             margin_indices(&lines)
                 .into_iter()
                 .filter_map(|index| normalized_margin_line(lines[index]))
-                .collect::<Vec<_>>()
-                .join(" ")
+                .collect()
         })
         .collect();
-    for page in pages.iter() {
-        let lines: Vec<&str> = page.lines().collect();
-        for index in margin_indices(&lines) {
-            if let Some(line) = normalized_margin_line(lines[index]) {
-                candidates.insert(line);
-            }
-        }
+
+    let mut candidates: HashSet<String> = HashSet::new();
+    for margins in &page_margin_lines {
+        candidates.extend(margins.iter().cloned());
     }
 
     let threshold = (pages.len() * 3).div_ceil(5).max(3);
-    let repeated: Vec<String> = candidates
+    let repeated: HashSet<String> = candidates
         .into_iter()
         .filter(|line| {
-            normalized_margins
+            page_margin_lines
                 .iter()
-                .filter(|margin| margin.contains(line))
+                .filter(|margins| margins.contains(line))
                 .count()
                 >= threshold
         })
@@ -889,17 +891,41 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
                 let Some(normalized) = normalized_margin_line(line) else {
                     return true;
                 };
-                !repeated.iter().any(|candidate| {
-                    candidate == &normalized
-                        || (normalized.chars().count() >= 12 && candidate.contains(&normalized))
-                        || (candidate.chars().count() >= 12 && normalized.contains(candidate))
-                })
+                !margin_line_is_repeated_header(&normalized, &repeated)
             })
             .map(|(_, line)| *line)
             .collect::<Vec<_>>()
             .join("\n");
         *page = retained;
     }
+}
+
+/// True when `normalized` is an exact repeated margin header, or is composed
+/// only of such headers (combined single-line form). Body lines that contain or
+/// are contained by a header phrase keep their other text and are not removed.
+fn margin_line_is_repeated_header(normalized: &str, repeated: &HashSet<String>) -> bool {
+    if repeated.contains(normalized) {
+        return true;
+    }
+
+    let mut remainder = normalized.to_string();
+    let mut removed_any = false;
+    // Longer fragments first so a long header is preferred over its prefixes.
+    let mut fragments: Vec<&String> = repeated
+        .iter()
+        .filter(|candidate| candidate.chars().count() >= 12)
+        .collect();
+    fragments.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()));
+    for candidate in fragments {
+        if remainder.contains(candidate.as_str()) {
+            remainder = remainder.replace(candidate.as_str(), " ");
+            removed_any = true;
+        }
+    }
+    if !removed_any {
+        return false;
+    }
+    remainder.split_whitespace().next().is_none()
 }
 
 /// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
@@ -1246,18 +1272,19 @@ mod tests {
     fn strips_repeated_headers_in_combined_and_split_forms() {
         let combined = "Mã hiệu: ALPHA/LD/HDCV/FPT **PHƯƠNG PHÁP LUẬN FPT CASAN** \
             Lần ban hành/sửa đổi: 1/0 **TRONG CHUYỂN ĐỔI AI** Ngày hiệu lực: 19/5/2026";
-        let mut pages = vec![
-            format!("{combined}\n\nNội dung trang một"),
-            format!("{combined}\n\nNội dung trang hai"),
-            format!("{combined}\n\nNội dung trang ba"),
-            format!("{combined}\n\nNội dung trang bốn"),
-            "PHƯƠNG PHÁP LUẬN FPT CASAN\n\
+        let split = "PHƯƠNG PHÁP LUẬN FPT CASAN\n\
              TRONG CHUYỂN ĐỔI AI\n\
              Mã hiệu: ALPHA/LD/HDCV/FPT\n\
              Lần ban hành/sửa đổi: 1/0\n\
-             Ngày hiệu lực: 19/5/2026\n\
-             Nội dung trang năm"
-                .to_string(),
+             Ngày hiệu lực: 19/5/2026";
+        // Majority split so each fragment is exact-repeated; the combined page
+        // is then dropped because it is only those fragments concatenated.
+        let mut pages = vec![
+            format!("{split}\nNội dung trang một"),
+            format!("{split}\nNội dung trang hai"),
+            format!("{split}\nNội dung trang ba"),
+            format!("{split}\nNội dung trang bốn"),
+            format!("{combined}\n\nNội dung trang năm"),
         ];
 
         strip_repeated_marginal_lines(&mut pages);
@@ -1291,6 +1318,56 @@ mod tests {
             .iter()
             .all(|page| page.contains("| Chỉ tiêu | Giá trị |")));
         assert!(pages.iter().all(|page| page.contains("| --- | --- |")));
+    }
+
+    #[test]
+    fn body_line_containing_repeated_header_is_preserved() {
+        let header = "PHƯƠNG PHÁP LUẬN FPT CASAN";
+        let body = "Theo PHƯƠNG PHÁP LUẬN FPT CASAN, doanh nghiệp phải chuẩn bị dữ liệu.";
+        let mut pages = vec![
+            format!("{header}\n\nNội dung trang một"),
+            format!("{header}\n\nNội dung trang hai"),
+            format!("{header}\n\nNội dung trang ba"),
+            format!("{header}\n\nNội dung trang bốn"),
+            format!("{body}\n\nNội dung trang năm"),
+        ];
+
+        strip_repeated_marginal_lines(&mut pages);
+
+        assert!(pages[..4]
+            .iter()
+            .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(
+            pages[4].contains(body),
+            "body line that contains a repeated header must stay intact"
+        );
+        assert!(pages[4].contains("doanh nghiệp phải chuẩn bị dữ liệu"));
+    }
+
+    #[test]
+    fn body_line_contained_by_repeated_header_is_preserved() {
+        let header = "PHƯƠNG PHÁP LUẬN FPT CASAN TRONG CHUYỂN ĐỔI AI";
+        // ≥12 chars and a proper substring of the repeated header; old logic
+        // deleted this via candidate.contains(normalized).
+        let body_fragment = "PHƯƠNG PHÁP LUẬN FPT";
+        let mut pages = vec![
+            format!("{header}\n\nNội dung trang một"),
+            format!("{header}\n\nNội dung trang hai"),
+            format!("{header}\n\nNội dung trang ba"),
+            format!("{header}\n\nNội dung trang bốn"),
+            format!("{body_fragment}\nphần thân bài độc lập trên trang năm"),
+        ];
+
+        strip_repeated_marginal_lines(&mut pages);
+
+        assert!(pages[..4]
+            .iter()
+            .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(
+            pages[4].contains(body_fragment),
+            "short body line must not be dropped just because a longer repeated header contains it"
+        );
+        assert!(pages[4].contains("phần thân bài độc lập trên trang năm"));
     }
 
     #[test]
