@@ -1,16 +1,18 @@
 //! Audio → text (tiếng Việt) bằng whisper.cpp qua `whisper-rs`.
 //!
 //! - Decode mp3/wav/m4a/flac/ogg bằng `symphonia` (Rust thuần), downmix mono,
-//!   resample về 16kHz (whisper yêu cầu PCM f32 16kHz mono).
-//! - `WhisperContext` được cache **process-wide** theo identity model + cấu hình
-//!   load bất biến; MCP/desktop tạo `Converter` mỗi request vẫn tái dùng model.
+//!   resample về 16kHz bằng `rubato` FFT (windowed anti-alias) — Whisper cần PCM f32 16kHz mono.
+//! - `WhisperContext` cache **process-wide**, LRU-bounded, keyed by immutable load identity;
+//!   MCP/desktop tạo `Converter` mỗi request vẫn tái dùng model đã load.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
+use rubato::audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Fft, FixedSync, Resampler};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
@@ -27,6 +29,9 @@ const WHISPER_MODEL_CANDIDATES: &[&str] = &[
     "ggml-base.bin",
     "ggml-tiny.bin",
 ];
+
+/// Default number of Ready Whisper contexts retained in the process cache.
+const DEFAULT_WHISPER_CACHE_CAPACITY: usize = 2;
 
 fn discover_model_in_roots(roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
     for root in roots {
@@ -84,10 +89,13 @@ pub struct Transcript {
 /// they are applied per [`AudioEngine`] after the shared context is retrieved.
 ///
 /// **Path/config change policy**
-/// - New canonical path or different load knobs → new cache entry (old retained).
-/// - Replacing bytes at the same path is **not** detected; restart the process or
-///   point at a different path to pick up a new file.
-/// - Failed loads are not retained; the next caller retries.
+/// - New canonical path or different load knobs → new cache entry.
+/// - Ready entries beyond the LRU capacity are evicted from the cache map; any
+///   outstanding [`AudioEngine`] `Arc` keeps that context alive until dropped.
+/// - Replacing bytes at the same path is **not** detected; restart or use a
+///   different path to pick up a new file.
+/// - Failed loads leave a stable `Failed` slot (no invalid `Ready` reference);
+///   the next caller transitions `Failed → Loading` (single loader) and retries.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WhisperModelKey {
     pub model_path: PathBuf,
@@ -130,17 +138,44 @@ fn canonical_model_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Process-wide load-once cache. Successful values are retained for the process
-/// lifetime; failed loads leave no entry (retryable). Concurrent callers for the
-/// same key share a single in-flight load.
-struct LoadOnceCache<K, V> {
-    map: Mutex<HashMap<K, Arc<CacheSlot<V>>>>,
+/// Per-key slot state. Transitions are serialized by the slot mutex + condvar.
+enum SlotState<V> {
+    Loading,
+    Ready(Arc<V>),
+    Failed,
 }
 
-struct CacheSlot<V> {
-    value: OnceLock<Arc<V>>,
-    /// Serializes the loader for this key so only one thread loads.
-    gate: Mutex<()>,
+struct Slot<V> {
+    state: Mutex<SlotState<V>>,
+    cv: Condvar,
+}
+
+impl<V> Slot<V> {
+    fn loading() -> Self {
+        Self {
+            state: Mutex::new(SlotState::Loading),
+            cv: Condvar::new(),
+        }
+    }
+}
+
+struct CacheInner<K, V> {
+    entries: HashMap<K, Arc<Slot<V>>>,
+    /// LRU order of Ready keys (front = oldest).
+    lru: VecDeque<K>,
+    capacity: usize,
+    /// Concurrent in-flight loaders (all keys). Testable via [`LoadOnceCache::max_active_loaders`].
+    active_loaders: usize,
+    max_active_loaders: usize,
+}
+
+/// Process-wide load-once cache with stable Loading/Ready/Failed states.
+///
+/// - One loader per key at a time (condvar waiters never overlap loaders).
+/// - Ready set is LRU-bounded; eviction drops the cache's `Arc` only.
+/// - Failed slots stay until a caller claims `Failed → Loading` for retry.
+struct LoadOnceCache<K, V> {
+    inner: Mutex<CacheInner<K, V>>,
 }
 
 impl<K, V> LoadOnceCache<K, V>
@@ -148,55 +183,114 @@ where
     K: Eq + Hash + Clone,
     V: Send + Sync,
 {
-    fn new() -> Self {
+    fn with_capacity(capacity: usize) -> Self {
         Self {
-            map: Mutex::new(HashMap::new()),
+            inner: Mutex::new(CacheInner {
+                entries: HashMap::new(),
+                lru: VecDeque::new(),
+                capacity: capacity.max(1),
+                active_loaders: 0,
+                max_active_loaders: 0,
+            }),
         }
     }
 
-    /// Load `key` once. Successful values stay for process lifetime; failures remove
-    /// the empty slot so the next caller retries without retaining an invalid entry.
     fn get_or_insert_with<E>(
         &self,
         key: K,
         loader: impl FnOnce() -> Result<V, E>,
     ) -> Result<Arc<V>, E> {
         let slot = {
-            let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(key.clone())
-                .or_insert_with(|| {
-                    Arc::new(CacheSlot {
-                        value: OnceLock::new(),
-                        gate: Mutex::new(()),
-                    })
-                })
-                .clone()
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(existing) = inner.entries.get(&key).cloned() {
+                // Fast path: already Ready.
+                {
+                    let st = existing.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let SlotState::Ready(value) = &*st {
+                        let out = Arc::clone(value);
+                        drop(st);
+                        touch_lru(&mut inner, &key);
+                        return Ok(out);
+                    }
+                }
+                existing
+            } else {
+                inner.evict_ready_to_capacity();
+                let slot = Arc::new(Slot::loading());
+                inner.entries.insert(key.clone(), Arc::clone(&slot));
+                drop(inner);
+                return self.run_loader(key, slot, loader);
+            }
         };
 
-        if let Some(ready) = slot.value.get() {
-            return Ok(Arc::clone(ready));
+        // Existing non-Ready slot: wait or claim Failed → Loading.
+        let mut st = slot.state.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            match &*st {
+                SlotState::Ready(value) => {
+                    let out = Arc::clone(value);
+                    drop(st);
+                    let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    touch_lru(&mut inner, &key);
+                    return Ok(out);
+                }
+                SlotState::Loading => {
+                    st = slot.cv.wait(st).unwrap_or_else(|e| e.into_inner());
+                }
+                SlotState::Failed => {
+                    *st = SlotState::Loading;
+                    drop(st);
+                    return self.run_loader(key, slot, loader);
+                }
+            }
+        }
+    }
+
+    fn run_loader<E>(
+        &self,
+        key: K,
+        slot: Arc<Slot<V>>,
+        loader: impl FnOnce() -> Result<V, E>,
+    ) -> Result<Arc<V>, E> {
+        {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.active_loaders += 1;
+            if inner.active_loaders > inner.max_active_loaders {
+                inner.max_active_loaders = inner.active_loaders;
+            }
         }
 
-        let gate = slot.gate.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ready) = slot.value.get() {
-            return Ok(Arc::clone(ready));
+        let result = loader();
+
+        {
+            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.active_loaders = inner.active_loaders.saturating_sub(1);
         }
 
-        match loader() {
+        match result {
             Ok(value) => {
                 let shared = Arc::new(value);
-                // Under `gate`, only one loader runs; `OnceLock` still guards races.
-                let _ = slot.value.set(Arc::clone(&shared));
-                drop(gate);
+                {
+                    let mut st = slot.state.lock().unwrap_or_else(|e| e.into_inner());
+                    *st = SlotState::Ready(Arc::clone(&shared));
+                    slot.cv.notify_all();
+                }
+                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                // Ensure entry still points at this slot (not evicted mid-load).
+                inner
+                    .entries
+                    .entry(key.clone())
+                    .and_modify(|s| *s = Arc::clone(&slot))
+                    .or_insert_with(|| Arc::clone(&slot));
+                touch_lru(&mut inner, &key);
+                inner.evict_ready_to_capacity();
                 Ok(shared)
             }
             Err(err) => {
-                drop(gate);
-                let mut map = self.map.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(existing) = map.get(&key) {
-                    if existing.value.get().is_none() && Arc::ptr_eq(existing, &slot) {
-                        map.remove(&key);
-                    }
+                {
+                    let mut st = slot.state.lock().unwrap_or_else(|e| e.into_inner());
+                    *st = SlotState::Failed;
+                    slot.cv.notify_all();
                 }
                 Err(err)
             }
@@ -204,21 +298,109 @@ where
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
-        self.map.lock().unwrap_or_else(|e| e.into_inner()).len()
+    fn len_ready(&self) -> usize {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .entries
+            .values()
+            .filter(|slot| {
+                matches!(
+                    *slot.state.lock().unwrap_or_else(|e| e.into_inner()),
+                    SlotState::Ready(_)
+                )
+            })
+            .count()
     }
+
+    #[cfg(test)]
+    fn len_entries(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .len()
+    }
+
+    #[cfg(test)]
+    fn max_active_loaders(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .max_active_loaders
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .capacity
+    }
+}
+
+impl<K, V> CacheInner<K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    fn evict_ready_to_capacity(&mut self) {
+        while self.ready_count() > self.capacity {
+            let Some(old) = self.lru.pop_front() else {
+                break;
+            };
+            let should_remove = self
+                .entries
+                .get(&old)
+                .map(|slot| {
+                    matches!(
+                        *slot.state.lock().unwrap_or_else(|e| e.into_inner()),
+                        SlotState::Ready(_)
+                    )
+                })
+                .unwrap_or(false);
+            if should_remove {
+                self.entries.remove(&old);
+            }
+        }
+    }
+
+    fn ready_count(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|slot| {
+                matches!(
+                    *slot.state.lock().unwrap_or_else(|e| e.into_inner()),
+                    SlotState::Ready(_)
+                )
+            })
+            .count()
+    }
+}
+
+fn touch_lru<K, V>(inner: &mut CacheInner<K, V>, key: &K)
+where
+    K: Eq + Hash + Clone,
+{
+    inner.lru.retain(|k| k != key);
+    inner.lru.push_back(key.clone());
+}
+
+fn whisper_cache_capacity() -> usize {
+    std::env::var("FILECONV_WHISPER_CACHE_CAPACITY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(DEFAULT_WHISPER_CACHE_CAPACITY)
 }
 
 fn whisper_model_cache() -> &'static LoadOnceCache<WhisperModelKey, WhisperContext> {
     static CACHE: OnceLock<LoadOnceCache<WhisperModelKey, WhisperContext>> = OnceLock::new();
-    CACHE.get_or_init(LoadOnceCache::new)
+    CACHE.get_or_init(|| LoadOnceCache::with_capacity(whisper_cache_capacity()))
 }
 
-fn load_whisper_context_cached(
-    key: &WhisperModelKey,
-    loader: impl FnOnce(&WhisperModelKey) -> Result<WhisperContext, ConvertError>,
-) -> Result<Arc<WhisperContext>, ConvertError> {
-    whisper_model_cache().get_or_insert_with(key.clone(), || loader(key))
+/// Production loader: all Whisper load behavior is derived from the complete key.
+fn load_whisper_from_key(key: &WhisperModelKey) -> Result<WhisperContext, ConvertError> {
+    WhisperContext::new_with_params(&key.model_path, key.context_parameters())
+        .map_err(|e| ConvertError::Failed(format!("load model whisper: {e}")))
 }
 
 /// Engine giữ `WhisperContext` đã load (chia sẻ process-wide qua cache).
@@ -229,22 +411,11 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    /// Load model GGML (vd models/ggml-base.bin), using the process-wide cache.
+    /// Load model GGML (vd models/ggml-base.bin) via the process-wide LRU cache.
     pub fn load(model_path: &Path) -> Result<Self, ConvertError> {
-        Self::load_with(model_path, |key| {
-            WhisperContext::new_with_params(&key.model_path, key.context_parameters())
-                .map_err(|e| ConvertError::Failed(format!("load model whisper: {e}")))
-        })
-    }
-
-    /// Load with an injectable loader (tests can count invocations without a real model
-    /// by exercising [`LoadOnceCache`] directly; this path is for whisper-backed hooks).
-    pub fn load_with(
-        model_path: &Path,
-        loader: impl FnOnce(&WhisperModelKey) -> Result<WhisperContext, ConvertError>,
-    ) -> Result<Self, ConvertError> {
         let key = WhisperModelKey::from_path(model_path);
-        let ctx = load_whisper_context_cached(&key, loader)?;
+        let ctx = whisper_model_cache()
+            .get_or_insert_with(key.clone(), || load_whisper_from_key(&key))?;
         Ok(Self {
             ctx,
             threads: 4,
@@ -416,105 +587,76 @@ pub fn decode_to_pcm16k_mono(path: &Path) -> Result<(Vec<f32>, f64), ConvertErro
     Ok((pcm16k, audio_secs))
 }
 
-/// Resample to 16 kHz with a cheap anti-alias path when downsampling.
+/// Target sample rate for Whisper ASR preprocess.
+const WHISPER_RATE: u32 = 16_000;
+
+/// Exact output length contract: `round(n_in * 16000 / from)`.
+fn expected_resample_len(input_len: usize, from: u32) -> usize {
+    if input_len == 0 {
+        return 0;
+    }
+    let n = ((input_len as f64) * (WHISPER_RATE as f64 / from as f64)).round() as usize;
+    n.max(1)
+}
+
+/// Resample mono PCM to 16 kHz with `rubato::Fft` (synchronous FFT + Blackman–Harris-2
+/// anti-alias window — maintained polyphase/FFT resampler).
 ///
-/// Integer ratios (e.g. 48 kHz → 16 kHz) use a short triangular-FIR decimator.
-/// Fractional downsampling (e.g. 44.1 kHz → 16 kHz) applies a short moving-average
-/// prefilter then linear interpolation. Upsampling stays linear.
+/// **Latency / edge policy**
+/// - Uses [`Resampler::process_all`], which resets the resampler and **trims startup
+///   delay** so the clip aligns with the input (no leading resampler silence).
+/// - Output length is normalized to [`expected_resample_len`] (`round`). If rubato
+///   returns fewer frames (short-clip edge after delay trim), pad with the last
+///   sample (or `0.0` if empty). If more, truncate.
+/// - Empty input → empty output. Non-empty input → non-empty output.
+/// - Channel downmix happens **before** this function (average → mono); this path
+///   is strictly mono.
 ///
-/// This targets alias energy reduction for ASR preprocessing; it does **not** claim
-/// WER improvement without corpus measurement.
+/// Does **not** claim WER improvement without corpus evidence.
 fn resample_to_16k(input: &[f32], from: u32) -> Vec<f32> {
-    const TO: u32 = 16000;
-    if from == TO || input.is_empty() {
+    if from == WHISPER_RATE || input.is_empty() {
         return input.to_vec();
     }
-    if from > TO {
-        if from % TO == 0 {
-            return box_decimate(input, (from / TO) as usize);
+    let expected = expected_resample_len(input.len(), from);
+    match resample_rubato_fft(input, from, WHISPER_RATE) {
+        Ok(mut out) => {
+            normalize_resample_len(&mut out, expected);
+            out
         }
-        let filtered = moving_average_prefilter(input, from, TO);
-        return resample_linear(&filtered, from, TO);
-    }
-    resample_linear(input, from, TO)
-}
-
-/// Integer-factor downsample with a short triangular FIR (length `2*factor-1`), then
-/// keep every `factor`-th filtered sample. Stronger stopband than a single box of
-/// width `factor`, still O(n) and allocation-light for ASR preprocess.
-fn box_decimate(input: &[f32], factor: usize) -> Vec<f32> {
-    if factor <= 1 {
-        return input.to_vec();
-    }
-    let taps = 2 * factor - 1;
-    if input.len() < taps {
-        return Vec::new();
-    }
-    let mid = factor - 1;
-    let mut kernel = vec![0.0f32; taps];
-    let mut kern_sum = 0.0f32;
-    for (i, tap) in kernel.iter_mut().enumerate() {
-        let dist = i.abs_diff(mid);
-        *tap = (factor - dist) as f32;
-        kern_sum += *tap;
-    }
-    let inv = 1.0 / kern_sum;
-    for tap in &mut kernel {
-        *tap *= inv;
-    }
-
-    let out_len = (input.len() - taps) / factor + 1;
-    let mut out = Vec::with_capacity(out_len);
-    let mut start = 0usize;
-    while start + taps <= input.len() {
-        let window = &input[start..start + taps];
-        let mut acc = 0.0f32;
-        for (s, k) in window.iter().zip(kernel.iter()) {
-            acc += s * k;
-        }
-        out.push(acc);
-        start += factor;
-    }
-    out
-}
-
-/// Causal moving-average prefilter; window ≈ from/to (≥ 2 when downsampling).
-fn moving_average_prefilter(input: &[f32], from: u32, to: u32) -> Vec<f32> {
-    let window = ((from as f64 / to as f64).round() as usize).max(2);
-    if input.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(input.len());
-    let mut run = 0.0f32;
-    for i in 0..input.len() {
-        run += input[i];
-        if i >= window {
-            run -= input[i - window];
-            out.push(run / window as f32);
-        } else {
-            out.push(run / (i + 1) as f32);
+        Err(_) => {
+            // Construction/process failure is unexpected for valid rates; keep ASR
+            // path alive with length-correct zeros rather than panicking decode.
+            vec![0.0; expected]
         }
     }
-    out
 }
 
-/// Resample tuyến tính (upsample / fractional stage after prefilter).
-fn resample_linear(input: &[f32], from: u32, to: u32) -> Vec<f32> {
-    if from == to || input.is_empty() {
-        return input.to_vec();
+fn normalize_resample_len(out: &mut Vec<f32>, expected: usize) {
+    match out.len().cmp(&expected) {
+        std::cmp::Ordering::Equal => {}
+        std::cmp::Ordering::Less => {
+            let pad = out.last().copied().unwrap_or(0.0);
+            out.resize(expected, pad);
+        }
+        std::cmp::Ordering::Greater => {
+            out.truncate(expected);
+        }
     }
-    let ratio = to as f64 / from as f64;
-    let out_len = ((input.len() as f64) * ratio).round() as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let src_pos = i as f64 / ratio;
-        let idx = src_pos.floor() as usize;
-        let frac = (src_pos - idx as f64) as f32;
-        let a = input.get(idx).copied().unwrap_or(0.0);
-        let b = input.get(idx + 1).copied().unwrap_or(a);
-        out.push(a + (b - a) * frac);
-    }
-    out
+}
+
+fn resample_rubato_fft(input: &[f32], from: u32, to: u32) -> Result<Vec<f32>, ConvertError> {
+    // Chunk size is a hint; FixedSync::Both snaps to an exact ratio-friendly size.
+    // 1024 keeps delay modest for ASR offline clips.
+    let mut resampler = Fft::<f32>::new(from as usize, to as usize, 1024, 1, FixedSync::Both)
+        .map_err(|e| ConvertError::Failed(format!("rubato init: {e}")))?;
+
+    let frames = input.len();
+    let adapter = InterleavedSlice::new(input, 1, frames)
+        .map_err(|e| ConvertError::Failed(format!("rubato input adapter: {e}")))?;
+    let owned = resampler
+        .process_all(&adapter, frames, None)
+        .map_err(|e| ConvertError::Failed(format!("rubato process_all: {e}")))?;
+    Ok(owned.take_data())
 }
 
 #[cfg(test)]
@@ -524,6 +666,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Barrier;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn no_speech_filter_rejects_probability_and_marker_hallucinations() {
@@ -585,7 +728,7 @@ mod tests {
 
     #[test]
     fn load_once_cache_dedups_concurrent_loads_with_injectable_counter() {
-        let cache = Arc::new(LoadOnceCache::<String, u64>::new());
+        let cache = Arc::new(LoadOnceCache::<String, u64>::with_capacity(4));
         let loads = Arc::new(AtomicUsize::new(0));
         let barrier = Arc::new(Barrier::new(8));
         let mut handles = Vec::new();
@@ -599,7 +742,7 @@ mod tests {
                 cache
                     .get_or_insert_with("model-a".to_string(), || {
                         cache_loads.fetch_add(1, Ordering::SeqCst);
-                        thread::sleep(std::time::Duration::from_millis(20));
+                        thread::sleep(Duration::from_millis(30));
                         Ok::<u64, &'static str>(42)
                     })
                     .unwrap()
@@ -608,46 +751,71 @@ mod tests {
 
         let values: Vec<Arc<u64>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
         assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.max_active_loaders(), 1);
         assert!(values.iter().all(|v| **v == 42));
         assert!(values.windows(2).all(|w| Arc::ptr_eq(&w[0], &w[1])));
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.len_ready(), 1);
     }
 
     #[test]
-    fn load_once_cache_does_not_retain_failed_loads() {
-        let cache = LoadOnceCache::<&'static str, i32>::new();
-        let loads = AtomicUsize::new(0);
+    fn load_once_cache_fail_retry_third_caller_never_overlaps_loaders() {
+        let cache = Arc::new(LoadOnceCache::<&'static str, i32>::with_capacity(2));
+        let loads = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
 
-        let err = cache.get_or_insert_with("k", || {
-            loads.fetch_add(1, Ordering::SeqCst);
-            Err::<i32, _>("boom")
-        });
+        // First load fails.
+        let err = cache.get_or_insert_with("k", || Err::<i32, _>("boom"));
         assert_eq!(err, Err("boom"));
-        assert_eq!(cache.len(), 0);
+        assert_eq!(cache.len_entries(), 1); // Failed slot retained
+
+        let barrier = Arc::new(Barrier::new(3));
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let cache = Arc::clone(&cache);
+            let loads = Arc::clone(&loads);
+            let active = Arc::clone(&active);
+            let max_active = Arc::clone(&max_active);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                cache
+                    .get_or_insert_with("k", || {
+                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active.fetch_max(now, Ordering::SeqCst);
+                        loads.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(40));
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<i32, &str>(7)
+                    })
+                    .unwrap()
+            }));
+        }
+
+        let values: Vec<Arc<i32>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert!(values.iter().all(|v| **v == 7));
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.max_active_loaders(), 1);
+        assert_eq!(cache.len_ready(), 1);
+    }
+
+    #[test]
+    fn load_once_cache_does_not_leak_failed_as_ready() {
+        let cache = LoadOnceCache::<&'static str, i32>::with_capacity(2);
+        let _ = cache.get_or_insert_with("k", || Err::<i32, _>("boom"));
+        assert_eq!(cache.len_ready(), 0);
 
         let ok = cache
-            .get_or_insert_with("k", || {
-                loads.fetch_add(1, Ordering::SeqCst);
-                Ok::<i32, &str>(7)
-            })
+            .get_or_insert_with("k", || Ok::<i32, &str>(7))
             .unwrap();
         assert_eq!(*ok, 7);
-        assert_eq!(loads.load(Ordering::SeqCst), 2);
-        assert_eq!(cache.len(), 1);
-
-        let again = cache
-            .get_or_insert_with("k", || {
-                loads.fetch_add(1, Ordering::SeqCst);
-                Ok::<i32, &str>(99)
-            })
-            .unwrap();
-        assert_eq!(*again, 7);
-        assert_eq!(loads.load(Ordering::SeqCst), 2);
+        assert_eq!(cache.len_ready(), 1);
     }
 
     #[test]
     fn load_once_cache_keys_distinct_configs_separately() {
-        let cache = LoadOnceCache::<(String, bool), i32>::new();
+        let cache = LoadOnceCache::<(String, bool), i32>::with_capacity(4);
         let loads = AtomicUsize::new(0);
         let a = cache
             .get_or_insert_with(("m".into(), false), || {
@@ -664,7 +832,79 @@ mod tests {
         assert_eq!(*a, 1);
         assert_eq!(*b, 2);
         assert_eq!(loads.load(Ordering::SeqCst), 2);
-        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.len_ready(), 2);
+    }
+
+    #[test]
+    fn load_once_cache_lru_evicts_and_reloads_while_arcs_keep_alive() {
+        let cache = LoadOnceCache::<String, u64>::with_capacity(2);
+        assert_eq!(cache.capacity(), 2);
+        let loads = AtomicUsize::new(0);
+
+        let a = cache
+            .get_or_insert_with("a".into(), || {
+                loads.fetch_add(1, Ordering::SeqCst);
+                Ok::<u64, &str>(1)
+            })
+            .unwrap();
+        let b = cache
+            .get_or_insert_with("b".into(), || {
+                loads.fetch_add(1, Ordering::SeqCst);
+                Ok::<u64, &str>(2)
+            })
+            .unwrap();
+        assert_eq!(cache.len_ready(), 2);
+
+        // Insert c → evict oldest Ready (a) from the map.
+        let c = cache
+            .get_or_insert_with("c".into(), || {
+                loads.fetch_add(1, Ordering::SeqCst);
+                Ok::<u64, &str>(3)
+            })
+            .unwrap();
+        assert_eq!(*c, 3);
+        assert!(cache.len_ready() <= 2);
+        // Held Arc stays alive after eviction.
+        assert_eq!(*a, 1);
+        assert_eq!(Arc::strong_count(&a), 1);
+
+        // Reload a → new load (evicted), not the same Arc.
+        let a2 = cache
+            .get_or_insert_with("a".into(), || {
+                loads.fetch_add(1, Ordering::SeqCst);
+                Ok::<u64, &str>(11)
+            })
+            .unwrap();
+        assert_eq!(*a2, 11);
+        assert!(!Arc::ptr_eq(&a, &a2));
+        assert_eq!(loads.load(Ordering::SeqCst), 4);
+        let _ = b;
+    }
+
+    #[test]
+    fn load_once_cache_lru_concurrent_safety() {
+        let cache = Arc::new(LoadOnceCache::<usize, usize>::with_capacity(2));
+        let barrier = Arc::new(Barrier::new(6));
+        let mut handles = Vec::new();
+        for i in 0..6 {
+            let cache = Arc::clone(&cache);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for k in 0..8 {
+                    let key = (i + k) % 5;
+                    let v = cache
+                        .get_or_insert_with(key, || Ok::<usize, &str>(key))
+                        .unwrap();
+                    assert_eq!(*v, key);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert!(cache.len_ready() <= cache.capacity());
+        assert!(cache.max_active_loaders() >= 1);
     }
 
     fn sine_wave(freq_hz: f32, sample_rate: u32, secs: f32) -> Vec<f32> {
@@ -674,10 +914,9 @@ mod tests {
             .collect()
     }
 
-    /// Single-bin Goertzel power for numeric alias checks.
     fn goertzel_power(samples: &[f32], sample_rate: u32, freq_hz: f32) -> f32 {
         let n = samples.len() as f32;
-        if n < 8.0 {
+        if n < 16.0 {
             return 0.0;
         }
         let k = (0.5 + (n * freq_hz / sample_rate as f32)).floor();
@@ -690,47 +929,98 @@ mod tests {
             s2 = s1;
             s1 = s0;
         }
-        let power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-        power.max(0.0)
+        (s1 * s1 + s2 * s2 - coeff * s1 * s2).max(0.0)
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let sum: f32 = samples.iter().map(|s| s * s).sum();
+        (sum / samples.len() as f32).sqrt()
+    }
+
+    const RATES_TO_16K: &[u32] = &[22_050, 24_000, 32_000, 44_100, 48_000, 96_000];
+
+    #[test]
+    fn resample_exact_rounded_length_across_common_rates() {
+        for &rate in RATES_TO_16K {
+            let src = sine_wave(440.0, rate, 0.2);
+            let out = resample_to_16k(&src, rate);
+            assert_eq!(
+                out.len(),
+                expected_resample_len(src.len(), rate),
+                "rate={rate}"
+            );
+        }
     }
 
     #[test]
-    fn downsample_48k_to_16k_suppresses_above_nyquist_alias() {
-        // 10 kHz tone at 48 kHz folds near 6 kHz after naive 16 kHz resample (Nyquist 8 kHz).
-        let src = sine_wave(10_000.0, 48_000, 0.25);
-        let naive = resample_linear(&src, 48_000, 16_000);
-        let filtered = resample_to_16k(&src, 48_000);
-        let expected_len = (src.len() - (2 * 3 - 1)) / 3 + 1;
-        assert_eq!(filtered.len(), expected_len);
-
-        let alias_naive = goertzel_power(&naive, 16_000, 6_000.0);
-        let alias_filtered = goertzel_power(&filtered, 16_000, 6_000.0);
-        assert!(
-            alias_filtered < alias_naive * 0.2,
-            "triangular decimate should suppress 10k→6k alias: filtered={alias_filtered}, naive={alias_naive}"
-        );
+    fn resample_short_input_is_nonempty() {
+        for &rate in RATES_TO_16K {
+            let src = vec![0.25f32; 3];
+            let out = resample_to_16k(&src, rate);
+            assert!(!out.is_empty(), "rate={rate}");
+            assert_eq!(out.len(), expected_resample_len(src.len(), rate));
+        }
+        assert!(resample_to_16k(&[], 48_000).is_empty());
     }
 
     #[test]
-    fn downsample_44k1_to_16k_suppresses_above_nyquist_alias() {
-        // 9.5 kHz tone at 44.1 kHz aliases below 8 kHz Nyquist after 16 kHz resample.
-        let src = sine_wave(9_500.0, 44_100, 0.25);
-        let naive = resample_linear(&src, 44_100, 16_000);
-        let filtered = resample_to_16k(&src, 44_100);
-
-        let alias_naive = goertzel_power(&naive, 16_000, 6_500.0);
-        let alias_filtered = goertzel_power(&filtered, 16_000, 6_500.0);
-        assert!(
-            alias_filtered < alias_naive * 0.55,
-            "prefilter+linear should reduce 9.5k alias energy: filtered={alias_filtered}, naive={alias_naive}"
-        );
+    fn resample_dc_unity_gain() {
+        for &rate in RATES_TO_16K {
+            let src = vec![1.0f32; (rate as usize) / 5]; // 0.2 s
+            let out = resample_to_16k(&src, rate);
+            // Skip a few edge samples; center should sit near DC 1.0.
+            let start = out.len() / 10;
+            let end = out.len().saturating_sub(out.len() / 10).max(start + 1);
+            let region = &out[start..end];
+            let mean = region.iter().sum::<f32>() / region.len() as f32;
+            assert!((mean - 1.0).abs() < 0.05, "DC mean={mean} at rate={rate}");
+        }
     }
 
     #[test]
-    fn upsample_linear_preserves_length_ratio() {
+    fn resample_passband_gain_and_alias_attenuation_above_8k() {
+        for &rate in RATES_TO_16K {
+            // Passband: 1 kHz tone should retain most energy.
+            let pass_src = sine_wave(1_000.0, rate, 0.25);
+            let pass_out = resample_to_16k(&pass_src, rate);
+            let pass_in_rms = rms(&pass_src);
+            let pass_out_rms = rms(&pass_out);
+            assert!(
+                pass_out_rms > pass_in_rms * 0.7,
+                "passband RMS dropped too far at {rate}: in={pass_in_rms} out={pass_out_rms}"
+            );
+
+            // Just above 8 kHz Nyquist of 16 kHz target → must be attenuated.
+            let alias_freq = 8_500.0;
+            if alias_freq >= (rate as f32) / 2.0 {
+                continue;
+            }
+            let alias_src = sine_wave(alias_freq, rate, 0.25);
+            let alias_out = resample_to_16k(&alias_src, rate);
+            let alias_out_rms = rms(&alias_out);
+            // Residual should be far below the passband tone level.
+            assert!(
+                alias_out_rms < pass_out_rms * 0.15,
+                "alias leakage at {rate}: alias_rms={alias_out_rms} pass_rms={pass_out_rms}"
+            );
+            // Also check energy near the folded region is small vs passband bin.
+            let pass_bin = goertzel_power(&pass_out, WHISPER_RATE, 1_000.0);
+            let fold = (alias_freq - WHISPER_RATE as f32).abs(); // 8500 → ~7500
+            let alias_bin = goertzel_power(&alias_out, WHISPER_RATE, fold);
+            assert!(
+                alias_bin < pass_bin * 0.05,
+                "alias bin too strong at {rate}: alias_bin={alias_bin} pass_bin={pass_bin}"
+            );
+        }
+    }
+
+    #[test]
+    fn upsample_from_8k_preserves_rounded_length() {
         let src = sine_wave(440.0, 8_000, 0.1);
         let up = resample_to_16k(&src, 8_000);
-        let expected = ((src.len() as f64) * (16_000.0 / 8_000.0)).round() as usize;
-        assert_eq!(up.len(), expected);
+        assert_eq!(up.len(), expected_resample_len(src.len(), 8_000));
     }
 }
