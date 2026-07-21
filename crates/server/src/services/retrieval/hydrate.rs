@@ -163,7 +163,7 @@ pub async fn hydrate_authorized_conflict_evidence(
                 .await?;
                 Ok(rows
                     .into_iter()
-                    .filter(|row| both_sides_authorized(&ctx, &row))
+                    .filter(|row| both_sides_authorized(&ctx, row))
                     .collect())
             })
         }

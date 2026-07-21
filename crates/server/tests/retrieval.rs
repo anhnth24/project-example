@@ -58,7 +58,8 @@ struct EphemeralDb {
 
 impl EphemeralDb {
     async fn create(base_url: &str) -> Self {
-        let db_name = format!("markhand_ret_{}", Uuid::new_v4().simple());
+        let suffix = Uuid::new_v4().simple();
+        let db_name = format!("markhand_ret_{suffix}");
         let admin_url = rewrite_database_url(base_url, "postgres");
         let admin = connect_raw(&admin_url).await;
         admin
@@ -150,10 +151,11 @@ async fn as_of_resolves_effective_version_from_postgres() {
                     &[&ctx.org_id(), &format!("org-{}", ctx.org_id()), &"org"],
                 )
                 .await?;
+                let user_email = format!("{}@example.test", ctx.user_id());
                 txn.execute(
                     "INSERT INTO users (id, email, display_name, password_hash)
                      VALUES ($1, $2, 'u', 'x')",
-                    &[&ctx.user_id(), &format!("{}@example.test", ctx.user_id())],
+                    &[&ctx.user_id(), &user_email],
                 )
                 .await?;
                 txn.execute(
@@ -163,7 +165,7 @@ async fn as_of_resolves_effective_version_from_postgres() {
                     &[
                         &collection,
                         &ctx.org_id(),
-                        &format!("c-{}", collection),
+                        &format!("c-{collection}"),
                         &ctx.user_id(),
                     ],
                 )
@@ -175,9 +177,10 @@ async fn as_of_resolves_effective_version_from_postgres() {
                     &[&document, &ctx.org_id(), &collection, &ctx.user_id()],
                 )
                 .await?;
-                let sha1 = format!("{}1", "a".repeat(63));
-                let sha2 = format!("{}2", "a".repeat(63));
-                let sha3 = format!("{}3", "a".repeat(63));
+                let sha_prefix = "a".repeat(63);
+                let sha1 = format!("{sha_prefix}1");
+                let sha2 = format!("{sha_prefix}2");
+                let sha3 = format!("{sha_prefix}3");
                 txn.execute(
                     "INSERT INTO document_versions (
                         id, org_id, document_id, version_number, publication_state, is_current,

@@ -277,16 +277,16 @@ pub async fn hybrid_search(
     let vector_future = async {
         match query_vector.as_deref() {
             Some(vector) => {
-                search_all_vector_legs(
+                search_all_vector_legs(VectorLegSearch {
                     pool,
                     qdrant,
                     ctx,
-                    &collection_ids,
-                    vector,
-                    &resolved.visibility,
-                    document_filter,
-                    leg_limit,
-                )
+                    collection_ids: &collection_ids,
+                    query_vector: vector,
+                    visibility: &resolved.visibility,
+                    document_id: document_filter,
+                    limit: leg_limit,
+                })
                 .await
             }
             None => Ok(Vec::new()),
@@ -486,16 +486,30 @@ pub fn same_lineage_pair(
     ids.contains(&version_a) && ids.contains(&version_b) && loaded.len() == 2
 }
 
-async fn search_all_vector_legs(
-    pool: &Pool,
-    qdrant: &QdrantClient,
-    ctx: &OrgContext,
-    collection_ids: &[Uuid],
-    query_vector: &[f32],
-    visibility: &VersionVisibility,
+struct VectorLegSearch<'a> {
+    pool: &'a Pool,
+    qdrant: &'a QdrantClient,
+    ctx: &'a OrgContext,
+    collection_ids: &'a [Uuid],
+    query_vector: &'a [f32],
+    visibility: &'a VersionVisibility,
     document_id: Option<Uuid>,
     limit: usize,
+}
+
+async fn search_all_vector_legs(
+    input: VectorLegSearch<'_>,
 ) -> Result<Vec<VectorCandidate>, RetrievalError> {
+    let VectorLegSearch {
+        pool,
+        qdrant,
+        ctx,
+        collection_ids,
+        query_vector,
+        visibility,
+        document_id,
+        limit,
+    } = input;
     let collection_ids_owned = collection_ids.to_vec();
     let active = with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
@@ -621,7 +635,7 @@ pub fn merge_rerank_hydrated(
     }
 
     sort_hybrid_hits(&mut hybrid_hits);
-    hybrid_hits.truncate(limit.max(1).min(100));
+    hybrid_hits.truncate(limit.clamp(1, 100));
 
     hybrid_hits
         .into_iter()
