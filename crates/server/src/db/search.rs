@@ -82,6 +82,15 @@ pub enum VersionVisibility {
     VersionIds(BTreeSet<Uuid>),
 }
 
+impl VersionVisibility {
+    fn required_permission(&self) -> &'static str {
+        match self {
+            Self::Current => "qa.query",
+            Self::VersionIds(_) => "qa.history",
+        }
+    }
+}
+
 /// Shadow/building/retired generations must not surface in retrieval.
 pub fn index_generation_visible_for_retrieval(
     is_active: bool,
@@ -308,13 +317,54 @@ pub async fn hydrate_chunks_by_identity(
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
+                   AND EXISTS (
+                     SELECT 1
+                     FROM collections acl_c
+                     JOIN org_memberships acl_m
+                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
+                     JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                     WHERE acl_c.org_id = d.org_id
+                       AND acl_c.id = d.collection_id
+                       AND acl_c.deleted_at IS NULL
+                       AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $5
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
+                       AND (
+                         acl_c.visibility = 'org'
+                         OR acl_c.owner_user_id = $4
+                         OR EXISTS (
+                           SELECT 1 FROM collection_user_access cua
+                           WHERE cua.org_id = acl_c.org_id
+                             AND cua.collection_id = acl_c.id
+                             AND cua.user_id = $4
+                         )
+                       )
+                   )
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
                    AND dv.is_current
                    AND im.is_active
                    AND im.state = 'active'",
-                &[&ctx.org_id(), &collection_ids, &identities],
+                &[
+                    &ctx.org_id(),
+                    &collection_ids,
+                    &identities,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                ],
             )
             .await?
         }
@@ -343,12 +393,54 @@ pub async fn hydrate_chunks_by_identity(
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
                    AND c.version_id = ANY($4)
+                   AND EXISTS (
+                     SELECT 1
+                     FROM collections acl_c
+                     JOIN org_memberships acl_m
+                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
+                     JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                     WHERE acl_c.org_id = d.org_id
+                       AND acl_c.id = d.collection_id
+                       AND acl_c.deleted_at IS NULL
+                       AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $6
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
+                       AND (
+                         acl_c.visibility = 'org'
+                         OR acl_c.owner_user_id = $5
+                         OR EXISTS (
+                           SELECT 1 FROM collection_user_access cua
+                           WHERE cua.org_id = acl_c.org_id
+                             AND cua.collection_id = acl_c.id
+                             AND cua.user_id = $5
+                         )
+                       )
+                   )
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
                    AND im.is_active
                    AND im.state = 'active'",
-                &[&ctx.org_id(), &collection_ids, &identities, &versions],
+                &[
+                    &ctx.org_id(),
+                    &collection_ids,
+                    &identities,
+                    &versions,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                ],
             )
             .await?
         }
@@ -406,6 +498,76 @@ pub async fn load_authorized_conflict_evidence(
                    AND conf.id = ANY($2)
                    AND da.collection_id = ANY($3)
                    AND db.collection_id = ANY($3)
+                   AND EXISTS (
+                     SELECT 1
+                     FROM collections acl_c
+                     JOIN org_memberships acl_m
+                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
+                     JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                     WHERE acl_c.org_id = da.org_id
+                       AND acl_c.id = da.collection_id
+                       AND acl_c.deleted_at IS NULL
+                       AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $5
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
+                       AND (
+                         acl_c.visibility = 'org'
+                         OR acl_c.owner_user_id = $4
+                         OR EXISTS (
+                           SELECT 1 FROM collection_user_access cua
+                           WHERE cua.org_id = acl_c.org_id
+                             AND cua.collection_id = acl_c.id
+                             AND cua.user_id = $4
+                         )
+                       )
+                   )
+                   AND EXISTS (
+                     SELECT 1
+                     FROM collections acl_c
+                     JOIN org_memberships acl_m
+                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
+                     JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                     WHERE acl_c.org_id = db.org_id
+                       AND acl_c.id = db.collection_id
+                       AND acl_c.deleted_at IS NULL
+                       AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $5
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
+                       AND (
+                         acl_c.visibility = 'org'
+                         OR acl_c.owner_user_id = $4
+                         OR EXISTS (
+                           SELECT 1 FROM collection_user_access cua
+                           WHERE cua.org_id = acl_c.org_id
+                             AND cua.collection_id = acl_c.id
+                             AND cua.user_id = $4
+                         )
+                       )
+                   )
                    AND da.deleted_at IS NULL
                    AND db.deleted_at IS NULL
                    AND da.state = 'indexed'
@@ -414,7 +576,13 @@ pub async fn load_authorized_conflict_evidence(
                    AND dvb.publication_state = 'published'
                    AND dva.is_current
                    AND dvb.is_current",
-                &[&ctx.org_id(), &conflict_ids, &collection_ids],
+                &[
+                    &ctx.org_id(),
+                    &conflict_ids,
+                    &collection_ids,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                ],
             )
             .await?
         }
@@ -459,6 +627,76 @@ pub async fn load_authorized_conflict_evidence(
                    AND conf.id = ANY($2)
                    AND da.collection_id = ANY($3)
                    AND db.collection_id = ANY($3)
+                   AND EXISTS (
+                     SELECT 1
+                     FROM collections acl_c
+                     JOIN org_memberships acl_m
+                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
+                     JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                     WHERE acl_c.org_id = da.org_id
+                       AND acl_c.id = da.collection_id
+                       AND acl_c.deleted_at IS NULL
+                       AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $6
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
+                       AND (
+                         acl_c.visibility = 'org'
+                         OR acl_c.owner_user_id = $5
+                         OR EXISTS (
+                           SELECT 1 FROM collection_user_access cua
+                           WHERE cua.org_id = acl_c.org_id
+                             AND cua.collection_id = acl_c.id
+                             AND cua.user_id = $5
+                         )
+                       )
+                   )
+                   AND EXISTS (
+                     SELECT 1
+                     FROM collections acl_c
+                     JOIN org_memberships acl_m
+                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
+                     JOIN users acl_u ON acl_u.id = acl_m.user_id
+                     JOIN roles acl_r
+                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                     JOIN role_permissions acl_rp
+                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                     WHERE acl_c.org_id = db.org_id
+                       AND acl_c.id = db.collection_id
+                       AND acl_c.deleted_at IS NULL
+                       AND acl_u.disabled_at IS NULL
+                       AND acl_p.code = $6
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
+                       AND (
+                         acl_c.visibility = 'org'
+                         OR acl_c.owner_user_id = $5
+                         OR EXISTS (
+                           SELECT 1 FROM collection_user_access cua
+                           WHERE cua.org_id = acl_c.org_id
+                             AND cua.collection_id = acl_c.id
+                             AND cua.user_id = $5
+                         )
+                       )
+                   )
                    AND da.deleted_at IS NULL
                    AND db.deleted_at IS NULL
                    AND da.state = 'indexed'
@@ -467,7 +705,14 @@ pub async fn load_authorized_conflict_evidence(
                    AND dvb.publication_state = 'published'
                    AND ca.version_id = ANY($4)
                    AND cb.version_id = ANY($4)",
-                &[&ctx.org_id(), &conflict_ids, &collection_ids, &versions],
+                &[
+                    &ctx.org_id(),
+                    &conflict_ids,
+                    &collection_ids,
+                    &versions,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                ],
             )
             .await?
         }

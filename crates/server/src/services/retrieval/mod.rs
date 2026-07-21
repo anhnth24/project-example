@@ -46,6 +46,8 @@ use crate::storage::qdrant::{QdrantClient, VectorScope};
 
 /// Permission required for retrieval (POC seed).
 pub const PERMISSION_QA_QUERY: &str = "qa.query";
+/// Additional permission required whenever retrieval can expose a superseded version.
+pub const PERMISSION_QA_HISTORY: &str = "qa.history";
 
 /// Candidate pull depth per leg before merge (desktop uses 250/500).
 const LEG_CANDIDATE_LIMIT: usize = 250;
@@ -233,6 +235,14 @@ pub fn validate_request(request: &RetrievalRequest) -> Result<(), RetrievalError
     Ok(())
 }
 
+fn require_mode_permissions(ctx: &OrgContext, mode: &VersionMode) -> Result<(), RetrievalError> {
+    require_permission(ctx, PERMISSION_QA_QUERY)?;
+    if !matches!(mode, VersionMode::Current) {
+        require_permission(ctx, PERMISSION_QA_HISTORY)?;
+    }
+    Ok(())
+}
+
 /// Tenant-scoped hybrid search. OrgContext is mandatory on every path.
 pub async fn hybrid_search(
     pool: &Pool,
@@ -241,7 +251,7 @@ pub async fn hybrid_search(
     ctx: &OrgContext,
     request: RetrievalRequest,
 ) -> Result<RetrievalResponse, RetrievalError> {
-    require_permission(ctx, PERMISSION_QA_QUERY)?;
+    require_mode_permissions(ctx, &request.mode)?;
     validate_request(&request)?;
     let scope = resolve_scope(ctx, request.collection_ids.as_ref())?;
     let collection_ids: Vec<Uuid> = scope.collection_ids.iter().copied().collect();
@@ -856,6 +866,41 @@ mod tests {
         let ctx = ctx_with([allowed]);
         let err = resolve_scope(&ctx, Some(&BTreeSet::from([allowed, foreign]))).unwrap_err();
         assert!(matches!(err, RetrievalError::PermissionDenied));
+    }
+
+    #[test]
+    fn historical_modes_require_explicit_history_permission() {
+        let collection = Uuid::new_v4();
+        let query_only = ctx_with([collection]);
+        let modes = [
+            VersionMode::AsOf { at: Utc::now() },
+            VersionMode::Compare {
+                document_id: Uuid::new_v4(),
+                version_a: Uuid::new_v4(),
+                version_b: Uuid::new_v4(),
+            },
+            VersionMode::History {
+                document_id: Uuid::new_v4(),
+            },
+        ];
+        for mode in &modes {
+            assert!(matches!(
+                require_mode_permissions(&query_only, mode),
+                Err(RetrievalError::PermissionDenied)
+            ));
+        }
+
+        let allowed = OrgContext::try_new(
+            query_only.org_id(),
+            query_only.user_id(),
+            [PERMISSION_QA_QUERY, PERMISSION_QA_HISTORY],
+            [collection],
+        )
+        .unwrap();
+        assert!(require_mode_permissions(&allowed, &VersionMode::Current).is_ok());
+        for mode in &modes {
+            assert!(require_mode_permissions(&allowed, mode).is_ok());
+        }
     }
 
     #[test]

@@ -70,6 +70,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0016_expand_chunks_accent_fold_tsv.sql",
         include_str!("../migrations/0016_expand_chunks_accent_fold_tsv.sql"),
     ),
+    (
+        "0017_expand_qa_history_permission.sql",
+        include_str!("../migrations/0017_expand_qa_history_permission.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
