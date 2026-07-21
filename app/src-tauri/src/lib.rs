@@ -486,6 +486,42 @@ fn convert_and_write_md(opts: ConverterOptions, source: PathBuf) -> Result<PathB
     Ok(md_path)
 }
 
+/// Additive detailed convert report for UI surfaces (legacy import/reconvert unchanged).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversionDetailedReport {
+    markdown_rel_path: String,
+    title: Option<String>,
+    format: String,
+    outcome: fileconv_core::ConversionOutcome,
+    warnings: Vec<fileconv_core::ConversionWarning>,
+}
+
+fn convert_and_write_md_detailed(
+    opts: ConverterOptions,
+    root: &Path,
+    source: PathBuf,
+) -> Result<ConversionDetailedReport, String> {
+    let md_path = source.with_file_name(format!(
+        "{}.md",
+        source
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
+    ));
+    let report = fileconv_core::Converter::with_options(opts)
+        .convert_path_detailed(&source)
+        .map_err(|e| format!("convert thất bại: {} ({})", e.error, e.kind.as_str()))?;
+    atomic_write(&md_path, report.result.markdown.as_bytes())?;
+    Ok(ConversionDetailedReport {
+        markdown_rel_path: rel_of(root, &md_path),
+        title: report.result.title,
+        format: report.result.format.as_str().into(),
+        outcome: report.outcome(),
+        warnings: report.warnings,
+    })
+}
+
 /// Validate and copy one source file into a folder inside DATA.
 ///
 /// Conversion is intentionally separate so the desktop UI can show the copied
@@ -845,6 +881,31 @@ async fn reconvert(state: State<'_, AppState>, source_rel: String) -> Result<Str
     Ok(rel_of(&root, &md_path))
 }
 
+/// Parallel detailed reconvert: same side effects as `reconvert`, plus outcome/warnings.
+#[tauri::command]
+async fn reconvert_detailed(
+    state: State<'_, AppState>,
+    source_rel: String,
+) -> Result<ConversionDetailedReport, String> {
+    let root = data_root(&state);
+    let source = resolve_within(&root, &source_rel)?;
+    if !source.is_file() {
+        return Err("file gốc không tồn tại".into());
+    }
+    if FormatKind::from_path(&source) == FormatKind::Unknown {
+        return Err("định dạng không hỗ trợ convert".into());
+    }
+    let opts = state.settings.lock().map_err(|_| "lock lỗi")?.to_options();
+    let root_for_snapshot = root.clone();
+    let source_rel_for_snapshot = source_rel.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        intelligence::snapshot_existing_version(&root_for_snapshot, &source_rel_for_snapshot)?;
+        convert_and_write_md_detailed(opts, &root_for_snapshot, source)
+    })
+    .await
+    .map_err(es)?
+}
+
 #[tauri::command]
 fn read_text_file(state: State<AppState>, rel_path: String) -> Result<String, String> {
     let p = resolve_within(&data_root(&state), &rel_path)?;
@@ -1121,6 +1182,7 @@ pub fn run() {
             import_file_only,
             import_file,
             reconvert,
+            reconvert_detailed,
             read_text_file,
             write_text_file,
             read_text_preview,

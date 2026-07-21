@@ -36,7 +36,9 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff|pptx-preview|info> ...");
+        eprintln!(
+            "dùng: fileconv <speed|accuracy|audio|one|one-detailed|handoff|pptx-preview|info> ..."
+        );
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -112,6 +114,66 @@ fn main() -> Result<()> {
             let conv = Converter::with_options(opts);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
+            Ok(())
+        }
+        "one-detailed" => {
+            // Additive structured report (stdout JSON). Legacy `one` stays markdown-only.
+            let f = args.get(2).context("thiếu file")?;
+            let rest = &args[3..];
+            let mut opts = fileconv_core::ConverterOptions::default();
+            if rest.iter().any(|a| a == "--ocr-images") {
+                opts.pdf_ocr_images = true;
+            }
+            if rest.iter().any(|a| a == "--no-pdf-ocr") {
+                opts.pdf_ocr = false;
+            }
+            if let Some(l) = rest
+                .iter()
+                .position(|a| a == "--lang")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.ocr_langs = l.clone();
+            }
+            if let Some(engine) = rest
+                .iter()
+                .position(|argument| argument == "--ocr-engine")
+                .and_then(|index| rest.get(index + 1))
+            {
+                opts.ocr_engine = fileconv_core::image_ocr::OcrEngine::from_name(engine);
+            }
+            if let Some(p) = rest
+                .iter()
+                .position(|a| a == "--pages")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.pdf_pages = Some(p.split(',').filter_map(|x| x.trim().parse().ok()).collect());
+            }
+            if let Some(s) = rest
+                .iter()
+                .position(|a| a == "--sheet")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.xlsx_sheet = Some(s.clone());
+            }
+            if let Some(m) = rest
+                .iter()
+                .position(|a| a == "--max-chars")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|x| x.parse().ok())
+            {
+                opts.max_chars = Some(m);
+            }
+            let report = Converter::with_options(opts).convert_path_detailed(Path::new(f))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "markdown": report.result.markdown,
+                    "title": report.result.title,
+                    "format": report.result.format.as_str(),
+                    "outcome": report.outcome(),
+                    "warnings": report.warnings,
+                }))?
+            );
             Ok(())
         }
         "handoff" => {
