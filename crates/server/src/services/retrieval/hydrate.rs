@@ -291,8 +291,7 @@ mod tests {
     fn shadow_and_retired_generations_are_not_hydrated() {
         let collection = Uuid::new_v4();
         let org = Uuid::new_v4();
-        let ctx =
-            OrgContext::try_new(org, Uuid::new_v4(), ["qa.query"], [collection]).unwrap();
+        let ctx = OrgContext::try_new(org, Uuid::new_v4(), ["qa.query"], [collection]).unwrap();
         let mut row = sample_row(collection, true);
         row.org_id = org;
         row.index_generation_state = IndexGenerationState::Shadow;

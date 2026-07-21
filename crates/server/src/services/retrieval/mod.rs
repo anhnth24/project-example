@@ -1176,14 +1176,7 @@ mod tests {
             payload_is_current: true,
         }];
         let tokens = vec!["doi".into(), "soat".into(), "giao".into(), "dich".into()];
-        let expected = hybrid_rerank_score(
-            Some(0),
-            Some(0),
-            0.75,
-            &tokens,
-            "Đối soát",
-            body,
-        );
+        let expected = hybrid_rerank_score(Some(0), Some(0), 0.75, &tokens, "Đối soát", body);
         let started = std::time::Instant::now();
         let hits = merge_rerank_hydrated(&lexical, &vector, &hydrated, &tokens, 10);
         let elapsed = started.elapsed();
