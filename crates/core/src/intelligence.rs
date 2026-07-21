@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::chunk::chunk_markdown;
+use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_text};
 use crate::ConvertError;
 
 const DEFAULT_CHUNK_CHARS: usize = 2_000;
@@ -394,8 +394,12 @@ fn tokens(text: &str) -> Vec<String> {
 /// Trang gần nhất trước `offset`, suy từ marker `<!-- Page N -->` hoặc
 /// `<!-- Trang N (OCR) -->` mà converter chèn cho mỗi trang PDF. Dùng chung cho
 /// citation anchor ở cả desktop lẫn index server.
+///
+/// `offset` không cần là char boundary: hàm clamp về boundary gần nhất bên trái
+/// trước khi slice (tránh panic khi caller truyền offset thô giữa glyph UTF-8).
 pub fn page_before(markdown: &str, offset: usize) -> Option<u32> {
-    let prefix = &markdown[..offset.min(markdown.len())];
+    let end = clamp_to_char_boundary(markdown, offset.min(markdown.len()));
+    let prefix = &markdown[..end];
     prefix.lines().rev().find_map(|line| {
         let line = line.trim();
         line.strip_prefix("<!-- Trang ")
@@ -423,19 +427,14 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
             if marker_only {
                 continue;
             }
-            cursor = cursor.min(document.markdown.len());
-            while cursor < document.markdown.len() && !document.markdown.is_char_boundary(cursor) {
-                cursor += 1;
-            }
-            let start = document.markdown[cursor..]
-                .find(&chunk.text)
-                .map(|relative| cursor + relative)
-                .unwrap_or(cursor);
-            let mut end = (start + chunk.text.len()).min(document.markdown.len());
-            while end > start && !document.markdown.is_char_boundary(end) {
-                end -= 1;
-            }
+            let Some((start, end)) = locate_chunk_text(&document.markdown, cursor, &chunk.text)
+            else {
+                // Không định vị được trên nguồn gốc → bỏ chunk thay vì emit span sai.
+                continue;
+            };
             cursor = end;
+            // Quote giữ đúng byte trên nguồn (kể cả CRLF) để citation khớp highlight.
+            let text = document.markdown[start..end].to_string();
             corpus.push(CorpusChunk {
                 id: format!(
                     "chunk-{}",
@@ -448,7 +447,7 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
                 source_rel: document.source_rel.clone(),
                 md_rel: document.md_rel.clone(),
                 heading: chunk.heading,
-                text: chunk.text,
+                text,
                 start,
                 end,
                 page: page_before(&document.markdown, start),
@@ -723,11 +722,27 @@ pub fn redact_pii(markdown: &str, findings: &[PiiFinding]) -> String {
     let mut output = markdown.to_string();
     let mut spans: Vec<(usize, usize, &PiiKind)> = findings
         .iter()
-        .filter(|finding| finding.end <= output.len() && finding.start < finding.end)
+        .filter(|finding| {
+            finding.end <= output.len()
+                && finding.start < finding.end
+                && output.is_char_boundary(finding.start)
+                && output.is_char_boundary(finding.end)
+        })
         .map(|finding| (finding.start, finding.end, &finding.kind))
         .collect();
-    spans.sort_by_key(|span| std::cmp::Reverse(span.0));
-    for (start, end, kind) in spans {
+    // Chọn span không chồng: ưu tiên start sớm hơn, rồi span dài hơn.
+    spans.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let mut selected: Vec<(usize, usize, &PiiKind)> = Vec::new();
+    let mut last_end = 0usize;
+    for span in spans {
+        if span.0 < last_end {
+            continue;
+        }
+        last_end = span.1;
+        selected.push(span);
+    }
+    // Áp từ phải sang trái để offset bên trái không lệch.
+    for (start, end, kind) in selected.into_iter().rev() {
         output.replace_range(start..end, &format!("[REDACTED_{kind:?}]"));
     }
     output
@@ -1880,6 +1895,113 @@ mod tests {
         let chunks = build_corpus(&[doc], 2_000);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].end >= chunks[0].start);
+    }
+
+    #[test]
+    fn corpus_multiline_crlf_spans_match_exact_quoted_content() {
+        let markdown =
+            "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu.\r\nDòng hai vẫn khớp.\r\n".to_string();
+        let doc = CorpusDocument {
+            source_rel: "crlf-multi.md".into(),
+            md_rel: "crlf-multi.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 1);
+        let chunk = &chunks[0];
+        assert!(markdown.is_char_boundary(chunk.start));
+        assert!(markdown.is_char_boundary(chunk.end));
+        assert_eq!(&markdown[chunk.start..chunk.end], chunk.text.as_str());
+        assert_eq!(
+            chunk.text.as_str(),
+            "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
+        );
+        assert_eq!(
+            page_before(&markdown, chunk.start),
+            None,
+            "no page marker before body"
+        );
+    }
+
+    #[test]
+    fn corpus_crlf_page_marker_anchors_correct_span() {
+        let markdown =
+            "<!-- Page 3 -->\r\n\r\n# Mục\r\n\r\nNội dung trang ba.\r\nDòng kế.\r\n".to_string();
+        let doc = CorpusDocument {
+            source_rel: "page.md".into(),
+            md_rel: "page.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        let body = chunks
+            .iter()
+            .find(|c| c.text.contains("Nội dung trang ba"))
+            .expect("body chunk");
+        assert_eq!(&markdown[body.start..body.end], body.text.as_str());
+        assert_eq!(body.page, Some(3));
+        assert_eq!(page_before(&markdown, body.start), Some(3));
+    }
+
+    #[test]
+    fn page_before_tolerates_non_char_boundary_offset() {
+        let markdown = "<!-- Page 2 -->\nệ chữ Việt";
+        // Byte 1 of "ệ" (U+ệ is 3 bytes after the marker prefix).
+        let ye_start = markdown.find('ệ').expect("glyph");
+        assert!(!markdown.is_char_boundary(ye_start + 1));
+        assert_eq!(page_before(markdown, ye_start + 1), Some(2));
+        assert_eq!(page_before(markdown, usize::MAX), Some(2));
+    }
+
+    #[test]
+    fn redact_pii_ignores_non_boundary_malformed_and_overlapping_spans() {
+        let markdown = "Liên hệ: a@b.co và ệ";
+        let email_start = markdown.find("a@b.co").unwrap();
+        let email_end = email_start + "a@b.co".len();
+        let ye = markdown.find('ệ').unwrap();
+        assert!(!markdown.is_char_boundary(ye + 1));
+        let findings = [
+            PiiFinding {
+                kind: PiiKind::Email,
+                text: "a@b.co".into(),
+                source_rel: "a.md".into(),
+                start: email_start,
+                end: email_end,
+                confidence: 1.0,
+            },
+            // Non-boundary span — must be ignored (no panic).
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "x".into(),
+                source_rel: "a.md".into(),
+                start: ye + 1,
+                end: ye + 2,
+                confidence: 1.0,
+            },
+            // Malformed start >= end — ignored.
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "x".into(),
+                source_rel: "a.md".into(),
+                start: 5,
+                end: 5,
+                confidence: 1.0,
+            },
+            // Overlaps the email span — ignored after primary redact.
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "@b".into(),
+                source_rel: "a.md".into(),
+                start: email_start + 1,
+                end: email_end - 1,
+                confidence: 1.0,
+            },
+        ];
+        let redacted = redact_pii(markdown, &findings);
+        assert!(redacted.contains("[REDACTED_Email]"));
+        assert!(redacted.contains('ệ'));
+        assert!(!redacted.contains("a@b.co"));
     }
 
     #[test]

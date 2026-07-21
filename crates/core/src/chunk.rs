@@ -17,8 +17,100 @@ pub struct Chunk {
 // serde chỉ dùng cho Serialize của Chunk — thêm dep nhẹ qua serde_json đã có.
 use serde::ser::Serialize as _;
 
+/// Chuẩn hoá mọi kiểu xuống dòng (`\r\n` / `\r`) về `\n` trước khi chunk.
+/// `chunk_markdown` luôn làm việc trên LF; caller định vị lại span trên nguồn gốc
+/// bằng [`locate_chunk_text`].
+pub fn normalize_newlines(md: &str) -> std::borrow::Cow<'_, str> {
+    if !md.as_bytes().contains(&b'\r') {
+        return std::borrow::Cow::Borrowed(md);
+    }
+    std::borrow::Cow::Owned(md.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+/// Clamp `offset` xuống char boundary gần nhất bên trái (hoặc 0).
+pub fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+/// Định vị `needle` (chunk text đã chuẩn LF) trong `haystack` gốc kể từ `cursor`.
+///
+/// `\n` trong needle khớp `\n`, `\r\n` hoặc `\r` trong haystack. Trả về
+/// `(start, end)` byte offset UTF-8-safe trên haystack, hoặc `None` nếu không thấy.
+pub fn locate_chunk_text(haystack: &str, cursor: usize, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return None;
+    }
+    let cursor = clamp_to_char_boundary(haystack, cursor.min(haystack.len()));
+
+    // Fast path: khớp nguyên văn (tài liệu LF).
+    if let Some(relative) = haystack[cursor..].find(needle) {
+        let start = cursor + relative;
+        let end = start + needle.len();
+        if haystack.is_char_boundary(start) && haystack.is_char_boundary(end) {
+            return Some((start, end));
+        }
+    }
+
+    // Slow path: needle LF khớp haystack CRLF/CR.
+    let hay_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut start = cursor;
+    while start < hay_bytes.len() {
+        if let Some(end) = match_lf_needle_at(hay_bytes, start, needle_bytes) {
+            if haystack.is_char_boundary(start) && haystack.is_char_boundary(end) {
+                return Some((start, end));
+            }
+        }
+        start = next_char_boundary(haystack, start + 1);
+    }
+    None
+}
+
+fn next_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset < text.len() && !text.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
+fn match_lf_needle_at(haystack: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    let mut hi = start;
+    let mut ni = 0usize;
+    while ni < needle.len() {
+        if needle[ni] == b'\n' {
+            if hi >= haystack.len() {
+                return None;
+            }
+            match haystack[hi] {
+                b'\n' => hi += 1,
+                b'\r' => {
+                    hi += 1;
+                    if hi < haystack.len() && haystack[hi] == b'\n' {
+                        hi += 1;
+                    }
+                }
+                _ => return None,
+            }
+            ni += 1;
+            continue;
+        }
+        if hi >= haystack.len() || haystack[hi] != needle[ni] {
+            return None;
+        }
+        hi += 1;
+        ni += 1;
+    }
+    Some(hi)
+}
+
 /// Chia markdown thành chunks ≤ `max_chars` (xấp xỉ — đo theo ký tự).
 pub fn chunk_markdown(md: &str, max_chars: usize) -> Vec<Chunk> {
+    let md = normalize_newlines(md);
     let max_chars = max_chars.max(200); // sàn tối thiểu hợp lý
                                         // 1) Gom thành section theo heading.
     let mut sections: Vec<(Vec<String>, String)> = Vec::new(); // (heading-path, body)
@@ -142,5 +234,36 @@ mod tests {
         let md = "# A\n\nbody a\n\n## B\n\nbody b\n\n# C\n\nbody c\n";
         let c = chunk_markdown(md, 1000);
         assert_eq!(c[2].heading, "C"); // không còn dính "A >"
+    }
+
+    #[test]
+    fn locate_chunk_text_matches_multiline_crlf_exactly() {
+        let md = "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu.\r\nDòng hai vẫn khớp.\r\n";
+        let chunks = chunk_markdown(md, 2_000);
+        assert_eq!(chunks.len(), 1);
+        let (start, end) = locate_chunk_text(md, 0, &chunks[0].text).expect("span");
+        assert_eq!(
+            &md[start..end],
+            "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
+        );
+        assert_eq!(normalize_newlines(&md[start..end]), chunks[0].text);
+    }
+
+    #[test]
+    fn locate_chunk_text_is_utf8_safe_for_vietnamese() {
+        let md = "# Mục\n\nNội dung có chữ ệ và ư.\n";
+        let chunks = chunk_markdown(md, 2_000);
+        let (start, end) = locate_chunk_text(md, 0, &chunks[0].text).expect("span");
+        assert!(md.is_char_boundary(start));
+        assert!(md.is_char_boundary(end));
+        assert_eq!(&md[start..end], chunks[0].text.as_str());
+    }
+
+    #[test]
+    fn clamp_to_char_boundary_backs_up_from_mid_glyph() {
+        let text = "ệ";
+        assert_eq!(text.len(), 3);
+        assert_eq!(clamp_to_char_boundary(text, 1), 0);
+        assert_eq!(clamp_to_char_boundary(text, 3), 3);
     }
 }

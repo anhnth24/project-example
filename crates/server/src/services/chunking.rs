@@ -1,6 +1,6 @@
 //! Pure markdown chunk preparation for indexing.
 
-use fileconv_core::chunk::chunk_markdown;
+use fileconv_core::chunk::{chunk_markdown, locate_chunk_text};
 use fileconv_core::intelligence::page_before;
 use fileconv_knowledge::citation::infer_source_anchor;
 use fileconv_knowledge::identity::{chunk_identity, BODY_TEXT_VERSION};
@@ -59,20 +59,12 @@ pub fn prepare_chunks(
             );
 
             // Định vị body trong Markdown gốc để lấy byte span + trang.
-            // Cùng thuật toán con trỏ với `fileconv_core::intelligence::build_corpus`
-            // để anchor server khớp desktop.
-            cursor = cursor.min(markdown.len());
-            while cursor < markdown.len() && !markdown.is_char_boundary(cursor) {
-                cursor += 1;
-            }
-            let start = markdown[cursor..]
-                .find(&chunk.text)
-                .map(|relative| cursor + relative)
-                .unwrap_or(cursor);
-            let mut end = (start + chunk.text.len()).min(markdown.len());
-            while end > start && !markdown.is_char_boundary(end) {
-                end -= 1;
-            }
+            // Cùng `locate_chunk_text` với `fileconv_core::intelligence::build_corpus`
+            // (khớp LF/CRLF, UTF-8-safe) để anchor server khớp desktop.
+            let (start, end) = match locate_chunk_text(markdown, cursor, &chunk.text) {
+                Some(span) => span,
+                None => (cursor, cursor),
+            };
             cursor = end;
 
             let page = page_before(markdown, start);
@@ -146,5 +138,27 @@ mod tests {
         // Non-xlsx không suy sheet.
         let not_sheet = prepare_chunks(document_id, version_id, sheet_md, "pdf");
         assert_eq!(not_sheet[0].sheet, None);
+    }
+
+    #[test]
+    fn prepare_chunks_multiline_crlf_span_matches_exact_quoted_content() {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let markdown = "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu.\r\nDòng hai vẫn khớp.\r\n";
+        let chunks = prepare_chunks(document_id, version_id, markdown, "");
+        let body = chunks
+            .iter()
+            .find(|chunk| chunk.body.contains("giữ dấu"))
+            .expect("body chunk");
+        let start = body.span_start as usize;
+        let end = body.span_end as usize;
+        assert!(markdown.is_char_boundary(start));
+        assert!(markdown.is_char_boundary(end));
+        assert_eq!(
+            &markdown[start..end],
+            "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
+        );
+        // Body giữ bản LF từ chunker; span trỏ đúng byte CRLF trên nguồn.
+        assert_eq!(body.body, "Hệ thống phải giữ dấu.\nDòng hai vẫn khớp.");
     }
 }
