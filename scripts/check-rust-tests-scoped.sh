@@ -51,6 +51,9 @@ for scope in "${ordered[@]}"; do
   case "$scope" in
     core)
       cargo test -p fileconv-core
+      # `audio` is off by default (keeps whisper.cpp out of server/knowledge builds);
+      # test it here so audio.rs stays covered when core changes.
+      cargo test -p fileconv-core --features audio
       cargo test -p fileconv-core --features llm llm
       ;;
     cli)

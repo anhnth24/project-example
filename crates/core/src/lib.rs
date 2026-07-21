@@ -9,8 +9,10 @@
 //!   - bỏ toàn bộ `println!` debug và dependency LLM nặng (rig-core/tokio).
 
 use std::path::{Path, PathBuf};
+#[cfg(feature = "audio")]
 use std::sync::OnceLock;
 
+#[cfg(feature = "audio")]
 pub mod audio;
 pub mod chunk;
 mod conv;
@@ -31,6 +33,7 @@ mod viet_legacy_maps;
 
 pub use probe::{probe, FileInfo};
 
+#[cfg(feature = "audio")]
 use audio::AudioEngine;
 
 /// Loại định dạng nhận diện được.
@@ -159,6 +162,7 @@ impl Default for ConverterOptions {
 /// nên convert nhiều file audio không phải load lại model.
 pub struct Converter {
     opts: ConverterOptions,
+    #[cfg(feature = "audio")]
     engine: OnceLock<AudioEngine>,
 }
 
@@ -176,11 +180,13 @@ impl Converter {
     pub fn with_options(opts: ConverterOptions) -> Self {
         Self {
             opts,
+            #[cfg(feature = "audio")]
             engine: OnceLock::new(),
         }
     }
 
     /// Lấy AudioEngine, load model một lần rồi cache lại.
+    #[cfg(feature = "audio")]
     fn engine(&self) -> Result<&AudioEngine, ConvertError> {
         if let Some(e) = self.engine.get() {
             return Ok(e);
@@ -220,10 +226,20 @@ impl Converter {
             FormatKind::Text => conv::text::to_markdown(path),
             FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
                 .map_err(|e| ConvertError::Failed(e.to_string())),
-            FormatKind::Audio => self
-                .engine()?
-                .transcribe_file(path, Some(&self.opts.audio_lang))
-                .map(|t| t.text),
+            FormatKind::Audio => {
+                #[cfg(feature = "audio")]
+                {
+                    self.engine()?
+                        .transcribe_file(path, Some(&self.opts.audio_lang))
+                        .map(|t| t.text)
+                }
+                #[cfg(not(feature = "audio"))]
+                {
+                    Err(ConvertError::Unsupported(
+                        "audio: build này không bật feature `audio`",
+                    ))
+                }
+            }
             FormatKind::Unknown => Err(ConvertError::Unsupported("không rõ đuôi file")),
         })?;
 
