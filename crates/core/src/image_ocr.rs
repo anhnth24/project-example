@@ -485,13 +485,48 @@ fn build_tesseract_psm_command(binary: &Path, path: &Path, langs: &str, psm: u8)
     cmd
 }
 
+/// Marker set only when `Command::output` for Tesseract returns `NotFound`.
+#[derive(Debug)]
+struct TesseractNotFoundError {
+    message: String,
+}
+
+impl std::fmt::Display for TesseractNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TesseractNotFoundError {}
+
+/// True only when the error was tagged at the Tesseract spawn-`NotFound` stage.
+pub fn error_is_tesseract_not_found(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<TesseractNotFoundError>())
+}
+
 fn run_tesseract_psm_with_binary(
     binary: &Path,
     path: &Path,
     langs: &str,
     psm: u8,
 ) -> io::Result<String> {
-    let output = build_tesseract_psm_command(binary, path, langs, psm).output()?;
+    let output = match build_tesseract_psm_command(binary, path, langs, psm).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                TesseractNotFoundError {
+                    message: format!(
+                        "không tìm thấy binary Tesseract ({}): {error}",
+                        binary.display()
+                    ),
+                },
+            ));
+        }
+        Err(error) => return Err(error),
+    };
 
     if !output.status.success() {
         return Err(io::Error::new(
