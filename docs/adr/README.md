@@ -30,6 +30,7 @@ native, security/egress và migration strategy.
 | [0010](0010-auth-session-lifecycle.md) | Accepted | Auth session lifecycle for Phase 1B |
 | [0011](0011-model-index-migration.md) | Accepted | Model and index migration lifecycle |
 | [0012](0012-backup-recovery-order.md) | Accepted | Backup and recovery authority/order |
+| [0013](0013-intelligence-durable-ids.md) | Accepted | Durable intelligence IDs (`sha256-v1`) and desktop rebuild |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.
