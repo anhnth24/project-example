@@ -1477,11 +1477,11 @@ mod tests {
         }
         let xref_at = out.len();
         out.push_str(&format!(
-            "xref\n0 {}\n0000000000 65535 f \n",
+            "xref\n0 {}\n0000000000 65535 f\r\n",
             objects.len() + 1
         ));
         for off in offsets {
-            out.push_str(&format!("{off:010} 00000 n \n"));
+            out.push_str(&format!("{off:010} 00000 n\r\n"));
         }
         out.push_str(&format!(
             "trailer\n<</Size {}/Root 1 0 R>>\nstartxref\n{xref_at}\n%%EOF\n",
@@ -1820,9 +1820,9 @@ mod tests {
         // Chống regression cho khóa serialize PDFium: nếu có nesting/lock-order
         // sai thì test này treo; nếu thiếu khóa thì đường chạy này chính là
         // kịch bản UB (watch-convert + convert tay đồng thời).
-        let dir = std::env::temp_dir();
-        let a_path = dir.join("fileconv_pdfium_lock_a.pdf");
-        let b_path = dir.join("fileconv_pdfium_lock_b.pdf");
+        let dir = tempfile::tempdir().expect("exclusive PDF fixture tempdir");
+        let a_path = dir.path().join("a.pdf");
+        let b_path = dir.path().join("b.pdf");
         std::fs::write(&a_path, minimal_pdf_bytes()).unwrap();
         std::fs::write(&b_path, minimal_pdf_bytes()).unwrap();
 
@@ -1846,8 +1846,6 @@ mod tests {
         } else {
             eprintln!("libpdfium không có — chỉ kiểm tra không deadlock, bỏ qua assert nội dung");
         }
-        let _ = std::fs::remove_file(&a_path);
-        let _ = std::fs::remove_file(&b_path);
     }
 
     #[test]
@@ -2057,11 +2055,15 @@ mod tests {
 
         // Force OCR spawn failure via injectable binary (no env mutation). Real
         // needs_ocr path must fall back to untrusted text → PartialSuccess.
-        let report = Converter::with_options(ConverterOptions {
-            pdf_ocr: true,
-            tesseract_binary: Some(missing_tesseract_bin()),
-            ..ConverterOptions::default()
-        })
+        let report = Converter::with_options_and_ocr_config(
+            ConverterOptions {
+                pdf_ocr: true,
+                ..ConverterOptions::default()
+            },
+            OcrRunConfig {
+                tesseract_binary: Some(missing_tesseract_bin()),
+            },
+        )
         .convert_path_detailed(&fixture)
         .expect("garbage text layer must recover as PartialSuccess, not hard-fail");
         assert_eq!(report.outcome(), ConversionOutcome::PartialSuccess);
@@ -2086,11 +2088,15 @@ mod tests {
             .map(|_| {
                 let path = std::sync::Arc::clone(&fixture);
                 std::thread::spawn(move || {
-                    Converter::with_options(ConverterOptions {
-                        pdf_ocr: true,
-                        tesseract_binary: Some(missing_tesseract_bin()),
-                        ..ConverterOptions::default()
-                    })
+                    Converter::with_options_and_ocr_config(
+                        ConverterOptions {
+                            pdf_ocr: true,
+                            ..ConverterOptions::default()
+                        },
+                        OcrRunConfig {
+                            tesseract_binary: Some(missing_tesseract_bin()),
+                        },
+                    )
                     .convert_path_detailed(path.as_path())
                     .expect("fixture convert")
                 })
@@ -2176,11 +2182,11 @@ mod tests {
         }
         let xref_at = out.len();
         out.push_str(&format!(
-            "xref\n0 {}\n0000000000 65535 f \n",
+            "xref\n0 {}\n0000000000 65535 f\r\n",
             objects.len() + 1
         ));
         for off in &offsets {
-            out.push_str(&format!("{off:010} 00000 n \n"));
+            out.push_str(&format!("{off:010} 00000 n\r\n"));
         }
         out.push_str(&format!(
             "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
@@ -2190,11 +2196,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("scan.pdf");
         std::fs::write(&path, out.as_bytes()).unwrap();
-        let err = Converter::with_options(ConverterOptions {
-            pdf_ocr: true,
-            tesseract_binary: Some(missing_tesseract_bin()),
-            ..ConverterOptions::default()
-        })
+        let err = Converter::with_options_and_ocr_config(
+            ConverterOptions {
+                pdf_ocr: true,
+                ..ConverterOptions::default()
+            },
+            OcrRunConfig {
+                tesseract_binary: Some(missing_tesseract_bin()),
+            },
+        )
         .convert_path_detailed(&path)
         .expect_err("scan + missing tesseract must hard-fail");
         assert_eq!(err.kind, ConvertErrorKind::DependencyMissing);

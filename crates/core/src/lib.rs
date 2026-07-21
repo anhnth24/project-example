@@ -38,6 +38,7 @@ pub use diagnostics::{
     ConversionOutcome, ConversionReport, ConversionWarning, ConversionWarningCode,
     ConvertErrorKind, DetailedConvertError, DetailedErrorDto,
 };
+pub use image_ocr::OcrRunConfig;
 pub use probe::{probe, FileInfo};
 
 #[cfg(feature = "audio")]
@@ -155,9 +156,6 @@ pub struct ConverterOptions {
     pub xlsx_sheet: Option<String>,
     /// Cắt Markdown ở tối đa N ký tự (kèm chú thích phần bị cắt). None = không cắt.
     pub max_chars: Option<usize>,
-    /// Override Tesseract binary for this conversion (injectable; no env mutation).
-    /// `None` uses `FILECONV_TESSERACT` / default `tesseract`.
-    pub tesseract_binary: Option<PathBuf>,
 }
 
 impl Default for ConverterOptions {
@@ -174,7 +172,6 @@ impl Default for ConverterOptions {
             pdf_pages: None,
             xlsx_sheet: None,
             max_chars: None,
-            tesseract_binary: None,
         }
     }
 }
@@ -183,6 +180,7 @@ impl Default for ConverterOptions {
 /// nên convert nhiều file audio không phải load lại model.
 pub struct Converter {
     opts: ConverterOptions,
+    ocr_config: OcrRunConfig,
     #[cfg(feature = "audio")]
     engine: OnceLock<AudioEngine>,
 }
@@ -199,8 +197,17 @@ impl Converter {
     }
 
     pub fn with_options(opts: ConverterOptions) -> Self {
+        Self::with_options_and_ocr_config(opts, OcrRunConfig::default())
+    }
+
+    /// Build a converter with additive, explicitly threaded OCR process overrides.
+    ///
+    /// Keeping this configuration separate preserves the exact legacy
+    /// [`ConverterOptions`] shape for exhaustive downstream struct literals.
+    pub fn with_options_and_ocr_config(opts: ConverterOptions, ocr_config: OcrRunConfig) -> Self {
         Self {
             opts,
+            ocr_config,
             #[cfg(feature = "audio")]
             engine: OnceLock::new(),
         }
@@ -292,9 +299,6 @@ impl Converter {
         path: &Path,
         format: FormatKind,
     ) -> Result<MarkdownOutput, DetailedConvertError> {
-        let ocr_config = image_ocr::OcrRunConfig {
-            tesseract_binary: self.opts.tesseract_binary.clone(),
-        };
         match format {
             FormatKind::Pdf => conv::pdf::to_markdown_detailed(
                 path,
@@ -302,7 +306,7 @@ impl Converter {
                 self.opts.pdf_ocr,
                 self.opts.pdf_ocr_images,
                 self.opts.pdf_pages.as_deref(),
-                &ocr_config,
+                &self.ocr_config,
             ),
             FormatKind::Docx => conv::docx::to_markdown(path)
                 .map(MarkdownOutput::clean)
@@ -323,7 +327,7 @@ impl Converter {
                 .map(MarkdownOutput::clean)
                 .map_err(DetailedConvertError::from_convert),
             FormatKind::Image => {
-                image_ocr::ocr_image_detailed(path, &self.opts.ocr_langs, &ocr_config)
+                image_ocr::ocr_image_detailed(path, &self.opts.ocr_langs, &self.ocr_config)
                     .map(MarkdownOutput::clean)
                     .map_err(image_ocr::OcrAttemptError::to_detailed)
             }
@@ -366,6 +370,23 @@ fn title_from_markdown(markdown: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_converter_options_exhaustive_literal_still_compiles() {
+        let _ = ConverterOptions {
+            ocr_langs: "vie+eng".to_string(),
+            ocr_engine: image_ocr::OcrEngine::Tesseract,
+            whisper_model: None,
+            audio_lang: "vi".to_string(),
+            audio_threads: 4,
+            audio_no_speech_threshold: 0.6,
+            pdf_ocr: true,
+            pdf_ocr_images: false,
+            pdf_pages: None,
+            xlsx_sheet: None,
+            max_chars: None,
+        };
+    }
 
     /// Tài liệu chứa tiếng Việt dạng NFD (dấu rời) phải ra NFC sau convert.
     #[test]
