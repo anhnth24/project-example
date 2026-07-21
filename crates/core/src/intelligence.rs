@@ -7,9 +7,11 @@
 //!
 //! Persisted chunk/table/handoff IDs use [`INTELLIGENCE_ID_SCHEME`] (`sha256-v1`):
 //! length-delimited SHA-256 with per-purpose domains. Visible IDs embed the
-//! scheme; desktop knowledge stores persist the same scheme in index metadata
-//! and atomically rebuild SQLite/FTS/HNSW on mismatch. ADR 0006 server index
-//! signatures / knowledge chunk identity remain a separate contract.
+//! scheme; desktop knowledge stores persist the same scheme in SQLite metadata
+//! and HNSW manifests. SQLite/FTS wipe is transactional; HNSW clear/rebuild is
+//! separate and best-effort (ADR 0013) — stale ANN is rejected by scheme, not
+//! by cross-store atomicity. ADR 0006 server index signatures / knowledge chunk
+//! identity remain a separate contract.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
@@ -33,8 +35,10 @@ const DEFAULT_CHUNK_CHARS: usize = 2_000;
 /// Integers use fixed-width `u64` BE bytes. No `std::hash::Hash` serialization.
 ///
 /// Migration: not compatible with historical `DefaultHasher` or interim
-/// `sip13-v1` digests. Desktop indexes missing this scheme rebuild atomically
-/// (see ADR 0013). ADR 0006 server identity is out of scope.
+/// `sip13-v1` digests. Desktop indexes missing this scheme wipe SQLite/FTS in
+/// one transaction and best-effort clear/rebuild HNSW separately (ADR 0013);
+/// scheme-gated ANN + exact cosine cover clear/rebuild failures. ADR 0006
+/// server identity is out of scope.
 pub const INTELLIGENCE_ID_SCHEME: &str = "sha256-v1";
 
 /// Handoff pack JSON schema that carries [`INTELLIGENCE_ID_SCHEME`].
