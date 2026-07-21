@@ -1379,6 +1379,7 @@ const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
     ("dien thoai", ExplicitLabel::Phone),
     ("cccd so", ExplicitLabel::NationalId),
     ("cmnd so", ExplicitLabel::NationalId),
+    ("can cuoc so", ExplicitLabel::NationalId),
     ("can cuoc", ExplicitLabel::NationalId),
     ("tai khoan", ExplicitLabel::Bank),
     ("hotline", ExplicitLabel::Phone),
@@ -1392,33 +1393,64 @@ const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
     ("stk", ExplicitLabel::Bank),
 ];
 
-/// Conjunctions / competing field keys in the qualifier before `:/=` act as clause
-/// breaks (e.g. closed-account prose + `mã giao dịch`).
+/// Competing field keys (folded) — not bare conjunctions like `và` (joint owners).
+const COMPETING_FIELD_KEYS: &[&str] = &[
+    "ma giao dich",
+    "ma gd",
+    "so tham chieu",
+    "ma tham chieu",
+    "so dien thoai",
+    "dien thoai",
+    "hotline",
+    "mobile",
+    "phone",
+    "sdt",
+    "tel",
+    "cccd",
+    "cmnd",
+    "stk",
+    "so tk",
+];
+
+/// Match `needle` in `haystack` with Unicode alphanumeric token borders so
+/// `(mã giao dịch)`, `/mã giao dịch`, and `—mã giao dịch` all count.
+fn contains_token_phrase(haystack: &str, needle: &str) -> bool {
+    let mut base = 0usize;
+    while base < haystack.len() {
+        let Some(rel) = haystack[base..].find(needle) else {
+            break;
+        };
+        let start = base + rel;
+        let end = start + needle.len();
+        let before_ok = start == 0
+            || !haystack[..start]
+                .chars()
+                .last()
+                .map(|ch| ch.is_alphanumeric())
+                .unwrap_or(false);
+        let after_ok = end >= haystack.len()
+            || !haystack[end..]
+                .chars()
+                .next()
+                .map(|ch| ch.is_alphanumeric())
+                .unwrap_or(false);
+        if before_ok && after_ok {
+            return true;
+        }
+        base = start + 1;
+        while base < haystack.len() && !haystack.is_char_boundary(base) {
+            base += 1;
+        }
+    }
+    false
+}
+
+/// Competing field keys in the qualifier before `:/=` break the field link
+/// (e.g. closed-account prose + `mã giao dịch`). Bare `và` alone does not.
 fn between_has_soft_clause_break(before_sep: &str) -> bool {
-    // Folded ASCII phrases; match as whole tokens via non-alphanumeric borders.
-    const BREAKS: &[&str] = &[
-        " va ",
-        " hoac ",
-        " nhung ",
-        " nhung ma ",
-        " ma giao dich",
-        " ma gd",
-        " so tham chieu",
-        " ma tham chieu",
-        " so dien thoai",
-        " dien thoai",
-        " hotline",
-        " mobile",
-        " phone",
-        " sdt",
-        " tel",
-        " cccd",
-        " cmnd",
-        " stk",
-        " so tk",
-    ];
-    let padded = format!(" {before_sep} ");
-    BREAKS.iter().any(|needle| padded.contains(needle))
+    COMPETING_FIELD_KEYS
+        .iter()
+        .any(|key| contains_token_phrase(before_sep, key))
 }
 
 fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
@@ -1480,7 +1512,7 @@ fn field_value_link(between: &str) -> bool {
     }
     let before = trimmed[..sep_at].trim();
     // Strong `:/=` bind: allow a longer qualifier, still no nested clause punctuation
-    // or soft breaks (`và`, `mã giao dịch`, competing `SĐT` / `STK` keys, …).
+    // or competing field keys (`mã giao dịch`, `SĐT`, `STK`, …). Bare `và` is fine.
     before.chars().count() <= 48
         && !before
             .chars()

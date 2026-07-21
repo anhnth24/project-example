@@ -666,11 +666,23 @@ fn pii_compound_aliases_cmnd_cccd_stk_variants() {
     let cccd = detect_pii(&[doc("cccd-full.md", "Căn cước công dân số 001234567890")]);
     assert_single_span(&cccd, PiiKind::NationalId, "001234567890");
 
+    let can_cuoc_so = detect_pii(&[doc("can-cuoc-so.md", "Căn cước số 001234567890")]);
+    assert_single_span(&can_cuoc_so, PiiKind::NationalId, "001234567890");
+
     let stk = detect_pii(&[doc("stk-nh.md", "STK ngân hàng 123456789012")]);
     assert_single_span(&stk, PiiKind::BankAccount, "123456789012");
 
     let so_tk = detect_pii(&[doc("so-tk.md", "Số TK ngân hàng 1234-5678-9012")]);
     assert_single_span(&so_tk, PiiKind::BankAccount, "1234-5678-9012");
+}
+
+#[test]
+fn pii_joint_owner_va_still_binds_account() {
+    let report = detect_pii(&[doc(
+        "joint.md",
+        "Tài khoản của Nguyễn A và Trần B: 123456789012",
+    )]);
+    assert_single_span(&report, PiiKind::BankAccount, "123456789012");
 }
 
 #[test]
@@ -681,7 +693,7 @@ fn pii_conjunction_and_competing_keys_block_closed_account_prose() {
     )]);
     assert!(
         !closed.counts.contains_key(&PiiKind::BankAccount),
-        "và/mã giao dịch must break bank link: {:?}",
+        "mã giao dịch must break bank link: {:?}",
         closed.findings
     );
 
@@ -703,6 +715,23 @@ fn pii_conjunction_and_competing_keys_block_closed_account_prose() {
         binder_compete.findings
     );
     assert_eq!(binder_compete.counts.get(&PiiKind::Phone), Some(&1));
+}
+
+#[test]
+fn pii_competing_keys_match_across_punctuation_wrappers() {
+    for (name, markdown) in [
+        ("parens", "Tài khoản đã đóng (mã giao dịch): 123456789012"),
+        ("slash", "Tài khoản đã đóng /mã giao dịch: 123456789012"),
+        ("em-dash", "Tài khoản đã đóng —mã giao dịch: 123456789012"),
+        ("en-dash", "Tài khoản đã đóng –mã giao dịch: 123456789012"),
+    ] {
+        let report = detect_pii(&[doc(name, markdown)]);
+        assert!(
+            !report.counts.contains_key(&PiiKind::BankAccount),
+            "{name} competing key must break bank link: {:?}",
+            report.findings
+        );
+    }
 }
 
 #[test]
