@@ -359,13 +359,7 @@ fn convert_sources(
             .map(|(index, source)| {
                 (
                     index,
-                    convert_source(
-                        source,
-                        originals,
-                        markdown_root,
-                        &converter,
-                        reuse_markdown,
-                    ),
+                    convert_source(source, originals, markdown_root, &converter, reuse_markdown),
                 )
             })
             .collect::<Vec<_>>()
