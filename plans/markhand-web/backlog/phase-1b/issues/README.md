@@ -205,10 +205,18 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
+- **Status:** Review — services `{citation,preview,download}` + bounded `BlobStore`/
+  `MemoryBlobStore`; citation quotes from trusted Markdown spans; original download
+  uses reconciliation parent-source metadata; exact citation ignores index generation
+  activity; live PG + memory-store acceptance in `tests/citation_preview_download.rs`.
+  Mark Done after coordinator review/merge.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
-- **Files:** `services/{citation,preview,download}.rs`, document routes.
+- **Files:** `services/{citation,preview,download}.rs`, `routes/documents.rs`,
+  `storage/blob.rs`, `db/{search,download_capabilities}.rs`,
+  `migrations/0018_expand_download_capabilities.sql`,
+  `migrations/0019_expand_download_capability_clock.sql`.
 - **Depends:** F05/F06/R01.
 - **Acceptance/tests:** Quote/hash/version/anchor valid; historical permission + fresh
   ACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,

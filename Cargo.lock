@@ -2121,6 +2121,7 @@ dependencies = [
  "fileconv-knowledge",
  "futures",
  "hex",
+ "http-body",
  "http-body-util",
  "image",
  "jsonwebtoken",

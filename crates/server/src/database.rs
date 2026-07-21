@@ -74,6 +74,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0017_expand_qa_history_permission.sql",
         include_str!("../migrations/0017_expand_qa_history_permission.sql"),
     ),
+    (
+        "0018_expand_download_capabilities.sql",
+        include_str!("../migrations/0018_expand_download_capabilities.sql"),
+    ),
+    (
+        "0019_expand_download_capability_clock.sql",
+        include_str!("../migrations/0019_expand_download_capability_clock.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -294,5 +302,19 @@ mod tests {
             .1;
         assert!(source.contains("'pending', 'writing', 'cleaned', 'committed'"));
         assert!(source.contains("status = 'committed'"));
+    }
+
+    #[test]
+    fn download_capabilities_have_mandatory_tenant_rls() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0018_expand_download_capabilities.sql")
+            .expect("download capabilities migration")
+            .1;
+        let table = "download_capabilities";
+        assert!(source.contains(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")));
+        assert!(source.contains(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")));
+        assert!(source.contains(&format!("CREATE POLICY {table}_org_isolation ON {table}")));
+        assert!(source.contains("purpose IN ('original', 'markdown')"));
     }
 }

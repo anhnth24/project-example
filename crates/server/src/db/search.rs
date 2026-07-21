@@ -448,6 +448,269 @@ pub async fn hydrate_chunks_by_identity(
     rows.iter().map(map_hydrated_chunk).collect()
 }
 
+/// Authorized document version row for citation resolve / preview / download.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthorizedVersionRow {
+    pub org_id: Uuid,
+    pub collection_id: Uuid,
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub version_number: i32,
+    pub parent_version_id: Option<Uuid>,
+    /// Version row hash (Markdown hash after promotion — not original upload).
+    pub content_sha256: String,
+    pub original_object_key: String,
+    pub markdown_object_key: Option<String>,
+    pub markdown_artifact_key: Option<String>,
+    pub markdown_artifact_sha256: Option<String>,
+    pub markdown_artifact_content_type: Option<String>,
+    pub markdown_artifact_byte_size: Option<i64>,
+    pub source_filename: Option<String>,
+    pub source_content_type: Option<String>,
+    pub byte_size: Option<i64>,
+    pub document_state: DocumentState,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub publication_state: PublicationState,
+    pub is_current: bool,
+    pub effective_from: DateTime<Utc>,
+    pub effective_to: Option<DateTime<Utc>>,
+}
+
+/// Immutable Markdown artifact required for citation quote verification / preview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedMarkdownArtifact {
+    pub object_key: String,
+    pub content_sha256: String,
+    pub content_type: String,
+    pub byte_size: u64,
+}
+
+/// Fresh-authorized chunk load by id for citation resolve (ADR 0002).
+///
+/// Exact citation resolve does **not** require the chunk's index generation to
+/// still be active (cutover/retired generations remain citeable). Fresh ACL,
+/// membership, document state and published version checks still apply.
+pub async fn hydrate_chunk_for_citation(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    chunk_id: Uuid,
+) -> Result<Option<HydratedChunkRow>, DbError> {
+    let row = txn
+        .query_opt(
+            "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
+                    c.document_id, c.version_id, dv.version_number, dv.content_sha256,
+                    c.heading_path, c.body, c.page, c.slide, c.sheet,
+                    c.span_start, c.span_end, d.state, d.deleted_at,
+                    dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
+                    c.index_metadata_id, im.is_active, im.state AS index_state
+             FROM chunks c
+             JOIN documents d
+               ON d.org_id = c.org_id AND d.id = c.document_id
+             JOIN document_versions dv
+               ON dv.org_id = c.org_id
+              AND dv.document_id = c.document_id
+              AND dv.id = c.version_id
+             JOIN index_metadata im
+               ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+             WHERE c.org_id = $1
+               AND c.id = $2
+               AND EXISTS (
+                 SELECT 1
+                 FROM collections acl_c
+                 JOIN org_memberships acl_m
+                   ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $3
+                 JOIN users acl_u ON acl_u.id = acl_m.user_id
+                 JOIN roles acl_r
+                   ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                 JOIN role_permissions acl_rp
+                   ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                 JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                 WHERE acl_c.org_id = d.org_id
+                   AND acl_c.id = d.collection_id
+                   AND acl_c.deleted_at IS NULL
+                   AND acl_u.disabled_at IS NULL
+                   AND acl_p.code = CASE WHEN dv.is_current THEN 'qa.query' ELSE 'qa.history' END
+                   AND EXISTS (
+                     SELECT 1
+                     FROM role_permissions query_rp
+                     JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                     WHERE query_rp.org_id = acl_r.org_id
+                       AND query_rp.role_id = acl_r.id
+                       AND query_p.code = 'qa.query'
+                   )
+                   AND (
+                     acl_c.visibility = 'org'
+                     OR acl_c.owner_user_id = $3
+                     OR EXISTS (
+                       SELECT 1 FROM collection_user_access cua
+                       WHERE cua.org_id = acl_c.org_id
+                         AND cua.collection_id = acl_c.id
+                         AND cua.user_id = $3
+                     )
+                   )
+               )
+               AND d.deleted_at IS NULL
+               AND d.state = 'indexed'
+               AND dv.publication_state = 'published'",
+            &[&ctx.org_id(), &chunk_id, &ctx.user_id()],
+        )
+        .await?;
+    row.map(|row| map_hydrated_chunk(&row)).transpose()
+}
+
+/// Fresh-authorized version load for trusted Markdown preview / download mint.
+pub async fn load_authorized_version_for_read(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<Option<AuthorizedVersionRow>, DbError> {
+    let kind = "markdown";
+    let row = txn
+        .query_opt(
+            "SELECT d.org_id, d.collection_id, d.id AS document_id, dv.id AS version_id,
+                    dv.version_number, dv.parent_version_id, dv.content_sha256,
+                    dv.original_object_key, dv.markdown_object_key,
+                    da.object_key AS markdown_artifact_key,
+                    da.content_sha256 AS markdown_artifact_sha256,
+                    da.content_type AS markdown_artifact_content_type,
+                    da.byte_size AS markdown_artifact_byte_size,
+                    dv.source_filename, dv.source_content_type, dv.byte_size,
+                    d.state, d.deleted_at, dv.publication_state, dv.is_current,
+                    dv.effective_from, dv.effective_to
+             FROM documents d
+             JOIN document_versions dv
+               ON dv.org_id = d.org_id
+              AND dv.document_id = d.id
+              AND dv.id = $3
+             LEFT JOIN derived_artifacts da
+               ON da.org_id = dv.org_id
+              AND da.version_id = dv.id
+              AND da.artifact_kind = $4
+             WHERE d.org_id = $1
+               AND d.id = $2
+               AND EXISTS (
+                 SELECT 1
+                 FROM collections acl_c
+                 JOIN org_memberships acl_m
+                   ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
+                 JOIN users acl_u ON acl_u.id = acl_m.user_id
+                 JOIN roles acl_r
+                   ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                 JOIN role_permissions acl_rp
+                   ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                 JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                 WHERE acl_c.org_id = d.org_id
+                   AND acl_c.id = d.collection_id
+                   AND acl_c.deleted_at IS NULL
+                   AND acl_u.disabled_at IS NULL
+                   AND acl_p.code = CASE WHEN dv.is_current THEN 'qa.query' ELSE 'qa.history' END
+                   AND EXISTS (
+                     SELECT 1
+                     FROM role_permissions query_rp
+                     JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                     WHERE query_rp.org_id = acl_r.org_id
+                       AND query_rp.role_id = acl_r.id
+                       AND query_p.code = 'qa.query'
+                   )
+                   AND (
+                     acl_c.visibility = 'org'
+                     OR acl_c.owner_user_id = $5
+                     OR EXISTS (
+                       SELECT 1 FROM collection_user_access cua
+                       WHERE cua.org_id = acl_c.org_id
+                         AND cua.collection_id = acl_c.id
+                         AND cua.user_id = $5
+                     )
+                   )
+               )
+               AND d.deleted_at IS NULL
+               AND d.state = 'indexed'
+               AND dv.publication_state = 'published'",
+            &[
+                &ctx.org_id(),
+                &document_id,
+                &version_id,
+                &kind,
+                &ctx.user_id(),
+            ],
+        )
+        .await?;
+    row.map(|row| map_authorized_version(&row)).transpose()
+}
+
+/// Fail-closed Markdown artifact identity (derived artifact key/hash/type/size).
+pub fn trusted_markdown_artifact(
+    row: &AuthorizedVersionRow,
+) -> Result<TrustedMarkdownArtifact, DbError> {
+    let object_key = row
+        .markdown_artifact_key
+        .as_deref()
+        .ok_or_else(|| DbError::Config("markdown_artifact_missing".into()))?;
+    let content_sha256 = row
+        .markdown_artifact_sha256
+        .as_deref()
+        .ok_or_else(|| DbError::Config("markdown_artifact_hash_missing".into()))?;
+    let content_type = row
+        .markdown_artifact_content_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("text/markdown; charset=utf-8");
+    let byte_size = row
+        .markdown_artifact_byte_size
+        .ok_or_else(|| DbError::Config("markdown_artifact_size_missing".into()))?;
+    let byte_size = u64::try_from(byte_size)
+        .map_err(|_| DbError::Config("markdown_artifact_size_invalid".into()))?;
+    if byte_size == 0 {
+        return Err(DbError::Config("markdown_artifact_size_invalid".into()));
+    }
+    Ok(TrustedMarkdownArtifact {
+        object_key: object_key.to_string(),
+        content_sha256: content_sha256.to_string(),
+        content_type: content_type.to_string(),
+        byte_size,
+    })
+}
+
+fn map_authorized_version(row: &Row) -> Result<AuthorizedVersionRow, DbError> {
+    let state: String = row.get("state");
+    let document_state = DocumentState::parse(&state).map_err(DbError::Config)?;
+    let publication_state: String = row.get("publication_state");
+    let publication_state = match publication_state.as_str() {
+        "draft" => PublicationState::Draft,
+        "published" => PublicationState::Published,
+        other => {
+            return Err(DbError::Config(format!(
+                "unknown publication state: {other}"
+            )));
+        }
+    };
+    Ok(AuthorizedVersionRow {
+        org_id: row.get("org_id"),
+        collection_id: row.get("collection_id"),
+        document_id: row.get("document_id"),
+        version_id: row.get("version_id"),
+        version_number: row.get("version_number"),
+        parent_version_id: row.get("parent_version_id"),
+        content_sha256: row.get("content_sha256"),
+        original_object_key: row.get("original_object_key"),
+        markdown_object_key: row.get("markdown_object_key"),
+        markdown_artifact_key: row.get("markdown_artifact_key"),
+        markdown_artifact_sha256: row.get("markdown_artifact_sha256"),
+        markdown_artifact_content_type: row.get("markdown_artifact_content_type"),
+        markdown_artifact_byte_size: row.get("markdown_artifact_byte_size"),
+        source_filename: row.get("source_filename"),
+        source_content_type: row.get("source_content_type"),
+        byte_size: row.get("byte_size"),
+        document_state,
+        deleted_at: row.get("deleted_at"),
+        publication_state,
+        is_current: row.get("is_current"),
+        effective_from: row.get("effective_from"),
+        effective_to: row.get("effective_to"),
+    })
+}
+
 /// Loads conflict evidence only when both claim sides remain authorized and
 /// published under the resolved version visibility.
 pub async fn load_authorized_conflict_evidence(

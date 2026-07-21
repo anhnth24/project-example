@@ -1255,6 +1255,23 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
                 "created_at",
             ],
         ),
+        (
+            "download_capabilities",
+            &[
+                "id",
+                "org_id",
+                "user_id",
+                "document_id",
+                "version_id",
+                "purpose",
+                "content_sha256",
+                "content_type",
+                "byte_size",
+                "expires_at",
+                "consumed_at",
+                "created_at",
+            ],
+        ),
     ]
 }
 
