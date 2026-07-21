@@ -189,10 +189,11 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
+- **Status:** done
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
-- **Files:** `services/retrieval/{vector,fts,hydrate}.rs`, `db/search.rs`.
+- **Files:** `services/retrieval/{mod,vector,fts,hydrate}.rs`, `db/search.rs`.
 - **Depends:** F04/F06/I06 + G0-RET/G1A.
 - **Acceptance/tests:** Empty scope deny; stale vector no text; current không trả
   superseded version; as-of resolve đúng effective version; compare/history cùng

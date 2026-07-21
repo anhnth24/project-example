@@ -12,4 +12,5 @@ pub mod indexing;
 pub mod promotion;
 pub mod quota;
 pub mod reconciliation;
+pub mod retrieval;
 pub mod upload;
