@@ -776,7 +776,34 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
     }
 }
 
-/// Conservative email shape: reject price/version tokens like `price@100.00`.
+/// PII recall policy (conservative, Vietnamese-document oriented):
+///
+/// - **Spans** are exact candidate bytes (email / phone / number run), never the
+///   surrounding whitespace token, Markdown table pipes, link wrappers, or labels.
+/// - **Email**: allow numeric locals (`123@x.com`); reject `price@100.00`, leading /
+///   trailing / consecutive local dots, and domain labels with leading/trailing `-`.
+/// - **Phone**: validate against explicit VN mobile + landline prefix/length tables
+///   after normalizing `+84` / optional `(0)`; accept grouped digits with spaces /
+///   dashes / parentheses; reject invalid `030…` and arbitrary bare digit runs.
+/// - **Bank**: only with nearest explicit label (`STK` / `Số TK` / `tài khoản` / …)
+///   and account-length digit groups; bare `ngân hàng` prose does **not** classify
+///   transaction counts. Nearest explicit `SĐT` / phone label beats bank/generic.
+/// - **CCCD/CMND**: only with nearest identity label (9 or 12 digits).
+/// - Bare valid VN mobiles/landlines remain in recall; exotic/foreign numbers,
+///   unlabeled account-like runs, and invalid prefixes are out of scope (precision).
+///
+/// Redaction keeps UTF-8 boundary checks, stale `finding.text` equality, and
+/// overlapping/crossing span coalescing.
+
+fn is_email_local_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '%' | '+' | '-')
+}
+
+fn is_email_domain_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-')
+}
+
+/// Conservative email shape on an exact `local@domain` candidate.
 fn looks_like_email(token: &str) -> bool {
     let Some((local, domain)) = token.split_once('@') else {
         return false;
@@ -790,11 +817,14 @@ fn looks_like_email(token: &str) -> bool {
     {
         return false;
     }
-    let local_ok = local
+    // Numeric locals are valid; reject leading/trailing/consecutive dots.
+    if !(local
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '%' | '+' | '-'))
-        && local.chars().any(|ch| ch.is_ascii_alphabetic());
-    if !local_ok {
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains(".."))
+    {
         return false;
     }
     let labels: Vec<&str> = domain.split('.').collect();
@@ -807,6 +837,8 @@ fn looks_like_email(token: &str) -> bool {
     }
     labels.iter().all(|label| {
         !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
             && label
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
@@ -814,82 +846,432 @@ fn looks_like_email(token: &str) -> bool {
     })
 }
 
-/// VN mobile national number after stripping leading `0` or country `84`.
-/// Keeps common 03x/05x/07x/08x/09x mobiles; rejects arbitrary 10-digit runs.
-fn looks_like_vn_mobile_national(national: &str) -> bool {
-    if national.len() != 9 || !national.chars().all(|ch| ch.is_ascii_digit()) {
+fn email_candidate_at(text: &str, at: usize) -> Option<(usize, usize)> {
+    if !text.is_char_boundary(at) || !text[at..].starts_with('@') {
+        return None;
+    }
+    let mut start = at;
+    for (idx, ch) in text[..at].char_indices().rev() {
+        if is_email_local_char(ch) {
+            start = idx;
+        } else {
+            break;
+        }
+    }
+    if start == at {
+        return None;
+    }
+    let mut end = at + 1;
+    for (rel, ch) in text[at + 1..].char_indices() {
+        if is_email_domain_char(ch) {
+            end = at + 1 + rel + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    // Drop a trailing '.' that is punctuation, not part of the domain.
+    while end > at + 1 && text[..end].ends_with('.') {
+        end -= 1;
+    }
+    let candidate = text.get(start..end)?;
+    if looks_like_email(candidate) {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+fn scan_emails(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if text.as_bytes()[i] == b'@' {
+            if let Some((start, end)) = email_candidate_at(text, i) {
+                // Prefer longer locals if overlapping; skip nested `@` inside span.
+                if out
+                    .last()
+                    .map(|&(_, prev_end)| start >= prev_end)
+                    .unwrap_or(true)
+                {
+                    out.push((start, end));
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+        while i < text.len() && !text.is_char_boundary(i) {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Explicit VN mobile prefixes in national form with leading `0` (length 10).
+const VN_MOBILE_PREFIXES: &[&str] = &[
+    "032", "033", "034", "035", "036", "037", "038", "039", "052", "056", "058", "059", "070",
+    "076", "077", "078", "079", "081", "082", "083", "084", "085", "086", "088", "089", "090",
+    "091", "092", "093", "094", "095", "096", "097", "098", "099",
+];
+
+/// 2-digit geographic area codes (after trunk `0`): Hanoi / HCMC.
+const VN_LANDLINE_AREA_2: &[&str] = &["24", "28"];
+
+/// 3-digit geographic area codes (after trunk `0`). `030` is intentionally absent.
+const VN_LANDLINE_AREA_3: &[&str] = &[
+    "203", "204", "205", "206", "207", "208", "209", "210", "211", "212", "213", "214", "215",
+    "216", "218", "219", "220", "221", "222", "225", "226", "227", "228", "229", "232", "233",
+    "234", "235", "236", "237", "238", "239", "251", "252", "254", "255", "256", "257", "258",
+    "259", "260", "261", "262", "263", "269", "270", "271", "272", "273", "274", "275", "276",
+    "277", "290", "291", "292", "293", "294", "296", "297", "299",
+];
+
+fn normalize_vn_phone_digits(digits: &str) -> Option<String> {
+    if !digits.chars().all(|ch| ch.is_ascii_digit()) || digits.is_empty() {
+        return None;
+    }
+    if digits.starts_with("840") && digits.len() >= 12 {
+        // +84 (0) … → national with trunk 0
+        Some(format!("0{}", &digits[3..]))
+    } else if digits.starts_with("84") && digits.len() >= 11 {
+        Some(format!("0{}", &digits[2..]))
+    } else if digits.starts_with('0') {
+        Some(digits.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_vn_mobile_national0(national0: &str) -> bool {
+    national0.len() == 10
+        && VN_MOBILE_PREFIXES
+            .iter()
+            .any(|prefix| national0.starts_with(prefix))
+}
+
+fn is_vn_landline_national0(national0: &str) -> bool {
+    if !national0.starts_with('0') || national0.starts_with("030") {
         return false;
     }
-    matches!(national.as_bytes()[0], b'3' | b'5' | b'7' | b'8' | b'9')
-}
-
-fn looks_like_vn_phone(digits: &str) -> bool {
-    if digits.len() == 10 && digits.starts_with('0') {
-        looks_like_vn_mobile_national(&digits[1..])
-    } else if digits.len() == 11 && digits.starts_with("84") {
-        looks_like_vn_mobile_national(&digits[2..])
-    } else {
-        false
+    let rest = &national0[1..];
+    for area in VN_LANDLINE_AREA_2 {
+        if let Some(subscriber) = rest.strip_prefix(area) {
+            // 0 + 2-digit area + 7..=8 subscriber → length 10..=11
+            return (7..=8).contains(&subscriber.len())
+                && subscriber.chars().all(|ch| ch.is_ascii_digit())
+                && (10..=11).contains(&national0.len());
+        }
     }
+    for area in VN_LANDLINE_AREA_3 {
+        if let Some(subscriber) = rest.strip_prefix(area) {
+            // 0 + 3-digit area + 6..=7 subscriber → length 10..=11
+            return (6..=7).contains(&subscriber.len())
+                && subscriber.chars().all(|ch| ch.is_ascii_digit())
+                && (10..=11).contains(&national0.len());
+        }
+    }
+    false
 }
 
-fn line_has_national_id_context(lower: &str) -> bool {
-    lower.contains("cccd") || lower.contains("cmnd") || lower.contains("can cuoc")
+fn looks_like_vn_phone_digits(digits: &str) -> bool {
+    let Some(national0) = normalize_vn_phone_digits(digits) else {
+        return false;
+    };
+    is_vn_mobile_national0(&national0) || is_vn_landline_national0(&national0)
 }
 
-fn line_has_bank_context(lower: &str) -> bool {
-    lower.contains("tai khoan") || lower.contains("ngan hang")
+fn is_phone_separator(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '-' | '.' | '(' | ')')
+}
+
+/// Consume a phone-shaped candidate starting at `chars[start_idx]`.
+/// Returns exclusive char-index end and collected digits.
+fn consume_phone_candidate(chars: &[(usize, char)], start_idx: usize) -> Option<(usize, String)> {
+    let mut idx = start_idx;
+    let mut digits = String::new();
+    let mut last_was_digit = false;
+    if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
+        idx += 1;
+    }
+    while idx < chars.len() {
+        let ch = chars[idx].1;
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            last_was_digit = true;
+            idx += 1;
+            if digits.len() > 15 {
+                return None;
+            }
+        } else if is_phone_separator(ch) {
+            // Separators only between / around digit groups; keep scanning.
+            idx += 1;
+            last_was_digit = false;
+        } else {
+            break;
+        }
+    }
+    if !last_was_digit {
+        // Trim trailing separators from the consumed range.
+        while idx > start_idx && is_phone_separator(chars[idx - 1].1) {
+            idx -= 1;
+        }
+    }
+    if digits.len() < 9 || !looks_like_vn_phone_digits(&digits) {
+        return None;
+    }
+    // Right boundary: must not continue into another digit.
+    if chars
+        .get(idx)
+        .map(|(_, ch)| ch.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some((idx, digits))
+}
+
+fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i].1;
+        let can_start = ch == '+'
+            || ch == '('
+            || (ch.is_ascii_digit() && (i == 0 || !chars[i - 1].1.is_ascii_alphanumeric()));
+        if can_start {
+            if let Some((end_idx, _)) = consume_phone_candidate(&chars, i) {
+                let start = chars[i].0;
+                let end = chars[end_idx - 1].0 + chars[end_idx - 1].1.len_utf8();
+                out.push((start, end));
+                i = end_idx;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Digit group with internal spaces/dashes (bank / CCCD / phone-shaped accounts).
+fn scan_digit_group_spans(text: &str) -> Vec<(usize, usize, String)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !chars[i].1.is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        if i > 0 && chars[i - 1].1.is_ascii_alphanumeric() {
+            i += 1;
+            continue;
+        }
+        let start_idx = i;
+        let mut digits = String::new();
+        let mut end_idx = i;
+        while i < chars.len() {
+            let ch = chars[i].1;
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+                end_idx = i + 1;
+                i += 1;
+            } else if matches!(ch, ' ' | '\t' | '-')
+                && i + 1 < chars.len()
+                && chars[i + 1].1.is_ascii_digit()
+            {
+                // Keep internal grouping separators inside the candidate span.
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if (8..=19).contains(&digits.len()) {
+            let start = chars[start_idx].0;
+            let end = chars[end_idx - 1].0 + chars[end_idx - 1].1.len_utf8();
+            out.push((start, end, digits));
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExplicitLabel {
+    Phone,
+    Bank,
+    NationalId,
+}
+
+fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
+    let before_ok = start == 0
+        || !folded
+            .get(..start)
+            .and_then(|s| s.chars().last())
+            .map(|ch| ch.is_ascii_alphanumeric())
+            .unwrap_or(false);
+    let after_ok = end >= folded.len()
+        || !folded
+            .get(end..)
+            .and_then(|s| s.chars().next())
+            .map(|ch| ch.is_ascii_alphanumeric())
+            .unwrap_or(false);
+    before_ok && after_ok
+}
+
+/// Nearest explicit label in `folded_prefix` (accent-folded text before a candidate).
+fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
+    // Longer phrases first in source order; rightmost match wins (nearest to number).
+    const LABELS: &[(&str, ExplicitLabel)] = &[
+        ("so dien thoai", ExplicitLabel::Phone),
+        ("can cuoc cong dan", ExplicitLabel::NationalId),
+        ("so tai khoan", ExplicitLabel::Bank),
+        ("dien thoai", ExplicitLabel::Phone),
+        ("can cuoc", ExplicitLabel::NationalId),
+        ("tai khoan", ExplicitLabel::Bank),
+        ("hotline", ExplicitLabel::Phone),
+        ("mobile", ExplicitLabel::Phone),
+        ("phone", ExplicitLabel::Phone),
+        ("so tk", ExplicitLabel::Bank),
+        ("cccd", ExplicitLabel::NationalId),
+        ("cmnd", ExplicitLabel::NationalId),
+        ("sdt", ExplicitLabel::Phone),
+        ("tel", ExplicitLabel::Phone),
+        ("stk", ExplicitLabel::Bank),
+    ];
+    let mut best: Option<(usize, ExplicitLabel)> = None;
+    for &(pat, kind) in LABELS {
+        let mut base = 0usize;
+        while base < folded_prefix.len() {
+            let Some(rel) = folded_prefix[base..].find(pat) else {
+                break;
+            };
+            let start = base + rel;
+            let end = start + pat.len();
+            if label_char_boundary(folded_prefix, start, end)
+                && best.map(|(prev_end, _)| end >= prev_end).unwrap_or(true)
+            {
+                best = Some((end, kind));
+            }
+            base = start + 1;
+            while base < folded_prefix.len() && !folded_prefix.is_char_boundary(base) {
+                base += 1;
+            }
+        }
+    }
+    best.map(|(_, kind)| kind)
+}
+
+fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+/// Accent-fold a nearby prefix window from original markdown (do not index folded
+/// text with source byte offsets — folding shortens Vietnamese glyphs).
+fn label_window_before(markdown: &str, start: usize) -> String {
+    let prefix_end = start.min(markdown.len());
+    let prefix = markdown.get(..prefix_end).unwrap_or("");
+    let window = if prefix.len() > 96 {
+        let mut cut = prefix.len() - 96;
+        while cut < prefix.len() && !prefix.is_char_boundary(cut) {
+            cut += 1;
+        }
+        &prefix[cut..]
+    } else {
+        prefix
+    };
+    accent_fold(window)
+}
+
+fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
+    let emails = scan_emails(markdown);
+    let mut occupied: Vec<(usize, usize)> = emails.clone();
+    let mut findings = Vec::new();
+
+    for (start, end) in emails {
+        findings.push(PiiFinding {
+            kind: PiiKind::Email,
+            text: markdown[start..end].to_string(),
+            source_rel: source_rel.into(),
+            start,
+            end,
+            confidence: 0.98,
+        });
+    }
+
+    // Phone scanner owns phone-shaped spans (keeps '+', grouping, parentheses).
+    // Nearest explicit Bank label reclassifies phone-shaped account numbers.
+    for (start, end) in scan_phone_spans(markdown) {
+        if occupied
+            .iter()
+            .any(|&span| spans_overlap(span, (start, end)))
+        {
+            continue;
+        }
+        let label = nearest_explicit_label(&label_window_before(markdown, start));
+        let (kind, confidence) = if label == Some(ExplicitLabel::Bank) {
+            (PiiKind::BankAccount, 0.8)
+        } else {
+            let confidence = if label == Some(ExplicitLabel::Phone) {
+                0.92
+            } else {
+                0.9
+            };
+            (PiiKind::Phone, confidence)
+        };
+        findings.push(PiiFinding {
+            kind,
+            text: markdown[start..end].to_string(),
+            source_rel: source_rel.into(),
+            start,
+            end,
+            confidence,
+        });
+        occupied.push((start, end));
+    }
+
+    // Remaining labeled digit groups: STK / CCCD (and non-phone-shaped accounts).
+    for (start, end, digits) in scan_digit_group_spans(markdown) {
+        if occupied
+            .iter()
+            .any(|&span| spans_overlap(span, (start, end)))
+        {
+            continue;
+        }
+        let label = nearest_explicit_label(&label_window_before(markdown, start));
+        let kind = match label {
+            Some(ExplicitLabel::Bank) if (8..=19).contains(&digits.len()) => {
+                Some((PiiKind::BankAccount, 0.8))
+            }
+            Some(ExplicitLabel::NationalId) if digits.len() == 9 || digits.len() == 12 => {
+                Some((PiiKind::NationalId, 0.95))
+            }
+            // No bare-"ngân hàng" path: unlabeled account-like runs stay undetected.
+            _ => None,
+        };
+        if let Some((kind, confidence)) = kind {
+            findings.push(PiiFinding {
+                kind,
+                text: markdown[start..end].to_string(),
+                source_rel: source_rel.into(),
+                start,
+                end,
+                confidence,
+            });
+            occupied.push((start, end));
+        }
+    }
+
+    findings.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+    findings
 }
 
 pub fn detect_pii(documents: &[CorpusDocument]) -> PiiReport {
     let mut findings = Vec::new();
     for document in documents {
-        let mut offset = 0usize;
-        for line in document.markdown.split_inclusive('\n') {
-            let lower = accent_fold(line);
-            let mut search_from = 0usize;
-            for token in line.split_whitespace() {
-                let token_start = line[search_from..]
-                    .find(token)
-                    .map(|relative| search_from + relative)
-                    .unwrap_or(search_from);
-                search_from = (token_start + token.len()).min(line.len());
-                let clean = token.trim_matches(|ch: char| {
-                    matches!(ch, ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']')
-                });
-                let digits: String = clean.chars().filter(|ch| ch.is_ascii_digit()).collect();
-                // Prefer labeled identity/bank over phone when a digit run is ambiguous
-                // (e.g. 10-digit account next to "tài khoản"), without dropping bare +84/0 phones.
-                let kind = if looks_like_email(clean) {
-                    Some((PiiKind::Email, 0.98))
-                } else if (digits.len() == 9 || digits.len() == 12)
-                    && line_has_national_id_context(&lower)
-                {
-                    Some((PiiKind::NationalId, 0.95))
-                } else if (8..=19).contains(&digits.len()) && line_has_bank_context(&lower) {
-                    Some((PiiKind::BankAccount, 0.75))
-                } else if looks_like_vn_phone(&digits) {
-                    Some((PiiKind::Phone, 0.9))
-                } else {
-                    None
-                };
-                if let Some((kind, confidence)) = kind {
-                    if let Some(clean_start) = token.find(clean) {
-                        let start = offset + token_start + clean_start;
-                        let end = start + clean.len();
-                        findings.push(PiiFinding {
-                            kind,
-                            text: clean.to_string(),
-                            source_rel: document.source_rel.clone(),
-                            start,
-                            end,
-                            confidence,
-                        });
-                    }
-                }
-            }
-            offset += line.len();
-        }
+        findings.extend(detect_pii_in_markdown(
+            &document.markdown,
+            &document.source_rel,
+        ));
     }
     let mut counts = BTreeMap::new();
     for finding in &findings {
@@ -1065,10 +1447,15 @@ pub fn update_markdown_table(
     rows: &[Vec<String>],
 ) -> Result<String, ConvertError> {
     if table.end > markdown.len()
-        || table.start > table.end
+        || table.start >= table.end
         || !markdown.is_char_boundary(table.start)
         || !markdown.is_char_boundary(table.end)
     {
+        return Err(ConvertError::Failed("span bảng không hợp lệ".into()));
+    }
+    // Stale span: edited markdown no longer looks like a table region.
+    let span = &markdown[table.start..table.end];
+    if !span.contains('|') {
         return Err(ConvertError::Failed("span bảng không hợp lệ".into()));
     }
     let rendered = render_markdown_table(rows);
