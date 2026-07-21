@@ -37,8 +37,8 @@ PDF và whisper **đắt** → phải giữ pattern cache. Đừng "dọn" thàn
   the cache entry while outstanding `AudioEngine` `Arc`s keep in-flight contexts alive. Production
   loader derives all behavior from the complete key (no public injectable loader). Runtime knobs
   (`audio_threads`, `audio_no_speech_threshold`) stay on `AudioEngine` and are **not** part of the
-  cache key. Resample to 16 kHz uses `rubato` FFT (`process_all`, delay trimmed). Trả `Unsupported`
-  nếu chưa có model.
+  cache key. Resample to 16 kHz uses `rubato` FFT with partial/flush + `output_delay` trim;
+  returns `Result` (never invents silence on failure). Trả `Unsupported` nếu chưa có model.
 - **Tesseract**: spawn mỗi lần qua `crate::proc::background_command()` (không cache process). Temp PNG dùng bộ đếm `AtomicU64`.
 
 ## Subprocess spawning — MUST dùng `crate::proc::background_command`
