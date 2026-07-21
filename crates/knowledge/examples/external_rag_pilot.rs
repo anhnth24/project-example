@@ -49,6 +49,15 @@ struct Query {
     relevant_source: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct BlindQuery {
+    question_id: String,
+    topic_index: usize,
+    intent: String,
+    question: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Summary {
@@ -106,7 +115,7 @@ struct EmbeddingSummary {
 #[serde(rename_all = "camelCase")]
 struct RetrievalSummary {
     ranking_path: &'static str,
-    query_provenance: &'static str,
+    query_provenance: String,
     overall: Metrics,
     by_category: BTreeMap<String, Metrics>,
     rows: Vec<QueryRow>,
@@ -145,6 +154,7 @@ struct Args {
     originals: PathBuf,
     work: PathBuf,
     output: PathBuf,
+    query_set: Option<PathBuf>,
     limit: Option<usize>,
 }
 
@@ -154,6 +164,10 @@ fn parse_args() -> Args {
     let originals = args.next().map(PathBuf::from);
     let work = args.next().map(PathBuf::from);
     let output = args.next().map(PathBuf::from);
+    let query_set = args
+        .next()
+        .map(PathBuf::from)
+        .filter(|value| value.as_os_str() != "-");
     let limit = args
         .next()
         .map(|value| {
@@ -171,7 +185,7 @@ fn parse_args() -> Args {
     {
         panic!(
             "usage: external_rag_pilot <sources.lock.json> <originals-dir> \
-             <work-dir> <output.json> [limit]"
+             <work-dir> <output.json> [queries.json|-] [limit]"
         );
     }
     Args {
@@ -179,6 +193,7 @@ fn parse_args() -> Args {
         originals: originals.unwrap(),
         work: work.unwrap(),
         output: output.unwrap(),
+        query_set,
         limit,
     }
 }
@@ -336,7 +351,7 @@ fn lowercase_first(value: &str) -> String {
     }
 }
 
-fn build_queries(sources: &[Source]) -> Vec<Query> {
+fn build_metadata_queries(sources: &[Source]) -> Vec<Query> {
     sources
         .iter()
         .flat_map(|source| {
@@ -356,6 +371,46 @@ fn build_queries(sources: &[Source]) -> Vec<Query> {
             ]
         })
         .collect()
+}
+
+fn load_queries(
+    sources: &[Source],
+    query_set: Option<&Path>,
+) -> Result<(Vec<Query>, String), Box<dyn Error>> {
+    let Some(path) = query_set else {
+        return Ok((
+            build_metadata_queries(sources),
+            "official-detail-metadata-derived".into(),
+        ));
+    };
+    let specs: Vec<BlindQuery> = serde_json::from_slice(&fs::read(path)?)?;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut queries = Vec::new();
+    for spec in specs {
+        if spec.topic_index == 0 {
+            return Err(format!("{} has zero topic_index", spec.question_id).into());
+        }
+        if spec.topic_index > sources.len() {
+            continue;
+        }
+        if !ids.insert(spec.question_id.clone()) {
+            return Err(format!("duplicate blind query ID: {}", spec.question_id).into());
+        }
+        let question = spec.question.trim();
+        if question.is_empty() {
+            return Err(format!("{} has an empty question", spec.question_id).into());
+        }
+        queries.push(Query {
+            id: spec.question_id,
+            category: spec.intent,
+            text: question.to_string(),
+            relevant_source: sources[spec.topic_index - 1].filename.clone(),
+        });
+    }
+    if queries.is_empty() {
+        return Err("blind query set contains no query for selected sources".into());
+    }
+    Ok((queries, "independent-agent-overview-only".into()))
 }
 
 fn embedding_failure(error: impl std::fmt::Display) -> KnowledgeError {
@@ -459,7 +514,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
     })?;
     let stats = index_stats(&paths)?;
 
-    let queries = build_queries(sources);
+    let (queries, query_provenance) = load_queries(sources, args.query_set.as_deref())?;
     let mut query_rows = Vec::with_capacity(queries.len());
     for (index, query) in queries.iter().enumerate() {
         let response = hybrid_search(
@@ -538,7 +593,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         index_stats: stats,
         retrieval: RetrievalSummary {
             ranking_path: "fileconv-knowledge/desktop::service::hybrid_search",
-            query_provenance: "official-detail-metadata-derived",
+            query_provenance,
             overall: summarize(&overall_refs),
             by_category,
             rows: query_rows,

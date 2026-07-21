@@ -37,6 +37,20 @@ python3 bench/external_rag/scripts/run_pilot.py
 make dev-down
 ```
 
+For the overview-only query track, an independent agent received one broad topic
+description for each document, but no source titles, identifiers, text, chunks,
+answers, or retrieval results. It produced two natural questions per topic in
+`blind_queries.json`. Run that fixed set with:
+
+```bash
+python3 bench/external_rag/scripts/run_pilot.py \
+  --queries bench/external_rag/blind_queries.json
+```
+
+The resulting `reports/pilot-blind.md` remains non-gating. Its qrels map each
+topic position to one source document, so it measures document retrieval rather
+than proving that every requested detail is present in a particular chunk.
+
 To intentionally refresh the source snapshot:
 
 ```bash

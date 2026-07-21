@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -32,6 +33,8 @@ ORIGINALS_DIR = WORK_DIR / "originals"
 RESULTS_DIR = WORK_DIR / "results"
 SUMMARY_PATH = RESULTS_DIR / "summary.json"
 REPORT_PATH = BENCH_DIR / "reports/pilot.md"
+BLIND_SUMMARY_PATH = RESULTS_DIR / "summary-blind.json"
+BLIND_REPORT_PATH = BENCH_DIR / "reports/pilot-blind.md"
 DEFAULT_RUNNER = ROOT / "target/release/examples/external_rag_pilot"
 LISTING_URL = (
     "https://vanban.chinhphu.vn/"
@@ -293,7 +296,29 @@ def materialize_sources(sources: list[dict]) -> None:
             print(f"downloaded {completed:02d}/{len(sources)} {source['id']}")
 
 
-def run_rust_pilot(runner: Path, limit: int | None) -> dict:
+def validate_query_set(path: Path) -> list[dict]:
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(rows, list) or len(rows) != EXPECTED_DOCUMENTS * 2:
+        raise ValueError("blind query set must contain exactly 100 rows")
+    expected_ids = [f"blind-{index:03d}" for index in range(1, len(rows) + 1)]
+    if [row.get("question_id") for row in rows] != expected_ids:
+        raise ValueError("blind query IDs must be ordered blind-001 through blind-100")
+    topics = Counter(row.get("topic_index") for row in rows)
+    if topics != Counter({index: 2 for index in range(1, EXPECTED_DOCUMENTS + 1)}):
+        raise ValueError("blind query set must contain exactly two rows per topic")
+    for row in rows:
+        if not isinstance(row.get("question"), str) or not row["question"].strip():
+            raise ValueError(f"{row['question_id']} has an empty question")
+        if not isinstance(row.get("intent"), str) or not row["intent"].strip():
+            raise ValueError(f"{row['question_id']} has an empty intent")
+        if re.search(r"\b\d{2,4}/\d{4}\b|NĐ-?CP", row["question"], re.IGNORECASE):
+            raise ValueError(f"{row['question_id']} leaks a document identifier")
+    return rows
+
+
+def run_rust_pilot(
+    runner: Path, limit: int | None, queries: Path | None = None
+) -> dict:
     if not runner.is_file():
         raise SystemExit(
             f"Rust runner not found: {runner}\n"
@@ -301,45 +326,67 @@ def run_rust_pilot(runner: Path, limit: int | None) -> dict:
             "--features external-rag-pilot --example external_rag_pilot"
         )
     lock = load_lock()
+    if queries:
+        validate_query_set(queries)
     sources = lock["sources"][:limit] if limit else lock["sources"]
     materialize_sources(sources)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    summary_path = BLIND_SUMMARY_PATH if queries else SUMMARY_PATH
     command = [
         str(runner),
         str(LOCK_PATH),
         str(ORIGINALS_DIR),
         str(WORK_DIR),
-        str(SUMMARY_PATH),
+        str(summary_path),
+        str(queries.resolve()) if queries else "-",
     ]
     if limit:
         command.append(str(limit))
     subprocess.run(command, cwd=ROOT, check=True)
-    summary = json.loads(SUMMARY_PATH.read_text(encoding="utf-8"))
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
     if not limit:
-        write_report(summary)
+        write_report(
+            summary,
+            BLIND_REPORT_PATH if queries else REPORT_PATH,
+        )
     return summary
 
 
-def write_report(summary: dict) -> None:
+def write_report(summary: dict, report_path: Path = REPORT_PATH) -> None:
     conversion = summary["conversion"]
     retrieval = summary["retrieval"]
     overall = retrieval["overall"]
     embedding = summary["embedding"]
+    provenance = retrieval["queryProvenance"]
+    blind = provenance == "independent-agent-overview-only"
     lines = [
-        "# External Vietnamese document RAG pilot",
+        (
+            "# External Vietnamese document blind-query RAG pilot"
+            if blind
+            else "# External Vietnamese document RAG pilot"
+        ),
         "",
         f"- Documents: `{summary['documents']}` official public files",
         f"- Converted: `{conversion['successful']}/{summary['documents']}`",
         f"- Non-empty: `{conversion['nonEmpty']}/{summary['documents']}`",
         f"- Production chunks: `{summary['chunks']}`",
-        f"- Queries: `{summary['queries']}` metadata-derived",
+        f"- Queries: `{summary['queries']}` (`{provenance}`)",
         f"- Embedding: `{embedding['model']}@{embedding['revision'][:12]}`",
         f"- Runtime path: `{embedding['runtimePath']}`",
         f"- Ranking path: `{retrieval['rankingPath']}`",
         "",
         "> **Non-gating pilot.** Conversion, chunking, SQLite indexing, neural",
-        "> embedding calls, and hybrid ranking use the production Rust path. Queries",
-        "> remain metadata-derived and do not establish production semantic quality.",
+        "> embedding calls, and hybrid ranking use the production Rust path.",
+        (
+            "> Questions were written by an independent agent given only one topic-level"
+            if blind
+            else "> Queries remain metadata-derived and do not establish production semantic quality."
+        ),
+        (
+            "> overview per document; it saw no titles, identifiers, source text, chunks, or retrieval results."
+            if blind
+            else ""
+        ),
         "",
         "## Conversion",
         "",
@@ -375,9 +422,17 @@ def write_report(summary: dict) -> None:
             "",
             f"- `{len(misses)}` queries missed the relevant document in top 5.",
             f"- `{sum(row['recallAt10'] == 0 for row in misses)}` remained absent from top 10.",
-            "- Every top-5 miss was an identifier query. Numeric document codes are",
-            "  split into common tokens, OCR can alter the code, and repeated chunks",
-            "  from competing decrees can crowd the fixed chunk-level top-k.",
+            (
+                "- Misses are grouped below by independently assigned query intent."
+                if blind
+                else "- Every top-5 miss was an identifier query. Numeric document codes are"
+            ),
+            (
+                ""
+                if blind
+                else "  split into common tokens, OCR can alter the code, and repeated chunks"
+            ),
+            "" if blind else "  from competing decrees can crowd the fixed chunk-level top-k.",
             "",
             "| Query | Relevant rank |",
             "|---|---:|",
@@ -393,14 +448,23 @@ def write_report(summary: dict) -> None:
             "",
             "- Fifty documents remain a small candidate pool.",
             "- Relevance is document-level over the production chunk ranking.",
-            "- Metadata-derived queries retain lexical overlap.",
+            (
+                "- Questions are overview-derived rather than written after reading source text."
+                if blind
+                else "- Metadata-derived queries retain lexical overlap."
+            ),
+            (
+                "- Topic-to-document qrels are positional and do not prove that every requested detail is present."
+                if blind
+                else ""
+            ),
             "- The corpus is government/legal-document heavy.",
             "- No-answer and answer-grounding quality are not scored.",
             "",
         ]
     )
-    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text("\n".join(lines), encoding="utf-8")
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def self_test() -> None:
@@ -412,6 +476,7 @@ def self_test() -> None:
     assert parser.hrefs == ["/?docid=123"]
     assert document_id("https://example.test/?docid=123") == "cp-123"
     assert extension_for("https://example.test/a.PDF?q=1") == ".pdf"
+    validate_query_set(BENCH_DIR / "blind_queries.json")
     print("external RAG acquisition self-test passed")
 
 
@@ -420,6 +485,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refresh-sources", action="store_true")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--runner", type=Path, default=DEFAULT_RUNNER)
+    parser.add_argument("--queries", type=Path)
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
@@ -435,7 +501,9 @@ def main() -> int:
         return 0
     if args.limit is not None and not 1 <= args.limit <= EXPECTED_DOCUMENTS:
         raise SystemExit(f"--limit must be between 1 and {EXPECTED_DOCUMENTS}")
-    summary = run_rust_pilot(args.runner, args.limit)
+    if args.queries and not args.queries.is_file():
+        raise SystemExit(f"query set not found: {args.queries}")
+    summary = run_rust_pilot(args.runner, args.limit, args.queries)
     print(
         json.dumps(
             {
