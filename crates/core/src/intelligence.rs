@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_span, normalize_newlines};
+use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_span};
 use crate::ConvertError;
 
 const DEFAULT_CHUNK_CHARS: usize = 2_000;
@@ -1819,6 +1819,7 @@ pub fn export_handoff_zip(pack: &HandoffPack, output: &Path) -> Result<(), Conve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunk::normalize_newlines;
 
     fn sample_document() -> CorpusDocument {
         CorpusDocument {
