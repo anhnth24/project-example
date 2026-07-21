@@ -51,6 +51,22 @@ The resulting `reports/pilot-blind.md` remains non-gating. Its qrels map each
 topic position to one source document, so it measures document retrieval rather
 than proving that every requested detail is present in a particular chunk.
 
+To isolate the effect of corpus size, build a second lock that preserves the 50
+query targets in their original order and appends 150 chronological documents
+as distractors:
+
+```bash
+python3 bench/external_rag/scripts/prepare_distractor_corpus.py
+FILECONV_EXTERNAL_REUSE_MARKDOWN=1 \
+python3 bench/external_rag/scripts/run_pilot.py \
+  --lock bench/external_rag/sources-200.lock.json \
+  --queries bench/external_rag/blind_queries.json
+```
+
+Markdown reuse is an explicit local optimization for repeated runs from the
+same converter revision. Omit it after converter changes. The 200-document
+result is written separately to `reports/pilot-blind-200.md`.
+
 To intentionally refresh the source snapshot:
 
 ```bash

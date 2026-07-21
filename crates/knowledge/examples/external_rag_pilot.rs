@@ -81,6 +81,7 @@ struct Summary {
 struct ConversionSummary {
     successful: usize,
     non_empty: usize,
+    cached: usize,
     success_rate: f64,
     non_empty_rate: f64,
     median_elapsed_ms: f64,
@@ -95,6 +96,7 @@ struct ConversionRow {
     document_id: String,
     filename: String,
     success: bool,
+    cached: bool,
     elapsed_ms: f64,
     markdown_chars: usize,
     error: Option<String>,
@@ -263,16 +265,49 @@ fn convert_sources(
 ) -> Result<(Vec<CorpusDocument>, Vec<ConversionRow>), Box<dyn Error>> {
     fs::create_dir_all(markdown_root)?;
     let converter = Converter::new();
+    let reuse_markdown = env::var("FILECONV_EXTERNAL_REUSE_MARKDOWN")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
     let mut documents = Vec::new();
     let mut rows = Vec::with_capacity(sources.len());
     for source in sources {
         let started = Instant::now();
         let source_path = checked_source_path(originals, source)?;
+        let md_name = format!("{}.md", source.id);
+        let md_path = markdown_root.join(&md_name);
+        if reuse_markdown && md_path.is_file() {
+            let markdown = fs::read_to_string(&md_path)?;
+            let markdown_chars = markdown.chars().count();
+            documents.push(CorpusDocument {
+                source_rel: source.filename.clone(),
+                md_rel: format!("markdown/{md_name}"),
+                format: source_path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("unknown")
+                    .to_ascii_lowercase(),
+                markdown,
+            });
+            rows.push(ConversionRow {
+                document_id: source.id.clone(),
+                filename: source.filename.clone(),
+                success: true,
+                cached: true,
+                elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                markdown_chars,
+                error: None,
+            });
+            eprintln!(
+                "converted {}/{} {} success=true cached=true chars={markdown_chars}",
+                rows.len(),
+                sources.len(),
+                source.id,
+            );
+            continue;
+        }
         match converter.convert_path(&source_path) {
             Ok(result) => {
                 let markdown_chars = result.markdown.chars().count();
-                let md_name = format!("{}.md", source.id);
-                fs::write(markdown_root.join(&md_name), &result.markdown)?;
+                fs::write(&md_path, &result.markdown)?;
                 documents.push(CorpusDocument {
                     source_rel: source.filename.clone(),
                     md_rel: format!("markdown/{md_name}"),
@@ -287,6 +322,7 @@ fn convert_sources(
                     document_id: source.id.clone(),
                     filename: source.filename.clone(),
                     success: true,
+                    cached: false,
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     markdown_chars,
                     error: None,
@@ -298,6 +334,7 @@ fn convert_sources(
                     document_id: source.id.clone(),
                     filename: source.filename.clone(),
                     success: false,
+                    cached: false,
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     markdown_chars: 0,
                     error: Some(error.to_string()),
@@ -555,6 +592,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         .map(|row| row.markdown_chars as f64)
         .collect::<Vec<_>>();
     let successful = conversion_rows.iter().filter(|row| row.success).count();
+    let cached = conversion_rows.iter().filter(|row| row.cached).count();
     let non_empty = conversion_rows
         .iter()
         .filter(|row| row.success && row.markdown_chars >= 80)
@@ -574,6 +612,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         conversion: ConversionSummary {
             successful,
             non_empty,
+            cached,
             success_rate: successful as f64 / sources.len() as f64,
             non_empty_rate: non_empty as f64 / sources.len() as f64,
             median_elapsed_ms: median(&elapsed),

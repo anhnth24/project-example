@@ -35,6 +35,8 @@ SUMMARY_PATH = RESULTS_DIR / "summary.json"
 REPORT_PATH = BENCH_DIR / "reports/pilot.md"
 BLIND_SUMMARY_PATH = RESULTS_DIR / "summary-blind.json"
 BLIND_REPORT_PATH = BENCH_DIR / "reports/pilot-blind.md"
+DISTRACTOR_SUMMARY_PATH = RESULTS_DIR / "summary-blind-200.json"
+DISTRACTOR_REPORT_PATH = BENCH_DIR / "reports/pilot-blind-200.md"
 DEFAULT_RUNNER = ROOT / "target/release/examples/external_rag_pilot"
 LISTING_URL = (
     "https://vanban.chinhphu.vn/"
@@ -248,17 +250,15 @@ def refresh_sources() -> dict:
     return lock
 
 
-def load_lock() -> dict:
-    if not LOCK_PATH.is_file():
+def load_lock(path: Path = LOCK_PATH) -> dict:
+    if not path.is_file():
         raise SystemExit(
-            f"missing {LOCK_PATH.relative_to(ROOT)}; run with --refresh-sources"
+            f"missing {path.relative_to(ROOT)}; run with --refresh-sources"
         )
-    lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+    lock = json.loads(path.read_text(encoding="utf-8"))
     sources = lock.get("sources") or []
-    if lock.get("documents") != EXPECTED_DOCUMENTS or len(sources) != EXPECTED_DOCUMENTS:
-        raise SystemExit(
-            f"source lock must contain exactly {EXPECTED_DOCUMENTS} documents"
-        )
+    if not sources or lock.get("documents") != len(sources):
+        raise SystemExit("source lock document count does not match its sources")
     ids = [source["id"] for source in sources]
     if len(set(ids)) != len(ids):
         raise SystemExit("source lock contains duplicate document IDs")
@@ -317,7 +317,10 @@ def validate_query_set(path: Path) -> list[dict]:
 
 
 def run_rust_pilot(
-    runner: Path, limit: int | None, queries: Path | None = None
+    runner: Path,
+    limit: int | None,
+    queries: Path | None = None,
+    lock_path: Path = LOCK_PATH,
 ) -> dict:
     if not runner.is_file():
         raise SystemExit(
@@ -325,16 +328,23 @@ def run_rust_pilot(
             "build it with: cargo build --release -p fileconv-knowledge "
             "--features external-rag-pilot --example external_rag_pilot"
         )
-    lock = load_lock()
+    lock = load_lock(lock_path)
     if queries:
         validate_query_set(queries)
     sources = lock["sources"][:limit] if limit else lock["sources"]
     materialize_sources(sources)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    summary_path = BLIND_SUMMARY_PATH if queries else SUMMARY_PATH
+    distractor_run = len(sources) > EXPECTED_DOCUMENTS
+    summary_path = (
+        DISTRACTOR_SUMMARY_PATH
+        if queries and distractor_run
+        else BLIND_SUMMARY_PATH
+        if queries
+        else SUMMARY_PATH
+    )
     command = [
         str(runner),
-        str(LOCK_PATH),
+        str(lock_path),
         str(ORIGINALS_DIR),
         str(WORK_DIR),
         str(summary_path),
@@ -347,7 +357,11 @@ def run_rust_pilot(
     if not limit:
         write_report(
             summary,
-            BLIND_REPORT_PATH if queries else REPORT_PATH,
+            DISTRACTOR_REPORT_PATH
+            if queries and distractor_run
+            else BLIND_REPORT_PATH
+            if queries
+            else REPORT_PATH,
         )
     return summary
 
@@ -369,6 +383,7 @@ def write_report(summary: dict, report_path: Path = REPORT_PATH) -> None:
         f"- Documents: `{summary['documents']}` official public files",
         f"- Converted: `{conversion['successful']}/{summary['documents']}`",
         f"- Non-empty: `{conversion['nonEmpty']}/{summary['documents']}`",
+        f"- Reused converted Markdown: `{conversion.get('cached', 0)}`",
         f"- Production chunks: `{summary['chunks']}`",
         f"- Queries: `{summary['queries']}` (`{provenance}`)",
         f"- Embedding: `{embedding['model']}@{embedding['revision'][:12]}`",
@@ -385,6 +400,12 @@ def write_report(summary: dict, report_path: Path = REPORT_PATH) -> None:
         (
             "> overview per document; it saw no titles, identifiers, source text, chunks, or retrieval results."
             if blind
+            else ""
+        ),
+        (
+            f"> The first {EXPECTED_DOCUMENTS} documents are query targets; the remaining "
+            f"{summary['documents'] - EXPECTED_DOCUMENTS} are chronological distractors."
+            if blind and summary["documents"] > EXPECTED_DOCUMENTS
             else ""
         ),
         "",
@@ -446,7 +467,11 @@ def write_report(summary: dict, report_path: Path = REPORT_PATH) -> None:
             "",
             "## Interpretation limits",
             "",
-            "- Fifty documents remain a small candidate pool.",
+            (
+                f"- The pool contains {summary['documents']} documents, but all targets remain in the first {EXPECTED_DOCUMENTS}."
+                if summary["documents"] > EXPECTED_DOCUMENTS
+                else "- Fifty documents remain a small candidate pool."
+            ),
             "- Relevance is document-level over the production chunk ranking.",
             (
                 "- Questions are overview-derived rather than written after reading source text."
@@ -496,6 +521,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--runner", type=Path, default=DEFAULT_RUNNER)
     parser.add_argument("--queries", type=Path)
+    parser.add_argument("--lock", type=Path, default=LOCK_PATH)
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args()
 
@@ -509,11 +535,12 @@ def main() -> int:
         lock = refresh_sources()
         print(f"wrote {LOCK_PATH.relative_to(ROOT)} with {lock['documents']} sources")
         return 0
-    if args.limit is not None and not 1 <= args.limit <= EXPECTED_DOCUMENTS:
-        raise SystemExit(f"--limit must be between 1 and {EXPECTED_DOCUMENTS}")
+    lock = load_lock(args.lock)
+    if args.limit is not None and not 1 <= args.limit <= lock["documents"]:
+        raise SystemExit(f"--limit must be between 1 and {lock['documents']}")
     if args.queries and not args.queries.is_file():
         raise SystemExit(f"query set not found: {args.queries}")
-    summary = run_rust_pilot(args.runner, args.limit, args.queries)
+    summary = run_rust_pilot(args.runner, args.limit, args.queries, args.lock)
     print(
         json.dumps(
             {
