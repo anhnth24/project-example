@@ -735,6 +735,51 @@ fn pii_competing_keys_match_across_punctuation_wrappers() {
 }
 
 #[test]
+fn pii_label_and_competing_keys_normalize_unicode_whitespace() {
+    const NBSP: &str = "\u{00a0}";
+
+    let can_cuoc_nbsp = format!("Căn{NBSP}cước{NBSP}số{NBSP}001234567890");
+    let report = detect_pii(&[doc("can-cuoc-nbsp.md", &can_cuoc_nbsp)]);
+    assert_single_span(&report, PiiKind::NationalId, "001234567890");
+    let hit = report
+        .findings
+        .iter()
+        .find(|f| f.kind == PiiKind::NationalId)
+        .expect("national id");
+    assert_eq!(&can_cuoc_nbsp[hit.start..hit.end], "001234567890");
+
+    let can_cuoc_spaces = detect_pii(&[doc("can-cuoc-spaces.md", "Căn  cước   số 001234567890")]);
+    assert_single_span(&can_cuoc_spaces, PiiKind::NationalId, "001234567890");
+    let space_hit = can_cuoc_spaces
+        .findings
+        .iter()
+        .find(|f| f.kind == PiiKind::NationalId)
+        .expect("national id");
+    assert_eq!(
+        &"Căn  cước   số 001234567890"[space_hit.start..space_hit.end],
+        "001234567890"
+    );
+
+    let compete_nbsp = format!("Tài khoản đã đóng và mã{NBSP}giao{NBSP}dịch: 123456789012");
+    let blocked = detect_pii(&[doc("compete-nbsp.md", &compete_nbsp)]);
+    assert!(
+        !blocked.counts.contains_key(&PiiKind::BankAccount),
+        "NBSP mã giao dịch must break bank link: {:?}",
+        blocked.findings
+    );
+
+    let compete_spaces = detect_pii(&[doc(
+        "compete-spaces.md",
+        "Tài khoản đã đóng và mã  giao   dịch: 123456789012",
+    )]);
+    assert!(
+        !compete_spaces.counts.contains_key(&PiiKind::BankAccount),
+        "repeated spaces in mã giao dịch must break bank link: {:?}",
+        compete_spaces.findings
+    );
+}
+
+#[test]
 fn pii_email_paired_markdown_wrappers_redact_inner_only() {
     for (markdown, exact, redacted_shape) in [
         (

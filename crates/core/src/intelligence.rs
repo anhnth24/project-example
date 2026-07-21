@@ -1366,6 +1366,63 @@ fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
     before_ok && after_ok
 }
 
+/// Accent-fold one source char to lowercase ASCII-ish letters (may be empty for marks).
+fn fold_label_char(ch: char) -> String {
+    ch.nfd()
+        .filter(|c| !('\u{0300}'..='\u{036f}').contains(c))
+        .map(|c| match c {
+            'đ' => 'd',
+            'Đ' => 'D',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Folded label/competing-key text plus byte map back into the source slice.
+///
+/// Matching uses accent-fold + Unicode whitespace collapsed to single ASCII
+/// spaces (NBSP, runs, …). `orig_at[i]` is the source byte offset that produced
+/// folded byte `i`; `orig_at[text.len()]` is `source.len()`. PII value spans
+/// still come from scanning the original markdown — this map only reconnects
+/// phrase-match ends to the original between-text for `field_value_link`.
+struct LabelPhraseFold {
+    text: String,
+    orig_at: Vec<usize>,
+}
+
+fn fold_label_phrase_mapped(source: &str) -> LabelPhraseFold {
+    let mut text = String::with_capacity(source.len());
+    let mut orig_at = Vec::with_capacity(source.len() + 1);
+    let mut last_was_space = false;
+    for (src_idx, ch) in source.char_indices() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                orig_at.push(src_idx);
+                text.push(' ');
+                last_was_space = true;
+            }
+            continue;
+        }
+        last_was_space = false;
+        for fc in fold_label_char(ch).chars() {
+            let byte_start = text.len();
+            text.push(fc);
+            for _ in byte_start..text.len() {
+                orig_at.push(src_idx);
+            }
+        }
+    }
+    orig_at.push(source.len());
+    debug_assert_eq!(orig_at.len(), text.len() + 1);
+    LabelPhraseFold { text, orig_at }
+}
+
+/// Accent-fold and collapse Unicode whitespace runs to a single ASCII space.
+fn fold_label_phrase(text: &str) -> String {
+    fold_label_phrase_mapped(text).text
+}
+
 /// Longer compound phrases first so `tai khoan ngan hang` wins over `tai khoan`.
 const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
     ("can cuoc cong dan so", ExplicitLabel::NationalId),
@@ -1448,12 +1505,14 @@ fn contains_token_phrase(haystack: &str, needle: &str) -> bool {
 /// Competing field keys in the qualifier before `:/=` break the field link
 /// (e.g. closed-account prose + `mã giao dịch`). Bare `và` alone does not.
 fn between_has_soft_clause_break(before_sep: &str) -> bool {
+    let normalized = fold_label_phrase(before_sep);
     COMPETING_FIELD_KEYS
         .iter()
-        .any(|key| contains_token_phrase(before_sep, key))
+        .any(|key| contains_token_phrase(&normalized, key))
 }
 
-fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
+fn classify_label_text(text: &str) -> Option<ExplicitLabel> {
+    let folded = fold_label_phrase(text);
     let mut best: Option<(usize, usize, ExplicitLabel)> = None;
     for &(pat, kind) in LABEL_PATTERNS {
         let mut base = 0usize;
@@ -1463,7 +1522,7 @@ fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
             };
             let start = base + rel;
             let end = start + pat.len();
-            if label_char_boundary(folded, start, end) {
+            if label_char_boundary(&folded, start, end) {
                 let take = match best {
                     None => true,
                     Some((prev_start, prev_end, _)) => {
@@ -1483,10 +1542,12 @@ fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
     best.map(|(_, _, kind)| kind)
 }
 
-/// Field-value link between a label and the candidate at the end of `folded_scope`.
+/// Field-value link between a label and the candidate at the end of `source_between`.
 /// - No-colon compound labels: tight whitespace only (`Tài khoản ngân hàng 123…`).
 /// - Terminal `:/=/：` strongly binds and allows a longer qualifier before the sep,
-///   unless a conjunction / competing field key breaks the clause.
+///   unless a competing field key breaks the clause.
+///
+/// `source_between` is a slice of the **original** markdown (via phrase-fold map).
 fn field_value_link(between: &str) -> bool {
     const MAX_BETWEEN_CHARS: usize = 64;
     if between.chars().count() > MAX_BETWEEN_CHARS {
@@ -1520,20 +1581,21 @@ fn field_value_link(between: &str) -> bool {
         && !between_has_soft_clause_break(before)
 }
 
-/// Nearest explicit label in scoped folded prefix that field-links to the value.
-fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
-    let value_at = folded_prefix.len();
+/// Nearest explicit label in scoped **original** prefix that field-links to the value.
+fn nearest_explicit_label(source_prefix: &str) -> Option<ExplicitLabel> {
+    let fold = fold_label_phrase_mapped(source_prefix);
     let mut best: Option<(usize, ExplicitLabel)> = None;
     for &(pat, kind) in LABEL_PATTERNS {
         let mut base = 0usize;
-        while base < folded_prefix.len() {
-            let Some(rel) = folded_prefix[base..].find(pat) else {
+        while base < fold.text.len() {
+            let Some(rel) = fold.text[base..].find(pat) else {
                 break;
             };
             let start = base + rel;
             let end = start + pat.len();
-            if label_char_boundary(folded_prefix, start, end)
-                && field_value_link(&folded_prefix[end..value_at])
+            let src_between_at = fold.orig_at[end];
+            if label_char_boundary(&fold.text, start, end)
+                && field_value_link(&source_prefix[src_between_at..])
             {
                 let take = best.map(|(prev_end, _)| end >= prev_end).unwrap_or(true);
                 if take {
@@ -1541,7 +1603,7 @@ fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
                 }
             }
             base = start + 1;
-            while base < folded_prefix.len() && !folded_prefix.is_char_boundary(base) {
+            while base < fold.text.len() && !fold.text.is_char_boundary(base) {
                 base += 1;
             }
         }
@@ -1571,10 +1633,6 @@ fn label_scope_before<'a>(markdown: &'a str, start: usize) -> &'a str {
         }
     }
     &prefix[cut..]
-}
-
-fn label_window_before(markdown: &str, start: usize) -> String {
-    accent_fold(label_scope_before(markdown, start))
 }
 
 /// Map a byte offset inside a Markdown table body cell to its column-header label.
@@ -1633,7 +1691,7 @@ fn table_column_label_at(markdown: &str, offset: usize) -> Option<ExplicitLabel>
                     }
                     if ch == b'|' {
                         if offset >= cell_start && offset < i {
-                            return classify_label_text(&accent_fold(headers.get(col)?.as_str()));
+                            return classify_label_text(headers.get(col)?.as_str());
                         }
                         col += 1;
                         cell_start = i + 1;
@@ -1641,7 +1699,7 @@ fn table_column_label_at(markdown: &str, offset: usize) -> Option<ExplicitLabel>
                     i += 1;
                 }
                 if offset >= cell_start && offset < line_end {
-                    return classify_label_text(&accent_fold(headers.get(col)?.as_str()));
+                    return classify_label_text(headers.get(col)?.as_str());
                 }
                 return None;
             }
@@ -1654,7 +1712,7 @@ fn table_column_label_at(markdown: &str, offset: usize) -> Option<ExplicitLabel>
 
 fn resolve_label(markdown: &str, start: usize) -> Option<ExplicitLabel> {
     table_column_label_at(markdown, start)
-        .or_else(|| nearest_explicit_label(&label_window_before(markdown, start)))
+        .or_else(|| nearest_explicit_label(label_scope_before(markdown, start)))
 }
 
 fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
