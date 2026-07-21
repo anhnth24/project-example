@@ -77,24 +77,34 @@ fn corpus_ids_are_unique_across_documents() {
     assert_eq!(ids.len(), 2);
 }
 
-/// Consumer ID stability under `STABLE_HASH_SCHEME` (`sip13-v1`).
+/// Consumer ID stability under `INTELLIGENCE_ID_SCHEME` (`sha256-v1`).
 /// Fixture bodies are fixed; digests must not drift across toolchains/runs.
 #[test]
-fn sip13_v1_consumer_ids_are_stable() {
-    assert_eq!(STABLE_HASH_SCHEME, "sip13-v1");
+fn sha256_v1_consumer_ids_are_stable() {
+    assert_eq!(INTELLIGENCE_ID_SCHEME, "sha256-v1");
+    assert_eq!(HANDOFF_SCHEMA_VERSION, 2);
     let markdown = "# Heading\n\nBody text for corpus.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
     let document = doc("doc.md", markdown);
 
     let corpus = build_corpus(&[document.clone()], 2_000);
     assert_eq!(corpus.len(), 1);
-    assert_eq!(corpus[0].id, "chunk-702130c0625e0b1f");
+    assert_eq!(corpus[0].heading, "Heading");
+    assert_eq!(corpus[0].start, 11);
+    assert_eq!(
+        corpus[0].id,
+        "chunk-sha256-v1-5c9caedfab489c26935e66e1b4e06016a670e011b174d324e236c40a87ed21ee"
+    );
+    assert!(corpus[0].id.contains(INTELLIGENCE_ID_SCHEME));
 
     let tables = parse_markdown_tables(&document);
     assert_eq!(tables.len(), 1);
-    assert_eq!(tables[0].id, "table-e70c986a6c81b97b");
+    assert_eq!(
+        tables[0].id,
+        "table-sha256-v1-7de19ebea10d6579f97772d6e4f8a6d75186198ce075d6e14a472beec81aa68a"
+    );
+    assert!(tables[0].id.contains(INTELLIGENCE_ID_SCHEME));
 
-    // Pack id embeds a wall-clock nonce; only the trailing fingerprint digest
-    // (content + mode) is the persisted stable_hash consumer.
+    // Pack id embeds a wall-clock nonce; trailing digest + schema encode the scheme.
     let pack = generate_handoff_pack(
         &[document],
         &HandoffOptions {
@@ -102,19 +112,24 @@ fn sip13_v1_consumer_ids_are_stable() {
             ..Default::default()
         },
     );
+    assert_eq!(pack.schema_version, HANDOFF_SCHEMA_VERSION);
+    assert_eq!(pack.id_scheme, INTELLIGENCE_ID_SCHEME);
     let fingerprint = pack
         .pack_id
         .rsplit('-')
         .next()
         .expect("pack_id ends with fingerprint digest");
-    assert_eq!(fingerprint, "7bc9c49bbcdf28ed");
     assert_eq!(
-        pack.pack_id.split('-').next(),
-        Some("handoff"),
-        "pack_id prefix preserved"
+        fingerprint,
+        "a501848e6a9bdc8a6e9ecb767558726e845f10e185dcd6faa02220ef959e4e5d"
+    );
+    assert!(
+        pack.pack_id
+            .starts_with(&format!("handoff-{INTELLIGENCE_ID_SCHEME}-")),
+        "pack_id={}",
+        pack.pack_id
     );
 
-    // Corpus chunk ids are the corpus-level identity surface for local search.
     let again = build_corpus(&[doc("doc.md", markdown)], 2_000);
     assert_eq!(again[0].id, corpus[0].id);
 }

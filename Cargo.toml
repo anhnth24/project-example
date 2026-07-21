@@ -21,6 +21,8 @@ rust-version = "1.88"
 anyhow = "1"
 thiserror = "2"
 infer = "0.16"
+# Contract-critical digest for durable IDs (CORE-T9 / ADR 0006 family). Pin exact.
+sha2 = "=0.11.0"
 
 # Tauri dev otherwise runs the PDF/OCR pipeline completely unoptimized
 # (measured ~17.5s vs <1s release on the 45-page CASAN PDF).

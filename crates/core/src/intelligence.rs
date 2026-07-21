@@ -5,19 +5,19 @@
 //! baselines for handoff packs, cited search, quality, PII, tables, schema,
 //! versions and automation. Optional LLM enhancement remains behind `llm`.
 //!
-//! Persisted chunk/table/pack fingerprint IDs use [`STABLE_HASH_SCHEME`]
-//! (`sip13-v1`). That scheme is **not** bit-compatible with historical
-//! `DefaultHasher` digests — rebuild or remap stores that keyed on old IDs.
-//! ADR 0006 index signatures remain a separate server/knowledge contract.
+//! Persisted chunk/table/handoff IDs use [`INTELLIGENCE_ID_SCHEME`] (`sha256-v1`):
+//! length-delimited SHA-256 with per-purpose domains. Visible IDs embed the
+//! scheme; desktop knowledge stores persist the same scheme in index metadata
+//! and atomically rebuild SQLite/FTS/HNSW on mismatch. ADR 0006 server index
+//! signatures / knowledge chunk identity remain a separate contract.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use siphasher::sip::SipHasher13;
+use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_span};
@@ -25,17 +25,26 @@ use crate::ConvertError;
 
 const DEFAULT_CHUNK_CHARS: usize = 2_000;
 
-/// Persisted core-intelligence ID hash scheme (chunk / table / pack fingerprint).
+/// Durable core-intelligence ID scheme (chunk / table / handoff fingerprints).
 ///
-/// `sip13-v1` = SipHash-1-3 with zero keys via `siphasher` 1.0.3, with an
-/// explicit domain tag hashed before payload parts. This is a supported
-/// cross-Rust-version contract for Markhand local intelligence IDs.
+/// `sha256-v1` = SHA-256 over a fixed framing:
+/// length-prefixed (`u64` BE) fields for
+/// `markhand-intelligence-id`, scheme, purpose domain, then payload parts.
+/// Integers use fixed-width `u64` BE bytes. No `std::hash::Hash` serialization.
 ///
-/// Migration: digests are **not** claimed equal to historical
-/// `std::collections::hash_map::DefaultHasher` IDs (those were never a stable
-/// API). Stores keyed by pre-`sip13-v1` IDs must rebuild or remap explicitly.
-/// ADR 0006 index-signature / server chunk identity is out of scope.
-pub const STABLE_HASH_SCHEME: &str = "sip13-v1";
+/// Migration: not compatible with historical `DefaultHasher` or interim
+/// `sip13-v1` digests. Desktop indexes missing this scheme rebuild atomically
+/// (see ADR 0013). ADR 0006 server identity is out of scope.
+pub const INTELLIGENCE_ID_SCHEME: &str = "sha256-v1";
+
+/// Handoff pack JSON schema that carries [`INTELLIGENCE_ID_SCHEME`].
+pub const HANDOFF_SCHEMA_VERSION: u32 = 2;
+
+const ID_NAMESPACE: &[u8] = b"markhand-intelligence-id";
+const DOMAIN_CHUNK: &str = "chunk";
+const DOMAIN_TABLE: &str = "table";
+const DOMAIN_HANDOFF_DOCUMENT: &str = "handoff-document";
+const DOMAIN_HANDOFF_PACK: &str = "handoff-pack";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -348,6 +357,8 @@ pub struct HandoffValidation {
 #[serde(rename_all = "camelCase")]
 pub struct HandoffPack {
     pub schema_version: u32,
+    /// Mirrors [`INTELLIGENCE_ID_SCHEME`]; present so consumers can refuse mixed packs.
+    pub id_scheme: String,
     pub pack_id: String,
     pub product_name: String,
     pub product_slug: String,
@@ -376,20 +387,86 @@ fn now_nonce() -> u128 {
         .as_nanos()
 }
 
-/// Length-delimited SipHash-1-3 digest for persisted intelligence IDs.
-///
-/// Parts are hashed independently with a `0xff` separator (same framing as the
-/// former `DefaultHasher` helper) after the [`STABLE_HASH_SCHEME`] domain tag.
-/// Output is a fixed 16-char lowercase hex string of the 64-bit digest.
-pub(crate) fn stable_hash(parts: impl IntoIterator<Item = impl AsRef<str>>) -> String {
-    let mut hasher = SipHasher13::new();
-    STABLE_HASH_SCHEME.hash(&mut hasher);
-    0xff_u8.hash(&mut hasher);
-    for part in parts {
-        part.as_ref().hash(&mut hasher);
-        0xff_u8.hash(&mut hasher);
+fn update_id_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
-    format!("{:016x}", hasher.finish())
+    out
+}
+
+/// Length-delimited SHA-256 digest for a purpose domain + raw byte fields.
+pub(crate) fn intelligence_digest(domain: &str, fields: &[&[u8]]) -> String {
+    let mut hasher = Sha256::new();
+    update_id_field(&mut hasher, ID_NAMESPACE);
+    update_id_field(&mut hasher, INTELLIGENCE_ID_SCHEME.as_bytes());
+    update_id_field(&mut hasher, domain.as_bytes());
+    for field in fields {
+        update_id_field(&mut hasher, field);
+    }
+    hex_encode(&hasher.finalize())
+}
+
+fn visible_id(kind: &str, digest: &str) -> String {
+    format!("{kind}-{INTELLIGENCE_ID_SCHEME}-{digest}")
+}
+
+pub(crate) fn corpus_chunk_id(source_rel: &str, heading: &str, start: usize) -> String {
+    let start_be = (start as u64).to_be_bytes();
+    visible_id(
+        "chunk",
+        &intelligence_digest(
+            DOMAIN_CHUNK,
+            &[source_rel.as_bytes(), heading.as_bytes(), &start_be],
+        ),
+    )
+}
+
+pub(crate) fn markdown_table_id(source_rel: &str, index: usize, start: usize) -> String {
+    let index_be = (index as u64).to_be_bytes();
+    let start_be = (start as u64).to_be_bytes();
+    visible_id(
+        "table",
+        &intelligence_digest(DOMAIN_TABLE, &[source_rel.as_bytes(), &index_be, &start_be]),
+    )
+}
+
+pub(crate) fn handoff_document_digest(source_rel: &str, markdown: &str) -> String {
+    intelligence_digest(
+        DOMAIN_HANDOFF_DOCUMENT,
+        &[source_rel.as_bytes(), markdown.as_bytes()],
+    )
+}
+
+fn handoff_mode_tag(mode: &HandoffMode) -> &'static str {
+    match mode {
+        HandoffMode::Deterministic => "deterministic",
+        HandoffMode::LlmAssisted => "llm_assisted",
+    }
+}
+
+pub(crate) fn handoff_pack_digest(
+    product_slug: &str,
+    mode: &HandoffMode,
+    document_digests: &[String],
+) -> String {
+    let mut hasher = Sha256::new();
+    update_id_field(&mut hasher, ID_NAMESPACE);
+    update_id_field(&mut hasher, INTELLIGENCE_ID_SCHEME.as_bytes());
+    update_id_field(&mut hasher, DOMAIN_HANDOFF_PACK.as_bytes());
+    update_id_field(&mut hasher, product_slug.as_bytes());
+    update_id_field(&mut hasher, handoff_mode_tag(mode).as_bytes());
+    for digest in document_digests {
+        update_id_field(&mut hasher, digest.as_bytes());
+    }
+    hex_encode(&hasher.finalize())
 }
 
 fn accent_fold(text: &str) -> String {
@@ -456,14 +533,7 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
             let (start, end) = locate_chunk_span(&document.markdown, cursor, &chunk.text);
             cursor = end;
             corpus.push(CorpusChunk {
-                id: format!(
-                    "chunk-{}",
-                    stable_hash([
-                        document.source_rel.as_str(),
-                        chunk.heading.as_str(),
-                        &start.to_string(),
-                    ])
-                ),
+                id: corpus_chunk_id(&document.source_rel, &chunk.heading, start),
                 source_rel: document.source_rel.clone(),
                 md_rel: document.md_rel.clone(),
                 heading: chunk.heading,
@@ -883,14 +953,7 @@ pub fn parse_markdown_tables(document: &CorpusDocument) -> Vec<MarkdownTable> {
             document.markdown.len()
         };
         tables.push(MarkdownTable {
-            id: format!(
-                "table-{}",
-                stable_hash([
-                    document.source_rel.as_str(),
-                    &tables.len().to_string(),
-                    &start.to_string(),
-                ])
-            ),
+            id: markdown_table_id(&document.source_rel, tables.len(), start),
             source_rel: document.source_rel.clone(),
             index: tables.len(),
             start,
@@ -1718,24 +1781,17 @@ pub fn generate_handoff_pack(
     let artifacts = render_handoff_artifacts(options, &items, &traceability, &citations);
     let created_at = now_epoch();
     let nonce = now_nonce();
-    let fingerprint: Vec<String> = documents
+    let document_digests: Vec<String> = documents
         .iter()
-        .map(|document| {
-            format!(
-                "{}:{}",
-                document.source_rel,
-                stable_hash([document.markdown.as_str()])
-            )
-        })
-        .chain(std::iter::once(format!("{:?}", options.mode)))
+        .map(|document| handoff_document_digest(&document.source_rel, &document.markdown))
         .collect();
+    let pack_digest = handoff_pack_digest(&options.product_slug, &options.mode, &document_digests);
     HandoffPack {
-        schema_version: 1,
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        id_scheme: INTELLIGENCE_ID_SCHEME.into(),
         pack_id: format!(
-            "handoff-{}-{}-{}",
+            "handoff-{INTELLIGENCE_ID_SCHEME}-{}-{nonce}-{pack_digest}",
             options.product_slug,
-            nonce,
-            stable_hash(fingerprint.iter())
         ),
         product_name: options.product_name.clone(),
         product_slug: options.product_slug.clone(),
@@ -2199,44 +2255,85 @@ mod tests {
 }
 
 #[cfg(test)]
-mod stable_hash_tests {
-    use super::{stable_hash, STABLE_HASH_SCHEME};
-    use std::hash::{Hash, Hasher};
+mod intelligence_id_tests {
+    use super::{
+        corpus_chunk_id, handoff_document_digest, handoff_pack_digest, intelligence_digest,
+        markdown_table_id, HandoffMode, DOMAIN_CHUNK, DOMAIN_HANDOFF_DOCUMENT, DOMAIN_TABLE,
+        HANDOFF_SCHEMA_VERSION, INTELLIGENCE_ID_SCHEME,
+    };
 
-    /// Fixed known vectors for `sip13-v1` — independent of OS/runtime clocks.
     #[test]
-    fn sip13_v1_known_vectors_are_pinned() {
-        assert_eq!(STABLE_HASH_SCHEME, "sip13-v1");
-        assert_eq!(stable_hash(std::iter::empty::<&str>()), "322443126ac5b468");
-        assert_eq!(stable_hash(["alpha"]), "56802a3ef1f89fbd");
-        assert_eq!(stable_hash(["a", "b", "c"]), "7f0c7f8a0148dfa9");
-        assert_eq!(stable_hash(["yêu cầu", "0"]), "ebcec1ae82a0f03a");
-        assert_eq!(stable_hash(["doc.md", "Heading", "0"]), "d58571045f74d9bf");
+    fn sha256_v1_domain_vectors_are_independent_and_pinned() {
+        assert_eq!(INTELLIGENCE_ID_SCHEME, "sha256-v1");
+        assert_eq!(HANDOFF_SCHEMA_VERSION, 2);
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[]),
+            "3d209f021406f03ded91cc145d3505de3d811d8c84407450fd0103e9c8ac762e"
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"alpha"]),
+            "035a5386d593c4334c79fe2c76dc8d0855bbb4406c02a06bba42d69b06f032dd"
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"a", b"b", b"c"]),
+            "ab08d8cb024ca089b89c89d26a2bad0c4f8b9c1a56177526dabffbb0b9b5564e"
+        );
+        let zero = 0u64.to_be_bytes();
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &["yêu cầu".as_bytes(), &zero]),
+            "1c7d0e2597701f6b5f510444c92557f01d5161482986d582bf47da32bc50cc9d"
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_TABLE, &[b"sheet.md", &zero, &12u64.to_be_bytes()]),
+            "890c11209f0ade11d5307d3344bbbb8f37b10775ab4d806b5b9c24c8a36bdb7a"
+        );
+        assert_eq!(
+            intelligence_digest(
+                DOMAIN_HANDOFF_DOCUMENT,
+                &[b"doc.md", b"# Title\n\nBody text.\n"]
+            ),
+            "d847104aef03239f6e19f30d970ee9cf47817f5de8c85d6d66cf020456f6cfb9"
+        );
     }
 
     #[test]
-    fn sip13_v1_is_deterministic_and_order_sensitive() {
-        assert_eq!(stable_hash(["x", "y"]), stable_hash(["x", "y"]));
-        assert_ne!(stable_hash(["x", "y"]), stable_hash(["y", "x"]));
-        assert_ne!(stable_hash(["ab"]), stable_hash(["a", "b"]));
-    }
-
-    #[test]
-    fn sip13_v1_does_not_claim_legacy_default_hasher_equality() {
-        // Pre-CORE-T9 helpers used DefaultHasher without a scheme domain tag.
-        // Even when SipHash-1-3 matches DefaultHasher for a bare string on a
-        // given Rust toolchain, versioned digests must not be treated as equal.
-        let parts = ["migration-check", "1"];
-        let mut legacy = std::collections::hash_map::DefaultHasher::new();
-        for part in parts {
-            part.hash(&mut legacy);
-            0xff_u8.hash(&mut legacy);
-        }
-        let legacy_hex = format!("{:016x}", legacy.finish());
-        let versioned = stable_hash(parts);
+    fn sha256_v1_length_prefix_and_domain_separate_collisions() {
         assert_ne!(
-            versioned, legacy_hex,
-            "sip13-v1 domain tag must break silent equality with unversioned DefaultHasher digests"
+            intelligence_digest(DOMAIN_CHUNK, &[b"ab", b"c"]),
+            intelligence_digest(DOMAIN_CHUNK, &[b"a", b"bc"])
+        );
+        assert_ne!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"alpha"]),
+            intelligence_digest(DOMAIN_TABLE, &[b"alpha"])
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"x", b"y"]),
+            intelligence_digest(DOMAIN_CHUNK, &[b"x", b"y"])
+        );
+        assert_ne!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"x", b"y"]),
+            intelligence_digest(DOMAIN_CHUNK, &[b"y", b"x"])
+        );
+    }
+
+    #[test]
+    fn visible_ids_encode_scheme_and_are_stable() {
+        assert_eq!(
+            corpus_chunk_id("doc.md", "Heading", 0),
+            "chunk-sha256-v1-f243a448d7403a66a04ddb2f8505673c3b938e710b374df23ed189b70c85614f"
+        );
+        assert_eq!(
+            markdown_table_id("sheet.md", 0, 12),
+            "table-sha256-v1-890c11209f0ade11d5307d3344bbbb8f37b10775ab4d806b5b9c24c8a36bdb7a"
+        );
+        let doc = handoff_document_digest("doc.md", "# Title\n\nBody text.\n");
+        assert_eq!(
+            doc,
+            "d847104aef03239f6e19f30d970ee9cf47817f5de8c85d6d66cf020456f6cfb9"
+        );
+        assert_eq!(
+            handoff_pack_digest("probe", &HandoffMode::Deterministic, &[doc]),
+            "0e15d4a58dc945c6f96037d3fbafedb0a7df4d0f0cf49ec62f820be0bd6768a2"
         );
     }
 }
