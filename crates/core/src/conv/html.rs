@@ -5,12 +5,16 @@
 //!
 //! Decode bytes (HTML-compatible, ưu tiên nội dung đúng):
 //! 1. BOM UTF-8 / UTF-16 LE / UTF-16 BE thắng meta
-//! 2. Charset từ thuộc tính `<meta>` / `<?xml …?>` trong head (bỏ comment/script/style/body)
-//! 3. Label chuẩn qua `encoding_rs` (gồm windows-1252 / windows-1258)
-//! 4. Alias legacy VN tường minh → `viet_legacy`
-//! 5. Không khai báo → `viet_legacy::decode_text` (UTF-8 hoặc heuristic có kiểm soát)
+//! 2. Prescanner stateful: charset từ `<meta>` / `<?xml?>` trong head; bỏ comment,
+//!    script/style/RCDATA (`title`…); chỉ dừng ở token `<body>` / `<frameset>` thật
+//! 3. WHATWG remap: BOMless utf-16* → UTF-8; `x-user-defined` → windows-1252
+//! 4. Label chuẩn qua `encoding_rs` (gồm windows-1252 / windows-1258)
+//! 5. Alias legacy VN tường minh → `viet_legacy`
+//! 6. Không khai báo → `viet_legacy::decode_text` (UTF-8 hoặc heuristic có kiểm soát)
 
 use std::path::Path;
+
+use encoding_rs::Encoding;
 
 use super::fail;
 use crate::ConvertError;
@@ -87,9 +91,21 @@ fn decode_declared_charset(bytes: &[u8], label: &str) -> Option<String> {
     if is_vps_charset(label) {
         return Some(crate::viet_legacy::decode_vps(bytes));
     }
-    let encoding = encoding_rs::Encoding::for_label(label.as_bytes())?;
+    let encoding = resolve_html_encoding(label)?;
     let (cow, _, _) = encoding.decode(bytes);
     Some(cow.into_owned())
+}
+
+/// WHATWG: BOMless UTF-16* → UTF-8; x-user-defined → windows-1252.
+fn resolve_html_encoding(label: &str) -> Option<&'static Encoding> {
+    let encoding = Encoding::for_label(label.as_bytes())?;
+    if encoding == encoding_rs::UTF_16LE || encoding == encoding_rs::UTF_16BE {
+        return Some(encoding_rs::UTF_8);
+    }
+    if encoding == encoding_rs::X_USER_DEFINED {
+        return Some(encoding_rs::WINDOWS_1252);
+    }
+    Some(encoding)
 }
 
 fn is_tcvn3_charset(name: &str) -> bool {
@@ -107,23 +123,25 @@ fn is_vps_charset(name: &str) -> bool {
     matches!(name, "vps" | "x-vps")
 }
 
-/// Charset từ thuộc tính meta/XML trong phần head (không đọc body / comment / script).
+/// Prescanner encoding (HTML-inspired, không phải full tokenizer).
 fn sniff_declared_charset(bytes: &[u8]) -> Option<String> {
-    let end = head_scan_limit(bytes);
-    scan_head_for_charset(&bytes[..end])
-}
-
-fn head_scan_limit(bytes: &[u8]) -> usize {
-    // Cắt trước `<body` nếu thấy; vẫn giới hạn để tránh quét cả file lớn.
     let cap = bytes.len().min(8192);
-    let head = &bytes[..cap];
-    let lower: Vec<u8> = head.iter().map(|b| b.to_ascii_lowercase()).collect();
-    find_bytes(&lower, b"<body")
-        .or_else(|| find_bytes(&lower, b"<frameset"))
-        .unwrap_or(cap)
+    let label = prescan_charset(&bytes[..cap])?;
+    // Trả label hiệu lực sau WHATWG remap (để test/decode thống nhất).
+    effective_charset_label(&label)
 }
 
-fn scan_head_for_charset(bytes: &[u8]) -> Option<String> {
+fn effective_charset_label(label: &str) -> Option<String> {
+    if is_tcvn3_charset(label) || is_vni_charset(label) || is_vps_charset(label) {
+        return Some(label.to_string());
+    }
+    let encoding = resolve_html_encoding(label)?;
+    Some(encoding.name().to_ascii_lowercase())
+}
+
+/// Quét byte stream: comment / rawtext / RCDATA được bỏ qua; chỉ dừng ở
+/// start-tag `body`/`frameset` thật (không cắt sớm vì chuỗi `<body` trong comment).
+fn prescan_charset(bytes: &[u8]) -> Option<String> {
     let lower: Vec<u8> = bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
     let mut index = 0usize;
     while index < lower.len() {
@@ -131,87 +149,149 @@ fn scan_head_for_charset(bytes: &[u8]) -> Option<String> {
             index += 1;
             continue;
         }
-        // Comment
+
+        // Comment: <!-- ... -->
         if lower[index..].starts_with(b"<!--") {
             index += 4;
-            if let Some(rel) = find_bytes(&lower[index..], b"-->") {
-                index += rel + 3;
-            } else {
-                break;
+            index = match find_bytes(&lower[index..], b"-->") {
+                Some(rel) => index + rel + 3,
+                None => return None,
+            };
+            continue;
+        }
+
+        // Declarations / bogus comments starting with <!
+        if lower[index..].starts_with(b"<!") {
+            index = skip_until(&lower, index + 2, b'>');
+            if index < lower.len() {
+                index += 1;
             }
             continue;
         }
-        // DOCTYPE / other declarations that are not xml
-        if lower[index..].starts_with(b"<!") {
-            index = skip_until(&lower, index + 2, b'>');
-            continue;
-        }
-        // XML declaration
-        if lower[index..].starts_with(b"<?xml") {
+
+        // XML declaration / processing instruction
+        if lower[index..].starts_with(b"<?") {
+            let is_xml = lower[index..].starts_with(b"<?xml");
             let close = find_bytes(&lower[index..], b"?>").map(|r| index + r)?;
-            let attrs = parse_tag_attributes(&lower[index + 5..close]);
-            if let Some(value) = attr_value(&attrs, "encoding") {
-                return Some(value);
+            if is_xml {
+                let attrs = parse_tag_attributes(&lower[index + 5..close]);
+                if let Some(value) = attr_value(&attrs, "encoding") {
+                    return Some(value);
+                }
             }
             index = close + 2;
             continue;
         }
-        // End of head — stop before body content markup we already cut, but also </head>
-        if lower[index..].starts_with(b"</head") {
-            break;
-        }
-        // Skip script / style entirely (false-positive charset= in JS/CSS).
-        if let Some(end_tag) = match_open_skip_element(&lower[index..]) {
-            let open_end = skip_until(&lower, index + 1, b'>');
-            if let Some(rel) = find_bytes(&lower[open_end..], end_tag) {
-                index = open_end + rel + end_tag.len();
-            } else {
-                break;
-            }
-            continue;
-        }
-        // Meta
-        if lower[index..].starts_with(b"<meta")
-            && matches!(
-                lower.get(index + 5).copied().unwrap_or(0),
-                b'>' | b'/' | b'\t' | b'\n' | b'\r' | b' '
-            )
-        {
-            let close = skip_until(&lower, index + 5, b'>');
-            let attrs = parse_tag_attributes(&lower[index + 5..close]);
-            if let Some(value) = charset_from_meta_attrs(&attrs) {
-                return Some(value);
-            }
+
+        // End tag: </name ...>
+        if lower[index..].starts_with(b"</") {
+            let (name, after_name) = read_tag_name(&lower[index + 2..]);
+            let close = skip_until(&lower, index + 2 + after_name, b'>');
             index = if close < lower.len() {
                 close + 1
             } else {
                 close
             };
+            // </head> không bắt buộc dừng — tiếp tục tới body/frameset hoặc hết buffer.
+            let _ = name;
             continue;
         }
-        // Other tag — skip.
-        index = skip_until(&lower, index + 1, b'>');
-        if index < lower.len() {
-            index += 1;
+
+        // Start tag
+        if lower
+            .get(index + 1)
+            .is_some_and(|b| b.is_ascii_alphabetic())
+        {
+            let (name, name_len) = read_tag_name(&lower[index + 1..]);
+            let attrs_start = index + 1 + name_len;
+            let close = skip_until(&lower, attrs_start, b'>');
+            let attrs = parse_tag_attributes(&lower[attrs_start..close]);
+            let next = if close < lower.len() {
+                close + 1
+            } else {
+                close
+            };
+
+            match name.as_str() {
+                "meta" => {
+                    if let Some(value) = charset_from_meta_attrs(&attrs) {
+                        return Some(value);
+                    }
+                    index = next;
+                }
+                "body" | "frameset" => {
+                    // Token body/frameset thật — dừng prescanner.
+                    return None;
+                }
+                name if is_rawtext_or_rcdata(name) => {
+                    // Bỏ nội dung tới end-tag tương ứng (meta giả trong title không đếm).
+                    index = skip_until_end_tag(&lower, next, name);
+                }
+                _ => {
+                    index = next;
+                }
+            }
+            continue;
         }
+
+        // `<` không mở tag — bỏ qua.
+        index += 1;
     }
     None
 }
 
-fn match_open_skip_element(lower_at_lt: &[u8]) -> Option<&'static [u8]> {
-    for (open, close) in [
-        (&b"<script"[..], &b"</script>"[..]),
-        (&b"<style"[..], &b"</style>"[..]),
-        (&b"<noscript"[..], &b"</noscript>"[..]),
-    ] {
-        if lower_at_lt.starts_with(open) {
-            let next = lower_at_lt.get(open.len()).copied().unwrap_or(0);
-            if matches!(next, b'>' | b'/' | b'\t' | b'\n' | b'\r' | b' ') {
-                return Some(close);
+fn is_rawtext_or_rcdata(name: &str) -> bool {
+    matches!(
+        name,
+        "script"
+            | "style"
+            | "noscript"
+            | "title"
+            | "textarea"
+            | "xmp"
+            | "iframe"
+            | "noembed"
+            | "noframes"
+    )
+}
+
+fn read_tag_name(bytes: &[u8]) -> (String, usize) {
+    let mut len = 0usize;
+    while len < bytes.len() && bytes[len].is_ascii_alphanumeric() {
+        len += 1;
+    }
+    let name = std::str::from_utf8(&bytes[..len])
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    (name, len)
+}
+
+/// Bỏ qua tới `</name>` (so khớp ASCII case-insensitive), bỏ qua `>` sau end-tag.
+fn skip_until_end_tag(lower: &[u8], mut index: usize, name: &str) -> usize {
+    let mut needle = Vec::with_capacity(name.len() + 2);
+    needle.extend_from_slice(b"</");
+    needle.extend_from_slice(name.as_bytes());
+    while index < lower.len() {
+        match find_bytes(&lower[index..], &needle) {
+            Some(rel) => {
+                let at = index + rel;
+                let after = at + needle.len();
+                let boundary = lower.get(after).copied().unwrap_or(b'>');
+                // End-tag phải kết thúc bằng whitespace, `/`, hoặc `>`.
+                if matches!(boundary, b'>' | b'/' | b'\t' | b'\n' | b'\r' | b' ') {
+                    let close = skip_until(lower, after, b'>');
+                    return if close < lower.len() {
+                        close + 1
+                    } else {
+                        close
+                    };
+                }
+                index = after;
             }
+            None => return lower.len(),
         }
     }
-    None
+    lower.len()
 }
 
 fn charset_from_meta_attrs(attrs: &[(String, String)]) -> Option<String> {
@@ -289,7 +369,6 @@ fn parse_tag_attributes(bytes: &[u8]) -> Vec<(String, String)> {
             index += 1;
         }
         if index >= bytes.len() || bytes[index] != b'=' {
-            // Boolean attribute — ignore for charset purposes.
             continue;
         }
         index += 1;
@@ -394,7 +473,7 @@ fn skip_until(bytes: &[u8], start: usize, marker: u8) -> usize {
 mod tests {
     use super::*;
     use crate::Converter;
-    use encoding_rs::WINDOWS_1258;
+    use unicode_normalization::UnicodeNormalization;
 
     fn temp_html(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
@@ -408,7 +487,6 @@ mod tests {
 
     #[test]
     fn utf8_bom_wins_over_conflicting_meta() {
-        // BOM UTF-8 + meta windows-1252: BOM thắng (HTML-compatible).
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
         bytes.extend_from_slice(
             b"<html><head><meta charset=\"windows-1252\"></head><body><p>Xin ch\xc3\xa0o</p></body></html>",
@@ -457,21 +535,82 @@ mod tests {
     }
 
     #[test]
+    fn body_inside_comment_does_not_stop_prescan_before_real_meta() {
+        // Regression: `<body` trong comment không được cắt prescanner.
+        let html = b"\
+<html><head>\
+<!-- decoy <body class=\"x\"> -->\
+<meta charset=\"utf-8\">\
+</head><body><p>ok</p></body></html>";
+        assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
+    }
+
+    #[test]
+    fn meta_text_inside_title_is_not_a_real_meta() {
+        // Regression: RCDATA title chứa chữ `<meta charset=...>` không phải token meta.
+        let html = b"\
+<html><head>\
+<title>demo &lt;meta charset=\"windows-1252\"&gt; still title <meta charset=\"windows-1252\"></title>\
+<meta charset=\"utf-8\">\
+</head><body></body></html>";
+        assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
+    }
+
+    #[test]
     fn body_charset_text_is_not_a_declaration() {
         let html = b"<html><body><p>charset=windows-1252</p></body></html>";
         assert_eq!(sniff_declared_charset(html), None);
     }
 
     #[test]
-    fn windows_1258_meta_decodes_vietnamese() {
-        // "Xin chào" in windows-1258: à = 0xE0 (same as Latin-1 for this word).
-        let (encoded, _, _) = WINDOWS_1258.encode("Xin chào");
+    fn bomless_utf16_label_remaps_to_utf8() {
+        // WHATWG: declared utf-16le without BOM → UTF-8.
+        let html =
+            b"<html><head><meta charset=\"utf-16le\"></head><body><p>Xin ch\xc3\xa0o</p></body></html>";
+        assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
+        let decoded = decode_html_bytes(html);
+        assert!(decoded.contains("Xin chào"), "got: {decoded:?}");
+    }
+
+    #[test]
+    fn x_user_defined_remaps_to_windows_1252() {
+        let html =
+            b"<html><head><meta charset=\"x-user-defined\"></head><body><p>caf\xe9</p></body></html>";
+        assert_eq!(
+            sniff_declared_charset(html).as_deref(),
+            Some("windows-1252")
+        );
+        let decoded = decode_html_bytes(html);
+        assert!(decoded.contains("café"), "got: {decoded:?}");
+    }
+
+    #[test]
+    fn windows_1258_meta_decodes_combining_tone_vietnamese() {
+        // "Người": ư=0xFD, ơ=0xF5, combining grave=0xCC — khác hẳn windows-1252 ("NgýõÌi").
+        let phrase = [b'N', b'g', 0xFD, 0xF5, 0xCC, b'i'];
+        let as_1252 = {
+            let (cow, _, _) = encoding_rs::WINDOWS_1252.decode(&phrase);
+            cow.into_owned()
+        };
+        assert!(
+            as_1252.contains('ý') || as_1252.contains('Ì'),
+            "fixture must distinguish from 1252: {as_1252:?}"
+        );
+
         let mut html = b"<html><head><meta charset=\"windows-1258\"></head><body><p>".to_vec();
-        html.extend_from_slice(&encoded);
+        html.extend_from_slice(&phrase);
         html.extend_from_slice(b"</p></body></html>");
         let path = temp_html("cp1258", &html);
         let md = Converter::new().convert_path(&path).unwrap().markdown;
-        assert!(md.contains("Xin chào"), "got: {md:?}");
+        let nfc: String = md.nfc().collect();
+        assert!(
+            nfc.contains("Người"),
+            "expected combining-tone Vietnamese, got: {md:?}"
+        );
+        assert!(
+            !nfc.contains("NgýõÌi"),
+            "must not decode as windows-1252: {md:?}"
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -510,6 +649,16 @@ mod tests {
     fn xml_declaration_encoding_is_honoured() {
         let html =
             br#"<?xml version="1.0" encoding = "utf-8"?><html><body><p>hi</p></body></html>"#;
+        assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
+    }
+
+    #[test]
+    fn body_inside_script_does_not_stop_prescan() {
+        let html = b"\
+<html><head>\
+<script>const html = '<body><meta charset=\"windows-1252\">';</script>\
+<meta charset=\"utf-8\">\
+</head><body></body></html>";
         assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
     }
 }
