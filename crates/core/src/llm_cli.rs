@@ -109,16 +109,211 @@ fn read_pipe<T: Read + Send + 'static>(mut pipe: T) -> std::thread::JoinHandle<V
     })
 }
 
-/// Kill the spawned CLI and direct children so piped stdin/stdout cannot hang
-/// after timeout (e.g. `/bin/sh -c sleep` leaves `sleep` holding the pipes).
-fn terminate_child(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        // Prefer parent-based kill: process-group signals are unreliable under
-        // some sandboxes, while `pkill -P` still reaps shell grandchildren.
-        let pid = child.id().to_string();
-        let _ = Command::new("pkill").args(["-KILL", "-P", &pid]).status();
+/// Join a helper thread without exceeding `deadline`. Abandoned joins are reaped
+/// in the background so a stuck pipe cannot block the caller past the budget.
+fn join_with_deadline<T: Send + 'static>(
+    handle: std::thread::JoinHandle<T>,
+    deadline: Instant,
+) -> Option<T> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        std::thread::spawn(move || {
+            let _ = handle.join();
+        });
+        return None;
     }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(remaining) {
+        Ok(Ok(value)) => Some(value),
+        _ => None,
+    }
+}
+
+#[cfg(unix)]
+fn prepare_command_containment(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // New process group (= child pid) so SIGKILL to -pgid reaps grandchildren.
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+struct WindowsJob(*mut core::ffi::c_void);
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn create() -> Option<Self> {
+        use std::ptr;
+        // Minimal Job Object containment without adding windows-sys as a dep.
+        extern "system" {
+            fn CreateJobObjectW(
+                lpJobAttributes: *mut core::ffi::c_void,
+                lpName: *const u16,
+            ) -> *mut core::ffi::c_void;
+            fn SetInformationJobObject(
+                hJob: *mut core::ffi::c_void,
+                jobObjectInformationClass: u32,
+                lpJobObjectInformation: *mut core::ffi::c_void,
+                cbJobObjectInformationLength: u32,
+            ) -> i32;
+        }
+        const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+        const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+        #[repr(C)]
+        struct IoCounters {
+            read_op: u64,
+            write_op: u64,
+            other_op: u64,
+            read_tr: u64,
+            write_tr: u64,
+            other_tr: u64,
+        }
+        #[repr(C)]
+        struct BasicLimit {
+            per_process_user_time: u64,
+            per_job_user_time: u64,
+            min_working: usize,
+            max_working: usize,
+            page_limit: u32,
+            active_limit: u32,
+            priority: u32,
+            scheduling: u32,
+            affinity: usize,
+            limit_flags: u32,
+        }
+        #[repr(C)]
+        struct ExtendedLimit {
+            basic: BasicLimit,
+            io: IoCounters,
+            process_memory: usize,
+            job_memory: usize,
+            peak_process: usize,
+            peak_job: usize,
+        }
+        unsafe {
+            let handle = CreateJobObjectW(ptr::null_mut(), ptr::null());
+            if handle.is_null() {
+                return None;
+            }
+            let mut info: ExtendedLimit = std::mem::zeroed();
+            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                handle,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &mut info as *mut _ as *mut core::ffi::c_void,
+                std::mem::size_of::<ExtendedLimit>() as u32,
+            );
+            if ok == 0 {
+                extern "system" {
+                    fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+                }
+                let _ = CloseHandle(handle);
+                return None;
+            }
+            Some(Self(handle))
+        }
+    }
+
+    fn assign(&self, child: &std::process::Child) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        extern "system" {
+            fn AssignProcessToJobObject(
+                hJob: *mut core::ffi::c_void,
+                hProcess: *mut core::ffi::c_void,
+            ) -> i32;
+        }
+        unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
+    }
+
+    fn terminate(&self) {
+        extern "system" {
+            fn TerminateJobObject(hJob: *mut core::ffi::c_void, uExitCode: u32) -> i32;
+        }
+        unsafe {
+            let _ = TerminateJobObject(self.0, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        extern "system" {
+            fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+        }
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn prepare_command_containment(_command: &mut Command) {}
+
+/// Containment token kept for the lifetime of the child (Windows Job Object).
+struct ProcessContainment {
+    #[cfg(unix)]
+    pgid: u32,
+    #[cfg(windows)]
+    job: Option<WindowsJob>,
+}
+
+impl ProcessContainment {
+    fn attach(command: &mut Command) -> Self {
+        prepare_command_containment(command);
+        #[cfg(unix)]
+        {
+            Self { pgid: 0 }
+        }
+        #[cfg(windows)]
+        {
+            Self {
+                job: WindowsJob::create(),
+            }
+        }
+    }
+
+    fn after_spawn(&mut self, child: &std::process::Child) {
+        #[cfg(unix)]
+        {
+            self.pgid = child.id();
+        }
+        #[cfg(windows)]
+        {
+            if let Some(job) = &self.job {
+                if !job.assign(child) {
+                    self.job = None;
+                }
+            }
+        }
+    }
+
+    fn kill_tree(&self) {
+        #[cfg(unix)]
+        {
+            if self.pgid != 0 {
+                extern "C" {
+                    fn kill(pid: i32, sig: i32) -> i32;
+                }
+                const SIGKILL: i32 = 9;
+                unsafe {
+                    let _ = kill(-(self.pgid as i32), SIGKILL);
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            if let Some(job) = &self.job {
+                job.terminate();
+            }
+        }
+    }
+}
+
+fn terminate_contained(child: &mut std::process::Child, containment: &ProcessContainment) {
+    containment.kill_tree();
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -128,12 +323,13 @@ fn run_command(
     input: Option<&str>,
     timeout: Duration,
 ) -> Result<CliOutput, ConvertError> {
-    // Start the deadline before potentially blocking stdin writes (large prompts
-    // can fill the OS pipe if the child never reads).
-    let started = Instant::now();
+    // Absolute deadline covers spawn, stdin write, wait, and pipe joins.
+    let deadline = Instant::now() + timeout;
+    let mut containment = ProcessContainment::attach(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| fail(format!("không khởi chạy được CLI: {error}")))?;
+    containment.after_spawn(&child);
     let stdout_reader = child.stdout.take().map(read_pipe);
     let stderr_reader = child.stderr.take().map(read_pipe);
     let stdin_writer = if let Some(input) = input {
@@ -152,34 +348,50 @@ fn run_command(
 
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < timeout => {
+            Ok(Some(status)) => {
+                // Parent may exit while grandchildren still hold pipes
+                // (`sleep 30 & exit 0`). Reap the process group / job first.
+                containment.kill_tree();
+                break status;
+            }
+            Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(40));
             }
             Ok(None) => {
-                terminate_child(&mut child);
-                // Closing pipes unblocks a stuck stdin writer / readers.
-                let _ = stdin_writer.and_then(|handle| handle.join().ok());
-                let _ = stdout_reader.and_then(|reader| reader.join().ok());
-                let _ = stderr_reader.and_then(|reader| reader.join().ok());
+                terminate_contained(&mut child, &containment);
+                if let Some(handle) = stdin_writer {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stdout_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stderr_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
                 return Err(fail(format!(
                     "subscription CLI timeout sau {} giây",
                     timeout.as_secs()
                 )));
             }
             Err(error) => {
-                terminate_child(&mut child);
-                let _ = stdin_writer.and_then(|handle| handle.join().ok());
-                let _ = stdout_reader.and_then(|reader| reader.join().ok());
-                let _ = stderr_reader.and_then(|reader| reader.join().ok());
+                terminate_contained(&mut child, &containment);
+                if let Some(handle) = stdin_writer {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stdout_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stderr_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
                 return Err(fail(format!("không chờ được CLI: {error}")));
             }
         }
     };
 
     if let Some(handle) = stdin_writer {
-        match handle.join() {
-            Ok(Err(error))
+        match join_with_deadline(handle, deadline) {
+            Some(Err(error))
                 if status.success() && error.kind() != std::io::ErrorKind::BrokenPipe =>
             {
                 return Err(fail(format!("không gửi được prompt tới CLI: {error}")));
@@ -189,10 +401,12 @@ fn run_command(
     }
 
     let stdout = stdout_reader
-        .and_then(|reader| reader.join().ok())
+        .and_then(|reader| join_with_deadline(reader, deadline))
         .unwrap_or_default();
     // Drain stderr without exposing OAuth URLs, tokens, or local paths to UI logs.
-    let _ = stderr_reader.and_then(|reader| reader.join().ok());
+    if let Some(reader) = stderr_reader {
+        let _ = join_with_deadline(reader, deadline);
+    }
     Ok(CliOutput {
         status,
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -492,6 +706,54 @@ printf '{"type":"result","result":"Grounded mock answer"}\n'
         let input = "x".repeat(512 * 1024);
         let started = Instant::now();
         let error = run_command(command, Some(&input), Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_nested_grandchildren_via_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sh -c 'sh -c \"sleep 30\"'"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let error = run_command(command, None, Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn early_parent_exit_reaps_orphans_without_hanging_pipes() {
+        // Parent exits immediately while a background grandchild keeps pipes open
+        // unless the process group is reaped.
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & exit 0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let input = "x".repeat(256 * 1024);
+        let started = Instant::now();
+        let result = run_command(command, Some(&input), Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(result.is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_timeout_returns_without_hanging() {
+        let mut command = Command::new("cmd");
+        command
+            .args(["/C", "ping -n 20 127.0.0.1 >NUL"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let error = run_command(command, None, Duration::from_millis(200)).unwrap_err();
         assert!(error.to_string().contains("timeout"));
         assert!(started.elapsed() < Duration::from_secs(3));
     }

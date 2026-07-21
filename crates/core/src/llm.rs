@@ -22,10 +22,47 @@ pub enum Provider {
     CodexCli,
 }
 
+fn serialize_redacted_secret<S: serde::Serializer>(
+    value: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    if value.is_empty() {
+        serializer.serialize_str("")
+    } else {
+        serializer.serialize_str("[REDACTED]")
+    }
+}
+
+/// Redact userinfo and common secret query params from URLs for Debug output.
+fn redact_url_for_debug(url: &str, api_key: &str) -> String {
+    let mut redacted = if api_key.is_empty() {
+        url.to_string()
+    } else {
+        url.replace(api_key, "[REDACTED]")
+    };
+    if let Some((scheme, rest)) = redacted.split_once("://") {
+        if let Some((_userinfo, host)) = rest.split_once('@') {
+            redacted = format!("{scheme}://[REDACTED]@{host}");
+        }
+    }
+    for key in ["key=", "api_key=", "apiKey=", "token=", "access_token="] {
+        if let Some(start) = redacted.find(key) {
+            let value_start = start + key.len();
+            let value_end = redacted[value_start..]
+                .find(['&', '#', ' ', '"', '\''])
+                .map(|idx| value_start + idx)
+                .unwrap_or(redacted.len());
+            redacted.replace_range(value_start..value_end, "[REDACTED]");
+        }
+    }
+    redacted
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmConfig {
     pub provider: Provider,
+    #[serde(serialize_with = "serialize_redacted_secret")]
     pub api_key: String,
     pub model: String,
     pub base_url: Option<String>,
@@ -39,7 +76,13 @@ impl std::fmt::Debug for LlmConfig {
             .field("provider", &self.provider)
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
-            .field("base_url", &self.base_url)
+            .field(
+                "base_url",
+                &self
+                    .base_url
+                    .as_deref()
+                    .map(|url| redact_url_for_debug(url, &self.api_key)),
+            )
             .field("cli_binary", &self.cli_binary)
             .finish()
     }
@@ -81,6 +124,7 @@ const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddingConfig {
     pub provider: Provider,
+    #[serde(serialize_with = "serialize_redacted_secret")]
     pub api_key: String,
     pub model: String,
     pub base_url: Option<String>,
@@ -96,7 +140,13 @@ impl std::fmt::Debug for EmbeddingConfig {
             .field("provider", &self.provider)
             .field("api_key", &"[REDACTED]")
             .field("model", &self.model)
-            .field("base_url", &self.base_url)
+            .field(
+                "base_url",
+                &self
+                    .base_url
+                    .as_deref()
+                    .map(|url| redact_url_for_debug(url, &self.api_key)),
+            )
             .field("dimensions", &self.dimensions)
             .field("runtime_path", &self.runtime_path)
             .finish()
@@ -660,10 +710,12 @@ fn fail<E: std::fmt::Display>(e: E) -> ConvertError {
     ConvertError::Failed(e.to_string())
 }
 
-/// Bounded HTTP retries for transient LLM transport / rate-limit failures.
+/// Bounded HTTP retries for connect failures and explicit 429/503 responses.
 const HTTP_MAX_ATTEMPTS: u32 = 3;
 const HTTP_BASE_BACKOFF: std::time::Duration = std::time::Duration::from_millis(200);
-const HTTP_MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(5);
+/// Max wait we will honor for a retry. Larger `Retry-After` values skip retry
+/// (never sleep less than the provider requested).
+const HTTP_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn redact_secret(text: &str, secret: Option<&str>) -> String {
     let Some(secret) = secret.filter(|value| !value.is_empty()) else {
@@ -676,23 +728,145 @@ fn fail_redacted(message: impl std::fmt::Display, secret: Option<&str>) -> Conve
     ConvertError::Failed(redact_secret(&message.to_string(), secret))
 }
 
-/// Parse `Retry-After` delta-seconds (HTTP-date forms are ignored).
-fn parse_retry_after_header(value: Option<&str>) -> Option<std::time::Duration> {
-    let value = value?.trim();
-    value
-        .parse::<u64>()
-        .ok()
-        .map(std::time::Duration::from_secs)
+fn invalid_provider_response(
+    provider: &str,
+    value: &serde_json::Value,
+    secret: Option<&str>,
+) -> ConvertError {
+    fail_redacted(format!("phản hồi {provider} không hợp lệ: {value}"), secret)
 }
 
-/// Delay before the next attempt (`attempt` is 0-based after the first failure).
-fn retry_backoff(attempt: u32, retry_after: Option<std::time::Duration>) -> std::time::Duration {
-    if let Some(after) = retry_after {
-        return after.min(HTTP_MAX_BACKOFF);
+#[cfg(test)]
+thread_local! {
+    static TEST_SLEEP_LOG: std::cell::RefCell<Vec<std::time::Duration>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static TEST_NOW_OVERRIDE: std::cell::Cell<Option<std::time::SystemTime>> =
+        const { std::cell::Cell::new(None) };
+    static TEST_SKIP_REAL_SLEEP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn sleep_for(duration: std::time::Duration) {
+    #[cfg(test)]
+    {
+        TEST_SLEEP_LOG.with(|log| log.borrow_mut().push(duration));
+        if TEST_SKIP_REAL_SLEEP.with(|skip| skip.get()) {
+            return;
+        }
     }
+    if !duration.is_zero() {
+        std::thread::sleep(duration);
+    }
+}
+
+fn current_time() -> std::time::SystemTime {
+    #[cfg(test)]
+    {
+        if let Some(now) = TEST_NOW_OVERRIDE.with(|cell| cell.get()) {
+            return now;
+        }
+    }
+    std::time::SystemTime::now()
+}
+
+fn month_from_name(name: &str) -> Option<u32> {
+    Some(match name {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    })
+}
+
+/// Civil date → days since Unix epoch (Howard Hinnant).
+fn unix_days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
+    if !(1..=12).contains(&month) || day == 0 || day > 31 {
+        return None;
+    }
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = (y - era * 400) as u32;
+    let mp = if month > 2 { month - 3 } else { month + 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era as i64 * 146_097 + doe as i64 - 719_468)
+}
+
+/// Parse IMF-fixdate (`Wed, 21 Oct 2015 07:28:00 GMT`) to `SystemTime`.
+fn parse_http_date(value: &str) -> Option<std::time::SystemTime> {
+    let value = value.trim();
+    let value = value.strip_suffix(" GMT")?;
+    let value = value.split_once(", ")?.1;
+    let mut parts = value.split_whitespace();
+    let day: u32 = parts.next()?.parse().ok()?;
+    let month = month_from_name(parts.next()?)?;
+    let year: i32 = parts.next()?.parse().ok()?;
+    let time = parts.next()?;
+    let mut hms = time.split(':');
+    let hour: u32 = hms.next()?.parse().ok()?;
+    let minute: u32 = hms.next()?.parse().ok()?;
+    let second: u32 = hms.next()?.parse().ok()?;
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+    let days = unix_days_from_civil(year, month, day)?;
+    let secs = days
+        .checked_mul(86_400)?
+        .checked_add(i64::from(hour * 3600 + minute * 60 + second))?;
+    if secs >= 0 {
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
+    } else {
+        std::time::UNIX_EPOCH.checked_sub(std::time::Duration::from_secs((-secs) as u64))
+    }
+}
+
+/// Parse `Retry-After` as delta-seconds or HTTP-date.
+fn parse_retry_after_header(
+    value: Option<&str>,
+    now: std::time::SystemTime,
+) -> Option<std::time::Duration> {
+    let value = value?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(std::time::Duration::from_secs(seconds));
+    }
+    let when = parse_http_date(value)?;
+    Some(
+        when.duration_since(now)
+            .unwrap_or(std::time::Duration::ZERO),
+    )
+}
+
+fn exponential_backoff(attempt: u32) -> std::time::Duration {
     let shift = attempt.min(4);
     let millis = HTTP_BASE_BACKOFF.as_millis() as u64;
-    std::time::Duration::from_millis(millis.saturating_mul(1u64 << shift)).min(HTTP_MAX_BACKOFF)
+    std::time::Duration::from_millis(millis.saturating_mul(1u64 << shift)).min(HTTP_RETRY_BUDGET)
+}
+
+/// Decide whether/how long to wait before another attempt.
+/// `Some(duration)` honors the full wait (never shortened below `Retry-After`).
+/// `None` means do not retry (including when `Retry-After` exceeds the budget).
+fn plan_retry_wait(
+    attempt: u32,
+    retry_after: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    if attempt + 1 >= HTTP_MAX_ATTEMPTS {
+        return None;
+    }
+    if let Some(after) = retry_after {
+        if after > HTTP_RETRY_BUDGET {
+            return None;
+        }
+        return Some(after);
+    }
+    Some(exponential_backoff(attempt))
 }
 
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
@@ -700,8 +874,9 @@ fn is_retryable_status(status: reqwest::StatusCode) -> bool {
 }
 
 fn is_retryable_transport(error: &reqwest::Error) -> bool {
-    // Only transient network failures — not builder/decode/status mapping errors.
-    error.is_timeout() || error.is_connect()
+    // Generation POSTs are not idempotent: never retry ambiguous read/timeouts
+    // after the request may have been consumed. Connect failures are safe.
+    error.is_connect()
 }
 
 fn openai_chat_url(base: &str) -> String {
@@ -777,7 +952,7 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
             v["choices"][0]["message"]["content"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| fail(format!("phản hồi OpenAI không hợp lệ: {v}")))
+                .ok_or_else(|| invalid_provider_response("OpenAI", &v, secret))
         }
         Provider::Anthropic => {
             let base = cfg
@@ -799,7 +974,7 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
             v["content"][0]["text"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| fail(format!("phản hồi Anthropic không hợp lệ: {v}")))
+                .ok_or_else(|| invalid_provider_response("Anthropic", &v, secret))
         }
         Provider::Gemini => {
             let base = cfg
@@ -818,7 +993,7 @@ pub fn chat(cfg: &LlmConfig, system: &str, user: &str) -> Result<String, Convert
             v["candidates"][0]["content"]["parts"][0]["text"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| fail(format!("phản hồi Gemini không hợp lệ: {v}")))
+                .ok_or_else(|| invalid_provider_response("Gemini", &v, secret))
         }
         Provider::CursorCli | Provider::CodexCli => unreachable!("handled above"),
     }
@@ -837,12 +1012,13 @@ fn post_json(
         let response = match request.send() {
             Ok(response) => response,
             Err(error) => {
-                let retryable = is_retryable_transport(&error);
                 let message = redact_secret(&error.to_string(), secret);
-                if retryable && attempt + 1 < HTTP_MAX_ATTEMPTS {
-                    std::thread::sleep(retry_backoff(attempt, None));
-                    last_error = Some(ConvertError::Failed(message));
-                    continue;
+                if is_retryable_transport(&error) {
+                    if let Some(wait) = plan_retry_wait(attempt, None) {
+                        sleep_for(wait);
+                        last_error = Some(ConvertError::Failed(message));
+                        continue;
+                    }
                 }
                 return Err(ConvertError::Failed(message));
             }
@@ -852,7 +1028,7 @@ fn post_json(
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
-            .and_then(|value| parse_retry_after_header(Some(value)));
+            .and_then(|value| parse_retry_after_header(Some(value), current_time()));
         let text = match response.text() {
             Ok(text) => text,
             Err(error) => return Err(fail_redacted(error, secret)),
@@ -862,10 +1038,12 @@ fn post_json(
         }
         let safe_text = redact_secret(&text, secret);
         let error = ConvertError::Failed(format!("LLM HTTP {status}: {safe_text}"));
-        if is_retryable_status(status) && attempt + 1 < HTTP_MAX_ATTEMPTS {
-            std::thread::sleep(retry_backoff(attempt, retry_after));
-            last_error = Some(error);
-            continue;
+        if is_retryable_status(status) {
+            if let Some(wait) = plan_retry_wait(attempt, retry_after) {
+                sleep_for(wait);
+                last_error = Some(error);
+                continue;
+            }
         }
         return Err(error);
     }
@@ -951,7 +1129,7 @@ fn embed_openai_batch(
     )?;
     let data = response["data"]
         .as_array()
-        .ok_or_else(|| fail(format!("phản hồi embedding không hợp lệ: {response}")))?;
+        .ok_or_else(|| invalid_provider_response("embedding", &response, secret))?;
     let mut indexed = Vec::with_capacity(data.len());
     for (fallback_index, item) in data.iter().enumerate() {
         let index = item["index"].as_u64().unwrap_or(fallback_index as u64) as usize;
@@ -1006,11 +1184,9 @@ fn embed_gemini_one(
     let response = post_json(client, &url, &body, secret, |request| {
         gemini_auth(request, &cfg.api_key)
     })?;
-    let values = response["embedding"]["values"].as_array().ok_or_else(|| {
-        fail(format!(
-            "phản hồi Gemini embedding không hợp lệ: {response}"
-        ))
-    })?;
+    let values = response["embedding"]["values"]
+        .as_array()
+        .ok_or_else(|| invalid_provider_response("Gemini embedding", &response, secret))?;
     let mut vector = values
         .iter()
         .map(|value| {
@@ -1155,7 +1331,7 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
             v["choices"][0]["message"]["content"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| fail(format!("phản hồi OpenAI vision không hợp lệ: {v}")))
+                .ok_or_else(|| invalid_provider_response("OpenAI vision", &v, secret))
         }
         Provider::Anthropic => {
             let base = cfg
@@ -1179,7 +1355,7 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
             v["content"][0]["text"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| fail(format!("phản hồi Anthropic vision không hợp lệ: {v}")))
+                .ok_or_else(|| invalid_provider_response("Anthropic vision", &v, secret))
         }
         Provider::Gemini => {
             let base = cfg
@@ -1200,7 +1376,7 @@ pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<Strin
             v["candidates"][0]["content"]["parts"][0]["text"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| fail(format!("phản hồi Gemini vision không hợp lệ: {v}")))
+                .ok_or_else(|| invalid_provider_response("Gemini vision", &v, secret))
         }
         Provider::CursorCli | Provider::CodexCli => unreachable!("handled above"),
     }
@@ -1442,15 +1618,37 @@ mod tests {
     }
 
     #[test]
-    fn config_debug_redacts_api_keys() {
-        let llm = LlmConfig::new(Provider::OpenAi, "super-secret-key", "model", None).unwrap();
+    fn config_debug_and_serialize_redact_secrets_canary() {
+        let secret = "super-secret-key-canary";
+        let llm = LlmConfig::new(
+            Provider::OpenAi,
+            secret,
+            "model",
+            Some("https://user:pass@api.example.com/v1?key=embedded-query".into()),
+        )
+        .unwrap();
         let llm_debug = format!("{llm:?}");
-        assert!(!llm_debug.contains("super-secret-key"));
+        assert!(!llm_debug.contains(secret));
+        assert!(!llm_debug.contains("user:pass"));
+        assert!(!llm_debug.contains("embedded-query"));
         assert!(llm_debug.contains("[REDACTED]"));
+
+        let serialized = serde_json::to_string(&llm).unwrap();
+        assert!(
+            !serialized.contains(secret),
+            "serialize leaked: {serialized}"
+        );
+        assert!(serialized.contains("[REDACTED]"));
+
+        let restored: LlmConfig = serde_json::from_str(
+            r#"{"provider":"open_ai","apiKey":"restored-from-disk","model":"m","baseUrl":null}"#,
+        )
+        .unwrap();
+        assert_eq!(restored.api_key, "restored-from-disk");
 
         let embedding = EmbeddingConfig::new(
             Provider::OpenAi,
-            "embed-secret-key",
+            "embed-secret-key-canary",
             "text-embedding-3-small",
             Some("https://api.openai.com".into()),
             Some(1536),
@@ -1458,8 +1656,9 @@ mod tests {
         )
         .unwrap();
         let embedding_debug = format!("{embedding:?}");
-        assert!(!embedding_debug.contains("embed-secret-key"));
-        assert!(embedding_debug.contains("[REDACTED]"));
+        let embedding_json = serde_json::to_string(&embedding).unwrap();
+        assert!(!embedding_debug.contains("embed-secret-key-canary"));
+        assert!(!embedding_json.contains("embed-secret-key-canary"));
     }
 
     #[test]
@@ -1474,35 +1673,74 @@ mod tests {
     }
 
     #[test]
-    fn retry_backoff_is_deterministic_and_caps_retry_after() {
+    fn malformed_response_error_redacts_secret_canary() {
+        let secret = "malformed-body-secret-canary";
+        let body = format!(r#"{{"error":"echo {secret}","leak":"{secret}"}}"#);
+        let leaked: &'static str = Box::leak(body.into_boxed_str());
+        let (base_url, server) = mock_json_server(leaked);
+        let config = LlmConfig::new(Provider::OpenAi, secret, "model", Some(base_url)).unwrap();
+        let error = chat(&config, "system", "ping").unwrap_err().to_string();
+        assert!(
+            !error.contains(secret),
+            "malformed response leaked: {error}"
+        );
+        assert!(error.contains("[REDACTED]") || error.contains("không hợp lệ"));
+        let _ = server.join();
+    }
+
+    #[test]
+    fn retry_after_delta_and_http_date_respect_budget_without_shortening() {
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_609_459_200); // 2021-01-01
         assert_eq!(
-            parse_retry_after_header(Some("2")),
+            parse_retry_after_header(Some("2"), now),
             Some(std::time::Duration::from_secs(2))
         );
+        // Past HTTP-date → zero wait (retry immediately).
         assert_eq!(
-            parse_retry_after_header(Some("Wed, 21 Oct 2015 07:28:00 GMT")),
+            parse_retry_after_header(Some("Wed, 21 Oct 2015 07:28:00 GMT"), now),
+            Some(std::time::Duration::ZERO)
+        );
+        assert_eq!(
+            parse_retry_after_header(Some("Fri, 01 Jan 2021 00:00:04 GMT"), now),
+            Some(std::time::Duration::from_secs(4))
+        );
+
+        assert_eq!(
+            plan_retry_wait(0, Some(std::time::Duration::from_secs(1))),
+            Some(std::time::Duration::from_secs(1))
+        );
+        // Beyond budget → no retry (never sleep less than requested).
+        assert_eq!(
+            plan_retry_wait(0, Some(std::time::Duration::from_secs(100))),
             None
         );
         assert_eq!(
-            retry_backoff(0, Some(std::time::Duration::from_secs(1))),
-            std::time::Duration::from_secs(1)
+            plan_retry_wait(0, None),
+            Some(std::time::Duration::from_millis(200))
         );
         assert_eq!(
-            retry_backoff(0, Some(std::time::Duration::from_secs(100))),
-            HTTP_MAX_BACKOFF
+            plan_retry_wait(1, None),
+            Some(std::time::Duration::from_millis(400))
         );
-        assert_eq!(
-            retry_backoff(0, None),
-            std::time::Duration::from_millis(200)
+        assert_eq!(plan_retry_wait(2, None), None);
+    }
+
+    #[test]
+    fn retry_after_beyond_budget_returns_without_sleeping() {
+        TEST_SKIP_REAL_SLEEP.with(|skip| skip.set(true));
+        TEST_SLEEP_LOG.with(|log| log.borrow_mut().clear());
+        let (base_url, server) =
+            mock_status_sequence_server(vec![(429, r#"{"error":"rate"}"#, Some("120"))]);
+        let config =
+            LlmConfig::new(Provider::OpenAi, "secret-key", "model", Some(base_url)).unwrap();
+        let error = chat(&config, "system", "ping").unwrap_err();
+        assert!(error.to_string().contains("LLM HTTP 429"));
+        assert!(
+            TEST_SLEEP_LOG.with(|log| log.borrow().is_empty()),
+            "must not sleep when Retry-After exceeds budget"
         );
-        assert_eq!(
-            retry_backoff(1, None),
-            std::time::Duration::from_millis(400)
-        );
-        assert_eq!(
-            retry_backoff(2, None),
-            std::time::Duration::from_millis(800)
-        );
+        assert_eq!(server.join().unwrap(), 1);
+        TEST_SKIP_REAL_SLEEP.with(|skip| skip.set(false));
     }
 
     fn mock_status_sequence_server(
@@ -1540,6 +1778,8 @@ mod tests {
 
     #[test]
     fn retries_429_with_retry_after_zero_then_succeeds() {
+        TEST_SKIP_REAL_SLEEP.with(|skip| skip.set(true));
+        TEST_SLEEP_LOG.with(|log| log.borrow_mut().clear());
         let ok = r#"{"choices":[{"message":{"content":"OK"}}]}"#;
         let (base_url, server) = mock_status_sequence_server(vec![
             (429, r#"{"error":"rate"}"#, Some("0")),
@@ -1549,10 +1789,16 @@ mod tests {
             LlmConfig::new(Provider::OpenAi, "secret-key", "model", Some(base_url)).unwrap();
         assert_eq!(chat(&config, "system", "ping").unwrap(), "OK");
         assert_eq!(server.join().unwrap(), 2);
+        assert_eq!(
+            TEST_SLEEP_LOG.with(|log| log.borrow().clone()),
+            vec![std::time::Duration::ZERO]
+        );
+        TEST_SKIP_REAL_SLEEP.with(|skip| skip.set(false));
     }
 
     #[test]
     fn gives_up_after_bounded_503_retries() {
+        TEST_SKIP_REAL_SLEEP.with(|skip| skip.set(true));
         let (base_url, server) = mock_status_sequence_server(vec![
             (503, "no", Some("0")),
             (503, "no", Some("0")),
@@ -1563,6 +1809,58 @@ mod tests {
         let error = chat(&config, "system", "ping").unwrap_err();
         assert!(error.to_string().contains("LLM HTTP 503"));
         assert_eq!(server.join().unwrap(), 3);
+        TEST_SKIP_REAL_SLEEP.with(|skip| skip.set(false));
+    }
+
+    #[test]
+    fn read_timeout_after_server_consumes_request_is_not_retried() {
+        // Server accepts + fully reads the generation POST, then delays the
+        // response past the client timeout. Must not issue a second request.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut count = 0usize;
+            listener.set_nonblocking(false).unwrap();
+            if let Ok((mut stream, _)) = listener.accept() {
+                count += 1;
+                let mut request = vec![0u8; 64 * 1024];
+                let _ = stream.read(&mut request);
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                let body = r#"{"choices":[{"message":{"content":"late"}}]}"#;
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+            // Brief window for a hypothetical retry to arrive.
+            listener.set_nonblocking(true).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+            while std::time::Instant::now() < deadline {
+                if listener.accept().is_ok() {
+                    count += 1;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            count
+        });
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(1))
+            .timeout(std::time::Duration::from_millis(150))
+            .build()
+            .unwrap();
+        let url = format!("http://{address}/v1/chat/completions");
+        let body = serde_json::json!({"model":"m","messages":[]});
+        let error = post_json(&client, &url, &body, Some("k"), |request| request);
+        assert!(
+            error.is_err(),
+            "expected timeout/transport error, got {error:?}"
+        );
+        assert_eq!(
+            server.join().unwrap(),
+            1,
+            "ambiguous read/timeout after server consumed the POST must not retry"
+        );
     }
 
     #[test]
