@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "platform": "linux/amd64",
+  "note": "Third-party pins for deploy/compose.poc.yml + Dockerfile bases + worker native deps.",
+  "images": {
+    "postgres": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "qdrant": "qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "minio": "pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "minio-init": "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+    "mock-embedding": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "rust-bookworm": "rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0",
+    "debian-bookworm-slim": "debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "python-slim-bookworm": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde34558376153c5cd80b00ca81da2e659387e76524edc73"
+  },
+  "native": {
+    "pdfium": {
+      "project": "bblanchon/pdfium-binaries",
+      "tag": "chromium/7906",
+      "asset": "pdfium-linux-x64.tgz",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7906/pdfium-linux-x64.tgz",
+      "sha256": "e07bc44c4e422c50eb01da742dc1ec59ad6780ce64ed91955533da8e9fe1a363"
+    },
+    "tesseract_apt": {
+      "suite": "bookworm",
+      "note": "Binary versions pinned in deploy/Dockerfile.worker apt-get install lines.",
+      "packages": {
+        "tesseract-ocr": "5.3.0-2",
+        "tesseract-ocr-eng": "1:4.1.0-2",
+        "tesseract-ocr-vie": "1:4.1.0-2"
+      },
+      "sources": {
+        "tesseract": "https://sources.debian.org/src/tesseract/5.3.0-2/",
+        "tesseract-lang": "https://sources.debian.org/src/tesseract-lang/1:4.1.0-2/"
+      }
+    }
+  },
+  "index_signatures": {
+    "mock": {
+      "base_url": "http://mock-embedding:8080/v1",
+      "model": "markhand-mock",
+      "revision": "poc-local",
+      "dimensions": 8,
+      "signature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874"
+    },
+    "aiteamvn": {
+      "base_url": "http://embedding-cpu:8080/v1",
+      "model": "AITeamVN/Vietnamese_Embedding",
+      "revision": "dea33aa1ab339f38d66ae0a40e6c40e0a9249568",
+      "dimensions": 1024,
+      "signature": "dc6f6af4922063ae815fa3c84e17491b059d7c323fb8320d827f34386a038f86"
+    }
+  }
+}

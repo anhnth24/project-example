@@ -1,0 +1,44 @@
+# POC-hardened AITeamVN CPU embedding image (non-root).
+# Build from repository root:
+#   docker build -f deploy/poc/Dockerfile.embedding-cpu -t markhand-embedding-cpu:poc .
+# Base digest pinned in deploy/poc/images.lock.json.
+
+FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde34558376153c5cd80b00ca81da2e659387e76524edc73
+
+WORKDIR /opt
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 markhand \
+    && useradd --system --uid 10001 --gid markhand \
+        --home-dir /var/lib/markhand --create-home markhand \
+    && mkdir -p /var/lib/markhand/.cache/huggingface \
+    && chown -R markhand:markhand /var/lib/markhand
+
+COPY deploy/dev/requirements-embedding-server.txt /opt/requirements.txt
+RUN pip install --no-cache-dir -r /opt/requirements.txt \
+    && chown -R markhand:markhand /opt
+
+COPY deploy/scripts/aiteamvn-embedding-server.py /opt/server.py
+
+ENV MARKHAND_EMBEDDING_HUB_ID=AITeamVN/Vietnamese_Embedding \
+    MARKHAND_EMBEDDING_REVISION=dea33aa1ab339f38d66ae0a40e6c40e0a9249568 \
+    MARKHAND_EMBEDDING_MODEL_ID=AITeamVN/Vietnamese_Embedding \
+    MARKHAND_EMBEDDING_DIMENSIONS=1024 \
+    MARKHAND_EMBEDDING_MAX_SEQ_LENGTH=2048 \
+    MARKHAND_EMBEDDING_BATCH_SIZE=16 \
+    MARKHAND_EMBEDDING_DEVICE=cpu \
+    MARKHAND_EMBEDDING_SERVER_API_KEY=poc-embedding-key \
+    MARKHAND_EMBEDDING_LISTEN_HOST=0.0.0.0 \
+    MARKHAND_EMBEDDING_LISTEN_PORT=8080 \
+    HF_HOME=/var/lib/markhand/.cache/huggingface \
+    TRANSFORMERS_CACHE=/var/lib/markhand/.cache/huggingface \
+    HOME=/var/lib/markhand
+
+USER markhand:markhand
+WORKDIR /var/lib/markhand
+
+EXPOSE 8080
+
+CMD ["python", "/opt/server.py"]

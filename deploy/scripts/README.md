@@ -1,7 +1,18 @@
-# Deployment scripts (local dev)
+# Deployment scripts
 
-Deterministic setup for the CPU-only dev stack in `deploy/dev/`. Production
+Deterministic setup for the CPU-only dev stack in `deploy/dev/`, plus POC
+boot/isolation helpers for `deploy/compose.poc.yml` (P1B-F02). Production
 orchestration belongs to Phase 4.
+
+POC:
+
+```bash
+cp deploy/.env.example deploy/.env
+deploy/scripts/poc-up.sh
+deploy/scripts/poc-isolation-smoke.sh
+```
+
+See [`deploy/README.md`](../README.md).
 
 Full runbook: [`docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md).
 

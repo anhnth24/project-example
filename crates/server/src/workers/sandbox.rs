@@ -224,11 +224,25 @@ mod imp {
             .args(&argv[1..])
             .current_dir(workspace.path())
             .env_clear()
-            .env("PATH", "/usr/bin:/bin")
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("LC_ALL", "C")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Allowlist-only passthrough so the converter can load pinned native deps
+        // (PDFium / Tesseract) without inheriting worker secrets.
+        for key in [
+            "FILECONV_PDFIUM_LIB",
+            "FILECONV_TESSDATA",
+            "TESSDATA_PREFIX",
+            "LANG",
+        ] {
+            if let Ok(value) = std::env::var(key) {
+                if !value.is_empty() {
+                    command.env(key, value);
+                }
+            }
+        }
 
         unsafe {
             command.pre_exec(move || pre_exec.apply());
@@ -521,15 +535,55 @@ mod imp {
             let uid = unsafe { libc::getuid() };
             let gid = unsafe { libc::getgid() };
             let executable_path = CString::new(path_to_bytes(Path::new(executable))?)?;
-            let landlock_allow = vec![
+            let mut landlock_allow = vec![
                 (workspace.clone(), LANDLOCK_ACCESS_FS_ALL_V1),
                 (executable_path, LANDLOCK_ACCESS_FS_EXEC_FILE),
+                // Preflight uses /bin/true; converter shells out to tesseract under /usr/bin.
+                (cstring_path("/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
+                (cstring_path("/usr/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
+                (
+                    cstring_path("/usr/local/bin")?,
+                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
+                ),
                 (cstring_path("/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
+                // Pinned PDFium + Debian Tesseract tessdata locations.
+                (
+                    cstring_path("/opt/pdfium")?,
+                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
+                ),
+                (
+                    cstring_path("/usr/share/tesseract-ocr")?,
+                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
+                ),
+                (
+                    cstring_path("/usr/share/tessdata")?,
+                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
+                ),
             ];
+            for key in [
+                "FILECONV_PDFIUM_LIB",
+                "FILECONV_TESSDATA",
+                "TESSDATA_PREFIX",
+            ] {
+                if let Ok(value) = std::env::var(key) {
+                    let trimmed = value.trim();
+                    let path = Path::new(trimmed);
+                    if path.is_absolute() {
+                        if let Ok(c_path) = cstring_path(trimmed) {
+                            landlock_allow.push((c_path, LANDLOCK_ACCESS_FS_READ_EXECUTE));
+                        }
+                        if let Some(parent) = path.parent().and_then(Path::to_str) {
+                            if let Ok(c_path) = cstring_path(parent) {
+                                landlock_allow.push((c_path, LANDLOCK_ACCESS_FS_READ_EXECUTE));
+                            }
+                        }
+                    }
+                }
+            }
             Ok(Self {
                 limits: config.limits.clone(),
                 pid_read_fd,

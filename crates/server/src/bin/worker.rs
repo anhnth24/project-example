@@ -31,9 +31,21 @@ async fn main() {
         .any(|argument| argument == "--help" || argument == "-h")
     {
         println!(
-            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON."
+            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config         Validate worker env/config and exit\n  --sandbox-preflight    Probe convert sandbox isolation and exit"
         );
         return;
+    }
+    if args
+        .iter()
+        .any(|argument| argument == "--sandbox-preflight")
+    {
+        match fileconv_server::workers::sandbox::preflight() {
+            Ok(()) => {
+                println!("sandbox preflight ok");
+                return;
+            }
+            Err(error) => exit_with_error(format!("sandbox preflight failed: {error}")),
+        }
     }
     match fileconv_server::config::ServerConfig::from_worker_env() {
         Ok(config) if args.iter().any(|argument| argument == "--check-config") => {

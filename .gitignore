@@ -7,6 +7,8 @@ web/dist/
 /deploy/dev/.env
 /deploy/dev/worker.env
 /deploy/spike/.env
+/deploy/.env
+/deploy/.env.poc-smoke.tmp
 **/*.rs.bk
 # Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng
 /bench/corpus/

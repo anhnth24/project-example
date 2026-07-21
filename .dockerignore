@@ -1,0 +1,23 @@
+# Keep Docker build context lean (deploy POC images).
+.git
+.github
+.cursor
+.claude
+**/.DS_Store
+**/node_modules
+**/target
+app/dist
+app/src-tauri/target
+bench/corpus*
+bench/edge
+bench/markhand_web/reports
+models
+pdfium
+tessdata_best
+vendor
+web
+plans
+*.log
+deploy/dev/.env
+deploy/spike/.env
+deploy/.env
