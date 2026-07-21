@@ -1,6 +1,8 @@
 //! Application services (use cases over repositories).
 
+pub mod acl;
 pub mod artifacts;
+pub mod authz_mutation;
 pub mod chunking;
 pub mod citation;
 pub mod claims;
@@ -13,6 +15,7 @@ pub mod index_signature;
 pub mod indexing;
 pub mod preview;
 pub mod promotion;
+pub mod qa;
 pub mod quota;
 pub mod reconciliation;
 pub mod retrieval;

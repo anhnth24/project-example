@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::auth::session::{write_audit, AuditEvent};
+use crate::db::authz_lock::LockPool;
 use crate::db::error::DbError;
 use crate::db::models::{Document, DocumentState, Job, JobStatus};
 use crate::db::pool::with_org_txn_typed;
@@ -20,6 +21,7 @@ use crate::db::{
 use crate::jobs::{
     self, CheckpointPayload, EventPayload, HeartbeatClaim, HeartbeatError, JobError,
 };
+use crate::services::authz_mutation::{mutate_with_barrier_typed, MutationTarget};
 use crate::services::document_state;
 use crate::services::index_signature::collection_name_for_digest;
 use crate::storage::keys::parse_key_for_org;
@@ -71,91 +73,104 @@ pub fn document_reads_suppressed(state: DocumentState, deleted_at_set: bool) -> 
 }
 
 pub async fn request_delete(
-    pool: &Pool,
+    _pool: &Pool,
+    lock_pool: &LockPool,
     ctx: &OrgContext,
     document_id: Uuid,
 ) -> Result<DeleteRequestOutcome, DeletionError> {
-    with_org_txn_typed(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
-                match document.state {
-                    DocumentState::Tombstoned | DocumentState::Purged => {
-                        Ok(DeleteRequestOutcome::AlreadyRequested(document))
-                    }
-                    DocumentState::Indexed => {
-                        // POC limitation: deletion is currently defined after successful indexing.
-                        // Tombstone holds the document row lock, then cancels any pending/leased
-                        // writer jobs with I06 terminal compensation. Persist/finalize paths also
-                        // lock this row, so a racing writer serializes behind the tombstone and
-                        // aborts without resurrecting chunks or vectors.
-                        let cancelled_writers =
-                            repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
-                        let cancelled_count = cancelled_writers.len();
-                        for cancelled in &cancelled_writers {
-                            crate::services::indexing::handle_terminal_index_job(
-                                txn, &ctx, cancelled,
-                            )
-                            .await
-                            .map_err(DeletionError::Job)?;
+    // Exclusive advisory barrier waits for active Q&A deliveries, then tombstones
+    // and bumps the document epoch before commit.
+    mutate_with_barrier_typed(
+        lock_pool,
+        ctx,
+        MutationTarget::Documents {
+            document_ids: vec![document_id],
+            user_id: ctx.user_id(),
+        },
+        {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                    match document.state {
+                        DocumentState::Tombstoned | DocumentState::Purged => {
+                            Ok(DeleteRequestOutcome::AlreadyRequested(document))
                         }
-                        document_state::apply_transition(
-                            txn,
-                            &ctx,
-                            document_id,
-                            DocumentState::Indexed,
-                            DocumentState::Tombstoned,
-                        )
-                        .await?;
-                        let tombstoned = documents::mark_deleted_at(txn, &ctx, document_id).await?;
-                        let payload = validated_event_payload(EventPayload {
-                            job_id: None,
-                            document_id: Some(document_id),
-                            version_id: tombstoned.current_version_id,
-                            outbox_event_id: None,
-                        })?;
-                        repo::insert_outbox_event(
-                            txn,
-                            &ctx,
-                            repo::NewOutboxEvent {
-                                event_type: "document.delete_requested",
-                                payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
-                                payload: &payload,
-                                idempotency_key: &format!(
-                                    "document.delete_requested.{document_id}"
-                                ),
+                        DocumentState::Indexed => {
+                            let cancelled_writers =
+                                repo::cancel_active_writer_jobs(txn, &ctx, document_id).await?;
+                            let cancelled_count = cancelled_writers.len();
+                            for cancelled in &cancelled_writers {
+                                crate::services::indexing::handle_terminal_index_job(
+                                    txn, &ctx, cancelled,
+                                )
+                                .await
+                                .map_err(DeletionError::Job)?;
+                            }
+                            document_state::apply_transition(
+                                txn,
+                                &ctx,
+                                document_id,
+                                DocumentState::Indexed,
+                                DocumentState::Tombstoned,
+                            )
+                            .await?;
+                            let tombstoned =
+                                documents::mark_deleted_at(txn, &ctx, document_id).await?;
+                            crate::db::authz_epoch::bump_document_epoch(
+                                txn,
+                                ctx.org_id(),
+                                document_id,
+                            )
+                            .await?;
+                            let payload = validated_event_payload(EventPayload {
                                 job_id: None,
-                            },
-                        )
-                        .await?;
-                        let resource_id = document_id.to_string();
-                        let request_id = format!("delete-{document_id}");
-                        write_audit(
-                            txn,
-                            AuditEvent {
-                                org_id: ctx.org_id(),
-                                actor_user_id: Some(ctx.user_id()),
-                                action: "document.tombstone",
-                                resource_type: "document",
-                                resource_id: Some(&resource_id),
-                                outcome: "success",
-                                request_id: &request_id,
-                                metadata: json!({
-                                    "document_id": document_id,
-                                    "version_id": tombstoned.current_version_id,
-                                    "cancelled_writer_jobs": cancelled_count,
-                                }),
-                            },
-                        )
-                        .await?;
-                        Ok(DeleteRequestOutcome::Requested(tombstoned))
+                                document_id: Some(document_id),
+                                version_id: tombstoned.current_version_id,
+                                outbox_event_id: None,
+                            })?;
+                            repo::insert_outbox_event(
+                                txn,
+                                &ctx,
+                                repo::NewOutboxEvent {
+                                    event_type: "document.delete_requested",
+                                    payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
+                                    payload: &payload,
+                                    idempotency_key: &format!(
+                                        "document.delete_requested.{document_id}"
+                                    ),
+                                    job_id: None,
+                                },
+                            )
+                            .await?;
+                            let resource_id = document_id.to_string();
+                            let request_id = format!("delete-{document_id}");
+                            write_audit(
+                                txn,
+                                AuditEvent {
+                                    org_id: ctx.org_id(),
+                                    actor_user_id: Some(ctx.user_id()),
+                                    action: "document.tombstone",
+                                    resource_type: "document",
+                                    resource_id: Some(&resource_id),
+                                    outcome: "success",
+                                    request_id: &request_id,
+                                    metadata: json!({
+                                        "document_id": document_id,
+                                        "version_id": tombstoned.current_version_id,
+                                        "cancelled_writer_jobs": cancelled_count,
+                                    }),
+                                },
+                            )
+                            .await?;
+                            Ok(DeleteRequestOutcome::Requested(tombstoned))
+                        }
+                        other => Err(DeletionError::UnexpectedState(other)),
                     }
-                    other => Err(DeletionError::UnexpectedState(other)),
-                }
-            })
-        }
-    })
+                })
+            }
+        },
+    )
     .await
 }
 

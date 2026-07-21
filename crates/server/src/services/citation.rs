@@ -322,12 +322,22 @@ pub async fn resolve_citation<S: BlobStore>(
     user_id: Uuid,
     request: CitationResolveRequest,
 ) -> Result<StableCitation, CitationError> {
-    validate_request_spans(&request)?;
     let ctx = resolve_org_context_in_txn(pool, org_id, user_id).await?;
+    resolve_citation_with_context(pool, storage, &ctx, request).await
+}
+
+/// Same as [`resolve_citation`] but reuses a freshly resolved [`OrgContext`].
+pub async fn resolve_citation_with_context<S: BlobStore>(
+    pool: &Pool,
+    storage: &S,
+    ctx: &crate::auth::context::OrgContext,
+    request: CitationResolveRequest,
+) -> Result<StableCitation, CitationError> {
+    validate_request_spans(&request)?;
     if !ctx.has_permission(PERMISSION_QA_QUERY) {
         return Err(CitationError::PermissionDenied);
     }
-    let row = with_org_txn(pool, &ctx, {
+    let row = with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
         let chunk_id = request.chunk_id;
         move |txn| {
@@ -340,12 +350,12 @@ pub async fn resolve_citation<S: BlobStore>(
     if !ctx.allows_collection(row.collection_id) {
         return Err(CitationError::PermissionDenied);
     }
-    require_citation_permissions(&ctx, row.is_current)?;
+    require_citation_permissions(ctx, row.is_current)?;
 
     let (artifact, markdown) =
-        load_authorized_markdown(pool, storage, &ctx, row.document_id, row.version_id).await?;
+        load_authorized_markdown(pool, storage, ctx, row.document_id, row.version_id).await?;
     let citation = citation_from_markdown_quote(&row, &markdown, &artifact.content_sha256)?;
-    if citation.org_id != org_id {
+    if citation.org_id != ctx.org_id() {
         return Err(CitationError::PermissionDenied);
     }
     validate_citation_pins(&citation, &request)?;
@@ -360,9 +370,67 @@ pub async fn resolve_citations<S: BlobStore>(
     user_id: Uuid,
     requests: &[CitationResolveRequest],
 ) -> Result<Vec<StableCitation>, CitationError> {
+    let ctx = resolve_org_context_in_txn(pool, org_id, user_id).await?;
+    resolve_citations_batched(pool, storage, &ctx, requests).await
+}
+
+/// Batch citation resolve: one auth txn for chunk hydrate, markdown cached by version.
+pub async fn resolve_citations_batched<S: BlobStore>(
+    pool: &Pool,
+    storage: &S,
+    ctx: &crate::auth::context::OrgContext,
+    requests: &[CitationResolveRequest],
+) -> Result<Vec<StableCitation>, CitationError> {
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+    for request in requests {
+        validate_request_spans(request)?;
+    }
+    if !ctx.has_permission(PERMISSION_QA_QUERY) {
+        return Err(CitationError::PermissionDenied);
+    }
+    let chunk_ids: Vec<Uuid> = requests.iter().map(|r| r.chunk_id).collect();
+    let rows = with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        let chunk_ids = chunk_ids.clone();
+        move |txn| {
+            Box::pin(
+                async move { search::hydrate_chunks_for_citation(txn, &ctx, &chunk_ids).await },
+            )
+        }
+    })
+    .await?;
+    let mut by_chunk = std::collections::HashMap::new();
+    for row in rows {
+        by_chunk.insert(row.chunk_id, row);
+    }
+    let mut markdown_cache: std::collections::HashMap<Uuid, (TrustedMarkdownArtifact, String)> =
+        std::collections::HashMap::new();
     let mut out = Vec::with_capacity(requests.len());
     for request in requests {
-        out.push(resolve_citation(pool, storage, org_id, user_id, request.clone()).await?);
+        let row = by_chunk
+            .get(&request.chunk_id)
+            .ok_or(CitationError::NotFound)?;
+        if !ctx.allows_collection(row.collection_id) {
+            return Err(CitationError::PermissionDenied);
+        }
+        require_citation_permissions(ctx, row.is_current)?;
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            markdown_cache.entry(row.version_id)
+        {
+            let loaded =
+                load_authorized_markdown(pool, storage, ctx, row.document_id, row.version_id)
+                    .await?;
+            entry.insert(loaded);
+        }
+        let (artifact, markdown) = markdown_cache.get(&row.version_id).unwrap();
+        let citation = citation_from_markdown_quote(row, markdown, &artifact.content_sha256)?;
+        if citation.org_id != ctx.org_id() {
+            return Err(CitationError::PermissionDenied);
+        }
+        validate_citation_pins(&citation, request)?;
+        out.push(citation);
     }
     Ok(out)
 }

@@ -9,6 +9,7 @@ use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_V
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::config::{MinioConfig, Profile, SecretString};
 use fileconv_server::database::apply_migrations;
+use fileconv_server::db::authz_lock::LockPool;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{ArtifactKind, CollectionVisibility, Document, DocumentState};
@@ -695,6 +696,7 @@ impl EphemeralDb {
 }
 
 struct LiveEnv {
+    lock_pool: LockPool,
     db: EphemeralDb,
     pool: Pool,
     storage: MinioClient,
@@ -711,9 +713,11 @@ impl LiveEnv {
         let db = EphemeralDb::create(&base_url).await;
         apply_migrations(&db.url).await.expect("apply migrations");
         let pool = create_pool(&db.url).expect("pool");
+        let lock_pool = LockPool::new(&db.url).expect("lock pool");
         let ctx = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], [])
             .expect("org context");
         Some(Self {
+            lock_pool,
             db,
             pool,
             storage,
@@ -1242,7 +1246,7 @@ async fn reset_delete_job_to_pending(env: &LiveEnv) {
 }
 
 async fn tombstone_directly(env: &LiveEnv, document_id: Uuid) {
-    request_delete(&env.pool, &env.ctx, document_id)
+    request_delete(&env.pool, &env.lock_pool, &env.ctx, document_id)
         .await
         .expect("request delete");
 }
@@ -1474,7 +1478,7 @@ async fn live_delete_tombstones_then_purges() {
     let orphan_chunk_identity = first_chunk_identity(&env, document_id).await;
     assert!(points_for_doc(&env, collection_id, document_id, &signature).await > 0);
 
-    let outcome = request_delete(&env.pool, &env.ctx, document_id)
+    let outcome = request_delete(&env.pool, &env.lock_pool, &env.ctx, document_id)
         .await
         .expect("request delete");
     let DeleteRequestOutcome::Requested(tombstoned) = outcome else {
@@ -1549,7 +1553,7 @@ async fn live_delete_replay_is_idempotent() {
     let embedding_plan = test_embedding_plan(provider.base_url());
     let (document_id, _version_id, _collection_id, _object_key, _signature) =
         index_seeded(&env, &provider, sample_markdown()).await;
-    request_delete(&env.pool, &env.ctx, document_id)
+    request_delete(&env.pool, &env.lock_pool, &env.ctx, document_id)
         .await
         .expect("request delete");
     relay(&env, &embedding_plan).await;
@@ -1686,7 +1690,7 @@ async fn live_delete_cancels_index_jobs_and_rejects_stale_index_attempts() {
         index_seeded(&env, &provider, sample_markdown()).await;
     let chunks_before = chunk_count(&env, document_id).await;
     let pending_job_id = insert_index_job(&env, document_id, version_id).await;
-    request_delete(&env.pool, &env.ctx, document_id)
+    request_delete(&env.pool, &env.lock_pool, &env.ctx, document_id)
         .await
         .expect("request delete");
     assert_eq!(job_status(&env, pending_job_id).await, "cancelled");
@@ -1860,7 +1864,7 @@ async fn live_compensation_failure_incident_reconcile_is_enqueued_and_cleans_orp
     let embedding_plan = test_embedding_plan(provider.base_url());
     let (document_id, version_id, collection_id, _object_key, signature) =
         index_seeded(&env, &provider, sample_markdown()).await;
-    request_delete(&env.pool, &env.ctx, document_id)
+    request_delete(&env.pool, &env.lock_pool, &env.ctx, document_id)
         .await
         .expect("request delete");
     relay(&env, &embedding_plan).await;

@@ -19,6 +19,7 @@
     "0016_expand_chunks_accent_fold_tsv.sql": "ab850b0ba0f1f323f498e4874c02d51f14421d016f6a792ed63780be4f3f38dd",
     "0017_expand_qa_history_permission.sql": "f804d47e4108251ed368299faed312cfbb093500f066a576d30d8da39f973b3a",
     "0018_expand_download_capabilities.sql": "72ea55837f3cbed1448049d3789b5dbeb93bb25cd9468a40e14ebc786bba5349",
-    "0019_expand_download_capability_clock.sql": "d47a68427198c7f9df4f0e4a738e23776df854c4f86ea082c2ad34601a190313"
+    "0019_expand_download_capability_clock.sql": "d47a68427198c7f9df4f0e4a738e23776df854c4f86ea082c2ad34601a190313",
+    "0020_expand_authz_epochs.sql": "5b75fa8bd21f378b8401ae534d074270a915b498dceefb41172b097035cc8f00"
   }
 }

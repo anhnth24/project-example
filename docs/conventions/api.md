@@ -43,6 +43,12 @@ SSE event data là JSON envelope versioned:
 - Client dedupe event đã nhận, detect gap và refetch state thay vì đoán.
 - Auth/ACL/revocation được kiểm tra lúc connect và trước mỗi sensitive payload; revoke
   đóng stream. Không đặt credential trong URL/query.
+- **Emission guarantee (HTTP-honest):** sau revoke, server dừng generate/enqueue application
+  frame mới. Byte đã giao cho Hyper/kernel không thu hồi được; tối đa một frame nhỏ đã
+  encode có thể còn trên transport (bounded tail) trước close. Không claim zero network
+  bytes post-commit.
+- Q&A SSE: `event: metadata` (full JSON envelope: pins / version_context / conflicts) rồi
+  token frames, rồi `event: close`.
 - Heartbeat, retry hint, retention window và terminal event được route-specific contract
   định nghĩa ở Phase 1B.
 

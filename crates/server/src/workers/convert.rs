@@ -153,6 +153,7 @@ enum PromotionWait {
 #[derive(Clone)]
 pub struct ConvertWorker {
     db_pool: Pool,
+    lock_pool: crate::db::authz_lock::LockPool,
     storage: MinioClient,
     config: ConvertWorkerConfig,
     next_claim_prefers_reconciliation: Arc<AtomicBool>,
@@ -161,6 +162,7 @@ pub struct ConvertWorker {
 impl ConvertWorker {
     pub fn new(
         db_pool: Pool,
+        lock_pool: crate::db::authz_lock::LockPool,
         storage: MinioClient,
         config: ConvertWorkerConfig,
     ) -> Result<Self, ConvertWorkerError> {
@@ -168,6 +170,7 @@ impl ConvertWorker {
         sandbox::preflight().map_err(ConvertWorkerError::Sandbox)?;
         Ok(Self {
             db_pool,
+            lock_pool,
             storage,
             config,
             next_claim_prefers_reconciliation: Arc::new(AtomicBool::new(false)),
@@ -608,7 +611,7 @@ impl ConvertWorker {
         {
             return PromotionWait::ReconciliationNeeded;
         }
-        let promotion = promotion::promote_conversion(&self.db_pool, ctx, input);
+        let promotion = promotion::promote_conversion(&self.db_pool, &self.lock_pool, ctx, input);
         tokio::pin!(promotion);
         let mut heartbeat = heartbeat_interval(self.config.heartbeat_interval);
         loop {

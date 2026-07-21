@@ -81,25 +81,17 @@ pub async fn resolve_org_context(
         .map_err(|_| ResolveError::Database)?;
     let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
 
-    // POC collection allow-list (full ACL is Phase 1C): org-visible, owned, or direct user grant.
-    let collection_rows = client
-        .query(
-            "SELECT c.id
+    // Consistent ACL: org / owner / direct / group / collection-role.
+    let acl_pred = crate::db::acl::collection_readable_predicate_c("$2");
+    let collection_sql = format!(
+        "SELECT c.id
              FROM collections c
              WHERE c.org_id = $1
                AND c.deleted_at IS NULL
-               AND (
-                 c.visibility = 'org'
-                 OR c.owner_user_id = $2
-                 OR EXISTS (
-                   SELECT 1 FROM collection_user_access cua
-                   WHERE cua.org_id = c.org_id
-                     AND cua.collection_id = c.id
-                     AND cua.user_id = $2
-                 )
-               )",
-            &[&org_id, &user_id],
-        )
+               AND {acl_pred}"
+    );
+    let collection_rows = client
+        .query(&collection_sql, &[&org_id, &user_id])
         .await
         .map_err(|_| ResolveError::Database)?;
     let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
@@ -178,25 +170,15 @@ pub async fn resolve_org_context_in_txn(
                 )
                 .await?;
             let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
-            let collection_rows = txn
-                .query(
-                    "SELECT c.id
+            let acl_pred = crate::db::acl::collection_readable_predicate_c("$2");
+            let collection_sql = format!(
+                "SELECT c.id
                      FROM collections c
                      WHERE c.org_id = $1
                        AND c.deleted_at IS NULL
-                       AND (
-                         c.visibility = 'org'
-                         OR c.owner_user_id = $2
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = c.org_id
-                             AND cua.collection_id = c.id
-                             AND cua.user_id = $2
-                         )
-                       )",
-                    &[&org_id, &user_id],
-                )
-                .await?;
+                       AND {acl_pred}"
+            );
+            let collection_rows = txn.query(&collection_sql, &[&org_id, &user_id]).await?;
             let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
             OrgContext::try_new(org_id, user_id, permissions, collections)
                 .map_err(|_| DbError::Config("invalid_org_context".into()))

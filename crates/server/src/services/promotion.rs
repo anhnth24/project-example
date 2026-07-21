@@ -6,6 +6,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::db::authz_lock::LockPool;
 use crate::db::document_versions::{
     self, ConversionSourceVersion, NewDerivedArtifact, NewPublishedVersion,
 };
@@ -14,6 +15,7 @@ use crate::db::jobs as jobs_repo;
 use crate::db::models::{ArtifactKind, DocumentVersion, Job, JobStatus, ResourceKind};
 use crate::db::{documents, pool, quota as quota_repo};
 use crate::jobs::{self, CheckpointPayload, EventPayload, JobError};
+use crate::services::authz_mutation::{mutate_with_barrier_typed, MutationTarget};
 use crate::services::conversion::{checkpoint_with_step, ConversionIdentity, ConversionStep};
 use crate::services::quota::QuotaError;
 
@@ -89,165 +91,186 @@ impl From<PromotionError> for JobError {
 }
 
 pub async fn promote_conversion(
-    db_pool: &Pool,
+    _db_pool: &Pool,
+    lock_pool: &LockPool,
     ctx: &OrgContext,
     input: PromoteConversionInput,
 ) -> Result<PromoteConversionOutcome, PromotionError> {
     let fault = input.fault;
-    let outcome = pool::with_org_txn_typed(db_pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                let job = jobs_repo::get_by_id_for_update(txn, &ctx, input.job_id)
-                    .await?
-                    .filter(|job| {
-                        job.status == JobStatus::Leased
-                            && job.lease_owner.as_deref() == Some(input.lease_token.as_str())
-                            && job.attempts == input.claimed_attempts
-                    })
-                    .ok_or(PromotionError::LeaseLost)?;
+    let document_id = input.source.document_id;
+    let outcome = mutate_with_barrier_typed(
+        lock_pool,
+        ctx,
+        MutationTarget::Documents {
+            document_ids: vec![document_id],
+            user_id: ctx.user_id(),
+        },
+        {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    let job = jobs_repo::get_by_id_for_update(txn, &ctx, input.job_id)
+                        .await?
+                        .filter(|job| {
+                            job.status == JobStatus::Leased
+                                && job.lease_owner.as_deref() == Some(input.lease_token.as_str())
+                                && job.attempts == input.claimed_attempts
+                        })
+                        .ok_or(PromotionError::LeaseLost)?;
 
-                let document =
-                    documents::get_by_id_for_update(txn, &ctx, input.source.document_id).await?;
-                let promoted_version_id = input.identity.promoted_version_id();
-                let existing = document_versions::find_by_id(
-                    txn,
-                    &ctx,
-                    input.source.document_id,
-                    promoted_version_id,
-                )
-                .await?;
-
-                let (version, created) = match existing {
-                    Some(version) => {
-                        ensure_existing_version_matches(&version, &input)?;
-                        (version, false)
-                    }
-                    None => {
-                        let inserted = document_versions::insert_published_version_if_absent(
-                            txn,
-                            &ctx,
-                            NewPublishedVersion {
-                                id: promoted_version_id,
-                                document_id: input.source.document_id,
-                                parent_version_id: input.source.source_version_id,
-                                content_sha256: &input.markdown_sha256,
-                                original_object_key: &input.source.original_object_key,
-                                markdown_object_key: &input.staged_object_key,
-                                source_filename: input.source.source_filename.as_deref(),
-                                source_content_type: Some("text/markdown; charset=utf-8"),
-                                byte_size: input.markdown_byte_size,
-                                change_summary: "Converted upload to Markdown",
-                            },
-                        )
-                        .await?;
-                        maybe_fault(input.fault, PromotionFault::AfterVersionInsert)?;
-                        inserted
-                    }
-                };
-
-                let artifact = document_versions::insert_artifact_if_absent(
-                    txn,
-                    &ctx,
-                    NewDerivedArtifact {
-                        id: input.artifact_id,
-                        document_id: input.source.document_id,
-                        version_id: promoted_version_id,
-                        kind: ArtifactKind::Markdown,
-                        object_key: &input.staged_object_key,
-                        content_sha256: &input.markdown_sha256,
-                        content_type: "text/markdown; charset=utf-8",
-                        byte_size: input.markdown_byte_size,
-                    },
-                )
-                .await?;
-                ensure_artifact_matches(&artifact, &input)?;
-                if version.markdown_object_key.as_deref() != Some(artifact.object_key.as_str()) {
-                    return Err(PromotionError::IdempotencyConflict);
-                }
-
-                if created || version.is_current {
-                    document_versions::promote_current_if_needed(
+                    let document =
+                        documents::get_by_id_for_update(txn, &ctx, input.source.document_id)
+                            .await?;
+                    let promoted_version_id = input.identity.promoted_version_id();
+                    let existing = document_versions::find_by_id(
                         txn,
                         &ctx,
-                        &document,
+                        input.source.document_id,
                         promoted_version_id,
                     )
                     .await?;
-                }
-                maybe_fault(input.fault, PromotionFault::AfterPointerSwap)?;
 
-                let index_payload = validated_event_payload(EventPayload {
-                    job_id: Some(job.id),
-                    document_id: Some(input.source.document_id),
-                    version_id: Some(promoted_version_id),
-                    outbox_event_id: None,
-                })?;
-                let index_outbox_key = input.identity.index_outbox_key();
-                jobs_repo::insert_outbox_event(
-                    txn,
-                    &ctx,
-                    jobs_repo::NewOutboxEvent {
-                        event_type: "document.index_requested",
-                        payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
-                        payload: &index_payload,
-                        idempotency_key: &index_outbox_key,
+                    let (version, created) = match existing {
+                        Some(version) => {
+                            ensure_existing_version_matches(&version, &input)?;
+                            (version, false)
+                        }
+                        None => {
+                            let inserted = document_versions::insert_published_version_if_absent(
+                                txn,
+                                &ctx,
+                                NewPublishedVersion {
+                                    id: promoted_version_id,
+                                    document_id: input.source.document_id,
+                                    parent_version_id: input.source.source_version_id,
+                                    content_sha256: &input.markdown_sha256,
+                                    original_object_key: &input.source.original_object_key,
+                                    markdown_object_key: &input.staged_object_key,
+                                    source_filename: input.source.source_filename.as_deref(),
+                                    source_content_type: Some("text/markdown; charset=utf-8"),
+                                    byte_size: input.markdown_byte_size,
+                                    change_summary: "Converted upload to Markdown",
+                                },
+                            )
+                            .await?;
+                            maybe_fault(input.fault, PromotionFault::AfterVersionInsert)?;
+                            inserted
+                        }
+                    };
+
+                    let artifact = document_versions::insert_artifact_if_absent(
+                        txn,
+                        &ctx,
+                        NewDerivedArtifact {
+                            id: input.artifact_id,
+                            document_id: input.source.document_id,
+                            version_id: promoted_version_id,
+                            kind: ArtifactKind::Markdown,
+                            object_key: &input.staged_object_key,
+                            content_sha256: &input.markdown_sha256,
+                            content_type: "text/markdown; charset=utf-8",
+                            byte_size: input.markdown_byte_size,
+                        },
+                    )
+                    .await?;
+                    ensure_artifact_matches(&artifact, &input)?;
+                    if version.markdown_object_key.as_deref() != Some(artifact.object_key.as_str())
+                    {
+                        return Err(PromotionError::IdempotencyConflict);
+                    }
+
+                    if created || version.is_current {
+                        let pointer_changed = document_versions::promote_current_if_needed(
+                            txn,
+                            &ctx,
+                            &document,
+                            promoted_version_id,
+                        )
+                        .await?;
+                        // M3: bump epoch only when the current pointer actually changed.
+                        if pointer_changed {
+                            crate::db::authz_epoch::bump_document_epoch(
+                                txn,
+                                ctx.org_id(),
+                                input.source.document_id,
+                            )
+                            .await?;
+                        }
+                    }
+                    maybe_fault(input.fault, PromotionFault::AfterPointerSwap)?;
+
+                    let index_payload = validated_event_payload(EventPayload {
                         job_id: Some(job.id),
-                    },
-                )
-                .await?;
-                maybe_fault(input.fault, PromotionFault::AfterOutboxInsert)?;
+                        document_id: Some(input.source.document_id),
+                        version_id: Some(promoted_version_id),
+                        outbox_event_id: None,
+                    })?;
+                    let index_outbox_key = input.identity.index_outbox_key();
+                    jobs_repo::insert_outbox_event(
+                        txn,
+                        &ctx,
+                        jobs_repo::NewOutboxEvent {
+                            event_type: "document.index_requested",
+                            payload_version: jobs::CURRENT_EVENT_PAYLOAD_VERSION,
+                            payload: &index_payload,
+                            idempotency_key: &index_outbox_key,
+                            job_id: Some(job.id),
+                        },
+                    )
+                    .await?;
+                    maybe_fault(input.fault, PromotionFault::AfterOutboxInsert)?;
 
-                finalize_storage_quota_locked(
-                    txn,
-                    &ctx,
-                    &input.quota_reservation_key,
-                    input.markdown_byte_size,
-                    input.job_id,
-                )
-                .await?;
+                    finalize_storage_quota_locked(
+                        txn,
+                        &ctx,
+                        &input.quota_reservation_key,
+                        input.markdown_byte_size,
+                        input.job_id,
+                    )
+                    .await?;
 
-                let checkpoint = checkpoint_with_step(
-                    job.checkpoint.as_ref(),
-                    &input.identity,
-                    ConversionStep::Promoted,
-                );
-                save_checkpoint_locked(
-                    txn,
-                    &ctx,
-                    input.job_id,
-                    &input.lease_token,
-                    input.claimed_attempts,
-                    checkpoint,
-                )
-                .await?;
+                    let checkpoint = checkpoint_with_step(
+                        job.checkpoint.as_ref(),
+                        &input.identity,
+                        ConversionStep::Promoted,
+                    );
+                    save_checkpoint_locked(
+                        txn,
+                        &ctx,
+                        input.job_id,
+                        &input.lease_token,
+                        input.claimed_attempts,
+                        checkpoint,
+                    )
+                    .await?;
 
-                let completed = jobs_repo::complete_owned(
-                    txn,
-                    &ctx,
-                    input.job_id,
-                    &input.lease_token,
-                    input.claimed_attempts,
-                )
-                .await?
-                .ok_or(PromotionError::LeaseLost)?;
-                write_job_succeeded_event(txn, &ctx, &completed).await?;
+                    let completed = jobs_repo::complete_owned(
+                        txn,
+                        &ctx,
+                        input.job_id,
+                        &input.lease_token,
+                        input.claimed_attempts,
+                    )
+                    .await?
+                    .ok_or(PromotionError::LeaseLost)?;
+                    write_job_succeeded_event(txn, &ctx, &completed).await?;
 
-                // The version/document relation is the ACL inheritance boundary: new
-                // versions stay on the same document and collection.
-                if document.id != version.document_id || document.org_id != version.org_id {
-                    return Err(PromotionError::IdempotencyConflict);
-                }
+                    // The version/document relation is the ACL inheritance boundary: new
+                    // versions stay on the same document and collection.
+                    if document.id != version.document_id || document.org_id != version.org_id {
+                        return Err(PromotionError::IdempotencyConflict);
+                    }
 
-                Ok(PromoteConversionOutcome {
-                    job: completed,
-                    version,
-                    artifact_created: artifact.created,
-                    committed_object_key: artifact.object_key,
+                    Ok(PromoteConversionOutcome {
+                        job: completed,
+                        version,
+                        artifact_created: artifact.created,
+                        committed_object_key: artifact.object_key,
+                    })
                 })
-            })
-        }
-    })
+            }
+        },
+    )
     .await?;
     if fault == Some(PromotionFault::AfterCommit) {
         return Err(PromotionError::CommittedOutcomeUnknown);

@@ -19,6 +19,10 @@ pub enum DbError {
     IllegalTransition { from: String, to: String },
     #[error("stale document state: expected {expected}, observed {observed}")]
     StaleState { expected: String, observed: String },
+    #[error("advisory lock acquire timeout")]
+    LockTimeout,
+    #[error("writer intent blocks delivery")]
+    WriterIntent,
 }
 
 impl DbError {
@@ -31,6 +35,8 @@ impl DbError {
             Self::NotFound => "db_not_found",
             Self::IllegalTransition { .. } => "db_illegal_transition",
             Self::StaleState { .. } => "db_stale_state",
+            Self::LockTimeout => "db_lock_timeout",
+            Self::WriterIntent => "db_writer_intent",
         }
     }
 }

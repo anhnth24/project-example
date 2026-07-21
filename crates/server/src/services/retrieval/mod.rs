@@ -70,6 +70,9 @@ pub enum VersionMode {
     },
     History {
         document_id: Uuid,
+        /// Stable cursor: return versions strictly older than this `version_number`.
+        /// `None` = newest page (including current).
+        before_version_no: Option<i32>,
     },
 }
 
@@ -110,6 +113,22 @@ pub struct RetrievalHit {
     pub span_end: usize,
 }
 
+/// Provenance binding retrieval results to the authorizing actor and scope.
+///
+/// Q&A (R03) requires this to re-check org/user/mode/collections before prompt
+/// construction and throughout streaming; responses without matching provenance
+/// are treated as stale and denied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetrievalProvenance {
+    pub org_id: Uuid,
+    pub user_id: Uuid,
+    pub mode: VersionMode,
+    pub collection_ids: BTreeSet<Uuid>,
+    pub retrieved_at: DateTime<Utc>,
+    /// Set for compare/history (single logical document lineage).
+    pub document_id: Option<Uuid>,
+}
+
 /// Hybrid retrieval response (no public unauthenticated path).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievalResponse {
@@ -119,6 +138,7 @@ pub struct RetrievalResponse {
     pub conflict_evidence: Vec<AuthorizedConflictEvidence>,
     /// Frozen knowledge weight used for rerank (regression anchor).
     pub vector_weight: f32,
+    pub provenance: RetrievalProvenance,
 }
 
 #[derive(Debug, Error)]
@@ -258,7 +278,7 @@ pub async fn hybrid_search(
 
     let resolved = resolve_version_visibility(pool, ctx, &collection_ids, &request.mode).await?;
     let document_filter = match &request.mode {
-        VersionMode::Compare { document_id, .. } | VersionMode::History { document_id } => {
+        VersionMode::Compare { document_id, .. } | VersionMode::History { document_id, .. } => {
             Some(*document_id)
         }
         VersionMode::Current | VersionMode::AsOf { .. } => None,
@@ -419,6 +439,14 @@ pub async fn hybrid_search(
         embedding_mode,
         conflict_evidence,
         vector_weight: VECTOR_WEIGHT,
+        provenance: RetrievalProvenance {
+            org_id: ctx.org_id(),
+            user_id: ctx.user_id(),
+            mode: request.mode.clone(),
+            collection_ids: scope.collection_ids,
+            retrieved_at: Utc::now(),
+            document_id: document_filter,
+        },
     })
 }
 
@@ -483,28 +511,41 @@ async fn resolve_version_visibility(
                 visibility: VersionVisibility::VersionIds(BTreeSet::from([*version_a, *version_b])),
             })
         }
-        VersionMode::History { document_id } => {
+        VersionMode::History {
+            document_id,
+            before_version_no,
+        } => {
+            // Resolve keyset page IDs before lexical/vector search.
             let document_id = *document_id;
+            let before_version_no = *before_version_no;
             let collection_ids = collection_ids.to_vec();
-            let versions = with_org_txn(pool, ctx, {
+            let page = with_org_txn(pool, ctx, {
                 let ctx = ctx.clone();
                 move |txn| {
                     Box::pin(async move {
-                        search::list_published_version_ids_for_document(
+                        search::list_published_version_timeline_recent_page(
                             txn,
                             &ctx,
                             document_id,
                             &collection_ids,
+                            (crate::services::qa::MAX_HISTORY_VERSIONS + 1) as i64,
+                            before_version_no,
                         )
                         .await
                     })
                 }
             })
             .await?;
-            if versions.is_empty() {
+            let truncated = page.len() > crate::services::qa::MAX_HISTORY_VERSIONS;
+            let mut page = page;
+            if truncated {
+                page.truncate(crate::services::qa::MAX_HISTORY_VERSIONS);
+            }
+            // Terminal 1-version history is supported; empty is not.
+            if page.is_empty() {
                 return Err(RetrievalError::LineageMismatch);
             }
-            let ids = versions.into_iter().map(|(id, _)| id).collect();
+            let ids = page.into_iter().map(|r| r.version_id).collect();
             Ok(ResolvedVisibility {
                 visibility: VersionVisibility::VersionIds(ids),
             })
@@ -881,6 +922,7 @@ mod tests {
             },
             VersionMode::History {
                 document_id: Uuid::new_v4(),
+                before_version_no: None,
             },
         ];
         for mode in &modes {

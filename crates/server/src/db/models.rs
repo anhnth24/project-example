@@ -192,6 +192,25 @@ pub enum AccessLevel {
     Admin,
 }
 
+impl AccessLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Admin => "admin",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "read" => Ok(Self::Read),
+            "write" => Ok(Self::Write),
+            "admin" => Ok(Self::Admin),
+            other => Err(format!("unknown access level: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionUserAccess {
     pub id: Uuid,
@@ -431,12 +450,52 @@ pub enum ConflictStatus {
     FalsePositive,
 }
 
+impl ConflictStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+            Self::AcceptedException => "accepted_exception",
+            Self::FalsePositive => "false_positive",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "open" => Ok(Self::Open),
+            "resolved" => Ok(Self::Resolved),
+            "accepted_exception" => Ok(Self::AcceptedException),
+            "false_positive" => Ok(Self::FalsePositive),
+            other => Err(format!("unknown conflict status: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictSeverity {
     Info,
     Warning,
     High,
+}
+
+impl ConflictSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::High => "high",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "info" => Ok(Self::Info),
+            "warning" => Ok(Self::Warning),
+            "high" => Ok(Self::High),
+            other => Err(format!("unknown conflict severity: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +507,31 @@ pub enum ConflictType {
     Limit,
     MustVsMustNot,
     Other,
+}
+
+impl ConflictType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Numeric => "numeric",
+            Self::Enum => "enum",
+            Self::Date => "date",
+            Self::Limit => "limit",
+            Self::MustVsMustNot => "must_vs_must_not",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "numeric" => Ok(Self::Numeric),
+            "enum" => Ok(Self::Enum),
+            "date" => Ok(Self::Date),
+            "limit" => Ok(Self::Limit),
+            "must_vs_must_not" => Ok(Self::MustVsMustNot),
+            "other" => Ok(Self::Other),
+            other => Err(format!("unknown conflict type: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1271,6 +1355,14 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
                 "consumed_at",
                 "created_at",
             ],
+        ),
+        (
+            "authz_epochs",
+            &["org_id", "user_id", "epoch", "updated_at"],
+        ),
+        (
+            "document_authz_epochs",
+            &["org_id", "document_id", "epoch", "updated_at"],
         ),
     ]
 }

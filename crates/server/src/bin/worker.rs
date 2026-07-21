@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use fileconv_server::auth::context::OrgContext;
+use fileconv_server::db::authz_lock::LockPool;
 use fileconv_server::db::pool::create_pool;
 use fileconv_server::jobs;
 use fileconv_server::services::indexing::IndexingOutboxSink;
@@ -80,6 +81,8 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
     let endpoints = state.endpoints();
     let pool = create_pool(endpoints.database_url.expose())
         .map_err(|error| format!("database pool failed: {error}"))?;
+    let lock_pool = LockPool::new(endpoints.database_url.expose())
+        .map_err(|error| format!("lock pool failed: {error}"))?;
     let storage_config = state
         .config()
         .storage_config()
@@ -96,7 +99,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
         "convert" => {
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
-            run_convert_worker(state, pool, storage, worker_id, ctx).await
+            run_convert_worker(state, pool, lock_pool, storage, worker_id, ctx).await
         }
         "index" => {
             let storage = MinioClient::from_config(storage_config.minio())
@@ -143,6 +146,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
 async fn run_convert_worker(
     state: fileconv_server::state::RuntimeState,
     pool: deadpool_postgres::Pool,
+    lock_pool: LockPool,
     storage: MinioClient,
     worker_id: String,
     ctx: OrgContext,
@@ -169,7 +173,7 @@ async fn run_convert_worker(
             return Err("MARKHAND_WORKER_CLAIM_LIMIT must be exactly 1".into());
         }
     }
-    let worker = ConvertWorker::new(pool.clone(), storage, config)
+    let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage, config)
         .map_err(|error| format!("converter worker initialization failed: {error}"))?;
     loop {
         tokio::select! {

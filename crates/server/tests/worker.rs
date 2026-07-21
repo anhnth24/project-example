@@ -11,6 +11,7 @@ use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::config::{MinioConfig, SecretString};
 use fileconv_server::database::apply_migrations;
+use fileconv_server::db::authz_lock::LockPool;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::error::DbError;
@@ -178,13 +179,14 @@ impl EphemeralDb {
     }
 }
 
-async fn boot_pool(base_url: &str) -> (EphemeralDb, Pool) {
+async fn boot_pool(base_url: &str) -> (EphemeralDb, Pool, LockPool) {
     let ephemeral = EphemeralDb::create(base_url).await;
     apply_migrations(&ephemeral.url)
         .await
         .expect("apply migrations");
     let pool = create_pool(&ephemeral.url).expect("pool");
-    (ephemeral, pool)
+    let lock_pool = LockPool::new(&ephemeral.url).expect("lock pool");
+    (ephemeral, pool, lock_pool)
 }
 
 fn test_minio_client() -> Option<MinioClient> {
@@ -1132,7 +1134,7 @@ async fn live_convert_worker_promotes_immutable_markdown_version() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1161,6 +1163,7 @@ async fn live_convert_worker_promotes_immutable_markdown_version() {
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(
             r#"while IFS= read -r line; do printf '%s\n' "$line"; done < "$1""#,
@@ -1224,7 +1227,7 @@ async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1255,6 +1258,7 @@ async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
     assert_eq!(duplicate.id, job.id);
     let worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -1290,7 +1294,7 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
 
     for fault in [
@@ -1346,8 +1350,13 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         .job;
         let mut fault_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
         fault_config.promotion_fault = Some(fault);
-        let fault_worker =
-            ConvertWorker::new(pool.clone(), storage.clone(), fault_config).expect("worker");
+        let fault_worker = ConvertWorker::new(
+            pool.clone(),
+            lock_pool.clone(),
+            storage.clone(),
+            fault_config,
+        )
+        .expect("worker");
 
         assert!(matches!(
             fault_worker.run_once(&ctx).await.expect("fault run"),
@@ -1381,6 +1390,7 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         make_job_available(&pool, &ctx, job.id).await;
         let retry_worker = ConvertWorker::new(
             pool.clone(),
+            lock_pool.clone(),
             storage.clone(),
             stub_worker_config(ECHO_INPUT_SCRIPT, 50),
         )
@@ -1410,7 +1420,7 @@ async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact()
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1439,7 +1449,8 @@ async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact()
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     config.promotion_fault = Some(PromotionFault::AfterCommit);
-    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), config)
+        .expect("worker");
 
     assert!(matches!(
         worker.run_once(&ctx).await.expect("post-commit run"),
@@ -1490,7 +1501,7 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1537,8 +1548,13 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
     let mut failing_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     failing_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     failing_config.fail_cleanup_delete = true;
-    let failing_worker =
-        ConvertWorker::new(pool.clone(), storage.clone(), failing_config).expect("worker");
+    let failing_worker = ConvertWorker::new(
+        pool.clone(),
+        lock_pool.clone(),
+        storage.clone(),
+        failing_config,
+    )
+    .expect("worker");
 
     assert!(matches!(
         failing_worker.run_once(&ctx).await.expect("failed run"),
@@ -1561,6 +1577,7 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
 
     let cleanup_worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -1588,7 +1605,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1698,6 +1715,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
     .expect("enqueue reconciliation");
     let worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage,
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -1736,7 +1754,7 @@ async fn live_convert_worker_tombstone_before_promotion_does_not_regress_documen
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1769,7 +1787,8 @@ async fn live_convert_worker_tombstone_before_promotion_does_not_regress_documen
     };
     let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     config.pause_after_staging = Some(pause.clone());
-    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), config)
+        .expect("worker");
     let staged_signal = Arc::clone(&pause.staged);
     let worker_ctx = ctx.clone();
     let worker_handle = tokio::spawn(async move { worker.run_once(&worker_ctx).await });
@@ -1825,7 +1844,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1874,8 +1893,13 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
     let mut first_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     first_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     first_config.fail_cleanup_delete = true;
-    let first_worker =
-        ConvertWorker::new(pool.clone(), storage.clone(), first_config).expect("first worker");
+    let first_worker = ConvertWorker::new(
+        pool.clone(),
+        lock_pool.clone(),
+        storage.clone(),
+        first_config,
+    )
+    .expect("first worker");
     assert!(matches!(
         first_worker.run_once(&ctx).await.expect("first attempt"),
         ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
@@ -1896,6 +1920,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
     make_job_available(&pool, &ctx, job.id).await;
     let retry_worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -1933,7 +1958,7 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -1989,7 +2014,8 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
     a_config.heartbeat_interval = Duration::from_millis(100);
     a_config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     a_config.pause_after_staging = Some(pause.clone());
-    let worker_a = ConvertWorker::new(pool.clone(), storage.clone(), a_config).expect("worker a");
+    let worker_a = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), a_config)
+        .expect("worker a");
     let run_ctx = ctx.clone();
     let run_worker = worker_a.clone();
     let staged_signal = Arc::clone(&pause.staged);
@@ -2013,6 +2039,7 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
 
     let worker_b = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -2066,7 +2093,7 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -2095,8 +2122,13 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let mut ambiguous_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     ambiguous_config.lose_staged_handle_after_put = true;
-    let ambiguous_worker =
-        ConvertWorker::new(pool.clone(), storage.clone(), ambiguous_config).expect("worker");
+    let ambiguous_worker = ConvertWorker::new(
+        pool.clone(),
+        lock_pool.clone(),
+        storage.clone(),
+        ambiguous_config,
+    )
+    .expect("worker");
     assert!(matches!(
         ambiguous_worker.run_once(&ctx).await.expect("ambiguous run"),
         ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
@@ -2113,6 +2145,7 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
     make_job_available(&pool, &ctx, job.id).await;
     let retry_worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -2136,7 +2169,7 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -2166,7 +2199,8 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
     let mut config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     config.fail_cleanup_delete = true;
-    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), config)
+        .expect("worker");
     assert!(matches!(
         worker.run_once(&ctx).await.expect("delete failure run"),
         ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
@@ -2191,6 +2225,7 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
     make_job_available(&pool, &ctx, job.id).await;
     let retry_worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -2218,7 +2253,7 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -2249,7 +2284,8 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
     config.promotion_fault = Some(PromotionFault::AfterStagingPut);
     config.fail_quota_refund = true;
     config.quota_reservation_ttl = Duration::from_secs(1);
-    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), config)
+        .expect("worker");
     assert!(matches!(
         worker.run_once(&ctx).await.expect("refund failure run"),
         ConvertWorkerRun::Failed { job_id, .. } if job_id == job.id
@@ -2277,6 +2313,7 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
     make_job_available(&pool, &ctx, job.id).await;
     let retry_worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -2304,7 +2341,7 @@ async fn live_convert_worker_second_promotion_demotes_current_and_preserves_orig
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let source_one = Uuid::new_v4();
@@ -2334,6 +2371,7 @@ async fn live_convert_worker_second_promotion_demotes_current_and_preserves_orig
     let first_job = enqueue_convert(&pool, &ctx, document_id, source_one).await;
     let worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage.clone(),
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
@@ -2413,7 +2451,7 @@ async fn live_convert_worker_converter_error_retries_job() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -2442,6 +2480,7 @@ async fn live_convert_worker_converter_error_retries_job() {
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let worker = ConvertWorker::new(
         pool.clone(),
+        lock_pool.clone(),
         storage,
         stub_worker_config("printf malformed >&2; exit 9", 50),
     )
@@ -2483,7 +2522,7 @@ async fn live_convert_worker_cancel_loses_lease_and_kills_sandbox() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -2529,7 +2568,8 @@ else:
     );
     config.heartbeat_interval = Duration::from_millis(50);
     config.lease_ttl = Duration::from_secs(2);
-    let worker = ConvertWorker::new(pool.clone(), storage, config).expect("worker");
+    let worker =
+        ConvertWorker::new(pool.clone(), lock_pool.clone(), storage, config).expect("worker");
     let run_ctx = ctx.clone();
     let run_worker = worker.clone();
     let handle = tokio::spawn(async move { run_worker.run_once(&run_ctx).await });
@@ -2560,7 +2600,7 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_rec
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
@@ -2589,7 +2629,8 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_rec
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let mut config = stub_worker_config("printf converted-after-upload", 50);
     config.post_upload_settlement_delay = Duration::from_secs(1);
-    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), config)
+        .expect("worker");
     let run_ctx = ctx.clone();
     let run_worker = worker.clone();
     let handle = tokio::spawn(async move { run_worker.run_once(&run_ctx).await });
@@ -2639,7 +2680,7 @@ async fn live_convert_worker_resource_failures_are_bounded_job_failures() {
     let Some(storage) = test_minio_client() else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let (ephemeral, pool, lock_pool) = boot_pool(&base_url).await;
     let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let cases = [
         (
@@ -2732,7 +2773,8 @@ while True:
         let mut config = ConvertWorkerConfig::new(format!("worker-{name}"), sandbox);
         config.heartbeat_interval = Duration::from_millis(50);
         config.lease_ttl = Duration::from_secs(2);
-        let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+        let worker = ConvertWorker::new(pool.clone(), lock_pool.clone(), storage.clone(), config)
+            .expect("worker");
         let outcome = worker.run_once(&ctx).await.expect("run once");
         assert!(matches!(
             outcome,

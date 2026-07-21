@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use deadpool_postgres::{Config, Pool, PoolConfig, Runtime};
-use tokio_postgres::{NoTls, Transaction};
+use tokio_postgres::{IsolationLevel, NoTls, Transaction};
 
 use crate::auth::context::OrgContext;
 use crate::database::{database_requires_tls, make_rustls_connect};
@@ -90,6 +90,34 @@ where
     }
 }
 
+/// Org transaction at SERIALIZABLE isolation for final Q&A authz barriers (H8).
+pub async fn with_org_txn_serializable<T, F>(
+    pool: &Pool,
+    ctx: &OrgContext,
+    f: F,
+) -> Result<T, DbError>
+where
+    F: for<'c> FnOnce(&'c Transaction<'c>) -> OrgTxnFuture<'c, T>,
+{
+    let mut client = pool.get().await?;
+    let txn = client
+        .build_transaction()
+        .isolation_level(IsolationLevel::Serializable)
+        .start()
+        .await?;
+    apply_org_context(&txn, ctx).await?;
+    match f(&txn).await {
+        Ok(value) => {
+            txn.commit().await?;
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = txn.rollback().await;
+            Err(error)
+        }
+    }
+}
+
 /// Applies tenant claims as transaction-local GUCs (never session-level).
 pub async fn apply_org_context(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<(), DbError> {
     let org = ctx.org_id().to_string();
@@ -97,6 +125,28 @@ pub async fn apply_org_context(txn: &Transaction<'_>, ctx: &OrgContext) -> Resul
     txn.execute("SELECT set_config('app.org_id', $1, true)", &[&org])
         .await?;
     txn.execute("SELECT set_config('app.user_id', $1, true)", &[&user])
+        .await?;
+    Ok(())
+}
+
+/// Session-scoped tenant GUCs for dedicated (non-pooled) lock connections.
+///
+/// Safe because lock clients are abandoned after use and never returned to a pool.
+pub async fn apply_org_context_on_client<C>(
+    client: &C,
+    org_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+) -> Result<(), DbError>
+where
+    C: tokio_postgres::GenericClient + Sync,
+{
+    let org = org_id.to_string();
+    let user = user_id.to_string();
+    client
+        .execute("SELECT set_config('app.org_id', $1, false)", &[&org])
+        .await?;
+    client
+        .execute("SELECT set_config('app.user_id', $1, false)", &[&user])
         .await?;
     Ok(())
 }

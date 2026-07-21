@@ -1,5 +1,8 @@
 //! Database models, pool, and tenant-scoped repositories.
 
+pub mod acl;
+pub mod authz_epoch;
+pub mod authz_lock;
 pub mod chunks;
 pub mod claims;
 pub mod collections;

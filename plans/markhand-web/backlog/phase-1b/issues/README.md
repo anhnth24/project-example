@@ -225,11 +225,18 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
+- **Status:** Blocked — depends on R01/R02 still in Review. R3 redesign evidence in
+  `services/qa/{mod,authz_fence,prompt,provider,grounding,stream}.rs` + migration
+  `0020_expand_authz_epochs.sql` + `tests/qa.rs`: authz epoch/fence (zero-token
+  after revoke); atomic mode-aware final resolver (pointer race → re-retrieve);
+  provider claims-only + server render; stream session metadata+receiver; history
+  snapshot caps; typed delta pins; resolved 4-pin lifecycle; SQL evidence-filtered
+  conflicts; batch citation resolve; barrier live PG tests. Routes remain R05.
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
   deterministic extractive fallback.
-- **Files:** `services/qa/{prompt,provider,grounding,stream}.rs`.
+- **Files:** `services/qa/{mod,prompt,provider,grounding,stream}.rs`, `tests/qa.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
 - **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
   compare cite old+new và đúng delta; injection không tool/scope change; provider

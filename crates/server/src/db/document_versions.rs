@@ -353,12 +353,16 @@ pub async fn list_by_document(
     rows.iter().map(map_version).collect()
 }
 
+/// Promote `version_id` to current when needed.
+///
+/// Returns `Ok(true)` only when the current pointer actually changed.
+/// `Ok(false)` means the version was already current (idempotent no-op).
 pub async fn promote_current_if_needed(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     document: &Document,
     version_id: Uuid,
-) -> Result<(), DbError> {
+) -> Result<bool, DbError> {
     let row = txn
         .query_one(
             "SELECT is_current
@@ -371,7 +375,7 @@ pub async fn promote_current_if_needed(
     let already_current: bool = row.get("is_current");
     if already_current {
         return if document.current_version_id == Some(version_id) {
-            Ok(())
+            Ok(false)
         } else {
             Err(DbError::StaleState {
                 expected: version_id.to_string(),
@@ -428,7 +432,7 @@ pub async fn promote_current_if_needed(
             observed: "missing_or_changed".into(),
         });
     }
-    Ok(())
+    Ok(true)
 }
 
 fn is_eligible_for_conversion_promotion(document: &Document) -> bool {
