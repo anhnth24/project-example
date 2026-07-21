@@ -24,7 +24,7 @@
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  PHỤ THUỘC NATIVE (đắt, có cache)                                   │
-│  PDFium (thread_local) · Tesseract (per-call) · Whisper (OnceLock)  │
+│  PDFium (thread_local) · Tesseract (per-call) · Whisper (process cache) │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

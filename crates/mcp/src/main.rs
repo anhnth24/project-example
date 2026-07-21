@@ -142,6 +142,7 @@ impl Fileconv {
             if let Ok(m) = std::env::var("FILECONV_WHISPER_MODEL") {
                 opts.whisper_model = Some(PathBuf::from(m));
             }
+            // Per-request Converter is fine: WhisperContext is process-cached in fileconv-core.
             Converter::with_options(opts)
                 .convert_path(&PathBuf::from(&req.path))
                 .map(|r| r.markdown)
@@ -171,6 +172,7 @@ impl Fileconv {
             if let Ok(m) = std::env::var("FILECONV_WHISPER_MODEL") {
                 opts.whisper_model = Some(PathBuf::from(m));
             }
+            // Per-request Converter is fine: WhisperContext is process-cached in fileconv-core.
             let report = Converter::with_options(opts)
                 .convert_path_detailed(&PathBuf::from(&req.path))
                 .map_err(|e| {
