@@ -24,13 +24,11 @@ pub use crate::identity::{
 
 /// Map endpoint metadata to a canonical runtime path (ADR 0006).
 ///
-/// Thin alias over [`fileconv_core::embedding_runtime::infer_embedding_runtime_path`]
-/// (always-on, not behind core `llm`). Fallback only — desktop presets carry an
-/// explicit `runtime_path` because real vLLM hosts (`127.0.0.1:8000` +
-/// `BAAI/bge-m3`) do not contain the string `"vllm"`.
-pub fn infer_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
-    fileconv_core::embedding_runtime::infer_embedding_runtime_path(base_url, model)
-}
+/// Re-export of always-on [`fileconv_core::embedding_runtime::infer_embedding_runtime_path`]
+/// (not behind core `llm`). Fallback only — desktop presets carry an explicit
+/// `runtime_path` because real vLLM hosts (`127.0.0.1:8000` + `BAAI/bge-m3`) do
+/// not contain a `vllm` DNS label.
+pub use fileconv_core::embedding_runtime::infer_embedding_runtime_path as infer_runtime_path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingVector {
@@ -601,20 +599,62 @@ mod tests {
     }
 
     #[test]
-    fn runtime_path_inference_matches_core_behavior_table() {
-        use fileconv_core::embedding_runtime::{
-            infer_embedding_runtime_path, INFER_EMBEDDING_RUNTIME_PATH_CASES,
-        };
-        for (base_url, model, expected) in INFER_EMBEDDING_RUNTIME_PATH_CASES {
-            let via_knowledge = super::infer_runtime_path(*base_url, model);
-            let via_core = infer_embedding_runtime_path(*base_url, model);
+    fn infer_runtime_path_literal_cases() {
+        let cases: &[(Option<&str>, &str, &str)] = &[
+            (None, "text-embedding-3-small", "provider-cloud"),
+            (
+                Some("http://127.0.0.1:8000"),
+                "BAAI/bge-m3",
+                "provider-cloud",
+            ),
+            (
+                Some("https://open.bigmodel.cn/api/paas/v4"),
+                "embedding-3",
+                "glm-cloud-interim",
+            ),
+            (
+                Some("open.bigmodel.cn/api/paas/v4"),
+                "custom",
+                "glm-cloud-interim",
+            ),
+            (Some("https://api.z.ai/v1"), "embed", "glm-cloud-interim"),
+            (Some("https://modelz.ai/v1"), "embed", "provider-cloud"),
+            (Some("http://vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
+            (
+                Some("http://vllm.internal:8000/v1"),
+                "glm-embedding",
+                "vllm-local",
+            ),
+            (
+                Some("http://vllm.bigmodel.cn/v1"),
+                "bge-m3",
+                "glm-cloud-interim",
+            ),
+            (Some("http://[vllm::1]:8000/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some(r"https://evil.com\@open.bigmodel.cn/v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (
+                Some(r"https://evil\bigmodel.cn@127.0.0.1/v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (None, "embedding-3", "glm-cloud-interim"),
+            (None, "vllm-served-model", "vllm-local"),
+            (Some("ftp://vllm.internal/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("https://api.openai.com/v1"),
+                "embedding-3",
+                "provider-cloud",
+            ),
+        ];
+        for (base_url, model, expected) in cases {
             assert_eq!(
-                via_knowledge, *expected,
-                "knowledge infer base_url={base_url:?} model={model}"
-            );
-            assert_eq!(
-                via_knowledge, via_core,
-                "parity base_url={base_url:?} model={model}"
+                super::infer_runtime_path(*base_url, model),
+                *expected,
+                "knowledge infer_runtime_path base_url={base_url:?} model={model}"
             );
         }
     }

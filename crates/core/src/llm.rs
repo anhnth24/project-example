@@ -1409,6 +1409,63 @@ mod tests {
     }
 
     #[test]
+    fn llm_export_infer_embedding_runtime_path_literal_cases() {
+        // Literal expectations at the `fileconv_core::llm` re-export surface.
+        let cases: &[(Option<&str>, &str, &str)] = &[
+            (None, "text-embedding-3-small", "provider-cloud"),
+            (
+                Some("http://127.0.0.1:8000"),
+                "BAAI/bge-m3",
+                "provider-cloud",
+            ),
+            (
+                Some("https://open.bigmodel.cn/api/paas/v4"),
+                "embedding-3",
+                "glm-cloud-interim",
+            ),
+            (Some("https://api.z.ai/v1"), "embed", "glm-cloud-interim"),
+            (Some("https://modelz.ai/v1"), "embed", "provider-cloud"),
+            (Some("http://vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
+            (
+                Some("http://vllm.internal:8000/v1"),
+                "glm-embedding",
+                "vllm-local",
+            ),
+            (
+                Some("http://vllm.bigmodel.cn/v1"),
+                "bge-m3",
+                "glm-cloud-interim",
+            ),
+            (Some("http://[vllm::1]:8000/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some(r"https://evil.com\@open.bigmodel.cn/v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (
+                Some(r"https://evil\bigmodel.cn@127.0.0.1/v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (None, "embedding-3", "glm-cloud-interim"),
+            (None, "vllm-served-model", "vllm-local"),
+            (Some("ftp://vllm.internal/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("http://vllm.internal:8000/v1"),
+                "embedding-3",
+                "vllm-local",
+            ),
+        ];
+        for (base_url, model, expected) in cases {
+            assert_eq!(
+                infer_embedding_runtime_path(*base_url, model),
+                *expected,
+                "llm export infer base_url={base_url:?} model={model}"
+            );
+        }
+    }
+
+    #[test]
     fn local_config_accepts_empty_api_key() {
         let config = LlmConfig::new(
             Provider::OpenAiCompatible,

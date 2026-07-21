@@ -4,7 +4,7 @@
 - Date: 2026-07-18
 - Owners: retrieval-owner, architecture-owner
 - Approver: Phase 0 architecture gate
-- Related issues/PRs: P0-06; ADR 0002, 0004, 0005; PR #209
+- Related issues/PRs: P0-06; ADR 0002, 0004, 0005; PR #209; CORE-T13
 
 ## Context
 
@@ -24,24 +24,27 @@ and query accent-fold into one `text_version` while the fixture still said
 3. **Index signature** is the length-delimited SHA-256 of:
    - `runtime_path`: `local-hash` | `local-neural` | `glm-cloud-interim` |
      `vllm-local` | `provider-cloud` — **explicit field** on `EmbeddingPlan` and
-     `EmbeddingPlan` and `EmbeddingConfig` (not inferred from the coarse `Provider`
-     enum). Markhand Web POC/1B pins **`local-neural`** with
-     `AITeamVN/Vietnamese_Embedding` (ADR 0005). Desktop presets may still set
-     `vllm-local` or `glm-cloud-interim`; CPU sentence-transformers quality track
-     uses `local-neural`. Host/model inference via
+     `EmbeddingConfig` (not inferred from the coarse `Provider` enum). Markhand
+     Web POC/1B pins **`local-neural`** with `AITeamVN/Vietnamese_Embedding`
+     (ADR 0005). Desktop presets may still set `vllm-local` or
+     `glm-cloud-interim`; CPU sentence-transformers quality track uses
+     `local-neural`. Host/model inference via
      `fileconv_core::embedding_runtime::infer_embedding_runtime_path` is only a
      fallback for unknown/custom endpoints — real vLLM preset URLs do not
-     contain the string `"vllm"`.
-   - **Single inference owner (CORE-T13):** the helper lives in always-on
-     `fileconv_core::embedding_runtime` (not behind the `llm` feature).
-     `fileconv_core::llm` re-exports it; `fileconv_knowledge::embedding::infer_runtime_path`
-     is a thin alias. Runtime-path string constants are defined once in core and
-     re-exported by knowledge as `RUNTIME_*`. Behavior is pinned by
-     `INFER_EMBEDDING_RUNTIME_PATH_CASES` (schemed / scheme-less, localhost /
-     private / custom hosts, GLM/bigmodel/z.ai/zhipu, vLLM cues, provider
-     defaults, malformed URLs, scheme casing, IPv6, userinfo). Changing a row’s
-     expected path changes the index signature for custom endpoints that relied
-     on inference and **must** trigger reindex.
+     contain a `vllm` DNS label.
+   - **Single inference owner (CORE-T13):** always-on
+     `fileconv_core::embedding_runtime` (not behind the `llm` feature) owns
+     constants and inference. `fileconv_core::llm` re-exports the helper;
+     `fileconv_knowledge::embedding` exposes
+     `pub use … as infer_runtime_path`. HTTP(S) endpoints are parsed with
+     `url::Url`; scheme-less values get an `https://` prefix only when
+     syntactically plausible. Malformed / non-http endpoints silently yield an
+     empty host (model cues may still apply). Provider domains match at DNS
+     label boundaries (`z.ai` does not match `modelz.ai`). Cue order:
+     official GLM host → vLLM host → known provider/loopback → anchored model
+     cues → default `provider-cloud`. A vLLM host beats a GLM-named model;
+     `vllm.bigmodel.cn` is official GLM first. Changing inference for a custom
+     endpoint **must** trigger reindex.
    - `embedding_family` (provider/model/deployment digest)
    - `embedding_revision`
    - `dimensions` (u64 BE)
@@ -72,13 +75,15 @@ and query accent-fold into one `text_version` while the fixture still said
 - Keep single `text_version`: rejected; body NFC and query folding change
   different surfaces and must pin independently.
 - Soft-migrate without `IDENTITY_VERSION` bump: rejected; ambiguous digests.
+- Parallel string-hint vs `Url::parse` helpers in core/knowledge: rejected
+  (CORE-T13); divergent hosts changed index signatures across crates.
 
 ## Verification
 
 ```bash
 cargo test -p fileconv-core embedding_runtime
-cargo test -p fileconv-core --features llm infer_embedding_runtime_path
-cargo test -p fileconv-knowledge --lib embedding::tests::runtime_path_inference_matches_core_behavior_table
+cargo test -p fileconv-core --features llm llm_export_infer_embedding_runtime_path_literal_cases
+cargo test -p fileconv-knowledge --lib embedding::tests::infer_runtime_path_literal_cases
 cargo test -p fileconv-knowledge --lib identity::tests
 python3 bench/markhand_web/scripts/generate_expected_chunks.py --check
 python3 bench/markhand_web/scripts/fill_citation_chunk_ids.py --check
@@ -93,8 +98,10 @@ Inspect `crates/knowledge/fixtures/identity-v2.json` (schema v2 payload) and
 
 - Desktop presets that already set explicit `runtime_path` (vLLM → `vllm-local`,
   GLM → `glm-cloud-interim`) are unchanged; no reindex for those stores.
-- Custom endpoints that previously diverged between core’s string host hint and
-  knowledge’s `url::Url::parse` (scheme-less hosts, uppercase `HTTP(S)`, IPv6)
-  now share one table. If a store was built with the old knowledge parser and
-  the unified helper yields a different `runtime_path`, signature mismatch
-  rebuilds the vector index (correct and required).
+- Custom endpoints that relied on inference may change `runtime_path` under the
+  unified rules (URL parser, DNS-label domains, cue order, scheme-less prefix).
+  Signature mismatch rebuilds the vector index (correct and required).
+- Notable semantic deltas vs earlier dual helpers: `modelz.ai` is not GLM;
+  invalid `[vllm::1]` does not count as a vLLM host; backslash-userinfo cannot
+  spoof `bigmodel.cn` / `vllm.*`; vLLM hosts win over GLM-named models;
+  non-official hosts such as `glm.example.com` no longer match via substring.

@@ -57,6 +57,8 @@ base64 = "0.22"
 encoding_rs = "0.8"
 # Durable intelligence IDs (CORE-T9): length-delimited SHA-256, workspace-pinned.
 sha2 = { workspace = true }
+# Embedding endpoint host parsing for ADR 0006 runtime-path inference (CORE-T13).
+url = "2.5.8"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
