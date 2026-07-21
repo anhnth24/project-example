@@ -9,6 +9,9 @@ if [[ "$INTEGRATION" == "true" ]]; then
 fi
 
 cargo test -p fileconv-core
+# `audio` is off by default (keeps whisper.cpp out of server/knowledge builds); test it
+# explicitly so audio.rs stays covered whenever core is exercised.
+cargo test -p fileconv-core --features audio
 cargo test -p fileconv-core --features llm llm
 cargo test -p fileconv-cli metrics
 cargo test -p fileconv-knowledge --no-default-features -p fileconv-server "${SERVER_TEST[@]}"

@@ -522,21 +522,12 @@ pub async fn refresh_session(
         .map_err(|_| SessionError::Database)?;
 
     let Some(row) = row else {
-        write_audit(
-            &txn,
-            AuditEvent {
-                org_id,
-                actor_user_id: None,
-                action: "auth.refresh",
-                resource_type: "session",
-                resource_id: None,
-                outcome: "deny",
-                request_id,
-                metadata: serde_json::json!({ "reason": "unknown_token" }),
-            },
-        )
-        .await?;
-        txn.commit().await.map_err(|_| SessionError::Database)?;
+        // SECURITY: `org_id` is parsed from the UNVERIFIED client token. Writing an audit
+        // row into that org here would let an unauthenticated caller forge
+        // `mh1.<victim_org>.<random>` and flood a tenant's append-only audit log; a
+        // non-existent org UUID would surface the audit FK violation as 500 vs 401,
+        // leaking org existence. Unknown-token attempts belong in application logs, not
+        // tenant audit. Fail closed with a uniform error; dropping `txn` rolls back.
         return Err(SessionError::InvalidRefresh);
     };
 
@@ -920,22 +911,11 @@ pub async fn logout_session(
             },
         )
         .await?;
-    } else {
-        write_audit(
-            &txn,
-            AuditEvent {
-                org_id,
-                actor_user_id: None,
-                action: "auth.logout",
-                resource_type: "session",
-                resource_id: None,
-                outcome: "deny",
-                request_id,
-                metadata: serde_json::json!({ "reason": "unknown_token" }),
-            },
-        )
-        .await?;
     }
+    // SECURITY: unknown token → no audit write into the client-supplied org (see
+    // refresh_session). Otherwise a forged `mh1.<victim_org>.<random>` token would let an
+    // unauthenticated caller flood a tenant's audit log or probe org existence via the
+    // audit FK error. Logout stays idempotent and does not reveal token validity.
     txn.commit().await.map_err(|_| SessionError::Database)?;
     Ok(())
 }

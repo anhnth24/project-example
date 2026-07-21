@@ -859,21 +859,66 @@ where
             Box::pin(async move {
                 let outbox_events = repo::claim_unpublished_outbox(txn, &ctx, limit).await?;
                 let mut publications = Vec::with_capacity(outbox_events.len());
-                for outbox in outbox_events {
-                    let event = sink.publish(txn, &ctx, &outbox).await?;
-                    let Some(outbox) = repo::mark_outbox_published(txn, &ctx, outbox.id).await?
-                    else {
-                        return Err(JobError::Database(DbError::Config(
-                            "claimed outbox event was already published".into(),
-                        )));
-                    };
-                    publications.push(OutboxPublication { outbox, event });
+                for (index, outbox) in outbox_events.into_iter().enumerate() {
+                    // Isolate each event in its own savepoint so a poison event (one that
+                    // always fails to publish) cannot abort the shared transaction and
+                    // block every later event for this org (head-of-line blocking). A
+                    // failed event is rolled back and left unpublished for the next relay
+                    // pass; healthy events in the same batch still commit.
+                    let savepoint = format!("outbox_relay_{index}");
+                    txn.batch_execute(&format!("SAVEPOINT {savepoint}"))
+                        .await
+                        .map_err(DbError::from)?;
+                    match publish_one(txn, &ctx, sink.as_ref(), &outbox).await {
+                        Ok(publication) => {
+                            txn.batch_execute(&format!("RELEASE SAVEPOINT {savepoint}"))
+                                .await
+                                .map_err(DbError::from)?;
+                            publications.push(publication);
+                        }
+                        Err(error) => {
+                            txn.batch_execute(&format!("ROLLBACK TO SAVEPOINT {savepoint}"))
+                                .await
+                                .map_err(DbError::from)?;
+                            txn.batch_execute(&format!("RELEASE SAVEPOINT {savepoint}"))
+                                .await
+                                .map_err(DbError::from)?;
+                            tracing::warn!(
+                                target: "outbox",
+                                outbox_id = %outbox.id,
+                                event_type = %outbox.event_type,
+                                error = %error,
+                                "outbox event publish failed; skipped to unblock the batch"
+                            );
+                        }
+                    }
                 }
                 Ok(publications)
             })
         }
     })
     .await
+}
+
+async fn publish_one<S>(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    sink: &S,
+    outbox: &OutboxEvent,
+) -> Result<OutboxPublication, JobError>
+where
+    S: OutboxSink + ?Sized,
+{
+    let event = sink.publish(txn, ctx, outbox).await?;
+    let Some(published) = repo::mark_outbox_published(txn, ctx, outbox.id).await? else {
+        return Err(JobError::Database(DbError::Config(
+            "claimed outbox event was already published".into(),
+        )));
+    };
+    Ok(OutboxPublication {
+        outbox: published,
+        event,
+    })
 }
 
 pub fn decode_job_payload(version: i32, payload: JsonValue) -> Result<JobPayload, JobError> {

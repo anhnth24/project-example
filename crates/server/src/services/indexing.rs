@@ -273,7 +273,8 @@ pub async fn index_version(
         return Err(IndexingError::MarkdownIntegrity);
     }
     let markdown = String::from_utf8(bytes.to_vec()).map_err(|_| IndexingError::MarkdownUtf8)?;
-    let prepared_chunks = prepare_chunks(document_id, version_id, &markdown);
+    let document_format = source_format(version.source_filename.as_deref());
+    let prepared_chunks = prepare_chunks(document_id, version_id, &markdown, &document_format);
 
     let dimensions = input
         .embedding_plan
@@ -378,6 +379,15 @@ pub async fn index_version(
         job_id: job.id,
         chunks: prepared_chunks.len(),
     })
+}
+
+/// Đuôi file nguồn viết thường (vd "report.XLSX" -> "xlsx"), dùng suy sheet/slide.
+/// Trả chuỗi rỗng nếu không có tên file hoặc không có đuôi.
+fn source_format(source_filename: Option<&str>) -> String {
+    source_filename
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 async fn load_index_source(
@@ -1048,6 +1058,11 @@ async fn persist_chunk_batch(
                             chunk_identity_sha256: &chunk.chunk_identity,
                             index_metadata_id: metadata_id,
                             index_signature: &signature_digest,
+                            page: chunk.page,
+                            slide: chunk.slide,
+                            sheet: chunk.sheet.as_deref(),
+                            span_start: Some(chunk.span_start),
+                            span_end: Some(chunk.span_end),
                         },
                     )
                     .await?;

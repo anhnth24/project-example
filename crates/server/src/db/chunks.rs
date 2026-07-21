@@ -23,6 +23,11 @@ pub struct NewChunk<'a> {
     pub chunk_identity_sha256: &'a str,
     pub index_metadata_id: Uuid,
     pub index_signature: &'a str,
+    pub page: Option<i32>,
+    pub slide: Option<i32>,
+    pub sheet: Option<&'a str>,
+    pub span_start: Option<i32>,
+    pub span_end: Option<i32>,
 }
 
 /// Inserts a chunk row; `org_id` always comes from `ctx`.
@@ -37,9 +42,9 @@ pub async fn insert(
             "INSERT INTO chunks (
                 id, org_id, document_id, version_id, ordinal, heading_path, body,
                 body_text_version, chunk_identity_sha256, index_metadata_id,
-                index_signature, tsv
+                index_signature, page, slide, sheet, span_start, span_end, tsv
              ) VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
                 to_tsvector('simple', $7)
              )
              RETURNING id, org_id, document_id, version_id, ordinal, heading_path, body,
@@ -58,6 +63,11 @@ pub async fn insert(
                 &input.chunk_identity_sha256,
                 &input.index_metadata_id,
                 &input.index_signature,
+                &input.page,
+                &input.slide,
+                &input.sheet,
+                &input.span_start,
+                &input.span_end,
             ],
         )
         .await?;
@@ -78,9 +88,10 @@ pub async fn insert_if_absent(
                 INSERT INTO chunks (
                     id, org_id, document_id, version_id, ordinal, heading_path, body,
                     body_text_version, chunk_identity_sha256, index_metadata_id,
-                    index_signature
+                    index_signature, page, slide, sheet, span_start, span_end, tsv
                 ) VALUES (
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                    to_tsvector('simple', $7)
                 )
                 ON CONFLICT ({GENERATION_IDENTITY_CONFLICT_TARGET}) DO NOTHING
                 RETURNING id, org_id, document_id, version_id, ordinal, heading_path, body,
@@ -116,6 +127,11 @@ pub async fn insert_if_absent(
                 &input.chunk_identity_sha256,
                 &input.index_metadata_id,
                 &input.index_signature,
+                &input.page,
+                &input.slide,
+                &input.sheet,
+                &input.span_start,
+                &input.span_end,
             ],
         )
         .await?;

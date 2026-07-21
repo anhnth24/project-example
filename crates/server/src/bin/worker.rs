@@ -24,6 +24,7 @@ const RECLAIM_BACKOFF: Duration = Duration::from_secs(1);
 
 #[tokio::main]
 async fn main() {
+    fileconv_server::init_tracing();
     let args: Vec<String> = std::env::args().collect();
     if args
         .iter()

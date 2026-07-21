@@ -939,3 +939,102 @@ async fn concurrent_refresh_and_revoke_all_leaves_no_usable_token() {
 
     ephemeral.drop().await;
 }
+
+/// Regression: a forged `mh1.<org>.<random>` refresh/logout token must not write an
+/// audit row into the victim org (append-only audit-log injection) and a non-existent
+/// org must fail identically to a real org with a bad secret (no 500-vs-401 org oracle).
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn forged_refresh_token_neither_injects_audit_nor_leaks_org_existence() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool, _provider, state) = boot(&base_url).await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let email = format!("user-{}@example.com", user.simple());
+    let password = "correct-horse-battery";
+    seed_user(&pool, org, user, &email, password).await;
+
+    let app = router(
+        AppState::from_parts(
+            state.runtime().clone(),
+            pool.clone(),
+            Some(PasswordAuthProvider::new(
+                pool.clone(),
+                test_auth_config(),
+                JwtKeys::from_auth(&test_auth_config()).unwrap(),
+            )),
+        )
+        .unwrap(),
+    );
+
+    let audit_count = |org_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            let ctx = OrgContext::try_new(org_id, org_id, [] as [&str; 0], []).unwrap();
+            with_org_txn(&pool, &ctx, move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_one(
+                            "SELECT count(*)::bigint FROM audit_log WHERE org_id = $1",
+                            &[&org_id],
+                        )
+                        .await?;
+                    Ok(row.get::<_, i64>(0))
+                })
+            })
+            .await
+            .unwrap()
+        }
+    };
+
+    let before = audit_count(org).await;
+
+    // Forged token naming the victim org with a syntactically valid but unknown secret.
+    let forged = format!("mh1.{org}.{}", "a".repeat(40));
+    let (status, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/auth/refresh",
+        Some(serde_json::json!({ "refreshToken": forged })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Idempotent logout must also refuse to inject an audit row.
+    let (status, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/auth/logout",
+        Some(serde_json::json!({ "refreshToken": forged })),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // A non-existent org must return the SAME status as a real org with a bad secret.
+    let ghost = format!("mh1.{}.{}", Uuid::new_v4(), "b".repeat(40));
+    let (status, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/auth/refresh",
+        Some(serde_json::json!({ "refreshToken": ghost })),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "non-existent org must not surface a 500 audit FK oracle"
+    );
+
+    let after = audit_count(org).await;
+    assert_eq!(
+        before, after,
+        "forged tokens must not write any audit row into the victim org"
+    );
+
+    ephemeral.drop().await;
+}

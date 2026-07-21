@@ -2,8 +2,8 @@
 
 The generated corpus contains:
 
-- 29 synthetic Vietnamese document versions covering all 10 ingest format families;
-- 260 retrieval queries with UTF-8 byte spans and graded judgments;
+- 31 synthetic Vietnamese document versions covering all 10 ingest format families;
+- 268 retrieval queries with UTF-8 byte spans and graded judgments;
 - multi-document answers plus current/as-of/compare/history version citations;
 - a 50-query stratified review packet;
 - 10 adversarial upload fixtures;
