@@ -10,6 +10,7 @@ web/dist/
 **/*.rs.bk
 # Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng
 /bench/corpus/
+/bench/corpus_external/
 /bench/vn_corpus/fonts/
 /bench/vn_corpus/*.docx
 /bench/vn_corpus/*.pptx

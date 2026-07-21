@@ -80,8 +80,28 @@ impl DesktopEmbeddingPlan {
         dimensions: Option<usize>,
         runtime_path: Option<&str>,
     ) -> Result<Self> {
+        let model = model.into();
+        Self::provider_with_revision(
+            provider,
+            model.clone(),
+            model,
+            base_url,
+            dimensions,
+            runtime_path,
+        )
+    }
+
+    pub fn provider_with_revision(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        revision: impl Into<String>,
+        base_url: Option<&str>,
+        dimensions: Option<usize>,
+        runtime_path: Option<&str>,
+    ) -> Result<Self> {
         let provider = provider.into();
         let model = model.into();
+        let revision = revision.into();
         let runtime = runtime_path
             .unwrap_or_else(|| infer_runtime_path(base_url, &model))
             .to_string();
@@ -90,7 +110,7 @@ impl DesktopEmbeddingPlan {
         let signature_plan = EmbeddingPlan::provider(
             provider.clone(),
             model.clone(),
-            model.clone(),
+            revision,
             deployment,
             dimensions,
             runtime,
@@ -641,5 +661,28 @@ mod tests {
             explicit.runtime_path(),
             Some(crate::identity::RUNTIME_VLLM_LOCAL)
         );
+    }
+
+    #[test]
+    fn provider_revision_is_part_of_index_compatibility() {
+        let first = DesktopEmbeddingPlan::provider_with_revision(
+            "openaicompatible",
+            "AITeamVN/Vietnamese_Embedding",
+            "revision-a",
+            Some("http://127.0.0.1:8088/v1"),
+            Some(1024),
+            Some(crate::identity::RUNTIME_LOCAL_NEURAL),
+        )
+        .unwrap();
+        let second = DesktopEmbeddingPlan::provider_with_revision(
+            "openaicompatible",
+            "AITeamVN/Vietnamese_Embedding",
+            "revision-b",
+            Some("http://127.0.0.1:8088/v1"),
+            Some(1024),
+            Some(crate::identity::RUNTIME_LOCAL_NEURAL),
+        )
+        .unwrap();
+        assert_ne!(first.metadata().signature, second.metadata().signature);
     }
 }
