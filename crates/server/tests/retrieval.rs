@@ -164,6 +164,12 @@ async fn as_of_resolves_effective_version_from_postgres() {
                 )
                 .await?;
                 txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, 'viewer')",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
                     "INSERT INTO collections (
                         id, org_id, name, slug, owner_user_id, visibility
                      ) VALUES ($1, $2, 'c', $3, $4, 'org')",
@@ -276,6 +282,12 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                     "INSERT INTO users (id, email, display_name, password_hash)
                      VALUES ($1, $2, 'u', 'x')",
                     &[&ctx.user_id(), &user_email],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, 'viewer')",
+                    &[&ctx.org_id(), &ctx.user_id()],
                 )
                 .await?;
                 txn.execute(
@@ -398,6 +410,34 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                     .await?;
                 let rank_f32: f32 = search::read_pg_real_rank(&row, "rank");
                 assert!(rank_f32 > 0.0);
+
+                let hydrated = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert_eq!(hydrated.len(), 1);
+
+                txn.execute(
+                    "DELETE FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                let denied_after_membership_revoke = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert!(
+                    denied_after_membership_revoke.is_empty(),
+                    "hydration must recheck current membership instead of trusting stale OrgContext"
+                );
 
                 Ok(())
             })
