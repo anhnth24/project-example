@@ -584,6 +584,14 @@ fn pii_phone_failed_plus_skips_one_group_then_scans_next() {
 }
 
 #[test]
+fn pii_phone_short_invalid_plus_group_does_not_swallow_next_phone() {
+    let report = detect_pii(&[doc("short-plus.md", "Sai +12345678 0987654321 cuối.")]);
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert_single_span(&report, PiiKind::Phone, "0987654321");
+    assert!(!report.findings.iter().any(|f| f.text.contains('+')));
+}
+
+#[test]
 fn pii_phone_unicode_alphanumeric_boundaries() {
     let report = detect_pii(&[doc("u.md", "mãＡ0912345678 và 0912345678Ｂ")]);
     assert!(
@@ -648,6 +656,53 @@ fn pii_compound_and_strong_bind_labels() {
         "Tài khoản của khách hàng doanh nghiệp đã đăng ký: 123456789012",
     )]);
     assert_single_span(&strong, PiiKind::BankAccount, "123456789012");
+}
+
+#[test]
+fn pii_compound_aliases_cmnd_cccd_stk_variants() {
+    let cmnd = detect_pii(&[doc("cmnd-so.md", "CMND số 123456789")]);
+    assert_single_span(&cmnd, PiiKind::NationalId, "123456789");
+
+    let cccd = detect_pii(&[doc("cccd-full.md", "Căn cước công dân số 001234567890")]);
+    assert_single_span(&cccd, PiiKind::NationalId, "001234567890");
+
+    let stk = detect_pii(&[doc("stk-nh.md", "STK ngân hàng 123456789012")]);
+    assert_single_span(&stk, PiiKind::BankAccount, "123456789012");
+
+    let so_tk = detect_pii(&[doc("so-tk.md", "Số TK ngân hàng 1234-5678-9012")]);
+    assert_single_span(&so_tk, PiiKind::BankAccount, "1234-5678-9012");
+}
+
+#[test]
+fn pii_conjunction_and_competing_keys_block_closed_account_prose() {
+    let closed = detect_pii(&[doc(
+        "closed.md",
+        "Tài khoản đã đóng và mã giao dịch: 123456789012 không còn hiệu lực.",
+    )]);
+    assert!(
+        !closed.counts.contains_key(&PiiKind::BankAccount),
+        "và/mã giao dịch must break bank link: {:?}",
+        closed.findings
+    );
+
+    let compete = detect_pii(&[doc(
+        "compete.md",
+        "Tài khoản cũ đã hủy, SĐT liên hệ: 0912345678",
+    )]);
+    // Comma already scopes; SĐT column/label wins for the phone — no bank hit.
+    assert!(!compete.counts.contains_key(&PiiKind::BankAccount));
+    assert_eq!(compete.counts.get(&PiiKind::Phone), Some(&1));
+
+    let binder_compete = detect_pii(&[doc(
+        "binder.md",
+        "Tài khoản chuyển khoản qua SĐT: 0912345678",
+    )]);
+    assert!(
+        !binder_compete.counts.contains_key(&PiiKind::BankAccount),
+        "competing SĐT before binder must not bank-classify: {:?}",
+        binder_compete.findings
+    );
+    assert_eq!(binder_compete.counts.get(&PiiKind::Phone), Some(&1));
 }
 
 #[test]

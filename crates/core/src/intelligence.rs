@@ -1158,30 +1158,28 @@ fn first_valid_phone_prefix_len(digits: &str, require_plus84: bool) -> Option<us
     None
 }
 
-/// Skip one plausible phone-shaped number group after a failed leading `+`.
-/// Stops before whitespace once ≥9 digits are collected so a later
-/// whitespace-separated valid phone can still be scanned.
-fn skip_one_phone_shaped_group(chars: &[(usize, char)], start_idx: usize) -> usize {
-    let mut idx = start_idx;
-    if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
+/// True when text after `ws_idx` (at whitespace) begins an independent valid VN phone.
+fn lookahead_begins_independent_vn_phone(chars: &[(usize, char)], ws_idx: usize) -> bool {
+    let mut idx = ws_idx;
+    while idx < chars.len() && matches!(chars[idx].1, ' ' | '\t') {
         idx += 1;
     }
-    let mut digits = 0usize;
-    let mut last_digit_end = idx;
+    if idx >= chars.len() || !chars[idx].1.is_ascii_digit() {
+        return false;
+    }
+    let mut digits = String::new();
     while idx < chars.len() {
         let ch = chars[idx].1;
         if ch.is_ascii_digit() {
-            digits += 1;
+            digits.push(ch);
             idx += 1;
-            last_digit_end = idx;
-            if digits >= 13 {
+            if digits.len() >= 13 {
                 break;
             }
         } else if matches!(ch, '-' | '.' | '(' | ')') {
             idx += 1;
         } else if matches!(ch, ' ' | '\t') {
-            if digits >= 9 {
-                // Boundary between number groups — do not consume the next phone.
+            if digits.len() >= 9 {
                 break;
             }
             idx += 1;
@@ -1189,7 +1187,42 @@ fn skip_one_phone_shaped_group(chars: &[(usize, char)], start_idx: usize) -> usi
             break;
         }
     }
-    if digits == 0 {
+    first_valid_phone_prefix_len(&digits, false).is_some()
+}
+
+/// Skip one plausible phone-shaped number group after a failed leading `+`.
+/// At whitespace, stop when collected digits cannot form `+84` **or** the
+/// lookahead begins an independent valid VN phone — so
+/// `+12345678 0987654321` skips only the invalid group.
+fn skip_one_phone_shaped_group(chars: &[(usize, char)], start_idx: usize) -> usize {
+    let mut idx = start_idx;
+    if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
+        idx += 1;
+    }
+    let mut digits = String::new();
+    let mut last_digit_end = idx;
+    while idx < chars.len() {
+        let ch = chars[idx].1;
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            idx += 1;
+            last_digit_end = idx;
+            if digits.len() >= 13 {
+                break;
+            }
+        } else if matches!(ch, '-' | '.' | '(' | ')') {
+            idx += 1;
+        } else if matches!(ch, ' ' | '\t') {
+            let can_form_plus84 = digits.starts_with("84");
+            if !can_form_plus84 || lookahead_begins_independent_vn_phone(chars, idx) {
+                break;
+            }
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    if digits.is_empty() {
         return (start_idx + 1).min(chars.len());
     }
     last_digit_end
@@ -1335,13 +1368,17 @@ fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
 
 /// Longer compound phrases first so `tai khoan ngan hang` wins over `tai khoan`.
 const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
+    ("can cuoc cong dan so", ExplicitLabel::NationalId),
     ("so tai khoan ngan hang", ExplicitLabel::Bank),
     ("tai khoan ngan hang", ExplicitLabel::Bank),
+    ("so tk ngan hang", ExplicitLabel::Bank),
+    ("stk ngan hang", ExplicitLabel::Bank),
     ("so dien thoai", ExplicitLabel::Phone),
     ("can cuoc cong dan", ExplicitLabel::NationalId),
     ("so tai khoan", ExplicitLabel::Bank),
     ("dien thoai", ExplicitLabel::Phone),
     ("cccd so", ExplicitLabel::NationalId),
+    ("cmnd so", ExplicitLabel::NationalId),
     ("can cuoc", ExplicitLabel::NationalId),
     ("tai khoan", ExplicitLabel::Bank),
     ("hotline", ExplicitLabel::Phone),
@@ -1354,6 +1391,35 @@ const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
     ("tel", ExplicitLabel::Phone),
     ("stk", ExplicitLabel::Bank),
 ];
+
+/// Conjunctions / competing field keys in the qualifier before `:/=` act as clause
+/// breaks (e.g. closed-account prose + `mã giao dịch`).
+fn between_has_soft_clause_break(before_sep: &str) -> bool {
+    // Folded ASCII phrases; match as whole tokens via non-alphanumeric borders.
+    const BREAKS: &[&str] = &[
+        " va ",
+        " hoac ",
+        " nhung ",
+        " nhung ma ",
+        " ma giao dich",
+        " ma gd",
+        " so tham chieu",
+        " ma tham chieu",
+        " so dien thoai",
+        " dien thoai",
+        " hotline",
+        " mobile",
+        " phone",
+        " sdt",
+        " tel",
+        " cccd",
+        " cmnd",
+        " stk",
+        " so tk",
+    ];
+    let padded = format!(" {before_sep} ");
+    BREAKS.iter().any(|needle| padded.contains(needle))
+}
 
 fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
     let mut best: Option<(usize, usize, ExplicitLabel)> = None;
@@ -1387,8 +1453,8 @@ fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
 
 /// Field-value link between a label and the candidate at the end of `folded_scope`.
 /// - No-colon compound labels: tight whitespace only (`Tài khoản ngân hàng 123…`).
-/// - Terminal `:/=/：` strongly binds and allows a longer qualifier before the sep.
-/// Clause/comma boundaries still reject distant prose / transaction IDs.
+/// - Terminal `:/=/：` strongly binds and allows a longer qualifier before the sep,
+///   unless a conjunction / competing field key breaks the clause.
 fn field_value_link(between: &str) -> bool {
     const MAX_BETWEEN_CHARS: usize = 64;
     if between.chars().count() > MAX_BETWEEN_CHARS {
@@ -1413,11 +1479,13 @@ fn field_value_link(between: &str) -> bool {
         return false;
     }
     let before = trimmed[..sep_at].trim();
-    // Strong `:/=` bind: allow a longer qualifier, still no nested clause punctuation.
+    // Strong `:/=` bind: allow a longer qualifier, still no nested clause punctuation
+    // or soft breaks (`và`, `mã giao dịch`, competing `SĐT` / `STK` keys, …).
     before.chars().count() <= 48
         && !before
             .chars()
             .any(|ch| is_label_scope_boundary(ch) || matches!(ch, ',' | '，' | '、'))
+        && !between_has_soft_clause_break(before)
 }
 
 /// Nearest explicit label in scoped folded prefix that field-links to the value.
