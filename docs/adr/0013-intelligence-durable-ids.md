@@ -18,6 +18,10 @@ document/chunk/index identity to length-delimited SHA-256; desktop local
 intelligence IDs still needed an explicit durable scheme without changing the
 ADR 0006 digest field layout.
 
+SQLite metadata and the on-disk HNSW cache are separate stores: they cannot share
+one filesystem transaction. Any migration story that claims cross-store atomicity
+is false; safety must come from scheme validation and exact-search fallback.
+
 ## Decision
 
 1. **Scheme** `sha256-v1` (`INTELLIGENCE_ID_SCHEME` in `fileconv-core`):
@@ -33,12 +37,21 @@ ADR 0006 digest field layout.
    `chunk-sha256-v1-{hex}`, `table-sha256-v1-{hex}`,
    `handoff-sha256-v1-{slug}-{nonce}-{hex}`.
 4. **Handoff schema** bumps to `HANDOFF_SCHEMA_VERSION = 2` and persists
-   `idScheme` beside `packId`.
-5. **Desktop knowledge** stores `intelligence_id_scheme` in SQLite `index_meta`.
-   Missing/empty/mismatched scheme (or embedding signature mismatch) clears
-   documents/chunks/FTS/meta and rebuilds HNSW via the existing atomic path.
-   Legacy and current IDs must not coexist in one store.
-6. **ADR 0006** server `IndexSignature` / knowledge `chunk_identity` remain
+   `idScheme` beside `packId`. Desktop `load_persisted_pack` rejects any pack
+   whose `schemaVersion` / `idScheme` are not exactly v2 / `sha256-v1`, with
+   guidance to regenerate the Knowledge Pack. App TypeScript types mirror the
+   same fields/constants.
+5. **Desktop SQLite** stores `intelligence_id_scheme` in `index_meta`.
+   Missing/empty/mismatched scheme (or embedding signature mismatch) wipes
+   documents/chunks/FTS/meta in one SQLite transaction and re-indexes. Legacy
+   and current chunk IDs must not coexist in one SQLite database.
+6. **Desktop HNSW** persists `idScheme` in `manifest.json` and folds a non-empty
+   scheme into the partition name. `is_available` / `search` / `rebuild` validate
+   scheme equality. A stale ANN left behind when HNSW clear fails after a SQLite
+   commit is therefore **not addressable** under the new scheme; hybrid search
+   self-heals via exact cosine and warnings. Clear/rebuild failures never roll
+   back a committed SQLite upgrade.
+7. **ADR 0006** server `IndexSignature` / knowledge `chunk_identity` remain
    unchanged and out of scope.
 
 Dependency: workspace-pinned `sha2 = "=0.11.0"` (same crate family as ADR 0006).
@@ -47,11 +60,14 @@ Dependency: workspace-pinned `sha2 = "=0.11.0"` (same crate family as ADR 0006).
 
 - Positive: durable local IDs across toolchains; desktop refuses mixed ID eras.
 - Positive: handoff consumers can gate on `schemaVersion` + `idScheme`.
+- Positive: SQLite/HNSW divergence cannot silently serve old ANN IDs after a
+  scheme upgrade.
 - Negative: every pre-`sha256-v1` desktop index and handoff pack ID is obsolete.
-- Migration: open/index with current plan → atomic SQLite/FTS wipe + HNSW clear
-  + re-embed. Rollback = restore a pre-upgrade backup of
-  `.markhand/knowledge.sqlite` and the HNSW partition directory, or delete both
-  and rebuild under the desired scheme.
+- Migration: open/index with current plan → SQLite/FTS wipe + best-effort HNSW
+  clear/rebuild. If HNSW clear/rebuild fails, search continues with exact cosine
+  until a later successful rebuild. Rollback = restore a pre-upgrade backup of
+  `.markhand/knowledge.sqlite` **and** the HNSW partition directory together, or
+  delete both and rebuild under the desired scheme.
 - Out of scope: server Postgres/Qdrant generations (ADR 0011); ADR 0006 digests.
 
 ## Alternatives considered
@@ -60,6 +76,8 @@ Dependency: workspace-pinned `sha2 = "=0.11.0"` (same crate family as ADR 0006).
   SHA-256 matches ADR 0006 precedent and avoids short-hash collision risk.
 - Soft-migrate by keeping old chunk rows beside new ones: rejected; citations
   and FTS would mix incompatible ID eras.
+- Pretend SQLite+HNSW clear is one atomic unit: rejected; not true on disk.
+  Scheme-gated ANN + exact fallback is the safety property instead.
 - Fold intelligence scheme into ADR 0006 `IndexSignature` fields: rejected for
   this change; server identity fixtures must stay frozen.
 
@@ -68,6 +86,7 @@ Dependency: workspace-pinned `sha2 = "=0.11.0"` (same crate family as ADR 0006).
 ```bash
 cargo test -p fileconv-core --lib intelligence
 cargo test -p fileconv-knowledge --features desktop-sqlite,desktop-hnsw --lib
+cargo test -p fileconv-desktop --lib intelligence::
 cargo fmt --all -- --check
 cargo metadata --locked --format-version 1 --no-deps
 python3 scripts/check-dependency-policy.py
@@ -78,8 +97,10 @@ Required cases:
 - pinned domain vectors for chunk/table/handoff-document/handoff-pack;
 - visible IDs contain `sha256-v1`;
 - handoff `schemaVersion == 2` and `idScheme == sha256-v1`;
-- legacy SQLite fixture has empty `id_scheme` and upgrades only via atomic rebuild;
-- missing `intelligence_id_scheme` with matching embedding signature still rebuilds.
+- load rejects schema v1 and idScheme mismatch with regenerate guidance;
+- legacy SQLite fixture has empty `id_scheme` and upgrades via SQLite rebuild;
+- HNSW manifest/partition scheme mismatch is unavailable; clear failure after
+  SQLite commit keeps SQLite and falls back to exact search.
 
 ## Exception lifecycle
 

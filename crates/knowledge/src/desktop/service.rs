@@ -217,14 +217,27 @@ fn rebuild_once(
     let mut warnings = Vec::new();
     if stored.replaced_incompatible_index {
         warnings.push(
-            "Index compatibility thay đổi (embedding signature hoặc intelligence ID scheme); đã rebuild knowledge index."
+            "Index compatibility thay đổi (embedding signature hoặc intelligence ID scheme); đã rebuild SQLite/FTS. HNSW được clear/rebuild riêng (không chung transaction)."
                 .into(),
         );
     }
+    if let Some(error) = stored.hnsw_clear_error.as_ref() {
+        warnings.push(format!(
+            "HNSW clear lỗi sau SQLite commit ({error}); ANN cũ bị từ chối theo ID scheme, search dùng exact cosine cho đến khi rebuild thành công."
+        ));
+        // Best-effort retry; failure still leaves scheme-gated exact fallback.
+        if let Err(retry_error) = hnsw::clear(&paths.ann_root) {
+            warnings.push(format!(
+                "HNSW clear retry lỗi ({retry_error}); tiếp tục exact cosine fallback."
+            ));
+        }
+    }
+    let id_scheme = stored.metadata.id_scheme.as_str();
     if stored.indexed > 0
         || !hnsw::is_available(
             &paths.ann_root,
             &stored.metadata.signature,
+            id_scheme,
             stored.metadata.dimensions,
         )
     {
@@ -234,6 +247,7 @@ fn rebuild_once(
                 hnsw::rebuild(
                     &paths.ann_root,
                     &stored.metadata.signature,
+                    id_scheme,
                     stored.metadata.dimensions,
                     &points,
                 )
@@ -345,6 +359,7 @@ fn rank_hits(
             match hnsw::search(
                 ann_root,
                 &metadata.signature,
+                &metadata.id_scheme,
                 metadata.dimensions,
                 query_vector,
                 (chunks.len() * 4).clamp(500, 5_000),
@@ -459,6 +474,7 @@ pub fn index_stats(paths: &KnowledgePaths) -> Result<IndexStats> {
         ann_available: hnsw::is_available(
             &paths.ann_root,
             &metadata.signature,
+            &metadata.id_scheme,
             metadata.dimensions,
         ),
         ann_threshold: 1_000,
@@ -638,6 +654,88 @@ mod tests {
         other.id_scheme = "sip13-v1".into();
         assert!(!local.matches(&other));
         assert!(local.matches(local.metadata()));
+    }
+
+    #[test]
+    fn hnsw_clear_failure_warns_and_leaves_scheme_gated_exact_fallback() {
+        let paths = temp_paths();
+        // Seed a legacy (empty-scheme) ANN partition that must become unusable.
+        let legacy_points = (0..128)
+            .map(|index| {
+                let mut vector = vec![0.0; LOCAL_VECTOR_DIMENSIONS];
+                vector[index % LOCAL_VECTOR_DIMENSIONS] = 1.0;
+                (format!("legacy-chunk-{index}"), vector)
+            })
+            .collect::<Vec<_>>();
+        hnsw::rebuild(
+            &paths.ann_root,
+            LOCAL_EMBEDDING_MODE,
+            "",
+            LOCAL_VECTOR_DIMENSIONS,
+            &legacy_points,
+        )
+        .unwrap();
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            LOCAL_EMBEDDING_MODE,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+
+        let mut store = SqliteKnowledgeStore::open(&paths.database).unwrap();
+        let doc = document();
+        let metadata = DesktopEmbeddingPlan::local().metadata().clone();
+        // Seed SQLite with a legacy empty scheme, then upgrade with failing clear.
+        store
+            .index_documents(
+                &[doc.clone()],
+                {
+                    let mut legacy = metadata.clone();
+                    legacy.id_scheme.clear();
+                    legacy.signature = LOCAL_EMBEDDING_MODE.into();
+                    legacy
+                },
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        let upgraded = store
+            .index_documents(
+                &[doc],
+                metadata.clone(),
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || Err(KnowledgeError::AdapterFailure("clear denied".into())),
+            )
+            .unwrap();
+        assert!(upgraded.hnsw_clear_error.is_some());
+        assert_eq!(upgraded.metadata.id_scheme, INTELLIGENCE_ID_SCHEME);
+        // Stale empty-scheme ANN may still be on disk, but must not be usable
+        // under the new SQLite ID scheme (exact cosine self-heals).
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            LOCAL_EMBEDDING_MODE,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+        assert!(!hnsw::is_available(
+            &paths.ann_root,
+            &metadata.signature,
+            INTELLIGENCE_ID_SCHEME,
+            metadata.dimensions
+        ));
+        let _ = std::fs::remove_dir_all(paths.ann_root);
     }
 
     #[test]

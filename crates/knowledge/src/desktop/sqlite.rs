@@ -46,6 +46,8 @@ pub struct StoreIndexResult {
     pub skipped: usize,
     pub metadata: IndexMetadata,
     pub replaced_incompatible_index: bool,
+    /// HNSW clear is best-effort after SQLite commit (not one shared transaction).
+    pub hnsw_clear_error: Option<String>,
 }
 
 pub struct SqliteKnowledgeStore {
@@ -372,9 +374,17 @@ impl SqliteKnowledgeStore {
 
         write_metadata(&transaction, &metadata)?;
         transaction.commit().map_err(sql)?;
-        if cleared {
-            on_cleared()?;
-        }
+        // SQLite and HNSW cannot share a transaction. Clear is best-effort; a
+        // failure must not undo the committed SQLite ID scheme. Callers rely on
+        // scheme-aware HNSW manifests so a stale ANN cannot stay usable.
+        let hnsw_clear_error = if cleared {
+            match on_cleared() {
+                Ok(()) => None,
+                Err(error) => Some(error.to_string()),
+            }
+        } else {
+            None
+        };
         Ok(StoreIndexResult {
             documents: documents.len(),
             chunks: total_chunks,
@@ -382,6 +392,7 @@ impl SqliteKnowledgeStore {
             skipped,
             metadata,
             replaced_incompatible_index: cleared,
+            hnsw_clear_error,
         })
     }
 
@@ -933,7 +944,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_intelligence_id_scheme_forces_atomic_rebuild() {
+    fn missing_intelligence_id_scheme_forces_sqlite_rebuild() {
         let path = temp_path("id_scheme_rebuild");
         let mut store = SqliteKnowledgeStore::open(&path).unwrap();
         let original = document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.");
@@ -970,8 +981,54 @@ mod tests {
             .unwrap();
         assert!(result.replaced_incompatible_index);
         assert!(cleared);
+        assert!(result.hnsw_clear_error.is_none());
         let upgraded = store.metadata().unwrap();
         assert_eq!(upgraded.id_scheme, INTELLIGENCE_ID_SCHEME);
+        assert!(store
+            .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
+            .unwrap()
+            .iter()
+            .all(|chunk| chunk.id.contains(INTELLIGENCE_ID_SCHEME)));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn hnsw_clear_failure_after_commit_keeps_sqlite_and_surfaces_error() {
+        let path = temp_path("hnsw_clear_fail");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        let original = document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.");
+        index(&mut store, &[original.clone()]);
+        store
+            .connection
+            .execute(
+                "DELETE FROM index_meta WHERE key = 'intelligence_id_scheme'",
+                [],
+            )
+            .unwrap();
+        let result = store
+            .index_documents(
+                &[original],
+                local_metadata(),
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || {
+                    Err(KnowledgeError::AdapterFailure(
+                        "simulated HNSW clear failure".into(),
+                    ))
+                },
+            )
+            .unwrap();
+        assert!(result.replaced_incompatible_index);
+        assert!(result
+            .hnsw_clear_error
+            .as_deref()
+            .is_some_and(|error| error.contains("simulated HNSW clear failure")));
+        assert_eq!(store.metadata().unwrap().id_scheme, INTELLIGENCE_ID_SCHEME);
         assert!(store
             .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
             .unwrap()
