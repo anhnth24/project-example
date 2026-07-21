@@ -12,9 +12,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
-#[cfg(test)]
-use rubato::Indexing;
-use rubato::{Fft, FixedSync, Resampler};
+use rubato::{Fft, FixedSync, Indexing, Resampler};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
@@ -660,8 +658,10 @@ fn min_output_len(n: usize, from: u32, to: u32) -> usize {
 /// - invalid rate / rubato failure → `Err` (never synthesize a silence buffer)
 ///
 /// **Latency / edge policy**
-/// - Fixed-input `rubato::Fft` with explicit partial final chunk + zero flush
-/// - Leading `output_delay` frames are trimmed after flush
+/// - Explicit partial final chunk + zero-flush (`partial_len(0)`), **not**
+///   `process_all` (rubato's mid-stream delay trim can collapse signal to silence)
+/// - Collect raw frames until `output_delay + ceil(n·to/from)`, then slice off
+///   the leading `output_delay` samples in one step
 /// - Channel downmix happens before this function (mono only)
 ///
 /// Does **not** claim WER improvement without corpus evidence.
@@ -710,50 +710,9 @@ fn normalize_resample_len(out: &mut Vec<f32>, exact: usize) {
     }
 }
 
-/// Offline FFT resample via [`Resampler::process_all`].
-///
-/// `process_all` feeds the clip, partial-pads the tail, flushes with silence until
-/// the ratio-correct length is reached, and trims `output_delay` — without any
-/// fixed flush-iteration cap. For a manual streaming path the equivalent bound is
-/// derived below in [`flush_iter_bound`] (feed ≤ n+1, flush ≤ delay+exact at
-/// ≥1 frame/iter, plus FFT block slack); true no-progress is an error.
-fn resample_rubato_fft(input: &[f32], from: u32, to: u32) -> Result<Vec<f32>, ConvertError> {
-    // Chunk is a hint; FixedSync::Both snaps to a ratio-friendly size.
-    let chunk = 1024usize;
-    let mut resampler = Fft::<f32>::new(from as usize, to as usize, chunk, 1, FixedSync::Both)
-        .map_err(|e| ConvertError::Failed(format!("rubato init: {e}")))?;
-
-    let frames = input.len();
-    let adapter = InterleavedSlice::new(input, 1, frames)
-        .map_err(|e| ConvertError::Failed(format!("rubato input adapter: {e}")))?;
-
-    // process_all resets, pads/flushes, and trims startup delay.
-    let owned = resampler
-        .process_all(&adapter, frames, None)
-        .map_err(|e| ConvertError::Failed(format!("rubato process_all: {e}")))?;
-    let out = owned.take_data();
-
-    let exact = exact_output_len(frames, from, to);
-    let minimum = min_output_len(frames, from, to);
-    if out.len() < minimum {
-        return Err(ConvertError::Failed(format!(
-            "rubato process_all returned {} frames; minimum is {minimum} (rate {from}->{to})",
-            out.len()
-        )));
-    }
-    if out.is_empty() && exact > 0 {
-        return Err(ConvertError::Failed(format!(
-            "rubato process_all returned empty output for nonempty input (rate {from}->{to})"
-        )));
-    }
-    Ok(out)
-}
-
-/// Mathematical upper bound on feed+flush iterations for a manual streaming
-/// resample loop (documentation / test oracle). Not a fixed magic constant:
+/// Mathematical upper bound on feed+flush iterations:
 /// `n+1` feed steps, `delay+exact` flush steps at ≥1 out-frame progress, plus
 /// FFT `input_frames_max + output_frames_max` pipeline slack.
-#[cfg(test)]
 fn flush_iter_bound(n: usize, delay: usize, exact: usize, in_max: usize, out_max: usize) -> usize {
     n.saturating_add(1)
         .saturating_add(delay.saturating_add(exact))
@@ -762,26 +721,21 @@ fn flush_iter_bound(n: usize, delay: usize, exact: usize, in_max: usize, out_max
         .saturating_add(2)
 }
 
-/// Manual pad/partial/flush loop with derived bound + no-progress detection.
-/// Mirrors `process_all_into_buffer` (trim delay, pump to ceil length) so tests can
-/// prove arbitrary rates succeed without a fixed `MAX_FLUSH=64`.
-#[cfg(test)]
-fn resample_rubato_fft_streaming_for_test(
-    input: &[f32],
-    from: u32,
-    to: u32,
-) -> Result<Vec<f32>, ConvertError> {
-    let chunk = 1024usize;
+/// Offline FFT resample: partial-pad tail, zero-flush, then trim `output_delay`
+/// by slicing the raw buffer (avoids rubato `process_all` trim regression).
+fn resample_rubato_fft(input: &[f32], from: u32, to: u32) -> Result<Vec<f32>, ConvertError> {
+    // FixedSync::Both handles coprime rates; chunk is a size hint.
+    let chunk = 256usize;
     let mut resampler = Fft::<f32>::new(from as usize, to as usize, chunk, 1, FixedSync::Both)
         .map_err(|e| ConvertError::Failed(format!("rubato init: {e}")))?;
     resampler.reset();
 
     let delay = resampler.output_delay();
     let exact = exact_output_len(input.len(), from, to);
-    // After delay trim we need `exact` frames; pump target matches rubato's ceil.
     let pump_target = ((input.len() as f64) * (to as f64 / from as f64))
         .ceil()
         .max(exact as f64) as usize;
+    let need_raw = delay.saturating_add(pump_target);
 
     let max_iters = flush_iter_bound(
         input.len(),
@@ -791,16 +745,13 @@ fn resample_rubato_fft_streaming_for_test(
         resampler.output_frames_max(),
     );
 
-    let mut collected = Vec::with_capacity(delay.saturating_add(pump_target).saturating_add(chunk));
-    let mut frames_to_trim = delay;
+    let mut raw = Vec::with_capacity(need_raw.saturating_add(chunk));
     let mut pos = 0usize;
     let n = input.len();
-    // Track raw collected growth so delay-fill flushes still count as progress.
-    let mut raw_len = 0usize;
 
     for _ in 0..max_iters {
         let before_pos = pos;
-        let before_raw = raw_len;
+        let before_raw = raw.len();
 
         let need_in = resampler.input_frames_next();
         let need_out = resampler.output_frames_next().max(1);
@@ -831,39 +782,36 @@ fn resample_rubato_fft_streaming_for_test(
         let (_frames_in, frames_out) = resampler
             .process_into_buffer(&adapter_in, &mut adapter_out, Some(&indexing))
             .map_err(|e| ConvertError::Failed(format!("rubato process: {e}")))?;
-        collected.extend_from_slice(&out_storage[..frames_out]);
-        raw_len = collected.len();
+        raw.extend_from_slice(&out_storage[..frames_out]);
 
-        if frames_to_trim > 0 && collected.len() > frames_to_trim {
-            // Move useful samples to the front (same intent as rubato's trim).
-            let useful = collected.len() - frames_to_trim;
-            collected.copy_within(frames_to_trim..frames_to_trim + useful, 0);
-            collected.truncate(useful);
-            frames_to_trim = 0;
+        if pos >= n && raw.len() >= need_raw {
+            break;
         }
 
-        let useful = if frames_to_trim == 0 {
-            collected.len()
-        } else {
-            0
-        };
-        if pos >= n && frames_to_trim == 0 && useful >= pump_target {
-            collected.truncate(pump_target);
-            return Ok(collected);
-        }
-
-        let progressed = pos > before_pos || raw_len > before_raw;
+        let progressed = pos > before_pos || raw.len() > before_raw;
         if !progressed {
             return Err(ConvertError::Failed(format!(
-                "rubato streaming resample made no progress (rate {from}->{to}, pos={pos}/{n}, useful={useful}, delay_left={frames_to_trim})"
+                "rubato resample made no progress (rate {from}->{to}, pos={pos}/{n}, raw={}, need_raw={need_raw})",
+                raw.len()
             )));
         }
     }
 
-    Err(ConvertError::Failed(format!(
-        "rubato streaming resample exhausted derived iter bound {max_iters} \
-         without delay-trimmed target (rate {from}->{to})"
-    )))
+    if raw.len() < need_raw {
+        return Err(ConvertError::Failed(format!(
+            "rubato resample exhausted derived iter bound {max_iters} \
+             (raw={}, need_raw={need_raw}, rate {from}->{to})",
+            raw.len()
+        )));
+    }
+    if raw.len() <= delay {
+        return Err(ConvertError::Failed(
+            "rubato flush produced insufficient output to trim output_delay".into(),
+        ));
+    }
+
+    // Trim startup delay in one slice — do not use process_all's mid-stream trim.
+    Ok(raw.split_off(delay))
 }
 
 #[cfg(test)]
@@ -1238,7 +1186,7 @@ mod tests {
     #[test]
     fn resample_arbitrary_positive_rates_short_and_one_second() {
         for &rate in ARBITRARY_RATES {
-            for &ms in &[5u32, 20, 100] {
+            for &ms in &[5u32, 10, 20, 100] {
                 let n = samples_for_ms(rate, ms).max(1);
                 let src = vec![0.25f32; n];
                 let out = resample_to_16k(&src, rate)
@@ -1248,14 +1196,9 @@ mod tests {
                     exact_output_len(n, rate, WHISPER_RATE),
                     "short {ms}ms @ {rate}"
                 );
-
-                // Streaming path with derived bound must also succeed (no fixed flush cap).
-                let streamed = resample_rubato_fft_streaming_for_test(&src, rate, WHISPER_RATE)
-                    .unwrap_or_else(|e| panic!("streaming short {ms}ms @ {rate} Hz: {e}"));
                 assert!(
-                    streamed.len() >= min_output_len(n, rate, WHISPER_RATE),
-                    "streaming short {ms}ms @ {rate}: len={}",
-                    streamed.len()
+                    out.iter().any(|s| s.abs() > 1e-4),
+                    "short {ms}ms @ {rate}: unexpected silence"
                 );
             }
 
@@ -1268,60 +1211,64 @@ mod tests {
                 exact_output_len(n1, rate, WHISPER_RATE),
                 "1s @ {rate}"
             );
-            // Non-silence after delay trim/flush. Absolute unity can vary for
-            // hard-to-reduce FFT ratios; require clear DC energy.
-            let mean = center_mean(&out1).abs();
-            assert!(mean > 0.2, "1s |DC| mean={mean} @ {rate}");
-
-            let streamed1 = resample_rubato_fft_streaming_for_test(&src1, rate, WHISPER_RATE)
-                .unwrap_or_else(|e| panic!("streaming 1s @ {rate} Hz: {e}"));
-            let ceil_len = ((n1 as f64) * (WHISPER_RATE as f64 / rate as f64)).ceil() as usize;
-            assert_eq!(streamed1.len(), ceil_len, "streaming 1s @ {rate}");
+            let mean = center_mean(&out1);
+            assert!((mean - 1.0).abs() < 0.12, "1s DC mean={mean} @ {rate}");
         }
     }
 
     #[test]
     fn resample_short_dc_impulse_passband_value_tests() {
-        for &(rate, label) in VALUE_RATES {
+        // Common + coprime rates; value checks at every short duration (not length-only).
+        let rates: &[(u32, &str)] = &[
+            (8_000, "8k→16k"),
+            (22_050, "22.05k→16k"),
+            (24_000, "24k→16k"),
+            (32_000, "32k→16k"),
+            (44_100, "44.1k→16k"),
+            (48_000, "48k→16k"),
+            (96_000, "96k→16k"),
+            (22_051, "22051→16k"),
+            (44_101, "44101→16k"),
+            (47_999, "47999→16k"),
+            (88_201, "88201→16k"),
+            (191_999, "191999→16k"),
+        ];
+        for &(rate, label) in rates {
             for &ms in SHORT_MS {
                 let n = samples_for_ms(rate, ms).max(1);
 
-                // Length always (5/10/20/100ms). Value checks at 100ms+.
-                let dc = resample_to_16k(&vec![1.0f32; n], rate).unwrap();
-                assert_eq!(dc.len(), exact_output_len(n, rate, WHISPER_RATE));
-                if ms >= 100 && dc.len() >= 64 {
-                    // DC unity is reliable on downsample/equal paths; upsample FFT
-                    // short buffers can show reduced DC gain after delay trim.
-                    if rate >= WHISPER_RATE {
-                        let mean = center_mean(&dc);
-                        assert!((mean - 1.0).abs() < 0.15, "DC mean={mean} {label} {ms}ms");
-                    } else {
-                        assert!(
-                            center_mean(&dc).abs() > 0.15,
-                            "upsample DC energy missing {label} {ms}ms"
-                        );
-                    }
+                let dc = resample_to_16k(&vec![1.0f32; n], rate)
+                    .unwrap_or_else(|e| panic!("DC {label} {ms}ms: {e}"));
+                assert_eq!(
+                    dc.len(),
+                    exact_output_len(n, rate, WHISPER_RATE),
+                    "{label} {ms}ms"
+                );
+                let mean = center_mean(&dc);
+                assert!((mean - 1.0).abs() < 0.12, "DC mean={mean} {label} {ms}ms");
 
-                    let mut impulse = vec![0.0f32; n];
-                    impulse[n / 2] = 1.0;
-                    let imp = resample_to_16k(&impulse, rate).unwrap();
-                    let peak = imp.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
-                    let min_peak = if rate >= WHISPER_RATE { 0.05 } else { 0.001 };
-                    assert!(
-                        peak > min_peak,
-                        "impulse peak={peak} {label} {ms}ms (delay trim/flush)"
-                    );
+                let mut impulse = vec![0.0f32; n];
+                impulse[n / 2] = 1.0;
+                let imp = resample_to_16k(&impulse, rate)
+                    .unwrap_or_else(|e| panic!("impulse {label} {ms}ms: {e}"));
+                let peak = imp.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
+                // Downsample attenuates impulse with rate ratio; ~192 kHz ≈ 0.08.
+                assert!(peak > 0.05, "impulse peak={peak} {label} {ms}ms");
 
-                    let tone = sine_wave(1_000.0, rate, ms as f32 / 1000.0);
-                    let out = resample_to_16k(&tone, rate).unwrap();
-                    let in_rms = rms(&tone);
-                    let out_rms = rms(&out);
-                    let min_ratio = if rate >= WHISPER_RATE { 0.45 } else { 0.25 };
-                    assert!(
-                        out_rms > in_rms * min_ratio,
-                        "passband rms in={in_rms} out={out_rms} {label} {ms}ms"
-                    );
-                }
+                let tone = sine_wave(1_000.0, rate, ms as f32 / 1000.0);
+                let out = resample_to_16k(&tone, rate)
+                    .unwrap_or_else(|e| panic!("1k {label} {ms}ms: {e}"));
+                let in_rms = rms(&tone);
+                let out_rms = rms(&out);
+                assert!(
+                    out_rms > in_rms * 0.9,
+                    "passband rms in={in_rms} out={out_rms} {label} {ms}ms"
+                );
+                // Absolute 1 kHz sine RMS ≈ 1/√2 when amplitude is 1.
+                assert!(
+                    (out_rms - 0.707).abs() < 0.05,
+                    "1k abs rms={out_rms} {label} {ms}ms"
+                );
             }
         }
     }
