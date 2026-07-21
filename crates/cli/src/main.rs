@@ -15,6 +15,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
+#[cfg(feature = "audio")]
 use fileconv_core::audio::AudioEngine;
 use fileconv_core::intelligence::{CorpusDocument, HandoffOptions};
 use fileconv_core::{Converter, FormatKind};
@@ -50,12 +51,19 @@ fn main() -> Result<()> {
             cmd_accuracy(Path::new(manifest), out.as_deref())
         }
         "audio" => {
-            let models = args
-                .get(2)
-                .context("thiếu danh sách model (phân tách dấu phẩy)")?;
-            let manifest = args.get(3).context("thiếu manifest")?;
-            let out = args.get(4).map(PathBuf::from);
-            cmd_audio(models, Path::new(manifest), out.as_deref())
+            #[cfg(feature = "audio")]
+            {
+                let models = args
+                    .get(2)
+                    .context("thiếu danh sách model (phân tách dấu phẩy)")?;
+                let manifest = args.get(3).context("thiếu manifest")?;
+                let out = args.get(4).map(PathBuf::from);
+                cmd_audio(models, Path::new(manifest), out.as_deref())
+            }
+            #[cfg(not(feature = "audio"))]
+            {
+                bail!("lệnh audio yêu cầu build với feature `audio` (mặc định của fileconv-cli)")
+            }
         }
         "one" => {
             let f = args.get(2).context("thiếu file")?;
@@ -536,6 +544,7 @@ fn render_accuracy_report(rows: &[AccRow]) -> String {
 
 // ----------------------------- AUDIO (whisper) -----------------------------
 
+#[cfg(feature = "audio")]
 struct AudioRow {
     model: String,
     load_ms: f64,
@@ -550,6 +559,7 @@ struct AudioRow {
     acc: f64,
 }
 
+#[cfg(feature = "audio")]
 fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()> {
     let text = fs::read_to_string(manifest).with_context(|| format!("đọc {manifest:?}"))?;
     let base = manifest.parent().unwrap_or(Path::new("."));
@@ -636,6 +646,7 @@ fn cmd_audio(models_csv: &str, manifest: &Path, out: Option<&Path>) -> Result<()
     Ok(())
 }
 
+#[cfg(feature = "audio")]
 fn render_audio_report(rows: &[AudioRow]) -> String {
     let mut s = String::new();
     s.push_str("# Báo cáo AUDIO (whisper, tiếng Việt) — fileconv-core\n\n");

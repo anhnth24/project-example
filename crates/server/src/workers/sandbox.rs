@@ -899,8 +899,9 @@ mod imp {
     }
 
     impl CgroupGuard {
-        // TODO(F02): cgroup v2 aggregate limits via container runtime. This best-effort
-        // hook only activates when a writable delegated subtree exists.
+        // Container runtime (P1B-F02 compose) sets mem_limit/pids_limit on the
+        // worker. This best-effort per-job cgroup only activates when a writable
+        // delegated subtree exists inside the container.
         fn best_effort_apply(pid: u32, limits: &ResourceLimits) -> Self {
             match Self::try_apply(pid, limits) {
                 Ok(path) => Self { path: Some(path) },

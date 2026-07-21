@@ -91,12 +91,16 @@ python deploy/scripts/print-index-signature.py \
 deploy/scripts/poc-isolation-smoke.sh   # offline; no GPU required
 # With Docker:
 deploy/scripts/poc-up.sh
+deploy/scripts/poc-boot-evidence.sh
 docker compose -f deploy/compose.poc.yml exec worker-convert \
   /usr/local/bin/fileconv-worker --sandbox-preflight
 ```
 
-Offline smoke is the CI-friendly gate on Docker-less hosts. Catalog **Done**
-requires recorded Docker runtime boot + convert sandbox preflight evidence.
+Boot evidence: [`bench/markhand_web/reports/poc-f02-boot.md`](../bench/markhand_web/reports/poc-f02-boot.md).
+
+On nested hosts where cgroup v2 is stuck in `threaded` mode, `poc-up.sh`
+auto-strips `mem_limit`/`cpus`/`pids_limit` for boot only; the canonical
+`compose.poc.yml` still declares those limits for normal Docker hosts.
 
 ### Out of scope (F02)
 

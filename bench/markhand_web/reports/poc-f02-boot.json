@@ -1,0 +1,22 @@
+{
+  "issue": "P1B-F02",
+  "stamp_utc": "2026-07-21T14:45:00Z",
+  "passed": true,
+  "api_live": true,
+  "api_ready": true,
+  "minio_init_exit": 0,
+  "sandbox_preflight": true,
+  "convert_network_internal": true,
+  "format_smoke": ["txt", "html", "csv"],
+  "isolation": {
+    "uid": "10001:10001",
+    "read_only": true,
+    "cap_drop": ["ALL"],
+    "no_new_privileges": true
+  },
+  "notes": [
+    "Nested host used vfs storage driver when overlayfs mount failed.",
+    "Cgroup v2 threaded mode blocked mem_limit application; limits remain declared in compose.poc.yml for normal hosts.",
+    "minio-init fixed for read-only mc image (MC_CONFIG_DIR on tmpfs; bash template expand)."
+  ]
+}

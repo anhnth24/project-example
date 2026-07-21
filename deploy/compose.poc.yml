@@ -101,7 +101,7 @@ services:
     volumes:
       - ./poc/minio-init.sh:/scripts/minio-init.sh:ro
       - ./poc/minio-app-policy.json.tmpl:/policies/minio-app-policy.json.tmpl:ro
-    entrypoint: ["/bin/sh", "/scripts/minio-init.sh"]
+    entrypoint: ["/usr/bin/bash", "/scripts/minio-init.sh"]
     networks: [private]
     restart: on-failure
     security_opt:

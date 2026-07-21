@@ -3,18 +3,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-COMPOSE_FILE="$ROOT/deploy/compose.poc.yml"
-ENV_FILE="$ROOT/deploy/.env"
-
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
-
-COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
-PROFILES="${COMPOSE_PROFILES:-mock}"
+# shellcheck source=poc-compose.sh
+source "$ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
 
 wait_http() {
   local url="$1"
@@ -74,7 +65,7 @@ wait_http "http://127.0.0.1:${MARKHAND_QDRANT_HTTP_PORT:-6343}/healthz" qdrant 9
 wait_http "http://127.0.0.1:${MARKHAND_MINIO_API_PORT:-9010}/minio/health/live" minio 60
 
 EMBED_PORT="${MARKHAND_EMBEDDING_PORT:-8090}"
-if [[ "$PROFILES" == *aiteamvn* ]]; then
+if [[ "${COMPOSE_PROFILES}" == *aiteamvn* ]]; then
   echo "waiting for AITeamVN embedding-cpu (first start may download model)..."
   wait_http "http://127.0.0.1:${EMBED_PORT}/health" embedding-cpu 900
 else

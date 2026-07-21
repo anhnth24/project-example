@@ -122,12 +122,18 @@ require_regex "$ROOT/deploy/poc/minio-init.sh" 'failed to install MinIO policy|f
   "MinIO init fail-closed on policy errors"
 forbid_regex "$ROOT/deploy/poc/minio-init.sh" 'policy create.*\|\| true' \
   "MinIO policy create must not ignore errors"
+require_regex "$ROOT/deploy/poc/minio-init.sh" 'MC_CONFIG_DIR' \
+  "MinIO init writes mc config under tmpfs-friendly MC_CONFIG_DIR"
+forbid_regex "$ROOT/deploy/poc/minio-init.sh" '(^|[|[:space:]])sed[[:space:]]' \
+  "MinIO init must not call sed (absent from minio/mc image)"
 
 # PhoWhisper exclusion + pinned PDFium
 forbid_regex "$DOCKERFILE_WORKER" '^(COPY|ADD).*[Pp]ho[Ww]hisper' \
   "worker Dockerfile must not COPY/ADD PhoWhisper artifacts"
 require_regex "$DOCKERFILE_WORKER" 'test ! -e /models/ggml-PhoWhisper-small.bin' \
   "worker Dockerfile guards against PhoWhisper model path"
+require_regex "$DOCKERFILE_WORKER" '--no-default-features' \
+  "worker builds fileconv-cli without default audio/whisper feature"
 forbid_regex "$DOCKERFILE_WORKER" 'releases/latest' "worker Dockerfile must not use releases/latest"
 require_regex "$DOCKERFILE_WORKER" "$PDFIUM_SHA" "worker Dockerfile pins PDFium sha256"
 require_regex "$DOCKERFILE_WORKER" 'chromium%2F7906|chromium/7906' "worker Dockerfile pins PDFium tag"
@@ -255,4 +261,4 @@ if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 echo "POC isolation smoke PASSED"
-echo "Catalog status must stay non-Done until Docker runtime boot/preflight evidence exists."
+echo "Runtime boot/preflight evidence: bench/markhand_web/reports/poc-f02-boot.md"
