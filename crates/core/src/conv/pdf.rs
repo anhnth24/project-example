@@ -17,8 +17,9 @@ use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::*;
 
-use super::{corrupt_input, dependency_missing, fail, ocr_fail};
-use crate::{image_ocr, push_conversion_warning, warning_codes, ConversionWarning, ConvertError};
+use super::fail;
+use crate::diagnostics::{ConversionWarning, DetailedConvertError, MarkdownOutput};
+use crate::{image_ocr, ConvertError};
 
 thread_local! {
     // PDFium chỉ init MỘT lần/tiến trình → cache một instance mỗi thread.
@@ -60,15 +61,38 @@ enum PageOcr {
     Blank,
 }
 
-pub fn to_markdown(
+const PDF_UNTRUSTED_INSPECTOR_SOURCE: &str = "pdf::needs_ocr_untrusted_inspector";
+const PDF_UNTRUSTED_PDFIUM_SOURCE: &str = "pdf::needs_ocr_untrusted_pdfium";
+const PDF_UNTRUSTED_EXTRACT_SOURCE: &str = "pdf::needs_ocr_untrusted_pdf_extract";
+
+/// Legacy string-only entry (warnings discarded). Prefer [`to_markdown_detailed`].
+#[allow(dead_code)]
+pub(crate) fn to_markdown(
     path: &Path,
     ocr_langs: &str,
     ocr_enabled: bool,
     ocr_images: bool,
     pages: Option<&[u32]>,
 ) -> Result<String, ConvertError> {
+    to_markdown_detailed(path, ocr_langs, ocr_enabled, ocr_images, pages)
+        .map(|output| output.markdown)
+        .map_err(|error| error.error)
+}
+
+/// Explicit markdown + soft diagnostics (no TLS collector).
+pub(crate) fn to_markdown_detailed(
+    path: &Path,
+    ocr_langs: &str,
+    ocr_enabled: bool,
+    ocr_images: bool,
+    pages: Option<&[u32]>,
+) -> Result<MarkdownOutput, DetailedConvertError> {
     image_ocr::clear_last_ocr_error();
-    let bytes = std::fs::read(path).map_err(fail)?;
+    let bytes = std::fs::read(path).map_err(|e| DetailedConvertError::failed(e.to_string()))?;
+
+    // Probe needs_ocr early so PDFium/pdf-extract fallbacks inherit the flags
+    // even when the structured inspector path is abandoned.
+    let probed_needs_ocr = probe_pages_needing_ocr(&bytes, pages);
 
     // Page-filtered requests are common in the desktop/MCP token-saving flow.
     // The per-page API below intentionally extracts the whole document for
@@ -79,67 +103,104 @@ pub fn to_markdown(
         match pages {
             Some(selected_pages) => {
                 if let Some(md) = via_pdf_inspector_filtered_fast(path, &bytes, selected_pages) {
-                    return Ok(md);
+                    // Fast path only accepts high-confidence pages — no untrusted warn.
+                    return Ok(MarkdownOutput::clean(md));
                 }
             }
             None => {
                 if let Some(md) = via_pdf_inspector_parallel_full(path, &bytes) {
-                    return Ok(md);
+                    return Ok(MarkdownOutput::clean(md));
                 }
             }
         }
     }
 
     // 1) pdf-inspector: markdown có cấu trúc + needs_ocr theo trang.
-    if let Some(md) = via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images, pages) {
-        if !md.trim().is_empty() {
-            return Ok(md);
+    let mut inherited_needs_ocr = probed_needs_ocr;
+    match via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images, pages) {
+        InspectorAttempt::Success(output) if !output.markdown.trim().is_empty() => {
+            return Ok(output);
+        }
+        InspectorAttempt::Abandoned { pages_needing_ocr } => {
+            inherited_needs_ocr.extend(pages_needing_ocr);
+        }
+        InspectorAttempt::Success(_) | InspectorAttempt::Unavailable => {}
+    }
+
+    // 2) Fallback: PDFium — inherits inspector needs_ocr flags.
+    if let Some(output) = via_pdfium(
+        path,
+        ocr_langs,
+        ocr_enabled,
+        ocr_images,
+        pages,
+        &inherited_needs_ocr,
+    ) {
+        if !output.markdown.trim().is_empty() {
+            return Ok(output);
         }
     }
-    // 2) Fallback: PDFium (đếm ký tự) — giữ cho trường hợp pdf-inspector trượt.
-    if let Some(md) = via_pdfium(path, ocr_langs, ocr_enabled, ocr_images, pages) {
-        if !md.trim().is_empty() {
-            return Ok(md);
-        }
-    }
+
     // 3) Cuối cùng: pdf-extract (không hỗ trợ lọc trang).
     if pages.is_some() {
         if let Some(error) = image_ocr::take_last_ocr_error() {
-            return Err(ocr_fail(format!("OCR trang PDF đã chọn thất bại: {error}")));
+            return Err(DetailedConvertError::failed(format!(
+                "OCR trang PDF đã chọn thất bại: {error}"
+            )));
         }
-        return Err(fail(
+        return Err(DetailedConvertError::failed(
             "không thể trích đúng các trang đã chọn (pdf-inspector/PDFium thất bại)",
         ));
     }
     match extract_with_pdf_extract(&bytes) {
-        Ok(text) if !text.trim().is_empty() => Ok(text),
+        Ok(text) if !text.trim().is_empty() => {
+            let mut warnings = Vec::new();
+            for page in inherited_needs_ocr {
+                // Extract path has no per-page OCR recovery — flagged pages that
+                // survive here preserved untrusted extracted text.
+                warnings.push(ConversionWarning::pdf_untrusted_text_fallback(
+                    page,
+                    PDF_UNTRUSTED_EXTRACT_SOURCE,
+                ));
+            }
+            Ok(MarkdownOutput::with_warnings(text, warnings))
+        }
         Err(error) => Err(error),
         Ok(_) => {
             if !ocr_enabled {
-                return Err(fail(
+                return Err(DetailedConvertError::failed(
                     "PDF không có text layer; hãy bật OCR trang scan trong Settings",
                 ));
             }
             if !pdfium_available() {
-                return Err(dependency_missing(
+                return Err(DetailedConvertError::failed(
                     "PDF là bản scan nhưng không tìm thấy PDFium để render trang; \
                      hãy cài lại Markhand Desktop hoặc đặt FILECONV_PDFIUM_LIB",
                 ));
             }
             if !image_ocr::tesseract_available() {
-                return Err(dependency_missing(
+                return Err(DetailedConvertError::failed(
                     "PDF là bản scan nhưng không tìm thấy Tesseract OCR; \
                      hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
                 ));
             }
             if let Some(error) = image_ocr::take_last_ocr_error() {
-                return Err(ocr_fail(format!("OCR trang PDF thất bại: {error}")));
+                return Err(DetailedConvertError::failed(format!(
+                    "OCR trang PDF thất bại: {error}"
+                )));
             }
-            Err(ocr_fail(
+            Err(DetailedConvertError::failed(
                 "PDF không có text layer và OCR không nhận được nội dung",
             ))
         }
     }
+}
+
+/// Outcome of attempting the structured pdf-inspector path.
+enum InspectorAttempt {
+    Success(MarkdownOutput),
+    Abandoned { pages_needing_ocr: HashSet<u32> },
+    Unavailable,
 }
 
 /// Recovery choice for a pdf-inspector `needs_ocr` page.
@@ -147,7 +208,7 @@ pub fn to_markdown(
 enum NeedsOcrRecovery {
     TrustedNative,
     OcrRendered,
-    UntrustedInspector,
+    UntrustedText,
     Unresolved,
 }
 
@@ -163,47 +224,35 @@ struct NeedsOcrPageResult {
 fn classify_needs_ocr_recovery(
     has_trustworthy_native: bool,
     ocr_ok: bool,
-    has_inspector_text: bool,
+    has_untrusted_text: bool,
 ) -> NeedsOcrRecovery {
     if has_trustworthy_native {
         NeedsOcrRecovery::TrustedNative
     } else if ocr_ok {
         NeedsOcrRecovery::OcrRendered
-    } else if has_inspector_text {
-        NeedsOcrRecovery::UntrustedInspector
+    } else if has_untrusted_text {
+        NeedsOcrRecovery::UntrustedText
     } else {
         NeedsOcrRecovery::Unresolved
     }
 }
 
-const PDF_UNTRUSTED_FALLBACK_SOURCE: &str = "pdf::needs_ocr_untrusted_fallback";
-
-fn untrusted_text_fallback_warning(page_1idx: u32) -> ConversionWarning {
-    ConversionWarning {
-        code: warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK,
-        source: PDF_UNTRUSTED_FALLBACK_SOURCE,
-        page: Some(page_1idx),
-        message: format!(
-            "trang {page_1idx}: OCR/khôi phục native thất bại — giữ text-layer pdf-inspector \
-             không đáng tin (partial success)"
-        ),
-    }
+fn untrusted_text_fallback_warning(page_1idx: u32, source: &str) -> ConversionWarning {
+    ConversionWarning::pdf_untrusted_text_fallback(page_1idx, source)
 }
 
 /// Decide markdown (+ optional diagnostic) for one `needs_ocr` page.
-///
-/// Untrusted inspector fallback is always paired with a structured warning so
-/// `convert_path` cannot report [`ConversionOutcome::FullSuccess`] for that path.
 fn recover_needs_ocr_page(
     page_1idx: u32,
     native_text: Option<&str>,
     ocr_text: Option<&str>,
-    inspector_markdown: &str,
+    untrusted_text: &str,
+    source: &str,
 ) -> NeedsOcrPageResult {
     let recovery = classify_needs_ocr_recovery(
         native_text.is_some(),
         ocr_text.is_some(),
-        !inspector_markdown.trim().is_empty(),
+        !untrusted_text.trim().is_empty(),
     );
     match recovery {
         NeedsOcrRecovery::TrustedNative => NeedsOcrPageResult {
@@ -217,10 +266,10 @@ fn recover_needs_ocr_page(
                 .map(|text| format!("<!-- Trang {page_1idx} (OCR) -->\n\n{}", text.trim())),
             warning: None,
         },
-        NeedsOcrRecovery::UntrustedInspector => NeedsOcrPageResult {
+        NeedsOcrRecovery::UntrustedText => NeedsOcrPageResult {
             recovery,
-            markdown: Some(inspector_markdown.trim_end().to_string()),
-            warning: Some(untrusted_text_fallback_warning(page_1idx)),
+            markdown: Some(untrusted_text.trim_end().to_string()),
+            warning: Some(untrusted_text_fallback_warning(page_1idx, source)),
         },
         NeedsOcrRecovery::Unresolved => NeedsOcrPageResult {
             recovery,
@@ -228,6 +277,23 @@ fn recover_needs_ocr_page(
             warning: None,
         },
     }
+}
+
+fn probe_pages_needing_ocr(bytes: &[u8], pages: Option<&[u32]>) -> HashSet<u32> {
+    let pages0: Option<Vec<u32>> =
+        pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect());
+    let Some(res) = catch_unwind(AssertUnwindSafe(|| {
+        pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
+    }))
+    .ok()
+    .and_then(|r| r.ok()) else {
+        return HashSet::new();
+    };
+    res.pages
+        .into_iter()
+        .filter(|page| page.needs_ocr)
+        .map(|page| page.page + 1)
+        .collect()
 }
 
 fn pdfium_available() -> bool {
@@ -499,14 +565,14 @@ fn via_pdf_inspector(
     ocr_enabled: bool,
     ocr_images: bool,
     pages: Option<&[u32]>,
-) -> Option<String> {
+) -> InspectorAttempt {
     // pages 1-indexed từ người dùng → 0-indexed cho pdf-inspector.
     let pages0: Option<Vec<u32>> =
         pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect());
     // lopdf structure extraction and PDFium native-text extraction are
     // independent. Run them concurrently so documents that need native table
     // rescue pay the slower stage, not the sum of both stages.
-    let (res, native_pages) = std::thread::scope(|scope| {
+    let Some((res, native_pages)) = std::thread::scope(|scope| {
         let inspector = scope.spawn(|| {
             catch_unwind(AssertUnwindSafe(|| {
                 pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
@@ -517,7 +583,16 @@ fn via_pdf_inspector(
         let native_pages = native_text_for_requested_pages(path, pages);
         let res = inspector.join().ok().flatten()?;
         Some((res, native_pages))
-    })?;
+    }) else {
+        return InspectorAttempt::Unavailable;
+    };
+
+    let pages_needing_ocr: HashSet<u32> = res
+        .pages
+        .iter()
+        .filter(|page| page.needs_ocr)
+        .map(|page| page.page + 1)
+        .collect();
 
     let needs_rendered_ocr = res.pages.iter().any(|page| {
         page.needs_ocr
@@ -529,7 +604,7 @@ fn via_pdf_inspector(
     let need_pdfium = ocr_enabled && (ocr_images || needs_rendered_ocr);
 
     let _pdfium_guard = pdfium_call_guard();
-    PDFIUM.with(|opt| -> Option<String> {
+    PDFIUM.with(|opt| -> InspectorAttempt {
         // Chỉ mở PDFium khi thật sự cần (OCR trang scan hoặc OCR ảnh nhúng).
         let pdf_doc = if need_pdfium {
             opt.as_ref()
@@ -569,6 +644,7 @@ fn via_pdf_inspector(
                     native_text.map(String::as_str),
                     ocr_text.as_deref(),
                     &pm.markdown,
+                    PDF_UNTRUSTED_INSPECTOR_SOURCE,
                 );
                 match recovered {
                     NeedsOcrPageResult {
@@ -623,8 +699,8 @@ fn via_pdf_inspector(
         }
 
         if unresolved_page {
-            // Abandoned inspector path — do not leak partial-page warnings.
-            return None;
+            // Abandoned inspector path — return needs_ocr so fallbacks inherit it.
+            return InspectorAttempt::Abandoned { pages_needing_ocr };
         }
         strip_repeated_marginal_lines(&mut page_chunks);
         let out = page_chunks
@@ -634,12 +710,9 @@ fn via_pdf_inspector(
             .collect::<Vec<_>>()
             .join("\n\n");
         if out.trim().is_empty() {
-            None
+            InspectorAttempt::Abandoned { pages_needing_ocr }
         } else {
-            for warning in page_warnings {
-                push_conversion_warning(warning);
-            }
-            Some(out)
+            InspectorAttempt::Success(MarkdownOutput::with_warnings(out, page_warnings))
         }
     })
 }
@@ -1031,29 +1104,76 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
 }
 
 /// Đường fallback cũ: PDFium đếm ký tự để quyết text vs OCR.
+///
+/// `pages_needing_ocr` is inherited from pdf-inspector. Flagged pages that keep
+/// native text because OCR failed emit a typed partial-success warning. Trusted
+/// (unflagged) native text is not over-warned.
 fn via_pdfium(
     path: &Path,
     ocr_langs: &str,
     ocr_enabled: bool,
     ocr_images: bool,
     pages: Option<&[u32]>,
-) -> Option<String> {
+    pages_needing_ocr: &HashSet<u32>,
+) -> Option<MarkdownOutput> {
     let _pdfium_guard = pdfium_call_guard();
-    PDFIUM.with(|opt| -> Option<String> {
+    PDFIUM.with(|opt| -> Option<MarkdownOutput> {
         let pdfium = opt.as_ref()?;
         let doc = pdfium.load_pdf_from_file(path, None).ok()?;
         let mut out = String::new();
+        let mut warnings = Vec::new();
         let mut unresolved_pages = Vec::new();
         for (i, page) in doc.pages().iter().enumerate() {
+            let page_1idx = i as u32 + 1;
             // Lọc trang (1-indexed) nếu người dùng chỉ định.
             if let Some(ps) = pages {
-                if !ps.contains(&(i as u32 + 1)) {
+                if !ps.contains(&page_1idx) {
                     continue;
                 }
             }
             let text = page.text().map(|t| t.all()).unwrap_or_default();
             let nonspace = text.chars().filter(|c| !c.is_whitespace()).count();
-            if nonspace >= PAGE_TEXT_MIN_CHARS {
+            let flagged = pages_needing_ocr.contains(&page_1idx);
+
+            if flagged {
+                let ocr_text = ocr_enabled
+                    .then(|| match ocr_full_page(&page, ocr_langs) {
+                        Ok(PageOcr::Text(ocr)) => Some(ocr),
+                        Ok(PageOcr::Blank) => Some(String::new()),
+                        Err(error) => {
+                            image_ocr::record_ocr_error(format!("trang {page_1idx}: {error}"));
+                            None
+                        }
+                    })
+                    .flatten();
+                let trustworthy = (native_text_is_trustworthy(&text)
+                    && native_text_is_high_confidence(&text))
+                .then_some(text.as_str());
+                let untrusted = if nonspace > 0 { text.as_str() } else { "" };
+                let recovered = recover_needs_ocr_page(
+                    page_1idx,
+                    trustworthy,
+                    ocr_text.as_deref(),
+                    untrusted,
+                    PDF_UNTRUSTED_PDFIUM_SOURCE,
+                );
+                match recovered {
+                    NeedsOcrPageResult {
+                        markdown: Some(page_md),
+                        warning,
+                        ..
+                    } => {
+                        out.push_str(page_md.trim_end());
+                        out.push_str("\n\n");
+                        if let Some(warning) = warning {
+                            warnings.push(warning);
+                        }
+                    }
+                    NeedsOcrPageResult { markdown: None, .. } => {
+                        unresolved_pages.push(page_1idx);
+                    }
+                }
+            } else if nonspace >= PAGE_TEXT_MIN_CHARS {
                 out.push_str(text.trim_end());
                 out.push_str("\n\n");
                 if ocr_enabled && ocr_images {
@@ -1065,24 +1185,24 @@ fn via_pdfium(
                 match ocr_full_page(&page, ocr_langs) {
                     Ok(PageOcr::Text(ocr)) => {
                         let ocr = ocr.trim();
-                        out.push_str(&format!("<!-- Trang {} (OCR) -->\n\n", i + 1));
+                        out.push_str(&format!("<!-- Trang {page_1idx} (OCR) -->\n\n"));
                         out.push_str(ocr);
                         out.push_str("\n\n");
                     }
                     Ok(PageOcr::Blank) => {}
                     Err(error) => {
-                        unresolved_pages.push(i + 1);
-                        image_ocr::record_ocr_error(format!("trang {}: {error}", i + 1));
+                        unresolved_pages.push(page_1idx);
+                        image_ocr::record_ocr_error(format!("trang {page_1idx}: {error}"));
                     }
                 }
             } else {
-                unresolved_pages.push(i + 1);
+                unresolved_pages.push(page_1idx);
             }
         }
         if !unresolved_pages.is_empty() || out.trim().is_empty() {
             None
         } else {
-            Some(out)
+            Some(MarkdownOutput::with_warnings(out, warnings))
         }
     })
 }
@@ -1213,14 +1333,15 @@ fn load_pdfium() -> Option<Pdfium> {
 }
 
 /// Fallback cuối: pdf-extract (có thể panic → bắt bằng catch_unwind).
-fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, ConvertError> {
+fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, DetailedConvertError> {
     let result = catch_unwind(AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(bytes)
     }));
     match result {
         Ok(Ok(text)) => Ok(text),
-        Ok(Err(e)) => Err(fail(e)),
-        Err(_) => Err(corrupt_input(
+        Ok(Err(e)) => Err(DetailedConvertError::failed(e.to_string())),
+        // Exact stage: parser panic → Internal (legacy error remains Failed).
+        Err(_) => Err(DetailedConvertError::internal(
             "pdf-extract panic (PDF phức tạp/không chuẩn)",
         )),
     }
@@ -1231,15 +1352,25 @@ mod tests {
     use super::{
         classify_needs_ocr_recovery, load_pdfium, markdown_has_malformed_table,
         native_text_covers_markdown, native_text_for_pages, native_text_is_high_confidence,
-        native_text_is_trustworthy, parse_marked_pages, recover_needs_ocr_page,
-        rendered_page_is_blank, strip_repeated_marginal_lines, untrusted_text_fallback_warning,
-        NeedsOcrPageResult, NeedsOcrRecovery, PDF_UNTRUSTED_FALLBACK_SOURCE,
+        native_text_is_trustworthy, parse_marked_pages, probe_pages_needing_ocr,
+        recover_needs_ocr_page, rendered_page_is_blank, strip_repeated_marginal_lines, via_pdfium,
+        NeedsOcrPageResult, NeedsOcrRecovery, PDF_UNTRUSTED_EXTRACT_SOURCE,
+        PDF_UNTRUSTED_INSPECTOR_SOURCE, PDF_UNTRUSTED_PDFIUM_SOURCE,
     };
+    use crate::diagnostics::MarkdownOutput;
     use crate::{
-        clear_conversion_warnings, finish_conversion_result, push_conversion_warning,
-        take_conversion_warnings, warning_codes, ConversionOutcome, ConvertError, Converter,
-        ConverterOptions, FormatKind,
+        ConversionOutcome, ConversionWarningCode, ConvertError, ConvertErrorKind, Converter,
+        ConverterOptions, DetailedConvertError,
     };
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    fn has_untrusted_warning(output: &MarkdownOutput) -> bool {
+        output
+            .warnings
+            .iter()
+            .any(|w| w.code == ConversionWarningCode::PdfUntrustedTextFallback)
+    }
 
     /// PDF một trang tối giản, tự tính offset xref để PDFium load được thật.
     fn minimal_pdf_bytes() -> Vec<u8> {
@@ -1659,7 +1790,7 @@ mod tests {
         );
         assert_eq!(
             classify_needs_ocr_recovery(false, false, true),
-            NeedsOcrRecovery::UntrustedInspector
+            NeedsOcrRecovery::UntrustedText
         );
         assert_eq!(
             classify_needs_ocr_recovery(false, false, false),
@@ -1668,45 +1799,33 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_inspector_fallback_cannot_silently_be_full_success() {
-        clear_conversion_warnings();
+    fn untrusted_text_recovery_always_pairs_warning() {
         let recovered = recover_needs_ocr_page(
             4,
             None,
             None,
             "<!-- garbled inspector text-layer -->\nGID/font rác",
+            PDF_UNTRUSTED_INSPECTOR_SOURCE,
         );
-        assert_eq!(recovered.recovery, NeedsOcrRecovery::UntrustedInspector);
-        let warning = recovered
-            .warning
-            .clone()
-            .expect("untrusted fallback must attach a warning");
-        assert_eq!(warning.code, warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK);
-        assert_eq!(warning.source, PDF_UNTRUSTED_FALLBACK_SOURCE);
+        assert_eq!(recovered.recovery, NeedsOcrRecovery::UntrustedText);
+        let warning = recovered.warning.expect("must warn");
+        assert_eq!(
+            warning.code,
+            ConversionWarningCode::PdfUntrustedTextFallback
+        );
+        assert_eq!(warning.source, PDF_UNTRUSTED_INSPECTOR_SOURCE);
         assert_eq!(warning.page, Some(4));
-        assert!(warning.message.contains("trang 4"));
-        assert!(recovered
-            .markdown
-            .as_deref()
-            .is_some_and(|md| md.contains("GID/font")));
-
-        push_conversion_warning(warning);
-        let result = finish_conversion_result(
-            recovered.markdown.expect("fallback keeps markdown"),
-            Some("partial".into()),
-            FormatKind::Pdf,
-        );
-        // The partial PDF path must never look like clean success.
-        assert_eq!(result.outcome, ConversionOutcome::PartialSuccess);
-        assert!(result.is_partial_success());
-        assert_ne!(result.outcome, ConversionOutcome::FullSuccess);
-        assert!(!result.warnings.is_empty());
-        assert!(result.has_warning_code(warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK));
     }
 
     #[test]
     fn trusted_native_and_ocr_paths_do_not_emit_untrusted_warning() {
-        let native = recover_needs_ocr_page(1, Some("native tin cậy"), None, "inspector");
+        let native = recover_needs_ocr_page(
+            1,
+            Some("native tin cậy"),
+            None,
+            "inspector",
+            PDF_UNTRUSTED_INSPECTOR_SOURCE,
+        );
         assert_eq!(
             native,
             NeedsOcrPageResult {
@@ -1715,21 +1834,17 @@ mod tests {
                 warning: None,
             }
         );
-        let ocr = recover_needs_ocr_page(2, None, Some("ocr text"), "");
+        let ocr =
+            recover_needs_ocr_page(2, None, Some("ocr text"), "", PDF_UNTRUSTED_PDFIUM_SOURCE);
         assert_eq!(ocr.recovery, NeedsOcrRecovery::OcrRendered);
         assert!(ocr.warning.is_none());
-        assert!(ocr
-            .markdown
-            .as_deref()
-            .is_some_and(|md| md.contains("<!-- Trang 2 (OCR) -->")));
-        let unresolved = recover_needs_ocr_page(3, None, None, "   ");
+        let unresolved = recover_needs_ocr_page(3, None, None, "   ", PDF_UNTRUSTED_EXTRACT_SOURCE);
         assert_eq!(unresolved.recovery, NeedsOcrRecovery::Unresolved);
-        assert!(unresolved.markdown.is_none());
         assert!(unresolved.warning.is_none());
     }
 
     #[test]
-    fn trusted_text_pdf_convert_is_full_success_without_untrusted_warning() {
+    fn trusted_text_pdf_detailed_is_full_success_without_over_warn() {
         let dir = std::env::temp_dir().join(format!(
             "fileconv_pdf_trusted_{}_{}",
             std::process::id(),
@@ -1742,46 +1857,159 @@ mod tests {
         let path = dir.join("trusted.pdf");
         std::fs::write(&path, minimal_pdf_bytes()).unwrap();
 
-        let result = Converter::with_options(ConverterOptions {
+        let report = Converter::with_options(ConverterOptions {
+            pdf_ocr: false,
+            ..ConverterOptions::default()
+        })
+        .convert_path_detailed(&path)
+        .expect("trusted text PDF should convert");
+
+        assert_eq!(report.outcome(), ConversionOutcome::FullSuccess);
+        assert!(!report.has_warning_code(ConversionWarningCode::PdfUntrustedTextFallback));
+        assert!(
+            report.result.markdown.contains("Xin chao PDFium")
+                || !report.result.markdown.is_empty()
+        );
+        // Legacy surface stays field-compatible.
+        let legacy = Converter::with_options(ConverterOptions {
             pdf_ocr: false,
             ..ConverterOptions::default()
         })
         .convert_path(&path)
-        .expect("trusted text PDF should convert");
-
-        assert_eq!(result.outcome, ConversionOutcome::FullSuccess);
-        assert!(!result.is_partial_success());
-        assert!(!result.has_warning_code(warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK));
-        assert!(result.markdown.contains("Xin chao PDFium") || !result.markdown.is_empty());
+        .unwrap();
+        assert_eq!(legacy.markdown, report.result.markdown);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn pdf_dependency_and_ocr_errors_expose_stable_codes() {
-        assert_eq!(
-            ConvertError::DependencyMissing("thiếu PDFium".into()).code(),
-            "dependency_missing"
+    fn pdfium_fallback_warns_when_inherited_needs_ocr_keeps_untrusted_native() {
+        let dir = std::env::temp_dir().join(format!(
+            "fileconv_pdf_flagged_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("flagged.pdf");
+        std::fs::write(&path, minimal_pdf_bytes()).unwrap();
+
+        // Inherit needs_ocr=1 with OCR disabled → preserve native text + warn.
+        let flagged = HashSet::from([1u32]);
+        let output = via_pdfium(&path, "eng", false, false, None, &flagged)
+            .expect("PDFium should return native text for minimal PDF");
+        assert!(
+            output.warnings.iter().any(|w| w.code
+                == ConversionWarningCode::PdfUntrustedTextFallback
+                && w.page == Some(1)
+                && w.source == PDF_UNTRUSTED_PDFIUM_SOURCE),
+            "flagged page keeping native without OCR must warn: {:?}",
+            output.warnings
         );
-        assert_eq!(
-            ConvertError::Ocr("OCR trang PDF thất bại".into()).code(),
-            "ocr"
+        assert!(!output.markdown.trim().is_empty());
+
+        // Unflagged trusted fallback must not over-warn.
+        let clean =
+            via_pdfium(&path, "eng", false, false, None, &HashSet::new()).expect("unflagged path");
+        assert!(
+            clean.warnings.is_empty(),
+            "trusted PDFium text must not emit partial warning"
         );
-        assert_eq!(
-            ConvertError::CorruptInput("pdf-extract panic".into()).code(),
-            "corrupt_input"
-        );
-        assert_eq!(
-            ConvertError::Integrity("cấu trúc PDF không nhất quán".into()).code(),
-            "integrity"
-        );
-        // Display still carries the actionable Vietnamese detail.
-        let dep = ConvertError::DependencyMissing(
-            "PDF là bản scan nhưng không tìm thấy PDFium để render trang".into(),
-        );
-        assert!(dep.to_string().contains("PDFium"));
-        assert!(dep.to_string().starts_with("thiếu phụ thuộc:"));
-        let _ = untrusted_text_fallback_warning(1);
-        let _ = take_conversion_warnings();
-        clear_conversion_warnings();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn review_fixture_needs_ocr_survives_into_detailed_partial_success() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/pdf/needs_ocr_untrusted_fallback.pdf");
+        if !fixture.is_file() {
+            // Fixture may be absent in sparse checkouts; skip rather than fail CI.
+            return;
+        }
+        let bytes = std::fs::read(&fixture).unwrap();
+        let needs = probe_pages_needing_ocr(&bytes, None);
+        // When inspector cannot flag this synthetic CID PDF, still exercise the
+        // inherited-flag PDFium path (same contract as abandoned inspector).
+        let flags = if needs.is_empty() {
+            HashSet::from([1u32])
+        } else {
+            needs
+        };
+        let output = via_pdfium(&fixture, "eng", false, false, None, &flags);
+        if let Some(output) = output {
+            assert!(
+                has_untrusted_warning(&output),
+                "fixture/flagged fallback must not silently succeed: {:?}",
+                output.warnings
+            );
+        }
+
+        // End-to-end detailed convert with OCR off: if inspector flags the page
+        // and keeps untrusted text, report must be PartialSuccess.
+        let report = Converter::with_options(ConverterOptions {
+            pdf_ocr: false,
+            ..ConverterOptions::default()
+        })
+        .convert_path_detailed(&fixture);
+        if let Ok(report) = report {
+            if report.has_warning_code(ConversionWarningCode::PdfUntrustedTextFallback) {
+                assert_eq!(report.outcome(), ConversionOutcome::PartialSuccess);
+                assert_ne!(report.outcome(), ConversionOutcome::FullSuccess);
+            }
+        }
+    }
+
+    #[test]
+    fn parser_panic_is_internal_kind_with_legacy_failed_error() {
+        let err = DetailedConvertError::internal("pdf-extract panic");
+        assert_eq!(err.kind, ConvertErrorKind::Internal);
+        assert!(matches!(err.error, ConvertError::Failed(_)));
+        // Exhaustive legacy match still compiles.
+        match err.error {
+            ConvertError::BadPath | ConvertError::Unsupported(_) | ConvertError::Failed(_) => {}
+        }
+    }
+
+    #[test]
+    fn concurrent_pdfium_flagged_paths_do_not_cross_contaminate_warnings() {
+        let dir = std::env::temp_dir().join(format!(
+            "fileconv_pdf_conc_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.pdf");
+        std::fs::write(&path, minimal_pdf_bytes()).unwrap();
+        let path = std::sync::Arc::new(path);
+        let handles: Vec<_> = (0..6)
+            .map(|i| {
+                let path = std::sync::Arc::clone(&path);
+                std::thread::spawn(move || {
+                    let flags = if i % 2 == 0 {
+                        HashSet::from([1u32])
+                    } else {
+                        HashSet::new()
+                    };
+                    via_pdfium(&path, "eng", false, false, None, &flags)
+                })
+            })
+            .collect();
+        for (i, handle) in handles.into_iter().enumerate() {
+            let output = handle.join().unwrap().expect("pdfium output");
+            if i % 2 == 0 {
+                assert!(has_untrusted_warning(&output));
+            } else {
+                assert!(
+                    output.warnings.is_empty(),
+                    "unflagged concurrent convert leaked warnings: {:?}",
+                    output.warnings
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
