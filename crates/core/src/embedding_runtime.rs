@@ -46,9 +46,13 @@ const KNOWN_PROVIDER_DOMAINS: &[&str] = &["openai.com", "googleapis.com"];
 ///   plausible; otherwise empty host
 /// - Non-http(s) / malformed → empty host (silent)
 /// - Userinfo / path / query / fragment stripped by the URL parser
+/// - One terminal absolute-DNS root dot is stripped (`example.com.` → `example.com`)
 pub fn embedding_host_hint(base_url: Option<&str>) -> String {
     parse_embedding_endpoint(base_url)
-        .and_then(|url| url.host_str().map(|host| host.to_ascii_lowercase()))
+        .and_then(|url| {
+            url.host_str()
+                .map(|host| strip_terminal_root_dot(&host.to_ascii_lowercase()).to_string())
+        })
         .unwrap_or_default()
 }
 
@@ -94,7 +98,14 @@ fn scheme_less_plausible(value: &str) -> bool {
     first.is_ascii_alphanumeric() || first == '['
 }
 
+/// Strip one absolute-DNS root dot (`example.com.` → `example.com`).
+fn strip_terminal_root_dot(host: &str) -> &str {
+    host.strip_suffix('.').unwrap_or(host)
+}
+
+/// Host form used for domain / loopback / DNS-label matching.
 fn host_for_dns_match(host: &str) -> &str {
+    let host = strip_terminal_root_dot(host);
     host.strip_prefix('[')
         .and_then(|inner| inner.strip_suffix(']'))
         .unwrap_or(host)
@@ -152,9 +163,40 @@ fn model_has_anchored_token(model: &str, token: &str) -> bool {
         .any(|part| part == token)
 }
 
+/// `id` at `start` with a non-alphanumeric (or EOS) terminator — not a prefix of a
+/// longer alphanumeric id (`embedding-3000`, `embedding-3rdparty`).
+fn model_id_at(model: &str, id: &str, start: usize) -> bool {
+    if !model
+        .as_bytes()
+        .get(start..)
+        .is_some_and(|bytes| bytes.starts_with(id.as_bytes()))
+    {
+        return false;
+    }
+    let after = start + id.len();
+    after == model.len() || !model.as_bytes()[after].is_ascii_alphanumeric()
+}
+
+/// Exact `embedding-2` / `embedding-3`, or the same id after a `/` path separator,
+/// each requiring a non-alphanumeric-or-EOS terminator (ADR 0006).
+fn has_glm_embedding_model_id(model: &str, id: &str) -> bool {
+    if model_id_at(model, id, 0) {
+        return true;
+    }
+    let mut search = 0;
+    while let Some(rel) = model[search..].find('/') {
+        let start = search + rel + 1;
+        if model_id_at(model, id, start) {
+            return true;
+        }
+        search = start;
+    }
+    false
+}
+
 fn anchored_glm_model_cue(model: &str) -> bool {
-    model.starts_with("embedding-2")
-        || model.starts_with("embedding-3")
+    has_glm_embedding_model_id(model, "embedding-2")
+        || has_glm_embedding_model_id(model, "embedding-3")
         || model_has_anchored_token(model, "glm")
 }
 
@@ -168,7 +210,8 @@ fn anchored_vllm_model_cue(model: &str) -> bool {
 /// 1. official GLM host (`*.bigmodel.cn`, `*.z.ai`, `*.zhipuai.cn`)
 /// 2. vLLM host (DNS label `vllm`) — beats GLM-named models
 /// 3. known provider host / loopback → [`EMBEDDING_RUNTIME_PROVIDER_CLOUD`]
-/// 4. carefully anchored model cues (`embedding-2|3`, token `glm` / `vllm`)
+/// 4. carefully anchored model cues (exact/`/`-segment `embedding-2|3` with
+///    non-alnum terminator; token `glm` / `vllm`)
 /// 5. default [`EMBEDDING_RUNTIME_PROVIDER_CLOUD`]
 ///
 /// Prefer explicit preset `runtime_path` (desktop vLLM / GLM). Real vLLM preset
@@ -253,11 +296,36 @@ mod tests {
             // Anchored model cues (no decisive host)
             (None, "embedding-2", "glm-cloud-interim"),
             (None, "embedding-3", "glm-cloud-interim"),
+            (None, "embedding-3@rev1", "glm-cloud-interim"),
+            (None, "org/embedding-3", "glm-cloud-interim"),
+            (None, "org/embedding-2/latest", "glm-cloud-interim"),
+            // Prefix false-friends must not match embedding-2/3
+            (None, "embedding-3000", "provider-cloud"),
+            (None, "embedding-3rdparty", "provider-cloud"),
+            (None, "embedding-20", "provider-cloud"),
+            (None, "text-embedding-3-small", "provider-cloud"),
             (None, "glm-embedding", "glm-cloud-interim"),
             (None, "org/glm-embed", "glm-cloud-interim"),
             (None, "myglmmodel", "provider-cloud"),
             (None, "vllm-served-model", "vllm-local"),
             (None, "myvllmserved", "provider-cloud"),
+            // Absolute DNS root dot (one trailing '.') is canonicalized away
+            (
+                Some("https://open.bigmodel.cn./api/paas/v4"),
+                "custom",
+                "glm-cloud-interim",
+            ),
+            (
+                Some("http://vllm.internal.:8000/v1"),
+                "bge-m3",
+                "vllm-local",
+            ),
+            (
+                Some("http://localhost.:8000/v1"),
+                "embedding-3",
+                "provider-cloud",
+            ),
+            (Some("https://api.z.ai./v1"), "embed", "glm-cloud-interim"),
             // vLLM hosts
             (Some("http://vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
             (Some("vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
@@ -390,6 +458,10 @@ mod tests {
             "open.bigmodel.cn"
         );
         assert_eq!(
+            embedding_host_hint(Some("https://open.bigmodel.cn./api")),
+            "open.bigmodel.cn"
+        );
+        assert_eq!(
             embedding_host_hint(Some("https://user:pass@vllm.internal:8000/v1")),
             "vllm.internal"
         );
@@ -407,11 +479,34 @@ mod tests {
     #[test]
     fn dns_label_boundaries_reject_substring_hosts() {
         assert!(host_matches_domain("api.z.ai", "z.ai"));
+        assert!(host_matches_domain("api.z.ai.", "z.ai"));
         assert!(!host_matches_domain("modelz.ai", "z.ai"));
         assert!(host_matches_domain("open.bigmodel.cn", "bigmodel.cn"));
+        assert!(host_matches_domain("open.bigmodel.cn.", "bigmodel.cn"));
         assert!(!host_matches_domain("notbigmodel.cn", "bigmodel.cn"));
         assert!(host_has_dns_label("vllm.internal", "vllm"));
+        assert!(host_has_dns_label("vllm.internal.", "vllm"));
         assert!(!host_has_dns_label("myvllm.internal", "vllm"));
+        assert!(is_loopback_host("localhost."));
+        assert!(is_loopback_host("127.0.0.1."));
+    }
+
+    #[test]
+    fn glm_embedding_model_ids_reject_prefix_false_friends() {
+        assert!(has_glm_embedding_model_id("embedding-3", "embedding-3"));
+        assert!(has_glm_embedding_model_id("embedding-3@rev", "embedding-3"));
+        assert!(has_glm_embedding_model_id("org/embedding-3", "embedding-3"));
+        assert!(has_glm_embedding_model_id("embedding-2", "embedding-2"));
+        assert!(!has_glm_embedding_model_id("embedding-3000", "embedding-3"));
+        assert!(!has_glm_embedding_model_id(
+            "embedding-3rdparty",
+            "embedding-3"
+        ));
+        assert!(!has_glm_embedding_model_id("embedding-20", "embedding-2"));
+        assert!(!has_glm_embedding_model_id(
+            "text-embedding-3-small",
+            "embedding-3"
+        ));
     }
 
     #[test]

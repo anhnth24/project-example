@@ -39,12 +39,17 @@ and query accent-fold into one `text_version` while the fixture still said
      `pub use … as infer_runtime_path`. HTTP(S) endpoints are parsed with
      `url::Url`; scheme-less values get an `https://` prefix only when
      syntactically plausible. Malformed / non-http endpoints silently yield an
-     empty host (model cues may still apply). Provider domains match at DNS
+     empty host (model cues may still apply). Parsed DNS hosts drop **one**
+     terminal absolute root dot before domain / loopback / label matching
+     (`open.bigmodel.cn.` ≡ `open.bigmodel.cn`). Provider domains match at DNS
      label boundaries (`z.ai` does not match `modelz.ai`). Cue order:
      official GLM host → vLLM host → known provider/loopback → anchored model
      cues → default `provider-cloud`. A vLLM host beats a GLM-named model;
-     `vllm.bigmodel.cn` is official GLM first. Changing inference for a custom
-     endpoint **must** trigger reindex.
+     `vllm.bigmodel.cn` is official GLM first. GLM model ids `embedding-2` /
+     `embedding-3` match only as the full model string (or after `/`) with a
+     non-alphanumeric-or-EOS terminator — not as a prefix of
+     `embedding-3000` / `embedding-3rdparty` / `text-embedding-3-small`.
+     Changing inference for a custom endpoint **must** trigger reindex.
    - `embedding_family` (provider/model/deployment digest)
    - `embedding_revision`
    - `dimensions` (u64 BE)
@@ -104,4 +109,6 @@ Inspect `crates/knowledge/fixtures/identity-v2.json` (schema v2 payload) and
 - Notable semantic deltas vs earlier dual helpers: `modelz.ai` is not GLM;
   invalid `[vllm::1]` does not count as a vLLM host; backslash-userinfo cannot
   spoof `bigmodel.cn` / `vllm.*`; vLLM hosts win over GLM-named models;
-  non-official hosts such as `glm.example.com` no longer match via substring.
+  non-official hosts such as `glm.example.com` no longer match via substring;
+  absolute DNS forms with a trailing root dot canonicalize; `embedding-3000` /
+  `embedding-3rdparty` are not GLM model cues.

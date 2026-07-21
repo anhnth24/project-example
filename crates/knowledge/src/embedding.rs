@@ -642,7 +642,27 @@ mod tests {
                 "provider-cloud",
             ),
             (None, "embedding-3", "glm-cloud-interim"),
+            (None, "embedding-2", "glm-cloud-interim"),
+            (None, "org/embedding-3", "glm-cloud-interim"),
+            (None, "embedding-3000", "provider-cloud"),
+            (None, "embedding-3rdparty", "provider-cloud"),
+            (None, "text-embedding-3-small", "provider-cloud"),
             (None, "vllm-served-model", "vllm-local"),
+            (
+                Some("https://open.bigmodel.cn./api/paas/v4"),
+                "custom",
+                "glm-cloud-interim",
+            ),
+            (
+                Some("http://vllm.internal.:8000/v1"),
+                "bge-m3",
+                "vllm-local",
+            ),
+            (
+                Some("http://localhost.:8000/v1"),
+                "embedding-3",
+                "provider-cloud",
+            ),
             (Some("ftp://vllm.internal/v1"), "bge-m3", "provider-cloud"),
             (
                 Some("https://api.openai.com/v1"),
