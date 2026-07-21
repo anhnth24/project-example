@@ -10,10 +10,11 @@
 //! Lưu ý: 'ư' là 0xAD (soft-hyphen) — nhiều bảng copy trên web hiển thị sai thành '-'.
 //! VNI/VPS maps được sinh từ bảng VietUnicode bằng `bench/generate_viet_legacy_maps.py`.
 //!
-//! **TCVN3 chữ hoa có dấu** không phải single-byte thuần: VietUnicode ghi rõ capital
-//! vowels dùng font hoa riêng nên cột TCVN3 Hex là digraph minh họa
-//! (vd Á = `41 B8`, Ấ = `A2 CA`). Decode ghép base + tone theo bảng đó — cùng nguồn
-//! với VNI/VPS maps (`https://vietunicode.sourceforge.net/charset/`).
+//! **Hạn chế TCVN3 chữ hoa có dấu:** TCVN 5712-3 / VietUnicode mô tả capital vowels
+//! qua font hoa riêng (TCVN-3-1 thường / TCVN-3-2 hoa), không phải digraph byte chắc chắn
+//! trong luồng không có metadata font/run. Decode ở đây **không** đoán hoa bằng
+//! lookahead base+tone — chỉ map single-byte (base hoa ĂÂÊÔƠƯĐ + chữ thường có dấu).
+//! Cần font/run metadata (hoặc bảng TCVN-3-2 tường minh) mới nâng case đúng.
 
 use crate::viet_legacy_maps::{VNI_MAP, VPS_MAP};
 
@@ -103,78 +104,6 @@ fn tcvn3_char(b: u8) -> Option<char> {
         .map(|i| TCVN3_MAP[i].1)
 }
 
-/// Digraph chữ hoa có dấu TCVN3: `[base, tone] → Unicode hoa`.
-/// Nguồn: cột TCVN3 Hex trên VietUnicode charset table (sorted by key).
-const TCVN3_UPPER_DIGRAPHS: &[([u8; 2], char)] = &[
-    ([0x41, 0xB5], 'À'),
-    ([0x41, 0xB6], 'Ả'),
-    ([0x41, 0xB7], 'Ã'),
-    ([0x41, 0xB8], 'Á'),
-    ([0x41, 0xB9], 'Ạ'),
-    ([0x45, 0xCC], 'È'),
-    ([0x45, 0xCE], 'Ẻ'),
-    ([0x45, 0xCF], 'Ẽ'),
-    ([0x45, 0xD0], 'É'),
-    ([0x45, 0xD1], 'Ẹ'),
-    ([0x49, 0xD7], 'Ì'),
-    ([0x49, 0xD8], 'Ỉ'),
-    ([0x49, 0xDC], 'Ĩ'),
-    ([0x49, 0xDD], 'Í'),
-    ([0x49, 0xDE], 'Ị'),
-    ([0x4F, 0xDF], 'Ò'),
-    ([0x4F, 0xE1], 'Ỏ'),
-    ([0x4F, 0xE2], 'Õ'),
-    ([0x4F, 0xE3], 'Ó'),
-    ([0x4F, 0xE4], 'Ọ'),
-    ([0x55, 0xEF], 'Ù'),
-    ([0x55, 0xF1], 'Ủ'),
-    ([0x55, 0xF2], 'Ũ'),
-    ([0x55, 0xF3], 'Ú'),
-    ([0x55, 0xF4], 'Ụ'),
-    ([0x59, 0xFA], 'Ỳ'),
-    ([0x59, 0xFB], 'Ỷ'),
-    ([0x59, 0xFC], 'Ỹ'),
-    ([0x59, 0xFD], 'Ý'),
-    ([0x59, 0xFE], 'Ỵ'),
-    ([0xA1, 0xBB], 'Ằ'),
-    ([0xA1, 0xBC], 'Ẳ'),
-    ([0xA1, 0xBD], 'Ẵ'),
-    ([0xA1, 0xBE], 'Ắ'),
-    ([0xA1, 0xC6], 'Ặ'),
-    ([0xA2, 0xC7], 'Ầ'),
-    ([0xA2, 0xC8], 'Ẩ'),
-    ([0xA2, 0xC9], 'Ẫ'),
-    ([0xA2, 0xCA], 'Ấ'),
-    ([0xA2, 0xCB], 'Ậ'),
-    ([0xA3, 0xD2], 'Ề'),
-    ([0xA3, 0xD3], 'Ể'),
-    ([0xA3, 0xD4], 'Ễ'),
-    ([0xA3, 0xD5], 'Ế'),
-    ([0xA3, 0xD6], 'Ệ'),
-    ([0xA4, 0xE5], 'Ồ'),
-    ([0xA4, 0xE6], 'Ổ'),
-    ([0xA4, 0xE7], 'Ỗ'),
-    ([0xA4, 0xE8], 'Ố'),
-    ([0xA4, 0xE9], 'Ộ'),
-    ([0xA5, 0xEA], 'Ờ'),
-    ([0xA5, 0xEB], 'Ở'),
-    ([0xA5, 0xEC], 'Ỡ'),
-    ([0xA5, 0xED], 'Ớ'),
-    ([0xA5, 0xEE], 'Ợ'),
-    ([0xA6, 0xF5], 'Ừ'),
-    ([0xA6, 0xF6], 'Ử'),
-    ([0xA6, 0xF7], 'Ữ'),
-    ([0xA6, 0xF8], 'Ứ'),
-    ([0xA6, 0xF9], 'Ự'),
-];
-
-fn tcvn3_upper_digraph(b0: u8, b1: u8) -> Option<char> {
-    TCVN3_UPPER_DIGRAPHS
-        .binary_search_by_key(&[b0, b1], |&(k, _)| k)
-        .ok()
-        .map(|i| TCVN3_UPPER_DIGRAPHS[i].1)
-}
-
 /// Đoán dữ liệu có phải TCVN3 không.
 /// Điều kiện: KHÔNG phải UTF-8 hợp lệ, và phần lớn (≥70%) byte >0x7F nằm trong
 /// bảng TCVN3, với ít nhất 3 byte như vậy (tránh nhận nhầm nhiễu ngắn).
@@ -194,25 +123,15 @@ pub fn looks_like_tcvn3(bytes: &[u8]) -> bool {
     high >= 3 && hit * 10 >= high * 7
 }
 
-/// Decode TCVN3 → String Unicode.
-///
-/// Chữ thường / base hoa (ĂÂÊÔƠƯĐ) = 1 byte; chữ hoa có dấu = digraph VietUnicode.
+/// Decode TCVN3 → String Unicode (single-byte map; xem hạn chế chữ hoa có dấu ở đầu module).
 pub fn decode_tcvn3(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len());
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if index + 1 < bytes.len() {
-            if let Some(character) = tcvn3_upper_digraph(bytes[index], bytes[index + 1]) {
-                out.push(character);
-                index += 2;
-                continue;
-            }
-        }
-        let b = bytes[index];
-        out.push(tcvn3_char(b).unwrap_or(b as char));
-        index += 1;
-    }
-    out
+    bytes
+        .iter()
+        .map(|&b| match tcvn3_char(b) {
+            Some(c) => c,
+            None => b as char, // ASCII + latin-1 passthrough
+        })
+        .collect()
 }
 
 fn vni_match(bytes: &[u8]) -> Option<(char, usize)> {
@@ -431,31 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn decodes_tcvn3_uppercase_accented_digraphs() {
-        // VietUnicode: Á=41 B8, Ấ=A2 CA, Ộ=A4 E9, Ỳ=59 FA, Đ=A7 (1 byte).
-        // "Á Ấ ĐỘ Ỳ" — representative hoa có dấu (ASCII base + tone, base hoa + tone).
-        let bytes = [
-            0x41, 0xB8, 0x20, // Á
-            0xA2, 0xCA, 0x20, // Ấ
-            0xA7, 0xA4, 0xE9, 0x20, // ĐỘ
-            0x59, 0xFA, // Ỳ
-        ];
-        assert_eq!(decode_tcvn3(&bytes), "Á Ấ ĐỘ Ỳ");
-        // Digraph không được nuốt nhầm ASCII đơn: "A B" giữ nguyên.
-        assert_eq!(decode_tcvn3(b"A B"), "A B");
-        // Base hoa đơn (không tone) vẫn 1 byte.
+    fn does_not_guess_tcvn3_uppercase_via_base_tone_lookahead() {
+        // Không có font metadata: A + 0xB8 phải ra "Aá", không bị ghép thành "Á".
+        assert_eq!(decode_tcvn3(&[0x41, 0xB8]), "Aá");
         assert_eq!(decode_tcvn3(&[0xA1, 0xA2, 0xA7]), "ĂÂĐ");
-    }
-
-    #[test]
-    fn decode_text_routes_tcvn3_uppercase_sentence() {
-        // "CỘNG HÒA" — hoa có dấu qua digraph + chữ thường không đổi.
-        let bytes = [
-            0x43, 0xA4, 0xE9, 0x4E, 0x47, 0x20, // CỘNG
-            0x48, 0x4F, 0xDF, 0x41, // HÒA
-        ];
-        assert!(looks_like_tcvn3(&bytes));
-        assert_eq!(decode_tcvn3(&bytes), "CỘNG HÒA");
-        assert_eq!(decode_text(&bytes), "CỘNG HÒA");
     }
 }

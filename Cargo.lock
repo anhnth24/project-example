@@ -2043,6 +2043,7 @@ dependencies = [
  "calamine",
  "csv",
  "docx-rust",
+ "encoding_rs",
  "htmd",
  "image",
  "pdf-extract",
