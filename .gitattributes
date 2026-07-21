@@ -1,1 +1,2 @@
 tests/fixtures/pdf/*.pdf binary
+crates/core/tests/snapshots/*.md text eol=lf
