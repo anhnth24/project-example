@@ -333,6 +333,14 @@ pub async fn hydrate_chunks_by_identity(
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
                        AND acl_p.code = $5
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $4
@@ -401,6 +409,14 @@ pub async fn hydrate_chunks_by_identity(
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
                        AND acl_p.code = $6
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $5
@@ -498,6 +514,14 @@ pub async fn load_authorized_conflict_evidence(
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
                        AND acl_p.code = $5
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $4
@@ -525,6 +549,14 @@ pub async fn load_authorized_conflict_evidence(
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
                        AND acl_p.code = $5
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $4
@@ -611,6 +643,14 @@ pub async fn load_authorized_conflict_evidence(
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
                        AND acl_p.code = $6
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $5
@@ -638,6 +678,14 @@ pub async fn load_authorized_conflict_evidence(
                        AND acl_c.deleted_at IS NULL
                        AND acl_u.disabled_at IS NULL
                        AND acl_p.code = $6
+                       AND EXISTS (
+                         SELECT 1
+                         FROM role_permissions query_rp
+                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                         WHERE query_rp.org_id = acl_r.org_id
+                           AND query_rp.role_id = acl_r.id
+                           AND query_p.code = 'qa.query'
+                       )
                        AND (
                          acl_c.visibility = 'org'
                          OR acl_c.owner_user_id = $5

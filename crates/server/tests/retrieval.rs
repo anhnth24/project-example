@@ -508,6 +508,41 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                 );
 
                 txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id FROM permissions WHERE code = $3",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_HISTORY],
+                )
+                .await?;
+                txn.execute(
+                    "DELETE FROM role_permissions
+                     WHERE org_id = $1
+                       AND role_id = $2
+                       AND permission_id = (
+                         SELECT id FROM permissions WHERE code = $3
+                       )",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_QUERY],
+                )
+                .await?;
+                let denied_without_query = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &historical_visibility,
+                )
+                .await?;
+                assert!(
+                    denied_without_query.is_empty(),
+                    "historical hydration must recheck qa.query as well as qa.history"
+                );
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id FROM permissions WHERE code = $3",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_QUERY],
+                )
+                .await?;
+
+                txn.execute(
                     "DELETE FROM org_memberships WHERE org_id = $1 AND user_id = $2",
                     &[&ctx.org_id(), &ctx.user_id()],
                 )
