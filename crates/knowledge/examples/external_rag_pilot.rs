@@ -3,6 +3,8 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use fileconv_core::intelligence::CorpusDocument;
@@ -49,6 +51,15 @@ struct Query {
     relevant_source: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct BlindQuery {
+    question_id: String,
+    topic_index: usize,
+    intent: String,
+    question: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Summary {
@@ -72,6 +83,7 @@ struct Summary {
 struct ConversionSummary {
     successful: usize,
     non_empty: usize,
+    cached: usize,
     success_rate: f64,
     non_empty_rate: f64,
     median_elapsed_ms: f64,
@@ -86,6 +98,7 @@ struct ConversionRow {
     document_id: String,
     filename: String,
     success: bool,
+    cached: bool,
     elapsed_ms: f64,
     markdown_chars: usize,
     error: Option<String>,
@@ -106,7 +119,7 @@ struct EmbeddingSummary {
 #[serde(rename_all = "camelCase")]
 struct RetrievalSummary {
     ranking_path: &'static str,
-    query_provenance: &'static str,
+    query_provenance: String,
     overall: Metrics,
     by_category: BTreeMap<String, Metrics>,
     rows: Vec<QueryRow>,
@@ -145,6 +158,7 @@ struct Args {
     originals: PathBuf,
     work: PathBuf,
     output: PathBuf,
+    query_set: Option<PathBuf>,
     limit: Option<usize>,
 }
 
@@ -154,6 +168,10 @@ fn parse_args() -> Args {
     let originals = args.next().map(PathBuf::from);
     let work = args.next().map(PathBuf::from);
     let output = args.next().map(PathBuf::from);
+    let query_set = args
+        .next()
+        .map(PathBuf::from)
+        .filter(|value| value.as_os_str() != "-");
     let limit = args
         .next()
         .map(|value| {
@@ -171,7 +189,7 @@ fn parse_args() -> Args {
     {
         panic!(
             "usage: external_rag_pilot <sources.lock.json> <originals-dir> \
-             <work-dir> <output.json> [limit]"
+             <work-dir> <output.json> [queries.json|-] [limit]"
         );
     }
     Args {
@@ -179,6 +197,7 @@ fn parse_args() -> Args {
         originals: originals.unwrap(),
         work: work.unwrap(),
         output: output.unwrap(),
+        query_set,
         limit,
     }
 }
@@ -241,24 +260,48 @@ fn checked_source_path(root: &Path, source: &Source) -> Result<PathBuf, Box<dyn 
     Ok(path)
 }
 
-fn convert_sources(
-    sources: &[Source],
+fn convert_source(
+    source: &Source,
     originals: &Path,
     markdown_root: &Path,
-) -> Result<(Vec<CorpusDocument>, Vec<ConversionRow>), Box<dyn Error>> {
-    fs::create_dir_all(markdown_root)?;
-    let converter = Converter::new();
-    let mut documents = Vec::new();
-    let mut rows = Vec::with_capacity(sources.len());
-    for source in sources {
-        let started = Instant::now();
-        let source_path = checked_source_path(originals, source)?;
-        match converter.convert_path(&source_path) {
-            Ok(result) => {
-                let markdown_chars = result.markdown.chars().count();
-                let md_name = format!("{}.md", source.id);
-                fs::write(markdown_root.join(&md_name), &result.markdown)?;
-                documents.push(CorpusDocument {
+    converter: &Converter,
+    reuse_markdown: bool,
+) -> Result<(Option<CorpusDocument>, ConversionRow), String> {
+    let started = Instant::now();
+    let source_path = checked_source_path(originals, source).map_err(|error| error.to_string())?;
+    let md_name = format!("{}.md", source.id);
+    let md_path = markdown_root.join(&md_name);
+    if reuse_markdown && md_path.is_file() {
+        let markdown = fs::read_to_string(&md_path).map_err(|error| error.to_string())?;
+        let markdown_chars = markdown.chars().count();
+        return Ok((
+            Some(CorpusDocument {
+                source_rel: source.filename.clone(),
+                md_rel: format!("markdown/{md_name}"),
+                format: source_path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("unknown")
+                    .to_ascii_lowercase(),
+                markdown,
+            }),
+            ConversionRow {
+                document_id: source.id.clone(),
+                filename: source.filename.clone(),
+                success: true,
+                cached: true,
+                elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
+                markdown_chars,
+                error: None,
+            },
+        ));
+    }
+    match converter.convert_path(&source_path) {
+        Ok(result) => {
+            let markdown_chars = result.markdown.chars().count();
+            fs::write(&md_path, &result.markdown).map_err(|error| error.to_string())?;
+            Ok((
+                Some(CorpusDocument {
                     source_rel: source.filename.clone(),
                     md_rel: format!("markdown/{md_name}"),
                     format: source_path
@@ -267,37 +310,108 @@ fn convert_sources(
                         .unwrap_or("unknown")
                         .to_ascii_lowercase(),
                     markdown: result.markdown,
-                });
-                rows.push(ConversionRow {
+                }),
+                ConversionRow {
                     document_id: source.id.clone(),
                     filename: source.filename.clone(),
                     success: true,
+                    cached: false,
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     markdown_chars,
                     error: None,
-                });
-            }
-            Err(error) => {
-                eprintln!("conversion failed for {}: {error}", source.id);
-                rows.push(ConversionRow {
+                },
+            ))
+        }
+        Err(error) => {
+            eprintln!("conversion failed for {}: {error}", source.id);
+            Ok((
+                None,
+                ConversionRow {
                     document_id: source.id.clone(),
                     filename: source.filename.clone(),
                     success: false,
+                    cached: false,
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     markdown_chars: 0,
                     error: Some(error.to_string()),
+                },
+            ))
+        }
+    }
+}
+
+fn convert_sources(
+    sources: &[Source],
+    originals: &Path,
+    markdown_root: &Path,
+) -> Result<(Vec<CorpusDocument>, Vec<ConversionRow>), Box<dyn Error>> {
+    fs::create_dir_all(markdown_root)?;
+    let reuse_markdown = env::var("FILECONV_EXTERNAL_REUSE_MARKDOWN")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let workers = env_value("FILECONV_EXTERNAL_CONVERSION_WORKERS", "1")
+        .parse::<usize>()?
+        .clamp(1, sources.len());
+    let mut converted = if workers == 1 {
+        let converter = Converter::new();
+        sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                (
+                    index,
+                    convert_source(source, originals, markdown_root, &converter, reuse_markdown),
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            for _ in 0..workers {
+                let sender = sender.clone();
+                let next = &next;
+                scope.spawn(move || {
+                    let converter = Converter::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(source) = sources.get(index) else {
+                            break;
+                        };
+                        let result = convert_source(
+                            source,
+                            originals,
+                            markdown_root,
+                            &converter,
+                            reuse_markdown,
+                        );
+                        if sender.send((index, result)).is_err() {
+                            break;
+                        }
+                    }
                 });
             }
-        }
-        let row = rows.last().expect("conversion row was appended");
+            drop(sender);
+            receiver.into_iter().collect::<Vec<_>>()
+        })
+    };
+    converted.sort_by_key(|(index, _)| *index);
+    let mut documents = Vec::new();
+    let mut rows = Vec::with_capacity(sources.len());
+    for (index, result) in converted {
+        let (document, row) = result.map_err(|error| -> Box<dyn Error> { error.into() })?;
         eprintln!(
-            "converted {}/{} {} success={} chars={}",
-            rows.len(),
+            "converted {}/{} {} success={} cached={} chars={}",
+            index + 1,
             sources.len(),
-            source.id,
+            row.document_id,
             row.success,
+            row.cached,
             row.markdown_chars
         );
+        if let Some(document) = document {
+            documents.push(document);
+        }
+        rows.push(row);
     }
     Ok((documents, rows))
 }
@@ -336,7 +450,7 @@ fn lowercase_first(value: &str) -> String {
     }
 }
 
-fn build_queries(sources: &[Source]) -> Vec<Query> {
+fn build_metadata_queries(sources: &[Source]) -> Vec<Query> {
     sources
         .iter()
         .flat_map(|source| {
@@ -356,6 +470,46 @@ fn build_queries(sources: &[Source]) -> Vec<Query> {
             ]
         })
         .collect()
+}
+
+fn load_queries(
+    sources: &[Source],
+    query_set: Option<&Path>,
+) -> Result<(Vec<Query>, String), Box<dyn Error>> {
+    let Some(path) = query_set else {
+        return Ok((
+            build_metadata_queries(sources),
+            "official-detail-metadata-derived".into(),
+        ));
+    };
+    let specs: Vec<BlindQuery> = serde_json::from_slice(&fs::read(path)?)?;
+    let mut ids = std::collections::BTreeSet::new();
+    let mut queries = Vec::new();
+    for spec in specs {
+        if spec.topic_index == 0 {
+            return Err(format!("{} has zero topic_index", spec.question_id).into());
+        }
+        if spec.topic_index > sources.len() {
+            continue;
+        }
+        if !ids.insert(spec.question_id.clone()) {
+            return Err(format!("duplicate blind query ID: {}", spec.question_id).into());
+        }
+        let question = spec.question.trim();
+        if question.is_empty() {
+            return Err(format!("{} has an empty question", spec.question_id).into());
+        }
+        queries.push(Query {
+            id: spec.question_id,
+            category: spec.intent,
+            text: question.to_string(),
+            relevant_source: sources[spec.topic_index - 1].filename.clone(),
+        });
+    }
+    if queries.is_empty() {
+        return Err("blind query set contains no query for selected sources".into());
+    }
+    Ok((queries, "independent-agent-overview-only".into()))
 }
 
 fn embedding_failure(error: impl std::fmt::Display) -> KnowledgeError {
@@ -459,7 +613,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
     })?;
     let stats = index_stats(&paths)?;
 
-    let queries = build_queries(sources);
+    let (queries, query_provenance) = load_queries(sources, args.query_set.as_deref())?;
     let mut query_rows = Vec::with_capacity(queries.len());
     for (index, query) in queries.iter().enumerate() {
         let response = hybrid_search(
@@ -500,6 +654,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         .map(|row| row.markdown_chars as f64)
         .collect::<Vec<_>>();
     let successful = conversion_rows.iter().filter(|row| row.success).count();
+    let cached = conversion_rows.iter().filter(|row| row.cached).count();
     let non_empty = conversion_rows
         .iter()
         .filter(|row| row.success && row.markdown_chars >= 80)
@@ -519,6 +674,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         conversion: ConversionSummary {
             successful,
             non_empty,
+            cached,
             success_rate: successful as f64 / sources.len() as f64,
             non_empty_rate: non_empty as f64 / sources.len() as f64,
             median_elapsed_ms: median(&elapsed),
@@ -538,7 +694,7 @@ fn run(args: Args) -> Result<Summary, Box<dyn Error>> {
         index_stats: stats,
         retrieval: RetrievalSummary {
             ranking_path: "fileconv-knowledge/desktop::service::hybrid_search",
-            query_provenance: "official-detail-metadata-derived",
+            query_provenance,
             overall: summarize(&overall_refs),
             by_category,
             rows: query_rows,
