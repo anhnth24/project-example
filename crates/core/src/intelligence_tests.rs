@@ -559,6 +559,105 @@ fn pii_email_apostrophe_dot_atom_and_strict_boundaries() {
 }
 
 #[test]
+fn pii_phone_failed_plus_run_is_skipped_not_retried() {
+    let report = detect_pii(&[doc(
+        "plus0.md",
+        "Sai +0912345678 và đúng 0912345678 cuối câu.",
+    )]);
+    // `+091…` must not yield a phone by retrying inside the run; bare mobile still hits.
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert_single_span(&report, PiiKind::Phone, "0912345678");
+    assert!(!report.findings.iter().any(|f| f.text.contains('+')));
+}
+
+#[test]
+fn pii_phone_unicode_alphanumeric_boundaries() {
+    let report = detect_pii(&[doc("u.md", "mãＡ0912345678 và 0912345678Ｂ")]);
+    assert!(
+        !report.counts.contains_key(&PiiKind::Phone),
+        "Unicode alphanumeric adjacency must block: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn pii_label_comma_and_distance_do_not_classify_transaction_ids() {
+    let ascii = detect_pii(&[doc(
+        "comma.md",
+        "Tài khoản đã xác minh, mã giao dịch 123456789012 trong biên lai.",
+    )]);
+    assert!(
+        !ascii.counts.contains_key(&PiiKind::BankAccount),
+        "comma must cut bank label: {:?}",
+        ascii.findings
+    );
+
+    let ideographic = detect_pii(&[doc(
+        "ucomma.md",
+        "Tài khoản đã xác minh，mã giao dịch 123456789012 trong biên lai.",
+    )]);
+    assert!(
+        !ideographic.counts.contains_key(&PiiKind::BankAccount),
+        "Unicode comma must cut bank label: {:?}",
+        ideographic.findings
+    );
+
+    let prose = detect_pii(&[doc(
+        "distance.md",
+        "Tài khoản khách hàng đã đối soát đầy đủ trước khi ghi nhận mã 123456789012.",
+    )]);
+    assert!(
+        !prose.counts.contains_key(&PiiKind::BankAccount),
+        "long prose after label must not classify: {:?}",
+        prose.findings
+    );
+
+    let ok = detect_pii(&[doc("stk.md", "Tài khoản ngân hàng: 123456789012")]);
+    assert_single_span(&ok, PiiKind::BankAccount, "123456789012");
+}
+
+#[test]
+fn pii_email_paired_markdown_wrappers_redact_inner_only() {
+    for (markdown, exact, redacted_shape) in [
+        (
+            "Mail **lan@example.com** ngay.",
+            "lan@example.com",
+            "Mail **[REDACTED_Email]** ngay.",
+        ),
+        (
+            "Mail *lan@example.com* ngay.",
+            "lan@example.com",
+            "Mail *[REDACTED_Email]* ngay.",
+        ),
+        (
+            "Mail __lan@example.com__ ngay.",
+            "lan@example.com",
+            "Mail __[REDACTED_Email]__ ngay.",
+        ),
+        (
+            "Mail _lan@example.com_ ngay.",
+            "lan@example.com",
+            "Mail _[REDACTED_Email]_ ngay.",
+        ),
+        (
+            "Mail `lan@example.com` ngay.",
+            "lan@example.com",
+            "Mail `[REDACTED_Email]` ngay.",
+        ),
+    ] {
+        let report = detect_pii(&[doc("wrap.md", markdown)]);
+        assert_single_span(&report, PiiKind::Email, exact);
+        assert_eq!(redact_pii(markdown, &report.findings), redacted_shape);
+    }
+
+    // Legitimate marker chars inside an unwrapped local stay part of the address.
+    let underscored = detect_pii(&[doc("u.md", "Mail user_name@example.com")]);
+    assert_single_span(&underscored, PiiKind::Email, "user_name@example.com");
+    let starred = detect_pii(&[doc("s.md", "Mail user*tag@example.com")]);
+    assert_single_span(&starred, PiiKind::Email, "user*tag@example.com");
+}
+
+#[test]
 fn redaction_ignores_out_of_range_findings() {
     let markdown = "Không đổi";
     let findings = [PiiFinding {

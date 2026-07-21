@@ -785,10 +785,14 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
 ///   (no partial carve-outs from unsupported adjacent characters).
 /// - **Phone**: maintained active VN mobile prefixes (incl. `055`/`087`) + exact
 ///   landline area/length tables; leading `+` preserved and must be `+84`; optional
-///   `(0)` trunk; grouped separators; alphanumeric boundaries; consecutive separated
-///   phones detected independently; reject `030…` and arbitrary bare digit runs.
-/// - **Labels**: nearest explicit label cannot cross newline, `|`, or sentence/clause
-///   boundary; Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
+///   `(0)` trunk; grouped separators; Unicode alphanumeric boundaries; consecutive
+///   separated phones detected independently; failed `+…` runs are skipped whole
+///   (no retry inside); reject `030…` and arbitrary bare digit runs.
+/// - **Labels**: nearest explicit label cannot cross newline, `|`, comma/`，`/`、`,
+///   or sentence/clause boundary, and must field-link within bounded distance;
+///   Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
+/// - **Email wrappers**: paired `**`/`*`/`__`/`_`/`` ` `` redact the inner address
+///   only; unwrapped locals may still contain those marker characters.
 /// - **Bank/CCCD**: nearest scoped label or table header only; bare `ngân hàng` prose
 ///   does not classify transaction counts. Explicit phone header/label beats bank.
 /// - Bare valid VN mobiles/landlines remain in recall; exotic/foreign numbers,
@@ -893,6 +897,41 @@ fn looks_like_email(token: &str) -> bool {
     })
 }
 
+/// Peel paired Markdown emphasis/code wrappers; return inner email span when wrapped.
+/// Longer markers (`**` / `__`) win over single `*` / `_`. Unwrapped locals keep
+/// legitimate `*` / `_` / `` ` `` characters inside the address.
+fn peel_markdown_email_wrappers(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+    for marker in ["**", "__", "`", "*", "_"] {
+        let m = marker.len();
+        // Markers outside the expanded candidate.
+        if start >= m
+            && end + m <= text.len()
+            && text.get(start - m..start) == Some(marker)
+            && text.get(end..end + m) == Some(marker)
+        {
+            return Some((start, end));
+        }
+        // Leading marker absorbed into local; trailing marker still outside.
+        if start + m < end
+            && end + m <= text.len()
+            && text.get(start..start + m) == Some(marker)
+            && text.get(end..end + m) == Some(marker)
+            && looks_like_email(&text[start + m..end])
+        {
+            return Some((start + m, end));
+        }
+        // Both markers absorbed (rare; trailing `*`/`_` are not domain chars).
+        if end >= start + 2 * m + 3
+            && text.get(start..start + m) == Some(marker)
+            && text.get(end - m..end) == Some(marker)
+            && looks_like_email(&text[start + m..end - m])
+        {
+            return Some((start + m, end - m));
+        }
+    }
+    None
+}
+
 fn email_candidate_at(text: &str, at: usize) -> Option<(usize, usize)> {
     if !text.is_char_boundary(at) || !text[at..].starts_with('@') {
         return None;
@@ -922,6 +961,9 @@ fn email_candidate_at(text: &str, at: usize) -> Option<(usize, usize)> {
     let candidate = text.get(start..end)?;
     if !looks_like_email(candidate) {
         return None;
+    }
+    if let Some((inner_start, inner_end)) = peel_markdown_email_wrappers(text, start, end) {
+        return Some((inner_start, inner_end));
     }
     // Strict both-side delimiters — reject partial carve-outs.
     let left_ok = start == 0
@@ -1052,6 +1094,28 @@ fn first_valid_phone_prefix_len(digits: &str, require_plus84: bool) -> Option<us
     None
 }
 
+/// Skip a phone-shaped run (optional leading `+`, digits, grouping separators).
+fn skip_phone_shaped_run(chars: &[(usize, char)], start_idx: usize) -> usize {
+    let mut idx = start_idx;
+    if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
+        idx += 1;
+    }
+    let run_start = idx;
+    while idx < chars.len() {
+        let ch = chars[idx].1;
+        if ch.is_ascii_digit() || is_phone_separator(ch) {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    while idx > run_start && is_phone_separator(chars[idx - 1].1) {
+        idx -= 1;
+    }
+    // Always advance past a leading `+` so `+091…` cannot retry inside the run.
+    idx.max(start_idx + 1)
+}
+
 /// Consume one phone candidate starting at `chars[start_idx]`.
 /// Preserves leading `+` and requires `+84` when `+` is present.
 fn consume_phone_candidate(chars: &[(usize, char)], start_idx: usize) -> Option<(usize, String)> {
@@ -1079,13 +1143,13 @@ fn consume_phone_candidate(chars: &[(usize, char)], start_idx: usize) -> Option<
     }
     let len = first_valid_phone_prefix_len(&digits, require_plus84)?;
     let end_idx = digit_end_idx[len - 1];
-    // Alphanumeric boundaries on both sides of the full span.
-    if start_idx > 0 && chars[start_idx - 1].1.is_ascii_alphanumeric() {
+    // Unicode alphanumeric boundaries on both sides of the full span.
+    if start_idx > 0 && chars[start_idx - 1].1.is_alphanumeric() {
         return None;
     }
     if chars
         .get(end_idx)
-        .map(|(_, ch)| ch.is_ascii_alphanumeric())
+        .map(|(_, ch)| ch.is_alphanumeric())
         .unwrap_or(false)
     {
         return None;
@@ -1099,7 +1163,7 @@ fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
     let mut i = 0usize;
     while i < chars.len() {
         let ch = chars[i].1;
-        let left_ok = i == 0 || !chars[i - 1].1.is_ascii_alphanumeric();
+        let left_ok = i == 0 || !chars[i - 1].1.is_alphanumeric();
         let can_start = left_ok && (ch == '+' || ch == '(' || ch.is_ascii_digit());
         if can_start {
             if let Some((end_idx, _)) = consume_phone_candidate(&chars, i) {
@@ -1107,6 +1171,11 @@ fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
                 let end = chars[end_idx - 1].0 + chars[end_idx - 1].1.len_utf8();
                 out.push((start, end));
                 i = end_idx;
+                continue;
+            }
+            // Failed `+…` must consume the whole phone-shaped run (no retry at `0…`).
+            if ch == '+' {
+                i = skip_phone_shaped_run(&chars, i);
                 continue;
             }
         }
@@ -1125,7 +1194,7 @@ fn scan_digit_group_spans(text: &str) -> Vec<(usize, usize, String)> {
             i += 1;
             continue;
         }
-        if i > 0 && chars[i - 1].1.is_ascii_alphanumeric() {
+        if i > 0 && chars[i - 1].1.is_alphanumeric() {
             i += 1;
             continue;
         }
@@ -1150,7 +1219,7 @@ fn scan_digit_group_spans(text: &str) -> Vec<(usize, usize, String)> {
         if (8..=19).contains(&digits.len())
             && !chars
                 .get(end_idx)
-                .map(|(_, ch)| ch.is_ascii_alphanumeric())
+                .map(|(_, ch)| ch.is_alphanumeric())
                 .unwrap_or(false)
         {
             let start = chars[start_idx].0;
@@ -1173,37 +1242,38 @@ fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
         || !folded
             .get(..start)
             .and_then(|s| s.chars().last())
-            .map(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.is_alphanumeric())
             .unwrap_or(false);
     let after_ok = end >= folded.len()
         || !folded
             .get(end..)
             .and_then(|s| s.chars().next())
-            .map(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.is_alphanumeric())
             .unwrap_or(false);
     before_ok && after_ok
 }
 
+const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
+    ("so dien thoai", ExplicitLabel::Phone),
+    ("can cuoc cong dan", ExplicitLabel::NationalId),
+    ("so tai khoan", ExplicitLabel::Bank),
+    ("dien thoai", ExplicitLabel::Phone),
+    ("can cuoc", ExplicitLabel::NationalId),
+    ("tai khoan", ExplicitLabel::Bank),
+    ("hotline", ExplicitLabel::Phone),
+    ("mobile", ExplicitLabel::Phone),
+    ("phone", ExplicitLabel::Phone),
+    ("so tk", ExplicitLabel::Bank),
+    ("cccd", ExplicitLabel::NationalId),
+    ("cmnd", ExplicitLabel::NationalId),
+    ("sdt", ExplicitLabel::Phone),
+    ("tel", ExplicitLabel::Phone),
+    ("stk", ExplicitLabel::Bank),
+];
+
 fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
-    const LABELS: &[(&str, ExplicitLabel)] = &[
-        ("so dien thoai", ExplicitLabel::Phone),
-        ("can cuoc cong dan", ExplicitLabel::NationalId),
-        ("so tai khoan", ExplicitLabel::Bank),
-        ("dien thoai", ExplicitLabel::Phone),
-        ("can cuoc", ExplicitLabel::NationalId),
-        ("tai khoan", ExplicitLabel::Bank),
-        ("hotline", ExplicitLabel::Phone),
-        ("mobile", ExplicitLabel::Phone),
-        ("phone", ExplicitLabel::Phone),
-        ("so tk", ExplicitLabel::Bank),
-        ("cccd", ExplicitLabel::NationalId),
-        ("cmnd", ExplicitLabel::NationalId),
-        ("sdt", ExplicitLabel::Phone),
-        ("tel", ExplicitLabel::Phone),
-        ("stk", ExplicitLabel::Bank),
-    ];
     let mut best: Option<(usize, usize, ExplicitLabel)> = None;
-    for &(pat, kind) in LABELS {
+    for &(pat, kind) in LABEL_PATTERNS {
         let mut base = 0usize;
         while base < folded.len() {
             let Some(rel) = folded[base..].find(pat) else {
@@ -1231,9 +1301,66 @@ fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
     best.map(|(_, _, kind)| kind)
 }
 
-/// Nearest explicit label in scoped (already boundary-trimmed) folded prefix.
+/// Field-value link between a label and the candidate at the end of `folded_scope`.
+/// Allows `Label: value`, `Label：value`, short `Label value`; rejects long prose
+/// / transaction-id tails after the label.
+fn field_value_link(between: &str) -> bool {
+    const MAX_BETWEEN_CHARS: usize = 28;
+    if between.chars().count() > MAX_BETWEEN_CHARS {
+        return false;
+    }
+    if between.chars().any(is_label_scope_boundary) {
+        return false;
+    }
+    let trimmed = between.trim();
+    if trimmed.is_empty() {
+        // Tight `Label 123…` — only a few spaces.
+        return between.chars().count() <= 3;
+    }
+    let sep = trimmed.rfind(|ch| matches!(ch, ':' | '=' | '：'));
+    let Some(sep_at) = sep else {
+        return false;
+    };
+    let sep_ch = trimmed[sep_at..].chars().next().unwrap_or(':');
+    let after = trimmed[sep_at + sep_ch.len_utf8()..].trim();
+    if !after.is_empty() {
+        return false;
+    }
+    let before = trimmed[..sep_at].trim();
+    // Optional short qualifier (`ngan hang`) — no nested clause punctuation.
+    before.chars().count() <= 20
+        && !before
+            .chars()
+            .any(|ch| is_label_scope_boundary(ch) || matches!(ch, ',' | '，' | '、'))
+}
+
+/// Nearest explicit label in scoped folded prefix that field-links to the value.
 fn nearest_explicit_label(folded_prefix: &str) -> Option<ExplicitLabel> {
-    classify_label_text(folded_prefix)
+    let value_at = folded_prefix.len();
+    let mut best: Option<(usize, ExplicitLabel)> = None;
+    for &(pat, kind) in LABEL_PATTERNS {
+        let mut base = 0usize;
+        while base < folded_prefix.len() {
+            let Some(rel) = folded_prefix[base..].find(pat) else {
+                break;
+            };
+            let start = base + rel;
+            let end = start + pat.len();
+            if label_char_boundary(folded_prefix, start, end)
+                && field_value_link(&folded_prefix[end..value_at])
+            {
+                let take = best.map(|(prev_end, _)| end >= prev_end).unwrap_or(true);
+                if take {
+                    best = Some((end, kind));
+                }
+            }
+            base = start + 1;
+            while base < folded_prefix.len() && !folded_prefix.is_char_boundary(base) {
+                base += 1;
+            }
+        }
+    }
+    best.map(|(_, kind)| kind)
 }
 
 fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
@@ -1243,7 +1370,7 @@ fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
 fn is_label_scope_boundary(ch: char) -> bool {
     matches!(
         ch,
-        '\n' | '\r' | '|' | '.' | '!' | '?' | ';' | '…' | '。' | '！' | '？'
+        '\n' | '\r' | '|' | '.' | '!' | '?' | ';' | ',' | '，' | '、' | '…' | '。' | '！' | '？'
     )
 }
 
