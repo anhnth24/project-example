@@ -17,6 +17,11 @@ source "$ENV_FILE"
 set +a
 
 export COMPOSE_PROFILES="${COMPOSE_PROFILES:-mock}"
+# Nested/cloud hosts sometimes lack a working BuildKit/overlay stack. Prefer
+# classic builder unless the caller already set DOCKER_BUILDKIT.
+export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
+export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
+export COMPOSE_BAKE="${COMPOSE_BAKE:-false}"
 COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 echo "building API + worker images..."

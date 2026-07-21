@@ -128,6 +128,8 @@ forbid_regex "$DOCKERFILE_WORKER" '^(COPY|ADD).*[Pp]ho[Ww]hisper' \
   "worker Dockerfile must not COPY/ADD PhoWhisper artifacts"
 require_regex "$DOCKERFILE_WORKER" 'test ! -e /models/ggml-PhoWhisper-small.bin' \
   "worker Dockerfile guards against PhoWhisper model path"
+require_regex "$DOCKERFILE_WORKER" '--no-default-features' \
+  "worker builds fileconv-cli without default audio/whisper feature"
 forbid_regex "$DOCKERFILE_WORKER" 'releases/latest' "worker Dockerfile must not use releases/latest"
 require_regex "$DOCKERFILE_WORKER" "$PDFIUM_SHA" "worker Dockerfile pins PDFium sha256"
 require_regex "$DOCKERFILE_WORKER" 'chromium%2F7906|chromium/7906' "worker Dockerfile pins PDFium tag"

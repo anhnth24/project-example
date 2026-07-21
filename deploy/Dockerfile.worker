@@ -24,12 +24,12 @@ RUN apt-get update \
 
 COPY . .
 
-# Lean converter: drop CLI audio/whisper so the image stays redistributable and
+# Lean converter: build CLI without the default `audio` feature so the image
 # does not compile whisper.cpp or ship any ggml model blobs (PhoWhisper excluded).
-RUN sed -i 's/, features = \["audio"\]//' crates/cli/Cargo.toml \
-    && cargo build --release \
-        -p fileconv-server --bin fileconv-worker \
-        -p fileconv-cli \
+RUN cargo build --release -p fileconv-server --bin fileconv-worker \
+    && cargo build --release -p fileconv-cli --bin fileconv --no-default-features \
+    && test -x /src/target/release/fileconv-worker \
+    && test -x /src/target/release/fileconv \
     && strip /src/target/release/fileconv-worker /src/target/release/fileconv
 
 # Pinned PDFium prebuilt (see deploy/poc/images.lock.json). Fail closed on hash mismatch.
