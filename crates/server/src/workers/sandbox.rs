@@ -541,14 +541,20 @@ mod imp {
                 // Preflight uses /bin/true; converter shells out to tesseract under /usr/bin.
                 (cstring_path("/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
-                (cstring_path("/usr/local/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
+                (
+                    cstring_path("/usr/local/bin")?,
+                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
+                ),
                 (cstring_path("/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
                 // Pinned PDFium + Debian Tesseract tessdata locations.
-                (cstring_path("/opt/pdfium")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
+                (
+                    cstring_path("/opt/pdfium")?,
+                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
+                ),
                 (
                     cstring_path("/usr/share/tesseract-ocr")?,
                     LANDLOCK_ACCESS_FS_READ_EXECUTE,
@@ -558,7 +564,11 @@ mod imp {
                     LANDLOCK_ACCESS_FS_READ_EXECUTE,
                 ),
             ];
-            for key in ["FILECONV_PDFIUM_LIB", "FILECONV_TESSDATA", "TESSDATA_PREFIX"] {
+            for key in [
+                "FILECONV_PDFIUM_LIB",
+                "FILECONV_TESSDATA",
+                "TESSDATA_PREFIX",
+            ] {
                 if let Ok(value) = std::env::var(key) {
                     let trimmed = value.trim();
                     let path = Path::new(trimmed);

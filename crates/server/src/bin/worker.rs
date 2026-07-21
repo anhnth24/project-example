@@ -35,7 +35,10 @@ async fn main() {
         );
         return;
     }
-    if args.iter().any(|argument| argument == "--sandbox-preflight") {
+    if args
+        .iter()
+        .any(|argument| argument == "--sandbox-preflight")
+    {
         match fileconv_server::workers::sandbox::preflight() {
             Ok(()) => {
                 println!("sandbox preflight ok");

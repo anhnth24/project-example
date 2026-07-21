@@ -10,7 +10,7 @@
 # Audio feature is disabled in this image so whisper.cpp is not compiled in;
 # convert path covers non-audio formats (pdf/office/html/csv/image OCR).
 
-FROM rust:1.88.0-bookworm AS builder
+FROM rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
 
 WORKDIR /src
 
@@ -42,15 +42,16 @@ RUN mkdir -p /opt/pdfium \
     && test -f /opt/pdfium/lib/libpdfium.so \
     && rm -f /tmp/pdfium.tgz
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
 
+# Apt pins recorded in deploy/poc/images.lock.json (Debian bookworm).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libssl3 \
-        tesseract-ocr \
-        tesseract-ocr-vie \
-        tesseract-ocr-eng \
+        tesseract-ocr=5.3.0-2 \
+        tesseract-ocr-eng=1:4.1.0-2 \
+        tesseract-ocr-vie=1:4.1.0-2 \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 markhand \

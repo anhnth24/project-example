@@ -132,6 +132,18 @@ forbid_regex "$DOCKERFILE_WORKER" 'releases/latest' "worker Dockerfile must not 
 require_regex "$DOCKERFILE_WORKER" "$PDFIUM_SHA" "worker Dockerfile pins PDFium sha256"
 require_regex "$DOCKERFILE_WORKER" 'chromium%2F7906|chromium/7906' "worker Dockerfile pins PDFium tag"
 require_regex "$IMAGES_LOCK" "$PDFIUM_SHA" "images.lock records PDFium sha256"
+require_regex "$DOCKERFILE_SERVER" 'rust:1\.88\.0-bookworm@sha256:' "server builder base digest pinned"
+require_regex "$DOCKERFILE_SERVER" 'debian:bookworm-slim@sha256:' "server runtime base digest pinned"
+require_regex "$DOCKERFILE_WORKER" 'rust:1\.88\.0-bookworm@sha256:' "worker builder base digest pinned"
+require_regex "$DOCKERFILE_WORKER" 'debian:bookworm-slim@sha256:' "worker runtime base digest pinned"
+require_regex "$DOCKERFILE_WORKER" 'tesseract-ocr=5\.3\.0-2' "worker pins tesseract-ocr apt version"
+require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" \
+  'python:3\.12\.12-slim-bookworm@sha256:' \
+  "embedding-cpu base digest pinned"
+require_regex "$IMAGES_LOCK" 'rust-bookworm' "images.lock records rust base"
+require_regex "$IMAGES_LOCK" 'debian-bookworm-slim' "images.lock records debian base"
+require_regex "$IMAGES_LOCK" 'python-slim-bookworm' "images.lock records python base"
+require_regex "$IMAGES_LOCK" 'tesseract_apt' "images.lock records tesseract apt pins"
 
 # Index signatures (source of truth: print-index-signature.py)
 require_regex "$ENV_EXAMPLE" "$MOCK_SIG" ".env.example has mock index signature"
