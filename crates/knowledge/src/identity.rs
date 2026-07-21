@@ -8,11 +8,14 @@ pub const BODY_TEXT_VERSION: &str = "nfc-v1";
 pub const QUERY_NORMALIZATION_VERSION: &str = "accent-fold-v1";
 pub const DEFAULT_CHUNKING_VERSION: &str = "heading-chunks-2000-v1";
 
-pub const RUNTIME_LOCAL_HASH: &str = "local-hash";
-pub const RUNTIME_LOCAL_NEURAL: &str = "local-neural";
-pub const RUNTIME_GLM_CLOUD_INTERIM: &str = "glm-cloud-interim";
-pub const RUNTIME_VLLM_LOCAL: &str = "vllm-local";
-pub const RUNTIME_PROVIDER_CLOUD: &str = "provider-cloud";
+// Single source of truth: always-on `fileconv_core::embedding_runtime` (ADR 0006).
+pub use fileconv_core::embedding_runtime::{
+    EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM as RUNTIME_GLM_CLOUD_INTERIM,
+    EMBEDDING_RUNTIME_LOCAL_HASH as RUNTIME_LOCAL_HASH,
+    EMBEDDING_RUNTIME_LOCAL_NEURAL as RUNTIME_LOCAL_NEURAL,
+    EMBEDDING_RUNTIME_PROVIDER_CLOUD as RUNTIME_PROVIDER_CLOUD,
+    EMBEDDING_RUNTIME_VLLM_LOCAL as RUNTIME_VLLM_LOCAL,
+};
 
 fn update_field(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());

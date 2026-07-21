@@ -17,6 +17,8 @@ pub mod audio;
 pub mod chunk;
 mod conv;
 pub mod diagnostics;
+/// Always-on embedding runtime-path helpers (ADR 0006). Not gated by `llm`.
+pub mod embedding_runtime;
 pub mod image_ocr;
 pub mod intelligence;
 #[cfg(test)]

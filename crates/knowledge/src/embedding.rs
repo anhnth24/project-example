@@ -22,40 +22,14 @@ pub use crate::identity::{
     RUNTIME_VLLM_LOCAL,
 };
 
-const ALLOWED_RUNTIME_PATHS: &[&str] = &[
-    RUNTIME_LOCAL_HASH,
-    RUNTIME_LOCAL_NEURAL,
-    RUNTIME_GLM_CLOUD_INTERIM,
-    RUNTIME_VLLM_LOCAL,
-    RUNTIME_PROVIDER_CLOUD,
-];
-
 /// Map endpoint metadata to a canonical runtime path (ADR 0006).
 ///
-/// Fallback only — desktop presets carry an explicit `runtime_path` on
-/// `EmbeddingConfig` because real vLLM hosts (`127.0.0.1:8000` + `BAAI/bge-m3`)
-/// do not contain the string `"vllm"`. Kept here (not behind core `llm`) so the
-/// knowledge crate stays usable without the HTTP client feature.
+/// Thin alias over [`fileconv_core::embedding_runtime::infer_embedding_runtime_path`]
+/// (always-on, not behind core `llm`). Fallback only — desktop presets carry an
+/// explicit `runtime_path` because real vLLM hosts (`127.0.0.1:8000` +
+/// `BAAI/bge-m3`) do not contain the string `"vllm"`.
 pub fn infer_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
-    let host = base_url
-        .and_then(|value| url::Url::parse(value).ok())
-        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
-        .unwrap_or_default();
-    let model = model.to_ascii_lowercase();
-    let blob = format!("{host} {model}");
-    if host.contains("bigmodel")
-        || host.contains("z.ai")
-        || host.contains("zhipu")
-        || model.starts_with("embedding-2")
-        || model.starts_with("embedding-3")
-        || blob.contains("glm")
-    {
-        return RUNTIME_GLM_CLOUD_INTERIM;
-    }
-    if host.contains("vllm") || model.contains("vllm") {
-        return RUNTIME_VLLM_LOCAL;
-    }
-    RUNTIME_PROVIDER_CLOUD
+    fileconv_core::embedding_runtime::infer_embedding_runtime_path(base_url, model)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -195,7 +169,7 @@ impl EmbeddingPlan {
                 "embedding dimensions must be positive",
             ));
         }
-        if !ALLOWED_RUNTIME_PATHS.contains(&runtime_path.as_str()) {
+        if !fileconv_core::embedding_runtime::is_allowed_embedding_runtime_path(&runtime_path) {
             return Err(KnowledgeError::InvalidInput(
                 "embedding runtime_path is unsupported",
             ));
@@ -624,5 +598,44 @@ mod tests {
         );
         assert_eq!(signature.runtime_path, super::RUNTIME_LOCAL_HASH);
         assert_eq!(signature.dimensions, LOCAL_VECTOR_DIMENSIONS);
+    }
+
+    #[test]
+    fn runtime_path_inference_matches_core_behavior_table() {
+        use fileconv_core::embedding_runtime::{
+            infer_embedding_runtime_path, INFER_EMBEDDING_RUNTIME_PATH_CASES,
+        };
+        for (base_url, model, expected) in INFER_EMBEDDING_RUNTIME_PATH_CASES {
+            let via_knowledge = super::infer_runtime_path(*base_url, model);
+            let via_core = infer_embedding_runtime_path(*base_url, model);
+            assert_eq!(
+                via_knowledge, *expected,
+                "knowledge infer base_url={base_url:?} model={model}"
+            );
+            assert_eq!(
+                via_knowledge, via_core,
+                "parity base_url={base_url:?} model={model}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_constants_alias_core_embedding_runtime() {
+        use fileconv_core::embedding_runtime::{
+            EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM, EMBEDDING_RUNTIME_LOCAL_HASH,
+            EMBEDDING_RUNTIME_LOCAL_NEURAL, EMBEDDING_RUNTIME_PROVIDER_CLOUD,
+            EMBEDDING_RUNTIME_VLLM_LOCAL,
+        };
+        assert_eq!(super::RUNTIME_LOCAL_HASH, EMBEDDING_RUNTIME_LOCAL_HASH);
+        assert_eq!(super::RUNTIME_LOCAL_NEURAL, EMBEDDING_RUNTIME_LOCAL_NEURAL);
+        assert_eq!(
+            super::RUNTIME_GLM_CLOUD_INTERIM,
+            EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM
+        );
+        assert_eq!(super::RUNTIME_VLLM_LOCAL, EMBEDDING_RUNTIME_VLLM_LOCAL);
+        assert_eq!(
+            super::RUNTIME_PROVIDER_CLOUD,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD
+        );
     }
 }

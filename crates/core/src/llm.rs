@@ -125,20 +125,13 @@ pub struct LlmProviderPreset {
     pub description: String,
 }
 
-/// Canonical embedding runtime paths for index signature (ADR 0006).
-pub const EMBEDDING_RUNTIME_LOCAL_HASH: &str = "local-hash";
-pub const EMBEDDING_RUNTIME_LOCAL_NEURAL: &str = "local-neural";
-pub const EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM: &str = "glm-cloud-interim";
-pub const EMBEDDING_RUNTIME_VLLM_LOCAL: &str = "vllm-local";
-pub const EMBEDDING_RUNTIME_PROVIDER_CLOUD: &str = "provider-cloud";
-
-const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
-    EMBEDDING_RUNTIME_LOCAL_HASH,
-    EMBEDDING_RUNTIME_LOCAL_NEURAL,
-    EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM,
-    EMBEDDING_RUNTIME_VLLM_LOCAL,
-    EMBEDDING_RUNTIME_PROVIDER_CLOUD,
-];
+// Re-export ADR 0006 runtime-path constants/helpers from the always-on module so
+// `fileconv_core::llm::*` callers keep working without depending on knowledge.
+pub use crate::embedding_runtime::{
+    infer_embedding_runtime_path, ALLOWED_EMBEDDING_RUNTIME_PATHS,
+    EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM, EMBEDDING_RUNTIME_LOCAL_HASH,
+    EMBEDDING_RUNTIME_LOCAL_NEURAL, EMBEDDING_RUNTIME_PROVIDER_CLOUD, EMBEDDING_RUNTIME_VLLM_LOCAL,
+};
 
 /// Runtime embedding config — Deserialize only (no Serialize); see [`LlmConfig`].
 #[derive(Clone, serde::Deserialize)]
@@ -183,51 +176,6 @@ pub struct EmbeddingProviderPreset {
     /// Index-signature runtime path for this preset (must not rely on URL cues).
     pub runtime_path: String,
     pub description: String,
-}
-
-fn embedding_host_hint(base_url: Option<&str>) -> String {
-    let Some(value) = base_url else {
-        return String::new();
-    };
-    let without_scheme = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"))
-        .unwrap_or(value);
-    let authority = without_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
-    let host_port = authority.rsplit('@').next().unwrap_or(authority);
-    host_port
-        .split(':')
-        .next()
-        .unwrap_or(host_port)
-        .to_ascii_lowercase()
-}
-
-/// Fallback when no preset supplies `runtime_path` (custom endpoints).
-///
-/// Deferred (CORE-T3): `fileconv-knowledge` keeps a parallel `infer_runtime_path`
-/// so that crate stays usable without the `llm` feature / HTTP client. Unifying
-/// would cross knowledge↔core feature boundaries; leave both until a shared
-/// non-HTTP helper exists.
-pub fn infer_embedding_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
-    let host = embedding_host_hint(base_url);
-    let model = model.to_ascii_lowercase();
-    let blob = format!("{host} {model}");
-    if host.contains("bigmodel")
-        || host.contains("z.ai")
-        || host.contains("zhipu")
-        || model.starts_with("embedding-2")
-        || model.starts_with("embedding-3")
-        || blob.contains("glm")
-    {
-        return EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM;
-    }
-    if host.contains("vllm") || model.contains("vllm") {
-        return EMBEDDING_RUNTIME_VLLM_LOCAL;
-    }
-    EMBEDDING_RUNTIME_PROVIDER_CLOUD
 }
 
 impl Provider {
@@ -370,7 +318,7 @@ impl EmbeddingConfig {
             ));
         }
         let runtime_path = runtime_path.into();
-        if !ALLOWED_EMBEDDING_RUNTIME_PATHS.contains(&runtime_path.as_str()) {
+        if !crate::embedding_runtime::is_allowed_embedding_runtime_path(&runtime_path) {
             return Err(ConvertError::Failed(format!(
                 "embedding runtime_path không được hỗ trợ: {runtime_path}"
             )));
