@@ -159,6 +159,31 @@ pub async fn list_signatures_by_collection(
         .collect())
 }
 
+/// Lists active index generations for the given collection ids (retrieval routing).
+pub async fn list_active_for_collections(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_ids: &[Uuid],
+) -> Result<Vec<IndexMetadata>, DbError> {
+    if collection_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = txn
+        .query(
+            &format!(
+                "SELECT {INDEX_METADATA_COLUMNS}
+                 FROM index_metadata
+                 WHERE org_id = $1
+                   AND is_active
+                   AND collection_id = ANY($2)
+                 ORDER BY collection_id, generation DESC"
+            ),
+            &[&ctx.org_id(), &collection_ids],
+        )
+        .await?;
+    rows.iter().map(map_index_metadata).collect()
+}
+
 async fn find_active_for_update(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

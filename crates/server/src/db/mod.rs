@@ -13,4 +13,5 @@ pub mod models;
 pub mod orgs;
 pub mod pool;
 pub mod quota;
+pub mod search;
 pub mod vector_cleanup_intents;
