@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_text};
+use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_span, normalize_newlines};
 use crate::ConvertError;
 
 const DEFAULT_CHUNK_CHARS: usize = 2_000;
@@ -427,14 +427,9 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
             if marker_only {
                 continue;
             }
-            let Some((start, end)) = locate_chunk_text(&document.markdown, cursor, &chunk.text)
-            else {
-                // Không định vị được trên nguồn gốc → bỏ chunk thay vì emit span sai.
-                continue;
-            };
+            // Cùng `locate_chunk_span` với server: giữ chunk khi không khớp; body luôn LF.
+            let (start, end) = locate_chunk_span(&document.markdown, cursor, &chunk.text);
             cursor = end;
-            // Quote giữ đúng byte trên nguồn (kể cả CRLF) để citation khớp highlight.
-            let text = document.markdown[start..end].to_string();
             corpus.push(CorpusChunk {
                 id: format!(
                     "chunk-{}",
@@ -447,7 +442,8 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
                 source_rel: document.source_rel.clone(),
                 md_rel: document.md_rel.clone(),
                 heading: chunk.heading,
-                text,
+                // Canonical LF body — parity với server indexing/identity.
+                text: chunk.text,
                 start,
                 end,
                 page: page_before(&document.markdown, start),
@@ -457,13 +453,27 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
     corpus
 }
 
-fn citation_from_chunk(chunk: &CorpusChunk, index: usize) -> Citation {
+/// Quote citation = đúng byte trên nguồn tại span (CRLF giữ nguyên); fallback body LF.
+fn citation_quote_from_source(chunk: &CorpusChunk, source_markdown: &str) -> String {
+    if chunk.start < chunk.end
+        && chunk.end <= source_markdown.len()
+        && source_markdown.is_char_boundary(chunk.start)
+        && source_markdown.is_char_boundary(chunk.end)
+    {
+        source_markdown[chunk.start..chunk.end].to_string()
+    } else {
+        chunk.text.clone()
+    }
+}
+
+fn citation_from_chunk(chunk: &CorpusChunk, index: usize, source_markdown: &str) -> Citation {
+    let quote = citation_quote_from_source(chunk, source_markdown);
     Citation {
         id: format!("CITE-{:04}", index + 1),
         source_rel: chunk.source_rel.clone(),
         md_rel: chunk.md_rel.clone(),
         heading: chunk.heading.clone(),
-        quote: chunk.text.clone(),
+        quote,
         start: chunk.start,
         end: chunk.end,
         page: chunk.page,
@@ -473,6 +483,14 @@ fn citation_from_chunk(chunk: &CorpusChunk, index: usize) -> Citation {
             1.0
         },
     }
+}
+
+fn markdown_for_source<'a>(documents: &'a [CorpusDocument], source_rel: &str) -> &'a str {
+    documents
+        .iter()
+        .find(|document| document.source_rel == source_rel)
+        .map(|document| document.markdown.as_str())
+        .unwrap_or("")
 }
 
 pub fn search_corpus(documents: &[CorpusDocument], query: &str, limit: usize) -> Vec<SearchHit> {
@@ -523,7 +541,13 @@ pub fn ask_corpus(documents: &[CorpusDocument], question: &str, top_k: usize) ->
     let citations: Vec<Citation> = hits
         .iter()
         .enumerate()
-        .map(|(index, hit)| citation_from_chunk(&hit.chunk, index))
+        .map(|(index, hit)| {
+            citation_from_chunk(
+                &hit.chunk,
+                index,
+                markdown_for_source(documents, &hit.chunk.source_rel),
+            )
+        })
         .collect();
     let answer = if hits.is_empty() {
         "Không tìm thấy nội dung phù hợp trong phạm vi đã chọn.".to_string()
@@ -730,19 +754,20 @@ pub fn redact_pii(markdown: &str, findings: &[PiiFinding]) -> String {
         })
         .map(|finding| (finding.start, finding.end, &finding.kind))
         .collect();
-    // Chọn span không chồng: ưu tiên start sớm hơn, rồi span dài hơn.
+    // Coalesce overlapping / crossing / nested ranges — tránh lộ suffix nhạy cảm.
     spans.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
-    let mut selected: Vec<(usize, usize, &PiiKind)> = Vec::new();
-    let mut last_end = 0usize;
+    let mut merged: Vec<(usize, usize, &PiiKind)> = Vec::new();
     for span in spans {
-        if span.0 < last_end {
-            continue;
+        if let Some(last) = merged.last_mut() {
+            if span.0 < last.1 {
+                last.1 = last.1.max(span.1);
+                continue;
+            }
         }
-        last_end = span.1;
-        selected.push(span);
+        merged.push(span);
     }
     // Áp từ phải sang trái để offset bên trái không lệch.
-    for (start, end, kind) in selected.into_iter().rev() {
+    for (start, end, kind) in merged.into_iter().rev() {
         output.replace_range(start..end, &format!("[REDACTED_{kind:?}]"));
     }
     output
@@ -1655,7 +1680,13 @@ pub fn generate_handoff_pack(
     let citations: Vec<Citation> = chunks
         .iter()
         .enumerate()
-        .map(|(index, chunk)| citation_from_chunk(chunk, index))
+        .map(|(index, chunk)| {
+            citation_from_chunk(
+                chunk,
+                index,
+                markdown_for_source(documents, &chunk.source_rel),
+            )
+        })
         .collect();
     let (items, traceability) = extract_handoff_items(&chunks, &citations);
     let validation = validate_handoff(&items, &citations, &traceability, options.strict_citations);
@@ -1912,16 +1943,52 @@ mod tests {
         let chunk = &chunks[0];
         assert!(markdown.is_char_boundary(chunk.start));
         assert!(markdown.is_char_boundary(chunk.end));
-        assert_eq!(&markdown[chunk.start..chunk.end], chunk.text.as_str());
+        // Body canonical LF (indexing/identity parity with server).
         assert_eq!(
             chunk.text.as_str(),
+            "Hệ thống phải giữ dấu.\nDòng hai vẫn khớp."
+        );
+        // Source span quote exact (CRLF preserved).
+        assert_eq!(
+            &markdown[chunk.start..chunk.end],
             "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
         );
+        assert_eq!(
+            normalize_newlines(&markdown[chunk.start..chunk.end]).as_ref(),
+            chunk.text.as_str()
+        );
+        let cite = citation_from_chunk(chunk, 0, &markdown);
+        assert_eq!(cite.quote, markdown[chunk.start..chunk.end]);
         assert_eq!(
             page_before(&markdown, chunk.start),
             None,
             "no page marker before body"
         );
+    }
+
+    #[test]
+    fn corpus_keeps_duplicate_mixed_newline_chunks_with_earliest_anchors() {
+        let markdown =
+            "# A\r\n\r\nLine one.\r\nLine two.\r\n\r\n# B\n\nLine one.\nLine two.\n".to_string();
+        let doc = CorpusDocument {
+            source_rel: "dup.md".into(),
+            md_rel: "dup.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 2, "duplicate bodies must not be dropped");
+        assert_eq!(chunks[0].text, "Line one.\nLine two.");
+        assert_eq!(chunks[1].text, "Line one.\nLine two.");
+        assert_eq!(
+            &markdown[chunks[0].start..chunks[0].end],
+            "Line one.\r\nLine two."
+        );
+        assert_eq!(
+            &markdown[chunks[1].start..chunks[1].end],
+            "Line one.\nLine two."
+        );
+        assert!(chunks[1].start > chunks[0].end);
     }
 
     #[test]
@@ -1939,7 +2006,11 @@ mod tests {
             .iter()
             .find(|c| c.text.contains("Nội dung trang ba"))
             .expect("body chunk");
-        assert_eq!(&markdown[body.start..body.end], body.text.as_str());
+        assert_eq!(body.text, "Nội dung trang ba.\nDòng kế.");
+        assert_eq!(
+            &markdown[body.start..body.end],
+            "Nội dung trang ba.\r\nDòng kế."
+        );
         assert_eq!(body.page, Some(3));
         assert_eq!(page_before(&markdown, body.start), Some(3));
     }
@@ -1955,7 +2026,7 @@ mod tests {
     }
 
     #[test]
-    fn redact_pii_ignores_non_boundary_malformed_and_overlapping_spans() {
+    fn redact_pii_ignores_non_boundary_and_malformed_spans() {
         let markdown = "Liên hệ: a@b.co và ệ";
         let email_start = markdown.find("a@b.co").unwrap();
         let email_end = email_start + "a@b.co".len();
@@ -1988,20 +2059,66 @@ mod tests {
                 end: 5,
                 confidence: 1.0,
             },
-            // Overlaps the email span — ignored after primary redact.
-            PiiFinding {
-                kind: PiiKind::Phone,
-                text: "@b".into(),
-                source_rel: "a.md".into(),
-                start: email_start + 1,
-                end: email_end - 1,
-                confidence: 1.0,
-            },
         ];
         let redacted = redact_pii(markdown, &findings);
         assert!(redacted.contains("[REDACTED_Email]"));
         assert!(redacted.contains('ệ'));
         assert!(!redacted.contains("a@b.co"));
+    }
+
+    #[test]
+    fn redact_pii_coalesces_crossing_nested_duplicate_and_reversed_spans() {
+        //                    012345678901234567890123
+        let markdown = "secret=ABCDEFGHtail and more";
+        let outer = (7, 15); // ABCDEFGH
+        let nested = (9, 12); // CDE
+        let crossing = (12, 19); // FGHtail — crosses outer; suffix "tail" must not leak
+        let duplicate = outer;
+        let findings_reversed = [
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "FGHtail".into(),
+                source_rel: "a.md".into(),
+                start: crossing.0,
+                end: crossing.1,
+                confidence: 1.0,
+            },
+            PiiFinding {
+                kind: PiiKind::Email,
+                text: "CDE".into(),
+                source_rel: "a.md".into(),
+                start: nested.0,
+                end: nested.1,
+                confidence: 1.0,
+            },
+            PiiFinding {
+                kind: PiiKind::BankAccount,
+                text: "ABCDEFGH".into(),
+                source_rel: "a.md".into(),
+                start: duplicate.0,
+                end: duplicate.1,
+                confidence: 1.0,
+            },
+            PiiFinding {
+                kind: PiiKind::NationalId,
+                text: "ABCDEFGH".into(),
+                source_rel: "a.md".into(),
+                start: outer.0,
+                end: outer.1,
+                confidence: 1.0,
+            },
+        ];
+        let redacted = redact_pii(markdown, &findings_reversed);
+        assert!(!redacted.contains("ABCDEFGH"));
+        assert!(
+            !redacted.contains("tail"),
+            "crossing suffix must be redacted: {redacted}"
+        );
+        assert!(redacted.contains("secret="));
+        assert!(redacted.contains(" and more"));
+        assert!(redacted.contains("[REDACTED_"));
+        // Single coalesced hole — not multiple adjacent redaction tokens for the cluster.
+        assert_eq!(redacted.matches("[REDACTED_").count(), 1);
     }
 
     #[test]

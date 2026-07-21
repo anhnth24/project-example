@@ -1,6 +1,6 @@
 //! Pure markdown chunk preparation for indexing.
 
-use fileconv_core::chunk::{chunk_markdown, locate_chunk_text};
+use fileconv_core::chunk::{chunk_markdown, locate_chunk_span, normalize_newlines};
 use fileconv_core::intelligence::page_before;
 use fileconv_knowledge::citation::infer_source_anchor;
 use fileconv_knowledge::identity::{chunk_identity, BODY_TEXT_VERSION};
@@ -59,12 +59,9 @@ pub fn prepare_chunks(
             );
 
             // Định vị body trong Markdown gốc để lấy byte span + trang.
-            // Cùng `locate_chunk_text` với `fileconv_core::intelligence::build_corpus`
-            // (khớp LF/CRLF, UTF-8-safe) để anchor server khớp desktop.
-            let (start, end) = match locate_chunk_text(markdown, cursor, &chunk.text) {
-                Some(span) => span,
-                None => (cursor, cursor),
-            };
+            // Cùng `locate_chunk_span` với `fileconv_core::intelligence::build_corpus`
+            // (khớp LF/CRLF, UTF-8-safe; failure → (cursor,cursor) — không drop chunk).
+            let (start, end) = locate_chunk_span(markdown, cursor, &chunk.text);
             cursor = end;
 
             let page = page_before(markdown, start);
@@ -158,7 +155,36 @@ mod tests {
             &markdown[start..end],
             "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
         );
-        // Body giữ bản LF từ chunker; span trỏ đúng byte CRLF trên nguồn.
+        // Body canonical LF (identity/indexing); span trỏ đúng byte CRLF trên nguồn.
         assert_eq!(body.body, "Hệ thống phải giữ dấu.\nDòng hai vẫn khớp.");
+        assert_eq!(
+            normalize_newlines(&markdown[start..end]).as_ref(),
+            body.body.as_str()
+        );
+    }
+
+    #[test]
+    fn prepare_chunks_keeps_duplicate_mixed_newline_bodies_with_earliest_anchors() {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let markdown = "# A\r\n\r\nLine one.\r\nLine two.\r\n\r\n# B\n\nLine one.\nLine two.\n";
+        let chunks = prepare_chunks(document_id, version_id, markdown, "");
+        let bodies: Vec<_> = chunks
+            .iter()
+            .filter(|chunk| chunk.body == "Line one.\nLine two.")
+            .collect();
+        assert_eq!(bodies.len(), 2, "duplicate bodies must not be dropped");
+        let first = bodies[0];
+        let second = bodies[1];
+        assert_eq!(
+            &markdown[first.span_start as usize..first.span_end as usize],
+            "Line one.\r\nLine two."
+        );
+        assert_eq!(
+            &markdown[second.span_start as usize..second.span_end as usize],
+            "Line one.\nLine two."
+        );
+        assert!(second.span_start > first.span_end);
+        assert_eq!(first.body, second.body);
     }
 }
