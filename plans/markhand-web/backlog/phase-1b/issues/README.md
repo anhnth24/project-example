@@ -37,9 +37,11 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
+- **Status:** done
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
-- **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`.
+- **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
+  `deploy/scripts/poc-*.sh`, `deploy/poc/*`, `deploy/README.md`.
 - **Depends:** F01 + G0-CAP/G0-SEC/G0-LIC.
 - **Acceptance/tests:** Clean host boot tự động; API/worker image tách; isolation/
   UID/cap/egress/native format smoke tests.

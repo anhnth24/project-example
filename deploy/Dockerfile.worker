@@ -1,0 +1,75 @@
+# Markhand Web worker image (fileconv-worker + fileconv converter).
+# Build from repository root:
+#   docker build -f deploy/Dockerfile.worker -t markhand-worker:poc .
+#
+# Isolation is enforced at compose/runtime (non-root, read-only rootfs, tmpfs,
+# cap_drop, convert network with internal:true / no egress). The in-process
+# sandbox still applies per-job rlimits and network unshare for convert.
+#
+# License: PhoWhisper and other unlicensed/unresolved models are NOT bundled.
+# Audio feature is disabled in this image so whisper.cpp is not compiled in;
+# convert path covers non-audio formats (pdf/office/html/csv/image OCR).
+
+FROM rust:1.88.0-bookworm AS builder
+
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libssl-dev \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+# Lean converter: drop CLI audio/whisper so the image stays redistributable and
+# does not compile whisper.cpp or ship any ggml model blobs (PhoWhisper excluded).
+RUN sed -i 's/, features = \["audio"\]//' crates/cli/Cargo.toml \
+    && cargo build --release \
+        -p fileconv-server --bin fileconv-worker \
+        -p fileconv-cli \
+    && strip /src/target/release/fileconv-worker /src/target/release/fileconv
+
+# PDFium prebuilt (runtime native dep). Fail closed if download breaks.
+RUN mkdir -p /opt/pdfium \
+    && curl -fsSL --max-time 180 \
+        -o /tmp/pdfium.tgz \
+        "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz" \
+    && tar -xzf /tmp/pdfium.tgz -C /opt/pdfium \
+    && test -f /opt/pdfium/lib/libpdfium.so \
+    && rm -f /tmp/pdfium.tgz
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libssl3 \
+        tesseract-ocr \
+        tesseract-ocr-vie \
+        tesseract-ocr-eng \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 markhand \
+    && useradd --system --uid 10001 --gid markhand \
+        --home-dir /var/lib/markhand --create-home markhand \
+    && mkdir -p /var/lib/markhand/tmp \
+    && chown -R markhand:markhand /var/lib/markhand
+
+COPY --from=builder /src/target/release/fileconv-worker /usr/local/bin/fileconv-worker
+COPY --from=builder /src/target/release/fileconv /usr/local/bin/fileconv
+COPY --from=builder /opt/pdfium /opt/pdfium
+
+ENV FILECONV_PDFIUM_LIB=/opt/pdfium/lib \
+    MARKHAND_CONVERTER_ARGV_JSON='["/usr/local/bin/fileconv","one","{input}"]'
+
+# Explicitly refuse any accidental model mount under the historical path.
+# Operators must not copy PhoWhisper into this image.
+RUN test ! -e /models/ggml-PhoWhisper-small.bin
+
+USER markhand:markhand
+WORKDIR /var/lib/markhand
+
+ENTRYPOINT ["/usr/local/bin/fileconv-worker"]

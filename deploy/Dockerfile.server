@@ -1,0 +1,36 @@
+# Markhand Web API image (fileconv-server).
+# Build from repository root:
+#   docker build -f deploy/Dockerfile.server -t markhand-api:poc .
+#
+# No whisper/PhoWhisper models are bundled. Runtime profile stays lean (API only).
+
+FROM rust:1.88.0-bookworm AS builder
+
+WORKDIR /src
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+RUN cargo build --release -p fileconv-server --bin fileconv-server \
+    && strip /src/target/release/fileconv-server
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 markhand \
+    && useradd --system --uid 10001 --gid markhand \
+        --home-dir /var/lib/markhand --create-home markhand
+
+COPY --from=builder /src/target/release/fileconv-server /usr/local/bin/fileconv-server
+
+USER markhand:markhand
+WORKDIR /var/lib/markhand
+
+EXPOSE 8787
+
+ENTRYPOINT ["/usr/local/bin/fileconv-server"]

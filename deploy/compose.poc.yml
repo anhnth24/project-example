@@ -1,0 +1,376 @@
+# Markhand Web — secure single-org POC stack (P1B-F02).
+#
+# Clean-host boot (from repo root):
+#   cp deploy/.env.example deploy/.env
+#   deploy/scripts/poc-up.sh
+#   deploy/scripts/poc-health.sh
+#
+# Default embedding profile is `mock` (no GPU, no HF download).
+# AITeamVN CPU: COMPOSE_PROFILES=aiteamvn deploy/scripts/poc-up.sh
+#
+# Isolation matrix (api + workers):
+#   non-root UID 10001, read_only rootfs, tmpfs /tmp, cap_drop ALL,
+#   no-new-privileges, resource limits.
+# Convert worker is attached only to the `convert` network (internal:true)
+# so the convert path has no external egress while still reaching Postgres/MinIO.
+
+name: ${MARKHAND_COMPOSE_PROJECT:-markhand-poc}
+
+x-app-security: &app-security
+  user: "10001:10001"
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-worker-build: &worker-build
+  context: ..
+  dockerfile: deploy/Dockerfile.worker
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    environment:
+      POSTGRES_DB: ${MARKHAND_POSTGRES_DB:-markhand}
+      POSTGRES_USER: ${MARKHAND_POSTGRES_USER:-markhand}
+      POSTGRES_PASSWORD: ${MARKHAND_POSTGRES_PASSWORD:-markhand_poc_change_me}
+    ports:
+      - "127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./poc/postgres-init.sql:/docker-entrypoint-initdb.d/10-markhand-app.sql:ro
+    networks: [private, convert]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${MARKHAND_POSTGRES_MEM_LIMIT:-1g}
+    shm_size: 256mb
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports:
+      - "127.0.0.1:${MARKHAND_QDRANT_HTTP_PORT:-6343}:6333"
+      - "127.0.0.1:${MARKHAND_QDRANT_GRPC_PORT:-6344}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks: [private]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${MARKHAND_QDRANT_MEM_LIMIT:-1g}
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MARKHAND_MINIO_ROOT_USER:-markhand_root}
+      MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}
+    ports:
+      - "127.0.0.1:${MARKHAND_MINIO_API_PORT:-9010}:9000"
+      - "127.0.0.1:${MARKHAND_MINIO_CONSOLE_PORT:-9011}:9001"
+    volumes:
+      - minio_data:/data
+    networks: [private, convert]
+    # Health is polled by minio-init + deploy/scripts/poc-health.sh (image has no curl).
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${MARKHAND_MINIO_MEM_LIMIT:-512m}
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MARKHAND_MINIO_ROOT_USER: ${MARKHAND_MINIO_ROOT_USER:-markhand_root}
+      MARKHAND_MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+    volumes:
+      - ./poc/minio-init.sh:/scripts/minio-init.sh:ro
+      - ./poc/minio-app-policy.json:/policies/minio-app-policy.json:ro
+    entrypoint: ["/bin/sh", "/scripts/minio-init.sh"]
+    networks: [private]
+    restart: on-failure
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+
+  mock-embedding:
+    profiles: ["mock"]
+    image: python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0
+    command: ["python", "/opt/mock-embedding.py"]
+    volumes:
+      - ./scripts/mock-embedding.py:/opt/mock-embedding.py:ro
+    environment:
+      MARKHAND_MOCK_EMBEDDING_DIMENSIONS: ${MARKHAND_MOCK_EMBEDDING_DIMENSIONS:-8}
+    ports:
+      - "127.0.0.1:${MARKHAND_EMBEDDING_PORT:-8090}:8080"
+    networks: [private]
+    restart: unless-stopped
+    read_only: true
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    mem_limit: 256m
+    pids_limit: 64
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  embedding-cpu:
+    profiles: ["aiteamvn"]
+    build:
+      context: ..
+      dockerfile: deploy/dev/Dockerfile.embedding-cpu
+    environment:
+      MARKHAND_EMBEDDING_HUB_ID: ${MARKHAND_EMBEDDING_HUB_ID:-AITeamVN/Vietnamese_Embedding}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-dea33aa1ab339f38d66ae0a40e6c40e0a9249568}
+      MARKHAND_EMBEDDING_MODEL_ID: ${MARKHAND_EMBEDDING_MODEL:-AITeamVN/Vietnamese_Embedding}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-1024}
+      MARKHAND_EMBEDDING_MAX_SEQ_LENGTH: ${MARKHAND_EMBEDDING_MAX_SEQ_LENGTH:-2048}
+      MARKHAND_EMBEDDING_BATCH_SIZE: ${MARKHAND_EMBEDDING_BATCH_SIZE:-16}
+      MARKHAND_EMBEDDING_DEVICE: cpu
+      MARKHAND_EMBEDDING_SERVER_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+    volumes:
+      - embedding_model_cache:/root/.cache/huggingface
+    ports:
+      - "127.0.0.1:${MARKHAND_EMBEDDING_PORT:-8090}:8080"
+    networks: [private]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${MARKHAND_EMBEDDING_MEM_LIMIT:-4g}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')\"",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 600s
+
+  api:
+    <<: *app-security
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    image: ${MARKHAND_API_IMAGE:-markhand-api:poc}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_BIND_ADDR: 0.0.0.0:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_AUTH_ISSUER: ${MARKHAND_AUTH_ISSUER:-http://127.0.0.1:8788}
+      MARKHAND_AUTH_AUDIENCE: ${MARKHAND_AUTH_AUDIENCE:-markhand-poc}
+      MARKHAND_AUTH_SIGNING_KEY: ${MARKHAND_AUTH_SIGNING_KEY:-poc-only-signing-key-at-least-32-bytes}
+      MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+    ports:
+      - "127.0.0.1:${MARKHAND_API_PORT:-8788}:8787"
+    networks: [edge, private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_API_MEM_LIMIT:-512m}
+    cpus: ${MARKHAND_API_CPUS:-1.0}
+    pids_limit: ${MARKHAND_API_PIDS_LIMIT:-256}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8787/api/v1/health/live >/dev/null",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+    restart: unless-stopped
+
+  worker-convert:
+    <<: *app-security
+    build: *worker-build
+    image: ${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      # Config requires a URL; convert network has no Qdrant — blackhole keeps
+      # validation happy without granting convert egress to the vector store.
+      MARKHAND_QDRANT_URL: http://127.0.0.1:9
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
+      MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
+      MARKHAND_WORKER_KIND: convert
+      MARKHAND_WORKER_ID: poc-convert-1
+      MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
+      MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-536870912}
+    # No egress: only the internal `convert` network (Postgres + MinIO).
+    networks: [convert]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_WORKER_MEM_LIMIT:-768m}
+    cpus: ${MARKHAND_WORKER_CPUS:-1.0}
+    pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
+    restart: unless-stopped
+
+  worker-index:
+    <<: *app-security
+    build: *worker-build
+    image: ${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
+      MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
+      MARKHAND_WORKER_KIND: index
+      MARKHAND_WORKER_ID: poc-index-1
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+    networks: [private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_WORKER_MEM_LIMIT:-768m}
+    cpus: ${MARKHAND_WORKER_CPUS:-1.0}
+    pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
+    restart: unless-stopped
+
+  worker-embedding:
+    <<: *app-security
+    build: *worker-build
+    image: ${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      api:
+        condition: service_started
+    environment:
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
+      MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
+      MARKHAND_WORKER_KIND: embedding
+      MARKHAND_WORKER_ID: poc-embedding-1
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+    networks: [private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_WORKER_MEM_LIMIT:-768m}
+    cpus: ${MARKHAND_WORKER_CPUS:-1.0}
+    pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
+  private:
+    driver: bridge
+  # Convert sandbox path: reach Postgres/MinIO only; no internet / no embedding.
+  convert:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  minio_data:
+  embedding_model_cache:
