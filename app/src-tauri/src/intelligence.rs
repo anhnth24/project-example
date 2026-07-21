@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fileconv_core::intelligence::{
     self, AskResult, CorpusDocument, DiffHunk, DocumentSchema, HandoffMode, HandoffOptions,
     HandoffPack, MarkdownTable, MergeResult, PiiReport, QualityReport, SearchHit, VersionSnapshot,
-    WatchMatch, WatchRule,
+    WatchMatch, WatchRule, HANDOFF_SCHEMA_VERSION, INTELLIGENCE_ID_SCHEME,
 };
 use fileconv_core::FormatKind;
 use serde::{Deserialize, Serialize};
@@ -489,13 +489,38 @@ pub fn read_handoff_artifact(
     fs::read_to_string(path).map_err(es)
 }
 
+fn validate_persisted_handoff_contract(value: &serde_json::Value) -> Result<(), String> {
+    let schema_version = value
+        .get("schemaVersion")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let id_scheme = value
+        .get("idScheme")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if schema_version != u64::from(HANDOFF_SCHEMA_VERSION) {
+        return Err(format!(
+            "handoff pack schemaVersion {schema_version} không được hỗ trợ (yêu cầu {HANDOFF_SCHEMA_VERSION}). Hãy generate lại Knowledge Pack."
+        ));
+    }
+    if id_scheme != INTELLIGENCE_ID_SCHEME {
+        return Err(format!(
+            "handoff pack idScheme '{id_scheme}' không khớp '{INTELLIGENCE_ID_SCHEME}'. Hãy generate lại Knowledge Pack."
+        ));
+    }
+    Ok(())
+}
+
 fn load_persisted_pack(root: &Path, out_rel_dir: &str) -> Result<(PathBuf, HandoffPack), String> {
     if !out_rel_dir.starts_with(".markhand/handoff/") {
         return Err("handoff path không hợp lệ".into());
     }
     let directory = resolve_within(root, out_rel_dir)?;
     let manifest = directory.join("manifest.json");
-    let pack = serde_json::from_slice(&fs::read(manifest).map_err(es)?).map_err(es)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(manifest).map_err(es)?).map_err(es)?;
+    validate_persisted_handoff_contract(&value)?;
+    let pack = serde_json::from_value(value).map_err(es)?;
     Ok((directory, pack))
 }
 
@@ -1128,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_pack_round_trips() {
+    fn persisted_pack_v2_round_trips() {
         let root = temp_root();
         let pack = intelligence::generate_handoff_pack(
             &[CorpusDocument {
@@ -1139,12 +1164,94 @@ mod tests {
             }],
             &HandoffOptions::default(),
         );
+        assert_eq!(pack.schema_version, HANDOFF_SCHEMA_VERSION);
+        assert_eq!(pack.id_scheme, INTELLIGENCE_ID_SCHEME);
         let dir = handoff_dir(&root, &pack.pack_id, None).unwrap();
         persist_pack(&dir, &pack).unwrap();
         let relative = rel_of(&root, &dir);
         let (_, loaded) = load_persisted_pack(&root, &relative).unwrap();
         assert_eq!(loaded.pack_id, pack.pack_id);
+        assert_eq!(loaded.schema_version, HANDOFF_SCHEMA_VERSION);
+        assert_eq!(loaded.id_scheme, INTELLIGENCE_ID_SCHEME);
         assert!(dir.join("01-BRD.md").exists());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn load_persisted_pack_rejects_schema_v1_with_regeneration_guidance() {
+        let root = temp_root();
+        let dir = handoff_dir(&root, "legacy-v1", None).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        let v1 = serde_json::json!({
+            "schemaVersion": 1,
+            "packId": "handoff-legacy",
+            "productName": "Demo",
+            "productSlug": "demo",
+            "locale": "vi-VN",
+            "mode": "deterministic",
+            "createdAt": 1,
+            "sources": [],
+            "citations": [],
+            "items": [],
+            "traceability": [],
+            "artifacts": {},
+            "validation": {
+                "ok": true,
+                "errors": [],
+                "warnings": [],
+                "citationCoverage": 1.0,
+                "traceabilityCoverage": 1.0
+            }
+        });
+        fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&v1).unwrap(),
+        )
+        .unwrap();
+        let relative = rel_of(&root, &dir);
+        let error = load_persisted_pack(&root, &relative).unwrap_err();
+        assert!(error.contains("schemaVersion 1"));
+        assert!(error.contains("generate lại"));
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn load_persisted_pack_rejects_id_scheme_mismatch_with_regeneration_guidance() {
+        let root = temp_root();
+        let dir = handoff_dir(&root, "mismatch", None).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        let mismatched = serde_json::json!({
+            "schemaVersion": HANDOFF_SCHEMA_VERSION,
+            "idScheme": "sip13-v1",
+            "packId": "handoff-mismatch",
+            "productName": "Demo",
+            "productSlug": "demo",
+            "locale": "vi-VN",
+            "mode": "deterministic",
+            "createdAt": 1,
+            "sources": [],
+            "citations": [],
+            "items": [],
+            "traceability": [],
+            "artifacts": {},
+            "validation": {
+                "ok": true,
+                "errors": [],
+                "warnings": [],
+                "citationCoverage": 1.0,
+                "traceabilityCoverage": 1.0
+            }
+        });
+        fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&mismatched).unwrap(),
+        )
+        .unwrap();
+        let relative = rel_of(&root, &dir);
+        let error = load_persisted_pack(&root, &relative).unwrap_err();
+        assert!(error.contains("idScheme"));
+        assert!(error.contains("sip13-v1"));
+        assert!(error.contains("generate lại"));
         fs::remove_dir_all(root).ok();
     }
 
