@@ -181,7 +181,11 @@ def rust_crates_for(paths: list[str]) -> tuple[str, bool]:
         ):
             scopes.append(scope)
 
-    desktop_deps = "desktop" in scopes
+    # The knowledge extraction gate also tests fileconv-desktop, so scoped
+    # knowledge changes need the same GTK/WebKit native packages as direct
+    # desktop changes.
+    knowledge_gate = classify(paths)["knowledge"]
+    desktop_deps = "desktop" in scopes or (knowledge_gate and bool(scopes))
     workspace_touch = any(
         fnmatch.fnmatch(path, pattern)
         for path in paths
@@ -319,6 +323,16 @@ class ClassifierTests(unittest.TestCase):
         crates, desktop = rust_crates_for(["crates/server/src/workers/delete.rs"])
         self.assertEqual(crates, "server")
         self.assertFalse(desktop)
+
+    def test_knowledge_change_requires_desktop_deps(self) -> None:
+        crates, desktop = rust_crates_for(["crates/knowledge/src/desktop/service.rs"])
+        self.assertEqual(crates, "knowledge")
+        self.assertTrue(desktop)
+
+    def test_knowledge_server_manifest_requires_desktop_deps(self) -> None:
+        crates, desktop = rust_crates_for(["crates/server/Cargo.toml"])
+        self.assertEqual(crates, "server")
+        self.assertTrue(desktop)
 
     def test_ci_infra_uses_smoke_rust_gate(self) -> None:
         crates, desktop = rust_crates_for([".github/workflows/ci.yml"])
