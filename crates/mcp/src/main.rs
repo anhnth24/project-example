@@ -174,11 +174,14 @@ impl Fileconv {
             let report = Converter::with_options(opts)
                 .convert_path_detailed(&PathBuf::from(&req.path))
                 .map_err(|e| {
-                    serde_json::json!({
-                        "error": e.error.to_string(),
-                        "kind": e.kind,
+                    // Structured `{message, kind}` — kind is a field, not text-only.
+                    serde_json::to_string(&e.to_dto()).unwrap_or_else(|_| {
+                        serde_json::json!({
+                            "message": e.error.to_string(),
+                            "kind": e.kind,
+                        })
+                        .to_string()
                     })
-                    .to_string()
                 })?;
             serde_json::to_string(&serde_json::json!({
                 "markdown": report.result.markdown,
@@ -339,4 +342,33 @@ async fn main() -> anyhow::Result<()> {
     let service = Fileconv::new().serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Fileconv;
+    use fileconv_core::{ConvertErrorKind, DetailedConvertError};
+
+    #[test]
+    fn convert_to_markdown_detailed_tool_is_registered() {
+        let server = Fileconv::new();
+        assert!(
+            server.tool_router.has_route("convert_to_markdown_detailed"),
+            "detailed convert tool must be registered"
+        );
+        assert!(
+            server.tool_router.has_route("convert_to_markdown"),
+            "legacy convert tool must remain registered"
+        );
+    }
+
+    #[test]
+    fn detailed_hard_failure_serializes_message_and_kind_dto() {
+        let err = DetailedConvertError::dependency_missing("không tìm thấy binary Tesseract");
+        let json = serde_json::to_value(err.to_dto()).expect("dto");
+        assert_eq!(json["kind"], "dependency_missing");
+        assert!(json["message"].as_str().unwrap().contains("Tesseract"));
+        assert!(json.get("error").is_none(), "use message, not error key");
+        assert_eq!(err.kind, ConvertErrorKind::DependencyMissing);
+    }
 }

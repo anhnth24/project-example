@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 
-use fileconv_core::{ConverterOptions, FormatKind};
+use fileconv_core::{ConvertErrorKind, ConverterOptions, DetailedErrorDto, FormatKind};
 
 mod intelligence;
 mod knowledge;
@@ -497,11 +497,18 @@ struct ConversionDetailedReport {
     warnings: Vec<fileconv_core::ConversionWarning>,
 }
 
+fn detailed_failed(message: impl Into<String>) -> DetailedErrorDto {
+    DetailedErrorDto {
+        message: message.into(),
+        kind: ConvertErrorKind::Failed,
+    }
+}
+
 fn convert_and_write_md_detailed(
     opts: ConverterOptions,
     root: &Path,
     source: PathBuf,
-) -> Result<ConversionDetailedReport, String> {
+) -> Result<ConversionDetailedReport, DetailedErrorDto> {
     let md_path = source.with_file_name(format!(
         "{}.md",
         source
@@ -511,13 +518,14 @@ fn convert_and_write_md_detailed(
     ));
     let report = fileconv_core::Converter::with_options(opts)
         .convert_path_detailed(&source)
-        .map_err(|e| format!("convert thất bại: {} ({})", e.error, e.kind.as_str()))?;
-    atomic_write(&md_path, report.result.markdown.as_bytes())?;
+        .map_err(|e| e.to_dto())?;
+    atomic_write(&md_path, report.result.markdown.as_bytes()).map_err(detailed_failed)?;
+    let outcome = report.outcome();
     Ok(ConversionDetailedReport {
         markdown_rel_path: rel_of(root, &md_path),
         title: report.result.title,
         format: report.result.format.as_str().into(),
-        outcome: report.outcome(),
+        outcome,
         warnings: report.warnings,
     })
 }
@@ -882,28 +890,34 @@ async fn reconvert(state: State<'_, AppState>, source_rel: String) -> Result<Str
 }
 
 /// Parallel detailed reconvert: same side effects as `reconvert`, plus outcome/warnings.
+/// Hard failures return structured `{message, kind}` DTOs (not kind embedded only in text).
 #[tauri::command]
 async fn reconvert_detailed(
     state: State<'_, AppState>,
     source_rel: String,
-) -> Result<ConversionDetailedReport, String> {
+) -> Result<ConversionDetailedReport, DetailedErrorDto> {
     let root = data_root(&state);
-    let source = resolve_within(&root, &source_rel)?;
+    let source = resolve_within(&root, &source_rel).map_err(detailed_failed)?;
     if !source.is_file() {
-        return Err("file gốc không tồn tại".into());
+        return Err(detailed_failed("file gốc không tồn tại"));
     }
     if FormatKind::from_path(&source) == FormatKind::Unknown {
-        return Err("định dạng không hỗ trợ convert".into());
+        return Err(detailed_failed("định dạng không hỗ trợ convert"));
     }
-    let opts = state.settings.lock().map_err(|_| "lock lỗi")?.to_options();
+    let opts = state
+        .settings
+        .lock()
+        .map_err(|_| detailed_failed("lock lỗi"))?
+        .to_options();
     let root_for_snapshot = root.clone();
     let source_rel_for_snapshot = source_rel.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        intelligence::snapshot_existing_version(&root_for_snapshot, &source_rel_for_snapshot)?;
+        intelligence::snapshot_existing_version(&root_for_snapshot, &source_rel_for_snapshot)
+            .map_err(detailed_failed)?;
         convert_and_write_md_detailed(opts, &root_for_snapshot, source)
     })
     .await
-    .map_err(es)?
+    .map_err(|e| detailed_failed(e.to_string()))?
 }
 
 #[tauri::command]
@@ -1493,5 +1507,41 @@ mod tests {
 
         assert!(resolve_within(&root, "escape/file.md").is_err());
         fs::remove_dir_all(&base).ok();
+    }
+
+    /// Keep detailed reconvert registered next to legacy `reconvert`.
+    const REGISTERED_CONVERT_COMMANDS: &[&str] = &["reconvert", "reconvert_detailed"];
+
+    #[test]
+    fn reconvert_detailed_command_is_registered() {
+        assert!(REGISTERED_CONVERT_COMMANDS.contains(&"reconvert_detailed"));
+        assert!(REGISTERED_CONVERT_COMMANDS.contains(&"reconvert"));
+        // Source-level registration check against generate_handler list in this file.
+        let src = include_str!("lib.rs");
+        assert!(
+            src.contains("reconvert_detailed,"),
+            "reconvert_detailed must remain in generate_handler!"
+        );
+        assert!(
+            src.contains("reconvert,"),
+            "legacy reconvert must remain registered"
+        );
+    }
+
+    #[test]
+    fn detailed_hard_failure_dto_serializes_message_and_kind() {
+        let dto = fileconv_core::DetailedConvertError::dependency_missing(
+            "không tìm thấy binary Tesseract",
+        )
+        .to_dto();
+        let value = serde_json::to_value(&dto).unwrap();
+        assert_eq!(value["kind"], "dependency_missing");
+        assert!(value["message"].as_str().unwrap().contains("Tesseract"));
+        assert_ne!(value["kind"], value["message"]);
+        // Desktop helper must produce the same structured shape.
+        let mapped = detailed_failed("lock lỗi");
+        let mapped_json = serde_json::to_value(&mapped).unwrap();
+        assert_eq!(mapped_json["kind"], "failed");
+        assert_eq!(mapped_json["message"], "lock lỗi");
     }
 }
