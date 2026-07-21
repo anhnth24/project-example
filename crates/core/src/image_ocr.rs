@@ -12,15 +12,14 @@
 //!   - Còn lại (trang giấy tờ đủ nét) → GIỮ NGUYÊN.
 
 use std::cell::{Cell, RefCell};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use image::{imageops, DynamicImage, GrayImage};
+use image::{imageops, DynamicImage, GrayImage, ImageReader, Limits};
+use tempfile::NamedTempFile;
 
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 static TESSERACT_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,11 +78,72 @@ fn active_engine() -> OcrEngine {
 const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
 /// Cạnh dài tối đa; lớn hơn ⇒ thu xuống để OCR không quá chậm.
 const MAX_LONG_SIDE: u32 = 2400;
+/// Cạnh tối đa khi decode (strict, qua `image::Limits`). Cho phép trang lớn
+/// (A3@~600 DPI ≈ 5k×7k, A1@300 DPI ≈ 10k) nhưng chặn decompression bomb.
+/// Giữ `Limits::default().max_alloc` (512 MiB) của crate `image`.
+const MAX_DECODE_SIDE: u32 = 12_000;
+
+/// Limits decode OCR: giữ max_alloc mặc định của `image`, thêm trần cạnh.
+fn ocr_image_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_SIDE);
+    limits.max_image_height = Some(MAX_DECODE_SIDE);
+    limits
+}
+
+fn image_error_to_io(error: image::ImageError) -> io::Error {
+    match error {
+        image::ImageError::IoError(inner) => inner,
+        image::ImageError::Limits(_) => {
+            io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+        }
+        other => io::Error::new(io::ErrorKind::Other, other.to_string()),
+    }
+}
+
+fn is_image_limit_error(error: &image::ImageError) -> bool {
+    matches!(error, image::ImageError::Limits(_))
+}
+
+fn ensure_ocr_image_bounds(width: u32, height: u32) -> io::Result<()> {
+    ocr_image_limits()
+        .check_dimensions(width, height)
+        .map_err(image_error_to_io)
+}
+
+/// Mở ảnh với giới hạn dimension/alloc **trước** khi decode đầy đủ buffer.
+fn load_image_for_ocr(path: &Path) -> Result<DynamicImage, image::ImageError> {
+    let mut reader = ImageReader::open(path)?;
+    reader.limits(ocr_image_limits());
+    reader.decode()
+}
+
+/// Ghi PNG OCR vào temp exclusive (`O_EXCL`/random name) — tránh path đoán được.
+fn write_ocr_temp_png(img: &DynamicImage) -> io::Result<NamedTempFile> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix("fileconv_ocr_")
+        .suffix(".png")
+        .tempfile()?;
+    img.write_to(&mut tmp, image::ImageFormat::Png)
+        .map_err(image_error_to_io)?;
+    tmp.flush()?;
+    Ok(tmp)
+}
+
+fn write_ocr_temp_gray_png(img: &GrayImage) -> io::Result<NamedTempFile> {
+    write_ocr_temp_png(&DynamicImage::ImageLuma8(img.clone()))
+}
 
 /// OCR một file ảnh. `langs` ví dụ "vie+eng".
 pub fn ocr_image(path: &Path, langs: &str) -> io::Result<String> {
-    match image::open(path) {
+    match load_image_for_ocr(path) {
         Ok(img) => ocr_dynimage(&img, langs),
+        // Vượt giới hạn kích thước/alloc → fail rõ, KHÔNG đẩy bomb sang tesseract.
+        Err(error) if is_image_limit_error(&error) => {
+            let error = image_error_to_io(error);
+            record_ocr_error(&error);
+            Err(error)
+        }
         // Không đọc/giải mã được bằng crate image → OCR thẳng file gốc.
         Err(_) => run_tesseract(path, langs),
     }
@@ -91,19 +151,18 @@ pub fn ocr_image(path: &Path, langs: &str) -> io::Result<String> {
 
 /// OCR một ảnh đã có trong bộ nhớ (vd trang PDF render ra) — có tiền xử lý.
 pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
+    ensure_ocr_image_bounds(img.width(), img.height())?;
     let pre = preprocess(img);
-    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("fileconv_ocr_{}_{seq}.png", std::process::id()));
-    pre.save(&tmp)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    let tesseract = || run_tesseract_with_columns(&pre.to_luma8(), &tmp, langs);
+    let tmp = write_ocr_temp_png(&pre)?;
+    let tmp_path = tmp.path();
+    let tesseract = || run_tesseract_with_columns(&pre.to_luma8(), tmp_path, langs);
     let text = match active_engine() {
         OcrEngine::Tesseract => tesseract(),
-        OcrEngine::Paddle => run_paddle(&tmp, langs).or_else(|_| tesseract()),
+        OcrEngine::Paddle => run_paddle(tmp_path, langs).or_else(|_| tesseract()),
         OcrEngine::Auto => {
             let baseline = tesseract()?;
             if should_retry_layout(&baseline) {
-                match run_paddle(&tmp, langs) {
+                match run_paddle(tmp_path, langs) {
                     Ok(paddle) if ocr_text_score(&paddle) > ocr_text_score(&baseline) => Ok(paddle),
                     _ => Ok(baseline),
                 }
@@ -112,7 +171,8 @@ pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
             }
         }
     };
-    let _ = std::fs::remove_file(&tmp);
+    // `tmp` drop → xoá exclusive temp; không dùng path đoán được theo pid/seq.
+    drop(tmp);
     if let Err(error) = &text {
         record_ocr_error(error);
     }
@@ -248,22 +308,14 @@ fn run_tesseract_with_columns(
         return Ok(whole);
     }
     let mut columns = Vec::new();
-    for (column, (left, right)) in ranges.into_iter().enumerate() {
+    for (left, right) in ranges {
         let cropped = imageops::crop_imm(image, left, 0, right - left, image.height()).to_image();
-        let sequence = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "fileconv_ocr_{}_{}_col{}.png",
-            std::process::id(),
-            sequence,
-            column + 1
-        ));
-        cropped
-            .save(&path)
-            .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
-        let automatic = run_tesseract_psm(&path, langs, 4);
+        let tmp = write_ocr_temp_gray_png(&cropped)?;
+        let path = tmp.path();
+        let automatic = run_tesseract_psm(path, langs, 4);
         let text = match automatic {
             Ok(value) if should_retry_layout(&value) => {
-                let block = run_tesseract_psm(&path, langs, 6).unwrap_or_default();
+                let block = run_tesseract_psm(path, langs, 6).unwrap_or_default();
                 if ocr_text_score(&block) > ocr_text_score(&value) {
                     block
                 } else {
@@ -271,12 +323,9 @@ fn run_tesseract_with_columns(
                 }
             }
             Ok(value) => value,
-            Err(error) => {
-                let _ = std::fs::remove_file(path);
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
-        let _ = std::fs::remove_file(path);
+        drop(tmp);
         if !text.trim().is_empty() {
             columns.push(text.trim().to_string());
         }
@@ -526,6 +575,15 @@ fn ocr_text_score(text: &str) -> i64 {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn retries_sparse_replacement_and_glued_uppercase_output() {
         assert!(should_retry_layout("ít chữ"));
@@ -577,5 +635,123 @@ mod tests {
         assert_eq!(OcrEngine::from_name("paddle"), OcrEngine::Paddle);
         assert_eq!(OcrEngine::from_name("auto"), OcrEngine::Auto);
         assert_eq!(OcrEngine::from_name("unknown"), OcrEngine::Tesseract);
+    }
+
+    #[test]
+    fn decode_limits_keep_image_default_alloc_and_allow_scanned_pages() {
+        let limits = ocr_image_limits();
+        assert_eq!(limits.max_alloc, Limits::default().max_alloc);
+        assert_eq!(limits.max_image_width, Some(MAX_DECODE_SIDE));
+        assert_eq!(limits.max_image_height, Some(MAX_DECODE_SIDE));
+        // A4 @ 300 DPI and A3 @ ~600 DPI must remain acceptable.
+        assert!(ensure_ocr_image_bounds(2480, 3508).is_ok());
+        assert!(ensure_ocr_image_bounds(4961, 7016).is_ok());
+        assert!(ensure_ocr_image_bounds(MAX_DECODE_SIDE, MAX_DECODE_SIDE).is_ok());
+        assert!(ensure_ocr_image_bounds(MAX_DECODE_SIDE + 1, 100).is_err());
+        assert!(ensure_ocr_image_bounds(100, MAX_DECODE_SIDE + 1).is_err());
+    }
+
+    #[test]
+    fn load_image_rejects_oversized_png_header_before_full_decode() {
+        // IHDR-only PNG claiming 20000×20000 — dimension check fails before pixel decode.
+        let bytes = hex_literal_png_ihdr(20_000, 20_000);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bomb.png");
+        std::fs::write(&path, bytes).expect("write bomb png");
+        let err = load_image_for_ocr(&path).expect_err("oversized header must fail");
+        assert!(is_image_limit_error(&err), "got {err:?}");
+    }
+
+    #[test]
+    fn ocr_image_does_not_fallback_tesseract_on_dimension_limit() {
+        // Limit path must fail before any tesseract spawn (no stub required).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bomb.png");
+        std::fs::write(&path, hex_literal_png_ihdr(20_000, 20_000)).expect("write");
+        let err = ocr_image(&path, "eng").expect_err("limit must surface");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            take_last_ocr_error().is_some_and(|message| message.contains("limit")),
+            "limit failure should be recorded"
+        );
+    }
+
+    #[test]
+    fn ocr_temp_png_uses_exclusive_random_path() {
+        let img = DynamicImage::ImageLuma8(GrayImage::from_pixel(16, 16, image::Luma([128])));
+        let first = write_ocr_temp_png(&img).expect("temp 1");
+        let second = write_ocr_temp_png(&img).expect("temp 2");
+        assert_ne!(first.path(), second.path());
+        let name = first
+            .path()
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        assert!(name.starts_with("fileconv_ocr_"));
+        assert!(name.ends_with(".png"));
+        // Old predictable pattern was `fileconv_ocr_{pid}_{seq}.png`.
+        assert!(
+            !name
+                .trim_start_matches("fileconv_ocr_")
+                .starts_with(&format!("{}_", std::process::id())),
+            "temp name should not be pid-prefixed: {name}"
+        );
+        assert!(first.path().exists());
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(!path.exists(), "NamedTempFile must unlink on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_image_uses_fileconv_tesseract_stub_subprocess() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = dir.path().join("fake-tesseract");
+        // Echo fixed text; ignore argv so parallel CI does not need real tessdata.
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\nprintf '%s\\n' 'FILECONV_TESSERACT_STUB_OK'\n",
+        )
+        .expect("stub script");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let previous = std::env::var_os("FILECONV_TESSERACT");
+        // SAFETY: serialized by env_lock; restored before unlock.
+        unsafe {
+            std::env::set_var("FILECONV_TESSERACT", &stub);
+        }
+
+        let image_path = dir.path().join("sample.png");
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(64, 64, image::Luma([0])))
+            .save(&image_path)
+            .expect("sample png");
+
+        let text = ocr_image(&image_path, "eng").expect("stub OCR");
+        assert!(
+            text.contains("FILECONV_TESSERACT_STUB_OK"),
+            "unexpected OCR output: {text:?}"
+        );
+
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("FILECONV_TESSERACT", value),
+                None => std::env::remove_var("FILECONV_TESSERACT"),
+            }
+        }
+    }
+
+    /// Minimal PNG with only an IHDR chunk (precomputed CRC for given size).
+    fn hex_literal_png_ihdr(width: u32, height: u32) -> Vec<u8> {
+        // Signature + IHDR length/type/data/CRC for 20000×20000 grayscale.
+        match (width, height) {
+            (20_000, 20_000) => vec![
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+                0x44, 0x52, 0x00, 0x00, 0x4e, 0x20, 0x00, 0x00, 0x4e, 0x20, 0x08, 0x00, 0x00, 0x00,
+                0x00, 0xc6, 0x1b, 0x19, 0xe5,
+            ],
+            _ => panic!("add CRC fixture for {width}x{height}"),
+        }
     }
 }
