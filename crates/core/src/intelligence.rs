@@ -4,6 +4,11 @@
 //! [`crate::Converter::convert_path`] unchanged and provides deterministic
 //! baselines for handoff packs, cited search, quality, PII, tables, schema,
 //! versions and automation. Optional LLM enhancement remains behind `llm`.
+//!
+//! Persisted chunk/table/pack fingerprint IDs use [`STABLE_HASH_SCHEME`]
+//! (`sip13-v1`). That scheme is **not** bit-compatible with historical
+//! `DefaultHasher` digests — rebuild or remap stores that keyed on old IDs.
+//! ADR 0006 index signatures remain a separate server/knowledge contract.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -12,12 +17,25 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use siphasher::sip::SipHasher13;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_span};
 use crate::ConvertError;
 
 const DEFAULT_CHUNK_CHARS: usize = 2_000;
+
+/// Persisted core-intelligence ID hash scheme (chunk / table / pack fingerprint).
+///
+/// `sip13-v1` = SipHash-1-3 with zero keys via `siphasher` 1.0.3, with an
+/// explicit domain tag hashed before payload parts. This is a supported
+/// cross-Rust-version contract for Markhand local intelligence IDs.
+///
+/// Migration: digests are **not** claimed equal to historical
+/// `std::collections::hash_map::DefaultHasher` IDs (those were never a stable
+/// API). Stores keyed by pre-`sip13-v1` IDs must rebuild or remap explicitly.
+/// ADR 0006 index-signature / server chunk identity is out of scope.
+pub const STABLE_HASH_SCHEME: &str = "sip13-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -358,8 +376,15 @@ fn now_nonce() -> u128 {
         .as_nanos()
 }
 
-fn stable_hash(parts: impl IntoIterator<Item = impl AsRef<str>>) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+/// Length-delimited SipHash-1-3 digest for persisted intelligence IDs.
+///
+/// Parts are hashed independently with a `0xff` separator (same framing as the
+/// former `DefaultHasher` helper) after the [`STABLE_HASH_SCHEME`] domain tag.
+/// Output is a fixed 16-char lowercase hex string of the 64-bit digest.
+pub(crate) fn stable_hash(parts: impl IntoIterator<Item = impl AsRef<str>>) -> String {
+    let mut hasher = SipHasher13::new();
+    STABLE_HASH_SCHEME.hash(&mut hasher);
+    0xff_u8.hash(&mut hasher);
     for part in parts {
         part.as_ref().hash(&mut hasher);
         0xff_u8.hash(&mut hasher);
@@ -2170,5 +2195,48 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "REPLACEMENT_CHARACTER"));
+    }
+}
+
+#[cfg(test)]
+mod stable_hash_tests {
+    use super::{stable_hash, STABLE_HASH_SCHEME};
+    use std::hash::{Hash, Hasher};
+
+    /// Fixed known vectors for `sip13-v1` — independent of OS/runtime clocks.
+    #[test]
+    fn sip13_v1_known_vectors_are_pinned() {
+        assert_eq!(STABLE_HASH_SCHEME, "sip13-v1");
+        assert_eq!(stable_hash(std::iter::empty::<&str>()), "322443126ac5b468");
+        assert_eq!(stable_hash(["alpha"]), "56802a3ef1f89fbd");
+        assert_eq!(stable_hash(["a", "b", "c"]), "7f0c7f8a0148dfa9");
+        assert_eq!(stable_hash(["yêu cầu", "0"]), "ebcec1ae82a0f03a");
+        assert_eq!(stable_hash(["doc.md", "Heading", "0"]), "d58571045f74d9bf");
+    }
+
+    #[test]
+    fn sip13_v1_is_deterministic_and_order_sensitive() {
+        assert_eq!(stable_hash(["x", "y"]), stable_hash(["x", "y"]));
+        assert_ne!(stable_hash(["x", "y"]), stable_hash(["y", "x"]));
+        assert_ne!(stable_hash(["ab"]), stable_hash(["a", "b"]));
+    }
+
+    #[test]
+    fn sip13_v1_does_not_claim_legacy_default_hasher_equality() {
+        // Pre-CORE-T9 helpers used DefaultHasher without a scheme domain tag.
+        // Even when SipHash-1-3 matches DefaultHasher for a bare string on a
+        // given Rust toolchain, versioned digests must not be treated as equal.
+        let parts = ["migration-check", "1"];
+        let mut legacy = std::collections::hash_map::DefaultHasher::new();
+        for part in parts {
+            part.hash(&mut legacy);
+            0xff_u8.hash(&mut legacy);
+        }
+        let legacy_hex = format!("{:016x}", legacy.finish());
+        let versioned = stable_hash(parts);
+        assert_ne!(
+            versioned, legacy_hex,
+            "sip13-v1 domain tag must break silent equality with unversioned DefaultHasher digests"
+        );
     }
 }

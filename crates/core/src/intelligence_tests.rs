@@ -77,6 +77,48 @@ fn corpus_ids_are_unique_across_documents() {
     assert_eq!(ids.len(), 2);
 }
 
+/// Consumer ID stability under `STABLE_HASH_SCHEME` (`sip13-v1`).
+/// Fixture bodies are fixed; digests must not drift across toolchains/runs.
+#[test]
+fn sip13_v1_consumer_ids_are_stable() {
+    assert_eq!(STABLE_HASH_SCHEME, "sip13-v1");
+    let markdown = "# Heading\n\nBody text for corpus.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+    let document = doc("doc.md", markdown);
+
+    let corpus = build_corpus(&[document.clone()], 2_000);
+    assert_eq!(corpus.len(), 1);
+    assert_eq!(corpus[0].id, "chunk-702130c0625e0b1f");
+
+    let tables = parse_markdown_tables(&document);
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].id, "table-e70c986a6c81b97b");
+
+    // Pack id embeds a wall-clock nonce; only the trailing fingerprint digest
+    // (content + mode) is the persisted stable_hash consumer.
+    let pack = generate_handoff_pack(
+        &[document],
+        &HandoffOptions {
+            product_slug: "probe".into(),
+            ..Default::default()
+        },
+    );
+    let fingerprint = pack
+        .pack_id
+        .rsplit('-')
+        .next()
+        .expect("pack_id ends with fingerprint digest");
+    assert_eq!(fingerprint, "7bc9c49bbcdf28ed");
+    assert_eq!(
+        pack.pack_id.split('-').next(),
+        Some("handoff"),
+        "pack_id prefix preserved"
+    );
+
+    // Corpus chunk ids are the corpus-level identity surface for local search.
+    let again = build_corpus(&[doc("doc.md", markdown)], 2_000);
+    assert_eq!(again[0].id, corpus[0].id);
+}
+
 #[test]
 fn corpus_parses_page_anchor_comments() {
     let corpus = build_corpus(
