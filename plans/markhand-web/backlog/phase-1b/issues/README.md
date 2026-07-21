@@ -178,6 +178,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-I07 — Tombstone delete và reconcile
 
+- **Status:** done — merged to `master` via PR #245
 - **Plan:** PG tombstone first; idempotent vector/object cleanup; dry-run/repair
   missing/orphan/stale across three stores.
 - **Files:** `workers/{delete,reconcile}.rs`, `services/{deletion,reconciliation}.rs`.

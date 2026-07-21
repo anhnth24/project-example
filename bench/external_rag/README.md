@@ -37,6 +37,39 @@ python3 bench/external_rag/scripts/run_pilot.py
 make dev-down
 ```
 
+For the overview-only query track, an independent agent received one broad topic
+description for each document, but no source titles, identifiers, text, chunks,
+answers, or retrieval results. It produced two natural questions per topic in
+`blind_queries.json`. Run that fixed set with:
+
+```bash
+python3 bench/external_rag/scripts/run_pilot.py \
+  --queries bench/external_rag/blind_queries.json
+```
+
+The resulting `reports/pilot-blind.md` remains non-gating. Its qrels map each
+topic position to one source document, so it measures document retrieval rather
+than proving that every requested detail is present in a particular chunk.
+
+To isolate the effect of corpus size, build a second lock that preserves the 50
+query targets in their original order and appends 150 chronological documents
+as distractors:
+
+```bash
+python3 bench/external_rag/scripts/prepare_distractor_corpus.py
+FILECONV_EXTERNAL_REUSE_MARKDOWN=1 \
+FILECONV_EXTERNAL_CONVERSION_WORKERS=4 \
+python3 bench/external_rag/scripts/run_pilot.py \
+  --lock bench/external_rag/sources-200.lock.json \
+  --queries bench/external_rag/blind_queries.json
+```
+
+Markdown reuse is an explicit local optimization for repeated runs from the
+same converter revision. Omit it after converter changes. Conversion workers
+default to one; increase conservatively because PDF rendering and OCR are
+memory-intensive. The 200-document result is written separately to
+`reports/pilot-blind-200.md`.
+
 To intentionally refresh the source snapshot:
 
 ```bash
