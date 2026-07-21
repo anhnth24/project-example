@@ -3,26 +3,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-COMPOSE_FILE="$ROOT/deploy/compose.poc.yml"
-ENV_FILE="$ROOT/deploy/.env"
-
-if [[ ! -f "$ENV_FILE" ]]; then
-  cp "$ROOT/deploy/.env.example" "$ENV_FILE"
-  echo "created $ENV_FILE from .env.example"
-fi
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-
-export COMPOSE_PROFILES="${COMPOSE_PROFILES:-mock}"
-# Nested/cloud hosts sometimes lack a working BuildKit/overlay stack. Prefer
-# classic builder unless the caller already set DOCKER_BUILDKIT.
-export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
-export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
-export COMPOSE_BAKE="${COMPOSE_BAKE:-false}"
-COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+# shellcheck source=poc-compose.sh
+source "$ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
 
 echo "building API + worker images..."
 "${COMPOSE[@]}" build api worker-convert worker-index worker-embedding
@@ -32,7 +15,7 @@ echo "starting POC stack (profiles=${COMPOSE_PROFILES})..."
 
 echo "waiting for minio-init..."
 init_status=""
-for _ in $(seq 1 60); do
+for _ in $(seq 1 90); do
   init_id="$("${COMPOSE[@]}" ps --all -q minio-init || true)"
   if [[ -n "$init_id" ]]; then
     init_status="$(docker inspect --format '{{.State.Status}}' "$init_id")"

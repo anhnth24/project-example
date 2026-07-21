@@ -37,7 +37,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** In progress — offline smoke green; Docker boot/preflight evidence still required.
+- **Status:** Done — Docker boot + sandbox preflight evidence in `bench/markhand_web/reports/poc-f02-boot.md` (API ready, workers healthy, convert preflight ok, format smoke).
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,

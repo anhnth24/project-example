@@ -122,6 +122,10 @@ require_regex "$ROOT/deploy/poc/minio-init.sh" 'failed to install MinIO policy|f
   "MinIO init fail-closed on policy errors"
 forbid_regex "$ROOT/deploy/poc/minio-init.sh" 'policy create.*\|\| true' \
   "MinIO policy create must not ignore errors"
+require_regex "$ROOT/deploy/poc/minio-init.sh" 'MC_CONFIG_DIR' \
+  "MinIO init writes mc config under tmpfs-friendly MC_CONFIG_DIR"
+forbid_regex "$ROOT/deploy/poc/minio-init.sh" '(^|[|[:space:]])sed[[:space:]]' \
+  "MinIO init must not call sed (absent from minio/mc image)"
 
 # PhoWhisper exclusion + pinned PDFium
 forbid_regex "$DOCKERFILE_WORKER" '^(COPY|ADD).*[Pp]ho[Ww]hisper' \
@@ -257,4 +261,4 @@ if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 echo "POC isolation smoke PASSED"
-echo "Catalog status must stay non-Done until Docker runtime boot/preflight evidence exists."
+echo "Runtime boot/preflight evidence: bench/markhand_web/reports/poc-f02-boot.md"

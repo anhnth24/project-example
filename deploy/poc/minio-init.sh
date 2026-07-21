@@ -1,7 +1,10 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Create buckets + narrow application credentials (not MinIO root).
 # Fail-closed: policy create/attach errors abort init.
-set -eu
+#
+# Runs in the official minio/mc image (read-only rootfs + tmpfs /tmp). That
+# image has bash/coreutils but not sed/awk, so templating stays in bash.
+set -euo pipefail
 
 MC_ALIAS="${MC_ALIAS:-local}"
 ROOT_USER="${MARKHAND_MINIO_ROOT_USER:?MARKHAND_MINIO_ROOT_USER required}"
@@ -19,12 +22,19 @@ case "$BUCKET" in
     ;;
 esac
 
+# Compose mounts this service read-only; keep mc config on tmpfs.
+export HOME="${HOME:-/tmp}"
+export MC_CONFIG_DIR="${MC_CONFIG_DIR:-/tmp/mc}"
+mkdir -p "$MC_CONFIG_DIR"
+
 echo "waiting for MinIO..."
 i=0
 until mc alias set "$MC_ALIAS" http://minio:9000 "$ROOT_USER" "$ROOT_PASSWORD" >/dev/null 2>&1; do
   i=$((i + 1))
-  if [ "$i" -ge 60 ]; then
+  if [[ "$i" -ge 60 ]]; then
     echo "MinIO not ready" >&2
+    # Surface the real mc error once for operators (credentials/network/config).
+    mc alias set "$MC_ALIAS" http://minio:9000 "$ROOT_USER" "$ROOT_PASSWORD" >&2 || true
     exit 1
   fi
   sleep 1
@@ -34,8 +44,14 @@ mc mb --ignore-existing "${MC_ALIAS}/${BUCKET}"
 
 POLICY_FILE="$(mktemp)"
 trap 'rm -f "$POLICY_FILE"' EXIT
-sed "s/__BUCKET__/${BUCKET}/g" "$POLICY_TMPL" >"$POLICY_FILE"
-grep -q "arn:aws:s3:::${BUCKET}" "$POLICY_FILE"
+# minio/mc image has bash/coreutils but not sed/grep/awk.
+policy_body="$(<"$POLICY_TMPL")"
+policy_body="${policy_body//__BUCKET__/${BUCKET}}"
+printf '%s\n' "$policy_body" >"$POLICY_FILE"
+if [[ "$policy_body" != *"arn:aws:s3:::${BUCKET}"* ]]; then
+  echo "policy template missing bucket ARN for ${BUCKET}" >&2
+  exit 1
+fi
 
 if mc admin policy info "$MC_ALIAS" "$POLICY_NAME" >/dev/null 2>&1; then
   mc admin policy remove "$MC_ALIAS" "$POLICY_NAME" >/dev/null 2>&1 \

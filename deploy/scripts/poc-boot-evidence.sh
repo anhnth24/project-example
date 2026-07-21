@@ -4,8 +4,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-COMPOSE_FILE="$ROOT/deploy/compose.poc.yml"
-ENV_FILE="$ROOT/deploy/.env"
+# shellcheck source=poc-compose.sh
+source "$ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
+
 OUT_DIR="${1:-$ROOT/bench/markhand_web/reports}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RAW_DIR="${POC_EVIDENCE_RAW_DIR:-/tmp/markhand-f02-evidence-$STAMP}"
@@ -14,19 +16,6 @@ JSON="$OUT_DIR/poc-f02-boot.json"
 FAIL=0
 
 mkdir -p "$OUT_DIR" "$RAW_DIR"
-
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "missing $ENV_FILE — run: cp deploy/.env.example deploy/.env && deploy/scripts/poc-up.sh" >&2
-  exit 1
-fi
-
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-
-COMPOSE=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
-export COMPOSE_PROFILES="${COMPOSE_PROFILES:-mock}"
 
 pass() { echo "PASS: $*"; echo "PASS: $*" >>"$RAW_DIR/summary.txt"; }
 fail() { echo "FAIL: $*" >&2; echo "FAIL: $*" >>"$RAW_DIR/summary.txt"; FAIL=1; }
