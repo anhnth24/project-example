@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use fileconv_core::intelligence::CorpusDocument;
+use fileconv_core::intelligence::{CorpusDocument, INTELLIGENCE_ID_SCHEME};
 
 use crate::ask::{
     extractive_answer, grounded_user_prompt, retrieval_context, valid_citation_ids, AnswerMode,
@@ -58,6 +58,7 @@ impl DesktopEmbeddingPlan {
                 model: LOCAL_EMBEDDING_MODE.into(),
                 dimensions: LOCAL_VECTOR_DIMENSIONS,
                 signature,
+                id_scheme: INTELLIGENCE_ID_SCHEME.into(),
             },
             // Schema-v2 canonical plan; legacy `"local_hash_v1"` string signatures rebuild.
             signature_plan: Some(signature_plan),
@@ -122,6 +123,7 @@ impl DesktopEmbeddingPlan {
                 model,
                 dimensions: dimensions.unwrap_or_default(),
                 signature: signature_plan.provisional_signature(),
+                id_scheme: INTELLIGENCE_ID_SCHEME.into(),
             },
             signature_plan: Some(signature_plan),
         })
@@ -142,6 +144,9 @@ impl DesktopEmbeddingPlan {
     }
 
     fn matches(&self, stored: &IndexMetadata) -> bool {
+        if stored.id_scheme.is_empty() || stored.id_scheme != self.metadata.id_scheme {
+            return false;
+        }
         let mut metadata = self.metadata.clone();
         if metadata.dimensions == 0 && stored.dimensions > 0 {
             metadata.dimensions = stored.dimensions;
@@ -211,8 +216,10 @@ fn rebuild_once(
     )?;
     let mut warnings = Vec::new();
     if stored.replaced_incompatible_index {
-        warnings
-            .push("Embedding signature thay đổi; đã rebuild knowledge index tương thích.".into());
+        warnings.push(
+            "Index compatibility thay đổi (embedding signature hoặc intelligence ID scheme); đã rebuild knowledge index."
+                .into(),
+        );
     }
     if stored.indexed > 0
         || !hnsw::is_available(
@@ -284,27 +291,27 @@ where
     let lexical_rank = store.lexical_ranks(&fts5_prefix_query(query), &scope, 250)?;
     let chunks = store.load_chunks(&scope, metadata.dimensions)?;
     let mut warnings = Vec::new();
-    let query_vector = if metadata.mode == PROVIDER_EMBEDDING_MODE {
-        if plan.matches(&metadata) {
-            match embed_query(query) {
-                Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
-                Ok(vector) => {
-                    warnings.push(format!(
-                        "Query embedding {}D không khớp index {}D; chỉ dùng FTS.",
-                        vector.len(),
-                        metadata.dimensions
-                    ));
-                    None
-                }
-                Err(_) => {
-                    warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".into());
-                    None
-                }
+    let query_vector = if !plan.matches(&metadata) {
+        warnings.push(
+            "Cấu hình index không khớp (embedding signature hoặc intelligence ID scheme); hãy rebuild. Tạm chỉ dùng FTS."
+                .into(),
+        );
+        None
+    } else if metadata.mode == PROVIDER_EMBEDDING_MODE {
+        match embed_query(query) {
+            Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
+            Ok(vector) => {
+                warnings.push(format!(
+                    "Query embedding {}D không khớp index {}D; chỉ dùng FTS.",
+                    vector.len(),
+                    metadata.dimensions
+                ));
+                None
             }
-        } else {
-            warnings
-                .push("Cấu hình embedding không khớp index; hãy rebuild. Tạm chỉ dùng FTS.".into());
-            None
+            Err(_) => {
+                warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".into());
+                None
+            }
         }
     } else {
         Some(local_vector(query).into_values())
@@ -605,7 +612,7 @@ mod tests {
         assert!(result
             .warnings
             .iter()
-            .any(|warning| warning.contains("Embedding signature thay đổi")));
+            .any(|warning| warning.contains("rebuild") && warning.contains("ID scheme")));
         let _ = std::fs::remove_dir_all(paths.ann_root);
     }
 
@@ -618,6 +625,19 @@ mod tests {
         let mut legacy = local.metadata().clone();
         legacy.signature = LOCAL_EMBEDDING_MODE.into();
         assert!(!local.matches(&legacy));
+    }
+
+    #[test]
+    fn missing_or_legacy_id_scheme_forces_rebuild_match_failure() {
+        let local = DesktopEmbeddingPlan::local();
+        assert_eq!(local.metadata().id_scheme, INTELLIGENCE_ID_SCHEME);
+        let mut missing = local.metadata().clone();
+        missing.id_scheme.clear();
+        assert!(!local.matches(&missing));
+        let mut other = local.metadata().clone();
+        other.id_scheme = "sip13-v1".into();
+        assert!(!local.matches(&other));
+        assert!(local.matches(local.metadata()));
     }
 
     #[test]

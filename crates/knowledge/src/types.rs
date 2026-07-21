@@ -116,6 +116,9 @@ pub struct IndexMetadata {
     pub model: String,
     pub dimensions: usize,
     pub signature: String,
+    /// Core intelligence durable ID scheme (`sha256-v1`). Empty/missing = legacy → rebuild.
+    #[serde(default)]
+    pub id_scheme: String,
 }
 
 #[cfg(test)]
