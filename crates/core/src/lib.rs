@@ -8,6 +8,7 @@
 //!   - pptx: đọc slide theo ĐÚNG thứ tự số.
 //!   - bỏ toàn bộ `println!` debug và dependency LLM nặng (rig-core/tokio).
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "audio")]
 use std::sync::OnceLock;
@@ -96,14 +97,67 @@ impl FormatKind {
     }
 }
 
+/// Stable machine-readable warning codes (`ConversionWarning::code`).
+pub mod warning_codes {
+    /// `needs_ocr` page kept untrusted pdf-inspector text after OCR/native recovery failed.
+    pub const PDF_UNTRUSTED_TEXT_FALLBACK: &str = "pdf_untrusted_text_fallback";
+}
+
+/// Structured conversion diagnostic for partial / degraded success paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversionWarning {
+    /// Stable code for programmatic handling (see [`warning_codes`]).
+    pub code: &'static str,
+    /// Converter / recovery stage that emitted the warning (stable, not localized).
+    pub source: &'static str,
+    /// 1-indexed page when the warning is page-scoped.
+    pub page: Option<u32>,
+    /// Human-readable detail (Vietnamese UI/logs). Preserved as authored — not reclassified.
+    pub message: String,
+}
+
+/// Outcome of a successful conversion (`Err` is hard failure).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionOutcome {
+    /// Trusted extraction paths only; no degraded recovery warnings.
+    FullSuccess,
+    /// Markdown produced, but at least one degraded recovery was recorded.
+    PartialSuccess,
+}
+
 #[derive(Debug, Clone)]
 pub struct ConversionResult {
     pub markdown: String,
     pub title: Option<String>,
     pub format: FormatKind,
+    /// Machine-readable soft diagnostics. Empty when [`outcome`] is [`FullSuccess`].
+    pub warnings: Vec<ConversionWarning>,
+    pub outcome: ConversionOutcome,
 }
 
+impl ConversionResult {
+    /// True when conversion returned markdown with one or more degraded recoveries.
+    pub fn is_partial_success(&self) -> bool {
+        self.outcome == ConversionOutcome::PartialSuccess
+    }
+
+    /// True when any warning carries the given stable code.
+    pub fn has_warning_code(&self, code: &str) -> bool {
+        self.warnings.iter().any(|warning| warning.code == code)
+    }
+}
+
+/// Hard conversion failure.
+///
+/// Existing variants (`BadPath`, `Unsupported`, `Failed`) stay stable. New typed
+/// variants are additive; prefer them only when the call site has clear evidence
+/// (do not parse opaque error strings to guess a category). `Failed` remains the
+/// compatibility catch-all / migration path for unclassified failures.
+///
+/// `#[non_exhaustive]` forces a wildcard arm so future taxonomy additions do not
+/// break downstream exhaustive matches.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConvertError {
     #[error("đường dẫn không hợp lệ (non-UTF8)")]
     BadPath,
@@ -111,6 +165,70 @@ pub enum ConvertError {
     Unsupported(&'static str),
     #[error("chuyển đổi thất bại: {0}")]
     Failed(String),
+    #[error("đầu vào hỏng hoặc không hợp lệ: {0}")]
+    CorruptInput(String),
+    #[error("thiếu phụ thuộc: {0}")]
+    DependencyMissing(String),
+    #[error("hết thời gian chờ: {0}")]
+    Timeout(String),
+    #[error("thiếu tài nguyên: {0}")]
+    Resource(String),
+    #[error("lỗi toàn vẹn dữ liệu: {0}")]
+    Integrity(String),
+    #[error("lỗi nhà cung cấp: {0}")]
+    Provider(String),
+    #[error("lỗi OCR: {0}")]
+    Ocr(String),
+}
+
+impl ConvertError {
+    /// Stable machine-readable error code (does not change with message text).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::BadPath => "bad_path",
+            Self::Unsupported(_) => "unsupported",
+            Self::Failed(_) => "failed",
+            Self::CorruptInput(_) => "corrupt_input",
+            Self::DependencyMissing(_) => "dependency_missing",
+            Self::Timeout(_) => "timeout",
+            Self::Resource(_) => "resource",
+            Self::Integrity(_) => "integrity",
+            Self::Provider(_) => "provider",
+            Self::Ocr(_) => "ocr",
+        }
+    }
+
+    /// Map an image-OCR `io::Error` using only `ErrorKind` evidence.
+    ///
+    /// Opaque / unclassified failures stay [`ConvertError::Ocr`] with the original
+    /// display text — never string-match messages into other taxonomy buckets.
+    pub(crate) fn from_ocr_io(error: std::io::Error) -> Self {
+        let message = error.to_string();
+        match error.kind() {
+            std::io::ErrorKind::NotFound => Self::DependencyMissing(format!(
+                "không tìm thấy Tesseract OCR (hoặc binary FILECONV_TESSERACT): {message}"
+            )),
+            std::io::ErrorKind::TimedOut => Self::Timeout(message),
+            std::io::ErrorKind::OutOfMemory => Self::Resource(message),
+            _ => Self::Ocr(message),
+        }
+    }
+}
+
+thread_local! {
+    static CONVERSION_WARNINGS: RefCell<Vec<ConversionWarning>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn clear_conversion_warnings() {
+    CONVERSION_WARNINGS.with(|warnings| warnings.borrow_mut().clear());
+}
+
+pub(crate) fn push_conversion_warning(warning: ConversionWarning) {
+    CONVERSION_WARNINGS.with(|warnings| warnings.borrow_mut().push(warning));
+}
+
+pub(crate) fn take_conversion_warnings() -> Vec<ConversionWarning> {
+    CONVERSION_WARNINGS.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()))
 }
 
 #[derive(Debug, Clone)]
@@ -208,9 +326,14 @@ impl Converter {
     }
 
     /// Chuyển một file sang Markdown.
+    ///
+    /// Soft degradation (e.g. PDF `needs_ocr` page kept untrusted inspector text)
+    /// returns [`Ok`] with [`ConversionOutcome::PartialSuccess`] and structured
+    /// [`ConversionWarning`]s. Hard failures remain [`Err`].
     pub fn convert_path(&self, path: &Path) -> Result<ConversionResult, ConvertError> {
+        clear_conversion_warnings();
         let format = FormatKind::from_path(path);
-        let md = image_ocr::with_ocr_engine(self.opts.ocr_engine, || match format {
+        let md = match image_ocr::with_ocr_engine(self.opts.ocr_engine, || match format {
             FormatKind::Pdf => conv::pdf::to_markdown(
                 path,
                 &self.opts.ocr_langs,
@@ -224,8 +347,9 @@ impl Converter {
             FormatKind::Csv => conv::csv_conv::to_markdown(path),
             FormatKind::Html => conv::html::to_markdown(path),
             FormatKind::Text => conv::text::to_markdown(path),
-            FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
-                .map_err(|e| ConvertError::Failed(e.to_string())),
+            FormatKind::Image => {
+                image_ocr::ocr_image(path, &self.opts.ocr_langs).map_err(ConvertError::from_ocr_io)
+            }
             FormatKind::Audio => {
                 #[cfg(feature = "audio")]
                 {
@@ -241,7 +365,13 @@ impl Converter {
                 }
             }
             FormatKind::Unknown => Err(ConvertError::Unsupported("không rõ đuôi file")),
-        })?;
+        }) {
+            Ok(md) => md,
+            Err(error) => {
+                clear_conversion_warnings();
+                return Err(error);
+            }
+        };
 
         // Chuẩn hoá Unicode NFC: tài liệu tiếng Việt cũ (nhất là từ macOS/PDF legacy)
         // hay ở dạng NFD (ê + dấu rời) — gây lệch so khớp/tìm kiếm/embedding dù nhìn
@@ -272,11 +402,28 @@ impl Converter {
                 .map(str::to_string)
         });
 
-        Ok(ConversionResult {
-            markdown: md,
-            title,
-            format,
-        })
+        Ok(finish_conversion_result(md, title, format))
+    }
+}
+
+/// Attach TLS diagnostics collected during conversion.
+pub(crate) fn finish_conversion_result(
+    markdown: String,
+    title: Option<String>,
+    format: FormatKind,
+) -> ConversionResult {
+    let warnings = take_conversion_warnings();
+    let outcome = if warnings.is_empty() {
+        ConversionOutcome::FullSuccess
+    } else {
+        ConversionOutcome::PartialSuccess
+    };
+    ConversionResult {
+        markdown,
+        title,
+        format,
+        warnings,
+        outcome,
     }
 }
 
@@ -327,5 +474,106 @@ mod tests {
             Some("Báo cáo dự án".into())
         );
         assert_eq!(title_from_markdown("nội dung không heading"), None);
+    }
+
+    #[test]
+    fn convert_error_codes_are_stable() {
+        assert_eq!(ConvertError::BadPath.code(), "bad_path");
+        assert_eq!(ConvertError::Unsupported("pdf/x").code(), "unsupported");
+        assert_eq!(ConvertError::Failed("x".into()).code(), "failed");
+        assert_eq!(
+            ConvertError::CorruptInput("x".into()).code(),
+            "corrupt_input"
+        );
+        assert_eq!(
+            ConvertError::DependencyMissing("x".into()).code(),
+            "dependency_missing"
+        );
+        assert_eq!(ConvertError::Timeout("x".into()).code(), "timeout");
+        assert_eq!(ConvertError::Resource("x".into()).code(), "resource");
+        assert_eq!(ConvertError::Integrity("x".into()).code(), "integrity");
+        assert_eq!(ConvertError::Provider("x".into()).code(), "provider");
+        assert_eq!(ConvertError::Ocr("x".into()).code(), "ocr");
+    }
+
+    #[test]
+    fn convert_error_display_keeps_legacy_failed_prefix() {
+        let err = ConvertError::Failed("không đọc được".into());
+        assert_eq!(err.to_string(), "chuyển đổi thất bại: không đọc được");
+        assert!(ConvertError::BadPath
+            .to_string()
+            .contains("đường dẫn không hợp lệ"));
+        assert!(ConvertError::Integrity("hash lệch".into())
+            .to_string()
+            .starts_with("lỗi toàn vẹn dữ liệu:"));
+    }
+
+    #[test]
+    fn partial_ocr_warning_is_surfaced_as_partial_success() {
+        clear_conversion_warnings();
+        push_conversion_warning(ConversionWarning {
+            code: warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK,
+            source: "pdf::needs_ocr_untrusted_fallback",
+            page: Some(2),
+            message: "trang 2: OCR/khôi phục native thất bại".into(),
+        });
+        let result = finish_conversion_result(
+            "<!-- page fallback -->".into(),
+            Some("fallback".into()),
+            FormatKind::Pdf,
+        );
+        assert_eq!(result.outcome, ConversionOutcome::PartialSuccess);
+        assert!(result.is_partial_success());
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.has_warning_code(warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK));
+        assert_eq!(
+            result.warnings[0].source,
+            "pdf::needs_ocr_untrusted_fallback"
+        );
+        assert_eq!(result.warnings[0].page, Some(2));
+        // Partial path must never look like clean success.
+        assert_ne!(result.outcome, ConversionOutcome::FullSuccess);
+        assert!(!result.warnings.is_empty());
+    }
+
+    #[test]
+    fn trusted_text_convert_emits_no_partial_ocr_warning() {
+        let dir = std::env::temp_dir().join(format!("fileconv_warn_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ok.txt");
+        std::fs::write(&path, "nội dung tin cậy").unwrap();
+        let trusted = Converter::new().convert_path(&path).unwrap();
+        assert_eq!(trusted.outcome, ConversionOutcome::FullSuccess);
+        assert!(!trusted.is_partial_success());
+        assert!(trusted.warnings.is_empty());
+        assert!(!trusted.has_warning_code(warning_codes::PDF_UNTRUSTED_TEXT_FALLBACK));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_ocr_io_uses_error_kind_evidence_only() {
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "tesseract");
+        assert_eq!(
+            ConvertError::from_ocr_io(missing).code(),
+            "dependency_missing"
+        );
+        let timed_out = std::io::Error::new(std::io::ErrorKind::TimedOut, "ocr timeout");
+        let timed = ConvertError::from_ocr_io(timed_out);
+        assert_eq!(timed.code(), "timeout");
+        assert!(timed.to_string().contains("ocr timeout"));
+        let oom = std::io::Error::new(std::io::ErrorKind::OutOfMemory, "oom");
+        assert_eq!(ConvertError::from_ocr_io(oom).code(), "resource");
+        // Opaque InvalidData must NOT be string-matched into Resource.
+        let opaque = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "image exceeds limit dimensions",
+        );
+        let classified = ConvertError::from_ocr_io(opaque);
+        assert_eq!(classified.code(), "ocr");
+        assert!(classified
+            .to_string()
+            .contains("image exceeds limit dimensions"));
+        let other = std::io::Error::new(std::io::ErrorKind::Other, "tesseract lỗi: foo");
+        assert_eq!(ConvertError::from_ocr_io(other).code(), "ocr");
     }
 }
