@@ -159,7 +159,7 @@ async fn as_of_resolves_effective_version_from_postgres() {
                 let user_email = format!("{}@example.test", ctx.user_id());
                 txn.execute(
                     "INSERT INTO users (id, email, display_name, password_hash)
-                     VALUES ($1, $2, 'u', 'x')",
+                     VALUES ($1, $2, 'u', 'test-hash')",
                     &[&ctx.user_id(), &user_email],
                 )
                 .await?;
@@ -280,7 +280,7 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                 let user_email = format!("{}@example.test", ctx.user_id());
                 txn.execute(
                     "INSERT INTO users (id, email, display_name, password_hash)
-                     VALUES ($1, $2, 'u', 'x')",
+                     VALUES ($1, $2, 'u', 'test-hash')",
                     &[&ctx.user_id(), &user_email],
                 )
                 .await?;
