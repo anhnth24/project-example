@@ -1,4 +1,5 @@
-//! CORE-T8: end-to-end real-file golden coverage for DOCX / PPTX / XLSX / HTML.
+//! CORE-T8: end-to-end real-file golden coverage for DOCX / PPTX / XLSX / HTML
+//! (and one deterministic native-text PDF).
 //!
 //! Fixtures are project-owned under `bench/markhand_web/golden/documents`
 //! (never `vendor/markitdown-rs`). Paths resolve from `CARGO_MANIFEST_DIR` so
@@ -6,6 +7,10 @@
 //!
 //! Assertions target semantic Vietnamese content and key Markdown structure
 //! (headings, slides, tables) — not brittle whole-output snapshots.
+//!
+//! PDF note: only `gold-001.pdf` is included. It is a compact native-text
+//! fixture that converts via the public `Converter::convert_path` path without
+//! OCR. Scan-like goldens (e.g. `gold-004.pdf`) need OCR and are out of scope.
 
 use fileconv_core::{ConvertError, Converter, FormatKind};
 use std::path::{Path, PathBuf};
@@ -202,31 +207,55 @@ fn gold_html_second_fixture_keeps_owner_and_headings() {
     assert_contains(md, "Phòng Nhân sự (PNS)");
 }
 
-/// Compact shared probe: OOXML formats must return `ConvertError` (no panic);
+#[test]
+fn gold_pdf_native_preserves_vietnamese_heading_and_fields() {
+    let path = golden_document("gold-001.pdf");
+    let result = convert(&path);
+    assert_eq!(result.format, FormatKind::Pdf);
+    assert_eq!(
+        result.title.as_deref(),
+        Some("Hồ sơ quy trình mua sắm số 01")
+    );
+
+    let md = &result.markdown;
+    assert_heading_line(md, 1, "Hồ sơ quy trình mua sắm số 01");
+    assert_hoso_semantics(md, "HS-2026-001");
+    assert_contains(md, "137 triệu đồng");
+    assert_contains(md, "Phòng Tài chính (PTC)");
+    // Two public-path conversions must match byte-for-byte (no OCR jitter).
+    let again = convert(&path).markdown;
+    assert_eq!(
+        md, &again,
+        "native-text PDF conversion must be deterministic across calls"
+    );
+}
+
+/// Compact shared probe: OOXML/PDF must return `ConvertError` (no panic);
 /// HTML must not panic on binary garbage (htmd may still emit a short string).
 #[test]
-fn malformed_office_and_html_fail_gracefully() {
+fn malformed_office_html_and_pdf_fail_gracefully() {
     let conv = Converter::new();
 
-    // Project-owned adversarial malformed DOCX (invalid OOXML inside zip-ish bytes).
-    let malformed_docx = adversarial_file("malformed.docx");
-    match conv.convert_path(&malformed_docx) {
-        Err(ConvertError::Failed(msg)) => {
-            assert!(
-                !msg.trim().is_empty(),
-                "Failed error should carry a message"
-            );
+    // Project-owned adversarial fixtures (invalid OOXML / broken PDF xref).
+    for name in ["malformed.docx", "corrupt.pdf"] {
+        let path = adversarial_file(name);
+        match conv.convert_path(&path) {
+            Err(ConvertError::Failed(msg)) => {
+                assert!(
+                    !msg.trim().is_empty(),
+                    "Failed error for {name} should carry a message"
+                );
+            }
+            other => panic!("expected ConvertError::Failed for {name}, got {other:?}"),
         }
-        other => panic!("expected ConvertError::Failed for malformed.docx, got {other:?}"),
     }
 
+    // Unique temp dir (pid + atomic counter; no wall-clock dependency).
+    static MALFORMED_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "fileconv_core_t8_malformed_{}_{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
+        MALFORMED_DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
 
@@ -236,6 +265,11 @@ fn malformed_office_and_html_fail_gracefully() {
         ("probe.docx", bogus_zip.as_slice(), true),
         ("probe.pptx", bogus_zip.as_slice(), true),
         ("probe.xlsx", bogus_zip.as_slice(), true),
+        (
+            "probe.pdf",
+            b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\ntrailer<<>>\n".as_slice(),
+            true,
+        ),
         // Binary garbage is not valid HTML; converter must not panic.
         (
             "probe.html",
