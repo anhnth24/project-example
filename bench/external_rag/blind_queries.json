@@ -99,3 +99,4 @@
   {"question_id": "blind-098", "topic_index": 49, "intent": "procedure", "question": "Việc đánh giá, xếp loại viên chức được thực hiện theo trình tự và thẩm quyền ra sao?"},
   {"question_id": "blind-099", "topic_index": 50, "intent": "condition", "question": "Vị trí việc làm của viên chức được xác định dựa trên chức năng, nhiệm vụ và khối lượng công việc như thế nào?"},
   {"question_id": "blind-100", "topic_index": 50, "intent": "procedure", "question": "Đề án vị trí việc làm trong đơn vị sự nghiệp công lập được xây dựng, thẩm định và phê duyệt ra sao?"}
+]
