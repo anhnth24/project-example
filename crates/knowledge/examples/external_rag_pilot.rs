@@ -3,6 +3,8 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::Instant;
 
 use fileconv_core::intelligence::CorpusDocument;
@@ -258,26 +260,22 @@ fn checked_source_path(root: &Path, source: &Source) -> Result<PathBuf, Box<dyn 
     Ok(path)
 }
 
-fn convert_sources(
-    sources: &[Source],
+fn convert_source(
+    source: &Source,
     originals: &Path,
     markdown_root: &Path,
-) -> Result<(Vec<CorpusDocument>, Vec<ConversionRow>), Box<dyn Error>> {
-    fs::create_dir_all(markdown_root)?;
-    let converter = Converter::new();
-    let reuse_markdown = env::var("FILECONV_EXTERNAL_REUSE_MARKDOWN")
-        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
-    let mut documents = Vec::new();
-    let mut rows = Vec::with_capacity(sources.len());
-    for source in sources {
-        let started = Instant::now();
-        let source_path = checked_source_path(originals, source)?;
-        let md_name = format!("{}.md", source.id);
-        let md_path = markdown_root.join(&md_name);
-        if reuse_markdown && md_path.is_file() {
-            let markdown = fs::read_to_string(&md_path)?;
-            let markdown_chars = markdown.chars().count();
-            documents.push(CorpusDocument {
+    converter: &Converter,
+    reuse_markdown: bool,
+) -> Result<(Option<CorpusDocument>, ConversionRow), String> {
+    let started = Instant::now();
+    let source_path = checked_source_path(originals, source).map_err(|error| error.to_string())?;
+    let md_name = format!("{}.md", source.id);
+    let md_path = markdown_root.join(&md_name);
+    if reuse_markdown && md_path.is_file() {
+        let markdown = fs::read_to_string(&md_path).map_err(|error| error.to_string())?;
+        let markdown_chars = markdown.chars().count();
+        return Ok((
+            Some(CorpusDocument {
                 source_rel: source.filename.clone(),
                 md_rel: format!("markdown/{md_name}"),
                 format: source_path
@@ -286,8 +284,8 @@ fn convert_sources(
                     .unwrap_or("unknown")
                     .to_ascii_lowercase(),
                 markdown,
-            });
-            rows.push(ConversionRow {
+            }),
+            ConversionRow {
                 document_id: source.id.clone(),
                 filename: source.filename.clone(),
                 success: true,
@@ -295,20 +293,15 @@ fn convert_sources(
                 elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                 markdown_chars,
                 error: None,
-            });
-            eprintln!(
-                "converted {}/{} {} success=true cached=true chars={markdown_chars}",
-                rows.len(),
-                sources.len(),
-                source.id,
-            );
-            continue;
-        }
-        match converter.convert_path(&source_path) {
-            Ok(result) => {
-                let markdown_chars = result.markdown.chars().count();
-                fs::write(&md_path, &result.markdown)?;
-                documents.push(CorpusDocument {
+            },
+        ));
+    }
+    match converter.convert_path(&source_path) {
+        Ok(result) => {
+            let markdown_chars = result.markdown.chars().count();
+            fs::write(&md_path, &result.markdown).map_err(|error| error.to_string())?;
+            Ok((
+                Some(CorpusDocument {
                     source_rel: source.filename.clone(),
                     md_rel: format!("markdown/{md_name}"),
                     format: source_path
@@ -317,8 +310,8 @@ fn convert_sources(
                         .unwrap_or("unknown")
                         .to_ascii_lowercase(),
                     markdown: result.markdown,
-                });
-                rows.push(ConversionRow {
+                }),
+                ConversionRow {
                     document_id: source.id.clone(),
                     filename: source.filename.clone(),
                     success: true,
@@ -326,11 +319,14 @@ fn convert_sources(
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     markdown_chars,
                     error: None,
-                });
-            }
-            Err(error) => {
-                eprintln!("conversion failed for {}: {error}", source.id);
-                rows.push(ConversionRow {
+                },
+            ))
+        }
+        Err(error) => {
+            eprintln!("conversion failed for {}: {error}", source.id);
+            Ok((
+                None,
+                ConversionRow {
                     document_id: source.id.clone(),
                     filename: source.filename.clone(),
                     success: false,
@@ -338,18 +334,90 @@ fn convert_sources(
                     elapsed_ms: started.elapsed().as_secs_f64() * 1000.0,
                     markdown_chars: 0,
                     error: Some(error.to_string()),
+                },
+            ))
+        }
+    }
+}
+
+fn convert_sources(
+    sources: &[Source],
+    originals: &Path,
+    markdown_root: &Path,
+) -> Result<(Vec<CorpusDocument>, Vec<ConversionRow>), Box<dyn Error>> {
+    fs::create_dir_all(markdown_root)?;
+    let reuse_markdown = env::var("FILECONV_EXTERNAL_REUSE_MARKDOWN")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    let workers = env_value("FILECONV_EXTERNAL_CONVERSION_WORKERS", "1")
+        .parse::<usize>()?
+        .clamp(1, sources.len());
+    let mut converted = if workers == 1 {
+        let converter = Converter::new();
+        sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                (
+                    index,
+                    convert_source(
+                        source,
+                        originals,
+                        markdown_root,
+                        &converter,
+                        reuse_markdown,
+                    ),
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            let (sender, receiver) = mpsc::channel();
+            for _ in 0..workers {
+                let sender = sender.clone();
+                let next = &next;
+                scope.spawn(move || {
+                    let converter = Converter::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(source) = sources.get(index) else {
+                            break;
+                        };
+                        let result = convert_source(
+                            source,
+                            originals,
+                            markdown_root,
+                            &converter,
+                            reuse_markdown,
+                        );
+                        if sender.send((index, result)).is_err() {
+                            break;
+                        }
+                    }
                 });
             }
-        }
-        let row = rows.last().expect("conversion row was appended");
+            drop(sender);
+            receiver.into_iter().collect::<Vec<_>>()
+        })
+    };
+    converted.sort_by_key(|(index, _)| *index);
+    let mut documents = Vec::new();
+    let mut rows = Vec::with_capacity(sources.len());
+    for (index, result) in converted {
+        let (document, row) = result.map_err(|error| -> Box<dyn Error> { error.into() })?;
         eprintln!(
-            "converted {}/{} {} success={} chars={}",
-            rows.len(),
+            "converted {}/{} {} success={} cached={} chars={}",
+            index + 1,
             sources.len(),
-            source.id,
+            row.document_id,
             row.success,
+            row.cached,
             row.markdown_chars
         );
+        if let Some(document) = document {
+            documents.push(document);
+        }
+        rows.push(row);
     }
     Ok((documents, rows))
 }

@@ -58,14 +58,17 @@ as distractors:
 ```bash
 python3 bench/external_rag/scripts/prepare_distractor_corpus.py
 FILECONV_EXTERNAL_REUSE_MARKDOWN=1 \
+FILECONV_EXTERNAL_CONVERSION_WORKERS=4 \
 python3 bench/external_rag/scripts/run_pilot.py \
   --lock bench/external_rag/sources-200.lock.json \
   --queries bench/external_rag/blind_queries.json
 ```
 
 Markdown reuse is an explicit local optimization for repeated runs from the
-same converter revision. Omit it after converter changes. The 200-document
-result is written separately to `reports/pilot-blind-200.md`.
+same converter revision. Omit it after converter changes. Conversion workers
+default to one; increase conservatively because PDF rendering and OCR are
+memory-intensive. The 200-document result is written separately to
+`reports/pilot-blind-200.md`.
 
 To intentionally refresh the source snapshot:
 
