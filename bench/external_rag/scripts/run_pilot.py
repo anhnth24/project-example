@@ -484,7 +484,7 @@ def write_report(summary: dict, report_path: Path = REPORT_PATH) -> None:
                 else ""
             ),
             (
-                "- Topic overviews remain discriminative in a 50-document corpus, so this score is still optimistic."
+                f"- Topic overviews remain discriminative in a {summary['documents']}-document corpus, so this score is still optimistic."
                 if blind
                 else ""
             ),
