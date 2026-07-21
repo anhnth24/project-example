@@ -14,7 +14,7 @@
     {
       "id": "core.pdf.needs_ocr_untrusted_fallback.v1",
       "path": "pdf/needs_ocr_untrusted_fallback.pdf",
-      "sha256": "dd65d6e1127f61dc426bc48e405927f6155cc1d98c847cde2f6a3dbc7ca5c2ec",
+      "sha256": "0d305a64c19c1353b2ed43c9f263376f6db3efa148db073044d259d365735253",
       "kind": "pdf",
       "owner": "markhand-core",
       "source": "synthetic",
