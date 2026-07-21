@@ -162,7 +162,7 @@ fn prescan_charset(bytes: &[u8]) -> Option<String> {
 
         // Declarations / bogus comments starting with <!
         if lower[index..].starts_with(b"<!") {
-            index = skip_until(&lower, index + 2, b'>');
+            index = find_unquoted_gt(&lower, index + 2);
             if index < lower.len() {
                 index += 1;
             }
@@ -186,7 +186,7 @@ fn prescan_charset(bytes: &[u8]) -> Option<String> {
         // End tag: </name ...>
         if lower[index..].starts_with(b"</") {
             let (name, after_name) = read_tag_name(&lower[index + 2..]);
-            let close = skip_until(&lower, index + 2 + after_name, b'>');
+            let close = find_unquoted_gt(&lower, index + 2 + after_name);
             index = if close < lower.len() {
                 close + 1
             } else {
@@ -204,7 +204,7 @@ fn prescan_charset(bytes: &[u8]) -> Option<String> {
         {
             let (name, name_len) = read_tag_name(&lower[index + 1..]);
             let attrs_start = index + 1 + name_len;
-            let close = skip_until(&lower, attrs_start, b'>');
+            let close = find_unquoted_gt(&lower, attrs_start);
             let attrs = parse_tag_attributes(&lower[attrs_start..close]);
             let next = if close < lower.len() {
                 close + 1
@@ -255,15 +255,48 @@ fn is_rawtext_or_rcdata(name: &str) -> bool {
     )
 }
 
+/// Tên thẻ HTML đầy đủ: chữ cái đầu, rồi mọi byte tới whitespace / `/` / `>`
+/// (gồm dấu `-` — `meta-data` ≠ `meta`).
 fn read_tag_name(bytes: &[u8]) -> (String, usize) {
-    let mut len = 0usize;
-    while len < bytes.len() && bytes[len].is_ascii_alphanumeric() {
+    if bytes.first().is_none_or(|b| !b.is_ascii_alphabetic()) {
+        return (String::new(), 0);
+    }
+    let mut len = 1usize;
+    while len < bytes.len()
+        && !matches!(
+            bytes[len],
+            b'\t' | b'\n' | b'\x0C' | b'\r' | b' ' | b'/' | b'>'
+        )
+    {
         len += 1;
     }
     let name = std::str::from_utf8(&bytes[..len])
         .unwrap_or("")
         .to_ascii_lowercase();
     (name, len)
+}
+
+/// Vị trí `>` kết thúc thẻ, bỏ qua `>` nằm trong attribute có quote.
+fn find_unquoted_gt(bytes: &[u8], start: usize) -> usize {
+    let mut quote: Option<u8> = None;
+    let mut index = start;
+    while index < bytes.len() {
+        let b = bytes[index];
+        match quote {
+            Some(q) => {
+                if b == q {
+                    quote = None;
+                }
+            }
+            None => match b {
+                b'"' | b'\'' => quote = Some(b),
+                b'>' => return index,
+                _ => {}
+            },
+        }
+        index += 1;
+    }
+    bytes.len()
 }
 
 /// Bỏ qua tới `</name>` (so khớp ASCII case-insensitive), bỏ qua `>` sau end-tag.
@@ -277,9 +310,12 @@ fn skip_until_end_tag(lower: &[u8], mut index: usize, name: &str) -> usize {
                 let at = index + rel;
                 let after = at + needle.len();
                 let boundary = lower.get(after).copied().unwrap_or(b'>');
-                // End-tag phải kết thúc bằng whitespace, `/`, hoặc `>`.
-                if matches!(boundary, b'>' | b'/' | b'\t' | b'\n' | b'\r' | b' ') {
-                    let close = skip_until(lower, after, b'>');
+                // End-tag đúng tên: ký tự kế phải là boundary (không phải tiếp tên).
+                if matches!(
+                    boundary,
+                    b'>' | b'/' | b'\t' | b'\n' | b'\x0C' | b'\r' | b' '
+                ) {
+                    let close = find_unquoted_gt(lower, after);
                     return if close < lower.len() {
                         close + 1
                     } else {
@@ -459,14 +495,6 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
-}
-
-fn skip_until(bytes: &[u8], start: usize, marker: u8) -> usize {
-    bytes[start..]
-        .iter()
-        .position(|&b| b == marker)
-        .map(|p| start + p)
-        .unwrap_or(bytes.len())
 }
 
 #[cfg(test)]
@@ -660,5 +688,37 @@ mod tests {
 <meta charset=\"utf-8\">\
 </head><body></body></html>";
         assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
+    }
+
+    #[test]
+    fn quoted_gt_inside_meta_attribute_does_not_truncate_tag() {
+        // Regression: `>` trong attribute có quote không cắt thẻ meta sớm.
+        let html = b"\
+<html><head>\
+<meta data-note=\"1 > 0\" charset=\"windows-1252\">\
+</head><body><p>caf\xe9</p></body></html>";
+        assert_eq!(
+            sniff_declared_charset(html).as_deref(),
+            Some("windows-1252")
+        );
+        let decoded = decode_html_bytes(html);
+        assert!(decoded.contains("café"), "got: {decoded:?}");
+    }
+
+    #[test]
+    fn meta_data_is_not_matched_as_meta() {
+        // Regression: tên thẻ đầy đủ `meta-data` ≠ `meta`.
+        let html = b"\
+<html><head>\
+<meta-data charset=\"tcvn3\">\
+<meta charset=\"utf-8\">\
+</head><body><p>ok</p></body></html>";
+        assert_eq!(sniff_declared_charset(html).as_deref(), Some("utf-8"));
+        assert_ne!(
+            sniff_declared_charset(
+                b"<html><head><meta-data charset=\"tcvn3\"></head><body></body></html>"
+            ),
+            Some("tcvn3".into())
+        );
     }
 }
