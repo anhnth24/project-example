@@ -104,17 +104,30 @@ def main() -> int:
     needed = TARGET_DOCUMENTS - len(sources)
     if needed <= 0:
         raise RuntimeError("base lock must contain fewer than 200 sources")
-    urls = discover_distractors({source["id"] for source in sources}, needed)
+    candidate_count = needed + 50
+    urls = discover_distractors(
+        {source["id"] for source in sources}, candidate_count
+    )
     rows_by_url: dict[str, tuple[dict, bytes]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = {executor.submit(pilot.inspect_source, url): url for url in urls}
         for future in concurrent.futures.as_completed(futures):
             url = futures[future]
-            rows_by_url[url] = future.result()
-            print(f"inspected {len(rows_by_url):03d}/{needed} {url}")
-    for url in urls:
+            try:
+                source, payload = future.result()
+            except RuntimeError as error:
+                print(f"skipped {url}: {error}")
+                continue
+            rows_by_url[url] = (source, payload)
+            (pilot.ORIGINALS_DIR / source["filename"]).write_bytes(payload)
+            print(f"inspected {len(rows_by_url):03d}/{candidate_count} {url}")
+    successful_urls = [url for url in urls if url in rows_by_url][:needed]
+    if len(successful_urls) != needed:
+        raise RuntimeError(
+            f"found only {len(successful_urls)} usable distractors; expected {needed}"
+        )
+    for url in successful_urls:
         source, payload = rows_by_url[url]
-        (pilot.ORIGINALS_DIR / source["filename"]).write_bytes(payload)
         sources.append(source)
     lock = {
         "schemaVersion": 1,
