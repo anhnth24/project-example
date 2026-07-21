@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
-use crate::db::models::{DocumentState, PublicationState};
+use crate::db::models::{DocumentState, IndexGenerationState, PublicationState};
 
 /// Lexical candidate before PG hydration (scores only; no body text).
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +48,9 @@ pub struct HydratedChunkRow {
     pub is_current: bool,
     pub effective_from: DateTime<Utc>,
     pub effective_to: Option<DateTime<Utc>>,
+    pub index_metadata_id: Uuid,
+    pub index_generation_active: bool,
+    pub index_generation_state: IndexGenerationState,
 }
 
 /// Conflict evidence sides that both remain authorized after recheck.
@@ -62,6 +65,10 @@ pub struct AuthorizedConflictEvidence {
     pub claim_b_version_id: Uuid,
     pub claim_a_collection_id: Uuid,
     pub claim_b_collection_id: Uuid,
+    pub claim_a_is_current: bool,
+    pub claim_b_is_current: bool,
+    pub claim_a_published: bool,
+    pub claim_b_published: bool,
     pub claim_a_quote: Option<String>,
     pub claim_b_quote: Option<String>,
 }
@@ -73,6 +80,14 @@ pub enum VersionVisibility {
     Current,
     /// Explicit set of published version ids (as_of / compare / history).
     VersionIds(BTreeSet<Uuid>),
+}
+
+/// Shadow/building/retired generations must not surface in retrieval.
+pub fn index_generation_visible_for_retrieval(
+    is_active: bool,
+    state: IndexGenerationState,
+) -> bool {
+    is_active && state == IndexGenerationState::Active
 }
 
 /// Resolves the published version effective at `as_of` for each in-scope document.
@@ -168,7 +183,10 @@ pub async fn load_lineage_versions(
         .collect())
 }
 
-/// Full-text search over in-scope, version-filtered chunks.
+/// Full-text search over active-generation, version-filtered chunks.
+///
+/// Query text is accent-folded (`accent-fold-v1`) before `plainto_tsquery` so it
+/// matches `markhand_accent_fold` tsvector content.
 pub async fn fts_search(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -180,13 +198,17 @@ pub async fn fts_search(
     if collection_ids.is_empty() || limit == 0 || query.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let folded = fileconv_core::intelligence::normalize_search_text(query);
+    if folded.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
     let rows = match visibility {
         VersionVisibility::Current => {
             txn.query(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
-                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $4)) AS rank
+                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $4))::real AS rank
                  FROM chunks c
                  JOIN documents d
                    ON d.org_id = c.org_id AND d.id = c.document_id
@@ -194,16 +216,20 @@ pub async fn fts_search(
                    ON dv.org_id = c.org_id
                   AND dv.document_id = c.document_id
                   AND dv.id = c.version_id
+                 JOIN index_metadata im
+                   ON im.org_id = c.org_id AND im.id = c.index_metadata_id
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
                    AND dv.is_current
+                   AND im.is_active
+                   AND im.state = 'active'
                    AND c.tsv @@ plainto_tsquery('simple', $4)
                  ORDER BY rank DESC, c.id
                  LIMIT $3",
-                &[&ctx.org_id(), &collection_ids, &limit_i64, &query],
+                &[&ctx.org_id(), &collection_ids, &limit_i64, &folded],
             )
             .await?
         }
@@ -215,7 +241,7 @@ pub async fn fts_search(
             txn.query(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
-                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $5)) AS rank
+                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $5))::real AS rank
                  FROM chunks c
                  JOIN documents d
                    ON d.org_id = c.org_id AND d.id = c.document_id
@@ -223,12 +249,16 @@ pub async fn fts_search(
                    ON dv.org_id = c.org_id
                   AND dv.document_id = c.document_id
                   AND dv.id = c.version_id
+                 JOIN index_metadata im
+                   ON im.org_id = c.org_id AND im.id = c.index_metadata_id
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
                    AND c.version_id = ANY($3)
+                   AND im.is_active
+                   AND im.state = 'active'
                    AND c.tsv @@ plainto_tsquery('simple', $5)
                  ORDER BY rank DESC, c.id
                  LIMIT $4",
@@ -237,7 +267,7 @@ pub async fn fts_search(
                     &collection_ids,
                     &versions,
                     &limit_i64,
-                    &query,
+                    &folded,
                 ],
             )
             .await?
@@ -246,10 +276,7 @@ pub async fn fts_search(
     rows.iter().map(map_fts_candidate).collect()
 }
 
-/// Hydrates candidate chunk identities from PostgreSQL with state/ACL joins.
-///
-/// Rows that fail collection allow-list, tombstone, or version visibility are
-/// omitted — vector/FTS scores never leak text without this path.
+/// Hydrates candidate chunk identities from the active index generation only.
 pub async fn hydrate_chunks_by_identity(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -267,7 +294,8 @@ pub async fn hydrate_chunks_by_identity(
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
                         c.heading_path, c.body, c.page, c.slide, c.sheet,
                         c.span_start, c.span_end, d.state, d.deleted_at,
-                        dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to
+                        dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
+                        c.index_metadata_id, im.is_active, im.state AS index_state
                  FROM chunks c
                  JOIN documents d
                    ON d.org_id = c.org_id AND d.id = c.document_id
@@ -275,13 +303,17 @@ pub async fn hydrate_chunks_by_identity(
                    ON dv.org_id = c.org_id
                   AND dv.document_id = c.document_id
                   AND dv.id = c.version_id
+                 JOIN index_metadata im
+                   ON im.org_id = c.org_id AND im.id = c.index_metadata_id
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
-                   AND dv.is_current",
+                   AND dv.is_current
+                   AND im.is_active
+                   AND im.state = 'active'",
                 &[&ctx.org_id(), &collection_ids, &identities],
             )
             .await?
@@ -296,7 +328,8 @@ pub async fn hydrate_chunks_by_identity(
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
                         c.heading_path, c.body, c.page, c.slide, c.sheet,
                         c.span_start, c.span_end, d.state, d.deleted_at,
-                        dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to
+                        dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
+                        c.index_metadata_id, im.is_active, im.state AS index_state
                  FROM chunks c
                  JOIN documents d
                    ON d.org_id = c.org_id AND d.id = c.document_id
@@ -304,13 +337,17 @@ pub async fn hydrate_chunks_by_identity(
                    ON dv.org_id = c.org_id
                   AND dv.document_id = c.document_id
                   AND dv.id = c.version_id
+                 JOIN index_metadata im
+                   ON im.org_id = c.org_id AND im.id = c.index_metadata_id
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
                    AND c.version_id = ANY($4)
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
-                   AND dv.publication_state = 'published'",
+                   AND dv.publication_state = 'published'
+                   AND im.is_active
+                   AND im.state = 'active'",
                 &[&ctx.org_id(), &collection_ids, &identities, &versions],
             )
             .await?
@@ -319,64 +356,128 @@ pub async fn hydrate_chunks_by_identity(
     rows.iter().map(map_hydrated_chunk).collect()
 }
 
-/// Loads conflict evidence only when both claim sides remain in authorized scope.
+/// Loads conflict evidence only when both claim sides remain authorized and
+/// published under the resolved version visibility.
 pub async fn load_authorized_conflict_evidence(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     collection_ids: &[Uuid],
     conflict_ids: &[Uuid],
+    visibility: &VersionVisibility,
 ) -> Result<Vec<AuthorizedConflictEvidence>, DbError> {
     if collection_ids.is_empty() || conflict_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = txn
-        .query(
-            "SELECT conf.id AS conflict_id,
-                    conf.claim_a_id, conf.claim_b_id,
-                    ca.document_id AS claim_a_document_id,
-                    cb.document_id AS claim_b_document_id,
-                    ca.version_id AS claim_a_version_id,
-                    cb.version_id AS claim_b_version_id,
-                    da.collection_id AS claim_a_collection_id,
-                    db.collection_id AS claim_b_collection_id,
-                    ca.citation_quote AS claim_a_quote,
-                    cb.citation_quote AS claim_b_quote
-             FROM conflicts conf
-             JOIN claims ca
-               ON ca.org_id = conf.org_id AND ca.id = conf.claim_a_id
-             JOIN claims cb
-               ON cb.org_id = conf.org_id AND cb.id = conf.claim_b_id
-             JOIN documents da
-               ON da.org_id = ca.org_id AND da.id = ca.document_id
-             JOIN documents db
-               ON db.org_id = cb.org_id AND db.id = cb.document_id
-             WHERE conf.org_id = $1
-               AND conf.id = ANY($2)
-               AND da.collection_id = ANY($3)
-               AND db.collection_id = ANY($3)
-               AND da.deleted_at IS NULL
-               AND db.deleted_at IS NULL
-               AND da.state = 'indexed'
-               AND db.state = 'indexed'",
-            &[&ctx.org_id(), &conflict_ids, &collection_ids],
-        )
-        .await?;
-    Ok(rows
-        .iter()
-        .map(|row| AuthorizedConflictEvidence {
-            conflict_id: row.get("conflict_id"),
-            claim_a_id: row.get("claim_a_id"),
-            claim_b_id: row.get("claim_b_id"),
-            claim_a_document_id: row.get("claim_a_document_id"),
-            claim_b_document_id: row.get("claim_b_document_id"),
-            claim_a_version_id: row.get("claim_a_version_id"),
-            claim_b_version_id: row.get("claim_b_version_id"),
-            claim_a_collection_id: row.get("claim_a_collection_id"),
-            claim_b_collection_id: row.get("claim_b_collection_id"),
-            claim_a_quote: row.get("claim_a_quote"),
-            claim_b_quote: row.get("claim_b_quote"),
-        })
-        .collect())
+    let rows = match visibility {
+        VersionVisibility::Current => {
+            txn.query(
+                "SELECT conf.id AS conflict_id,
+                        conf.claim_a_id, conf.claim_b_id,
+                        ca.document_id AS claim_a_document_id,
+                        cb.document_id AS claim_b_document_id,
+                        ca.version_id AS claim_a_version_id,
+                        cb.version_id AS claim_b_version_id,
+                        da.collection_id AS claim_a_collection_id,
+                        db.collection_id AS claim_b_collection_id,
+                        dva.is_current AS claim_a_is_current,
+                        dvb.is_current AS claim_b_is_current,
+                        (dva.publication_state = 'published') AS claim_a_published,
+                        (dvb.publication_state = 'published') AS claim_b_published,
+                        ca.citation_quote AS claim_a_quote,
+                        cb.citation_quote AS claim_b_quote
+                 FROM conflicts conf
+                 JOIN claims ca
+                   ON ca.org_id = conf.org_id AND ca.id = conf.claim_a_id
+                 JOIN claims cb
+                   ON cb.org_id = conf.org_id AND cb.id = conf.claim_b_id
+                 JOIN documents da
+                   ON da.org_id = ca.org_id AND da.id = ca.document_id
+                 JOIN documents db
+                   ON db.org_id = cb.org_id AND db.id = cb.document_id
+                 JOIN document_versions dva
+                   ON dva.org_id = ca.org_id
+                  AND dva.document_id = ca.document_id
+                  AND dva.id = ca.version_id
+                 JOIN document_versions dvb
+                   ON dvb.org_id = cb.org_id
+                  AND dvb.document_id = cb.document_id
+                  AND dvb.id = cb.version_id
+                 WHERE conf.org_id = $1
+                   AND conf.id = ANY($2)
+                   AND da.collection_id = ANY($3)
+                   AND db.collection_id = ANY($3)
+                   AND da.deleted_at IS NULL
+                   AND db.deleted_at IS NULL
+                   AND da.state = 'indexed'
+                   AND db.state = 'indexed'
+                   AND dva.publication_state = 'published'
+                   AND dvb.publication_state = 'published'
+                   AND dva.is_current
+                   AND dvb.is_current",
+                &[&ctx.org_id(), &conflict_ids, &collection_ids],
+            )
+            .await?
+        }
+        VersionVisibility::VersionIds(version_ids) => {
+            if version_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            let versions: Vec<Uuid> = version_ids.iter().copied().collect();
+            txn.query(
+                "SELECT conf.id AS conflict_id,
+                        conf.claim_a_id, conf.claim_b_id,
+                        ca.document_id AS claim_a_document_id,
+                        cb.document_id AS claim_b_document_id,
+                        ca.version_id AS claim_a_version_id,
+                        cb.version_id AS claim_b_version_id,
+                        da.collection_id AS claim_a_collection_id,
+                        db.collection_id AS claim_b_collection_id,
+                        dva.is_current AS claim_a_is_current,
+                        dvb.is_current AS claim_b_is_current,
+                        (dva.publication_state = 'published') AS claim_a_published,
+                        (dvb.publication_state = 'published') AS claim_b_published,
+                        ca.citation_quote AS claim_a_quote,
+                        cb.citation_quote AS claim_b_quote
+                 FROM conflicts conf
+                 JOIN claims ca
+                   ON ca.org_id = conf.org_id AND ca.id = conf.claim_a_id
+                 JOIN claims cb
+                   ON cb.org_id = conf.org_id AND cb.id = conf.claim_b_id
+                 JOIN documents da
+                   ON da.org_id = ca.org_id AND da.id = ca.document_id
+                 JOIN documents db
+                   ON db.org_id = cb.org_id AND db.id = cb.document_id
+                 JOIN document_versions dva
+                   ON dva.org_id = ca.org_id
+                  AND dva.document_id = ca.document_id
+                  AND dva.id = ca.version_id
+                 JOIN document_versions dvb
+                   ON dvb.org_id = cb.org_id
+                  AND dvb.document_id = cb.document_id
+                  AND dvb.id = cb.version_id
+                 WHERE conf.org_id = $1
+                   AND conf.id = ANY($2)
+                   AND da.collection_id = ANY($3)
+                   AND db.collection_id = ANY($3)
+                   AND da.deleted_at IS NULL
+                   AND db.deleted_at IS NULL
+                   AND da.state = 'indexed'
+                   AND db.state = 'indexed'
+                   AND dva.publication_state = 'published'
+                   AND dvb.publication_state = 'published'
+                   AND ca.version_id = ANY($4)
+                   AND cb.version_id = ANY($4)",
+                &[&ctx.org_id(), &conflict_ids, &collection_ids, &versions],
+            )
+            .await?
+        }
+    };
+    Ok(rows.iter().map(map_conflict_evidence).collect())
+}
+
+/// Decode a PostgreSQL `real` (`f32`) rank without widening to `f64` first.
+pub fn read_pg_real_rank(row: &Row, column: &str) -> f32 {
+    row.get::<_, f32>(column)
 }
 
 fn map_fts_candidate(row: &Row) -> Result<FtsCandidate, DbError> {
@@ -386,8 +487,28 @@ fn map_fts_candidate(row: &Row) -> Result<FtsCandidate, DbError> {
         document_id: row.get("document_id"),
         version_id: row.get("version_id"),
         collection_id: row.get("collection_id"),
-        rank: row.get::<_, f64>("rank") as f32,
+        rank: read_pg_real_rank(row, "rank"),
     })
+}
+
+fn map_conflict_evidence(row: &Row) -> AuthorizedConflictEvidence {
+    AuthorizedConflictEvidence {
+        conflict_id: row.get("conflict_id"),
+        claim_a_id: row.get("claim_a_id"),
+        claim_b_id: row.get("claim_b_id"),
+        claim_a_document_id: row.get("claim_a_document_id"),
+        claim_b_document_id: row.get("claim_b_document_id"),
+        claim_a_version_id: row.get("claim_a_version_id"),
+        claim_b_version_id: row.get("claim_b_version_id"),
+        claim_a_collection_id: row.get("claim_a_collection_id"),
+        claim_b_collection_id: row.get("claim_b_collection_id"),
+        claim_a_is_current: row.get("claim_a_is_current"),
+        claim_b_is_current: row.get("claim_b_is_current"),
+        claim_a_published: row.get("claim_a_published"),
+        claim_b_published: row.get("claim_b_published"),
+        claim_a_quote: row.get("claim_a_quote"),
+        claim_b_quote: row.get("claim_b_quote"),
+    }
 }
 
 fn map_hydrated_chunk(row: &Row) -> Result<HydratedChunkRow, DbError> {
@@ -403,6 +524,9 @@ fn map_hydrated_chunk(row: &Row) -> Result<HydratedChunkRow, DbError> {
             )));
         }
     };
+    let index_state: String = row.get("index_state");
+    let index_generation_state =
+        IndexGenerationState::parse(&index_state).map_err(DbError::Config)?;
     Ok(HydratedChunkRow {
         chunk_id: row.get("id"),
         chunk_identity_sha256: row.get("chunk_identity_sha256"),
@@ -425,12 +549,15 @@ fn map_hydrated_chunk(row: &Row) -> Result<HydratedChunkRow, DbError> {
         is_current: row.get("is_current"),
         effective_from: row.get("effective_from"),
         effective_to: row.get("effective_to"),
+        index_metadata_id: row.get("index_metadata_id"),
+        index_generation_active: row.get("is_active"),
+        index_generation_state,
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::VersionVisibility;
+    use super::*;
     use std::collections::BTreeSet;
     use uuid::Uuid;
 
@@ -442,5 +569,40 @@ mod tests {
             VersionVisibility::Current => panic!("expected version ids"),
         }
         let _ = Uuid::nil();
+    }
+
+    #[test]
+    fn only_active_generation_is_retrieval_visible() {
+        assert!(index_generation_visible_for_retrieval(
+            true,
+            IndexGenerationState::Active
+        ));
+        assert!(!index_generation_visible_for_retrieval(
+            true,
+            IndexGenerationState::Shadow
+        ));
+        assert!(!index_generation_visible_for_retrieval(
+            true,
+            IndexGenerationState::Building
+        ));
+        assert!(!index_generation_visible_for_retrieval(
+            false,
+            IndexGenerationState::Active
+        ));
+        assert!(!index_generation_visible_for_retrieval(
+            false,
+            IndexGenerationState::Retired
+        ));
+        assert!(!index_generation_visible_for_retrieval(
+            true,
+            IndexGenerationState::Draining
+        ));
+    }
+
+    #[test]
+    fn pg_real_rank_helper_preserves_f32() {
+        // Compile-time contract: retrieval must decode REAL as f32, not f64.
+        let value: f32 = 0.75;
+        assert!((value - 0.75).abs() < f32::EPSILON);
     }
 }

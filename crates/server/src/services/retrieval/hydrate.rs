@@ -13,7 +13,10 @@ use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
 use crate::db::models::{DocumentState, PublicationState};
 use crate::db::pool::with_org_txn;
-use crate::db::search::{self, AuthorizedConflictEvidence, HydratedChunkRow, VersionVisibility};
+use crate::db::search::{
+    self, index_generation_visible_for_retrieval, AuthorizedConflictEvidence, HydratedChunkRow,
+    VersionVisibility,
+};
 use crate::services::deletion::document_reads_suppressed;
 
 /// Citation-ready chunk after fail-closed recheck.
@@ -57,6 +60,12 @@ pub fn authorize_hydrated_row(
         return None;
     }
     if row.publication_state != PublicationState::Published {
+        return None;
+    }
+    if !index_generation_visible_for_retrieval(
+        row.index_generation_active,
+        row.index_generation_state,
+    ) {
         return None;
     }
     match visibility {
@@ -135,10 +144,27 @@ pub async fn hydrate_authorized_chunks(
     .await
 }
 
-/// Conflict evidence is returned only when both claim sides stay authorized.
-pub fn both_sides_authorized(ctx: &OrgContext, evidence: &AuthorizedConflictEvidence) -> bool {
-    ctx.allows_collection(evidence.claim_a_collection_id)
-        && ctx.allows_collection(evidence.claim_b_collection_id)
+/// Conflict evidence requires both sides authorized under collection + visibility.
+pub fn both_sides_authorized(
+    ctx: &OrgContext,
+    evidence: &AuthorizedConflictEvidence,
+    visibility: &VersionVisibility,
+) -> bool {
+    if !(ctx.allows_collection(evidence.claim_a_collection_id)
+        && ctx.allows_collection(evidence.claim_b_collection_id))
+    {
+        return false;
+    }
+    if !(evidence.claim_a_published && evidence.claim_b_published) {
+        return false;
+    }
+    match visibility {
+        VersionVisibility::Current => evidence.claim_a_is_current && evidence.claim_b_is_current,
+        VersionVisibility::VersionIds(allowed) => {
+            allowed.contains(&evidence.claim_a_version_id)
+                && allowed.contains(&evidence.claim_b_version_id)
+        }
+    }
 }
 
 /// Loads conflict evidence and keeps pairs where both sides remain in scope.
@@ -147,9 +173,11 @@ pub async fn hydrate_authorized_conflict_evidence(
     ctx: &OrgContext,
     collection_ids: &[Uuid],
     conflict_ids: &[Uuid],
+    visibility: &VersionVisibility,
 ) -> Result<Vec<AuthorizedConflictEvidence>, DbError> {
     let collection_ids = collection_ids.to_vec();
     let conflict_ids = conflict_ids.to_vec();
+    let visibility = visibility.clone();
     with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -159,11 +187,12 @@ pub async fn hydrate_authorized_conflict_evidence(
                     &ctx,
                     &collection_ids,
                     &conflict_ids,
+                    &visibility,
                 )
                 .await?;
                 Ok(rows
                     .into_iter()
-                    .filter(|row| both_sides_authorized(&ctx, row))
+                    .filter(|row| both_sides_authorized(&ctx, row, &visibility))
                     .collect())
             })
         }
@@ -190,6 +219,7 @@ pub fn collect_candidate_identities(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::IndexGenerationState;
     use chrono::TimeZone;
 
     fn sample_row(collection_id: Uuid, is_current: bool) -> HydratedChunkRow {
@@ -215,6 +245,9 @@ mod tests {
             is_current,
             effective_from: Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap(),
             effective_to: None,
+            index_metadata_id: Uuid::new_v4(),
+            index_generation_active: true,
+            index_generation_state: IndexGenerationState::Active,
         }
     }
 
@@ -255,27 +288,70 @@ mod tests {
     }
 
     #[test]
-    fn conflict_requires_both_authorized_collections() {
+    fn shadow_and_retired_generations_are_not_hydrated() {
+        let collection = Uuid::new_v4();
+        let org = Uuid::new_v4();
+        let ctx =
+            OrgContext::try_new(org, Uuid::new_v4(), ["qa.query"], [collection]).unwrap();
+        let mut row = sample_row(collection, true);
+        row.org_id = org;
+        row.index_generation_state = IndexGenerationState::Shadow;
+        assert!(authorize_hydrated_row(&ctx, &row, &VersionVisibility::Current).is_none());
+        row.index_generation_state = IndexGenerationState::Active;
+        row.index_generation_active = false;
+        assert!(authorize_hydrated_row(&ctx, &row, &VersionVisibility::Current).is_none());
+        row.index_generation_active = true;
+        row.index_generation_state = IndexGenerationState::Retired;
+        assert!(authorize_hydrated_row(&ctx, &row, &VersionVisibility::Current).is_none());
+    }
+
+    #[test]
+    fn conflict_requires_both_authorized_collections_and_visibility() {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
         let org = Uuid::new_v4();
         let user = Uuid::new_v4();
         let ctx = OrgContext::try_new(org, user, ["qa.query"], [a]).unwrap();
+        let va = Uuid::new_v4();
+        let vb = Uuid::new_v4();
         let evidence = AuthorizedConflictEvidence {
             conflict_id: Uuid::new_v4(),
             claim_a_id: Uuid::new_v4(),
             claim_b_id: Uuid::new_v4(),
             claim_a_document_id: Uuid::new_v4(),
             claim_b_document_id: Uuid::new_v4(),
-            claim_a_version_id: Uuid::new_v4(),
-            claim_b_version_id: Uuid::new_v4(),
+            claim_a_version_id: va,
+            claim_b_version_id: vb,
             claim_a_collection_id: a,
             claim_b_collection_id: b,
+            claim_a_is_current: true,
+            claim_b_is_current: true,
+            claim_a_published: true,
+            claim_b_published: true,
             claim_a_quote: Some("left".into()),
             claim_b_quote: Some("right".into()),
         };
-        assert!(!both_sides_authorized(&ctx, &evidence));
+        assert!(!both_sides_authorized(
+            &ctx,
+            &evidence,
+            &VersionVisibility::Current
+        ));
         let ctx_both = OrgContext::try_new(org, user, ["qa.query"], [a, b]).unwrap();
-        assert!(both_sides_authorized(&ctx_both, &evidence));
+        assert!(both_sides_authorized(
+            &ctx_both,
+            &evidence,
+            &VersionVisibility::Current
+        ));
+        let mut unpublished = evidence.clone();
+        unpublished.claim_b_published = false;
+        assert!(!both_sides_authorized(
+            &ctx_both,
+            &unpublished,
+            &VersionVisibility::Current
+        ));
+        let visibility = VersionVisibility::VersionIds(BTreeSet::from([va]));
+        assert!(!both_sides_authorized(&ctx_both, &evidence, &visibility));
+        let visibility = VersionVisibility::VersionIds(BTreeSet::from([va, vb]));
+        assert!(both_sides_authorized(&ctx_both, &evidence, &visibility));
     }
 }

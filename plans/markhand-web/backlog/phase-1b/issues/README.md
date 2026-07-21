@@ -189,7 +189,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
-- **Status:** Review — draft PR #252; Sol review pending. Do not mark Done until Sol APPROVE.
+- **Status:** Review — draft PR #252; addressing Sol REQUEST_CHANGES. Do not mark Done until Sol APPROVE.
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.

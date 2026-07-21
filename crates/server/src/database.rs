@@ -66,6 +66,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0015_expand_vector_cleanup_intent_states.sql",
         include_str!("../migrations/0015_expand_vector_cleanup_intent_states.sql"),
     ),
+    (
+        "0016_chunks_accent_fold_tsv.sql",
+        include_str!("../migrations/0016_chunks_accent_fold_tsv.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

@@ -10,10 +10,13 @@ pub mod fts;
 pub mod hydrate;
 pub mod vector;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::future::Future;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use deadpool_postgres::Pool;
+use fileconv_knowledge::embedding::EmbeddingPlan;
 use fileconv_knowledge::query::PreparedQuery;
 use fileconv_knowledge::rank::{hybrid_rerank_score, sort_hybrid_hits, VECTOR_WEIGHT};
 use fileconv_knowledge::types::{HybridSearchHit, SourceAnchor};
@@ -24,8 +27,11 @@ use crate::auth::context::OrgContext;
 use crate::auth::permissions::{require_permission, ResolveError};
 use crate::db::error::DbError;
 use crate::db::index_metadata;
+use crate::db::models::IndexMetadata;
 use crate::db::pool::with_org_txn;
-use crate::db::search::{self, AuthorizedConflictEvidence, VersionVisibility};
+use crate::db::search::{
+    self, index_generation_visible_for_retrieval, AuthorizedConflictEvidence, VersionVisibility,
+};
 use crate::services::embedding::{ApprovedEmbeddingRuntime, EmbeddingError};
 use crate::services::index_signature::collection_name_for_digest;
 use crate::services::retrieval::fts::{self as fts_leg, LexicalCandidate};
@@ -43,6 +49,10 @@ pub const PERMISSION_QA_QUERY: &str = "qa.query";
 
 /// Candidate pull depth per leg before merge (desktop uses 250/500).
 const LEG_CANDIDATE_LIMIT: usize = 250;
+/// Bound embedding so a hung provider cannot stall retrieval forever.
+pub const EMBED_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bound each retrieval leg (FTS / Qdrant) independently.
+pub const LEG_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Version-aware retrieval mode (ADR 0002).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,14 +256,21 @@ pub async fn hybrid_search(
 
     let prepared = PreparedQuery::new(&request.query);
     let mut warnings = Vec::new();
+    let runtime_plan = embedder.map(ApprovedEmbeddingRuntime::plan);
     let query_vector = match embedder {
-        Some(runtime) => match runtime.embed(&[request.query.clone()]).await {
-            Ok(mut vectors) => vectors.pop().filter(|vector| !vector.is_empty()),
-            Err(_) => {
-                warnings.push("Embedding provider error; using FTS-only retrieval.".into());
-                None
+        Some(runtime) => {
+            match with_timeout(EMBED_TIMEOUT, runtime.embed(&[request.query.clone()])).await {
+                Ok(Ok(mut vectors)) => vectors.pop().filter(|vector| !vector.is_empty()),
+                Ok(Err(_)) => {
+                    warnings.push("Embedding provider error; using FTS-only retrieval.".into());
+                    None
+                }
+                Err(_) => {
+                    warnings.push("Embedding timed out; using FTS-only retrieval.".into());
+                    None
+                }
             }
-        },
+        }
         None => {
             warnings.push("No embedding runtime configured; using FTS-only retrieval.".into());
             None
@@ -265,31 +282,42 @@ pub async fn hybrid_search(
 
     let leg_limit = LEG_CANDIDATE_LIMIT.max(request.limit);
 
-    let lexical_future = fts_leg::search_lexical(
-        pool,
-        ctx,
-        &collection_ids,
-        &request.query,
-        &resolved.visibility,
-        leg_limit,
-    );
+    let lexical_future = async {
+        with_timeout(
+            LEG_TIMEOUT,
+            fts_leg::search_lexical(
+                pool,
+                ctx,
+                &collection_ids,
+                &request.query,
+                &resolved.visibility,
+                leg_limit,
+            ),
+        )
+        .await
+    };
 
     let vector_future = async {
         match query_vector.as_deref() {
             Some(vector) => {
-                search_all_vector_legs(VectorLegSearch {
-                    pool,
-                    qdrant,
-                    ctx,
-                    collection_ids: &collection_ids,
-                    query_vector: vector,
-                    visibility: &resolved.visibility,
-                    document_id: document_filter,
-                    limit: leg_limit,
-                })
+                with_timeout(
+                    LEG_TIMEOUT,
+                    search_all_vector_legs(VectorLegSearch {
+                        pool,
+                        qdrant,
+                        ctx,
+                        collection_ids: &collection_ids,
+                        query_vector: vector,
+                        visibility: &resolved.visibility,
+                        document_id: document_filter,
+                        limit: leg_limit,
+                        runtime_plan,
+                        warnings: &mut warnings,
+                    }),
+                )
                 .await
             }
-            None => Ok(Vec::new()),
+            None => Ok(Ok(Vec::new())),
         }
     };
 
@@ -298,23 +326,23 @@ pub async fn hybrid_search(
     let mut lexical_failed = false;
     let mut vector_failed = false;
     let mut lexical = match lexical_result {
-        Ok(rows) => fts_leg::filter_lexical_in_scope(&collection_ids, rows),
-        Err(_) => {
+        Ok(Ok(rows)) => fts_leg::filter_lexical_in_scope(&collection_ids, rows),
+        Ok(Err(_)) | Err(_) => {
             lexical_failed = true;
             warnings.push("FTS leg unavailable; continuing with vector-only retrieval.".into());
             Vec::new()
         }
     };
     let mut vector_candidates = match vector_result {
-        Ok(rows) => rows,
-        Err(_) => {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(_)) | Err(_) => {
             vector_failed = true;
             warnings.push("Vector leg unavailable; continuing with FTS-only retrieval.".into());
             Vec::new()
         }
     };
 
-    // One-leg outage is graceful; only fail when every attempted leg errored.
+    // One-leg outage / timeout is graceful; only fail when every attempted leg errored.
     let vector_attempted = query_vector.is_some();
     if lexical_failed && (vector_failed || !vector_attempted) {
         return Err(RetrievalError::BothLegsFailed);
@@ -366,6 +394,7 @@ pub async fn hybrid_search(
             ctx,
             &collection_ids,
             &request.conflict_ids,
+            &resolved.visibility,
         )
         .await?
     };
@@ -495,6 +524,49 @@ struct VectorLegSearch<'a> {
     visibility: &'a VersionVisibility,
     document_id: Option<Uuid>,
     limit: usize,
+    runtime_plan: Option<&'a EmbeddingPlan>,
+    warnings: &'a mut Vec<String>,
+}
+
+/// Bound a retrieval dependency so hung legs degrade instead of stalling.
+pub async fn with_timeout<T, E>(
+    timeout: Duration,
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<Result<T, E>, ()> {
+    match tokio::time::timeout(timeout, future).await {
+        Ok(result) => Ok(result),
+        Err(_) => Err(()),
+    }
+}
+
+/// Active generation whose index signature matches the approved embedding runtime
+/// **and** the actual query vector dimensionality (never search with a mismatched vector).
+pub fn generation_compatible_with_runtime(
+    meta: &IndexMetadata,
+    plan: &EmbeddingPlan,
+    query_dimensions: usize,
+) -> bool {
+    if query_dimensions == 0 {
+        return false;
+    }
+    if !index_generation_visible_for_retrieval(meta.is_active, meta.state) {
+        return false;
+    }
+    let Ok(dimensions) = usize::try_from(meta.dimensions) else {
+        return false;
+    };
+    if dimensions != query_dimensions {
+        return false;
+    }
+    if let Some(expected) = plan.expected_dimensions() {
+        if expected != query_dimensions {
+            return false;
+        }
+    }
+    match plan.index_signature(query_dimensions) {
+        Ok(signature) => signature.digest() == meta.index_signature_sha256,
+        Err(_) => false,
+    }
 }
 
 async fn search_all_vector_legs(
@@ -509,6 +581,8 @@ async fn search_all_vector_legs(
         visibility,
         document_id,
         limit,
+        runtime_plan,
+        warnings,
     } = input;
     let collection_ids_owned = collection_ids.to_vec();
     let active = with_org_txn(pool, ctx, {
@@ -521,9 +595,23 @@ async fn search_all_vector_legs(
     })
     .await?;
 
-    // Group collections by active signature digest (one Qdrant collection each).
+    // Only search generations whose signature matches this runtime + query dims.
+    // Never send one query vector into an incompatible Qdrant collection.
+    let query_dimensions = query_vector.len();
     let mut by_signature: BTreeMap<String, BTreeSet<Uuid>> = BTreeMap::new();
+    let mut skipped_incompatible = 0usize;
+    let Some(plan) = runtime_plan else {
+        warnings.push(
+            "Embedding plan missing; refusing vector search without signature compatibility."
+                .into(),
+        );
+        return Ok(Vec::new());
+    };
     for meta in active {
+        if !generation_compatible_with_runtime(&meta, plan, query_dimensions) {
+            skipped_incompatible += 1;
+            continue;
+        }
         let Some(collection_id) = meta.collection_id else {
             continue;
         };
@@ -532,9 +620,15 @@ async fn search_all_vector_legs(
             .or_default()
             .insert(collection_id);
     }
+    if skipped_incompatible > 0 {
+        warnings.push(format!(
+            "Skipped {skipped_incompatible} active generation(s) with incompatible index signature."
+        ));
+    }
 
     let mut all = Vec::new();
     for (digest, collections) in by_signature {
+        // Each digest group shares one signature; query_vector dims already matched.
         let name = collection_name_for_digest(&digest)?;
         let scope = VectorScope::new(ctx.org_id(), collections);
         let hits = vector_leg::search_vectors(
@@ -593,7 +687,12 @@ pub fn merge_rerank_hydrated(
     let mut hybrid_hits = Vec::new();
     let mut meta: HashMap<String, &AuthorizedChunk> = HashMap::new();
 
-    for identity in lexical_rank.keys().chain(vector_rank.keys()) {
+    // Unique identity union — dual-leg candidates must not produce duplicate hits.
+    let mut identities: HashSet<&str> = HashSet::new();
+    identities.extend(lexical_rank.keys().copied());
+    identities.extend(vector_rank.keys().copied());
+
+    for identity in identities {
         let Some(chunk) = text_only_from_hydration(identity, hydrated) else {
             // Stale vector / unauthorized: never emit text.
             continue;
@@ -687,6 +786,7 @@ fn extract_snippet(body: &str, query_tokens: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::models::IndexGenerationState;
     use crate::services::retrieval::hydrate::authorize_hydrated_row;
     use chrono::TimeZone;
     use fileconv_knowledge::rank::VECTOR_WEIGHT;
@@ -846,6 +946,9 @@ mod tests {
             is_current: true,
             effective_from: Utc::now(),
             effective_to: None,
+            index_metadata_id: Uuid::new_v4(),
+            index_generation_active: true,
+            index_generation_state: IndexGenerationState::Active,
         };
         assert!(authorize_hydrated_row(&ctx, &row, &visibility).is_none());
         row.version_id = v1;
@@ -946,11 +1049,159 @@ mod tests {
             is_current: true,
             effective_from: Utc::now(),
             effective_to: None,
+            index_metadata_id: Uuid::new_v4(),
+            index_generation_active: true,
+            index_generation_state: IndexGenerationState::Active,
         };
         assert!(authorize_hydrated_row(&ctx, &row, &VersionVisibility::Current).is_none());
         row.document_state = crate::db::models::DocumentState::Indexed;
         row.deleted_at = None;
         assert!(authorize_hydrated_row(&ctx, &row, &VersionVisibility::Current).is_some());
+    }
+
+    #[test]
+    fn dual_leg_candidate_emits_single_hit() {
+        let collection = Uuid::new_v4();
+        let version = Uuid::new_v4();
+        let chunk = authorized(
+            "shared",
+            collection,
+            version,
+            true,
+            "Đối soát giao theo ngày",
+        );
+        let mut hydrated = HashMap::new();
+        hydrated.insert("shared".into(), chunk);
+        let lexical = vec![LexicalCandidate {
+            chunk_id: Uuid::new_v4(),
+            chunk_identity_sha256: "shared".into(),
+            document_id: Uuid::new_v4(),
+            version_id: version,
+            collection_id: collection,
+            score: 1.1,
+        }];
+        let vector = vec![VectorCandidate {
+            chunk_identity_sha256: "shared".into(),
+            document_id: Uuid::new_v4(),
+            version_id: version,
+            collection_id: collection,
+            score: 0.8,
+            payload_is_current: true,
+        }];
+        let hits = merge_rerank_hydrated(
+            &lexical,
+            &vector,
+            &hydrated,
+            &["doi".into(), "soat".into()],
+            10,
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chunk_identity_sha256, "shared");
+        assert!(hits[0].lexical_score > 0.0);
+        assert!(hits[0].vector_score > 0.0);
+    }
+
+    #[tokio::test]
+    async fn hung_leg_timeout_degrades_instead_of_stall() {
+        let result = with_timeout(Duration::from_millis(20), async {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok::<(), RetrievalError>(())
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn incompatible_generation_is_not_vector_searched() {
+        let plan = EmbeddingPlan::local_hash_v1();
+        let mut meta = IndexMetadata {
+            id: Uuid::new_v4(),
+            org_id: Uuid::new_v4(),
+            collection_id: Some(Uuid::new_v4()),
+            index_signature_sha256: "a".repeat(64),
+            identity_version: 2,
+            chunking_version: "heading-chunks-2000-v1".into(),
+            body_text_version: "nfc-v1".into(),
+            query_normalization_version: "accent-fold-v1".into(),
+            embedding_family: "other".into(),
+            embedding_revision: "x".into(),
+            dimensions: 256,
+            normalized: true,
+            runtime_path: crate::db::models::EmbeddingRuntimePath::LocalHash,
+            generation: 1,
+            is_active: true,
+            state: IndexGenerationState::Active,
+            created_at: Utc::now(),
+        };
+        assert!(!generation_compatible_with_runtime(&meta, &plan, 256));
+        meta.index_signature_sha256 = plan.signature(256).unwrap();
+        assert!(generation_compatible_with_runtime(&meta, &plan, 256));
+        assert!(
+            !generation_compatible_with_runtime(&meta, &plan, 128),
+            "must not search a generation with a differently sized query vector"
+        );
+        meta.state = IndexGenerationState::Shadow;
+        assert!(!generation_compatible_with_runtime(&meta, &plan, 256));
+        meta.state = IndexGenerationState::Active;
+        meta.dimensions = 128;
+        meta.index_signature_sha256 = plan.signature(128).unwrap_or_else(|_| "b".repeat(64));
+        assert!(
+            !generation_compatible_with_runtime(&meta, &plan, 256),
+            "dimension mismatch must fail closed even if a signature string is present"
+        );
+    }
+
+    #[test]
+    fn golden_dual_leg_rerank_score_and_latency_budget() {
+        let collection = Uuid::new_v4();
+        let version = Uuid::new_v4();
+        let body = "Đối soát giao dịch theo ngày cho chi nhánh Hà Nội";
+        let chunk = authorized("golden", collection, version, true, body);
+        let mut hydrated = HashMap::new();
+        hydrated.insert("golden".into(), chunk);
+        let lexical = vec![LexicalCandidate {
+            chunk_id: Uuid::new_v4(),
+            chunk_identity_sha256: "golden".into(),
+            document_id: Uuid::new_v4(),
+            version_id: version,
+            collection_id: collection,
+            score: 1.4,
+        }];
+        let vector = vec![VectorCandidate {
+            chunk_identity_sha256: "golden".into(),
+            document_id: Uuid::new_v4(),
+            version_id: version,
+            collection_id: collection,
+            score: 0.75,
+            payload_is_current: true,
+        }];
+        let tokens = vec!["doi".into(), "soat".into(), "giao".into(), "dich".into()];
+        let expected = hybrid_rerank_score(
+            Some(0),
+            Some(0),
+            0.75,
+            &tokens,
+            "Đối soát",
+            body,
+        );
+        let started = std::time::Instant::now();
+        let hits = merge_rerank_hydrated(&lexical, &vector, &hydrated, &tokens, 10);
+        let elapsed = started.elapsed();
+        assert_eq!(hits.len(), 1);
+        assert!((hits[0].rerank_score - expected).abs() < 0.0001);
+        assert!(hits[0].lexical_score > 0.0 && hits[0].vector_score > 0.0);
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "hermetic merge latency budget exceeded: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn accent_fold_query_matches_desktop_normalization() {
+        let folded = fileconv_core::intelligence::normalize_search_text("Đối soát");
+        assert_eq!(folded, "doi soat");
+        let prepared = PreparedQuery::new("Đối soát GIAO DỊCH");
+        assert_eq!(prepared.tokens, ["doi", "soat", "giao", "dich"]);
     }
 
     #[test]
