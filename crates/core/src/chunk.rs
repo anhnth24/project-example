@@ -17,8 +17,12 @@ pub struct Chunk {
 // serde chỉ dùng cho Serialize của Chunk — thêm dep nhẹ qua serde_json đã có.
 use serde::ser::Serialize as _;
 
-/// Chuẩn hoá CRLF (`\r\n`) → LF. **Không** đụng standalone `\r` (tránh đổi
-/// semantics tài liệu classic-Mac / binary-ish mà chưa có versioning/migration).
+/// Chuẩn hoá CRLF (`\r\n`) → LF để so khớp body canonical với span nguồn.
+///
+/// **Không** dùng làm pre-pass trước `str::lines()`: trên input như `a\r\r\nb`,
+/// replace `\r\n`→`\n` thành `a\r\nb` làm `lines()` nuốt standalone `\r`
+/// (Rust `lines` chỉ tách `\n`/`\r\n`, giữ lone `\r` trong nội dung dòng).
+/// **Không** đụng standalone `\r` ngoài cặp CRLF.
 pub fn normalize_newlines(md: &str) -> std::borrow::Cow<'_, str> {
     if !md.as_bytes().windows(2).any(|window| window == b"\r\n") {
         return std::borrow::Cow::Borrowed(md);
@@ -104,8 +108,11 @@ fn match_lf_needle_at(haystack: &[u8], start: usize, needle: &[u8]) -> Option<us
 }
 
 /// Chia markdown thành chunks ≤ `max_chars` (xấp xỉ — đo theo ký tự).
+///
+/// Duyệt bằng `str::lines()` trực tiếp trên nguồn (không pre-normalize CRLF):
+/// CRLF vẫn cho body canonical LF khi rejoin `\n`, còn standalone `\r` nằm trong
+/// nội dung dòng và giữ được khi định vị lại span.
 pub fn chunk_markdown(md: &str, max_chars: usize) -> Vec<Chunk> {
-    let md = normalize_newlines(md);
     let max_chars = max_chars.max(200); // sàn tối thiểu hợp lý
                                         // 1) Gom thành section theo heading.
     let mut sections: Vec<(Vec<String>, String)> = Vec::new(); // (heading-path, body)
@@ -237,6 +244,29 @@ mod tests {
         // Standalone CR phải giữ nguyên (không migration/versioning).
         assert_eq!(normalize_newlines("a\rb"), "a\rb");
         assert_eq!(normalize_newlines("a\r\nb\rc"), "a\nb\rc");
+        // Helper vẫn replace cặp CRLF trong `\r\r\n` — vì vậy chunk_markdown
+        // không được gọi normalize trước lines().
+        assert_eq!(normalize_newlines("a\r\r\nb"), "a\r\nb");
+    }
+
+    #[test]
+    fn chunk_markdown_preserves_standalone_cr_before_crlf_with_nonempty_span() {
+        // `a\r\r\nb`: lone CR rồi CRLF. Pre-normalize → `a\r\nb` làm lines() mất `\r`.
+        let md = "a\r\r\nb";
+        assert_eq!(md.lines().collect::<Vec<_>>(), ["a\r", "b"]);
+        let chunks = chunk_markdown(md, 2_000);
+        assert_eq!(chunks.len(), 1);
+        // Body: lone CR giữ trong nội dung; CRLF → LF khi rejoin.
+        assert_eq!(chunks[0].text, "a\r\nb");
+        let (start, end) = locate_chunk_text(md, 0, &chunks[0].text).expect("nonempty span");
+        assert!(end > start, "span must be nonempty");
+        assert_eq!(&md[start..end], "a\r\r\nb");
+        assert_eq!(
+            normalize_newlines(&md[start..end]).as_ref(),
+            chunks[0].text.as_str()
+        );
+        // Nguồn gốc không bị rewrite — standalone CR semantics giữ nguyên.
+        assert!(md.as_bytes().windows(3).any(|w| w == b"\r\r\n"));
     }
 
     #[test]

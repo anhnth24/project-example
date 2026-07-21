@@ -1968,6 +1968,27 @@ mod tests {
     }
 
     #[test]
+    fn corpus_standalone_cr_before_crlf_keeps_nonempty_exact_span() {
+        let markdown = "a\r\r\nb".to_string();
+        let doc = CorpusDocument {
+            source_rel: "cr-crlf.md".into(),
+            md_rel: "cr-crlf.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "a\r\nb");
+        assert!(chunks[0].end > chunks[0].start);
+        assert_eq!(&markdown[chunks[0].start..chunks[0].end], "a\r\r\nb");
+        assert!(markdown.as_bytes().windows(3).any(|w| w == b"\r\r\n"));
+        assert_eq!(
+            normalize_newlines(&markdown[chunks[0].start..chunks[0].end]).as_ref(),
+            chunks[0].text.as_str()
+        );
+    }
+
+    #[test]
     fn corpus_keeps_duplicate_mixed_newline_chunks_with_earliest_anchors() {
         let markdown =
             "# A\r\n\r\nLine one.\r\nLine two.\r\n\r\n# B\n\nLine one.\nLine two.\n".to_string();

@@ -164,6 +164,25 @@ mod tests {
     }
 
     #[test]
+    fn prepare_chunks_standalone_cr_before_crlf_keeps_nonempty_exact_span() {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let markdown = "a\r\r\nb";
+        let chunks = prepare_chunks(document_id, version_id, markdown, "");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].body, "a\r\nb");
+        assert!(chunks[0].span_end > chunks[0].span_start);
+        let start = chunks[0].span_start as usize;
+        let end = chunks[0].span_end as usize;
+        assert_eq!(&markdown[start..end], "a\r\r\nb");
+        assert!(markdown.as_bytes().windows(3).any(|w| w == b"\r\r\n"));
+        assert_eq!(
+            normalize_newlines(&markdown[start..end]).as_ref(),
+            chunks[0].body.as_str()
+        );
+    }
+
+    #[test]
     fn prepare_chunks_keeps_duplicate_mixed_newline_bodies_with_earliest_anchors() {
         let document_id = Uuid::new_v4();
         let version_id = Uuid::new_v4();
