@@ -82,6 +82,32 @@ pub enum AuthorizedConsumeOutcome {
     NotFound,
 }
 
+/// HMAC-bound fields required for an authorized single-use consume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorizedConsumeBinding {
+    pub capability_id: Uuid,
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub purpose: DownloadPurpose,
+    pub content_sha256: String,
+    pub content_type: String,
+    pub byte_size: i64,
+}
+
+impl AuthorizedConsumeBinding {
+    pub fn from_row(row: &DownloadCapabilityRow) -> Self {
+        Self {
+            capability_id: row.id,
+            document_id: row.document_id,
+            version_id: row.version_id,
+            purpose: row.purpose,
+            content_sha256: row.content_sha256.clone(),
+            content_type: row.content_type.clone(),
+            byte_size: row.byte_size,
+        }
+    }
+}
+
 /// Non-mutating liveness probe (DB clock). May race; consume is authoritative.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityLiveness {
@@ -277,15 +303,9 @@ pub async fn consume_or_classify(
 pub async fn consume_authorized_or_classify(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
-    capability_id: Uuid,
-    expected_document_id: Uuid,
-    expected_version_id: Uuid,
-    expected_purpose: DownloadPurpose,
-    expected_content_sha256: &str,
-    expected_content_type: &str,
-    expected_byte_size: i64,
+    expected: &AuthorizedConsumeBinding,
 ) -> Result<AuthorizedConsumeOutcome, DbError> {
-    let purpose = expected_purpose.as_str();
+    let purpose = expected.purpose.as_str();
     // Lock the capability row so classification and conditional consume see one snapshot.
     let locked = txn
         .query_opt(
@@ -297,7 +317,7 @@ pub async fn consume_authorized_or_classify(
              FROM download_capabilities
              WHERE org_id = $1 AND id = $2
              FOR UPDATE",
-            &[&ctx.org_id(), &capability_id],
+            &[&ctx.org_id(), &expected.capability_id],
         )
         .await?;
     let Some(locked) = locked else {
@@ -341,14 +361,14 @@ pub async fn consume_authorized_or_classify(
             &update_sql,
             &[
                 &ctx.org_id(),
-                &capability_id,
+                &expected.capability_id,
                 &ctx.user_id(),
-                &expected_document_id,
-                &expected_version_id,
+                &expected.document_id,
+                &expected.version_id,
                 &purpose,
-                &expected_content_sha256,
-                &expected_content_type,
-                &expected_byte_size,
+                &expected.content_sha256,
+                &expected.content_type,
+                &expected.byte_size,
             ],
         )
         .await?;
@@ -364,7 +384,10 @@ pub async fn consume_authorized_or_classify(
          WHERE dc.org_id = $1 AND dc.id = $2 AND dc.user_id = $3"
     );
     let auth_row = txn
-        .query_one(&auth_sql, &[&ctx.org_id(), &capability_id, &ctx.user_id()])
+        .query_one(
+            &auth_sql,
+            &[&ctx.org_id(), &expected.capability_id, &ctx.user_id()],
+        )
         .await?;
     let authorized: bool = auth_row.get(0);
     if !authorized {
@@ -377,7 +400,7 @@ pub async fn consume_authorized_or_classify(
              FROM download_capabilities
              WHERE org_id = $1 AND id = $2
              FOR UPDATE",
-            &[&ctx.org_id(), &capability_id],
+            &[&ctx.org_id(), &expected.capability_id],
         )
         .await?;
     let consumed_now: bool = again.get(0);

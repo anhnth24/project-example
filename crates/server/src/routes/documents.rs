@@ -272,12 +272,14 @@ async fn mint_download_capability(
     let minted = download::mint_download_capability(
         state.pool(),
         &signer,
-        auth.context.org_id(),
-        auth.context.user_id(),
-        document_id,
-        version_id,
-        purpose,
-        ttl,
+        &download::MintDownloadCapabilityRequest {
+            org_id: auth.context.org_id(),
+            user_id: auth.context.user_id(),
+            document_id,
+            version_id,
+            purpose,
+            ttl,
+        },
     )
     .await
     .map_err(|error| DocumentRouteError::Download(error, request_id.clone()))?;

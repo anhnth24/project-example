@@ -31,8 +31,8 @@ use crate::auth::permissions::{resolve_org_context_in_txn, ResolveError};
 use crate::config::SecretString;
 use crate::db::document_versions;
 use crate::db::download_capabilities::{
-    self, AuthorizedConsumeOutcome, CapabilityLiveness, DownloadCapabilityRow, DownloadPurpose,
-    NewDownloadCapability,
+    self, AuthorizedConsumeBinding, AuthorizedConsumeOutcome, CapabilityLiveness,
+    DownloadCapabilityRow, DownloadPurpose, NewDownloadCapability,
 };
 use crate::db::error::DbError;
 use crate::db::models::DocumentVersion;
@@ -94,7 +94,7 @@ impl fmt::Debug for CapabilityToken {
 
 impl CapabilitySigner {
     pub fn new(key: SecretString) -> Result<Self, DownloadError> {
-        if key.expose().as_bytes().len() < 32 {
+        if key.expose().len() < 32 {
             return Err(DownloadError::SignerNotConfigured);
         }
         Ok(Self { key })
@@ -324,6 +324,17 @@ impl Body for BudgetedDownloadBody {
     }
 }
 
+/// Input for minting a short-lived download capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintDownloadCapabilityRequest {
+    pub org_id: Uuid,
+    pub user_id: Uuid,
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub purpose: DownloadPurpose,
+    pub ttl: Duration,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MintedDownloadCapability {
     pub capability_id: Uuid,
@@ -335,6 +346,19 @@ pub struct MintedDownloadCapability {
     pub content_type: String,
     pub byte_size: u64,
     pub expires_at: DateTime<Utc>,
+}
+
+/// Fresh ACL + HMAC binding check before fetching download bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DownloadSourceBinding<'a> {
+    org_id: Uuid,
+    user_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    purpose: DownloadPurpose,
+    bound_sha: &'a str,
+    bound_type: &'a str,
+    bound_size: i64,
 }
 
 /// Redeemed download artifact. Body owns the budget permit (not `Clone`).
@@ -552,27 +576,27 @@ pub fn resolve_original_artifact_meta(
 pub async fn mint_download_capability(
     pool: &Pool,
     signer: &CapabilitySigner,
-    org_id: Uuid,
-    user_id: Uuid,
-    document_id: Uuid,
-    version_id: Uuid,
-    purpose: DownloadPurpose,
-    ttl: Duration,
+    request: &MintDownloadCapabilityRequest,
 ) -> Result<MintedDownloadCapability, DownloadError> {
-    if ttl.is_zero() || ttl > MAX_CAPABILITY_TTL {
+    if request.ttl.is_zero() || request.ttl > MAX_CAPABILITY_TTL {
         return Err(DownloadError::InvalidTtl);
     }
-    let ttl_secs = i64::try_from(ttl.as_secs()).map_err(|_| DownloadError::InvalidTtl)?;
+    let ttl_secs = i64::try_from(request.ttl.as_secs()).map_err(|_| DownloadError::InvalidTtl)?;
     if ttl_secs <= 0 {
         return Err(DownloadError::InvalidTtl);
     }
-    let ctx = resolve_org_context_in_txn(pool, org_id, user_id).await?;
+    let ctx = resolve_org_context_in_txn(pool, request.org_id, request.user_id).await?;
     if !ctx.has_permission(PERMISSION_QA_QUERY) {
         return Err(DownloadError::PermissionDenied);
     }
     if ctx.allowed_collection_ids().is_empty() {
         return Err(DownloadError::PermissionDenied);
     }
+
+    let document_id = request.document_id;
+    let version_id = request.version_id;
+    let purpose = request.purpose;
+    let org_id = request.org_id;
 
     let (row, versions) = with_org_txn(pool, &ctx, {
         let ctx = ctx.clone();
@@ -658,19 +682,14 @@ pub async fn mint_download_capability(
 
 async fn authorize_download_source(
     pool: &Pool,
-    org_id: Uuid,
-    user_id: Uuid,
-    document_id: Uuid,
-    version_id: Uuid,
-    purpose: DownloadPurpose,
-    bound_sha: &str,
-    bound_type: &str,
-    bound_size: i64,
+    binding: DownloadSourceBinding<'_>,
 ) -> Result<(String, String, String, u64, Option<String>), DownloadError> {
-    let ctx = resolve_org_context_in_txn(pool, org_id, user_id).await?;
+    let ctx = resolve_org_context_in_txn(pool, binding.org_id, binding.user_id).await?;
     if !ctx.has_permission(PERMISSION_QA_QUERY) {
         return Err(DownloadError::PermissionDenied);
     }
+    let document_id = binding.document_id;
+    let version_id = binding.version_id;
     let (version, versions) = with_org_txn(pool, &ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -692,7 +711,7 @@ async fn authorize_download_source(
         return Err(DownloadError::PermissionDenied);
     }
 
-    let (object_key_raw, expected_sha, content_type, byte_size, filename) = match purpose {
+    let (object_key_raw, expected_sha, content_type, byte_size, filename) = match binding.purpose {
         DownloadPurpose::Original => {
             let original = resolve_original_artifact_meta(&versions, &version)?;
             (
@@ -715,9 +734,9 @@ async fn authorize_download_source(
         }
     };
 
-    if expected_sha != bound_sha
-        || content_type != bound_type
-        || i64::try_from(byte_size).ok() != Some(bound_size)
+    if expected_sha != binding.bound_sha
+        || content_type != binding.bound_type
+        || i64::try_from(byte_size).ok() != Some(binding.bound_size)
     {
         return Err(DownloadError::Integrity);
     }
@@ -725,11 +744,11 @@ async fn authorize_download_source(
         return Err(DownloadError::TooLarge);
     }
 
-    let key = parse_key_for_org(&object_key_raw, org_id)?;
-    if purpose == DownloadPurpose::Markdown && key.namespace() != ObjectNamespace::Trusted {
+    let key = parse_key_for_org(&object_key_raw, binding.org_id)?;
+    if binding.purpose == DownloadPurpose::Markdown && key.namespace() != ObjectNamespace::Trusted {
         return Err(DownloadError::PermissionDenied);
     }
-    authorize_key_for_version(&key, version_id)?;
+    authorize_key_for_version(&key, binding.version_id)?;
     Ok((
         object_key_raw,
         expected_sha,
@@ -792,14 +811,16 @@ pub async fn redeem_download_capability<S: BlobStore>(
     let (object_key_raw, _expected_sha, _content_type, byte_size, filename) =
         authorize_download_source(
             pool,
-            org_id,
-            user_id,
-            capability.document_id,
-            capability.version_id,
-            capability.purpose,
-            &capability.content_sha256,
-            &capability.content_type,
-            capability.byte_size,
+            DownloadSourceBinding {
+                org_id,
+                user_id,
+                document_id: capability.document_id,
+                version_id: capability.version_id,
+                purpose: capability.purpose,
+                bound_sha: &capability.content_sha256,
+                bound_type: &capability.content_type,
+                bound_size: capability.byte_size,
+            },
         )
         .await?;
 
@@ -838,30 +859,20 @@ pub async fn redeem_download_capability<S: BlobStore>(
             return Err(DownloadError::PermissionDenied);
         }
     };
-    let expected_document_id = capability.document_id;
-    let expected_version_id = capability.version_id;
-    let expected_purpose = capability.purpose;
-    let expected_sha = capability.content_sha256.clone();
-    let expected_type = capability.content_type.clone();
-    let expected_size = capability.byte_size;
+    let expected = AuthorizedConsumeBinding {
+        capability_id,
+        document_id: capability.document_id,
+        version_id: capability.version_id,
+        purpose: capability.purpose,
+        content_sha256: capability.content_sha256.clone(),
+        content_type: capability.content_type.clone(),
+        byte_size: capability.byte_size,
+    };
     let outcome = with_org_txn(pool, &ctx, {
         let ctx = ctx.clone();
-        let expected_sha = expected_sha.clone();
-        let expected_type = expected_type.clone();
         move |txn| {
             Box::pin(async move {
-                download_capabilities::consume_authorized_or_classify(
-                    txn,
-                    &ctx,
-                    capability_id,
-                    expected_document_id,
-                    expected_version_id,
-                    expected_purpose,
-                    &expected_sha,
-                    &expected_type,
-                    expected_size,
-                )
-                .await
+                download_capabilities::consume_authorized_or_classify(txn, &ctx, &expected).await
             })
         }
     })
@@ -977,39 +988,43 @@ mod tests {
         }
     }
 
-    fn version(
+    struct VersionFixture<'a> {
         id: Uuid,
         parent: Option<Uuid>,
         number: i32,
-        original_key: &str,
+        original_key: &'a str,
         content_sha256: String,
-        markdown_key: Option<&str>,
-        content_type: &str,
+        markdown_key: Option<&'a str>,
+        content_type: &'a str,
         byte_size: i64,
-    ) -> DocumentVersion {
-        DocumentVersion {
-            id,
-            org_id: Uuid::new_v4(),
-            document_id: Uuid::new_v4(),
-            version_number: number,
-            parent_version_id: parent,
-            publication_state: if markdown_key.is_some() {
-                PublicationState::Published
-            } else {
-                PublicationState::Draft
-            },
-            is_current: markdown_key.is_some(),
-            content_sha256,
-            original_object_key: original_key.into(),
-            markdown_object_key: markdown_key.map(str::to_string),
-            source_filename: Some("source.pdf".into()),
-            source_content_type: Some(content_type.into()),
-            byte_size: Some(byte_size),
-            effective_from: Utc::now(),
-            effective_to: None,
-            change_summary: None,
-            created_by_user_id: Uuid::new_v4(),
-            created_at: Utc::now(),
+    }
+
+    impl VersionFixture<'_> {
+        fn build(self) -> DocumentVersion {
+            DocumentVersion {
+                id: self.id,
+                org_id: Uuid::new_v4(),
+                document_id: Uuid::new_v4(),
+                version_number: self.number,
+                parent_version_id: self.parent,
+                publication_state: if self.markdown_key.is_some() {
+                    PublicationState::Published
+                } else {
+                    PublicationState::Draft
+                },
+                is_current: self.markdown_key.is_some(),
+                content_sha256: self.content_sha256,
+                original_object_key: self.original_key.into(),
+                markdown_object_key: self.markdown_key.map(str::to_string),
+                source_filename: Some("source.pdf".into()),
+                source_content_type: Some(self.content_type.into()),
+                byte_size: Some(self.byte_size),
+                effective_from: Utc::now(),
+                effective_to: None,
+                change_summary: None,
+                created_by_user_id: Uuid::new_v4(),
+                created_at: Utc::now(),
+            }
         }
     }
 
@@ -1021,26 +1036,28 @@ mod tests {
         let original_sha = "aa".repeat(32);
         let markdown_sha = "bb".repeat(32);
         let versions = vec![
-            version(
-                source_id,
-                None,
-                1,
+            VersionFixture {
+                id: source_id,
+                parent: None,
+                number: 1,
                 original_key,
-                original_sha.clone(),
-                None,
-                "application/pdf",
-                2048,
-            ),
-            version(
-                published_id,
-                Some(source_id),
-                2,
+                content_sha256: original_sha.clone(),
+                markdown_key: None,
+                content_type: "application/pdf",
+                byte_size: 2048,
+            }
+            .build(),
+            VersionFixture {
+                id: published_id,
+                parent: Some(source_id),
+                number: 2,
                 original_key,
-                markdown_sha.clone(),
-                Some("trusted/aa/bb/cc"),
-                "text/markdown; charset=utf-8",
-                100,
-            ),
+                content_sha256: markdown_sha.clone(),
+                markdown_key: Some("trusted/aa/bb/cc"),
+                content_type: "text/markdown; charset=utf-8",
+                byte_size: 100,
+            }
+            .build(),
         ];
         let published = AuthorizedVersionRow {
             org_id: versions[1].org_id,

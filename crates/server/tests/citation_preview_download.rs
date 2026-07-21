@@ -12,8 +12,8 @@ use fileconv_server::auth::context::OrgContext;
 use fileconv_server::config::SecretString;
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::download_capabilities::{
-    classify_liveness, consume_authorized_or_classify, AuthorizedConsumeOutcome,
-    CapabilityLiveness, DownloadCapabilityRow, DownloadPurpose,
+    classify_liveness, consume_authorized_or_classify, AuthorizedConsumeBinding,
+    AuthorizedConsumeOutcome, CapabilityLiveness, DownloadCapabilityRow, DownloadPurpose,
 };
 use fileconv_server::db::pool::{apply_org_context, create_pool, with_org_txn};
 use fileconv_server::services::citation::{
@@ -21,7 +21,7 @@ use fileconv_server::services::citation::{
 };
 use fileconv_server::services::download::{
     mint_download_capability, redeem_download_capability, CapabilitySigner, DownloadError,
-    DownloadFetchBudget, DEFAULT_CAPABILITY_TTL,
+    DownloadFetchBudget, MintDownloadCapabilityRequest, DEFAULT_CAPABILITY_TTL,
 };
 use fileconv_server::services::preview::{fetch_trusted_markdown, PreviewError};
 use fileconv_server::services::retrieval::{PERMISSION_QA_HISTORY, PERMISSION_QA_QUERY};
@@ -302,10 +302,9 @@ async fn seed_tenant(
         [ids.collection],
     )
     .unwrap();
-    let markdown_len = markdown.as_bytes().len() as i64;
+    let markdown_len = markdown.len() as i64;
     let original_len = original_bytes.len() as i64;
     with_org_txn(pool, &ctx, {
-        let ids = ids;
         let markdown_sha = markdown_sha.clone();
         let original_sha = original_sha.clone();
         let original_key_str = original_key.as_str();
@@ -588,12 +587,14 @@ async fn citation_preview_download_happy_path_with_memory_store() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Original,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Original,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint original");
@@ -658,12 +659,14 @@ async fn two_tenants_idor_is_permission_denied_not_database() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        a.ids.org,
-        a.ids.user,
-        a.ids.document,
-        a.ids.published_version,
-        DownloadPurpose::Markdown,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: a.ids.org,
+            user_id: a.ids.user,
+            document_id: a.ids.document,
+            version_id: a.ids.published_version,
+            purpose: DownloadPurpose::Markdown,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -729,12 +732,14 @@ async fn concurrent_redeem_allows_only_one_winner() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Markdown,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Markdown,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -775,13 +780,7 @@ async fn concurrent_redeem_allows_only_one_winner() {
             let outcome = consume_authorized_or_classify(
                 &txn,
                 &ctx,
-                capability.id,
-                capability.document_id,
-                capability.version_id,
-                capability.purpose,
-                &capability.content_sha256,
-                &capability.content_type,
-                capability.byte_size,
+                &AuthorizedConsumeBinding::from_row(&capability),
             )
             .await
             .expect("consume_authorized_or_classify");
@@ -966,12 +965,14 @@ async fn mint_rejects_oversized_ttl() {
     let denied = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Original,
-        Duration::from_secs(10_000),
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Original,
+            ttl: Duration::from_secs(10_000),
+        },
     )
     .await;
     assert_eq!(denied, Err(DownloadError::InvalidTtl));
@@ -1018,12 +1019,14 @@ async fn disabled_user_and_membership_removal_deny_services() {
     let disabled = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Markdown,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Markdown,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await;
     assert_eq!(disabled, Err(DownloadError::PermissionDenied));
@@ -1179,7 +1182,7 @@ async fn qa_history_revoke_denies_non_current_version() {
         let version = tenant.ids.published_version;
         let user = tenant.ids.user;
         let markdown_sha = tenant.markdown_sha.clone();
-        let markdown_len = tenant.markdown.as_bytes().len() as i64;
+        let markdown_len = tenant.markdown.len() as i64;
         move |txn| {
             Box::pin(async move {
                 let successor = Uuid::new_v4();
@@ -1322,12 +1325,14 @@ async fn capability_expiry_boundary_is_expired_not_replay() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Markdown,
-        Duration::from_secs(1),
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Markdown,
+            ttl: Duration::from_secs(1),
+        },
     )
     .await
     .expect("mint ttl=1s");
@@ -1426,12 +1431,14 @@ async fn content_type_mismatch_on_redeem_is_integrity() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Original,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Original,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -1512,12 +1519,14 @@ async fn busy_budget_keeps_token_retryable() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Original,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Original,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -1627,12 +1636,14 @@ async fn barrier_acl_revoke_before_consume_denies_without_burning_token() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Markdown,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Markdown,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -1767,12 +1778,14 @@ async fn barrier_document_delete_before_consume_denies_without_body() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        tenant.ids.org,
-        tenant.ids.user,
-        tenant.ids.document,
-        tenant.ids.published_version,
-        DownloadPurpose::Original,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: tenant.ids.org,
+            user_id: tenant.ids.user,
+            document_id: tenant.ids.document,
+            version_id: tenant.ids.published_version,
+            purpose: DownloadPurpose::Original,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -1871,12 +1884,14 @@ async fn wrong_user_consume_is_permission_denied_not_expired_oracle() {
     let minted = mint_download_capability(
         &pool,
         &signer,
-        owner.ids.org,
-        owner.ids.user,
-        owner.ids.document,
-        owner.ids.published_version,
-        DownloadPurpose::Markdown,
-        DEFAULT_CAPABILITY_TTL,
+        &MintDownloadCapabilityRequest {
+            org_id: owner.ids.org,
+            user_id: owner.ids.user,
+            document_id: owner.ids.document,
+            version_id: owner.ids.published_version,
+            purpose: DownloadPurpose::Markdown,
+            ttl: DEFAULT_CAPABILITY_TTL,
+        },
     )
     .await
     .expect("mint");
@@ -1980,27 +1995,9 @@ async fn wrong_user_consume_is_permission_denied_not_expired_oracle() {
     .unwrap();
     let classified = with_org_txn(&pool, &peer_ctx, {
         let ctx = peer_ctx.clone();
-        let id = minted.capability_id;
-        let document = owner.ids.document;
-        let version = owner.ids.published_version;
-        let sha = row.content_sha256.clone();
-        let ctype = row.content_type.clone();
-        let size = row.byte_size;
+        let expected = AuthorizedConsumeBinding::from_row(&row);
         move |txn| {
-            Box::pin(async move {
-                fileconv_server::db::download_capabilities::consume_authorized_or_classify(
-                    txn,
-                    &ctx,
-                    id,
-                    document,
-                    version,
-                    DownloadPurpose::Markdown,
-                    &sha,
-                    &ctype,
-                    size,
-                )
-                .await
-            })
+            Box::pin(async move { consume_authorized_or_classify(txn, &ctx, &expected).await })
         }
     })
     .await
