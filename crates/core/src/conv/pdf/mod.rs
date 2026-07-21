@@ -421,3 +421,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod equivalence {
+    use crate::{Converter, ConverterOptions};
+    use std::path::PathBuf;
+
+    fn gold_001() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../bench/markhand_web/golden/documents/gold-001.pdf")
+    }
+
+    /// Byte-for-byte guard: native-text golden PDF output must match the
+    /// pre-split snapshot captured on cursor/core-hardening-754e @ 9048f9a.
+    #[test]
+    fn gold_001_markdown_matches_presplit_snapshot() {
+        let path = gold_001();
+        assert!(path.is_file(), "missing {}", path.display());
+        let md = Converter::with_options(ConverterOptions {
+            pdf_ocr: false,
+            ..ConverterOptions::default()
+        })
+        .convert_path(&path)
+        .expect("gold-001 convert")
+        .markdown;
+        let expected = include_str!("../../../tests/snapshots/gold_001_pdf.md");
+        assert_eq!(
+            md, expected,
+            "PDF module split must preserve gold-001 markdown byte-for-byte"
+        );
+    }
+}
