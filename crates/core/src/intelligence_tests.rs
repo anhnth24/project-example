@@ -571,6 +571,19 @@ fn pii_phone_failed_plus_run_is_skipped_not_retried() {
 }
 
 #[test]
+fn pii_phone_failed_plus_skips_one_group_then_scans_next() {
+    let report = detect_pii(&[doc(
+        "plus-next.md",
+        "Sai +0912345678 0987654321 và thêm 0912 345 678",
+    )]);
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&2));
+    assert!(report.findings.iter().any(|f| f.text == "0987654321"));
+    assert!(report.findings.iter().any(|f| f.text == "0912 345 678"));
+    assert!(!report.findings.iter().any(|f| f.text.starts_with('+')));
+    assert!(!report.findings.iter().any(|f| f.text == "0912345678"));
+}
+
+#[test]
 fn pii_phone_unicode_alphanumeric_boundaries() {
     let report = detect_pii(&[doc("u.md", "mãＡ0912345678 và 0912345678Ｂ")]);
     assert!(
@@ -617,6 +630,27 @@ fn pii_label_comma_and_distance_do_not_classify_transaction_ids() {
 }
 
 #[test]
+fn pii_compound_and_strong_bind_labels() {
+    let no_colon = detect_pii(&[doc(
+        "compound.md",
+        "Tài khoản ngân hàng 123456789012 cần đối soát.",
+    )]);
+    assert_single_span(&no_colon, PiiKind::BankAccount, "123456789012");
+
+    let so_tk = detect_pii(&[doc("so-tk-nh.md", "Số tài khoản ngân hàng 1234 5678 9012")]);
+    assert_single_span(&so_tk, PiiKind::BankAccount, "1234 5678 9012");
+
+    let cccd_so = detect_pii(&[doc("cccd-so.md", "CCCD số 001234567890")]);
+    assert_single_span(&cccd_so, PiiKind::NationalId, "001234567890");
+
+    let strong = detect_pii(&[doc(
+        "strong.md",
+        "Tài khoản của khách hàng doanh nghiệp đã đăng ký: 123456789012",
+    )]);
+    assert_single_span(&strong, PiiKind::BankAccount, "123456789012");
+}
+
+#[test]
 fn pii_email_paired_markdown_wrappers_redact_inner_only() {
     for (markdown, exact, redacted_shape) in [
         (
@@ -655,6 +689,44 @@ fn pii_email_paired_markdown_wrappers_redact_inner_only() {
     assert_single_span(&underscored, PiiKind::Email, "user_name@example.com");
     let starred = detect_pii(&[doc("s.md", "Mail user*tag@example.com")]);
     assert_single_span(&starred, PiiKind::Email, "user*tag@example.com");
+}
+
+#[test]
+fn pii_email_recursive_markdown_wrappers_including_strike_and_nested() {
+    for (markdown, redacted_shape) in [
+        (
+            "Mail ***lan@example.com*** ngay.",
+            "Mail ***[REDACTED_Email]*** ngay.",
+        ),
+        (
+            "Mail ~~lan@example.com~~ ngay.",
+            "Mail ~~[REDACTED_Email]~~ ngay.",
+        ),
+        (
+            "Mail **_lan@example.com_** ngay.",
+            "Mail **_[REDACTED_Email]_** ngay.",
+        ),
+        (
+            "Mail _**lan@example.com**_ ngay.",
+            "Mail _**[REDACTED_Email]**_ ngay.",
+        ),
+        (
+            "Mail ~~**lan@example.com**~~ ngay.",
+            "Mail ~~**[REDACTED_Email]**~~ ngay.",
+        ),
+        (
+            "Mail ***_lan@example.com_*** ngay.",
+            "Mail ***_[REDACTED_Email]_*** ngay.",
+        ),
+    ] {
+        let report = detect_pii(&[doc("nest.md", markdown)]);
+        assert_single_span(&report, PiiKind::Email, "lan@example.com");
+        assert_eq!(
+            redact_pii(markdown, &report.findings),
+            redacted_shape,
+            "input={markdown:?}"
+        );
+    }
 }
 
 #[test]

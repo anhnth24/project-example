@@ -791,8 +791,9 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
 /// - **Labels**: nearest explicit label cannot cross newline, `|`, comma/`，`/`、`,
 ///   or sentence/clause boundary, and must field-link within bounded distance;
 ///   Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
-/// - **Email wrappers**: paired `**`/`*`/`__`/`_`/`` ` `` redact the inner address
-///   only; unwrapped locals may still contain those marker characters.
+/// - **Email wrappers**: recursively peel balanced `***`/`**`/`~~`/`__`/`*`/`_`/
+///   `` ` `` (nested combinations); redact the inner address only; unwrapped locals
+///   may still contain those marker characters.
 /// - **Bank/CCCD**: nearest scoped label or table header only; bare `ngân hàng` prose
 ///   does not classify transaction counts. Explicit phone header/label beats bank.
 /// - Bare valid VN mobiles/landlines remain in recall; exotic/foreign numbers,
@@ -897,39 +898,102 @@ fn looks_like_email(token: &str) -> bool {
     })
 }
 
-/// Peel paired Markdown emphasis/code wrappers; return inner email span when wrapped.
-/// Longer markers (`**` / `__`) win over single `*` / `_`. Unwrapped locals keep
-/// legitimate `*` / `_` / `` ` `` characters inside the address.
+fn is_markdown_wrapper_char(ch: char) -> bool {
+    matches!(ch, '*' | '_' | '~' | '`')
+}
+
+/// Recursively peel balanced Markdown wrappers (`***` / `**` / `~~` / `__` / `*` /
+/// `_` / `` ` `` and nested combinations). Only paired closers; unwrapped locals
+/// keep legitimate marker characters inside the address.
 fn peel_markdown_email_wrappers(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
-    for marker in ["**", "__", "`", "*", "_"] {
-        let m = marker.len();
-        // Markers outside the expanded candidate.
-        if start >= m
-            && end + m <= text.len()
-            && text.get(start - m..start) == Some(marker)
-            && text.get(end..end + m) == Some(marker)
-        {
-            return Some((start, end));
+    // Longest markers first so `***` wins over `**`/`*`.
+    const MARKERS: &[&str] = &["***", "**", "~~", "__", "`", "*", "_"];
+
+    // Include leading/trailing wrapper markers around the expanded candidate so
+    // nested forms like `**_email_**` / `~~**email**~~` peel outside-in.
+    let mut region_start = start;
+    let mut region_end = end;
+    loop {
+        let mut extended = false;
+        for &marker in MARKERS {
+            let m = marker.len();
+            if region_start >= m && text.get(region_start - m..region_start) == Some(marker) {
+                region_start -= m;
+                extended = true;
+                break;
+            }
         }
-        // Leading marker absorbed into local; trailing marker still outside.
-        if start + m < end
-            && end + m <= text.len()
-            && text.get(start..start + m) == Some(marker)
-            && text.get(end..end + m) == Some(marker)
-            && looks_like_email(&text[start + m..end])
-        {
-            return Some((start + m, end));
-        }
-        // Both markers absorbed (rare; trailing `*`/`_` are not domain chars).
-        if end >= start + 2 * m + 3
-            && text.get(start..start + m) == Some(marker)
-            && text.get(end - m..end) == Some(marker)
-            && looks_like_email(&text[start + m..end - m])
-        {
-            return Some((start + m, end - m));
+        if !extended {
+            break;
         }
     }
-    None
+    loop {
+        let mut extended = false;
+        for &marker in MARKERS {
+            let m = marker.len();
+            if region_end + m <= text.len() && text.get(region_end..region_end + m) == Some(marker)
+            {
+                region_end += m;
+                extended = true;
+                break;
+            }
+        }
+        if !extended {
+            break;
+        }
+    }
+
+    // Do not invent wrappers from ordinary prose — region must actually grow or
+    // the expanded candidate itself must begin/end with wrapper markers.
+    let expanded_has_wrapper_edge = text
+        .get(start..end)
+        .map(|s| {
+            s.chars()
+                .next()
+                .map(is_markdown_wrapper_char)
+                .unwrap_or(false)
+                || s.chars()
+                    .next_back()
+                    .map(is_markdown_wrapper_char)
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if region_start == start && region_end == end && !expanded_has_wrapper_edge {
+        return None;
+    }
+
+    let mut s = region_start;
+    let mut e = region_end;
+    let mut peeled = false;
+    loop {
+        let mut progress = false;
+        for &marker in MARKERS {
+            let m = marker.len();
+            if e >= s + 2 * m + 3
+                && text.get(s..s + m) == Some(marker)
+                && text.get(e - m..e) == Some(marker)
+            {
+                let inner = text.get(s + m..e - m)?;
+                // Allow intermediate nested wrappers; final span must be an email.
+                if inner.contains('@') {
+                    s += m;
+                    e -= m;
+                    peeled = true;
+                    progress = true;
+                    break;
+                }
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+
+    if peeled && looks_like_email(text.get(s..e)?) {
+        Some((s, e))
+    } else {
+        None
+    }
 }
 
 fn email_candidate_at(text: &str, at: usize) -> Option<(usize, usize)> {
@@ -1094,26 +1158,41 @@ fn first_valid_phone_prefix_len(digits: &str, require_plus84: bool) -> Option<us
     None
 }
 
-/// Skip a phone-shaped run (optional leading `+`, digits, grouping separators).
-fn skip_phone_shaped_run(chars: &[(usize, char)], start_idx: usize) -> usize {
+/// Skip one plausible phone-shaped number group after a failed leading `+`.
+/// Stops before whitespace once ≥9 digits are collected so a later
+/// whitespace-separated valid phone can still be scanned.
+fn skip_one_phone_shaped_group(chars: &[(usize, char)], start_idx: usize) -> usize {
     let mut idx = start_idx;
     if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
         idx += 1;
     }
-    let run_start = idx;
+    let mut digits = 0usize;
+    let mut last_digit_end = idx;
     while idx < chars.len() {
         let ch = chars[idx].1;
-        if ch.is_ascii_digit() || is_phone_separator(ch) {
+        if ch.is_ascii_digit() {
+            digits += 1;
+            idx += 1;
+            last_digit_end = idx;
+            if digits >= 13 {
+                break;
+            }
+        } else if matches!(ch, '-' | '.' | '(' | ')') {
+            idx += 1;
+        } else if matches!(ch, ' ' | '\t') {
+            if digits >= 9 {
+                // Boundary between number groups — do not consume the next phone.
+                break;
+            }
             idx += 1;
         } else {
             break;
         }
     }
-    while idx > run_start && is_phone_separator(chars[idx - 1].1) {
-        idx -= 1;
+    if digits == 0 {
+        return (start_idx + 1).min(chars.len());
     }
-    // Always advance past a leading `+` so `+091…` cannot retry inside the run.
-    idx.max(start_idx + 1)
+    last_digit_end
 }
 
 /// Consume one phone candidate starting at `chars[start_idx]`.
@@ -1173,9 +1252,10 @@ fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
                 i = end_idx;
                 continue;
             }
-            // Failed `+…` must consume the whole phone-shaped run (no retry at `0…`).
+            // Failed `+…`: skip one plausible group only (no retry inside), then
+            // continue so a later whitespace-separated valid phone can match.
             if ch == '+' {
-                i = skip_phone_shaped_run(&chars, i);
+                i = skip_one_phone_shaped_group(&chars, i);
                 continue;
             }
         }
@@ -1253,11 +1333,15 @@ fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
     before_ok && after_ok
 }
 
+/// Longer compound phrases first so `tai khoan ngan hang` wins over `tai khoan`.
 const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
+    ("so tai khoan ngan hang", ExplicitLabel::Bank),
+    ("tai khoan ngan hang", ExplicitLabel::Bank),
     ("so dien thoai", ExplicitLabel::Phone),
     ("can cuoc cong dan", ExplicitLabel::NationalId),
     ("so tai khoan", ExplicitLabel::Bank),
     ("dien thoai", ExplicitLabel::Phone),
+    ("cccd so", ExplicitLabel::NationalId),
     ("can cuoc", ExplicitLabel::NationalId),
     ("tai khoan", ExplicitLabel::Bank),
     ("hotline", ExplicitLabel::Phone),
@@ -1302,10 +1386,11 @@ fn classify_label_text(folded: &str) -> Option<ExplicitLabel> {
 }
 
 /// Field-value link between a label and the candidate at the end of `folded_scope`.
-/// Allows `Label: value`, `Label：value`, short `Label value`; rejects long prose
-/// / transaction-id tails after the label.
+/// - No-colon compound labels: tight whitespace only (`Tài khoản ngân hàng 123…`).
+/// - Terminal `:/=/：` strongly binds and allows a longer qualifier before the sep.
+/// Clause/comma boundaries still reject distant prose / transaction IDs.
 fn field_value_link(between: &str) -> bool {
-    const MAX_BETWEEN_CHARS: usize = 28;
+    const MAX_BETWEEN_CHARS: usize = 64;
     if between.chars().count() > MAX_BETWEEN_CHARS {
         return false;
     }
@@ -1314,11 +1399,12 @@ fn field_value_link(between: &str) -> bool {
     }
     let trimmed = between.trim();
     if trimmed.is_empty() {
-        // Tight `Label 123…` — only a few spaces.
+        // Tight `Label 123…` / compound no-colon — only a few spaces.
         return between.chars().count() <= 3;
     }
     let sep = trimmed.rfind(|ch| matches!(ch, ':' | '=' | '：'));
     let Some(sep_at) = sep else {
+        // Without a terminal binder, letters between label and value are prose.
         return false;
     };
     let sep_ch = trimmed[sep_at..].chars().next().unwrap_or(':');
@@ -1327,8 +1413,8 @@ fn field_value_link(between: &str) -> bool {
         return false;
     }
     let before = trimmed[..sep_at].trim();
-    // Optional short qualifier (`ngan hang`) — no nested clause punctuation.
-    before.chars().count() <= 20
+    // Strong `:/=` bind: allow a longer qualifier, still no nested clause punctuation.
+    before.chars().count() <= 48
         && !before
             .chars()
             .any(|ch| is_label_scope_boundary(ch) || matches!(ch, ',' | '，' | '、'))
