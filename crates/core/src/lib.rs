@@ -9,8 +9,6 @@
 //!   - bỏ toàn bộ `println!` debug và dependency LLM nặng (rig-core/tokio).
 
 use std::path::{Path, PathBuf};
-#[cfg(feature = "audio")]
-use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -176,13 +174,14 @@ impl Default for ConverterOptions {
     }
 }
 
-/// Backend chuyển đổi. Model whisper được **cache** sau lần load đầu (OnceLock),
-/// nên convert nhiều file audio không phải load lại model.
+/// Backend chuyển đổi.
+///
+/// Với feature `audio`, `WhisperContext` được cache **process-wide** theo
+/// [`audio::WhisperModelKey`] (canonical path + immutable load knobs). Mỗi
+/// `Converter`/request (MCP, desktop) lấy `Arc` từ cache — không reload model.
 pub struct Converter {
     opts: ConverterOptions,
     ocr_config: OcrRunConfig,
-    #[cfg(feature = "audio")]
-    engine: OnceLock<AudioEngine>,
 }
 
 impl Default for Converter {
@@ -205,20 +204,12 @@ impl Converter {
     /// Keeping this configuration separate preserves the exact legacy
     /// [`ConverterOptions`] shape for exhaustive downstream struct literals.
     pub fn with_options_and_ocr_config(opts: ConverterOptions, ocr_config: OcrRunConfig) -> Self {
-        Self {
-            opts,
-            ocr_config,
-            #[cfg(feature = "audio")]
-            engine: OnceLock::new(),
-        }
+        Self { opts, ocr_config }
     }
 
-    /// Lấy AudioEngine, load model một lần rồi cache lại.
+    /// Lấy AudioEngine từ process-wide Whisper cache (cheap `Arc` clone).
     #[cfg(feature = "audio")]
-    fn engine(&self) -> Result<&AudioEngine, ConvertError> {
-        if let Some(e) = self.engine.get() {
-            return Ok(e);
-        }
+    fn engine(&self) -> Result<AudioEngine, ConvertError> {
         let model = self
             .opts
             .whisper_model
@@ -227,12 +218,9 @@ impl Converter {
             .ok_or(ConvertError::Unsupported(
                 "audio: chưa cài hoặc cấu hình whisper_model",
             ))?;
-        let eng = AudioEngine::load(&model)?
+        Ok(AudioEngine::load(&model)?
             .with_threads(self.opts.audio_threads)
-            .with_no_speech_threshold(self.opts.audio_no_speech_threshold);
-        // Nếu thread khác set trước, bỏ qua bản của ta (vẫn dùng bản đã cache).
-        let _ = self.engine.set(eng);
-        Ok(self.engine.get().unwrap())
+            .with_no_speech_threshold(self.opts.audio_no_speech_threshold))
     }
 
     /// Legacy convert: identical `ConversionResult` / `ConvertError` surface.

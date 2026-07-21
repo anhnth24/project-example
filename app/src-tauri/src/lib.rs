@@ -478,6 +478,7 @@ fn convert_and_write_md(opts: ConverterOptions, source: PathBuf) -> Result<PathB
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default()
     ));
+    // Per-request Converter is fine: WhisperContext is process-cached in fileconv-core.
     let conv = fileconv_core::Converter::with_options(opts);
     let result = conv
         .convert_path(&source)
@@ -516,6 +517,7 @@ fn convert_and_write_md_detailed(
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default()
     ));
+    // Per-request Converter is fine: WhisperContext is process-cached in fileconv-core.
     let report = fileconv_core::Converter::with_options(opts)
         .convert_path_detailed(&source)
         .map_err(|e| e.to_dto())?;
