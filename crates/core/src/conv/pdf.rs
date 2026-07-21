@@ -797,6 +797,11 @@ fn markdown_has_malformed_table(markdown: &str) -> bool {
     false
 }
 
+/// Normalize a margin candidate for exact-line comparison.
+///
+/// Leading Markdown heading markers (`#`…`######`) are kept so structural
+/// headings never collapse into plain repeated header text. Emphasis markers
+/// are still stripped. Cross-line joins are intentionally not used.
 fn normalized_margin_line(line: &str) -> Option<String> {
     use unicode_normalization::UnicodeNormalization;
 
@@ -804,18 +809,45 @@ fn normalized_margin_line(line: &str) -> Option<String> {
     if trimmed.starts_with('|') || trimmed.starts_with("```") || is_table_separator(trimmed) {
         return None;
     }
-    let filtered = trimmed
+
+    let (heading_prefix, rest) = split_markdown_heading_prefix(trimmed);
+    let filtered = rest
         .chars()
-        .filter(|ch| !matches!(ch, '#' | '*' | '_' | '`'))
+        .filter(|ch| !matches!(ch, '*' | '_' | '`'))
         .collect::<String>();
-    let normalized = filtered
+    let body = filtered
         .nfc()
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase();
-    (normalized.chars().count() >= 8 && normalized.chars().count() <= 400).then_some(normalized)
+    if body.chars().count() < 8 || body.chars().count() > 400 {
+        return None;
+    }
+    let normalized = if heading_prefix.is_empty() {
+        body
+    } else {
+        format!("{heading_prefix} {body}")
+    };
+    Some(normalized)
+}
+
+fn split_markdown_heading_prefix(line: &str) -> (&str, &str) {
+    let bytes = line.as_bytes();
+    let mut hashes = 0usize;
+    while hashes < bytes.len() && hashes < 6 && bytes[hashes] == b'#' {
+        hashes += 1;
+    }
+    if hashes == 0 {
+        return ("", line);
+    }
+    if hashes < bytes.len() && !bytes[hashes].is_ascii_whitespace() {
+        // `#not-a-heading` — keep as ordinary text (hashes stripped below? no,
+        // treat whole line as body; hashes are not a valid MD heading marker).
+        return ("", line);
+    }
+    (&line[..hashes], line[hashes..].trim_start())
 }
 
 /// First/last nonempty line indices used for exact per-line margin matching.
@@ -833,186 +865,36 @@ fn margin_line_indices(lines: &[&str]) -> HashSet<usize> {
         .collect()
 }
 
-#[derive(Clone, Default)]
-struct PageMarginAnalysis {
-    /// Normalized lines at first-5 / last-3 nonempty positions (exact-line pool).
-    margin_lines: Vec<(usize, String)>,
-    /// Contiguous top margin block (ordered, stops at blank / non-margin line).
-    top_indices: Vec<usize>,
-    top_block: Vec<String>,
-    /// Contiguous bottom margin block (ordered, top-exclusive).
-    bottom_indices: Vec<usize>,
-    bottom_block: Vec<String>,
-}
-
-impl PageMarginAnalysis {
-    fn from_lines(lines: &[&str]) -> Self {
-        let margin_indices = margin_line_indices(lines);
-        let mut margin_lines = Vec::new();
-        for index in &margin_indices {
-            if let Some(normalized) = normalized_margin_line(lines[*index]) {
-                margin_lines.push((*index, normalized));
-            }
-        }
-
-        let (top_indices, top_block) = contiguous_top_block(lines);
-        let top_set: HashSet<usize> = top_indices.iter().copied().collect();
-        let (bottom_indices, bottom_block) = contiguous_bottom_block(lines, &top_set);
-
-        Self {
-            margin_lines,
-            top_indices,
-            top_block,
-            bottom_indices,
-            bottom_block,
-        }
-    }
-
-    fn top_signature(&self) -> Option<String> {
-        block_signature(&self.top_block)
-    }
-
-    fn bottom_signature(&self) -> Option<String> {
-        block_signature(&self.bottom_block)
-    }
-
-    fn indices_to_strip(
-        &self,
-        repeated_lines: &HashSet<String>,
-        repeated_tops: &HashSet<String>,
-        repeated_bottoms: &HashSet<String>,
-    ) -> HashSet<usize> {
-        let mut drop = HashSet::new();
-        if self
-            .top_signature()
-            .is_some_and(|sig| repeated_tops.contains(&sig))
-        {
-            drop.extend(self.top_indices.iter().copied());
-        }
-        if self
-            .bottom_signature()
-            .is_some_and(|sig| repeated_bottoms.contains(&sig))
-        {
-            drop.extend(self.bottom_indices.iter().copied());
-        }
-        for (index, normalized) in &self.margin_lines {
-            if repeated_lines.contains(normalized) {
-                drop.insert(*index);
-            }
-        }
-        drop
-    }
-}
-
-fn block_signature(block: &[String]) -> Option<String> {
-    if block.is_empty() {
-        return None;
-    }
-    Some(block.join(" "))
-}
-
-/// Ordered contiguous top block: leading nonempty normalizable lines until a
-/// blank, a non-margin line, or 5 lines. Never mixes in bottom-margin text.
-fn contiguous_top_block(lines: &[&str]) -> (Vec<usize>, Vec<String>) {
-    let mut indices = Vec::new();
-    let mut block = Vec::new();
-    let mut seen_content = false;
-    for (index, line) in lines.iter().enumerate() {
-        if line.trim().is_empty() {
-            if seen_content {
-                break;
-            }
-            continue;
-        }
-        seen_content = true;
-        if block.len() >= 5 {
-            break;
-        }
-        match normalized_margin_line(line) {
-            Some(normalized) => {
-                indices.push(index);
-                block.push(normalized);
-            }
-            None => break,
-        }
-    }
-    (indices, block)
-}
-
-/// Ordered contiguous bottom block: trailing nonempty normalizable lines until
-/// a blank, a non-margin line, the top block, or 3 lines.
-fn contiguous_bottom_block(
-    lines: &[&str],
-    top_indices: &HashSet<usize>,
-) -> (Vec<usize>, Vec<String>) {
-    let mut indices_rev = Vec::new();
-    let mut block_rev = Vec::new();
-    let mut seen_content = false;
-    for (index, line) in lines.iter().enumerate().rev() {
-        if top_indices.contains(&index) {
-            break;
-        }
-        if line.trim().is_empty() {
-            if seen_content {
-                break;
-            }
-            continue;
-        }
-        seen_content = true;
-        if block_rev.len() >= 3 {
-            break;
-        }
-        match normalized_margin_line(line) {
-            Some(normalized) => {
-                indices_rev.push(index);
-                block_rev.push(normalized);
-            }
-            None => break,
-        }
-    }
-    indices_rev.reverse();
-    block_rev.reverse();
-    (indices_rev, block_rev)
-}
-
 /// Remove headers/footers repeated on most pages.
 ///
-/// Content-preserving rules:
-/// - individual margin lines drop only on exact normalized equality
-/// - combined/split forms match only via complete ordered contiguous top or
-///   bottom margin blocks (never by subtracting arbitrary global fragments)
-/// - uncertain margins are retained rather than risking body deletion
+/// Only exact normalized individual margin-line identity is used. Without PDF
+/// geometry we do not equate combined vs split segmentations (joined block
+/// signatures erased line boundaries and, with `#` stripped, deleted real
+/// Markdown headings). Alternate combined/split forms are retained.
 fn strip_repeated_marginal_lines(pages: &mut [String]) {
     if pages.len() < 4 {
         return;
     }
 
     let threshold = (pages.len() * 3).div_ceil(5).max(3);
-    let analyses: Vec<PageMarginAnalysis> = pages
+    let page_margin_lines: Vec<Vec<(usize, String)>> = pages
         .iter()
         .map(|page| {
             let lines: Vec<&str> = page.lines().collect();
-            PageMarginAnalysis::from_lines(&lines)
+            margin_line_indices(&lines)
+                .into_iter()
+                .filter_map(|index| {
+                    normalized_margin_line(lines[index]).map(|normalized| (index, normalized))
+                })
+                .collect()
         })
         .collect();
 
     let mut line_page_counts: HashMap<String, usize> = HashMap::new();
-    let mut top_sig_counts: HashMap<String, usize> = HashMap::new();
-    let mut bottom_sig_counts: HashMap<String, usize> = HashMap::new();
-    for analysis in &analyses {
-        let unique_lines: HashSet<&str> = analysis
-            .margin_lines
-            .iter()
-            .map(|(_, line)| line.as_str())
-            .collect();
+    for margins in &page_margin_lines {
+        let unique_lines: HashSet<&str> = margins.iter().map(|(_, line)| line.as_str()).collect();
         for line in unique_lines {
             *line_page_counts.entry(line.to_string()).or_default() += 1;
-        }
-        if let Some(sig) = analysis.top_signature() {
-            *top_sig_counts.entry(sig).or_default() += 1;
-        }
-        if let Some(sig) = analysis.bottom_signature() {
-            *bottom_sig_counts.entry(sig).or_default() += 1;
         }
     }
 
@@ -1021,23 +903,16 @@ fn strip_repeated_marginal_lines(pages: &mut [String]) {
         .filter(|(_, count)| *count >= threshold)
         .map(|(line, _)| line)
         .collect();
-    let repeated_tops: HashSet<String> = top_sig_counts
-        .into_iter()
-        .filter(|(_, count)| *count >= threshold)
-        .map(|(sig, _)| sig)
-        .collect();
-    let repeated_bottoms: HashSet<String> = bottom_sig_counts
-        .into_iter()
-        .filter(|(_, count)| *count >= threshold)
-        .map(|(sig, _)| sig)
-        .collect();
-    if repeated_lines.is_empty() && repeated_tops.is_empty() && repeated_bottoms.is_empty() {
+    if repeated_lines.is_empty() {
         return;
     }
 
-    for (page, analysis) in pages.iter_mut().zip(analyses.iter()) {
-        let drop_indices =
-            analysis.indices_to_strip(&repeated_lines, &repeated_tops, &repeated_bottoms);
+    for (page, margins) in pages.iter_mut().zip(page_margin_lines.iter()) {
+        let drop_indices: HashSet<usize> = margins
+            .iter()
+            .filter(|(_, normalized)| repeated_lines.contains(normalized))
+            .map(|(index, _)| *index)
+            .collect();
         if drop_indices.is_empty() {
             continue;
         }
@@ -1393,12 +1268,12 @@ mod tests {
     }
 
     #[test]
-    fn strips_repeated_headers_in_combined_and_split_forms() {
+    fn strips_repeated_headers_majority_combined_retains_split_form() {
         let combined = "Mã hiệu: ALPHA/LD/HDCV/FPT **PHƯƠNG PHÁP LUẬN FPT CASAN** \
             Lần ban hành/sửa đổi: 1/0 **TRONG CHUYỂN ĐỔI AI** Ngày hiệu lực: 19/5/2026";
-        // Original majority-combined / minority-split fixture. Split order differs
-        // from the combined line, so the minority page may retain its header
-        // rather than guess via global fragment subtraction.
+        // Exact line identity only: majority combined lines are stripped.
+        // Minority split lines are different strings and are retained — we do
+        // not join/split-equate without PDF geometry.
         let mut pages = vec![
             format!("{combined}\n\nNội dung trang một"),
             format!("{combined}\n\nNội dung trang hai"),
@@ -1419,6 +1294,11 @@ mod tests {
         assert!(pages[..4]
             .iter()
             .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(
+            pages[4].contains("PHƯƠNG PHÁP LUẬN FPT CASAN"),
+            "split-form margins must remain without cross-segmentation matching"
+        );
+        assert!(pages[4].contains("Mã hiệu:"));
         assert!(pages
             .iter()
             .enumerate()
@@ -1429,9 +1309,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_repeated_headers_majority_split_minority_combined() {
-        // Combined line uses a different field order than the split block, so
-        // ordered block signatures diverge; minority page keeps its margin.
+    fn strips_repeated_headers_majority_split_retains_combined_form() {
         let combined = "Mã hiệu: ALPHA/LD/HDCV/FPT **PHƯƠNG PHÁP LUẬN FPT CASAN** \
             Lần ban hành/sửa đổi: 1/0 **TRONG CHUYỂN ĐỔI AI** Ngày hiệu lực: 19/5/2026";
         let split = "PHƯƠNG PHÁP LUẬN FPT CASAN\n\
@@ -1455,7 +1333,7 @@ mod tests {
         assert!(pages[..4].iter().all(|page| !page.contains("Mã hiệu:")));
         assert!(
             pages[4].contains("PHƯƠNG PHÁP LUẬN FPT CASAN"),
-            "uncertain minority combined margin must be retained, not guessed away"
+            "combined-form margin must remain without cross-segmentation matching"
         );
         assert!(pages
             .iter()
@@ -1464,6 +1342,36 @@ mod tests {
                 "trang {}",
                 ["một", "hai", "ba", "bốn", "năm"][index]
             ))));
+    }
+
+    #[test]
+    fn markdown_heading_lines_not_stripped_via_joined_plain_header() {
+        // Same-side concatenated plain header vs legitimate Markdown headings
+        // that would match if '#' were stripped and lines were joined.
+        let plain = "PHƯƠNG PHÁP LUẬN FPT CASAN TRONG CHUYỂN ĐỔI AI";
+        let headings = "# PHƯƠNG PHÁP LUẬN FPT CASAN\n## TRONG CHUYỂN ĐỔI AI";
+        let mut pages = vec![
+            format!("{plain}\n\nNội dung trang một"),
+            format!("{plain}\n\nNội dung trang hai"),
+            format!("{plain}\n\nNội dung trang ba"),
+            format!("{plain}\n\nNội dung trang bốn"),
+            format!("{headings}\n\nNội dung trang năm về mục tiêu chuyển đổi"),
+        ];
+
+        strip_repeated_marginal_lines(&mut pages);
+
+        assert!(pages[..4]
+            .iter()
+            .all(|page| !page.contains("PHƯƠNG PHÁP LUẬN FPT CASAN")));
+        assert!(
+            pages[4].contains("# PHƯƠNG PHÁP LUẬN FPT CASAN"),
+            "AT heading must not be deleted by plain joined-header equivalence"
+        );
+        assert!(
+            pages[4].contains("## TRONG CHUYỂN ĐỔI AI"),
+            "nested heading must be preserved as its own structural line"
+        );
+        assert!(pages[4].contains("Nội dung trang năm về mục tiêu chuyển đổi"));
     }
 
     #[test]
