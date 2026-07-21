@@ -1618,7 +1618,26 @@ fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
 fn is_label_scope_boundary(ch: char) -> bool {
     matches!(
         ch,
-        '\n' | '\r' | '|' | '.' | '!' | '?' | ';' | ',' | '，' | '、' | '…' | '。' | '！' | '？'
+        // Vertical line/paragraph breaks (CR/LF + NEL/LS/PS/VT/FF).
+        '\n'
+            | '\r'
+            | '\u{000B}' // VT
+            | '\u{000C}' // FF
+            | '\u{0085}' // NEL
+            | '\u{2028}' // LINE SEPARATOR
+            | '\u{2029}' // PARAGRAPH SEPARATOR
+            | '|'
+            | '.'
+            | '!'
+            | '?'
+            | ';'
+            | ','
+            | '，'
+            | '、'
+            | '…'
+            | '。'
+            | '！'
+            | '？'
     )
 }
 

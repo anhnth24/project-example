@@ -520,6 +520,44 @@ fn pii_label_scope_does_not_cross_newline_pipe_or_sentence() {
 }
 
 #[test]
+fn pii_label_scope_cuts_on_vertical_unicode_separators() {
+    for (name, sep) in [
+        ("lf", '\n'),
+        ("cr", '\r'),
+        ("vt", '\u{000B}'),
+        ("ff", '\u{000C}'),
+        ("nel", '\u{0085}'),
+        ("line-sep", '\u{2028}'),
+        ("para-sep", '\u{2029}'),
+    ] {
+        let markdown = format!("Tài khoản: 123456789012{sep}Gọi ngay 0912345678");
+        let report = detect_pii(&[doc(name, &markdown)]);
+        assert_eq!(
+            report.counts.get(&PiiKind::BankAccount),
+            Some(&1),
+            "{name} (U+{:04X}) should keep prior bank span: {:?}",
+            sep as u32,
+            report.findings
+        );
+        assert_eq!(
+            report.counts.get(&PiiKind::Phone),
+            Some(&1),
+            "{name} (U+{:04X}) must cut bank label before phone: {:?}",
+            sep as u32,
+            report.findings
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == PiiKind::BankAccount && f.text.contains("0912345678")),
+            "{name} must not bank-classify phone across vertical sep: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
 fn pii_table_column_headers_associate_bank_and_phone() {
     let markdown = "| Tài khoản | SĐT |\n|---|---|\n| 123456789012 | 0912345678 |\n";
     let report = detect_pii(&[doc("cols.md", markdown)]);
