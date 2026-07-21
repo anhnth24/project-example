@@ -458,13 +458,23 @@ def write_report(summary: dict, report_path: Path = REPORT_PATH) -> None:
                 if blind
                 else ""
             ),
+            (
+                "- Topic overviews remain discriminative in a 50-document corpus, so this score is still optimistic."
+                if blind
+                else ""
+            ),
+            "- Recall measures intended-document retrieval, not correct-chunk evidence or answer quality.",
             "- The corpus is government/legal-document heavy.",
             "- No-answer and answer-grounding quality are not scored.",
             "",
         ]
     )
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text("\n".join(lines), encoding="utf-8")
+    rendered: list[str] = []
+    for line in lines:
+        if line or not rendered or rendered[-1]:
+            rendered.append(line)
+    report_path.write_text("\n".join(rendered), encoding="utf-8")
 
 
 def self_test() -> None:
