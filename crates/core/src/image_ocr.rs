@@ -463,8 +463,12 @@ fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
 }
 
 fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
-    let binary = tesseract_binary();
-    let mut cmd = crate::proc::background_command(&binary);
+    run_tesseract_psm_with_binary(&tesseract_binary(), path, langs, psm)
+}
+
+/// Xây `Command` tesseract (argv rời, không shell). `binary` inject được cho test.
+fn build_tesseract_psm_command(binary: &Path, path: &Path, langs: &str, psm: u8) -> Command {
+    let mut cmd = crate::proc::background_command(binary);
     apply_ocr_runtime_env(&mut cmd);
     cmd.arg(path)
         .arg("stdout")
@@ -478,7 +482,16 @@ fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
     if let Some(dir) = tessdata_dir() {
         cmd.env("TESSDATA_PREFIX", dir);
     }
-    let output = cmd.output()?;
+    cmd
+}
+
+fn run_tesseract_psm_with_binary(
+    binary: &Path,
+    path: &Path,
+    langs: &str,
+    psm: u8,
+) -> io::Result<String> {
+    let output = build_tesseract_psm_command(binary, path, langs, psm).output()?;
 
     if !output.status.success() {
         return Err(io::Error::new(
@@ -489,11 +502,16 @@ fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn tesseract_binary() -> PathBuf {
-    std::env::var_os("FILECONV_TESSERACT")
+/// Resolve binary: `FILECONV_TESSERACT` override (nếu non-empty) → `tesseract`.
+fn resolve_tesseract_binary(override_bin: Option<&std::ffi::OsStr>) -> PathBuf {
+    override_bin
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("tesseract"))
+}
+
+fn tesseract_binary() -> PathBuf {
+    resolve_tesseract_binary(std::env::var_os("FILECONV_TESSERACT").as_deref())
 }
 
 fn apply_ocr_runtime_env(command: &mut Command) {
@@ -574,15 +592,6 @@ fn ocr_text_score(text: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        use std::sync::{Mutex, OnceLock};
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     #[test]
     fn retries_sparse_replacement_and_glued_uppercase_output() {
@@ -702,44 +711,83 @@ mod tests {
         assert!(!path.exists(), "NamedTempFile must unlink on drop");
     }
 
+    #[test]
+    fn resolve_tesseract_binary_honors_override_and_default() {
+        assert_eq!(resolve_tesseract_binary(None).as_os_str(), "tesseract");
+        assert_eq!(
+            resolve_tesseract_binary(Some(std::ffi::OsStr::new(""))).as_os_str(),
+            "tesseract"
+        );
+        assert_eq!(
+            resolve_tesseract_binary(Some(std::ffi::OsStr::new("/opt/custom-tess"))),
+            PathBuf::from("/opt/custom-tess")
+        );
+    }
+
+    /// Injected binary must receive the OCR tempfile as argv[1] and be able to read it.
     #[cfg(unix)]
     #[test]
-    fn ocr_image_uses_fileconv_tesseract_stub_subprocess() {
-        let _guard = env_lock();
+    fn injected_tesseract_binary_opens_ocr_tempfile() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let stub = dir.path().join("fake-tesseract");
-        // Echo fixed text; ignore argv so parallel CI does not need real tessdata.
-        std::fs::write(
-            &stub,
-            "#!/bin/sh\nprintf '%s\\n' 'FILECONV_TESSERACT_STUB_OK'\n",
-        )
-        .expect("stub script");
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stub = install_readable_tesseract_stub(dir.path());
+        let img = DynamicImage::ImageLuma8(GrayImage::from_pixel(32, 32, image::Luma([40])));
+        let tmp = write_ocr_temp_png(&img).expect("ocr temp");
+        let text =
+            run_tesseract_psm_with_binary(&stub, tmp.path(), "eng", 3).expect("injected stub OCR");
+        assert!(
+            text.contains("FILECONV_TESSERACT_STUB_OK"),
+            "unexpected stub output: {text:?}"
+        );
+        assert!(
+            text.contains("READ_OK"),
+            "stub must confirm argv[1] was readable: {text:?}"
+        );
+    }
 
-        let previous = std::env::var_os("FILECONV_TESSERACT");
-        // SAFETY: serialized by env_lock; restored before unlock.
-        unsafe {
-            std::env::set_var("FILECONV_TESSERACT", &stub);
+    /// Production `FILECONV_TESSERACT` override: set only on a child process via
+    /// `Command::env` — never mutate the in-process environment (parallel-safe).
+    #[cfg(unix)]
+    #[test]
+    fn ocr_image_honors_fileconv_tesseract_env_in_child() {
+        const CHILD_FLAG: &str = "FILECONV_OCR_TEST_CHILD";
+        const CHILD_IMAGE: &str = "FILECONV_OCR_TEST_IMAGE";
+
+        if std::env::var_os(CHILD_FLAG).is_some() {
+            let image = std::env::var(CHILD_IMAGE).expect("child image path");
+            let text = ocr_image(Path::new(&image), "eng").expect("child OCR via env override");
+            assert!(
+                text.contains("FILECONV_TESSERACT_STUB_OK") && text.contains("READ_OK"),
+                "child OCR output: {text:?}"
+            );
+            return;
         }
 
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = install_readable_tesseract_stub(dir.path());
         let image_path = dir.path().join("sample.png");
         DynamicImage::ImageLuma8(GrayImage::from_pixel(64, 64, image::Luma([0])))
             .save(&image_path)
             .expect("sample png");
 
-        let text = ocr_image(&image_path, "eng").expect("stub OCR");
+        let exe = std::env::current_exe().expect("test executable");
+        let output = Command::new(&exe)
+            .args([
+                "--exact",
+                "image_ocr::tests::ocr_image_honors_fileconv_tesseract_env_in_child",
+            ])
+            .env(CHILD_FLAG, "1")
+            .env(CHILD_IMAGE, &image_path)
+            .env("FILECONV_TESSERACT", &stub)
+            .env("RUST_TEST_THREADS", "1")
+            .output()
+            .expect("spawn child test process");
         assert!(
-            text.contains("FILECONV_TESSERACT_STUB_OK"),
-            "unexpected OCR output: {text:?}"
+            output.status.success(),
+            "child failed status={:?}\nstdout={}\nstderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
-
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("FILECONV_TESSERACT", value),
-                None => std::env::remove_var("FILECONV_TESSERACT"),
-            }
-        }
     }
 
     /// Minimal PNG with only an IHDR chunk (precomputed CRC for given size).
@@ -753,5 +801,28 @@ mod tests {
             ],
             _ => panic!("add CRC fixture for {width}x{height}"),
         }
+    }
+
+    /// Unix stub: open/read argv[1] (image path), then print markers to stdout.
+    #[cfg(unix)]
+    fn install_readable_tesseract_stub(dir: &Path) -> PathBuf {
+        let stub = dir.join("fake-tesseract");
+        // Portable POSIX: require readable argv[1], read 8 bytes (PNG sig), then OK.
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             set -eu\n\
+             image=${1:-}\n\
+             if [ -z \"$image\" ] || [ ! -r \"$image\" ]; then\n\
+               echo \"stub: image not readable: ${image:-<missing>}\" >&2\n\
+               exit 2\n\
+             fi\n\
+             head -c 8 \"$image\" >/dev/null\n\
+             printf '%s\\n' 'READ_OK FILECONV_TESSERACT_STUB_OK'\n",
+        )
+        .expect("write stub");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        stub
     }
 }
