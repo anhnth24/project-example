@@ -14,13 +14,13 @@
     {
       "id": "core.pdf.needs_ocr_untrusted_fallback.v1",
       "path": "pdf/needs_ocr_untrusted_fallback.pdf",
-      "sha256": "d063cdc794eceaed068d33e19fe27c14a6554416aa90d38badb454cc7a3238c8",
+      "sha256": "dd65d6e1127f61dc426bc48e405927f6155cc1d98c847cde2f6a3dbc7ca5c2ec",
       "kind": "pdf",
       "owner": "markhand-core",
       "source": "synthetic",
       "license": "CC0-1.0",
       "sensitive": false,
-      "notes": "Synthetic Type0/Identity-H CID PDF for CORE-T7 partial-success diagnostics review"
+      "notes": "Synthetic Helvetica garbage-punctuation page; pdf-inspector is_garbage_text \u2192 needs_ocr for CORE-T7 partial-success"
     }
   ]
 }

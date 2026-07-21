@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::*;
 
-use super::fail;
 use crate::diagnostics::{ConversionWarning, DetailedConvertError, MarkdownOutput};
-use crate::{image_ocr, ConvertError};
+use crate::image_ocr::{self, OcrAttemptError, OcrRunConfig, OcrStage};
+use crate::ConvertError;
 
 thread_local! {
     // PDFium chỉ init MỘT lần/tiến trình → cache một instance mỗi thread.
@@ -74,25 +74,33 @@ pub(crate) fn to_markdown(
     ocr_images: bool,
     pages: Option<&[u32]>,
 ) -> Result<String, ConvertError> {
-    to_markdown_detailed(path, ocr_langs, ocr_enabled, ocr_images, pages)
-        .map(|output| output.markdown)
-        .map_err(|error| error.error)
+    to_markdown_detailed(
+        path,
+        ocr_langs,
+        ocr_enabled,
+        ocr_images,
+        pages,
+        &OcrRunConfig::default(),
+    )
+    .map(|output| output.markdown)
+    .map_err(|error| error.error)
 }
 
-/// Explicit markdown + soft diagnostics (no TLS collector).
+/// Explicit markdown + soft diagnostics (no TLS OCR error collector).
 pub(crate) fn to_markdown_detailed(
     path: &Path,
     ocr_langs: &str,
     ocr_enabled: bool,
     ocr_images: bool,
     pages: Option<&[u32]>,
+    ocr_config: &OcrRunConfig,
 ) -> Result<MarkdownOutput, DetailedConvertError> {
-    image_ocr::clear_last_ocr_error();
     let bytes = std::fs::read(path).map_err(|e| DetailedConvertError::failed(e.to_string()))?;
 
     // Probe needs_ocr early so PDFium/pdf-extract fallbacks inherit the flags
     // even when the structured inspector path is abandoned.
     let probed_needs_ocr = probe_pages_needing_ocr(&bytes, pages);
+    let mut last_ocr_error: Option<OcrAttemptError> = None;
 
     // Page-filtered requests are common in the desktop/MCP token-saving flow.
     // The per-page API below intentionally extracts the whole document for
@@ -117,7 +125,16 @@ pub(crate) fn to_markdown_detailed(
 
     // 1) pdf-inspector: markdown có cấu trúc + needs_ocr theo trang.
     let mut inherited_needs_ocr = probed_needs_ocr;
-    match via_pdf_inspector(path, &bytes, ocr_langs, ocr_enabled, ocr_images, pages) {
+    match via_pdf_inspector(
+        path,
+        &bytes,
+        ocr_langs,
+        ocr_enabled,
+        ocr_images,
+        pages,
+        ocr_config,
+        &mut last_ocr_error,
+    ) {
         InspectorAttempt::Success(output) if !output.markdown.trim().is_empty() => {
             return Ok(output);
         }
@@ -135,6 +152,8 @@ pub(crate) fn to_markdown_detailed(
         ocr_images,
         pages,
         &inherited_needs_ocr,
+        ocr_config,
+        &mut last_ocr_error,
     ) {
         if !output.markdown.trim().is_empty() {
             return Ok(output);
@@ -143,10 +162,11 @@ pub(crate) fn to_markdown_detailed(
 
     // 3) Cuối cùng: pdf-extract (không hỗ trợ lọc trang).
     if pages.is_some() {
-        if let Some(error) = image_ocr::take_last_ocr_error() {
-            return Err(DetailedConvertError::failed(format!(
-                "OCR trang PDF đã chọn thất bại: {error}"
-            )));
+        if let Some(error) = last_ocr_error {
+            return Err(pdf_ocr_hard_failure(
+                error,
+                "OCR trang PDF đã chọn thất bại",
+            ));
         }
         return Err(DetailedConvertError::failed(
             "không thể trích đúng các trang đã chọn (pdf-inspector/PDFium thất bại)",
@@ -178,21 +198,31 @@ pub(crate) fn to_markdown_detailed(
                      hãy cài lại Markhand Desktop hoặc đặt FILECONV_PDFIUM_LIB",
                 ));
             }
-            if !image_ocr::tesseract_available() {
-                return Err(DetailedConvertError::failed(
-                    "PDF là bản scan nhưng không tìm thấy Tesseract OCR; \
-                     hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
-                ));
+            if let Some(error) = last_ocr_error {
+                return Err(pdf_ocr_hard_failure(error, "OCR trang PDF thất bại"));
             }
-            if let Some(error) = image_ocr::take_last_ocr_error() {
-                return Err(DetailedConvertError::failed(format!(
-                    "OCR trang PDF thất bại: {error}"
+            // No OCR attempt recorded: probe binary availability at this stage.
+            let binary = image_ocr::effective_tesseract_binary(ocr_config);
+            if !image_ocr::tesseract_available() {
+                return Err(DetailedConvertError::dependency_missing(format!(
+                    "PDF là bản scan nhưng không tìm thấy Tesseract OCR ({}); \
+                     hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
+                    binary.display()
                 )));
             }
             Err(DetailedConvertError::failed(
                 "PDF không có text layer và OCR không nhận được nội dung",
             ))
         }
+    }
+}
+
+fn pdf_ocr_hard_failure(error: OcrAttemptError, prefix: &str) -> DetailedConvertError {
+    match error {
+        OcrAttemptError::TesseractNotFound { message, .. } => {
+            DetailedConvertError::dependency_missing(format!("{prefix}: {message}"))
+        }
+        other => DetailedConvertError::failed(format!("{prefix}: {other}")),
     }
 }
 
@@ -565,6 +595,8 @@ fn via_pdf_inspector(
     ocr_enabled: bool,
     ocr_images: bool,
     pages: Option<&[u32]>,
+    ocr_config: &OcrRunConfig,
+    last_ocr_error: &mut Option<OcrAttemptError>,
 ) -> InspectorAttempt {
     // pages 1-indexed từ người dùng → 0-indexed cho pdf-inspector.
     let pages0: Option<Vec<u32>> =
@@ -633,9 +665,16 @@ fn via_pdf_inspector(
                 });
                 let ocr_text = ocr_enabled
                     .then(|| {
-                        pdf_doc
-                            .as_ref()
-                            .and_then(|d| ocr_page_at(d, pm.page, langs))
+                        pdf_doc.as_ref().and_then(|d| {
+                            match ocr_page_at(d, pm.page, langs, ocr_config) {
+                                Ok(PageOcr::Text(text)) => Some(text),
+                                Ok(PageOcr::Blank) => Some(String::new()),
+                                Err(error) => {
+                                    *last_ocr_error = Some(error);
+                                    None
+                                }
+                            }
+                        })
                     })
                     .flatten();
                 let page_1idx = pm.page + 1;
@@ -683,9 +722,14 @@ fn via_pdf_inspector(
                 if ocr_enabled && ocr_images {
                     if let Some(doc) = pdf_doc.as_ref() {
                         if let Ok(page) = doc.pages().get(pm.page as i32) {
-                            if let Some(extra) =
-                                ocr_page_images(doc, &page, langs, pm.page as usize + 1)
-                            {
+                            if let Some(extra) = ocr_page_images(
+                                doc,
+                                &page,
+                                langs,
+                                pm.page as usize + 1,
+                                ocr_config,
+                                last_ocr_error,
+                            ) {
                                 if !page_out.is_empty() {
                                     page_out.push_str("\n\n");
                                 }
@@ -718,16 +762,38 @@ fn via_pdf_inspector(
 }
 
 /// Render + OCR một trang theo chỉ số 0-based.
-fn ocr_page_at(doc: &PdfDocument, page_0idx: u32, langs: &str) -> Option<String> {
-    let page = doc.pages().get(page_0idx as i32).ok()?;
-    match ocr_full_page(&page, langs) {
-        Ok(PageOcr::Text(text)) => Some(text),
-        Ok(PageOcr::Blank) => Some(String::new()),
-        Err(error) => {
-            image_ocr::record_ocr_error(format!("trang {}: {error}", page_0idx + 1));
-            None
-        }
-    }
+fn ocr_page_at(
+    doc: &PdfDocument,
+    page_0idx: u32,
+    langs: &str,
+    ocr_config: &OcrRunConfig,
+) -> Result<PageOcr, OcrAttemptError> {
+    let page = doc.pages().get(page_0idx as i32).map_err(|e| {
+        OcrAttemptError::failed(
+            OcrStage::Render,
+            format!("trang {}: mở trang PDF thất bại: {e}", page_0idx + 1),
+        )
+    })?;
+    ocr_full_page(&page, langs, ocr_config).map_err(|error| match error {
+        OcrAttemptError::TesseractNotFound {
+            stage,
+            binary,
+            message,
+        } => OcrAttemptError::TesseractNotFound {
+            stage,
+            binary,
+            message: format!("trang {}: {message}", page_0idx + 1),
+        },
+        OcrAttemptError::Failed {
+            stage,
+            message,
+            io_kind,
+        } => OcrAttemptError::Failed {
+            stage,
+            message: format!("trang {}: {message}", page_0idx + 1),
+            io_kind,
+        },
+    })
 }
 
 /// Extract the page's native text layer through PDFium.
@@ -1115,6 +1181,8 @@ fn via_pdfium(
     ocr_images: bool,
     pages: Option<&[u32]>,
     pages_needing_ocr: &HashSet<u32>,
+    ocr_config: &OcrRunConfig,
+    last_ocr_error: &mut Option<OcrAttemptError>,
 ) -> Option<MarkdownOutput> {
     let _pdfium_guard = pdfium_call_guard();
     PDFIUM.with(|opt| -> Option<MarkdownOutput> {
@@ -1137,11 +1205,11 @@ fn via_pdfium(
 
             if flagged {
                 let ocr_text = ocr_enabled
-                    .then(|| match ocr_full_page(&page, ocr_langs) {
+                    .then(|| match ocr_full_page(&page, ocr_langs, ocr_config) {
                         Ok(PageOcr::Text(ocr)) => Some(ocr),
                         Ok(PageOcr::Blank) => Some(String::new()),
                         Err(error) => {
-                            image_ocr::record_ocr_error(format!("trang {page_1idx}: {error}"));
+                            *last_ocr_error = Some(error);
                             None
                         }
                     })
@@ -1177,12 +1245,14 @@ fn via_pdfium(
                 out.push_str(text.trim_end());
                 out.push_str("\n\n");
                 if ocr_enabled && ocr_images {
-                    if let Some(extra) = ocr_page_images(&doc, &page, ocr_langs, i + 1) {
+                    if let Some(extra) =
+                        ocr_page_images(&doc, &page, ocr_langs, i + 1, ocr_config, last_ocr_error)
+                    {
                         out.push_str(&extra);
                     }
                 }
             } else if ocr_enabled {
-                match ocr_full_page(&page, ocr_langs) {
+                match ocr_full_page(&page, ocr_langs, ocr_config) {
                     Ok(PageOcr::Text(ocr)) => {
                         let ocr = ocr.trim();
                         out.push_str(&format!("<!-- Trang {page_1idx} (OCR) -->\n\n"));
@@ -1192,7 +1262,7 @@ fn via_pdfium(
                     Ok(PageOcr::Blank) => {}
                     Err(error) => {
                         unresolved_pages.push(page_1idx);
-                        image_ocr::record_ocr_error(format!("trang {page_1idx}: {error}"));
+                        *last_ocr_error = Some(error);
                     }
                 }
             } else {
@@ -1213,6 +1283,8 @@ fn ocr_page_images(
     page: &PdfPage,
     langs: &str,
     page_no: usize,
+    ocr_config: &OcrRunConfig,
+    last_ocr_error: &mut Option<OcrAttemptError>,
 ) -> Option<String> {
     let mut out = String::new();
     for obj in page.objects().iter() {
@@ -1227,12 +1299,17 @@ fn ocr_page_images(
         let Ok(img) = img_obj.get_processed_image(doc) else {
             continue;
         };
-        if let Ok(text) = image_ocr::ocr_dynimage(&img, langs) {
-            let text = text.trim();
-            if text.chars().filter(|c| c.is_alphanumeric()).count() >= 4 {
-                out.push_str(&format!("<!-- Ảnh trong trang {page_no} (OCR) -->\n\n"));
-                out.push_str(text);
-                out.push_str("\n\n");
+        match image_ocr::ocr_dynimage_detailed(&img, langs, ocr_config) {
+            Ok(text) => {
+                let text = text.trim();
+                if text.chars().filter(|c| c.is_alphanumeric()).count() >= 4 {
+                    out.push_str(&format!("<!-- Ảnh trong trang {page_no} (OCR) -->\n\n"));
+                    out.push_str(text);
+                    out.push_str("\n\n");
+                }
+            }
+            Err(error) => {
+                *last_ocr_error = Some(error);
             }
         }
     }
@@ -1257,22 +1334,29 @@ fn rendered_page_is_blank(image: &image::DynamicImage) -> bool {
         && max_row_dark <= (grayscale.width() as usize / 200).max(8)
 }
 
-fn ocr_full_page(page: &PdfPage, langs: &str) -> Result<PageOcr, ConvertError> {
+fn ocr_full_page(
+    page: &PdfPage,
+    langs: &str,
+    ocr_config: &OcrRunConfig,
+) -> Result<PageOcr, OcrAttemptError> {
     let w = (((page.width().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 5000);
     let h = (((page.height().value / 72.0) * OCR_DPI).round() as i32).clamp(100, 7000);
     let bitmap = page
         .render(w, h, None)
-        .map_err(|e| fail(format!("render: {e}")))?;
+        .map_err(|e| OcrAttemptError::failed(OcrStage::Render, format!("render: {e}")))?;
     let img = bitmap
         .as_image()
-        .map_err(|e| fail(format!("as_image: {e}")))?;
-    let text = image_ocr::ocr_dynimage(&img, langs).map_err(fail)?;
+        .map_err(|e| OcrAttemptError::failed(OcrStage::Render, format!("as_image: {e}")))?;
+    let text = image_ocr::ocr_dynimage_detailed(&img, langs, ocr_config)?;
     if !text.trim().is_empty() {
         Ok(PageOcr::Text(text))
     } else if rendered_page_is_blank(&img) {
         Ok(PageOcr::Blank)
     } else {
-        Err(fail("Tesseract không trả nội dung cho trang có nét chữ"))
+        Err(OcrAttemptError::failed(
+            OcrStage::Tesseract,
+            "Tesseract không trả nội dung cho trang có nét chữ",
+        ))
     }
 }
 
@@ -1358,6 +1442,7 @@ mod tests {
         PDF_UNTRUSTED_INSPECTOR_SOURCE, PDF_UNTRUSTED_PDFIUM_SOURCE,
     };
     use crate::diagnostics::MarkdownOutput;
+    use crate::image_ocr::OcrRunConfig;
     use crate::{
         ConversionOutcome, ConversionWarningCode, ConvertError, ConvertErrorKind, Converter,
         ConverterOptions, DetailedConvertError,
@@ -1881,6 +1966,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    fn missing_tesseract_bin() -> PathBuf {
+        PathBuf::from("/nonexistent/fileconv-core-t7-missing-tesseract")
+    }
+
+    fn review_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/pdf/needs_ocr_untrusted_fallback.pdf")
+    }
+
     #[test]
     fn pdfium_fallback_warns_when_inherited_needs_ocr_keeps_untrusted_native() {
         let dir = std::env::temp_dir().join(format!(
@@ -1894,10 +1988,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("flagged.pdf");
         std::fs::write(&path, minimal_pdf_bytes()).unwrap();
+        let cfg = OcrRunConfig::default();
+        let mut last = None;
 
         // Inherit needs_ocr=1 with OCR disabled → preserve native text + warn.
         let flagged = HashSet::from([1u32]);
-        let output = via_pdfium(&path, "eng", false, false, None, &flagged)
+        let output = via_pdfium(&path, "eng", false, false, None, &flagged, &cfg, &mut last)
             .expect("PDFium should return native text for minimal PDF");
         assert!(
             output.warnings.iter().any(|w| w.code
@@ -1910,8 +2006,18 @@ mod tests {
         assert!(!output.markdown.trim().is_empty());
 
         // Unflagged trusted fallback must not over-warn.
-        let clean =
-            via_pdfium(&path, "eng", false, false, None, &HashSet::new()).expect("unflagged path");
+        let mut last = None;
+        let clean = via_pdfium(
+            &path,
+            "eng",
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &cfg,
+            &mut last,
+        )
+        .expect("unflagged path");
         assert!(
             clean.warnings.is_empty(),
             "trusted PDFium text must not emit partial warning"
@@ -1920,43 +2026,80 @@ mod tests {
     }
 
     #[test]
-    fn review_fixture_needs_ocr_survives_into_detailed_partial_success() {
-        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/pdf/needs_ocr_untrusted_fallback.pdf");
-        if !fixture.is_file() {
-            // Fixture may be absent in sparse checkouts; skip rather than fail CI.
-            return;
-        }
-        let bytes = std::fs::read(&fixture).unwrap();
+    fn committed_review_fixture_detector_flags_needs_ocr() {
+        let fixture = review_fixture_path();
+        assert!(
+            fixture.is_file(),
+            "committed project fixture must exist: {}",
+            fixture.display()
+        );
+        let bytes = std::fs::read(&fixture).expect("read fixture");
         let needs = probe_pages_needing_ocr(&bytes, None);
-        // When inspector cannot flag this synthetic CID PDF, still exercise the
-        // inherited-flag PDFium path (same contract as abandoned inspector).
-        let flags = if needs.is_empty() {
-            HashSet::from([1u32])
-        } else {
-            needs
-        };
-        let output = via_pdfium(&fixture, "eng", false, false, None, &flags);
-        if let Some(output) = output {
-            assert!(
-                has_untrusted_warning(&output),
-                "fixture/flagged fallback must not silently succeed: {:?}",
-                output.warnings
-            );
-        }
+        assert!(
+            needs.contains(&1),
+            "pdf-inspector detector must set needs_ocr on committed fixture page 1, got {needs:?}"
+        );
+    }
 
-        // End-to-end detailed convert with OCR off: if inspector flags the page
-        // and keeps untrusted text, report must be PartialSuccess.
+    #[test]
+    fn committed_review_fixture_forced_ocr_fail_unconditionally_partial_success() {
+        let fixture = review_fixture_path();
+        assert!(
+            fixture.is_file(),
+            "committed project fixture must exist: {}",
+            fixture.display()
+        );
+        let bytes = std::fs::read(&fixture).expect("read fixture");
+        assert!(
+            probe_pages_needing_ocr(&bytes, None).contains(&1),
+            "test requires real detector needs_ocr — not a substituted flag"
+        );
+
+        // Force OCR spawn failure via injectable binary (no env mutation). Real
+        // needs_ocr path must fall back to untrusted text → PartialSuccess.
         let report = Converter::with_options(ConverterOptions {
-            pdf_ocr: false,
+            pdf_ocr: true,
+            tesseract_binary: Some(missing_tesseract_bin()),
             ..ConverterOptions::default()
         })
-        .convert_path_detailed(&fixture);
-        if let Ok(report) = report {
-            if report.has_warning_code(ConversionWarningCode::PdfUntrustedTextFallback) {
-                assert_eq!(report.outcome(), ConversionOutcome::PartialSuccess);
-                assert_ne!(report.outcome(), ConversionOutcome::FullSuccess);
-            }
+        .convert_path_detailed(&fixture)
+        .expect("garbage text layer must recover as PartialSuccess, not hard-fail");
+        assert_eq!(report.outcome(), ConversionOutcome::PartialSuccess);
+        assert_ne!(report.outcome(), ConversionOutcome::FullSuccess);
+        assert!(
+            report.has_warning_code(ConversionWarningCode::PdfUntrustedTextFallback),
+            "must emit untrusted-text warning: {:?}",
+            report.warnings
+        );
+        assert!(!report.result.markdown.trim().is_empty());
+    }
+
+    #[test]
+    fn concurrent_real_fixture_converts_stay_partial_when_ocr_forced_fail() {
+        let fixture = std::sync::Arc::new(review_fixture_path());
+        assert!(
+            fixture.is_file(),
+            "committed project fixture must exist: {}",
+            fixture.display()
+        );
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let path = std::sync::Arc::clone(&fixture);
+                std::thread::spawn(move || {
+                    Converter::with_options(ConverterOptions {
+                        pdf_ocr: true,
+                        tesseract_binary: Some(missing_tesseract_bin()),
+                        ..ConverterOptions::default()
+                    })
+                    .convert_path_detailed(path.as_path())
+                    .expect("fixture convert")
+                })
+            })
+            .collect();
+        for handle in handles {
+            let report = handle.join().expect("thread");
+            assert_eq!(report.outcome(), ConversionOutcome::PartialSuccess);
+            assert!(report.has_warning_code(ConversionWarningCode::PdfUntrustedTextFallback));
         }
     }
 
@@ -1994,7 +2137,9 @@ mod tests {
                     } else {
                         HashSet::new()
                     };
-                    via_pdfium(&path, "eng", false, false, None, &flags)
+                    let cfg = OcrRunConfig::default();
+                    let mut last = None;
+                    via_pdfium(&path, "eng", false, false, None, &flags, &cfg, &mut last)
                 })
             })
             .collect();
@@ -2010,6 +2155,59 @@ mod tests {
                 );
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_tesseract_on_scan_pdf_is_dependency_missing() {
+        // Empty page: needs_ocr, no text to preserve → hard DependencyMissing.
+        let stream = "";
+        let objects = [
+            "<</Type/Catalog/Pages 2 0 R>>".to_string(),
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>".to_string(),
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R>>".to_string(),
+            format!("<</Length {}>>\nstream\n{stream}\nendstream", stream.len()),
+        ];
+        let mut out = String::from("%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", i + 1));
+        }
+        let xref_at = out.len();
+        out.push_str(&format!(
+            "xref\n0 {}\n0000000000 65535 f \n",
+            objects.len() + 1
+        ));
+        for off in &offsets {
+            out.push_str(&format!("{off:010} 00000 n \n"));
+        }
+        out.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n",
+            objects.len() + 1
+        ));
+        let dir = std::env::temp_dir().join(format!("fileconv_scan_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scan.pdf");
+        std::fs::write(&path, out.as_bytes()).unwrap();
+        let err = Converter::with_options(ConverterOptions {
+            pdf_ocr: true,
+            tesseract_binary: Some(missing_tesseract_bin()),
+            ..ConverterOptions::default()
+        })
+        .convert_path_detailed(&path)
+        .expect_err("scan + missing tesseract must hard-fail");
+        assert_eq!(err.kind, ConvertErrorKind::DependencyMissing);
+        let dto = err.to_dto();
+        assert_eq!(dto.kind, ConvertErrorKind::DependencyMissing);
+        assert!(!dto.message.is_empty());
+        // Kind is a structured field — not only embedded in the message text.
+        let json = serde_json::to_value(&dto).expect("dto json");
+        assert_eq!(json["kind"], "dependency_missing");
+        assert!(
+            json["message"].as_str().unwrap().contains("Tesseract")
+                || json["message"].as_str().unwrap().contains("tesseract")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -11,7 +11,7 @@
 //!   - Ảnh quá lớn (cạnh dài > 2400px) → thu xuống (giữ tốc độ).
 //!   - Còn lại (trang giấy tờ đủ nét) → GIỮ NGUYÊN.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,6 +19,8 @@ use std::sync::OnceLock;
 
 use image::{imageops, DynamicImage, GrayImage, ImageReader, Limits};
 use tempfile::NamedTempFile;
+
+use crate::diagnostics::{ConvertErrorKind, DetailedConvertError};
 
 static TESSERACT_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
@@ -39,9 +41,132 @@ impl OcrEngine {
     }
 }
 
+/// Per-call OCR configuration (no process-wide / TLS error collector).
+#[derive(Debug, Clone, Default)]
+pub struct OcrRunConfig {
+    /// Override Tesseract binary; `None` uses `FILECONV_TESSERACT` / `tesseract`.
+    pub tesseract_binary: Option<PathBuf>,
+}
+
+/// Pipeline stage where an OCR attempt failed (stable, not localized).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrStage {
+    Decode,
+    Bounds,
+    Preprocess,
+    Render,
+    Tesseract,
+    Paddle,
+}
+
+impl OcrStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Bounds => "bounds",
+            Self::Preprocess => "preprocess",
+            Self::Render => "render",
+            Self::Tesseract => "tesseract",
+            Self::Paddle => "paddle",
+        }
+    }
+}
+
+/// Typed OCR attempt failure returned explicitly to callers (PDF/image).
+///
+/// No TLS / process-global collector — safe under nested calls, concurrency, and panics.
+#[derive(Debug, Clone)]
+pub enum OcrAttemptError {
+    /// Exact stage: `Command::output` for Tesseract returned `ErrorKind::NotFound`.
+    TesseractNotFound {
+        stage: OcrStage,
+        binary: PathBuf,
+        message: String,
+    },
+    /// Other OCR/decode/render failure; stage + message + io kind (no string reclassification).
+    Failed {
+        stage: OcrStage,
+        message: String,
+        io_kind: io::ErrorKind,
+    },
+}
+
+impl std::fmt::Display for OcrAttemptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TesseractNotFound { message, .. } | Self::Failed { message, .. } => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for OcrAttemptError {}
+
+impl OcrAttemptError {
+    pub fn stage(&self) -> OcrStage {
+        match self {
+            Self::TesseractNotFound { stage, .. } | Self::Failed { stage, .. } => *stage,
+        }
+    }
+
+    /// Maps to [`ConvertErrorKind`] for detailed convert surfaces.
+    pub fn kind(&self) -> ConvertErrorKind {
+        match self {
+            Self::TesseractNotFound { .. } => ConvertErrorKind::DependencyMissing,
+            Self::Failed { .. } => ConvertErrorKind::Failed,
+        }
+    }
+
+    pub fn convert_kind(&self) -> ConvertErrorKind {
+        self.kind()
+    }
+
+    pub fn to_detailed(self) -> DetailedConvertError {
+        match self {
+            Self::TesseractNotFound { message, .. } => {
+                DetailedConvertError::dependency_missing(message)
+            }
+            Self::Failed { message, .. } => DetailedConvertError::failed(message),
+        }
+    }
+
+    pub fn into_io(self) -> io::Error {
+        match self {
+            Self::TesseractNotFound {
+                message, binary, ..
+            } => io::Error::new(
+                io::ErrorKind::NotFound,
+                TesseractNotFoundError {
+                    message: format!("{message} ({})", binary.display()),
+                },
+            ),
+            Self::Failed {
+                message, io_kind, ..
+            } => io::Error::new(io_kind, message),
+        }
+    }
+
+    pub(crate) fn failed(stage: OcrStage, error: impl std::fmt::Display) -> Self {
+        Self::Failed {
+            stage,
+            message: error.to_string(),
+            io_kind: io::ErrorKind::Other,
+        }
+    }
+
+    pub(crate) fn from_io(stage: OcrStage, error: io::Error) -> Self {
+        Self::Failed {
+            stage,
+            message: error.to_string(),
+            io_kind: error.kind(),
+        }
+    }
+}
+
 thread_local! {
     static OCR_ENGINE: Cell<OcrEngine> = const { Cell::new(OcrEngine::Tesseract) };
-    static LAST_OCR_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T {
@@ -56,18 +181,6 @@ pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T
         let _reset = Reset(active, previous);
         operation()
     })
-}
-
-pub(crate) fn clear_last_ocr_error() {
-    LAST_OCR_ERROR.with(|error| *error.borrow_mut() = None);
-}
-
-pub(crate) fn record_ocr_error(error: impl std::fmt::Display) {
-    LAST_OCR_ERROR.with(|last| *last.borrow_mut() = Some(error.to_string()));
-}
-
-pub(crate) fn take_last_ocr_error() -> Option<String> {
-    LAST_OCR_ERROR.with(|error| error.borrow_mut().take())
 }
 
 fn active_engine() -> OcrEngine {
@@ -135,30 +248,54 @@ fn write_ocr_temp_gray_png(img: &GrayImage) -> io::Result<NamedTempFile> {
 }
 
 /// OCR một file ảnh. `langs` ví dụ "vie+eng".
+///
+/// Legacy `io::Result` surface. Prefer [`ocr_image_detailed`] for typed errors.
 pub fn ocr_image(path: &Path, langs: &str) -> io::Result<String> {
+    ocr_image_detailed(path, langs, &OcrRunConfig::default()).map_err(OcrAttemptError::into_io)
+}
+
+/// Additive detailed image OCR with typed attempt errors (no TLS collector).
+pub fn ocr_image_detailed(
+    path: &Path,
+    langs: &str,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
     match load_image_for_ocr(path) {
-        Ok(img) => ocr_dynimage(&img, langs),
+        Ok(img) => ocr_dynimage_detailed(&img, langs, config),
         // Vượt giới hạn kích thước/alloc → fail rõ, KHÔNG đẩy bomb sang tesseract.
-        Err(error) if is_image_limit_error(&error) => {
-            let error = image_error_to_io(error);
-            record_ocr_error(&error);
-            Err(error)
-        }
+        Err(error) if is_image_limit_error(&error) => Err(OcrAttemptError::from_io(
+            OcrStage::Bounds,
+            image_error_to_io(error),
+        )),
         // Không đọc/giải mã được bằng crate image → OCR thẳng file gốc.
-        Err(_) => run_tesseract(path, langs),
+        Err(_) => run_tesseract_detailed(path, langs, config),
     }
 }
 
 /// OCR một ảnh đã có trong bộ nhớ (vd trang PDF render ra) — có tiền xử lý.
 pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
-    ensure_ocr_image_bounds(img.width(), img.height())?;
+    ocr_dynimage_detailed(img, langs, &OcrRunConfig::default()).map_err(OcrAttemptError::into_io)
+}
+
+/// Additive detailed in-memory OCR with typed attempt errors.
+pub fn ocr_dynimage_detailed(
+    img: &DynamicImage,
+    langs: &str,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    ensure_ocr_image_bounds(img.width(), img.height())
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Bounds, error))?;
     let pre = preprocess(img);
-    let tmp = write_ocr_temp_png(&pre)?;
+    let tmp = write_ocr_temp_png(&pre)
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
     let tmp_path = tmp.path();
-    let tesseract = || run_tesseract_with_columns(&pre.to_luma8(), tmp_path, langs);
+    let tesseract =
+        || run_tesseract_with_columns_detailed(&pre.to_luma8(), tmp_path, langs, config);
     let text = match active_engine() {
         OcrEngine::Tesseract => tesseract(),
-        OcrEngine::Paddle => run_paddle(tmp_path, langs).or_else(|_| tesseract()),
+        OcrEngine::Paddle => run_paddle(tmp_path, langs)
+            .map_err(|error| OcrAttemptError::from_io(OcrStage::Paddle, error))
+            .or_else(|_| tesseract()),
         OcrEngine::Auto => {
             let baseline = tesseract()?;
             if should_retry_layout(&baseline) {
@@ -173,9 +310,6 @@ pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
     };
     // `tmp` drop → xoá exclusive temp; không dùng path đoán được theo pid/seq.
     drop(tmp);
-    if let Err(error) = &text {
-        record_ocr_error(error);
-    }
     text
 }
 
@@ -297,12 +431,13 @@ fn detect_column_ranges(image: &GrayImage) -> Vec<(u32, u32)> {
     }
 }
 
-fn run_tesseract_with_columns(
+fn run_tesseract_with_columns_detailed(
     image: &GrayImage,
     whole_path: &Path,
     langs: &str,
-) -> io::Result<String> {
-    let whole = run_tesseract(whole_path, langs)?;
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    let whole = run_tesseract_detailed(whole_path, langs, config)?;
     let ranges = detect_column_ranges(image);
     if ranges.len() <= 1 {
         return Ok(whole);
@@ -310,12 +445,13 @@ fn run_tesseract_with_columns(
     let mut columns = Vec::new();
     for (left, right) in ranges {
         let cropped = imageops::crop_imm(image, left, 0, right - left, image.height()).to_image();
-        let tmp = write_ocr_temp_gray_png(&cropped)?;
+        let tmp = write_ocr_temp_gray_png(&cropped)
+            .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
         let path = tmp.path();
-        let automatic = run_tesseract_psm(path, langs, 4);
+        let automatic = run_tesseract_psm_detailed(path, langs, 4, config);
         let text = match automatic {
             Ok(value) if should_retry_layout(&value) => {
-                let block = run_tesseract_psm(path, langs, 6).unwrap_or_default();
+                let block = run_tesseract_psm_detailed(path, langs, 6, config).unwrap_or_default();
                 if ocr_text_score(&block) > ocr_text_score(&value) {
                     block
                 } else {
@@ -449,12 +585,16 @@ fn run_paddle(path: &Path, langs: &str) -> io::Result<String> {
     Ok(parsed.text)
 }
 
-fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
-    let automatic = run_tesseract_psm(path, langs, 3)?;
+fn run_tesseract_detailed(
+    path: &Path,
+    langs: &str,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    let automatic = run_tesseract_psm_detailed(path, langs, 3, config)?;
     if !should_retry_layout(&automatic) {
         return Ok(automatic);
     }
-    let block = run_tesseract_psm(path, langs, 6)?;
+    let block = run_tesseract_psm_detailed(path, langs, 6, config)?;
     if ocr_text_score(&block) > ocr_text_score(&automatic) {
         Ok(block)
     } else {
@@ -462,8 +602,17 @@ fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
     }
 }
 
-fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
-    run_tesseract_psm_with_binary(&tesseract_binary(), path, langs, psm)
+fn run_tesseract_psm_detailed(
+    path: &Path,
+    langs: &str,
+    psm: u8,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    let binary = config
+        .tesseract_binary
+        .clone()
+        .unwrap_or_else(tesseract_binary);
+    run_tesseract_psm_with_binary(&binary, path, langs, psm)
 }
 
 /// Xây `Command` tesseract (argv rời, không shell). `binary` inject được cho test.
@@ -511,28 +660,28 @@ fn run_tesseract_psm_with_binary(
     path: &Path,
     langs: &str,
     psm: u8,
-) -> io::Result<String> {
+) -> Result<String, OcrAttemptError> {
     let output = match build_tesseract_psm_command(binary, path, langs, psm).output() {
         Ok(output) => output,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                TesseractNotFoundError {
-                    message: format!(
-                        "không tìm thấy binary Tesseract ({}): {error}",
-                        binary.display()
-                    ),
-                },
-            ));
+            return Err(OcrAttemptError::TesseractNotFound {
+                stage: OcrStage::Tesseract,
+                binary: binary.to_path_buf(),
+                message: format!(
+                    "không tìm thấy binary Tesseract ({}): {error}",
+                    binary.display()
+                ),
+            });
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(OcrAttemptError::from_io(OcrStage::Tesseract, error)),
     };
 
     if !output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("tesseract lỗi: {}", String::from_utf8_lossy(&output.stderr)),
-        ));
+        return Err(OcrAttemptError::Failed {
+            stage: OcrStage::Tesseract,
+            message: format!("tesseract lỗi: {}", String::from_utf8_lossy(&output.stderr)),
+            io_kind: io::ErrorKind::Other,
+        });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -547,6 +696,14 @@ fn resolve_tesseract_binary(override_bin: Option<&std::ffi::OsStr>) -> PathBuf {
 
 fn tesseract_binary() -> PathBuf {
     resolve_tesseract_binary(std::env::var_os("FILECONV_TESSERACT").as_deref())
+}
+
+/// Binary used for a run config (config override → env → default).
+pub fn effective_tesseract_binary(config: &OcrRunConfig) -> PathBuf {
+    config
+        .tesseract_binary
+        .clone()
+        .unwrap_or_else(tesseract_binary)
 }
 
 fn apply_ocr_runtime_env(command: &mut Command) {
@@ -714,9 +871,25 @@ mod tests {
         std::fs::write(&path, hex_literal_png_ihdr(20_000, 20_000)).expect("write");
         let err = ocr_image(&path, "eng").expect_err("limit must surface");
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let detailed = ocr_image_detailed(&path, "eng", &OcrRunConfig::default())
+            .expect_err("limit must surface as typed OCR error");
         assert!(
-            take_last_ocr_error().is_some_and(|message| message.contains("limit")),
-            "limit failure should be recorded"
+            matches!(
+                detailed,
+                OcrAttemptError::Failed {
+                    stage: OcrStage::Bounds,
+                    io_kind: io::ErrorKind::InvalidData,
+                    ..
+                }
+            ),
+            "got {detailed:?}"
+        );
+        assert_eq!(detailed.kind(), ConvertErrorKind::Failed);
+        assert_eq!(detailed.stage(), OcrStage::Bounds);
+        assert!(
+            detailed.to_string().to_ascii_lowercase().contains("limit")
+                || detailed.to_string().contains("dimension"),
+            "limit detail preserved: {detailed}"
         );
     }
 
@@ -823,6 +996,39 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn missing_tesseract_binary_is_typed_dependency_missing_with_stage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.png");
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(32, 32, image::Luma([40])))
+            .save(&path)
+            .expect("sample png");
+        let cfg = OcrRunConfig {
+            tesseract_binary: Some(PathBuf::from(
+                "/nonexistent/fileconv-core-t7-missing-tesseract",
+            )),
+        };
+        let err = ocr_image_detailed(&path, "eng", &cfg).expect_err("missing binary");
+        assert!(
+            matches!(
+                err,
+                OcrAttemptError::TesseractNotFound {
+                    stage: OcrStage::Tesseract,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+        assert_eq!(err.stage(), OcrStage::Tesseract);
+        assert_eq!(err.kind(), ConvertErrorKind::DependencyMissing);
+        let detailed = err.clone().to_detailed();
+        assert_eq!(detailed.kind, ConvertErrorKind::DependencyMissing);
+        // Legacy surface stays io::NotFound with marker type.
+        let io_err = err.into_io();
+        assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
+        assert!(error_is_tesseract_not_found(&io_err));
     }
 
     /// Minimal PNG with only an IHDR chunk (precomputed CRC for given size).

@@ -36,7 +36,7 @@ mod viet_legacy_maps;
 
 pub use diagnostics::{
     ConversionOutcome, ConversionReport, ConversionWarning, ConversionWarningCode,
-    ConvertErrorKind, DetailedConvertError,
+    ConvertErrorKind, DetailedConvertError, DetailedErrorDto,
 };
 pub use probe::{probe, FileInfo};
 
@@ -155,6 +155,9 @@ pub struct ConverterOptions {
     pub xlsx_sheet: Option<String>,
     /// Cắt Markdown ở tối đa N ký tự (kèm chú thích phần bị cắt). None = không cắt.
     pub max_chars: Option<usize>,
+    /// Override Tesseract binary for this conversion (injectable; no env mutation).
+    /// `None` uses `FILECONV_TESSERACT` / default `tesseract`.
+    pub tesseract_binary: Option<PathBuf>,
 }
 
 impl Default for ConverterOptions {
@@ -171,6 +174,7 @@ impl Default for ConverterOptions {
             pdf_pages: None,
             xlsx_sheet: None,
             max_chars: None,
+            tesseract_binary: None,
         }
     }
 }
@@ -288,6 +292,9 @@ impl Converter {
         path: &Path,
         format: FormatKind,
     ) -> Result<MarkdownOutput, DetailedConvertError> {
+        let ocr_config = image_ocr::OcrRunConfig {
+            tesseract_binary: self.opts.tesseract_binary.clone(),
+        };
         match format {
             FormatKind::Pdf => conv::pdf::to_markdown_detailed(
                 path,
@@ -295,6 +302,7 @@ impl Converter {
                 self.opts.pdf_ocr,
                 self.opts.pdf_ocr_images,
                 self.opts.pdf_pages.as_deref(),
+                &ocr_config,
             ),
             FormatKind::Docx => conv::docx::to_markdown(path)
                 .map(MarkdownOutput::clean)
@@ -314,17 +322,11 @@ impl Converter {
             FormatKind::Text => conv::text::to_markdown(path)
                 .map(MarkdownOutput::clean)
                 .map_err(DetailedConvertError::from_convert),
-            FormatKind::Image => image_ocr::ocr_image(path, &self.opts.ocr_langs)
-                .map(MarkdownOutput::clean)
-                .map_err(|error| {
-                    if image_ocr::error_is_tesseract_not_found(&error) {
-                        DetailedConvertError::dependency_missing(format!(
-                            "không tìm thấy Tesseract OCR (spawn NotFound): {error}"
-                        ))
-                    } else {
-                        DetailedConvertError::failed(error.to_string())
-                    }
-                }),
+            FormatKind::Image => {
+                image_ocr::ocr_image_detailed(path, &self.opts.ocr_langs, &ocr_config)
+                    .map(MarkdownOutput::clean)
+                    .map_err(image_ocr::OcrAttemptError::to_detailed)
+            }
             FormatKind::Audio => {
                 #[cfg(feature = "audio")]
                 {
@@ -465,6 +467,11 @@ mod tests {
         assert_eq!(internal.kind, ConvertErrorKind::Internal);
         let failed = DetailedConvertError::failed("opaque");
         assert_eq!(failed.kind, ConvertErrorKind::Failed);
+        let dto = dep.to_dto();
+        let value = serde_json::to_value(&dto).unwrap();
+        assert_eq!(value["kind"], "dependency_missing");
+        assert!(value["message"].as_str().unwrap().contains("tesseract"));
+        assert!(value.get("message").is_some() && value.get("kind").is_some());
     }
 
     #[test]

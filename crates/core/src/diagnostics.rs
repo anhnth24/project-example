@@ -172,6 +172,21 @@ impl DetailedConvertError {
             kind: ConvertErrorKind::BadPath,
         }
     }
+
+    /// Structured DTO for detailed CLI/MCP/desktop hard-failure surfaces.
+    pub fn to_dto(&self) -> DetailedErrorDto {
+        DetailedErrorDto {
+            message: self.error.to_string(),
+            kind: self.kind,
+        }
+    }
+}
+
+/// Serializable hard-failure payload for detailed commands/tools (`{message, kind}`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetailedErrorDto {
+    pub message: String,
+    pub kind: ConvertErrorKind,
 }
 
 /// Explicit markdown + warnings returned by converters (no TLS collector).
