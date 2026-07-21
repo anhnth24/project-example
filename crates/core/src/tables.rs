@@ -1,8 +1,11 @@
 //! Trích BẢNG có cấu trúc → JSON (tất định, KHÔNG cần LLM). Cho xlsx/xls/csv.
 //!
 //! Trả JSON: xlsx → `{ "<sheet>": [[ô,...], ...], ... }`; csv → `[[ô,...], ...]`.
+//! Chuỗi text trong JSON được chuẩn hoá NFC (cùng hợp đồng với `convert_path`).
 
 use std::path::Path;
+
+use unicode_normalization::{is_nfc_quick, IsNormalized, UnicodeNormalization};
 
 use crate::{ConvertError, FormatKind};
 
@@ -15,6 +18,17 @@ pub fn tables_json(path: &Path, sheet: Option<&str>) -> Result<String, ConvertEr
             _ => "extract_tables_json: chỉ hỗ trợ xlsx/xls/csv",
         })),
     }
+}
+
+fn normalize_nfc(text: String) -> String {
+    match is_nfc_quick(text.chars()) {
+        IsNormalized::Yes => text,
+        _ => text.nfc().collect(),
+    }
+}
+
+fn json_string(text: impl Into<String>) -> serde_json::Value {
+    serde_json::Value::String(normalize_nfc(text.into()))
 }
 
 fn xlsx_json(path: &Path, sheet: Option<&str>) -> Result<String, ConvertError> {
@@ -45,13 +59,13 @@ fn xlsx_json(path: &Path, sheet: Option<&str>) -> Result<String, ConvertError> {
                             Data::Int(i) => (*i).into(),
                             Data::Float(f) => (*f).into(),
                             Data::Bool(b) => (*b).into(),
-                            other => serde_json::Value::String(other.to_string()),
+                            other => json_string(other.to_string()),
                         })
                         .collect(),
                 )
             })
             .collect();
-        obj.insert(name, serde_json::Value::Array(rows));
+        obj.insert(normalize_nfc(name), serde_json::Value::Array(rows));
     }
     serde_json::to_string(&serde_json::Value::Object(obj))
         .map_err(|e| ConvertError::Failed(e.to_string()))
@@ -68,13 +82,7 @@ fn csv_json(path: &Path) -> Result<String, ConvertError> {
     let rows: Vec<serde_json::Value> = rdr
         .records()
         .filter_map(|r| r.ok())
-        .map(|rec| {
-            serde_json::Value::Array(
-                rec.iter()
-                    .map(|s| serde_json::Value::String(s.to_string()))
-                    .collect(),
-            )
-        })
+        .map(|rec| serde_json::Value::Array(rec.iter().map(|s| json_string(s)).collect()))
         .collect();
     serde_json::to_string(&serde_json::Value::Array(rows))
         .map_err(|e| ConvertError::Failed(e.to_string()))
@@ -95,6 +103,38 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         let json = tables_json(&path, None).unwrap();
         assert!(json.contains("Cộng hòa xã hội"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn csv_json_normalizes_nfd_cells_to_nfc() {
+        // "tiếng" NFD: e + ◌̂ + ◌́
+        let nfd = "ti\u{0065}\u{0302}\u{0301}ng,Vi\u{0065}\u{0323}\u{0302}t\n";
+        let path =
+            std::env::temp_dir().join(format!("fileconv_tables_nfd_{}.csv", std::process::id()));
+        std::fs::write(&path, nfd).unwrap();
+        let json = tables_json(&path, None).unwrap();
+        assert!(json.contains("tiếng"), "got: {json}");
+        assert!(json.contains("Việt"), "got: {json}");
+        assert!(
+            !json.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)),
+            "JSON còn combining mark: {json}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn csv_json_decodes_tcvn3_uppercase_digraph_cell() {
+        // "Á,ĐỘ" — hoa có dấu TCVN3.
+        let bytes = [0x41, 0xB8, b',', 0xA7, 0xA4, 0xE9, b'\n'];
+        let path = std::env::temp_dir().join(format!(
+            "fileconv_tables_tcvn3_upper_{}.csv",
+            std::process::id()
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        let json = tables_json(&path, None).unwrap();
+        assert!(json.contains("Á"), "got: {json}");
+        assert!(json.contains("ĐỘ"), "got: {json}");
         let _ = std::fs::remove_file(path);
     }
 }
