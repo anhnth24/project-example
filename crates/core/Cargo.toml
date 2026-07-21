@@ -25,12 +25,13 @@ openblas = ["audio", "whisper-rs/openblas"]
 openmp = ["audio", "whisper-rs/openmp"]
 # Lớp LLM tuỳ chọn (summarize / extract_json ngữ nghĩa) — cần API key lúc chạy.
 # Bật khi build: cargo build --features llm. Mặc định TẮT để giữ build lean/offline.
-llm = ["dep:reqwest"]
+llm = ["dep:reqwest", "dep:httpdate"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
+httpdate = { version = "1.0.3", optional = true }
 thiserror.workspace = true
 # Gọi thẳng các crate gốc thay vì qua markitdown-rs:
 calamine = "0.35"        # xlsx/xls — đọc TẤT CẢ sheet
@@ -52,3 +53,12 @@ pdf-inspector = "0.1.3"
 unicode-normalization = "0.1.25"
 base64 = "0.22"
 encoding_rs = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }

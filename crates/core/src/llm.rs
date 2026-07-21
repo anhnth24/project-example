@@ -22,47 +22,91 @@ pub enum Provider {
     CodexCli,
 }
 
-fn serialize_redacted_secret<S: serde::Serializer>(
-    value: &str,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    if value.is_empty() {
-        serializer.serialize_str("")
-    } else {
-        serializer.serialize_str("[REDACTED]")
+const REDACTED_SECRET_PLACEHOLDER: &str = "[REDACTED]";
+
+fn deserialize_api_key<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    if value == REDACTED_SECRET_PLACEHOLDER {
+        return Err(serde::de::Error::custom(
+            "api_key placeholder [REDACTED] is not a valid secret",
+        ));
     }
+    Ok(value)
 }
 
-/// Redact userinfo and common secret query params from URLs for Debug output.
+fn is_sensitive_query_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "key"
+            | "api_key"
+            | "apikey"
+            | "api-key"
+            | "token"
+            | "access_token"
+            | "access-token"
+            | "secret"
+            | "password"
+            | "passwd"
+            | "auth"
+            | "authorization"
+            | "client_secret"
+            | "client-secret"
+    )
+}
+
+/// Redact userinfo and all sensitive query params (case-insensitive, duplicates).
 fn redact_url_for_debug(url: &str, api_key: &str) -> String {
     let mut redacted = if api_key.is_empty() {
         url.to_string()
     } else {
-        url.replace(api_key, "[REDACTED]")
+        url.replace(api_key, REDACTED_SECRET_PLACEHOLDER)
     };
     if let Some((scheme, rest)) = redacted.split_once("://") {
         if let Some((_userinfo, host)) = rest.split_once('@') {
-            redacted = format!("{scheme}://[REDACTED]@{host}");
+            redacted = format!("{scheme}://{REDACTED_SECRET_PLACEHOLDER}@{host}");
         }
     }
-    for key in ["key=", "api_key=", "apiKey=", "token=", "access_token="] {
-        if let Some(start) = redacted.find(key) {
-            let value_start = start + key.len();
-            let value_end = redacted[value_start..]
-                .find(['&', '#', ' ', '"', '\''])
-                .map(|idx| value_start + idx)
-                .unwrap_or(redacted.len());
-            redacted.replace_range(value_start..value_end, "[REDACTED]");
-        }
+    let (before_frag, frag) = match redacted.split_once('#') {
+        Some((head, tail)) => (head.to_string(), Some(tail.to_string())),
+        None => (redacted, None),
+    };
+    let rebuilt = if let Some((base, query)) = before_frag.split_once('?') {
+        let pairs: Vec<String> = query
+            .split('&')
+            .map(|pair| {
+                if pair.is_empty() {
+                    return pair.to_string();
+                }
+                let (raw_key, raw_value) = pair.split_once('=').unwrap_or((pair, ""));
+                if is_sensitive_query_key(raw_key)
+                    || (!api_key.is_empty() && raw_value.contains(api_key))
+                {
+                    format!("{raw_key}={REDACTED_SECRET_PLACEHOLDER}")
+                } else {
+                    pair.to_string()
+                }
+            })
+            .collect();
+        format!("{base}?{}", pairs.join("&"))
+    } else {
+        before_frag
+    };
+    match frag {
+        Some(tail) => format!("{rebuilt}#{tail}"),
+        None => rebuilt,
     }
-    redacted
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// Runtime LLM config — Deserialize only (no Serialize): secrets must not leave
+/// process memory via serde. Construct with builders / `from_env`.
+#[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmConfig {
     pub provider: Provider,
-    #[serde(serialize_with = "serialize_redacted_secret")]
+    #[serde(deserialize_with = "deserialize_api_key")]
     pub api_key: String,
     pub model: String,
     pub base_url: Option<String>,
@@ -74,7 +118,7 @@ impl std::fmt::Debug for LlmConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LlmConfig")
             .field("provider", &self.provider)
-            .field("api_key", &"[REDACTED]")
+            .field("api_key", &REDACTED_SECRET_PLACEHOLDER)
             .field("model", &self.model)
             .field(
                 "base_url",
@@ -120,11 +164,12 @@ const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
     EMBEDDING_RUNTIME_PROVIDER_CLOUD,
 ];
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+/// Runtime embedding config — Deserialize only (no Serialize); see [`LlmConfig`].
+#[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddingConfig {
     pub provider: Provider,
-    #[serde(serialize_with = "serialize_redacted_secret")]
+    #[serde(deserialize_with = "deserialize_api_key")]
     pub api_key: String,
     pub model: String,
     pub base_url: Option<String>,
@@ -138,7 +183,7 @@ impl std::fmt::Debug for EmbeddingConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EmbeddingConfig")
             .field("provider", &self.provider)
-            .field("api_key", &"[REDACTED]")
+            .field("api_key", &REDACTED_SECRET_PLACEHOLDER)
             .field("model", &self.model)
             .field(
                 "base_url",
@@ -721,7 +766,7 @@ fn redact_secret(text: &str, secret: Option<&str>) -> String {
     let Some(secret) = secret.filter(|value| !value.is_empty()) else {
         return text.to_string();
     };
-    text.replace(secret, "[REDACTED]")
+    text.replace(secret, REDACTED_SECRET_PLACEHOLDER)
 }
 
 fn fail_redacted(message: impl std::fmt::Display, secret: Option<&str>) -> ConvertError {
@@ -768,80 +813,26 @@ fn current_time() -> std::time::SystemTime {
     std::time::SystemTime::now()
 }
 
-fn month_from_name(name: &str) -> Option<u32> {
-    Some(match name {
-        "Jan" => 1,
-        "Feb" => 2,
-        "Mar" => 3,
-        "Apr" => 4,
-        "May" => 5,
-        "Jun" => 6,
-        "Jul" => 7,
-        "Aug" => 8,
-        "Sep" => 9,
-        "Oct" => 10,
-        "Nov" => 11,
-        "Dec" => 12,
-        _ => return None,
-    })
-}
-
-/// Civil date → days since Unix epoch (Howard Hinnant).
-fn unix_days_from_civil(year: i32, month: u32, day: u32) -> Option<i64> {
-    if !(1..=12).contains(&month) || day == 0 || day > 31 {
-        return None;
-    }
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = (y - era * 400) as u32;
-    let mp = if month > 2 { month - 3 } else { month + 9 };
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era as i64 * 146_097 + doe as i64 - 719_468)
-}
-
-/// Parse IMF-fixdate (`Wed, 21 Oct 2015 07:28:00 GMT`) to `SystemTime`.
-fn parse_http_date(value: &str) -> Option<std::time::SystemTime> {
-    let value = value.trim();
-    let value = value.strip_suffix(" GMT")?;
-    let value = value.split_once(", ")?.1;
-    let mut parts = value.split_whitespace();
-    let day: u32 = parts.next()?.parse().ok()?;
-    let month = month_from_name(parts.next()?)?;
-    let year: i32 = parts.next()?.parse().ok()?;
-    let time = parts.next()?;
-    let mut hms = time.split(':');
-    let hour: u32 = hms.next()?.parse().ok()?;
-    let minute: u32 = hms.next()?.parse().ok()?;
-    let second: u32 = hms.next()?.parse().ok()?;
-    if hour > 23 || minute > 59 || second > 60 {
-        return None;
-    }
-    let days = unix_days_from_civil(year, month, day)?;
-    let secs = days
-        .checked_mul(86_400)?
-        .checked_add(i64::from(hour * 3600 + minute * 60 + second))?;
-    if secs >= 0 {
-        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64))
-    } else {
-        std::time::UNIX_EPOCH.checked_sub(std::time::Duration::from_secs((-secs) as u64))
-    }
-}
-
-/// Parse `Retry-After` as delta-seconds or HTTP-date.
+/// Parse `Retry-After` as delta-seconds or HTTP-date (IMF-fixdate / RFC850 / asctime).
+/// Malformed values return `None` — never panic.
 fn parse_retry_after_header(
     value: Option<&str>,
     now: std::time::SystemTime,
 ) -> Option<std::time::Duration> {
     let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(std::time::Duration::from_secs(seconds));
     }
-    let when = parse_http_date(value)?;
-    Some(
-        when.duration_since(now)
-            .unwrap_or(std::time::Duration::ZERO),
-    )
+    match httpdate::parse_http_date(value) {
+        Ok(when) => Some(
+            when.duration_since(now)
+                .unwrap_or(std::time::Duration::ZERO),
+        ),
+        Err(_) => None,
+    }
 }
 
 fn exponential_backoff(attempt: u32) -> std::time::Duration {
@@ -1618,33 +1609,37 @@ mod tests {
     }
 
     #[test]
-    fn config_debug_and_serialize_redact_secrets_canary() {
+    fn config_debug_redacts_url_secrets_and_deserialize_rejects_placeholder() {
         let secret = "super-secret-key-canary";
         let llm = LlmConfig::new(
             Provider::OpenAi,
             secret,
             "model",
-            Some("https://user:pass@api.example.com/v1?key=embedded-query".into()),
+            Some(
+                "https://user:pass@api.example.com/v1?KEY=one&key=two&Api_Key=three&token=four&TOKEN=five#frag"
+                    .into(),
+            ),
         )
         .unwrap();
         let llm_debug = format!("{llm:?}");
         assert!(!llm_debug.contains(secret));
         assert!(!llm_debug.contains("user:pass"));
-        assert!(!llm_debug.contains("embedded-query"));
-        assert!(llm_debug.contains("[REDACTED]"));
-
-        let serialized = serde_json::to_string(&llm).unwrap();
-        assert!(
-            !serialized.contains(secret),
-            "serialize leaked: {serialized}"
-        );
-        assert!(serialized.contains("[REDACTED]"));
+        assert!(!llm_debug.contains("=one"));
+        assert!(!llm_debug.contains("=two"));
+        assert!(!llm_debug.contains("=three"));
+        assert!(!llm_debug.contains("=four"));
+        assert!(!llm_debug.contains("=five"));
+        assert!(llm_debug.contains(REDACTED_SECRET_PLACEHOLDER));
 
         let restored: LlmConfig = serde_json::from_str(
             r#"{"provider":"open_ai","apiKey":"restored-from-disk","model":"m","baseUrl":null}"#,
         )
         .unwrap();
         assert_eq!(restored.api_key, "restored-from-disk");
+        assert!(serde_json::from_str::<LlmConfig>(
+            r#"{"provider":"open_ai","apiKey":"[REDACTED]","model":"m"}"#
+        )
+        .is_err());
 
         let embedding = EmbeddingConfig::new(
             Provider::OpenAi,
@@ -1656,9 +1651,35 @@ mod tests {
         )
         .unwrap();
         let embedding_debug = format!("{embedding:?}");
-        let embedding_json = serde_json::to_string(&embedding).unwrap();
         assert!(!embedding_debug.contains("embed-secret-key-canary"));
-        assert!(!embedding_json.contains("embed-secret-key-canary"));
+        assert!(serde_json::from_str::<EmbeddingConfig>(
+            r#"{"provider":"open_ai","apiKey":"[REDACTED]","model":"m","runtimePath":"provider-cloud"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn retry_after_malformed_http_date_never_panics() {
+        let now = std::time::SystemTime::now();
+        for bad in [
+            "",
+            "not-a-date",
+            "Sun Nov 10 08*00:00 2000",
+            "999999999999999999999",
+            "Thu, 40 Jan 1970 99:99:99 GMT",
+        ] {
+            let _ = parse_retry_after_header(Some(bad), now);
+        }
+        // Legacy RFC850 + asctime accepted by httpdate when well-formed.
+        let epoch = std::time::UNIX_EPOCH + std::time::Duration::from_secs(784_111_777);
+        assert_eq!(
+            parse_retry_after_header(Some("Sunday, 06-Nov-94 08:49:37 GMT"), epoch),
+            Some(std::time::Duration::ZERO)
+        );
+        assert_eq!(
+            parse_retry_after_header(Some("Sun Nov  6 08:49:37 1994"), epoch),
+            Some(std::time::Duration::ZERO)
+        );
     }
 
     #[test]

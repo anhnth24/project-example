@@ -133,160 +133,157 @@ fn join_with_deadline<T: Send + 'static>(
 }
 
 #[cfg(unix)]
-fn prepare_command_containment(command: &mut Command) {
+fn prepare_unix_containment(command: &mut Command) {
     use std::os::unix::process::CommandExt;
     // New process group (= child pid) so SIGKILL to -pgid reaps grandchildren.
     command.process_group(0);
 }
 
 #[cfg(windows)]
-struct WindowsJob(*mut core::ffi::c_void);
+mod win_job {
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Child, Command};
 
-#[cfg(windows)]
-impl WindowsJob {
-    fn create() -> Option<Self> {
-        use std::ptr;
-        // Minimal Job Object containment without adding windows-sys as a dep.
-        extern "system" {
-            fn CreateJobObjectW(
-                lpJobAttributes: *mut core::ffi::c_void,
-                lpName: *const u16,
-            ) -> *mut core::ffi::c_void;
-            fn SetInformationJobObject(
-                hJob: *mut core::ffi::c_void,
-                jobObjectInformationClass: u32,
-                lpJobObjectInformation: *mut core::ffi::c_void,
-                cbJobObjectInformationLength: u32,
-            ) -> i32;
-        }
-        const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
-        const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
-        #[repr(C)]
-        struct IoCounters {
-            read_op: u64,
-            write_op: u64,
-            other_op: u64,
-            read_tr: u64,
-            write_tr: u64,
-            other_tr: u64,
-        }
-        #[repr(C)]
-        struct BasicLimit {
-            per_process_user_time: u64,
-            per_job_user_time: u64,
-            min_working: usize,
-            max_working: usize,
-            page_limit: u32,
-            active_limit: u32,
-            priority: u32,
-            scheduling: u32,
-            affinity: usize,
-            limit_flags: u32,
-        }
-        #[repr(C)]
-        struct ExtendedLimit {
-            basic: BasicLimit,
-            io: IoCounters,
-            process_memory: usize,
-            job_memory: usize,
-            peak_process: usize,
-            peak_job: usize,
-        }
-        unsafe {
-            let handle = CreateJobObjectW(ptr::null_mut(), ptr::null());
-            if handle.is_null() {
-                return None;
-            }
-            let mut info: ExtendedLimit = std::mem::zeroed();
-            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            let ok = SetInformationJobObject(
-                handle,
-                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                &mut info as *mut _ as *mut core::ffi::c_void,
-                std::mem::size_of::<ExtendedLimit>() as u32,
-            );
-            if ok == 0 {
-                extern "system" {
-                    fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenThread, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED, THREAD_SUSPEND_RESUME,
+    };
+
+    pub struct WindowsJob(HANDLE);
+
+    impl WindowsJob {
+        pub fn create() -> Option<Self> {
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                    return None;
                 }
-                let _ = CloseHandle(handle);
-                return None;
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 {
+                    let _ = CloseHandle(handle);
+                    return None;
+                }
+                Some(Self(handle))
             }
-            Some(Self(handle))
+        }
+
+        pub fn assign(&self, child: &Child) -> bool {
+            unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
+        }
+
+        pub fn terminate(&self) {
+            unsafe {
+                let _ = TerminateJobObject(self.0, 1);
+            }
         }
     }
 
-    fn assign(&self, child: &std::process::Child) -> bool {
-        use std::os::windows::io::AsRawHandle;
-        extern "system" {
-            fn AssignProcessToJobObject(
-                hJob: *mut core::ffi::c_void,
-                hProcess: *mut core::ffi::c_void,
-            ) -> i32;
+    impl Drop for WindowsJob {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
         }
-        unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
     }
 
-    fn terminate(&self) {
-        extern "system" {
-            fn TerminateJobObject(hJob: *mut core::ffi::c_void, uExitCode: u32) -> i32;
-        }
+    /// Resume the primary thread of a CREATE_SUSPENDED process (std::process::Child
+    /// does not expose PROCESS_INFORMATION.hThread).
+    pub fn resume_primary_thread(pid: u32) -> bool {
         unsafe {
-            let _ = TerminateJobObject(self.0, 1);
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let mut entry = THREADENTRY32 {
+                dwSize: size_of::<THREADENTRY32>() as u32,
+                ..std::mem::zeroed()
+            };
+            let mut found = Thread32First(snap, &mut entry) != 0;
+            let mut resumed = false;
+            while found {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !thread.is_null() && thread != INVALID_HANDLE_VALUE {
+                        resumed = ResumeThread(thread) != u32::MAX;
+                        let _ = CloseHandle(thread);
+                    }
+                    break;
+                }
+                found = Thread32Next(snap, &mut entry) != 0;
+            }
+            let _ = CloseHandle(snap);
+            resumed
         }
+    }
+
+    pub fn apply_suspended_flags(command: &mut Command) {
+        command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
 }
 
-#[cfg(windows)]
-impl Drop for WindowsJob {
-    fn drop(&mut self) {
-        extern "system" {
-            fn CloseHandle(handle: *mut core::ffi::c_void) -> i32;
-        }
-        unsafe {
-            let _ = CloseHandle(self.0);
-        }
-    }
-}
-
-#[cfg(windows)]
-fn prepare_command_containment(_command: &mut Command) {}
-
-/// Containment token kept for the lifetime of the child (Windows Job Object).
+/// Containment token kept for the lifetime of the child.
 struct ProcessContainment {
     #[cfg(unix)]
     pgid: u32,
     #[cfg(windows)]
-    job: Option<WindowsJob>,
+    job: win_job::WindowsJob,
 }
 
 impl ProcessContainment {
-    fn attach(command: &mut Command) -> Self {
-        prepare_command_containment(command);
+    fn begin(command: &mut Command) -> Result<Self, ConvertError> {
         #[cfg(unix)]
         {
-            Self { pgid: 0 }
+            prepare_unix_containment(command);
+            Ok(Self { pgid: 0 })
         }
         #[cfg(windows)]
         {
-            Self {
-                job: WindowsJob::create(),
-            }
+            let job = win_job::WindowsJob::create().ok_or_else(|| {
+                fail("không tạo được Windows Job Object cho subscription CLI (fail-closed)")
+            })?;
+            win_job::apply_suspended_flags(command);
+            Ok(Self { job })
         }
     }
 
-    fn after_spawn(&mut self, child: &std::process::Child) {
+    fn after_spawn(&mut self, child: &std::process::Child) -> Result<(), ConvertError> {
         #[cfg(unix)]
         {
             self.pgid = child.id();
+            Ok(())
         }
         #[cfg(windows)]
         {
-            if let Some(job) = &self.job {
-                if !job.assign(child) {
-                    self.job = None;
-                }
+            if !self.job.assign(child) {
+                return Err(fail(
+                    "không gán được CLI vào Windows Job Object (fail-closed)",
+                ));
             }
+            // Process stayed suspended until job assignment — no grandchild race.
+            if !win_job::resume_primary_thread(child.id()) {
+                self.job.terminate();
+                return Err(fail(
+                    "không resume được CLI sau khi gán Job Object (fail-closed)",
+                ));
+            }
+            Ok(())
         }
     }
 
@@ -305,9 +302,7 @@ impl ProcessContainment {
         }
         #[cfg(windows)]
         {
-            if let Some(job) = &self.job {
-                job.terminate();
-            }
+            self.job.terminate();
         }
     }
 }
@@ -325,11 +320,15 @@ fn run_command(
 ) -> Result<CliOutput, ConvertError> {
     // Absolute deadline covers spawn, stdin write, wait, and pipe joins.
     let deadline = Instant::now() + timeout;
-    let mut containment = ProcessContainment::attach(&mut command);
+    let mut containment = ProcessContainment::begin(&mut command)?;
     let mut child = command
         .spawn()
         .map_err(|error| fail(format!("không khởi chạy được CLI: {error}")))?;
-    containment.after_spawn(&child);
+    if let Err(error) = containment.after_spawn(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
     let stdout_reader = child.stdout.take().map(read_pipe);
     let stderr_reader = child.stderr.take().map(read_pipe);
     let stdin_writer = if let Some(input) = input {
@@ -745,15 +744,16 @@ printf '{"type":"result","result":"Grounded mock answer"}\n'
 
     #[cfg(windows)]
     #[test]
-    fn windows_timeout_returns_without_hanging() {
+    fn windows_timeout_kills_nested_cmd_tree_via_job_object() {
+        // Nested `cmd /C` grandchildren must be reaped by the Job Object.
         let mut command = Command::new("cmd");
         command
-            .args(["/C", "ping -n 20 127.0.0.1 >NUL"])
+            .args(["/C", "cmd /C ping -n 30 127.0.0.1 >NUL"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let started = Instant::now();
-        let error = run_command(command, None, Duration::from_millis(200)).unwrap_err();
+        let error = run_command(command, None, Duration::from_millis(300)).unwrap_err();
         assert!(error.to_string().contains("timeout"));
         assert!(started.elapsed() < Duration::from_secs(3));
     }

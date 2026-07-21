@@ -2045,6 +2045,7 @@ dependencies = [
  "docx-rust",
  "encoding_rs",
  "htmd",
+ "httpdate",
  "image",
  "pdf-extract",
  "pdf-inspector",
@@ -2058,6 +2059,7 @@ dependencies = [
  "thiserror 2.0.18",
  "unicode-normalization",
  "whisper-rs",
+ "windows-sys 0.61.2",
  "zip 2.4.2",
 ]
 
