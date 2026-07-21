@@ -32,11 +32,12 @@ RUN sed -i 's/, features = \["audio"\]//' crates/cli/Cargo.toml \
         -p fileconv-cli \
     && strip /src/target/release/fileconv-worker /src/target/release/fileconv
 
-# PDFium prebuilt (runtime native dep). Fail closed if download breaks.
+# Pinned PDFium prebuilt (see deploy/poc/images.lock.json). Fail closed on hash mismatch.
+ARG PDFIUM_URL=https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7906/pdfium-linux-x64.tgz
+ARG PDFIUM_SHA256=e07bc44c4e422c50eb01da742dc1ec59ad6780ce64ed91955533da8e9fe1a363
 RUN mkdir -p /opt/pdfium \
-    && curl -fsSL --max-time 180 \
-        -o /tmp/pdfium.tgz \
-        "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz" \
+    && curl -fsSL --max-time 180 -o /tmp/pdfium.tgz "$PDFIUM_URL" \
+    && echo "${PDFIUM_SHA256}  /tmp/pdfium.tgz" | sha256sum -c - \
     && tar -xzf /tmp/pdfium.tgz -C /opt/pdfium \
     && test -f /opt/pdfium/lib/libpdfium.so \
     && rm -f /tmp/pdfium.tgz
@@ -63,6 +64,7 @@ COPY --from=builder /src/target/release/fileconv /usr/local/bin/fileconv
 COPY --from=builder /opt/pdfium /opt/pdfium
 
 ENV FILECONV_PDFIUM_LIB=/opt/pdfium/lib \
+    TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata \
     MARKHAND_CONVERTER_ARGV_JSON='["/usr/local/bin/fileconv","one","{input}"]'
 
 # Explicitly refuse any accidental model mount under the historical path.

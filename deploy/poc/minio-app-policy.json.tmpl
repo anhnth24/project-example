@@ -9,7 +9,7 @@
         "s3:ListBucket"
       ],
       "Resource": [
-        "arn:aws:s3:::markhand-documents"
+        "arn:aws:s3:::__BUCKET__"
       ]
     },
     {
@@ -21,8 +21,8 @@
         "s3:DeleteObject"
       ],
       "Resource": [
-        "arn:aws:s3:::markhand-documents/quarantine/*",
-        "arn:aws:s3:::markhand-documents/trusted/*"
+        "arn:aws:s3:::__BUCKET__/quarantine/*",
+        "arn:aws:s3:::__BUCKET__/trusted/*"
       ]
     }
   ]

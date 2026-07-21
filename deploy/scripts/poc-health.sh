@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Health checks for the Markhand POC stack (host loopback ports).
+# Health checks for the Markhand POC stack (host loopback ports + worker state).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -31,6 +31,29 @@ wait_http() {
   return 1
 }
 
+require_running() {
+  local service="$1"
+  local id
+  id="$("${COMPOSE[@]}" ps -q "$service" || true)"
+  if [[ -z "$id" ]]; then
+    echo "unhealthy: $service (not running)" >&2
+    return 1
+  fi
+  local status
+  status="$(docker inspect --format '{{.State.Status}}' "$id")"
+  if [[ "$status" != "running" ]]; then
+    echo "unhealthy: $service (state=$status)" >&2
+    return 1
+  fi
+  local health
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+  if [[ "$health" != "none" && "$health" != "healthy" ]]; then
+    echo "unhealthy: $service (health=$health)" >&2
+    return 1
+  fi
+  echo "healthy: $service (running${health:+, health=$health})"
+}
+
 for _ in $(seq 1 60); do
   postgres_id="$("${COMPOSE[@]}" ps -q postgres || true)"
   if [[ -n "$postgres_id" ]] &&
@@ -60,7 +83,15 @@ fi
 
 wait_http \
   "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/live" \
-  api \
+  api-live \
   90
+wait_http \
+  "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready" \
+  api-ready \
+  90
+
+require_running worker-convert
+require_running worker-index
+require_running worker-embedding
 
 echo "POC health OK"

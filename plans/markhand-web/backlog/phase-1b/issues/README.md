@@ -37,7 +37,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** done
+- **Status:** in progress — offline isolation/signature smoke green; Docker runtime
+  boot + convert `--sandbox-preflight` evidence still required before Done.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,

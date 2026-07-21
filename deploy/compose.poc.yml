@@ -35,11 +35,13 @@ services:
       POSTGRES_DB: ${MARKHAND_POSTGRES_DB:-markhand}
       POSTGRES_USER: ${MARKHAND_POSTGRES_USER:-markhand}
       POSTGRES_PASSWORD: ${MARKHAND_POSTGRES_PASSWORD:-markhand_poc_change_me}
+      MARKHAND_APP_DB_USER: ${MARKHAND_APP_DB_USER:-markhand_app}
+      MARKHAND_APP_DB_PASSWORD: ${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}
     ports:
       - "127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
-      - ./poc/postgres-init.sql:/docker-entrypoint-initdb.d/10-markhand-app.sql:ro
+      - ./poc/postgres-init.sh:/docker-entrypoint-initdb.d/10-markhand-app.sh:ro
     networks: [private, convert]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
@@ -98,7 +100,7 @@ services:
       MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
     volumes:
       - ./poc/minio-init.sh:/scripts/minio-init.sh:ro
-      - ./poc/minio-app-policy.json:/policies/minio-app-policy.json:ro
+      - ./poc/minio-app-policy.json.tmpl:/policies/minio-app-policy.json.tmpl:ro
     entrypoint: ["/bin/sh", "/scripts/minio-init.sh"]
     networks: [private]
     restart: on-failure
@@ -146,7 +148,10 @@ services:
     profiles: ["aiteamvn"]
     build:
       context: ..
-      dockerfile: deploy/dev/Dockerfile.embedding-cpu
+      dockerfile: deploy/poc/Dockerfile.embedding-cpu
+    image: ${MARKHAND_EMBEDDING_IMAGE:-markhand-embedding-cpu:poc}
+    user: "10001:10001"
+    read_only: true
     environment:
       MARKHAND_EMBEDDING_HUB_ID: ${MARKHAND_EMBEDDING_HUB_ID:-AITeamVN/Vietnamese_Embedding}
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-dea33aa1ab339f38d66ae0a40e6c40e0a9249568}
@@ -156,15 +161,24 @@ services:
       MARKHAND_EMBEDDING_BATCH_SIZE: ${MARKHAND_EMBEDDING_BATCH_SIZE:-16}
       MARKHAND_EMBEDDING_DEVICE: cpu
       MARKHAND_EMBEDDING_SERVER_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      HF_HOME: /var/lib/markhand/.cache/huggingface
+      TRANSFORMERS_CACHE: /var/lib/markhand/.cache/huggingface
+      HOME: /var/lib/markhand
     volumes:
-      - embedding_model_cache:/root/.cache/huggingface
+      - embedding_model_cache:/var/lib/markhand/.cache/huggingface
     ports:
       - "127.0.0.1:${MARKHAND_EMBEDDING_PORT:-8090}:8080"
     networks: [private]
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
     mem_limit: ${MARKHAND_EMBEDDING_MEM_LIMIT:-4g}
+    cpus: ${MARKHAND_EMBEDDING_CPUS:-2.0}
+    pids_limit: ${MARKHAND_EMBEDDING_PIDS_LIMIT:-512}
     healthcheck:
       test:
         [
@@ -203,7 +217,8 @@ services:
       MARKHAND_AUTH_AUDIENCE: ${MARKHAND_AUTH_AUDIENCE:-markhand-poc}
       MARKHAND_AUTH_SIGNING_KEY: ${MARKHAND_AUTH_SIGNING_KEY:-poc-only-signing-key-at-least-32-bytes}
       MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
-      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      # Mock profile signature (print-index-signature.py --base-url http://mock-embedding:8080/v1 ...)
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
     ports:
@@ -219,12 +234,12 @@ services:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS http://127.0.0.1:8787/api/v1/health/live >/dev/null",
+          "curl -fsS http://127.0.0.1:8787/api/v1/health/ready >/dev/null",
         ]
       interval: 10s
       timeout: 5s
       retries: 18
-      start_period: 30s
+      start_period: 45s
     restart: unless-stopped
 
   worker-convert:
@@ -238,6 +253,12 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
+    # Override merged security_opt: default Docker seccomp blocks landlock/unshare
+    # sequences required by in-process convert sandbox preflight. Keep cap_drop ALL,
+    # no-new-privileges, read_only, and the internal `convert` network (no egress).
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
     environment:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
@@ -250,7 +271,7 @@ services:
       MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
       MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
       MARKHAND_MINIO_PATH_STYLE: "true"
-      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
       MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
@@ -259,6 +280,8 @@ services:
       MARKHAND_WORKER_ID: poc-convert-1
       MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
       MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-536870912}
+      FILECONV_PDFIUM_LIB: /opt/pdfium/lib
+      TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
     # No egress: only the internal `convert` network (Postgres + MinIO).
     networks: [convert]
     tmpfs:
@@ -268,6 +291,12 @@ services:
     cpus: ${MARKHAND_WORKER_CPUS:-1.0}
     pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fileconv-worker", "--sandbox-preflight"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
 
   worker-index:
     <<: *app-security
@@ -292,7 +321,7 @@ services:
       MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
       MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
       MARKHAND_MINIO_PATH_STYLE: "true"
-      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
       MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
@@ -336,7 +365,7 @@ services:
       MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
       MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
       MARKHAND_MINIO_PATH_STYLE: "true"
-      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0}
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
       MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
