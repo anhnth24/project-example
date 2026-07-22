@@ -185,14 +185,13 @@ fn prepare_snapshot(input: &NewClosedSnapshot) -> Result<(i64, Vec<PreparedEvent
             "closed sse snapshot requires metadata".into(),
         ));
     }
-    if input.events.len() > 1 {
-        if input.events[0].event_type != "metadata"
+    if input.events.len() > 1
+        && (input.events[0].event_type != "metadata"
             || input.events[1..input.events.len() - 1]
                 .iter()
-                .any(|event| event.event_type != "token")
-        {
-            return Err(DbError::Config("invalid sse snapshot event order".into()));
-        }
+                .any(|event| event.event_type != "token"))
+    {
+        return Err(DbError::Config("invalid sse snapshot event order".into()));
     }
     if input.events.len() as i32 > input.max_events {
         return Err(DbError::Config("sse snapshot exceeds max_events".into()));
