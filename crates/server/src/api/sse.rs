@@ -467,6 +467,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delivery_probe_deleted_stops_further_events_without_recall_claim() {
+        use futures::StreamExt;
+        let envelopes = vec![
+            build_envelope(1, EVENT_METADATA, "req", json!({"n": 1})),
+            build_envelope(2, EVENT_TOKEN, "req", json!({"text": "a"})),
+            build_envelope(3, EVENT_TOKEN, "req", json!({"text": "b"})),
+            build_envelope(4, EVENT_CLOSE, "req", json!({"reason": "completed"})),
+        ];
+        let cancel = StreamCancel::new();
+        let mut calls = 0u32;
+        let stream = deliver_closed_snapshot(
+            envelopes,
+            cancel,
+            move || {
+                calls += 1;
+                let decision = if calls <= 2 {
+                    AuthProbeDecision::Allow
+                } else {
+                    AuthProbeDecision::Deleted
+                };
+                async move { decision }
+            },
+            test_bounds(),
+        );
+        let mut got = Vec::new();
+        let mut pinned = std::pin::pin!(stream);
+        while let Some(Ok(event)) = pinned.next().await {
+            got.push(event);
+        }
+        // Deletion is fail-closed for unsent bytes; already-sent events cannot be recalled.
+        assert_eq!(got.len(), 2);
+    }
+
+    #[tokio::test]
     async fn hanging_probe_timeout_closes_delivery_hermetic() {
         use futures::StreamExt;
         let envelopes = vec![

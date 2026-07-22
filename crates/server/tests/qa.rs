@@ -670,6 +670,53 @@ async fn history_conflict_note_is_deterministic() {
 }
 
 #[tokio::test]
+async fn history_conflict_notes_cover_terminal_non_resolution_statuses() {
+    let conflict_id = Uuid::parse_str("99999999-9999-9999-9999-999999999913").unwrap();
+    let hits = vec![
+        hit(v1(), 1, false, "Kinh phí 10 triệu"),
+        hit(v2(), 2, true, "Kinh phí 15 triệu"),
+    ];
+
+    for (status, label) in [
+        (ConflictStatus::AcceptedException, "accepted_exception"),
+        (ConflictStatus::FalsePositive, "false_positive"),
+    ] {
+        let answer = answer_question::<ScriptedProvider>(
+            QaRequest {
+                question: "Lịch sử conflict?".into(),
+                mode: VersionMode::History {
+                    document_id: doc_id(),
+                },
+                use_provider: false,
+                conflict_lifecycle: vec![ConflictLifecycle {
+                    conflict_id,
+                    status,
+                    resolution_note: Some("ghi chú đã xác minh".into()),
+                    resolution_version_a_id: None,
+                    resolution_version_b_id: None,
+                }],
+            },
+            retrieval(
+                hits.clone(),
+                vec![conflict(conflict_id, v1(), v2(), false, true)],
+            ),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.conflict_warnings.len(), 1);
+        assert_eq!(answer.conflict_warnings[0].status, status);
+        assert!(answer.conflict_warnings[0].message.contains(label));
+        assert!(answer.conflict_warnings[0]
+            .message
+            .contains("ghi chú đã xác minh"));
+        assert_eq!(answer.conflict_warnings[0].pin_cite_ids.len(), 2);
+    }
+}
+
+#[tokio::test]
 async fn provider_timeout_outage_and_oversize_fall_back() {
     let hits = vec![hit(v2(), 2, true, "Kinh phí phê duyệt là 15 triệu đồng.")];
     let config = QaProviderConfig::with_api_key(
@@ -765,6 +812,67 @@ async fn provider_timeout_outage_and_oversize_fall_back() {
         answer.mode,
         fileconv_server::services::qa::AnswerMode::FallbackExtractive
     );
+}
+
+#[tokio::test]
+async fn provider_unavailable_and_refusal_fall_back_with_distinct_reasons() {
+    let hits = vec![hit(v2(), 2, true, "Kinh phí phê duyệt là 15 triệu đồng.")];
+    let unavailable = answer_question::<ScriptedProvider>(
+        QaRequest {
+            question: "Kinh phí?".into(),
+            mode: VersionMode::Current,
+            use_provider: true,
+            conflict_lifecycle: vec![],
+        },
+        retrieval(hits.clone(), vec![]),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        unavailable.mode,
+        fileconv_server::services::qa::AnswerMode::FallbackExtractive
+    );
+    assert_eq!(
+        unavailable.audit.fallback_reason,
+        Some("provider_unavailable")
+    );
+    assert!(unavailable
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("provider unavailable")));
+    assert!(unavailable.answer.contains("[CITE-0001]"));
+
+    let refusing = ScriptedProvider {
+        result: Ok(ProviderGroundedPayload {
+            claims: vec![],
+            refusal: true,
+        }),
+    };
+    let refused = answer_question(
+        QaRequest {
+            question: "Kinh phí?".into(),
+            mode: VersionMode::Current,
+            use_provider: true,
+            conflict_lifecycle: vec![],
+        },
+        retrieval(hits, vec![]),
+        Some(&refusing),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        refused.mode,
+        fileconv_server::services::qa::AnswerMode::FallbackExtractive
+    );
+    assert_eq!(refused.audit.fallback_reason, Some("provider_refusal"));
+    assert!(refused
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("provider refused")));
+    assert!(refused.answer.contains("[CITE-0001]"));
 }
 
 #[test]
