@@ -96,6 +96,8 @@ pub struct Transcript {
 ///   different path to pick up a new file.
 /// - Failed loads leave a stable `Failed` slot (no invalid `Ready` reference);
 ///   the next caller transitions `Failed → Loading` (single loader) and retries.
+/// - Loader panic is cleaned up by an RAII guard on the owned `Loading` slot
+///   (`Failed` + `notify_all`); the initiating caller's panic still propagates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WhisperModelKey {
     pub model_path: PathBuf,
@@ -175,8 +177,125 @@ struct CacheInner<K, V> {
 /// - One loader per key at a time (condvar waiters never overlap loaders).
 /// - Ready set is LRU-bounded; eviction drops the cache's `Arc` only.
 /// - Failed slots stay until a caller claims `Failed → Loading` for retry.
+/// - Every `Loading` ownership is wrapped in [`LoadingGuard`]: loader panic (or
+///   any unfinished load) atomically moves that **owned** slot to `Failed`,
+///   keeps LRU consistent, and `notify_all`s waiters without catching the panic
+///   for the initiating caller.
 struct LoadOnceCache<K, V> {
     inner: Mutex<CacheInner<K, V>>,
+}
+
+/// RAII guard for the loader that owns a `Loading` slot.
+///
+/// Armed on every transition into loader ownership. On drop (panic unwind or
+/// unfinished `Err` path) it:
+/// - decrements `active_loaders`;
+/// - sets the **owned** slot to `Failed` if it is still `Loading` (never
+///   clobbers `Ready`);
+/// - removes the key from LRU when this slot is still the map entry;
+/// - `notify_all` so every waiter unblocks for retry.
+///
+/// Publication of `Ready` goes through [`LoadingGuard::publish_ready`], which
+/// disarms first so `Drop` cannot overwrite a successful publish. Map/LRU
+/// updates are skipped when the entry was replaced (`!Arc::ptr_eq`), so a
+/// newer slot is never overwritten. Lock order remains **inner → slot**;
+/// poisoned mutexes are recovered with `into_inner` (no permanent poison
+/// failure, no condvar wait during unwind).
+struct LoadingGuard<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    cache: &'a LoadOnceCache<K, V>,
+    key: K,
+    slot: Arc<Slot<V>>,
+    armed: bool,
+}
+
+impl<'a, K, V> LoadingGuard<'a, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    fn arm(cache: &'a LoadOnceCache<K, V>, key: K, slot: Arc<Slot<V>>) -> Self {
+        {
+            let mut inner = cache.inner.lock().unwrap_or_else(|e| e.into_inner());
+            inner.active_loaders += 1;
+            if inner.active_loaders > inner.max_active_loaders {
+                inner.max_active_loaders = inner.active_loaders;
+            }
+        }
+        Self {
+            cache,
+            key,
+            slot,
+            armed: true,
+        }
+    }
+
+    fn publish_ready(mut self, value: V) -> Arc<V>
+    where
+        V: Send + Sync,
+    {
+        // Disarm before mutating shared state so `Drop` cannot double-account
+        // `active_loaders` or race a `Failed` write over `Ready` if we panic
+        // after publishing. Remaining work is infallible aside from poison,
+        // which is recovered via `into_inner`.
+        self.armed = false;
+        let shared = Arc::new(value);
+        let mut inner = self.cache.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.active_loaders = inner.active_loaders.saturating_sub(1);
+        let ours = inner
+            .entries
+            .get(&self.key)
+            .is_some_and(|mapped| Arc::ptr_eq(mapped, &self.slot));
+        {
+            // inner → slot
+            let mut st = self.slot.state.lock().unwrap_or_else(|e| e.into_inner());
+            *st = SlotState::Ready(Arc::clone(&shared));
+            self.slot.cv.notify_all();
+        }
+        if ours {
+            touch_lru(&mut inner, &self.key);
+            let cap = inner.capacity;
+            inner.evict_ready_while(|ready| ready > cap);
+        }
+        // If not ours: never resurrect/overwrite the replaced map entry.
+        shared
+    }
+
+    fn fail_owned_slot(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        let mut inner = self.cache.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.active_loaders = inner.active_loaders.saturating_sub(1);
+        let ours = inner
+            .entries
+            .get(&self.key)
+            .is_some_and(|mapped| Arc::ptr_eq(mapped, &self.slot));
+        {
+            // inner → slot — never wait on `cv` here (unwind-safe).
+            let mut st = self.slot.state.lock().unwrap_or_else(|e| e.into_inner());
+            if matches!(*st, SlotState::Loading) {
+                *st = SlotState::Failed;
+            }
+            self.slot.cv.notify_all();
+        }
+        if ours {
+            // Failed is not Ready; keep LRU free of this key.
+            inner.lru.retain(|k| k != &self.key);
+        }
+        // If not ours: orphan Failed is fine; map must keep the replacement.
+    }
+}
+
+impl<K, V> Drop for LoadingGuard<'_, K, V>
+where
+    K: Eq + Hash + Clone,
+{
+    fn drop(&mut self) {
+        self.fail_owned_slot();
+    }
 }
 
 impl<K, V> LoadOnceCache<K, V>
@@ -281,56 +400,13 @@ where
         slot: Arc<Slot<V>>,
         loader: impl FnOnce() -> Result<V, E>,
     ) -> Result<Arc<V>, E> {
-        {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.active_loaders += 1;
-            if inner.active_loaders > inner.max_active_loaders {
-                inner.max_active_loaders = inner.active_loaders;
-            }
-        }
-
-        let result = loader();
-
-        match result {
-            Ok(value) => {
-                let shared = Arc::new(value);
-                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                inner.active_loaders = inner.active_loaders.saturating_sub(1);
-                let ours = inner
-                    .entries
-                    .get(&key)
-                    .is_some_and(|mapped| Arc::ptr_eq(mapped, &slot));
-                {
-                    // inner → slot
-                    let mut st = slot.state.lock().unwrap_or_else(|e| e.into_inner());
-                    *st = SlotState::Ready(Arc::clone(&shared));
-                    slot.cv.notify_all();
-                }
-                if ours {
-                    touch_lru(&mut inner, &key);
-                    let cap = inner.capacity;
-                    inner.evict_ready_while(|ready| ready > cap);
-                }
-                // If not ours: never resurrect/overwrite the replaced map entry.
-                Ok(shared)
-            }
-            Err(err) => {
-                let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-                inner.active_loaders = inner.active_loaders.saturating_sub(1);
-                let ours = inner
-                    .entries
-                    .get(&key)
-                    .is_some_and(|mapped| Arc::ptr_eq(mapped, &slot));
-                {
-                    let mut st = slot.state.lock().unwrap_or_else(|e| e.into_inner());
-                    *st = SlotState::Failed;
-                    slot.cv.notify_all();
-                }
-                if !ours {
-                    // Orphan failed slot is fine; map must keep the replacement.
-                }
-                Err(err)
-            }
+        // Guard covers the entire load ownership window (including panic in
+        // `loader`). Production does not catch_unwind: the initiating caller's
+        // panic propagates after `Drop` publishes `Failed` + `notify_all`.
+        let guard = LoadingGuard::arm(self, key, slot);
+        match loader() {
+            Ok(value) => Ok(guard.publish_ready(value)),
+            Err(err) => Err(err), // `Drop` → Failed / notify_all / LRU
         }
     }
 
@@ -367,11 +443,31 @@ where
     }
 
     #[cfg(test)]
+    fn active_loaders(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_loaders
+    }
+
+    #[cfg(test)]
     fn capacity(&self) -> usize {
         self.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .capacity
+    }
+
+    /// Test-only: whether `key` maps to a `Failed` slot (used by panic-cleanup tests).
+    #[cfg(test)]
+    fn is_failed(&self, key: &K) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.entries.get(key).is_some_and(|slot| {
+            matches!(
+                *slot.state.lock().unwrap_or_else(|e| e.into_inner()),
+                SlotState::Failed
+            )
+        })
     }
 }
 
@@ -819,7 +915,8 @@ fn resample_rubato_fft(input: &[f32], from: u32, to: u32) -> Result<Vec<f32>, Co
 mod tests {
     use super::*;
     use std::f32::consts::PI;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Barrier;
     use std::thread;
     use std::time::Duration;
@@ -954,6 +1051,229 @@ mod tests {
         assert_eq!(max_active.load(Ordering::SeqCst), 1);
         assert_eq!(cache.max_active_loaders(), 1);
         assert_eq!(cache.len_ready(), 1);
+    }
+
+    /// Loader panic with concurrent waiters: all waiters unblock, exactly one
+    /// retry loader runs at a time, later retry succeeds, cache stays bounded.
+    /// `catch_unwind` is test-only; production lets the initiating panic propagate.
+    #[test]
+    fn load_once_cache_loader_panic_unblocks_waiters_single_retry_succeeds() {
+        let cache = Arc::new(LoadOnceCache::<&'static str, i32>::with_capacity(2));
+        let panic_loads = Arc::new(AtomicUsize::new(0));
+        let retry_loads = Arc::new(AtomicUsize::new(0));
+        let retry_active = Arc::new(AtomicUsize::new(0));
+        let retry_max_active = Arc::new(AtomicUsize::new(0));
+        let loader_entered = Arc::new(Barrier::new(2));
+        let release_panic = Arc::new(Barrier::new(2));
+
+        let cache_p = Arc::clone(&cache);
+        let panic_loads_p = Arc::clone(&panic_loads);
+        let loader_entered_p = Arc::clone(&loader_entered);
+        let release_panic_p = Arc::clone(&release_panic);
+        let panicker = thread::spawn(move || {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                let _: Result<Arc<i32>, &str> = cache_p.get_or_insert_with("k", || {
+                    panic_loads_p.fetch_add(1, Ordering::SeqCst);
+                    loader_entered_p.wait();
+                    release_panic_p.wait();
+                    panic!("injected LoadOnceCache loader panic");
+                });
+            }));
+            assert!(
+                caught.is_err(),
+                "initiating caller must observe the loader panic"
+            );
+        });
+
+        // Panicking loader owns Loading before waiters arrive.
+        loader_entered.wait();
+
+        const WAITERS: usize = 4;
+        let waiters_ready = Arc::new(Barrier::new(WAITERS + 1));
+        let mut waiter_handles = Vec::with_capacity(WAITERS);
+        for _ in 0..WAITERS {
+            let cache = Arc::clone(&cache);
+            let retry_loads = Arc::clone(&retry_loads);
+            let retry_active = Arc::clone(&retry_active);
+            let retry_max_active = Arc::clone(&retry_max_active);
+            let waiters_ready = Arc::clone(&waiters_ready);
+            waiter_handles.push(thread::spawn(move || {
+                waiters_ready.wait();
+                cache
+                    .get_or_insert_with("k", || {
+                        let now = retry_active.fetch_add(1, Ordering::SeqCst) + 1;
+                        retry_max_active.fetch_max(now, Ordering::SeqCst);
+                        retry_loads.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(40));
+                        retry_active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<i32, &str>(99)
+                    })
+                    .unwrap()
+            }));
+        }
+
+        // Park waiters on the Loading slot, then let the loader panic.
+        waiters_ready.wait();
+        thread::sleep(Duration::from_millis(30));
+        release_panic.wait();
+        panicker.join().unwrap();
+
+        let values: Vec<Arc<i32>> = waiter_handles
+            .into_iter()
+            .map(|h| h.join().expect("waiter must unblock after loader panic"))
+            .collect();
+        assert!(values.iter().all(|v| **v == 99));
+        assert!(values.windows(2).all(|w| Arc::ptr_eq(&w[0], &w[1])));
+        assert_eq!(panic_loads.load(Ordering::SeqCst), 1);
+        assert_eq!(retry_loads.load(Ordering::SeqCst), 1);
+        assert_eq!(retry_max_active.load(Ordering::SeqCst), 1);
+        // Panic load + single retry loader: peak concurrent loaders is 1; no
+        // leftover in-flight accounting after success.
+        assert_eq!(cache.max_active_loaders(), 1);
+        assert_eq!(cache.active_loaders(), 0);
+        assert_eq!(cache.len_ready(), 1);
+        assert!(cache.len_ready() <= cache.capacity());
+        assert_eq!(cache.len_entries(), 1);
+    }
+
+    /// Panic cleanup must leave a retryable Failed slot and must not poison
+    /// the cache into permanent failure; a later retry succeeds while capacity
+    /// stays bounded under concurrent pressure (LRU / map replacement safety).
+    #[test]
+    fn load_once_cache_loader_panic_retryable_and_capacity_bounded() {
+        let cache = Arc::new(LoadOnceCache::<String, u64>::with_capacity(2));
+        let release_panic = Arc::new(Barrier::new(2));
+        let loader_entered = Arc::new(Barrier::new(2));
+
+        let cache_p = Arc::clone(&cache);
+        let release_panic_p = Arc::clone(&release_panic);
+        let loader_entered_p = Arc::clone(&loader_entered);
+        let panicker = thread::spawn(move || {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                let _: Result<Arc<u64>, &str> =
+                    cache_p.get_or_insert_with("panic-key".into(), || {
+                        loader_entered_p.wait();
+                        release_panic_p.wait();
+                        panic!("injected bounded-cache loader panic");
+                    });
+            }));
+            assert!(caught.is_err());
+        });
+
+        loader_entered.wait();
+        release_panic.wait();
+        panicker.join().unwrap();
+
+        // Slot retained as Failed (retryable), not Ready; accounting cleared once.
+        assert!(cache.is_failed(&"panic-key".to_string()));
+        assert_eq!(cache.len_ready(), 0);
+        assert_eq!(cache.len_entries(), 1);
+        assert_eq!(cache.active_loaders(), 0);
+        assert_eq!(cache.max_active_loaders(), 1);
+
+        let retry_ok = cache
+            .get_or_insert_with("panic-key".into(), || Ok::<u64, &str>(7))
+            .unwrap();
+        assert_eq!(*retry_ok, 7);
+        assert_eq!(cache.len_ready(), 1);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        // 6 workers + main coordinator.
+        let barrier = Arc::new(Barrier::new(7));
+        let mut handles = Vec::new();
+        for i in 0..6 {
+            let cache = Arc::clone(&cache);
+            let stop = Arc::clone(&stop);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                let mut round = 0u64;
+                while !stop.load(Ordering::SeqCst) {
+                    let key = format!("k-{}", (i + round as usize) % 5);
+                    let v = cache
+                        .get_or_insert_with(key.clone(), || Ok::<u64, &str>(round + 1))
+                        .unwrap();
+                    assert!(*v >= 1);
+                    // Keep touching the recovered key so LRU stays exercised.
+                    let again = cache
+                        .get_or_insert_with("panic-key".into(), || Ok::<u64, &str>(7))
+                        .unwrap();
+                    assert_eq!(*again, 7);
+                    round += 1;
+                }
+            }));
+        }
+        barrier.wait();
+        thread::sleep(Duration::from_millis(80));
+        stop.store(true, Ordering::SeqCst);
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert!(cache.len_ready() <= cache.capacity());
+        assert_eq!(cache.capacity(), 2);
+        assert_eq!(cache.active_loaders(), 0);
+        assert!(cache.max_active_loaders() >= 1);
+    }
+
+    /// While a loader for key A is in-flight (then panics), concurrent inserts of
+    /// other keys may LRU-evict Ready entries and replace map slots. Panic
+    /// cleanup must only fail the owned Loading slot — never clobber a
+    /// replacement entry — and waiters / later loads must still succeed.
+    #[test]
+    fn load_once_cache_loader_panic_does_not_clobber_map_replacement() {
+        let cache = Arc::new(LoadOnceCache::<String, u64>::with_capacity(1));
+        // Fill the sole Ready slot so later inserts must evict via LRU.
+        let held = cache
+            .get_or_insert_with("keep-alive".into(), || Ok::<u64, &str>(1))
+            .unwrap();
+        assert_eq!(*held, 1);
+        assert_eq!(cache.len_ready(), 1);
+
+        let loader_entered = Arc::new(Barrier::new(2));
+        let release_panic = Arc::new(Barrier::new(2));
+        let cache_p = Arc::clone(&cache);
+        let loader_entered_p = Arc::clone(&loader_entered);
+        let release_panic_p = Arc::clone(&release_panic);
+        let panicker = thread::spawn(move || {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                let _: Result<Arc<u64>, &str> =
+                    cache_p.get_or_insert_with("panic-key".into(), || {
+                        loader_entered_p.wait();
+                        release_panic_p.wait();
+                        panic!("injected replacement-safety loader panic");
+                    });
+            }));
+            assert!(caught.is_err());
+        });
+
+        loader_entered.wait();
+        // Inserting a new Ready key while panic-key is still Loading exercises
+        // eviction of the prior Ready entry without touching the Loading slot.
+        let other = cache
+            .get_or_insert_with("other".into(), || Ok::<u64, &str>(2))
+            .unwrap();
+        assert_eq!(*other, 2);
+        assert!(cache.len_ready() <= 1);
+
+        release_panic.wait();
+        panicker.join().unwrap();
+
+        assert!(cache.is_failed(&"panic-key".to_string()));
+        assert_eq!(cache.active_loaders(), 0);
+        // Replacement / survivor Ready entry must remain Ready (not Failed).
+        let again = cache
+            .get_or_insert_with("other".into(), || Ok::<u64, &str>(99))
+            .unwrap();
+        assert_eq!(*again, 2);
+        assert!(Arc::ptr_eq(&other, &again));
+
+        let recovered = cache
+            .get_or_insert_with("panic-key".into(), || Ok::<u64, &str>(7))
+            .unwrap();
+        assert_eq!(*recovered, 7);
+        assert_eq!(cache.active_loaders(), 0);
+        assert!(cache.len_ready() <= cache.capacity());
+        let _ = held;
     }
 
     #[test]
