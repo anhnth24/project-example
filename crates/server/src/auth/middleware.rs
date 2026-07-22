@@ -141,9 +141,31 @@ impl FromRequestParts<Arc<crate::http::AppState>> for AuthenticatedOrg {
         })?;
 
         // Authorization is current PG state — JWT org/user are hints only.
-        let context = resolve_org_context_in_txn(provider.pool(), org_id, user_id)
-            .await
-            .map_err(|error| map_resolve_error(error, &request_id))?;
+        let context = match resolve_org_context_in_txn(provider.pool(), org_id, user_id).await {
+            Ok(context) => context,
+            Err(error) => {
+                let rejection = map_resolve_error(error, &request_id);
+                let reason = match rejection.code {
+                    "permission_denied" => crate::services::audit::AuditReason::PermissionDenied,
+                    "membership_missing" => crate::services::audit::AuditReason::MembershipMissing,
+                    "user_disabled" => crate::services::audit::AuditReason::UserDisabled,
+                    "collection_denied" => crate::services::audit::AuditReason::CollectionDenied,
+                    _ => crate::services::audit::AuditReason::InvalidCredentials,
+                };
+                let _ = crate::services::audit::write_deny_durable(
+                    provider.pool(),
+                    org_id,
+                    Some(user_id),
+                    crate::services::audit::AuditAction::AuthDeny,
+                    crate::services::audit::AuditResource::Session,
+                    None,
+                    &request_id,
+                    crate::services::audit::reason_metadata(reason),
+                )
+                .await;
+                return Err(rejection);
+            }
+        };
 
         let auth = Self {
             context,
@@ -157,38 +179,42 @@ impl FromRequestParts<Arc<crate::http::AppState>> for AuthenticatedOrg {
 }
 
 fn map_resolve_error(error: ResolveError, request_id: &str) -> AuthRejection {
-    match error {
-        ResolveError::UserDisabled => AuthRejection::new(
+    let (status, code, message) = match error {
+        ResolveError::UserDisabled => (
             StatusCode::FORBIDDEN,
             "user_disabled",
             "User account is disabled",
-            request_id.to_string(),
         ),
-        ResolveError::MembershipMissing => AuthRejection::new(
+        ResolveError::MembershipMissing => (
             StatusCode::FORBIDDEN,
             "membership_missing",
             "Org membership is missing",
-            request_id.to_string(),
         ),
-        ResolveError::PermissionDenied => AuthRejection::new(
+        ResolveError::PermissionDenied => (
             StatusCode::FORBIDDEN,
             "permission_denied",
             "Permission denied",
-            request_id.to_string(),
         ),
-        ResolveError::CollectionDenied => AuthRejection::new(
+        ResolveError::CollectionDenied => (
             StatusCode::FORBIDDEN,
             "collection_denied",
             "Collection access denied",
-            request_id.to_string(),
         ),
-        ResolveError::InvalidContext | ResolveError::Database => AuthRejection::new(
+        ResolveError::InvalidContext | ResolveError::Database => (
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "Unable to resolve organization context",
-            request_id.to_string(),
         ),
-    }
+    };
+    tracing::info!(
+        target: "auth",
+        request_id = %request_id,
+        code,
+        outcome = "deny",
+        "auth resolve denied"
+    );
+    crate::telemetry::record_auth_decision("deny", code);
+    AuthRejection::new(status, code, message, request_id.to_string())
 }
 
 /// Maps session errors to HTTP responses without embedding secrets.

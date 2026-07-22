@@ -223,6 +223,35 @@ impl ConvertWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let payload = crate::jobs::decode_job_payload(job.payload_version, job.payload.clone())
+            .unwrap_or_else(|_| crate::jobs::JobPayload::default());
+        let convert_started = std::time::Instant::now();
+        let job_id = job.id;
+        let outcome = crate::telemetry::run_worker(
+            "convert",
+            job_id,
+            &payload,
+            Some(ctx.org_id()),
+            self.process_claimed_job_inner(ctx, job, &payload),
+        )
+        .await;
+        let (format, result) = match &outcome {
+            Ok(ConvertWorkerRun::Completed { format, .. }) => (format.as_str(), "success"),
+            Ok(ConvertWorkerRun::Reconciled { .. }) => ("document", "success"),
+            Ok(ConvertWorkerRun::Failed { .. }) => ("document", "failed"),
+            Ok(_) => ("document", "other"),
+            Err(_) => ("document", "error"),
+        };
+        crate::telemetry::record_conversion(format, result, convert_started.elapsed());
+        outcome
+    }
+
+    async fn process_claimed_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+        _payload: &crate::jobs::JobPayload,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()
@@ -241,6 +270,7 @@ impl ConvertWorker {
                 source,
                 identity,
                 checkpoint,
+                format,
             }) => {
                 let byte_size = match i64::try_from(markdown_len) {
                     Ok(byte_size) => byte_size,
@@ -483,6 +513,7 @@ impl ConvertWorker {
                 Ok(ConvertWorkerRun::Completed {
                     job_id: completed.job.id,
                     markdown_bytes: markdown_len as usize,
+                    format,
                 })
             }
             Err(ConvertWorkerError::LeaseLost) => {
@@ -515,11 +546,28 @@ impl ConvertWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+        let job_id = job.id;
+        crate::telemetry::run_worker(
+            "reconcile",
+            job_id,
+            &payload,
+            Some(ctx.org_id()),
+            self.process_reconciliation_job_inner(ctx, job, payload.clone()),
+        )
+        .await
+    }
+
+    async fn process_reconciliation_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+        payload: JobPayload,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()
             .ok_or(ConvertWorkerError::MissingLease)?;
-        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
         let parent_job_id = payload
             .cleanup_target_job_id
             .ok_or(ConvertWorkerError::InvalidReconciliationPayload)?;
@@ -666,6 +714,8 @@ impl ConvertWorker {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent_job.id),
+                request_id: None,
+                traceparent: None,
             },
             format!("convert.cleanup:{}", parent_job.id),
         );
@@ -751,12 +801,13 @@ impl ConvertWorker {
         let format = metadata
             .get("canonical-format")
             .or_else(|| metadata.get("x-amz-meta-canonical-format"))
-            .ok_or(ConvertWorkerError::MissingCanonicalFormat)?;
-        if is_audio_format(format) {
+            .ok_or(ConvertWorkerError::MissingCanonicalFormat)?
+            .clone();
+        if is_audio_format(&format) {
             return Err(ConvertWorkerError::AudioConversionDisabled);
         }
         let canonical_extension =
-            canonical_extension(format).ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
+            canonical_extension(&format).ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
         let input = self
             .heartbeat_while(
                 ctx,
@@ -829,6 +880,7 @@ impl ConvertWorker {
             source,
             identity,
             checkpoint: saved.checkpoint,
+            format,
         })
     }
 
@@ -1301,6 +1353,7 @@ pub enum ConvertWorkerRun {
     Completed {
         job_id: Uuid,
         markdown_bytes: usize,
+        format: String,
     },
     Failed {
         job_id: Uuid,
@@ -1326,6 +1379,7 @@ struct ConversionOutput {
     source: ConversionSourceVersion,
     identity: ConversionIdentity,
     checkpoint: Option<serde_json::Value>,
+    format: String,
 }
 
 #[derive(Debug, Error)]

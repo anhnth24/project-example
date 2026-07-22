@@ -126,58 +126,11 @@ fn mint_refresh_token(org_id: Uuid) -> SecretString {
 }
 
 /// Append-only audit fields (metadata must never contain secrets).
-pub struct AuditEvent<'a> {
-    pub org_id: Uuid,
-    pub actor_user_id: Option<Uuid>,
-    pub action: &'a str,
-    pub resource_type: &'a str,
-    pub resource_id: Option<&'a str>,
-    pub outcome: &'a str,
-    pub request_id: &'a str,
-    pub metadata: serde_json::Value,
-}
+pub use crate::services::audit::AuditEvent;
 
 /// Append-only audit row (metadata must never contain secrets).
 pub async fn write_audit(txn: &Transaction<'_>, event: AuditEvent<'_>) -> Result<(), DbError> {
-    // Defense-in-depth: refuse metadata / request ids that embed raw secrets.
-    let rendered = event.metadata.to_string();
-    for fragment in [
-        "\"password\":",
-        "\"refreshToken\":",
-        "\"refresh_token\":",
-        "\"accessToken\":",
-        "\"access_token\":",
-        "Bearer ",
-        "mh1.",
-    ] {
-        if rendered.contains(fragment) {
-            return Err(DbError::Config("audit_metadata_contains_secret".into()));
-        }
-    }
-    if event.request_id.contains("mh1.")
-        || event.request_id.contains("Bearer ")
-        || event.request_id.starts_with("eyJ")
-        || event.request_id.len() > 64
-    {
-        return Err(DbError::Config("audit_request_id_contains_secret".into()));
-    }
-    txn.execute(
-        "INSERT INTO audit_log (
-            org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        &[
-            &event.org_id,
-            &event.actor_user_id,
-            &event.action,
-            &event.resource_type,
-            &event.resource_id,
-            &event.outcome,
-            &event.metadata,
-            &event.request_id,
-        ],
-    )
-    .await?;
-    Ok(())
+    crate::services::audit::write_audit(txn, event).await
 }
 
 /// Password login: verify Argon2id, mint access+refresh, rehash if params changed.
@@ -218,7 +171,7 @@ pub async fn login_with_password(
                 .await
             {
                 let org_id: Uuid = row.get(0);
-                let _ = audit_on_client(
+                if let Err(error) = audit_on_client(
                     &mut client,
                     AuditEvent {
                         org_id,
@@ -231,7 +184,25 @@ pub async fn login_with_password(
                         metadata: serde_json::json!({ "reason": "unknown_user" }),
                     },
                 )
-                .await;
+                .await
+                {
+                    tracing::error!(
+                        target: "audit",
+                        request_id = %request_id,
+                        error_class = "audit_write_failed",
+                        "deny audit write failed; emitting fallback append"
+                    );
+                    tracing::warn!(
+                        target: "audit_fallback",
+                        request_id = %request_id,
+                        org_id = %org_id,
+                        action = "auth.login",
+                        outcome = "deny",
+                        fallback = true,
+                        "audit_fallback_deny"
+                    );
+                    let _ = error;
+                }
             }
         }
         return Err(SessionError::InvalidCredentials);
@@ -249,7 +220,7 @@ pub async fn login_with_password(
             burn_password_verify_time(password, &auth.argon2);
         }
         if let Some(org_id) = find_user_org(&mut client, user_id).await? {
-            let _ = audit_on_client(
+            if let Err(error) = audit_on_client(
                 &mut client,
                 AuditEvent {
                     org_id,
@@ -262,7 +233,25 @@ pub async fn login_with_password(
                     metadata: serde_json::json!({ "reason": "user_disabled" }),
                 },
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    target: "audit",
+                    request_id = %request_id,
+                    error_class = "audit_write_failed",
+                    "deny audit write failed; emitting fallback append"
+                );
+                tracing::warn!(
+                    target: "audit_fallback",
+                    request_id = %request_id,
+                    org_id = %org_id,
+                    action = "auth.login",
+                    outcome = "deny",
+                    fallback = true,
+                    "audit_fallback_deny"
+                );
+                let _ = error;
+            }
         }
         return Err(SessionError::InvalidCredentials);
     }
@@ -273,7 +262,7 @@ pub async fn login_with_password(
     };
     if password::verify_password(password, &password_hash).is_err() {
         if let Some(org_id) = find_user_org(&mut client, user_id).await? {
-            let _ = audit_on_client(
+            if let Err(error) = audit_on_client(
                 &mut client,
                 AuditEvent {
                     org_id,
@@ -286,7 +275,25 @@ pub async fn login_with_password(
                     metadata: serde_json::json!({ "reason": "bad_password" }),
                 },
             )
-            .await;
+            .await
+            {
+                tracing::error!(
+                    target: "audit",
+                    request_id = %request_id,
+                    error_class = "audit_write_failed",
+                    "deny audit write failed; emitting fallback append"
+                );
+                tracing::warn!(
+                    target: "audit_fallback",
+                    request_id = %request_id,
+                    org_id = %org_id,
+                    action = "auth.login",
+                    outcome = "deny",
+                    fallback = true,
+                    "audit_fallback_deny"
+                );
+                let _ = error;
+            }
         }
         return Err(SessionError::InvalidCredentials);
     }
@@ -467,8 +474,8 @@ async fn issue_new_family(
                         outcome: "success",
                         request_id: &request_id,
                         metadata: serde_json::json!({
-                            "familyId": family_id.to_string(),
-                            "refreshTokenId": refresh_id.to_string()
+                            "family_id": family_id.to_string(),
+                            "refresh_id": refresh_id.to_string()
                         }),
                     },
                 )
@@ -570,8 +577,8 @@ pub async fn refresh_session(
                 request_id,
                 metadata: serde_json::json!({
                     "reason": "refresh_reuse",
-                    "familyId": family_id.to_string(),
-                    "tokenId": token_id.to_string()
+                    "family_id": family_id.to_string(),
+                    "token_id": token_id.to_string()
                 }),
             },
         )
@@ -724,9 +731,9 @@ pub async fn refresh_session(
             outcome: "success",
             request_id,
             metadata: serde_json::json!({
-                "familyId": family_id.to_string(),
-                "refreshTokenId": new_id.to_string(),
-                "replacedTokenId": token_id.to_string()
+                "family_id": family_id.to_string(),
+                "refresh_id": new_id.to_string(),
+                "replaced_id": token_id.to_string()
             }),
         },
     )
@@ -907,7 +914,7 @@ pub async fn logout_session(
                 resource_id: Some(&family_id.to_string()),
                 outcome: "success",
                 request_id,
-                metadata: serde_json::json!({ "familyId": family_id.to_string() }),
+                metadata: serde_json::json!({ "family_id": family_id.to_string() }),
             },
         )
         .await?;

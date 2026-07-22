@@ -406,6 +406,12 @@ pub async fn reconcile_document(
     let object_drift = compare_document_minio_inventory(storage, ctx, &inventory).await?;
     report.missing_objects = object_drift.missing_objects.len();
     report.orphan_objects = object_drift.orphan_objects.len();
+    if report.missing_objects > 0 {
+        crate::telemetry::record_drift("object", "missing");
+    }
+    if report.orphan_objects > 0 {
+        crate::telemetry::record_drift("object", "orphan");
+    }
 
     if reads_suppressed(inventory.document.state) {
         let candidates = all_point_candidates(
@@ -415,11 +421,26 @@ pub async fn reconcile_document(
             document_id,
         )?;
         report.orphan_vectors = candidates.len();
+        if report.orphan_vectors > 0 {
+            crate::telemetry::record_drift("vector", "orphan");
+        }
         // Purged/tombstoned: absence is expected; only leftovers are actionable.
         report.missing_objects = 0;
         let orphan_object_keys = object_drift.orphan_objects.clone();
         report.orphan_objects = orphan_object_keys.len();
 
+        let mode_label = match mode {
+            ReconcileMode::Repair => "repair",
+            ReconcileMode::DryRun => "detect",
+        };
+        let result_label =
+            if report.orphan_vectors > 0 || report.orphan_objects > 0 || report.missing_objects > 0
+            {
+                "drift"
+            } else {
+                "success"
+            };
+        crate::telemetry::record_reconcile(mode_label, result_label);
         if mode == ReconcileMode::Repair {
             if report.orphan_vectors > 0 {
                 report.repaired.orphan_vectors = report.orphan_vectors;
@@ -442,7 +463,7 @@ pub async fn reconcile_document(
                     ctx,
                     document_id,
                     &orphan_object_keys,
-                    "reconcile.object_cleanup",
+                    "object.cleanup",
                 )
                 .await?;
                 report.repaired.orphan_objects = orphan_object_keys.len();
@@ -564,7 +585,7 @@ pub async fn reconcile_document(
                     ctx,
                     document_id,
                     &object_drift.orphan_objects,
-                    "reconcile.object_cleanup",
+                    "object.cleanup",
                 )
                 .await?;
                 report.repaired.orphan_objects = object_drift.orphan_objects.len();
@@ -622,7 +643,7 @@ pub async fn reconcile_dead_letter_jobs(
             ctx,
             Uuid::nil(),
             &staged_orphans,
-            "reconcile.dead_letter_gc",
+            "object.cleanup",
         )
         .await?;
         report.repaired.staged_objects = staged_orphans.len();
@@ -735,7 +756,8 @@ async fn drain_pending_vector_intents(
                     "success",
                     json!({
                         "document_id": document_id,
-                        "point_count": repaired,
+                        "phase": "success",
+                        "result": "drained",
                     }),
                 )
                 .await?;
@@ -751,6 +773,8 @@ async fn drain_pending_vector_intents(
                 "error",
                 json!({
                     "document_id": document_id,
+                    "phase": "error",
+                    "result": "failed",
                 }),
             )
             .await?;
@@ -820,11 +844,11 @@ async fn delete_objects_with_audit(
             ctx,
             document_id,
             action,
-            "intent",
+            "success",
             json!({
                 "document_id": document_id,
                 "object_count": batch_keys.len(),
-                "object_keys": batch_keys,
+                "phase": "intent",
             }),
         )
         .await?;
@@ -839,7 +863,7 @@ async fn delete_objects_with_audit(
                     json!({
                         "document_id": document_id,
                         "object_count": batch_keys.len(),
-                        "object_keys": batch_keys,
+                        "phase": "success",
                     }),
                 )
                 .await?;
@@ -854,7 +878,7 @@ async fn delete_objects_with_audit(
                     json!({
                         "document_id": document_id,
                         "object_count": batch_keys.len(),
-                        "object_keys": batch_keys,
+                        "phase": "error",
                     }),
                 )
                 .await?;
@@ -1295,7 +1319,12 @@ async fn write_intent_audit(
                 } else {
                     Some(document_id.to_string())
                 };
-                let request_id = format!("{action}-{document_id}-{outcome}");
+                let request_id = uuid::Uuid::new_v4().to_string();
+                let outcome = match outcome {
+                    "error" => "error",
+                    "deny" => "deny",
+                    _ => "success",
+                };
                 write_audit(
                     txn,
                     AuditEvent {
@@ -1303,7 +1332,7 @@ async fn write_intent_audit(
                         actor_user_id: Some(ctx.user_id()),
                         action,
                         resource_type: if document_id.is_nil() {
-                            "jobs"
+                            "job"
                         } else {
                             "document"
                         },

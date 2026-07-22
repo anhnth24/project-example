@@ -3,6 +3,8 @@
 //! Callers should run these functions inside [`crate::db::pool::with_org_txn`]
 //! so RLS `app.org_id` is set before any row is visible or mutable.
 
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
 use tokio_postgres::{Row, Transaction};
@@ -277,6 +279,34 @@ pub async fn list_page(
         )
         .await?;
     rows.iter().map(map_job).collect()
+}
+
+/// Pending queue depth and age of the oldest available pending job for a type.
+pub async fn pending_queue_stats(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_type: JobType,
+) -> Result<(u64, Duration), DbError> {
+    let job_type = job_type.as_str();
+    let row = txn
+        .query_one(
+            "SELECT
+                count(*)::bigint AS depth,
+                COALESCE(
+                    EXTRACT(EPOCH FROM (clock_timestamp() - min(available_at))),
+                    0
+                )::bigint AS oldest_age_secs
+             FROM jobs
+             WHERE org_id = $1
+               AND job_type = $2
+               AND status = 'pending'
+               AND available_at <= clock_timestamp()",
+            &[&ctx.org_id(), &job_type],
+        )
+        .await?;
+    let depth = u64::try_from(row.get::<_, i64>("depth")).unwrap_or(0);
+    let oldest_age_secs = u64::try_from(row.get::<_, i64>("oldest_age_secs")).unwrap_or(0);
+    Ok((depth, Duration::from_secs(oldest_age_secs)))
 }
 
 pub async fn claim_pending(
@@ -1034,27 +1064,41 @@ fn reject_forbidden_keys(value: &JsonValue) -> Result<(), DbError> {
 }
 
 fn validate_id_only_value(value: &JsonValue) -> Result<(), DbError> {
+    validate_id_only_value_at(value, None)
+}
+
+fn validate_id_only_value_at(value: &JsonValue, key: Option<&str>) -> Result<(), DbError> {
     match value {
         JsonValue::Null => Ok(()),
-        JsonValue::String(value) => Uuid::parse_str(value)
-            .map(|_| ())
-            .map_err(|_| DbError::Config("payload strings must be UUIDs".into())),
+        JsonValue::String(value) => {
+            if key == Some("traceparent") {
+                return validate_traceparent_payload(value);
+            }
+            Uuid::parse_str(value)
+                .map(|_| ())
+                .map_err(|_| DbError::Config("payload strings must be UUIDs".into()))
+        }
         JsonValue::Array(values) => {
             for nested in values {
-                validate_id_only_value(nested)?;
+                validate_id_only_value_at(nested, None)?;
             }
             Ok(())
         }
         JsonValue::Object(map) => {
-            for nested in map.values() {
-                validate_id_only_value(nested)?;
+            for (nested_key, nested) in map {
+                validate_id_only_value_at(nested, Some(nested_key.as_str()))?;
             }
             Ok(())
         }
         JsonValue::Bool(_) | JsonValue::Number(_) => Err(DbError::Config(
-            "job/event payloads may contain only UUID strings, arrays, objects, or null".into(),
+            "job/event payloads may contain only UUID strings, W3C traceparent, arrays, objects, or null"
+                .into(),
         )),
     }
+}
+
+fn validate_traceparent_payload(value: &str) -> Result<(), DbError> {
+    crate::telemetry::validate_traceparent(value).map_err(DbError::Config)
 }
 
 fn validate_checkpoint_payload(value: &JsonValue) -> Result<(), DbError> {

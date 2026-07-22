@@ -22,7 +22,7 @@ use crate::db::error::DbError;
 use crate::db::models::{EventLogEntry, Job, JobStatus, JobType, OutboxEvent};
 use crate::db::{jobs as repo, pool};
 
-pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 3;
+pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 5;
 pub const CURRENT_EVENT_PAYLOAD_VERSION: i32 = 2;
 
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 160;
@@ -45,6 +45,10 @@ pub struct JobPayload {
     pub index_metadata_id: Option<Uuid>,
     /// Parent conversion job for an independent reconciliation job.
     pub cleanup_target_job_id: Option<Uuid>,
+    /// Originating API request id (UUID) for async correlation.
+    pub request_id: Option<Uuid>,
+    /// W3C `traceparent` for async OTel context propagation (not a UUID).
+    pub traceparent: Option<String>,
 }
 
 impl JobPayload {
@@ -74,6 +78,39 @@ impl From<JobPayloadV1> for JobPayload {
             batch_id: None,
             index_metadata_id: None,
             cleanup_target_job_id: None,
+            request_id: None,
+            traceparent: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct JobPayloadV4 {
+    document_id: Option<Uuid>,
+    version_id: Option<Uuid>,
+    collection_id: Option<Uuid>,
+    upload_id: Option<Uuid>,
+    batch_id: Option<Uuid>,
+    index_metadata_id: Option<Uuid>,
+    cleanup_target_job_id: Option<Uuid>,
+    request_id: Option<Uuid>,
+    /// Legacy UUID trace id from payload v4; not convertible to a valid W3C parent.
+    trace_id: Option<Uuid>,
+}
+
+impl From<JobPayloadV4> for JobPayload {
+    fn from(value: JobPayloadV4) -> Self {
+        Self {
+            document_id: value.document_id,
+            version_id: value.version_id,
+            collection_id: value.collection_id,
+            upload_id: value.upload_id,
+            batch_id: value.batch_id,
+            index_metadata_id: value.index_metadata_id,
+            cleanup_target_job_id: value.cleanup_target_job_id,
+            request_id: value.request_id,
+            traceparent: None,
         }
     }
 }
@@ -354,11 +391,14 @@ pub async fn enqueue(
 pub(crate) async fn enqueue_within_txn(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
-    input: EnqueueJob,
+    mut input: EnqueueJob,
 ) -> Result<EnqueueOutcome, JobError> {
     validate_idempotency_key(&input.idempotency_key)?;
     let max_attempts = checked_max_attempts(input.max_attempts)?;
     let available_after = checked_duration(input.available_after)?;
+    if let Some(correlation) = crate::telemetry::CorrelationContext::current() {
+        crate::telemetry::apply_to_job_payload(&mut input.payload, &correlation);
+    }
     let payload = validated_job_payload(&input.payload)?;
     validate_job_payload_lineage(&input.payload)?;
 
@@ -394,6 +434,8 @@ pub(crate) async fn enqueue_within_txn(
         },
     )
     .await?;
+    // Record only after successful insert/commit path inside the txn.
+    crate::telemetry::record_job_transition(input.job_type.as_str(), "enqueue", "accepted");
     Ok(EnqueueOutcome { job, created })
 }
 
@@ -407,18 +449,22 @@ pub async fn claim(
     validate_worker_id(worker_id)?;
     let limit = checked_limit(limit)?;
     let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
-    pool::with_org_txn_typed(db_pool, ctx, {
+    let jobs = pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         let worker_id = worker_id.to_string();
         move |txn| {
             Box::pin(async move {
                 repo::claim_pending(txn, &ctx, &worker_id, limit, lease_ttl_secs)
                     .await
-                    .map_err(Into::into)
+                    .map_err(JobError::from)
             })
         }
     })
-    .await
+    .await?;
+    for job in &jobs {
+        crate::telemetry::record_job_transition(job.job_type.as_str(), "claim", "leased");
+    }
+    Ok(jobs)
 }
 
 pub async fn claim_type(
@@ -432,18 +478,31 @@ pub async fn claim_type(
     validate_worker_id(worker_id)?;
     let limit = checked_limit(limit)?;
     let lease_ttl_secs = checked_duration_secs(lease_ttl)?;
-    pool::with_org_txn_typed(db_pool, ctx, {
+    let (jobs, depth, oldest_age) = pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         let worker_id = worker_id.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::claim_pending_of_type(txn, &ctx, job_type, &worker_id, limit, lease_ttl_secs)
-                    .await
-                    .map_err(Into::into)
+                let (depth, oldest_age) = repo::pending_queue_stats(txn, &ctx, job_type).await?;
+                let jobs = repo::claim_pending_of_type(
+                    txn,
+                    &ctx,
+                    job_type,
+                    &worker_id,
+                    limit,
+                    lease_ttl_secs,
+                )
+                .await?;
+                Ok::<_, JobError>((jobs, depth, oldest_age))
             })
         }
     })
-    .await
+    .await?;
+    crate::telemetry::record_queue_depth(job_type.as_str(), depth, oldest_age);
+    for job in &jobs {
+        crate::telemetry::record_job_transition(job.job_type.as_str(), "claim", "leased");
+    }
+    Ok(jobs)
 }
 
 /// Claims reconcile jobs for either conversion cleanup or document-drift workers.
@@ -633,6 +692,7 @@ pub(crate) async fn complete_within_txn(
         .ok_or(JobError::LeaseLost)?;
     let outbox_key = transition_key(&job, "job.succeeded");
     write_job_event(txn, ctx, &job, "job.succeeded", &outbox_key).await?;
+    crate::telemetry::record_job_transition(job.job_type.as_str(), "finish", "succeeded");
     Ok(job)
 }
 
@@ -740,8 +800,14 @@ pub(crate) async fn fail_within_txn(
     .await?
     .ok_or(JobError::LeaseLost)?;
     let event_type = match job.status {
-        JobStatus::Pending => "job.retry_scheduled",
-        JobStatus::DeadLetter => "job.dead_lettered",
+        JobStatus::Pending => {
+            crate::telemetry::record_job_transition(job.job_type.as_str(), "finish", "retry");
+            "job.retry_scheduled"
+        }
+        JobStatus::DeadLetter => {
+            crate::telemetry::record_job_transition(job.job_type.as_str(), "finish", "dead_letter");
+            "job.dead_lettered"
+        }
         _ => {
             return Err(JobError::Database(DbError::Config(format!(
                 "unexpected failure status: {:?}",
@@ -929,6 +995,11 @@ pub fn decode_job_payload(version: i32, payload: JsonValue) -> Result<JobPayload
             .map_err(|error| JobError::InvalidPayload(format!("v1 decode failed: {error}"))),
         2 | 3 => serde_json::from_value::<JobPayload>(payload)
             .map_err(|error| JobError::InvalidPayload(format!("v2 decode failed: {error}"))),
+        4 => serde_json::from_value::<JobPayloadV4>(payload)
+            .map(Into::into)
+            .map_err(|error| JobError::InvalidPayload(format!("v4 decode failed: {error}"))),
+        5 => serde_json::from_value::<JobPayload>(payload)
+            .map_err(|error| JobError::InvalidPayload(format!("v5 decode failed: {error}"))),
         other => Err(JobError::InvalidPayload(format!(
             "unsupported payload version: {other}"
         ))),

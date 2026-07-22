@@ -102,6 +102,24 @@ impl ReconcileWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<ReconcileWorkerRun, ReconcileWorkerError> {
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())
+            .unwrap_or_else(|_| jobs::JobPayload::default());
+        let job_id = job.id;
+        crate::telemetry::run_worker(
+            "reconcile",
+            job_id,
+            &payload,
+            Some(ctx.org_id()),
+            self.process_claimed_job_inner(ctx, job),
+        )
+        .await
+    }
+
+    async fn process_claimed_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+    ) -> Result<ReconcileWorkerRun, ReconcileWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()

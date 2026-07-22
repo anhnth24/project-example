@@ -94,6 +94,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0022_expand_runtime_readiness.sql",
         include_str!("../migrations/0022_expand_runtime_readiness.sql"),
     ),
+    (
+        "0023_expand_audit_append_only.sql",
+        include_str!("../migrations/0023_expand_audit_append_only.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

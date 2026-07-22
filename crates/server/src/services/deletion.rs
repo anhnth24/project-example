@@ -130,7 +130,7 @@ pub async fn request_delete(
                         )
                         .await?;
                         let resource_id = document_id.to_string();
-                        let request_id = format!("delete-{document_id}");
+                        let request_id = crate::services::audit::request_id_from_correlation();
                         write_audit(
                             txn,
                             AuditEvent {
@@ -442,7 +442,7 @@ async fn write_object_cleanup_audit(
         move |txn| {
             Box::pin(async move {
                 let resource_id = document_id.to_string();
-                let request_id = format!("purge-objects-{document_id}-{phase}");
+                let request_id = crate::services::audit::request_id_from_correlation();
                 write_audit(
                     txn,
                     AuditEvent {
@@ -457,7 +457,6 @@ async fn write_object_cleanup_audit(
                             "document_id": document_id,
                             "phase": phase,
                             "object_count": object_keys.len(),
-                            "object_keys": object_keys,
                         }),
                     },
                 )
@@ -525,7 +524,7 @@ async fn finalize_purged(
                     .ok_or(DeletionError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
                 let resource_id = document_id.to_string();
-                let request_id = format!("purge-{job_id}");
+                let request_id = crate::services::audit::request_id_from_correlation();
                 write_audit(
                     txn,
                     AuditEvent {
