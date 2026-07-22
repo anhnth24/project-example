@@ -7,6 +7,14 @@
 //! Index signatures include `runtime_path`. Changing inference semantics for a
 //! `(base_url, model)` pair that lacked an explicit preset path creates a new
 //! generation and triggers desktop reindex.
+//!
+//! Public config / persisted boundaries must validate via
+//! [`parse_embedding_runtime_path`] (or [`EmbeddingRuntimePath::parse`]) **before**
+//! computing index signatures or loading indexes. Inference helpers below only
+//! produce allowlisted constants; they are not a substitute for boundary checks
+//! on untrusted/persisted strings.
+
+use std::fmt;
 
 use url::Url;
 
@@ -26,8 +34,101 @@ pub const ALLOWED_EMBEDDING_RUNTIME_PATHS: &[&str] = &[
     EMBEDDING_RUNTIME_PROVIDER_CLOUD,
 ];
 
+/// Canonical ADR 0006 `runtime_path` enum (exact string forms via [`Self::as_str`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EmbeddingRuntimePath {
+    LocalHash,
+    LocalNeural,
+    GlmCloudInterim,
+    VllmLocal,
+    ProviderCloud,
+}
+
+impl EmbeddingRuntimePath {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalHash => EMBEDDING_RUNTIME_LOCAL_HASH,
+            Self::LocalNeural => EMBEDDING_RUNTIME_LOCAL_NEURAL,
+            Self::GlmCloudInterim => EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM,
+            Self::VllmLocal => EMBEDDING_RUNTIME_VLLM_LOCAL,
+            Self::ProviderCloud => EMBEDDING_RUNTIME_PROVIDER_CLOUD,
+        }
+    }
+
+    /// Parse a persisted/config `runtime_path` against the allowlist.
+    ///
+    /// Rejects empty values, any Unicode control character (including `\0`,
+    /// `\n`, `\t`), and unknown/legacy aliases such as `local_hash_v1`.
+    /// Matching is exact — no trim or case folding — so signature bytes stay
+    /// stable. Prefer this (or [`parse_embedding_runtime_path`]) at every
+    /// public config / DB boundary before hashing or loading an index.
+    pub fn parse(value: &str) -> Result<Self, EmbeddingRuntimePathError> {
+        parse_embedding_runtime_path(value)
+    }
+}
+
+impl fmt::Display for EmbeddingRuntimePath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Typed failure when a config/persisted `runtime_path` is not allowlisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbeddingRuntimePathError {
+    Empty,
+    ControlCharacter,
+    Unknown { value: String },
+}
+
+impl EmbeddingRuntimePathError {
+    pub fn as_static_message(&self) -> &'static str {
+        match self {
+            Self::Empty => "embedding runtime_path must not be empty",
+            Self::ControlCharacter => "embedding runtime_path must not contain control characters",
+            Self::Unknown { .. } => "embedding runtime_path is unsupported",
+        }
+    }
+}
+
+impl fmt::Display for EmbeddingRuntimePathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => f.write_str(self.as_static_message()),
+            Self::ControlCharacter => f.write_str(self.as_static_message()),
+            Self::Unknown { value } => {
+                write!(f, "embedding runtime_path is unsupported: {value}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EmbeddingRuntimePathError {}
+
+/// Validate and parse a `runtime_path` from config or persisted storage.
+pub fn parse_embedding_runtime_path(
+    value: &str,
+) -> Result<EmbeddingRuntimePath, EmbeddingRuntimePathError> {
+    if value.is_empty() {
+        return Err(EmbeddingRuntimePathError::Empty);
+    }
+    if value.chars().any(|ch| ch.is_control()) {
+        return Err(EmbeddingRuntimePathError::ControlCharacter);
+    }
+    match value {
+        EMBEDDING_RUNTIME_LOCAL_HASH => Ok(EmbeddingRuntimePath::LocalHash),
+        EMBEDDING_RUNTIME_LOCAL_NEURAL => Ok(EmbeddingRuntimePath::LocalNeural),
+        EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM => Ok(EmbeddingRuntimePath::GlmCloudInterim),
+        EMBEDDING_RUNTIME_VLLM_LOCAL => Ok(EmbeddingRuntimePath::VllmLocal),
+        EMBEDDING_RUNTIME_PROVIDER_CLOUD => Ok(EmbeddingRuntimePath::ProviderCloud),
+        other => Err(EmbeddingRuntimePathError::Unknown {
+            value: other.to_string(),
+        }),
+    }
+}
+
 pub fn is_allowed_embedding_runtime_path(path: &str) -> bool {
-    ALLOWED_EMBEDDING_RUNTIME_PATHS.contains(&path)
+    parse_embedding_runtime_path(path).is_ok()
 }
 
 /// Official GLM / Zhipu cloud embedding hosts (DNS suffix match).
@@ -576,7 +677,60 @@ mod tests {
             EMBEDDING_RUNTIME_PROVIDER_CLOUD,
         ] {
             assert!(is_allowed_embedding_runtime_path(path));
+            let parsed = parse_embedding_runtime_path(path).unwrap();
+            assert_eq!(parsed.as_str(), path);
         }
         assert!(!is_allowed_embedding_runtime_path("local_hash_v1"));
+    }
+
+    #[test]
+    fn parse_runtime_path_rejects_empty_control_and_unknown() {
+        assert_eq!(
+            parse_embedding_runtime_path(""),
+            Err(EmbeddingRuntimePathError::Empty)
+        );
+        assert_eq!(
+            parse_embedding_runtime_path("local-hash\n"),
+            Err(EmbeddingRuntimePathError::ControlCharacter)
+        );
+        assert_eq!(
+            parse_embedding_runtime_path("local-hash\0"),
+            Err(EmbeddingRuntimePathError::ControlCharacter)
+        );
+        assert_eq!(
+            parse_embedding_runtime_path("local-hash\t"),
+            Err(EmbeddingRuntimePathError::ControlCharacter)
+        );
+        assert_eq!(
+            parse_embedding_runtime_path("local_hash_v1"),
+            Err(EmbeddingRuntimePathError::Unknown {
+                value: "local_hash_v1".into()
+            })
+        );
+        // Exact match only — no trim / case fold at the persisted boundary.
+        assert!(matches!(
+            parse_embedding_runtime_path(" local-hash"),
+            Err(EmbeddingRuntimePathError::Unknown { .. })
+        ));
+        assert!(matches!(
+            parse_embedding_runtime_path("Local-Hash"),
+            Err(EmbeddingRuntimePathError::Unknown { .. })
+        ));
+    }
+
+    #[test]
+    fn inference_outputs_are_always_allowlisted() {
+        for (base_url, model) in [
+            (None, "nomic-embed-text"),
+            (Some("https://open.bigmodel.cn/api/paas/v4"), "embedding-3"),
+            (Some("http://127.0.0.1:8000/v1"), "BAAI/bge-m3"),
+            (Some("https://api.openai.com/v1"), "text-embedding-3-small"),
+        ] {
+            let inferred = infer_embedding_runtime_path(base_url, model);
+            assert!(
+                is_allowed_embedding_runtime_path(inferred),
+                "inferred {inferred} for {base_url:?}/{model}"
+            );
+        }
     }
 }

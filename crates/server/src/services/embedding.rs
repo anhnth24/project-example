@@ -103,7 +103,10 @@ impl ApprovedEmbeddingRuntime {
             Some(dimensions),
             runtime_path,
         )?;
-        let signature = plan.index_signature(dimensions)?.digest();
+        let signature = plan
+            .index_signature(dimensions)?
+            .digest()
+            .map_err(fileconv_knowledge::KnowledgeError::from)?;
         if let Some(approved) = approved_signature {
             if approved != signature {
                 return Err(EmbeddingError::SignatureMismatch);

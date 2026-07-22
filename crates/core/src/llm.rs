@@ -37,6 +37,17 @@ where
     Ok(value)
 }
 
+/// Persist/config boundary for `runtimePath`: same allowlist as [`EmbeddingConfig::new`].
+fn deserialize_runtime_path<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+    crate::embedding_runtime::parse_embedding_runtime_path(&value)
+        .map(|parsed| parsed.as_str().to_string())
+        .map_err(serde::de::Error::custom)
+}
+
 /// Conservative endpoint redaction: keep scheme + host[:port] only.
 /// Never surface userinfo, path, query, or fragment.
 fn redact_endpoint(url: &str) -> String {
@@ -128,7 +139,8 @@ pub struct LlmProviderPreset {
 // Re-export ADR 0006 runtime-path constants/helpers from the always-on module so
 // `fileconv_core::llm::*` callers keep working without depending on knowledge.
 pub use crate::embedding_runtime::{
-    infer_embedding_runtime_path, ALLOWED_EMBEDDING_RUNTIME_PATHS,
+    infer_embedding_runtime_path, parse_embedding_runtime_path, EmbeddingRuntimePath,
+    EmbeddingRuntimePathError, ALLOWED_EMBEDDING_RUNTIME_PATHS,
     EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM, EMBEDDING_RUNTIME_LOCAL_HASH,
     EMBEDDING_RUNTIME_LOCAL_NEURAL, EMBEDDING_RUNTIME_PROVIDER_CLOUD, EMBEDDING_RUNTIME_VLLM_LOCAL,
 };
@@ -145,6 +157,9 @@ pub struct EmbeddingConfig {
     pub dimensions: Option<usize>,
     /// Explicit runtime path for index signature (ADR 0006). Prefer preset values
     /// over host/model inference for known deployments (e.g. vLLM → `vllm-local`).
+    /// Validated on deserialize via [`parse_embedding_runtime_path`] (JSON field
+    /// name stays `runtimePath`; public shape unchanged).
+    #[serde(deserialize_with = "deserialize_runtime_path")]
     pub runtime_path: String,
 }
 
@@ -318,11 +333,11 @@ impl EmbeddingConfig {
             ));
         }
         let runtime_path = runtime_path.into();
-        if !crate::embedding_runtime::is_allowed_embedding_runtime_path(&runtime_path) {
-            return Err(ConvertError::Failed(format!(
-                "embedding runtime_path không được hỗ trợ: {runtime_path}"
-            )));
-        }
+        // Validate at the public config boundary before any signature / index use.
+        let runtime_path = crate::embedding_runtime::parse_embedding_runtime_path(&runtime_path)
+            .map_err(|error| ConvertError::Failed(error.to_string()))?
+            .as_str()
+            .to_string();
         Ok(Self {
             provider,
             api_key: api_key.into(),
@@ -1610,6 +1625,78 @@ mod tests {
             "not-a-runtime",
         )
         .is_err());
+    }
+
+    #[test]
+    fn embedding_config_rejects_invalid_runtime_path_with_actionable_errors() {
+        let err = |runtime: &str| {
+            EmbeddingConfig::new(
+                Provider::OpenAi,
+                "key",
+                "text-embedding-3-small",
+                Some("https://api.openai.com".into()),
+                Some(1536),
+                runtime,
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        assert!(err("").contains("must not be empty"));
+        assert!(err("provider-cloud\n").contains("control characters"));
+        let unknown = err("local_hash_v1");
+        assert!(unknown.contains("unsupported"));
+        assert!(unknown.contains("local_hash_v1"));
+        // Valid allowlisted + inferred presets still construct.
+        for runtime in ALLOWED_EMBEDDING_RUNTIME_PATHS {
+            EmbeddingConfig::new(
+                Provider::OpenAiCompatible,
+                "",
+                "model",
+                Some("http://127.0.0.1:8000/v1".into()),
+                None,
+                *runtime,
+            )
+            .unwrap_or_else(|error| panic!("accepted runtime {runtime}: {error}"));
+        }
+    }
+
+    #[test]
+    fn embedding_config_deserialize_rejects_invalid_runtime_path() {
+        let base = |runtime: &str| {
+            format!(
+                r#"{{"provider":"open_ai","apiKey":"k","model":"m","baseUrl":"https://api.openai.com/v1","dimensions":1536,"runtimePath":{runtime}}}"#
+            )
+        };
+        for (runtime_json, needle) in [
+            (r#""""#, "must not be empty"),
+            (r#""provider-cloud\n""#, "control characters"),
+            (r#""local_hash_v1""#, "unsupported"),
+            (r#"" ""#, "unsupported"),
+        ] {
+            let err = serde_json::from_str::<EmbeddingConfig>(&base(runtime_json))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(needle),
+                "runtime={runtime_json} err={err} needle={needle}"
+            );
+        }
+        for runtime in ALLOWED_EMBEDDING_RUNTIME_PATHS {
+            let cfg: EmbeddingConfig = serde_json::from_str(&base(&format!("\"{runtime}\"")))
+                .unwrap_or_else(|error| panic!("accepted deserialized runtime {runtime}: {error}"));
+            assert_eq!(cfg.runtime_path, *runtime);
+        }
+        // Public camelCase JSON shape unchanged.
+        let raw = serde_json::json!({
+            "provider": "open_ai_compatible",
+            "apiKey": "",
+            "model": "BAAI/bge-m3",
+            "baseUrl": "http://127.0.0.1:8000/v1",
+            "dimensions": null,
+            "runtimePath": EMBEDDING_RUNTIME_VLLM_LOCAL,
+        });
+        let cfg: EmbeddingConfig = serde_json::from_value(raw).unwrap();
+        assert_eq!(cfg.runtime_path, EMBEDDING_RUNTIME_VLLM_LOCAL);
     }
 
     #[test]

@@ -83,8 +83,16 @@ pub struct IndexSignature<'a> {
 }
 
 impl IndexSignature<'_> {
-    pub fn digest(&self) -> String {
-        digest(
+    /// Compute the index signature digest after validating `runtime_path`.
+    ///
+    /// Rejects empty / control-character / unknown values so bad persisted or
+    /// hand-built signatures never enter the hash. Prefer constructing plans via
+    /// [`crate::embedding::EmbeddingPlan`] which allowlists at the config boundary.
+    pub fn digest(
+        &self,
+    ) -> Result<String, fileconv_core::embedding_runtime::EmbeddingRuntimePathError> {
+        fileconv_core::embedding_runtime::parse_embedding_runtime_path(self.runtime_path)?;
+        Ok(digest(
             "index",
             &[
                 self.runtime_path.as_bytes(),
@@ -96,7 +104,7 @@ impl IndexSignature<'_> {
                 self.body_text_version.as_bytes(),
                 self.query_normalization_version.as_bytes(),
             ],
-        )
+        ))
     }
 }
 
@@ -184,7 +192,7 @@ mod tests {
                 .unwrap(),
         };
         assert_eq!(
-            signature.digest(),
+            signature.digest().unwrap(),
             fixture["index"]["signature"].as_str().unwrap()
         );
         assert_eq!(signature.chunking_version, DEFAULT_CHUNKING_VERSION);
@@ -195,20 +203,65 @@ mod tests {
         );
         assert_eq!(signature.runtime_path, RUNTIME_LOCAL_HASH);
         assert_ne!(
-            signature.digest(),
+            signature.digest().unwrap(),
             IndexSignature {
                 dimensions: 768,
                 ..signature.clone()
             }
             .digest()
+            .unwrap()
         );
         assert_ne!(
-            signature.digest(),
+            signature.digest().unwrap(),
             IndexSignature {
                 runtime_path: "glm-cloud-interim",
                 ..signature.clone()
             }
             .digest()
+            .unwrap()
         );
+    }
+
+    #[test]
+    fn index_signature_digest_rejects_invalid_runtime_path() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/identity-v2.json")).unwrap();
+        let base = IndexSignature {
+            runtime_path: fixture["index"]["runtimePath"].as_str().unwrap(),
+            embedding_family: fixture["index"]["embeddingFamily"].as_str().unwrap(),
+            embedding_revision: fixture["index"]["embeddingRevision"].as_str().unwrap(),
+            dimensions: fixture["index"]["dimensions"].as_u64().unwrap() as usize,
+            normalized: fixture["index"]["normalized"].as_bool().unwrap(),
+            chunking_version: fixture["index"]["chunkingVersion"].as_str().unwrap(),
+            body_text_version: fixture["index"]["bodyTextVersion"].as_str().unwrap(),
+            query_normalization_version: fixture["index"]["queryNormalizationVersion"]
+                .as_str()
+                .unwrap(),
+        };
+        assert!(base.digest().is_ok());
+        assert!(matches!(
+            IndexSignature {
+                runtime_path: "",
+                ..base.clone()
+            }
+            .digest(),
+            Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::Empty)
+        ));
+        assert!(matches!(
+            IndexSignature {
+                runtime_path: "local-hash\n",
+                ..base.clone()
+            }
+            .digest(),
+            Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::ControlCharacter)
+        ));
+        assert!(matches!(
+            IndexSignature {
+                runtime_path: "local_hash_v1",
+                ..base
+            }
+            .digest(),
+            Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::Unknown { .. })
+        ));
     }
 }

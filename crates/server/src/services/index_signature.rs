@@ -66,7 +66,10 @@ pub fn collection_name_for_digest(digest: &str) -> Result<CollectionName, Storag
 pub fn collection_name_for_signature(
     signature: &IndexSignature<'_>,
 ) -> Result<CollectionName, StorageError> {
-    collection_name_for_digest(&signature.digest())
+    let digest = signature
+        .digest()
+        .map_err(|_| StorageError::PreconditionFailed)?;
+    collection_name_for_digest(&digest)
 }
 
 /// Parse and validate `markhand_chunks_<64-hex>` (charset `[a-z0-9_]` only).
@@ -131,7 +134,7 @@ mod tests {
     #[test]
     fn collection_name_uses_full_digest() {
         let signature = sample_signature();
-        let digest = signature.digest();
+        let digest = signature.digest().unwrap();
         let name = collection_name_for_signature(&signature).unwrap();
         assert!(name.as_str().starts_with(COLLECTION_NAME_PREFIX));
         assert_eq!(name.digest(), digest.as_str());

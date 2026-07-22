@@ -2,6 +2,10 @@
 pub enum KnowledgeError {
     #[error("invalid knowledge input: {0}")]
     InvalidInput(&'static str),
+    #[error("{0}")]
+    InvalidEmbeddingRuntimePath(
+        #[from] fileconv_core::embedding_runtime::EmbeddingRuntimePathError,
+    ),
     #[error("knowledge index is incompatible: {0}")]
     IncompatibleIndex(&'static str),
     #[error("embedding count mismatch: expected {expected}, received {actual}")]

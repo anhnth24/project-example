@@ -863,7 +863,7 @@ async fn seed_first_batch_and_checkpoint(
     assert!(chunks.len() > 1);
     let first = &chunks[0];
     let signature = embedding_plan.index_signature(8).unwrap();
-    let signature_digest = signature.digest();
+    let signature_digest = signature.digest().unwrap();
     let collection_name = env
         .qdrant
         .ensure_collection_for_signature(&signature)
@@ -1014,7 +1014,7 @@ async fn live_index_worker_indexes_converted_document() {
         DocumentState::Indexed
     );
     assert_eq!(chunk_count(&env, version_id).await, expected.len() as i64);
-    let signature = embedding_plan.index_signature(8).unwrap().digest();
+    let signature = embedding_plan.index_signature(8).unwrap().digest().unwrap();
     assert_eq!(active_signature(&env, collection_id).await, Some(signature));
     let points = fetched_points(
         &env,

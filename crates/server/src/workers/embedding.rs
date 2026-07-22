@@ -168,7 +168,9 @@ impl EmbeddingWorker {
         indexing::validate_target_generation(
             &source.metadata,
             source.collection_id,
-            &signature.digest(),
+            &signature
+                .digest()
+                .map_err(fileconv_knowledge::KnowledgeError::from)?,
         )?;
         let inputs = source
             .chunks

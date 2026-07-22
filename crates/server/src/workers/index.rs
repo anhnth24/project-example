@@ -109,8 +109,8 @@ impl IndexWorker {
         if let Some(signature) = approved_signature.as_deref() {
             let approved = embedding_plan
                 .index_signature(dimensions)
-                .map_err(IndexWorkerError::Knowledge)?
-                .digest();
+                .and_then(|sig| sig.digest().map_err(Into::into))
+                .map_err(IndexWorkerError::Knowledge)?;
             if signature != approved {
                 return Err(IndexWorkerError::SignatureMismatch);
             }

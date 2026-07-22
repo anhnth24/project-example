@@ -1025,4 +1025,62 @@ mod tests {
         .unwrap();
         assert_ne!(first.metadata().signature, second.metadata().signature);
     }
+
+    #[test]
+    fn desktop_plan_rejects_invalid_persisted_runtime_path() {
+        for bad in ["", "vllm-local\0", "not-a-runtime"] {
+            let err = DesktopEmbeddingPlan::provider_with_runtime(
+                "openaicompatible",
+                "BAAI/bge-m3",
+                Some("http://127.0.0.1:8000"),
+                None,
+                Some(bad),
+            )
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                crate::KnowledgeError::InvalidEmbeddingRuntimePath(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn desktop_presets_and_inference_round_trip_allowlisted_paths() {
+        let local = DesktopEmbeddingPlan::local();
+        assert_eq!(
+            local.runtime_path(),
+            Some(crate::identity::RUNTIME_LOCAL_HASH)
+        );
+        assert!(local
+            .signature_plan
+            .as_ref()
+            .unwrap()
+            .signature(256)
+            .is_ok());
+
+        let inferred = DesktopEmbeddingPlan::provider(
+            "openaicompatible",
+            "embedding-3",
+            Some("https://open.bigmodel.cn/api/paas/v4"),
+            Some(1024),
+        )
+        .unwrap();
+        assert_eq!(
+            inferred.runtime_path(),
+            Some(crate::identity::RUNTIME_GLM_CLOUD_INTERIM)
+        );
+
+        let explicit = DesktopEmbeddingPlan::provider_with_runtime(
+            "openaicompatible",
+            "BAAI/bge-m3",
+            Some("http://127.0.0.1:8000"),
+            None,
+            Some(crate::identity::RUNTIME_VLLM_LOCAL),
+        )
+        .unwrap();
+        assert_eq!(
+            explicit.runtime_path(),
+            Some(crate::identity::RUNTIME_VLLM_LOCAL)
+        );
+    }
 }
