@@ -209,10 +209,18 @@ const ABC_VN_REJECTED_FAMILIES: &[&str] = &[
 /// `.VnTimes2H`, `.VnArial2`, …) — không cấm digit rộng.
 pub fn tcvn3_case_hint_from_font_name(font_name: &str) -> Option<Tcvn3CaseHint> {
     let primary = first_css_font_family(font_name)?;
-    let lower = primary.to_ascii_lowercase();
     // Dot required; case-insensitive `.Vn`. Reject `.VNI…` (would be `.vn` + `i…`).
-    let body = lower.strip_prefix(".vn")?;
-    if body.is_empty() || body.starts_with('i') {
+    let prefix = primary.get(..3)?;
+    if !prefix.eq_ignore_ascii_case(".vn") {
+        return None;
+    }
+    let body = &primary[3..];
+    if body.is_empty()
+        || body
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'i'))
+    {
         return None;
     }
 
@@ -262,13 +270,11 @@ pub fn tcvn3_case_hint_from_font_name(font_name: &str) -> Option<Tcvn3CaseHint> 
     }
 
     let last = *tokens.last()?;
-    let last_alnum: String = last
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    // Terminal H on the last remaining family/width token ⇒ all-capital H-font.
-    if last_alnum.len() > 1 && last_alnum.ends_with('h') {
+    let last_alnum: String = last.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    // A dedicated uppercase terminal H on the last family/width token marks an
+    // all-capital H-font. Preserve case so ordinary names ending in lowercase
+    // `h` (for example `.VnEnglish`) are not misclassified.
+    if last_alnum.len() > 1 && last_alnum.ends_with('H') {
         Some(Tcvn3CaseHint::UppercaseFont)
     } else {
         Some(Tcvn3CaseHint::AsMapped)
@@ -623,6 +629,13 @@ mod tests {
             (".vntime", Some(Tcvn3CaseHint::AsMapped)),
             (".VnTime Bold Italic", Some(Tcvn3CaseHint::AsMapped)),
             (".VnArial Narrow", Some(Tcvn3CaseHint::AsMapped)),
+            // Ordinary family names ending in lowercase `h` are not H-fonts.
+            (".VnEnglish", Some(Tcvn3CaseHint::AsMapped)),
+            (".VnBrush", Some(Tcvn3CaseHint::AsMapped)),
+            (".VnGraph", Some(Tcvn3CaseHint::AsMapped)),
+            (".VnWidth", Some(Tcvn3CaseHint::AsMapped)),
+            (".VnSwitch", Some(Tcvn3CaseHint::AsMapped)),
+            (".vntimeh", Some(Tcvn3CaseHint::AsMapped)),
             // TCVN3/ABC all-capital H-fonts — terminal H before style suffixes.
             (".VnTimeH", Some(Tcvn3CaseHint::UppercaseFont)),
             (".VNTimeH", Some(Tcvn3CaseHint::UppercaseFont)),
