@@ -563,14 +563,8 @@ pub fn generation_compatible_with_runtime(
             return false;
         }
     }
-    match plan
-        .index_signature(query_dimensions)
-        .and_then(|signature| {
-            signature
-                .digest()
-                .map_err(fileconv_knowledge::KnowledgeError::from)
-        }) {
-        Ok(digest) => digest == meta.index_signature_sha256,
+    match plan.index_signature(query_dimensions) {
+        Ok(signature) => signature.digest() == meta.index_signature_sha256,
         Err(_) => false,
     }
 }

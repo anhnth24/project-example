@@ -1037,10 +1037,10 @@ mod tests {
                 Some(bad),
             )
             .unwrap_err();
-            assert!(matches!(
+            assert_eq!(
                 err,
-                crate::KnowledgeError::InvalidEmbeddingRuntimePath(_)
-            ));
+                crate::KnowledgeError::InvalidInput("embedding runtime_path is unsupported")
+            );
         }
     }
 

@@ -167,9 +167,10 @@ impl EmbeddingPlan {
                 "embedding dimensions must be positive",
             ));
         }
-        // Public config / plan boundary — reject before any signature digest.
+        // Public config / plan boundary — reject once before any signature digest.
         let runtime_path =
-            fileconv_core::embedding_runtime::parse_embedding_runtime_path(&runtime_path)?
+            fileconv_core::embedding_runtime::parse_embedding_runtime_path(&runtime_path)
+                .map_err(|_| KnowledgeError::InvalidInput("embedding runtime_path is unsupported"))?
                 .as_str()
                 .to_string();
         let family = embedding_family(&provider, &model, &deployment);
@@ -206,7 +207,7 @@ impl EmbeddingPlan {
     }
 
     pub fn signature(&self, actual_dimensions: usize) -> Result<String> {
-        Ok(self.index_signature(actual_dimensions)?.digest()?)
+        Ok(self.index_signature(actual_dimensions)?.digest())
     }
 
     pub fn index_signature(&self, actual_dimensions: usize) -> Result<IndexSignature<'_>> {
@@ -223,8 +224,7 @@ impl EmbeddingPlan {
                 });
             }
         }
-        // Re-validate at signature boundary (defense in depth for persisted plans).
-        fileconv_core::embedding_runtime::parse_embedding_runtime_path(&self.runtime_path)?;
+        // Trusted path: runtime_path was allowlisted in constructors / local_hash_v1.
         Ok(self.index_signature_unchecked(actual_dimensions))
     }
 
@@ -233,10 +233,8 @@ impl EmbeddingPlan {
     /// It must not be persisted as index metadata; once vectors arrive callers
     /// replace it with [`Self::signature`].
     pub fn provisional_signature(&self) -> String {
-        // `EmbeddingPlan` construction already allowlisted `runtime_path`.
         self.index_signature_unchecked(self.expected_dimensions.unwrap_or(0))
             .digest()
-            .expect("EmbeddingPlan runtime_path is allowlisted at construction")
     }
 
     fn index_signature_unchecked(&self, dimensions: usize) -> IndexSignature<'_> {
@@ -595,7 +593,7 @@ mod tests {
         let plan = EmbeddingPlan::local_hash_v1();
         let signature = plan.index_signature(LOCAL_VECTOR_DIMENSIONS).unwrap();
         assert_eq!(
-            signature.digest().unwrap(),
+            signature.digest(),
             plan.signature(LOCAL_VECTOR_DIMENSIONS).unwrap()
         );
         assert_eq!(signature.runtime_path, super::RUNTIME_LOCAL_HASH);
@@ -714,12 +712,7 @@ mod tests {
     fn provider_plan_rejects_invalid_runtime_path_before_signature() {
         let deployment =
             super::ProviderDeployment::from_base_url(Some("http://embedding.internal")).unwrap();
-        let cases = [
-            ("", "must not be empty"),
-            ("vllm-local\n", "control characters"),
-            ("local_hash_v1", "unsupported"),
-        ];
-        for (runtime, needle) in cases {
+        for runtime in ["", "vllm-local\n", "local_hash_v1", " "] {
             let err = EmbeddingPlan::provider(
                 "vllm",
                 "vi-model",
@@ -729,11 +722,11 @@ mod tests {
                 runtime,
             )
             .unwrap_err();
-            assert!(
-                matches!(err, KnowledgeError::InvalidEmbeddingRuntimePath(_)),
-                "{runtime:?} => {err:?}"
+            assert_eq!(
+                err,
+                KnowledgeError::InvalidInput("embedding runtime_path is unsupported"),
+                "{runtime:?}"
             );
-            assert!(err.to_string().contains(needle), "{err}");
         }
         // Valid allowlisted round-trip still builds a signature.
         let plan = EmbeddingPlan::provider(

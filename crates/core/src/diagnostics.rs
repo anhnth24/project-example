@@ -4,11 +4,12 @@
 //! Soft degradation and typed error kinds live here and are returned only from
 //! [`crate::Converter::convert_path_detailed`].
 //!
-//! [`ConversionReport::new`] is the sole public construction boundary for soft
-//! warnings: it deduplicates and sorts so callers never depend on thread
-//! completion order when pages are recovered concurrently.
+//! [`ConversionReport::new`] / [`ConversionReport::merge`] normalize soft
+//! warnings so callers never depend on thread completion order. The same
+//! policy runs on JSON serialize/deserialize of `warnings` so direct struct
+//! construction and shuffled payloads stay canonical on the wire.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{ConversionResult, ConvertError};
 
@@ -66,9 +67,16 @@ pub enum ConversionOutcome {
 }
 
 /// Additive successful conversion report.
+///
+/// Public fields stay source-compatible. `warnings` is normalized on
+/// serialize/deserialize (sort + exact dedupe) without changing the JSON shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionReport {
     pub result: ConversionResult,
+    #[serde(
+        serialize_with = "serialize_normalized_warnings",
+        deserialize_with = "deserialize_normalized_warnings"
+    )]
     pub warnings: Vec<ConversionWarning>,
 }
 
@@ -141,6 +149,26 @@ fn normalize_conversion_warnings(mut warnings: Vec<ConversionWarning>) -> Vec<Co
         conversion_warning_order_key(left) == conversion_warning_order_key(right)
     });
     warnings
+}
+
+fn serialize_normalized_warnings<S>(
+    warnings: &[ConversionWarning],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    normalize_conversion_warnings(warnings.to_vec()).serialize(serializer)
+}
+
+fn deserialize_normalized_warnings<'de, D>(
+    deserializer: D,
+) -> Result<Vec<ConversionWarning>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let warnings = Vec::<ConversionWarning>::deserialize(deserializer)?;
+    Ok(normalize_conversion_warnings(warnings))
 }
 
 /// Additive error kind for structured surfaces.
@@ -387,5 +415,82 @@ mod tests {
         // Round-trip JSON must keep the normalized order (not HashMap/hash order).
         let restored: ConversionReport = serde_json::from_value(value).expect("deserialize report");
         assert_eq!(restored.warnings, merged.warnings);
+    }
+
+    #[test]
+    fn conversion_report_serde_normalizes_direct_construct_and_shuffled_json() {
+        let shuffled = vec![
+            warning(Some(2), "b", "m2"),
+            warning(None, "doc", "root"),
+            warning(Some(1), "a", "m1"),
+            warning(Some(2), "b", "m2"), // exact duplicate
+            warning(Some(1), "a", "m1-b"),
+        ];
+        // Direct field construction (bypassing new) must still serialize canonically.
+        let direct = ConversionReport {
+            result: sample_result(),
+            warnings: shuffled.clone(),
+        };
+        assert_eq!(direct.warnings.len(), 5, "in-memory stays as constructed");
+        let serialized = serde_json::to_value(&direct).expect("serialize direct");
+        let pages: Vec<_> = serialized["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["page"].as_u64())
+            .collect();
+        assert_eq!(pages, vec![None, Some(1), Some(1), Some(2)]);
+        assert_eq!(serialized["warnings"].as_array().unwrap().len(), 4);
+        assert_eq!(serialized["warnings"][1]["message"], "m1");
+        assert_eq!(serialized["warnings"][2]["message"], "m1-b");
+
+        // Shuffled/duplicated JSON deserializes into the same normalized list.
+        let shuffled_json = serde_json::json!({
+            "result": {
+                "markdown": "ok",
+                "title": "t",
+                "format": "pdf"
+            },
+            "warnings": [
+                {
+                    "code": "pdf_untrusted_text_fallback",
+                    "source": "b",
+                    "page": 2,
+                    "message": "m2"
+                },
+                {
+                    "code": "pdf_untrusted_text_fallback",
+                    "source": "doc",
+                    "page": null,
+                    "message": "root"
+                },
+                {
+                    "code": "pdf_untrusted_text_fallback",
+                    "source": "a",
+                    "page": 1,
+                    "message": "m1"
+                },
+                {
+                    "code": "pdf_untrusted_text_fallback",
+                    "source": "b",
+                    "page": 2,
+                    "message": "m2"
+                },
+                {
+                    "code": "pdf_untrusted_text_fallback",
+                    "source": "a",
+                    "page": 1,
+                    "message": "m1-b"
+                }
+            ]
+        });
+        let from_json: ConversionReport =
+            serde_json::from_value(shuffled_json).expect("deserialize shuffled");
+        let expected = ConversionReport::new(sample_result(), shuffled).warnings;
+        assert_eq!(from_json.warnings, expected);
+        assert_eq!(
+            serde_json::to_value(&from_json).unwrap()["warnings"],
+            serialized["warnings"]
+        );
     }
 }

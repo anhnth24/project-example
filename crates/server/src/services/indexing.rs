@@ -281,9 +281,7 @@ pub async fn index_version(
         .expected_dimensions()
         .ok_or(IndexingError::EmbeddingDimensionsUnknown)?;
     let signature = input.embedding_plan.index_signature(dimensions)?;
-    let signature_digest = signature
-        .digest()
-        .map_err(fileconv_knowledge::KnowledgeError::from)?;
+    let signature_digest = signature.digest();
     if let Some(approved) = input.approved_signature {
         if approved != signature_digest {
             return Err(IndexingError::SignatureMismatch);
@@ -965,9 +963,7 @@ impl EnsureGenerationOwned {
             EmbeddingRuntimePath::parse(signature.runtime_path).map_err(DbError::Config)?;
         Ok(Self {
             collection_id: None,
-            signature_sha256: signature
-                .digest()
-                .map_err(fileconv_knowledge::KnowledgeError::from)?,
+            signature_sha256: signature.digest(),
             chunking_version: signature.chunking_version.to_string(),
             body_text_version: signature.body_text_version.to_string(),
             query_normalization_version: signature.query_normalization_version.to_string(),

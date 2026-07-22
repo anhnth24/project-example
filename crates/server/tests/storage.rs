@@ -168,7 +168,7 @@ async fn qdrant_tenant_isolation_and_deterministic_points() {
         body_text_version: BODY_TEXT_VERSION,
         query_normalization_version: QUERY_NORMALIZATION_VERSION,
     };
-    let digest = signature.digest().unwrap();
+    let digest = signature.digest();
     let collection = client
         .ensure_collection_for_digest(&digest, signature.dimensions, signature.normalized)
         .await
@@ -310,7 +310,7 @@ async fn cross_org_point_overwrite_rejected() {
         body_text_version: BODY_TEXT_VERSION,
         query_normalization_version: QUERY_NORMALIZATION_VERSION,
     };
-    let digest = signature.digest().unwrap();
+    let digest = signature.digest();
     let collection = client
         .ensure_collection_for_digest(&digest, 8, true)
         .await
@@ -429,7 +429,7 @@ async fn same_org_different_collection_cannot_overwrite() {
         query_normalization_version: QUERY_NORMALIZATION_VERSION,
     };
     let collection = client
-        .ensure_collection_for_digest(&signature.digest().unwrap(), 8, true)
+        .ensure_collection_for_digest(&signature.digest(), 8, true)
         .await
         .expect("ensure");
 
@@ -543,7 +543,7 @@ async fn existing_collection_dimension_mismatch_rejected() {
         body_text_version: BODY_TEXT_VERSION,
         query_normalization_version: QUERY_NORMALIZATION_VERSION,
     };
-    let digest = signature.digest().unwrap();
+    let digest = signature.digest();
     let collection = client
         .ensure_collection_for_digest(&digest, 8, true)
         .await

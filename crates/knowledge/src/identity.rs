@@ -83,16 +83,14 @@ pub struct IndexSignature<'a> {
 }
 
 impl IndexSignature<'_> {
-    /// Compute the index signature digest after validating `runtime_path`.
+    /// Compute the index signature digest.
     ///
-    /// Rejects empty / control-character / unknown values so bad persisted or
-    /// hand-built signatures never enter the hash. Prefer constructing plans via
-    /// [`crate::embedding::EmbeddingPlan`] which allowlists at the config boundary.
-    pub fn digest(
-        &self,
-    ) -> Result<String, fileconv_core::embedding_runtime::EmbeddingRuntimePathError> {
-        fileconv_core::embedding_runtime::parse_embedding_runtime_path(self.runtime_path)?;
-        Ok(digest(
+    /// Does **not** validate `runtime_path` — trusted plans already allowlist at
+    /// construction, and untrusted DB/config boundaries must call
+    /// [`Self::validate_runtime_path`] / [`Self::try_digest`] (or
+    /// `parse_embedding_runtime_path`) once before hashing or loading.
+    pub fn digest(&self) -> String {
+        digest(
             "index",
             &[
                 self.runtime_path.as_bytes(),
@@ -104,7 +102,27 @@ impl IndexSignature<'_> {
                 self.body_text_version.as_bytes(),
                 self.query_normalization_version.as_bytes(),
             ],
-        ))
+        )
+    }
+
+    /// Allowlist check for untrusted/persisted `runtime_path` values.
+    pub fn validate_runtime_path(
+        &self,
+    ) -> Result<(), fileconv_core::embedding_runtime::EmbeddingRuntimePathError> {
+        fileconv_core::embedding_runtime::parse_embedding_runtime_path(self.runtime_path)
+            .map(|_| ())
+    }
+
+    /// Validate `runtime_path` then return [`Self::digest`].
+    ///
+    /// Prefer this (or an earlier config/DB parse) for hand-built signatures from
+    /// untrusted input. Trusted [`crate::embedding::EmbeddingPlan`] paths may call
+    /// [`Self::digest`] directly after construction-time allowlisting.
+    pub fn try_digest(
+        &self,
+    ) -> Result<String, fileconv_core::embedding_runtime::EmbeddingRuntimePathError> {
+        self.validate_runtime_path()?;
+        Ok(self.digest())
     }
 }
 
@@ -192,7 +210,7 @@ mod tests {
                 .unwrap(),
         };
         assert_eq!(
-            signature.digest().unwrap(),
+            signature.digest(),
             fixture["index"]["signature"].as_str().unwrap()
         );
         assert_eq!(signature.chunking_version, DEFAULT_CHUNKING_VERSION);
@@ -203,27 +221,25 @@ mod tests {
         );
         assert_eq!(signature.runtime_path, RUNTIME_LOCAL_HASH);
         assert_ne!(
-            signature.digest().unwrap(),
+            signature.digest(),
             IndexSignature {
                 dimensions: 768,
                 ..signature.clone()
             }
             .digest()
-            .unwrap()
         );
         assert_ne!(
-            signature.digest().unwrap(),
+            signature.digest(),
             IndexSignature {
                 runtime_path: "glm-cloud-interim",
                 ..signature.clone()
             }
             .digest()
-            .unwrap()
         );
     }
 
     #[test]
-    fn index_signature_digest_rejects_invalid_runtime_path() {
+    fn index_signature_try_digest_rejects_invalid_runtime_path() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/identity-v2.json")).unwrap();
         let base = IndexSignature {
@@ -238,13 +254,14 @@ mod tests {
                 .as_str()
                 .unwrap(),
         };
-        assert!(base.digest().is_ok());
+        // Public digest() stays infallible String for trusted callers.
+        assert_eq!(base.digest(), base.try_digest().unwrap());
         assert!(matches!(
             IndexSignature {
                 runtime_path: "",
                 ..base.clone()
             }
-            .digest(),
+            .try_digest(),
             Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::Empty)
         ));
         assert!(matches!(
@@ -252,7 +269,7 @@ mod tests {
                 runtime_path: "local-hash\n",
                 ..base.clone()
             }
-            .digest(),
+            .validate_runtime_path(),
             Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::ControlCharacter)
         ));
         assert!(matches!(
@@ -260,7 +277,7 @@ mod tests {
                 runtime_path: "local_hash_v1",
                 ..base
             }
-            .digest(),
+            .try_digest(),
             Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::Unknown { .. })
         ));
     }
