@@ -1,6 +1,6 @@
 id: 42
 event: metadata
-data: {"version":1,"sequence":42,"event":"metadata","requestId":"a1010000-0000-4000-8000-000000000002","data":{"mode":"extractive","grounded":true,"citationCount":1,"citations":[{"citeId":"c1","documentId":"b2010000-0000-4000-8000-000000000001","versionId":"c3010000-0000-4000-8000-000000000001","versionNumber":1,"contentSha256":"abc","chunkId":"d4010000-0000-4000-8000-000000000001","isCurrent":true,"heading":"Mục 1","quote":"Nội dung"}],"warnings":[],"versionContext":{"mode":"current","currentVersionIds":[],"citedVersionIds":[],"changeNote":null},"answerMode":"extractive","fallbackReason":null,"envelopeVersion":1}}
+data: {"version":1,"sequence":42,"event":"metadata","requestId":"a1010000-0000-4000-8000-000000000002","data":{"mode":"offline_extractive","grounded":true,"citationCount":1,"citations":[{"citeId":"c1","documentId":"b2010000-0000-4000-8000-000000000001","versionId":"c3010000-0000-4000-8000-000000000001","versionNumber":1,"contentSha256":"abc","chunkId":"d4010000-0000-4000-8000-000000000001","isCurrent":true,"heading":"Mục 1","quote":"Nội dung"}],"warnings":[],"versionContext":{"mode":"current","currentVersionIds":[],"citedVersionIds":[],"changeNote":null},"answerMode":"offline_extractive","fallbackReason":null,"envelopeVersion":1}}
 
 id: 43
 event: token

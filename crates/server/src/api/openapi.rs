@@ -287,6 +287,16 @@ mod tests {
                 envelope.event
             );
         }
+        assert_eq!(envelopes[0].event, crate::api::sse::EVENT_METADATA);
+        assert_eq!(envelopes[0].data["mode"], "offline_extractive");
+        assert_eq!(envelopes[0].data["answerMode"], "offline_extractive");
+        assert!(
+            matches!(
+                envelopes[0].data["mode"].as_str(),
+                Some("offline_extractive" | "fallback_extractive" | "provider_llm")
+            ),
+            "fixture metadata mode must use AnswerMode::as_str()"
+        );
     }
 
     #[test]
