@@ -1,4 +1,9 @@
-//! In-memory observability and audit contracts; no exporter or durable storage.
+//! Observability contracts: correlation, redaction, metric cardinality (P1B-O01).
+//!
+//! Exporters are deployment-configured (OTel collector). This module owns
+//! secret-safe field policy and low-cardinality metric names.
+
+pub mod metrics;
 
 use std::collections::BTreeMap;
 

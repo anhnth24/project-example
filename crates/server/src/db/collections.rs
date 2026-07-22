@@ -79,6 +79,50 @@ pub async fn list(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<Vec<Collect
     rows.iter().map(map_collection).collect()
 }
 
+/// Updates mutable collection fields within the tenant.
+pub async fn update_metadata(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Collection, DbError> {
+    let row = txn
+        .query_opt(
+            "UPDATE collections
+             SET name = $3,
+                 description = $4,
+                 updated_at = now()
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+             RETURNING id, org_id, name, slug, description, owner_user_id,
+                       visibility, created_at, updated_at, deleted_at",
+            &[&ctx.org_id(), &collection_id, &name, &description],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    map_collection(&row)
+}
+
+/// Soft-deletes a collection (tombstone).
+pub async fn soft_delete(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+) -> Result<(), DbError> {
+    let updated = txn
+        .execute(
+            "UPDATE collections
+             SET deleted_at = now(), updated_at = now()
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+            &[&ctx.org_id(), &collection_id],
+        )
+        .await?;
+    if updated == 0 {
+        return Err(DbError::NotFound);
+    }
+    Ok(())
+}
+
 fn map_collection(row: &Row) -> Result<Collection, DbError> {
     let visibility: String = row.get("visibility");
     Ok(Collection {

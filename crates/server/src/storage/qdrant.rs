@@ -670,6 +670,32 @@ impl QdrantClient {
         Ok(())
     }
 
+    /// Credentialed readiness probe: list collections (auth failures fail closed).
+    pub async fn collections_probe(&self) -> Result<(), StorageError> {
+        let url = format!("{}/collections", self.base_url);
+        let response = self
+            .authed(self.http.get(url))
+            .send()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if response.status().is_success() {
+            Ok(())
+        } else if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
+            Err(StorageError::ConfigMissingCredentials)
+        } else {
+            Err(StorageError::Backend)
+        }
+    }
+
+    /// Credentialed probe that the configured signature's collection exists.
+    pub async fn collection_probe_for_digest(&self, digest: &str) -> Result<(), StorageError> {
+        let name = collection_name_for_digest(digest)?;
+        match self.get_collection_params(&name).await? {
+            Some(_) => Ok(()),
+            None => Err(StorageError::PreconditionFailed),
+        }
+    }
+
     fn authed(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(key) = self.api_key.as_ref() {
             builder.header("api-key", key.expose())

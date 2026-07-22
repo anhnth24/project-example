@@ -1263,6 +1263,10 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
                 "created_at",
             ],
         ),
+        (
+            "download_capability_redemptions",
+            &["org_id", "jti", "redeemed_at", "expires_at"],
+        ),
     ]
 }
 

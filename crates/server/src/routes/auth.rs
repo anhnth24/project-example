@@ -6,14 +6,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::api::ApiError;
 use crate::auth::middleware::{session_error_response, AuthenticatedOrg};
 use crate::auth::provider::{AuthProvider, AuthRequestMeta};
 use crate::http::AppState;
+use crate::middleware::{ClientIp, RequestId};
 
 const MAX_EMAIL_LEN: usize = 320;
 const MAX_PASSWORD_LEN: usize = 1024;
@@ -107,11 +107,16 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/auth/me", get(me))
 }
 
-/// Server-minted request id for API responses and audit rows.
-///
-/// Never persists caller-controlled `x-request-id` (could contain a refresh token).
-fn server_request_id() -> String {
-    Uuid::new_v4().to_string()
+fn request_id(extension: Option<Extension<RequestId>>) -> String {
+    extension
+        .map(|id| id.0 .0)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+fn peer_ip(extension: Option<Extension<ClientIp>>) -> String {
+    extension
+        .map(|ip| ip.0 .0)
+        .unwrap_or_else(|| "unknown".into())
 }
 
 fn validation_error(request_id: &str, message: &str) -> Response {
@@ -127,8 +132,23 @@ fn validation_error(request_id: &str, message: &str) -> Response {
         .into_response()
 }
 
-async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> Response {
-    let request_id = server_request_id();
+async fn login(
+    State(state): State<Arc<AppState>>,
+    request_id_ext: Option<Extension<RequestId>>,
+    client_ip: Option<Extension<ClientIp>>,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let request_id = request_id(request_id_ext);
+    let ip = peer_ip(client_ip);
+    if let Err(rejected) = crate::routes::rate_limit_guard::check_auth_ip(&state, &ip, &request_id)
+    {
+        return rejected.into_response();
+    }
+    if let Err(rejected) =
+        crate::routes::rate_limit_guard::check_route(&state, "auth.login", &ip, &request_id)
+    {
+        return rejected.into_response();
+    }
     if body.email.len() > MAX_EMAIL_LEN || body.password.len() > MAX_PASSWORD_LEN {
         return validation_error(&request_id, "Email or password exceeds allowed length");
     }
@@ -164,8 +184,18 @@ async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest
     }
 }
 
-async fn refresh(State(state): State<Arc<AppState>>, Json(body): Json<RefreshRequest>) -> Response {
-    let request_id = server_request_id();
+async fn refresh(
+    State(state): State<Arc<AppState>>,
+    request_id_ext: Option<Extension<RequestId>>,
+    client_ip: Option<Extension<ClientIp>>,
+    Json(body): Json<RefreshRequest>,
+) -> Response {
+    let request_id = request_id(request_id_ext);
+    let ip = peer_ip(client_ip);
+    if let Err(rejected) = crate::routes::rate_limit_guard::check_auth_ip(&state, &ip, &request_id)
+    {
+        return rejected.into_response();
+    }
     if body.refresh_token.is_empty() || body.refresh_token.len() > MAX_REFRESH_LEN {
         return validation_error(&request_id, "refreshToken is required");
     }
@@ -195,8 +225,18 @@ async fn refresh(State(state): State<Arc<AppState>>, Json(body): Json<RefreshReq
     }
 }
 
-async fn logout(State(state): State<Arc<AppState>>, Json(body): Json<LogoutRequest>) -> Response {
-    let request_id = server_request_id();
+async fn logout(
+    State(state): State<Arc<AppState>>,
+    request_id_ext: Option<Extension<RequestId>>,
+    client_ip: Option<Extension<ClientIp>>,
+    Json(body): Json<LogoutRequest>,
+) -> Response {
+    let request_id = request_id(request_id_ext);
+    let ip = peer_ip(client_ip);
+    if let Err(rejected) = crate::routes::rate_limit_guard::check_auth_ip(&state, &ip, &request_id)
+    {
+        return rejected.into_response();
+    }
     if body.refresh_token.is_empty() || body.refresh_token.len() > MAX_REFRESH_LEN {
         return validation_error(&request_id, "refreshToken is required");
     }

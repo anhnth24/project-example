@@ -1,0 +1,43 @@
+groups:
+  - name: markhand-phase1b-slo
+    rules:
+      - alert: MarkhandApiLatencyBurn
+        expr: histogram_quantile(0.95, sum(rate(markhand_http_request_duration_seconds_bucket[5m])) by (le, route)) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API p95 latency above 2s
+          runbook: docs/runbooks/phase-1b/api-latency.md
+      - alert: MarkhandQueueGrowth
+        expr: max(markhand_job_queue_depth) by (job_type) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Job queue depth growing
+          runbook: docs/runbooks/phase-1b/stuck-jobs.md
+      - alert: MarkhandReconcileDrift
+        expr: increase(markhand_reconcile_drift_total[30m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Cross-store drift detected
+          runbook: docs/runbooks/phase-1b/reconcile-drift.md
+      - alert: MarkhandBackupStale
+        expr: max(markhand_backup_age_seconds) by (store) > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup age exceeds RPO target (15m)
+          runbook: docs/runbooks/phase-1b/backup-restore.md
+      - alert: MarkhandDependencyDown
+        expr: up{job=~"markhand-(api|postgres|qdrant|minio)"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Required dependency is down
+          runbook: docs/runbooks/phase-1b/dependency-outage.md

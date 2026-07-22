@@ -82,6 +82,47 @@ pub async fn source_for_conversion(
     })
 }
 
+/// Lists published versions for a document newest-first (bounded).
+pub async fn list_published_for_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    limit: i64,
+) -> Result<Vec<DocumentVersion>, DbError> {
+    let limit = limit.clamp(1, 100);
+    let rows = txn
+        .query(
+            "SELECT id, org_id, document_id, version_number, parent_version_id,
+                    publication_state, is_current, content_sha256, original_object_key,
+                    markdown_object_key, source_filename, source_content_type, byte_size,
+                    effective_from, effective_to, change_summary, created_by_user_id, created_at
+             FROM document_versions
+             WHERE org_id = $1
+               AND document_id = $2
+               AND publication_state = 'published'
+             ORDER BY version_number DESC
+             LIMIT $3",
+            &[&ctx.org_id(), &document_id, &limit],
+        )
+        .await?;
+    rows.iter().map(map_version).collect()
+}
+
+/// Publishes a draft/current pointer via the SQL convenience function.
+pub async fn publish_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<(), DbError> {
+    txn.query_one(
+        "SELECT markhand_publish_document_version($1, $2, $3)",
+        &[&ctx.org_id(), &document_id, &version_id],
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn find_by_id(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

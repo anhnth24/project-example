@@ -183,6 +183,46 @@ pub async fn count(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbErr
     Ok(row.get(0))
 }
 
+/// Lists non-deleted documents in an allowed collection (cursor by created_at/id).
+pub async fn list_in_collection(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    limit: i64,
+    after_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    after_id: Option<Uuid>,
+) -> Result<Vec<Document>, DbError> {
+    if !ctx.allowed_collection_ids().contains(&collection_id) {
+        return Err(DbError::Config("collection_denied".into()));
+    }
+    let limit = limit.clamp(1, 100);
+    let rows = txn
+        .query(
+            "SELECT id, org_id, collection_id, title, state, current_version_id,
+                    created_by_user_id, created_at, updated_at, deleted_at
+             FROM documents
+             WHERE org_id = $1
+               AND collection_id = $2
+               AND deleted_at IS NULL
+               AND state NOT IN ('tombstoned', 'purged')
+               AND (
+                    $3::timestamptz IS NULL
+                    OR (created_at, id) < ($3::timestamptz, $4::uuid)
+               )
+             ORDER BY created_at DESC, id DESC
+             LIMIT $5",
+            &[
+                &ctx.org_id(),
+                &collection_id,
+                &after_created_at,
+                &after_id,
+                &limit,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_document).collect()
+}
+
 pub async fn get_version_source_for_convert(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

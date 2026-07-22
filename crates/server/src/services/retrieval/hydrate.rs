@@ -17,6 +17,7 @@ use crate::db::search::{
     self, index_generation_visible_for_retrieval, AuthorizedConflictEvidence, HydratedChunkRow,
     VersionVisibility,
 };
+use crate::services::access::conflict_both_legs_authorized;
 use crate::services::deletion::document_reads_suppressed;
 
 /// Citation-ready chunk after fail-closed recheck.
@@ -29,6 +30,7 @@ pub struct AuthorizedChunk {
     pub version_id: Uuid,
     pub version_number: i32,
     pub content_sha256: String,
+    pub canonical_markdown_sha256: String,
     pub heading: String,
     pub body: String,
     pub page: Option<u32>,
@@ -95,6 +97,7 @@ pub fn authorize_hydrated_row(
         version_id: row.version_id,
         version_number: row.version_number,
         content_sha256: row.content_sha256.clone(),
+        canonical_markdown_sha256: row.canonical_markdown_sha256.clone(),
         heading,
         body: row.body.clone(),
         page: row.page.and_then(|value| u32::try_from(value).ok()),
@@ -150,12 +153,16 @@ pub fn both_sides_authorized(
     evidence: &AuthorizedConflictEvidence,
     visibility: &VersionVisibility,
 ) -> bool {
-    if !(ctx.allows_collection(evidence.claim_a_collection_id)
-        && ctx.allows_collection(evidence.claim_b_collection_id))
-    {
-        return false;
-    }
-    if !(evidence.claim_a_published && evidence.claim_b_published) {
+    // Shared dual-leg resolver (REST list/get/triage uses the same predicates).
+    if !conflict_both_legs_authorized(
+        ctx,
+        evidence.claim_a_collection_id,
+        evidence.claim_b_collection_id,
+        evidence.claim_a_published,
+        evidence.claim_b_published,
+        false,
+        false,
+    ) {
         return false;
     }
     match visibility {
@@ -232,6 +239,7 @@ mod tests {
             version_id: Uuid::new_v4(),
             version_number: 1,
             content_sha256: "a".repeat(64),
+            canonical_markdown_sha256: "e".repeat(64),
             heading_path: vec!["Heading".into()],
             body: "body text".into(),
             page: Some(1),

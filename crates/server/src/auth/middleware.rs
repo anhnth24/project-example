@@ -62,9 +62,14 @@ impl IntoResponse for AuthRejection {
     }
 }
 
-fn request_id_from(_parts: &Parts) -> String {
-    // Server-minted only — never persist caller-controlled correlation headers.
-    Uuid::new_v4().to_string()
+fn request_id_from(parts: &Parts) -> String {
+    // Prefer the middleware-injected server-minted id so audit/logs correlate.
+    // Never trust caller-controlled `x-request-id` header values.
+    // Never mint a fresh UUID here — missing middleware is a wiring bug.
+    if let Some(id) = parts.extensions.get::<crate::middleware::RequestId>() {
+        return id.0.clone();
+    }
+    "missing-middleware-request-id".into()
 }
 
 fn bearer_token(parts: &Parts) -> Result<&str, ()> {

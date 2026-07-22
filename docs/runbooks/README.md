@@ -6,3 +6,4 @@ Each runbook must state prerequisites, commands, expected evidence and rollback.
 - [Local development](local-development.md)
 - [Contributor setup](contributor-setup.md)
 - [Knowledge index compatibility](knowledge-index-compatibility.md)
+- [Phase 1B operations](phase-1b/README.md)

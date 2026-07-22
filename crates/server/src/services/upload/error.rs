@@ -1,12 +1,10 @@
 //! Typed upload errors, dispositions, and redacted reason codes.
 
+use crate::api::ApiError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use thiserror::Error;
-use uuid::Uuid;
-
-use crate::api::ApiError;
 
 /// Terminal intake disposition (P0-09 §7 + Accepted for benign controls).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,7 +252,8 @@ impl UploadError {
 
 impl IntoResponse for UploadError {
     fn into_response(self) -> Response {
-        self.into_response_with_request_id(&Uuid::new_v4().to_string())
+        // Callers must pass the middleware request id; never mint a fresh UUID here.
+        self.into_response_with_request_id("missing-middleware-request-id")
     }
 }
 

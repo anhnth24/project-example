@@ -17,6 +17,9 @@
     "0014_expand_vector_cleanup_intents.sql": "fb9ae5f06cbcd5f438eaac6b9b0464627b47aa90e3115717d76c3656e0350932",
     "0015_expand_vector_cleanup_intent_states.sql": "f5f5cdcee30a96f3541a6635efaf1147f8595b09b03b1a919c916ee09e4706a5",
     "0016_expand_chunks_accent_fold_tsv.sql": "ab850b0ba0f1f323f498e4874c02d51f14421d016f6a792ed63780be4f3f38dd",
-    "0017_expand_qa_history_permission.sql": "f804d47e4108251ed368299faed312cfbb093500f066a576d30d8da39f973b3a"
+    "0017_expand_qa_history_permission.sql": "f804d47e4108251ed368299faed312cfbb093500f066a576d30d8da39f973b3a",
+    "0018_expand_download_capability_redemptions.sql": "fe660678523878cb62c174116545de3cb9b5037ff9db19590e6c3c312dc682d0",
+    "0019_expand_ops_fences_jobs_system.sql": "90bc4c28bd5804aed1739fa484df7eb0f32d909713fe3e08a9fcd331d5fc451f",
+    "0020_expand_hash_semantics_readiness_ops.sql": "d36f471ff4c8f91e0b11d91dce605f6a84b7216004649e45d4e8ff34282dd02c"
   }
 }

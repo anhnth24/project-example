@@ -1,0 +1,15 @@
+{
+  "generatedAt": "2026-07-22T12:30:00Z",
+  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
+  "live": false,
+  "status": "not_run",
+  "notes": "Stack not opted in; report records workload intent only",
+  "versions": {
+    "git": "a89a500"
+  },
+  "gates": {
+    "unboundedGrowth": "unknown",
+    "recovery": "unknown",
+    "postRestoreRetrieval": "unknown"
+  }
+}
