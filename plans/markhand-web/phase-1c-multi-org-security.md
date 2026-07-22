@@ -22,7 +22,7 @@ API gồm org list/detail, members CRUD và org switch/session refresh.
 Permission constants:
 
 - `doc.upload`, `doc.delete`;
-- `qa.query`;
+- `qa.query`, `qa.history`;
 - `member.manage`, `settings.manage`;
 - `intel.use`, `pii.manage`, `export.run`;
 - `audit.view`.
@@ -38,6 +38,7 @@ Canonical built-in matrix:
 | `doc.upload` | ✓ | ✓ | ✓ | |
 | `doc.delete` | ✓ | ✓ | own/explicit policy | |
 | `qa.query` | ✓ | ✓ | ✓ | ✓ |
+| `qa.history` | ✓ | ✓ | | |
 | `member.manage` | ✓ | ✓, không quản owner | | |
 | `settings.manage` | ✓ | ✓, trừ owner/security | | |
 | `intel.use` | ✓ | ✓ | ✓ | theo org policy |

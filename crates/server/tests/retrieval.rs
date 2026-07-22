@@ -14,7 +14,7 @@ use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::db::search::{self, VersionVisibility};
 use fileconv_server::services::retrieval::{
     resolve_scope, same_lineage_pair, validate_request, RetrievalError, RetrievalRequest,
-    VersionMode, PERMISSION_QA_QUERY,
+    VersionMode, PERMISSION_QA_HISTORY, PERMISSION_QA_QUERY,
 };
 use tokio_postgres::NoTls;
 use uuid::Uuid;
@@ -141,11 +141,18 @@ async fn as_of_resolves_effective_version_from_postgres() {
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
     let collection = Uuid::new_v4();
+    let role = Uuid::new_v4();
     let document = Uuid::new_v4();
     let v1 = Uuid::new_v4();
     let v2 = Uuid::new_v4();
     let v3 = Uuid::new_v4();
-    let ctx = OrgContext::try_new(org, user, [PERMISSION_QA_QUERY], [collection]).unwrap();
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        [PERMISSION_QA_QUERY, PERMISSION_QA_HISTORY],
+        [collection],
+    )
+    .unwrap();
 
     with_org_txn(&pool, &ctx, {
         let ctx = ctx.clone();
@@ -159,8 +166,28 @@ async fn as_of_resolves_effective_version_from_postgres() {
                 let user_email = format!("{}@example.test", ctx.user_id());
                 txn.execute(
                     "INSERT INTO users (id, email, display_name, password_hash)
-                     VALUES ($1, $2, 'u', 'x')",
+                     VALUES ($1, $2, 'u', 'test-hash')",
                     &[&ctx.user_id(), &user_email],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, 'viewer')",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO roles (id, org_id, code, name, is_system)
+                     VALUES ($1, $2, 'viewer', 'Viewer', true)",
+                    &[&role, &ctx.org_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id
+                     FROM permissions
+                     WHERE code IN ('qa.query', 'qa.history')",
+                    &[&ctx.org_id(), &role],
                 )
                 .await?;
                 txn.execute(
@@ -244,6 +271,7 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
     let collection = Uuid::new_v4();
+    let role = Uuid::new_v4();
     let document = Uuid::new_v4();
     let version = Uuid::new_v4();
     let meta_active = Uuid::new_v4();
@@ -255,7 +283,13 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
     let identity_active = sha64('c');
     let identity_shadow = sha64('d');
     let content_sha = sha64('e');
-    let ctx = OrgContext::try_new(org, user, [PERMISSION_QA_QUERY], [collection]).unwrap();
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        [PERMISSION_QA_QUERY, PERMISSION_QA_HISTORY],
+        [collection],
+    )
+    .unwrap();
 
     with_org_txn(&pool, &ctx, {
         let ctx = ctx.clone();
@@ -274,8 +308,28 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                 let user_email = format!("{}@example.test", ctx.user_id());
                 txn.execute(
                     "INSERT INTO users (id, email, display_name, password_hash)
-                     VALUES ($1, $2, 'u', 'x')",
+                     VALUES ($1, $2, 'u', 'test-hash')",
                     &[&ctx.user_id(), &user_email],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, 'viewer')",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO roles (id, org_id, code, name, is_system)
+                     VALUES ($1, $2, 'viewer', 'Viewer', true)",
+                    &[&role, &ctx.org_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id
+                     FROM permissions
+                     WHERE code IN ('qa.query', 'qa.history')",
+                    &[&ctx.org_id(), &role],
                 )
                 .await?;
                 txn.execute(
@@ -398,6 +452,113 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                     .await?;
                 let rank_f32: f32 = search::read_pg_real_rank(&row, "rank");
                 assert!(rank_f32 > 0.0);
+
+                let hydrated = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert_eq!(hydrated.len(), 1);
+
+                let historical_visibility =
+                    VersionVisibility::VersionIds(BTreeSet::from([version]));
+                let historical = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &historical_visibility,
+                )
+                .await?;
+                assert_eq!(historical.len(), 1);
+
+                txn.execute(
+                    "DELETE FROM role_permissions
+                     WHERE org_id = $1
+                       AND role_id = $2
+                       AND permission_id = (
+                         SELECT id FROM permissions WHERE code = $3
+                       )",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_HISTORY],
+                )
+                .await?;
+                let current_after_history_revoke = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert_eq!(current_after_history_revoke.len(), 1);
+                let denied_historical = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &historical_visibility,
+                )
+                .await?;
+                assert!(
+                    denied_historical.is_empty(),
+                    "historical hydration must recheck qa.history instead of trusting stale OrgContext"
+                );
+
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id FROM permissions WHERE code = $3",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_HISTORY],
+                )
+                .await?;
+                txn.execute(
+                    "DELETE FROM role_permissions
+                     WHERE org_id = $1
+                       AND role_id = $2
+                       AND permission_id = (
+                         SELECT id FROM permissions WHERE code = $3
+                       )",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_QUERY],
+                )
+                .await?;
+                let denied_without_query = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &historical_visibility,
+                )
+                .await?;
+                assert!(
+                    denied_without_query.is_empty(),
+                    "historical hydration must recheck qa.query as well as qa.history"
+                );
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id FROM permissions WHERE code = $3",
+                    &[&ctx.org_id(), &role, &PERMISSION_QA_QUERY],
+                )
+                .await?;
+
+                txn.execute(
+                    "DELETE FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                let denied_after_membership_revoke = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    std::slice::from_ref(&identity_active),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert!(
+                    denied_after_membership_revoke.is_empty(),
+                    "hydration must recheck current membership instead of trusting stale OrgContext"
+                );
 
                 Ok(())
             })
