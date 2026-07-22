@@ -125,6 +125,15 @@ impl ApprovedEmbeddingRuntime {
         &self.plan
     }
 
+    /// Derived index-signature digest for the approved runtime (64-hex).
+    pub fn signature_digest(&self) -> Result<String, EmbeddingError> {
+        let dimensions = self
+            .plan
+            .expected_dimensions()
+            .ok_or(EmbeddingError::InvalidConfiguration(ENV_DIMENSIONS))?;
+        Ok(self.plan.index_signature(dimensions)?.digest())
+    }
+
     /// Canonical server/desktop-compatible input: `{heading}\n{body}`.
     pub fn canonical_input(heading: &str, body: &str) -> String {
         format!("{heading}\n{body}")

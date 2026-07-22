@@ -191,8 +191,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
-- **Status:** Review — PR #252 merged; post-merge authorization hardening and live
-  PostgreSQL acceptance evidence are in PR #254. Mark Done after that PR merges.
+- **Status:** Done — implementation merged via PR #252; authorization hardening and
+  live PostgreSQL acceptance evidence merged via PR #254.
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
@@ -205,11 +205,10 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
-- **Status:** Review — services `{citation,preview,download}` + bounded `BlobStore`/
+- **Status:** Done — merged via PR #256. Services `{citation,preview,download}` + bounded `BlobStore`/
   `MemoryBlobStore`; citation quotes from trusted Markdown spans; original download
   uses reconciliation parent-source metadata; exact citation ignores index generation
   activity; live PG + memory-store acceptance in `tests/citation_preview_download.rs`.
-  Mark Done after coordinator review/merge.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
@@ -225,11 +224,22 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
+- **Status:** Done — merged via PR #257. Evidence: hermetic
+  `services/qa/{mod,prompt,provider,grounding,stream}.rs`
+  + `tests/qa.rs`: policy-separated untrusted framing; claims-only provider with
+  bounded HTTPS/local config (no redirects/proxy; secrets/model redacted); server
+  validates cite-ID subset and renders markers; current/compare/history mode rules;
+  conflict notes only from authorized `RetrievalResponse.conflict_evidence`;
+  extractive fallback with `[CITE-*]` neutralization; streaming is **bounded
+  validated replay** (validate whole answer, then UTF-8-safe chunks via bounded
+  channel + caller auth probe before each app chunk; no further chunks after deny —
+  no claim of recalling bytes already handed to HTTP/kernel). No DB/ACL/lock/migration.
+  Routes/SSE resume remain R05.
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
   deterministic extractive fallback.
-- **Files:** `services/qa/{prompt,provider,grounding,stream}.rs`.
+- **Files:** `services/qa/{mod,prompt,provider,grounding,stream}.rs`, `tests/qa.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
 - **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
   compare cite old+new và đúng delta; injection không tool/scope change; provider
@@ -240,7 +250,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Status:** Blocked — implementation ready; R02 dependency Review
+- **Status:** Done — merged via PR #258.
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -270,22 +280,56 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
+- **Status:** Review — implementation ready in PR #259; dependencies R01/R03/R04 are Done.
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
-- **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`.
+- **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`, `db/sse_streams.rs`,
+  `migrations/0021_expand_sse_stream_events.sql`, `tests/search_ask_sse.rs`.
 - **Depends:** F05/I03/R01/R03/R04.
 - **Acceptance/tests:** No lost acknowledged/duplicate sequence; bounded slow client;
   reconnect/order/expiry/revoke/worker restart.
-- **Security/migration:** Scoped per user/org/job, no cache. **Out:** WebSocket.
+- **Evidence (implementation ready):**
+  - `POST /api/v1/search` maps bounded query/collections/version mode/limit(≤100) to R01
+    `hybrid_search` with fresh `OrgContext`; stable R04 `ApiError` envelopes; response
+    is authorized hits + citation locators only (no raw body/internals).
+  - `POST /api/v1/ask` returns R03 grounded QA over fresh retrieval (ask limit ≤32
+    pre-retrieval); provider/runtime from `AppState` (absent → extractive fallback).
+  - Closed-snapshot SSE: after complete R03 answer, auth probe, then one atomic txn
+    writes contiguous metadata+token+terminal events and marks closed (terminal slot
+    reserved; no durable open rows). `POST /api/v1/ask/stream` and
+    `GET /api/v1/events/{requestId}` only deliver durable closed snapshots with
+    per-event fresh auth/collection/history probe; body cancel/backpressure ends the
+    HTTP connection only (DB snapshot remains reconnectable). Not true provider
+    token streaming; does not claim transport-byte recall.
+  - Persisted auth scope: version mode / `requires_history`, exact collection IDs,
+    cited doc/version IDs; reconnect + initial delivery revalidate before payload.
+  - Expired GET → 410 `stream_expired` + bounded cascade cleanup; IDOR → 404;
+    refresh-family liveness requires `expires_at > clock_timestamp()`; invalid
+    Last-Event-ID (incl. bad UTF-8) → 400; missing header replays from start.
+- **Security/migration:** Scoped per user/org/request, no cache; additive `0021`.
+  **Out:** WebSocket / R06 OpenAPI/rate-limit/readiness / O01 telemetry.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
+- **Status:** Blocked — implementation ready in PR #260; R04 is Done, R05 remains Review.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
 - **Depends:** R04/R05/F05 + G0-SLO.
 - **Acceptance/tests:** Every route represented; readiness detects required deps/
   signature/reconciliation; 429 metadata; snapshots/rate/trusted-proxy/outage tests.
+- **Evidence (implementation ready):**
+  - Static `openapi/openapi.yaml` + `api/openapi.rs` inventory/drift tests for every
+    wired `/api/v1` route (R02/R04/R05); security scheme, SSE `text/event-stream`,
+    canonical errors; forbidden secret/object-key markers.
+  - Middleware order: request ID → error envelope → CORS → rate → auth extractor.
+    `X-Request-Id` UUID validate/generate/echo; exact-origin CORS (prod wildcard fail);
+    in-process fixed-window limiter (IP + org/user, endpoint classes) with bounded map
+    eviction; trusted-proxy XFF only when peer in CIDRs (else ignore/reject spoof).
+    429 envelope + `Retry-After` + quota metadata. Config caps fail closed.
+  - Health: `/live` `/ready` `/startup` + compat `/api/v1/health/*`; readiness probes
+    PG/MinIO/Qdrant/config/signature/reconciliation with fake-probe hermetic tests;
+    liveness unaffected; HEAD supported. No distributed limiter / O01–O02.
 - **Security/migration:** Conservative CORS/proxy trust. **Out:** distributed limiter.
 
 ## Operations và release

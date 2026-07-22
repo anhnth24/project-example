@@ -2,54 +2,1640 @@ openapi: 3.1.0
 info:
   title: Markhand Web API
   version: 0.1.0
-  description: Phase 1B POC API contract.
+  description: Phase 1B POC `/api/v1` contract (R02/R04/R05/R06). Does not expose secrets or internal
+    object keys.
 servers:
-  - url: /api/v1
+- url: /
+tags:
+- name: Health
+- name: Auth
+- name: Collections
+- name: Documents
+- name: Conflicts
+- name: Citations
+- name: Jobs
+- name: Uploads
+- name: Search
+- name: Ask
 paths:
-  /health/live:
+  /live:
+    get:
+      operationId: rootLive
+      tags:
+      - Health
+      summary: Process liveness (root)
+      responses: &id001
+        '200':
+          description: Alive
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '429': &id003
+          $ref: '#/components/responses/RateLimited'
+    head:
+      operationId: rootLiveHead
+      tags:
+      - Health
+      summary: Process liveness (root) (HEAD)
+      responses: *id001
+  /ready:
+    get:
+      operationId: rootReady
+      tags:
+      - Health
+      summary: Readiness (root)
+      responses: &id002
+        '200':
+          description: Ready
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    head:
+      operationId: rootReadyHead
+      tags:
+      - Health
+      summary: Readiness (root) (HEAD)
+      responses: *id002
+  /startup:
+    get:
+      operationId: rootStartup
+      tags:
+      - Health
+      summary: One-way startup completion (root)
+      responses: &id004
+        '200':
+          description: Startup completed
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Startup'
+        '503':
+          description: Still starting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Startup'
+        '429': *id003
+    head:
+      operationId: rootStartupHead
+      tags:
+      - Health
+      summary: One-way startup completion (root) (HEAD)
+      responses: *id004
+  /api/v1/health/live:
     get:
       operationId: healthLive
-      responses:
-        "200":
-          description: Process health; does not contact dependencies.
+      tags:
+      - Health
+      summary: Process liveness
+      responses: &id005
+        '200':
+          description: Alive
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Health"
-  /health/ready:
+                $ref: '#/components/schemas/Health'
+        '429': *id003
+    head:
+      operationId: healthLiveHead
+      tags:
+      - Health
+      summary: Process liveness (HEAD)
+      responses: *id005
+  /api/v1/health/ready:
     get:
       operationId: healthReady
-      responses:
-        "200":
-          description: PostgreSQL, Qdrant and MinIO are reachable.
+      tags:
+      - Health
+      summary: Readiness (deps/signature/reconciliation)
+      responses: &id006
+        '200':
+          description: Ready
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Health"
-        "503":
-          $ref: "#/components/responses/ApiError"
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    head:
+      operationId: healthReadyHead
+      tags:
+      - Health
+      summary: Readiness (deps/signature/reconciliation) (HEAD)
+      responses: *id006
+  /api/v1/health/startup:
+    get:
+      operationId: healthStartup
+      tags:
+      - Health
+      summary: One-way startup completion
+      responses: &id007
+        '200':
+          description: Startup completed
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Startup'
+        '503':
+          description: Still starting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Startup'
+        '429': *id003
+    head:
+      operationId: healthStartupHead
+      tags:
+      - Health
+      summary: One-way startup completion (HEAD)
+      responses: *id007
+  /api/v1/auth/login:
+    post:
+      operationId: authLogin
+      tags:
+      - Auth
+      summary: Password login
+      responses:
+        '200':
+          description: Tokens
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+  /api/v1/auth/refresh:
+    post:
+      operationId: authRefresh
+      tags:
+      - Auth
+      summary: Refresh session
+      responses:
+        '200':
+          description: Rotated tokens
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+  /api/v1/auth/logout:
+    post:
+      operationId: authLogout
+      tags:
+      - Auth
+      summary: Logout / revoke refresh family
+      responses:
+        '204':
+          description: Logged out
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+  /api/v1/auth/me:
+    get:
+      operationId: authMe
+      tags:
+      - Auth
+      summary: Current principal
+      responses:
+        '200':
+          description: Current principal
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': &id008
+          $ref: '#/components/responses/ApiError'
+      security:
+      - bearerAuth: []
+    head:
+      operationId: authMeHead
+      tags:
+      - Auth
+      summary: Current principal (HEAD)
+      responses:
+        '200':
+          description: Current principal
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': *id008
+      security:
+      - bearerAuth: []
+  /api/v1/collections:
+    get:
+      operationId: listCollections
+      tags:
+      - Collections
+      summary: List collections
+      responses:
+        '200':
+          description: Collection page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionList'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+      security:
+      - bearerAuth: []
+      parameters:
+      - &id010
+        $ref: '#/components/parameters/Limit'
+      - &id011
+        $ref: '#/components/parameters/Cursor'
+    post:
+      operationId: createCollection
+      tags:
+      - Collections
+      summary: Create collection
+      responses:
+        '201':
+          description: Created
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectionCreate'
+    head:
+      operationId: listCollectionsHead
+      tags:
+      - Collections
+      summary: List collections (HEAD)
+      responses:
+        '200':
+          description: Collection page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionList'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /api/v1/collections/{collectionId}:
+    get:
+      operationId: getCollection
+      tags:
+      - Collections
+      summary: Get collection
+      responses:
+        '200':
+          description: Collection
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - &id009
+        $ref: '#/components/parameters/CollectionId'
+    patch:
+      operationId: updateCollection
+      tags:
+      - Collections
+      summary: Update collection
+      responses:
+        '200':
+          description: Updated
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id009
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CollectionUpdate'
+    head:
+      operationId: getCollectionHead
+      tags:
+      - Collections
+      summary: Get collection (HEAD)
+      responses:
+        '200':
+          description: Collection
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collection'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/CollectionId'
+  /api/v1/documents:
+    get:
+      operationId: listDocuments
+      tags:
+      - Documents
+      summary: List documents
+      responses:
+        '200':
+          description: Document page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id010
+      - *id011
+    head:
+      operationId: listDocumentsHead
+      tags:
+      - Documents
+      summary: List documents (HEAD)
+      responses:
+        '200':
+          description: Document page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentList'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /api/v1/documents/{documentId}:
+    get:
+      operationId: getDocument
+      tags:
+      - Documents
+      summary: Get document
+      responses:
+        '200':
+          description: Document
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - &id012
+        $ref: '#/components/parameters/DocumentId'
+    delete:
+      operationId: deleteDocument
+      tags:
+      - Documents
+      summary: Tombstone document
+      responses:
+        '200':
+          description: Tombstoned
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+    head:
+      operationId: getDocumentHead
+      tags:
+      - Documents
+      summary: Get document (HEAD)
+      responses:
+        '200':
+          description: Document
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DocumentId'
+  /api/v1/documents/{documentId}/reindex:
+    post:
+      operationId: reindexDocument
+      tags:
+      - Documents
+      summary: Enqueue reindex
+      responses:
+        '200':
+          description: Reindex enqueued
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReindexResponse'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - &id015
+        $ref: '#/components/parameters/IdempotencyKey'
+  /api/v1/documents/{documentId}/versions:
+    get:
+      operationId: listDocumentVersions
+      tags:
+      - Documents
+      summary: List versions
+      responses:
+        '200':
+          description: Version page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersionList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - *id010
+      - *id011
+    head:
+      operationId: listDocumentVersionsHead
+      tags:
+      - Documents
+      summary: List versions (HEAD)
+      responses:
+        '200':
+          description: Version page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersionList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DocumentId'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /api/v1/documents/{documentId}/versions/{versionId}:
+    get:
+      operationId: getDocumentVersion
+      tags:
+      - Documents
+      summary: Get version metadata (no object keys)
+      responses:
+        '200':
+          description: Version metadata
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersion'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - &id013
+        $ref: '#/components/parameters/VersionId'
+    head:
+      operationId: getDocumentVersionHead
+      tags:
+      - Documents
+      summary: Get version metadata (no object keys) (HEAD)
+      responses:
+        '200':
+          description: Version metadata
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersion'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DocumentId'
+      - $ref: '#/components/parameters/VersionId'
+  /api/v1/documents/{documentId}/versions/{versionId}/publish:
+    post:
+      operationId: publishDocumentVersion
+      tags:
+      - Documents
+      summary: Publish version
+      responses:
+        '200':
+          description: Published
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentVersion'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - *id013
+  /api/v1/documents/{documentId}/versions/{leftVersionId}/diff/{rightVersionId}:
+    get:
+      operationId: diffDocumentVersions
+      tags:
+      - Documents
+      summary: Metadata diff between versions
+      responses:
+        '200':
+          description: Metadata diff
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionDiff'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - name: leftVersionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: rightVersionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    head:
+      operationId: diffDocumentVersionsHead
+      tags:
+      - Documents
+      summary: Metadata diff between versions (HEAD)
+      responses:
+        '200':
+          description: Metadata diff
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionDiff'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DocumentId'
+      - name: leftVersionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: rightVersionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/documents/{documentId}/versions/{versionId}/preview:
+    get:
+      operationId: previewDocumentVersion
+      tags:
+      - Documents
+      summary: Authorized markdown preview
+      responses:
+        '200':
+          description: Preview
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewResponse'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - *id013
+    head:
+      operationId: previewDocumentVersionHead
+      tags:
+      - Documents
+      summary: Authorized markdown preview (HEAD)
+      responses:
+        '200':
+          description: Preview
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewResponse'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/DocumentId'
+      - $ref: '#/components/parameters/VersionId'
+  /api/v1/documents/{documentId}/versions/{versionId}/download-capabilities:
+    post:
+      operationId: mintDownloadCapability
+      tags:
+      - Documents
+      summary: Mint short-lived download capability
+      responses:
+        '200':
+          description: Capability token
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadCapabilityResponse'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id012
+      - *id013
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownloadCapabilityRequest'
+  /api/v1/download-capabilities/redeem:
+    post:
+      operationId: redeemDownloadCapability
+      tags:
+      - Documents
+      summary: Redeem download capability (binary media body)
+      responses:
+        '200':
+          description: Authorized binary download body
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+            X-Content-Sha256:
+              schema:
+                type: string
+              description: Content digest of the redeemed artifact
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '401': *id008
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownloadRedeemRequest'
+  /api/v1/conflicts:
+    get:
+      operationId: listConflicts
+      tags:
+      - Conflicts
+      summary: List conflicts
+      responses:
+        '200':
+          description: Conflict page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id010
+      - *id011
+    head:
+      operationId: listConflictsHead
+      tags:
+      - Conflicts
+      summary: List conflicts (HEAD)
+      responses:
+        '200':
+          description: Conflict page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /api/v1/conflicts/{conflictId}:
+    get:
+      operationId: getConflict
+      tags:
+      - Conflicts
+      summary: Get conflict
+      responses:
+        '200':
+          description: Conflict
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - &id014
+        $ref: '#/components/parameters/ConflictId'
+    head:
+      operationId: getConflictHead
+      tags:
+      - Conflicts
+      summary: Get conflict (HEAD)
+      responses:
+        '200':
+          description: Conflict
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ConflictId'
+  /api/v1/conflicts/{conflictId}/triage:
+    post:
+      operationId: triageConflict
+      tags:
+      - Conflicts
+      summary: Triage conflict
+      responses:
+        '200':
+          description: Triaged
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conflict'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id014
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConflictTriageRequest'
+  /api/v1/conflicts/{conflictId}/evidence:
+    get:
+      operationId: listConflictEvidence
+      tags:
+      - Conflicts
+      summary: List conflict evidence
+      responses:
+        '200':
+          description: Evidence page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictEvidenceList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id014
+      - *id010
+      - *id011
+    head:
+      operationId: listConflictEvidenceHead
+      tags:
+      - Conflicts
+      summary: List conflict evidence (HEAD)
+      responses:
+        '200':
+          description: Evidence page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictEvidenceList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ConflictId'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /api/v1/citations/resolve:
+    post:
+      operationId: resolveCitations
+      tags:
+      - Citations
+      summary: Resolve citation locators
+      responses:
+        '200':
+          description: Resolved citations
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CitationResolveResponse'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CitationResolveRequest'
+  /api/v1/jobs:
+    get:
+      operationId: listJobs
+      tags:
+      - Jobs
+      summary: List jobs
+      responses:
+        '200':
+          description: Job page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id010
+      - *id011
+    head:
+      operationId: listJobsHead
+      tags:
+      - Jobs
+      summary: List jobs (HEAD)
+      responses:
+        '200':
+          description: Job page
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobList'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+  /api/v1/jobs/{jobId}:
+    get:
+      operationId: getJob
+      tags:
+      - Jobs
+      summary: Get job
+      responses:
+        '200':
+          description: Job
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    head:
+      operationId: getJobHead
+      tags:
+      - Jobs
+      summary: Get job (HEAD)
+      responses:
+        '200':
+          description: Job
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+  /api/v1/uploads:
+    post:
+      operationId: createUpload
+      tags:
+      - Uploads
+      summary: Streaming quarantine upload
+      responses:
+        '200':
+          description: Upload accepted (opaque objectId only)
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '413':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - *id015
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                collectionId:
+                  type: string
+                  format: uuid
+  /api/v1/search:
+    post:
+      operationId: search
+      tags:
+      - Search
+      summary: Tenant-scoped hybrid search
+      responses:
+        '200':
+          description: Authorized hits
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '403': *id008
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+  /api/v1/ask:
+    post:
+      operationId: ask
+      tags:
+      - Ask
+      summary: Grounded Q&A
+      responses:
+        '200':
+          description: Grounded answer
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskResponse'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+  /api/v1/ask/stream:
+    post:
+      operationId: askStream
+      tags:
+      - Ask
+      summary: Closed-snapshot SSE Q&A delivery
+      responses:
+        '200':
+          description: Closed-snapshot SSE delivery
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEnvelope'
+              examples:
+                frames:
+                  summary: Repeated canonical SSE frames
+                  value: 'id: 42
+
+                    event: metadata
+
+                    data: {"version":1,"sequence":42,"event":"metadata","requestId":"a1010000-0000-4000-8000-000000000002","data":{}}
+
+
+                    id: 43
+
+                    event: token
+
+                    data: {"version":1,"sequence":43,"event":"token","requestId":"a1010000-0000-4000-8000-000000000002","data":{"text":"hi"}}
+
+
+                    '
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '403': *id008
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskRequest'
+  /api/v1/events/{requestId}:
+    get:
+      operationId: resumeEvents
+      tags:
+      - Ask
+      summary: Resume closed SSE snapshot
+      responses:
+        '200':
+          description: Resumable closed SSE snapshot
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEnvelope'
+              examples:
+                frames:
+                  summary: Repeated canonical SSE frames
+                  value: 'id: 42
+
+                    event: metadata
+
+                    data: {"version":1,"sequence":42,"event":"metadata","requestId":"a1010000-0000-4000-8000-000000000002","data":{}}
+
+
+                    id: 43
+
+                    event: token
+
+                    data: {"version":1,"sequence":43,"event":"token","requestId":"a1010000-0000-4000-8000-000000000002","data":{"text":"hi"}}
+
+
+                    '
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '410':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
+    head:
+      operationId: resumeEventsHead
+      tags:
+      - Ask
+      summary: Resume closed SSE snapshot (HEAD)
+      responses:
+        '200':
+          description: Resumable closed SSE snapshot
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEnvelope'
+              examples:
+                frames:
+                  summary: Repeated canonical SSE frames
+                  value: 'id: 42
+
+                    event: metadata
+
+                    data: {"version":1,"sequence":42,"event":"metadata","requestId":"a1010000-0000-4000-8000-000000000002","data":{}}
+
+
+                    id: 43
+
+                    event: token
+
+                    data: {"version":1,"sequence":43,"event":"token","requestId":"a1010000-0000-4000-8000-000000000002","data":{"text":"hi"}}
+
+
+                    '
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '410':
+          $ref: '#/components/responses/ApiError'
+        '429': *id003
+        '401': *id008
+        '403': *id008
+      security:
+      - bearerAuth: []
+      parameters:
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          type: string
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  headers:
+    RequestId:
+      description: Validated or server-generated request id
+      schema:
+        type: string
+        format: uuid
+    RetryAfter:
+      description: Seconds until rate-limit window resets
+      schema:
+        type: integer
+        minimum: 1
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+    CollectionId:
+      name: collectionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ConflictId:
+      name: conflictId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 256
   responses:
     ApiError:
       description: Canonical API error
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ApiError"
+            $ref: '#/components/schemas/ApiError'
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        X-RateLimit-Limit:
+          description: Configured request budget for the active scope
+          schema:
+            type: integer
+            minimum: 0
+        X-RateLimit-Remaining:
+          description: Remaining requests in the current window
+          schema:
+            type: integer
+            minimum: 0
+        X-RateLimit-Reset:
+          description: Seconds until the current window resets
+          schema:
+            type: integer
+            minimum: 1
+        X-Request-Id:
+          $ref: '#/components/headers/RequestId'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RateLimitedError'
   schemas:
     Health:
       type: object
-      required: [status, requestId]
+      required:
+      - status
+      - requestId
       properties:
         status:
           type: string
-          enum: [ok]
+          enum:
+          - ok
+        requestId:
+          type: string
+          format: uuid
+    Startup:
+      type: object
+      required:
+      - status
+      - completed
+      - degraded
+      - requestId
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+          - degraded
+          - starting
+        completed:
+          type: boolean
+        degraded:
+          type: boolean
         requestId:
           type: string
           format: uuid
     ApiError:
       type: object
-      required: [code, message, requestId]
+      required:
+      - code
+      - message
+      - requestId
       properties:
         code:
           type: string
@@ -59,11 +1645,1087 @@ components:
           type: string
           format: uuid
         details: {}
+    RateLimitedError:
+      type: object
+      required:
+      - code
+      - message
+      - requestId
+      - details
+      properties:
+        code:
+          type: string
+          enum:
+          - rate_limited
+        message:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+        details:
+          type: object
+          required:
+          - limit
+          - remaining
+          - resetSecs
+          - scope
+          properties:
+            limit:
+              type: integer
+            remaining:
+              type: integer
+            resetSecs:
+              type: integer
+            scope:
+              type: string
+            quota:
+              type: object
+              required:
+              - limit
+              - remaining
+              - resetSecs
+              - scope
+              properties:
+                limit:
+                  type: integer
+                remaining:
+                  type: integer
+                resetSecs:
+                  type: integer
+                scope:
+                  type: string
     PageInfo:
       type: object
-      required: [hasMore]
+      required:
+      - hasMore
       properties:
         nextCursor:
-          type: [string, "null"]
+          type:
+          - string
+          - 'null'
         hasMore:
           type: boolean
+    LoginRequest:
+      type: object
+      required:
+      - email
+      - password
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+    RefreshRequest:
+      type: object
+      required:
+      - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          writeOnly: true
+    LogoutRequest:
+      type: object
+      required:
+      - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          writeOnly: true
+    TokenResponse:
+      type: object
+      required:
+      - accessToken
+      - refreshToken
+      - tokenType
+      - expiresIn
+      - orgId
+      - userId
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          enum:
+          - Bearer
+        expiresIn:
+          type: integer
+        orgId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+    MeResponse:
+      type: object
+      required:
+      - userId
+      - orgId
+      - email
+      - displayName
+      - permissions
+      - allowedCollectionIds
+      - sessionId
+      properties:
+        userId:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        allowedCollectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        sessionId:
+          type: string
+    Collection:
+      type: object
+      required:
+      - id
+      - name
+      - slug
+      - visibility
+      - ownerUserId
+      - createdAt
+      - updatedAt
+      - requestId
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        visibility:
+          type: string
+        ownerUserId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
+    CollectionList:
+      type: object
+      required:
+      - items
+      - pageInfo
+      - requestId
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Collection'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+        requestId:
+          type: string
+          format: uuid
+    CollectionCreate:
+      type: object
+      required:
+      - name
+      - slug
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        visibility:
+          type: string
+    CollectionUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        visibility:
+          type: string
+    Document:
+      type: object
+      required:
+      - id
+      - collectionId
+      - title
+      - state
+      - createdByUserId
+      - createdAt
+      - updatedAt
+      - requestId
+      properties:
+        id:
+          type: string
+          format: uuid
+        collectionId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        state:
+          type: string
+        currentVersionId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        createdByUserId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        deletedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
+    DocumentList:
+      type: object
+      required:
+      - items
+      - pageInfo
+      - requestId
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Document'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+        requestId:
+          type: string
+          format: uuid
+    DocumentVersion:
+      type: object
+      description: Version metadata only — never exposes storage object keys.
+      required:
+      - id
+      - documentId
+      - versionNumber
+      - publicationState
+      - isCurrent
+      - contentSha256
+      - effectiveFrom
+      - createdByUserId
+      - createdAt
+      - requestId
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        parentVersionId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        publicationState:
+          type: string
+        isCurrent:
+          type: boolean
+        contentSha256:
+          type: string
+        sourceFilename:
+          type:
+          - string
+          - 'null'
+        sourceContentType:
+          type:
+          - string
+          - 'null'
+        byteSize:
+          type:
+          - integer
+          - 'null'
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        changeSummary:
+          type:
+          - string
+          - 'null'
+        createdByUserId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
+    DocumentVersionList:
+      type: object
+      required:
+      - items
+      - pageInfo
+      - requestId
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/DocumentVersion'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+        requestId:
+          type: string
+          format: uuid
+    VersionDiff:
+      type: object
+      required:
+      - documentId
+      - leftVersionId
+      - rightVersionId
+      - leftVersionNumber
+      - rightVersionNumber
+      - contentSha256Changed
+      - publicationStateChanged
+      - currentFlagChanged
+      - changeSummaryChanged
+      - requestId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        leftVersionId:
+          type: string
+          format: uuid
+        rightVersionId:
+          type: string
+          format: uuid
+        leftVersionNumber:
+          type: integer
+        rightVersionNumber:
+          type: integer
+        contentSha256Changed:
+          type: boolean
+        publicationStateChanged:
+          type: boolean
+        currentFlagChanged:
+          type: boolean
+        changeSummaryChanged:
+          type: boolean
+        requestId:
+          type: string
+          format: uuid
+    ReindexResponse:
+      type: object
+      required:
+      - documentId
+      - versionId
+      - jobId
+      - created
+      - requestId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        jobId:
+          type: string
+          format: uuid
+        created:
+          type: boolean
+        requestId:
+          type: string
+          format: uuid
+    PreviewResponse:
+      type: object
+      required:
+      - documentId
+      - versionId
+      - markdown
+      - requestId
+      properties:
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        markdown:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+    DownloadCapabilityRequest:
+      type: object
+      required:
+      - purpose
+      properties:
+        purpose:
+          type: string
+          enum:
+          - original
+          - markdown
+        ttlSecs:
+          type: integer
+          minimum: 1
+    DownloadCapabilityResponse:
+      type: object
+      required:
+      - capabilityId
+      - token
+      - purpose
+      - documentId
+      - versionId
+      - expiresAt
+      - requestId
+      properties:
+        capabilityId:
+          type: string
+          format: uuid
+        token:
+          type: string
+          writeOnly: true
+        purpose:
+          type: string
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
+    DownloadRedeemRequest:
+      type: object
+      required:
+      - token
+      properties:
+        token:
+          type: string
+          writeOnly: true
+    Conflict:
+      type: object
+      required:
+      - id
+      - status
+      - severity
+      - conflictType
+      - claimAId
+      - claimBId
+      - firstDetectedAt
+      - createdAt
+      - updatedAt
+      - requestId
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        severity:
+          type: string
+        conflictType:
+          type: string
+        claimAId:
+          type: string
+          format: uuid
+        claimBId:
+          type: string
+          format: uuid
+        firstDetectedAt:
+          type: string
+          format: date-time
+        firstDetectedVersionId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        resolvedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        resolutionNote:
+          type:
+          - string
+          - 'null'
+        resolutionVersionAId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        resolutionVersionBId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
+    ConflictList:
+      type: object
+      required:
+      - items
+      - pageInfo
+      - requestId
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Conflict'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+        requestId:
+          type: string
+          format: uuid
+    ConflictTriageRequest:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+        resolutionNote:
+          type: string
+        resolutionVersionAId:
+          type: string
+          format: uuid
+        resolutionVersionBId:
+          type: string
+          format: uuid
+    ConflictEvidence:
+      type: object
+      required:
+      - id
+      - conflictId
+      - claimId
+      - evidenceRole
+      - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        conflictId:
+          type: string
+          format: uuid
+        claimId:
+          type: string
+          format: uuid
+        evidenceRole:
+          type: string
+        citationQuote:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          type: string
+          format: date-time
+    ConflictEvidenceList:
+      type: object
+      required:
+      - items
+      - pageInfo
+      - requestId
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConflictEvidence'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+        requestId:
+          type: string
+          format: uuid
+    CitationResolveItem:
+      type: object
+      required:
+      - chunkId
+      properties:
+        chunkId:
+          type: string
+          format: uuid
+        expectedVersionId:
+          type: string
+          format: uuid
+        expectedDocumentId:
+          type: string
+          format: uuid
+        expectedContentSha256:
+          type: string
+        expectedQuote:
+          type: string
+        expectedSpanStart:
+          type: integer
+          minimum: 0
+        expectedSpanEnd:
+          type: integer
+          minimum: 0
+    StableCitation:
+      type: object
+      required:
+      - orgId
+      - logicalDocumentId
+      - versionId
+      - versionNumber
+      - contentSha256
+      - chunkId
+      - chunkIdentitySha256
+      - spanStart
+      - spanEnd
+      - quote
+      - effectiveFrom
+      - isCurrent
+      - heading
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        logicalDocumentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        contentSha256:
+          type: string
+        chunkId:
+          type: string
+          format: uuid
+        chunkIdentitySha256:
+          type: string
+        page:
+          type: integer
+        slide:
+          type: integer
+        sheet:
+          type: string
+        spanStart:
+          type: integer
+        spanEnd:
+          type: integer
+        quote:
+          type: string
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        isCurrent:
+          type: boolean
+        heading:
+          type: string
+    CitationResolveRequest:
+      type: object
+      required:
+      - citations
+      properties:
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/CitationResolveItem'
+    CitationResolveResponse:
+      type: object
+      required:
+      - citations
+      - requestId
+      properties:
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/StableCitation'
+        requestId:
+          type: string
+          format: uuid
+    Job:
+      type: object
+      required:
+      - id
+      - jobType
+      - status
+      - attempts
+      - maxAttempts
+      - availableAt
+      - createdAt
+      - updatedAt
+      - requestId
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobType:
+          type: string
+        status:
+          type: string
+        attempts:
+          type: integer
+        maxAttempts:
+          type: integer
+        documentId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        versionId:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        availableAt:
+          type: string
+          format: date-time
+        startedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        finishedAt:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        lastError:
+          type:
+          - string
+          - 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        requestId:
+          type: string
+          format: uuid
+    JobList:
+      type: object
+      required:
+      - items
+      - pageInfo
+      - requestId
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+        pageInfo:
+          $ref: '#/components/schemas/PageInfo'
+        requestId:
+          type: string
+          format: uuid
+    UploadResponse:
+      type: object
+      required:
+      - disposition
+      - objectId
+      - sha256
+      - sizeBytes
+      - canonicalFormat
+      - requestId
+      properties:
+        disposition:
+          type: string
+        threatClass:
+          type: string
+        reasonCode:
+          type: string
+        objectId:
+          type: string
+          format: uuid
+          description: Opaque upload identity (not a storage key)
+        sha256:
+          type: string
+        sizeBytes:
+          type: integer
+        canonicalFormat:
+          type: string
+        originalFilename:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+    VersionMode:
+      type: object
+      required:
+      - type
+      properties:
+        type:
+          type: string
+          enum:
+          - current
+          - as_of
+          - compare
+          - history
+        at:
+          type: string
+          format: date-time
+        documentId:
+          type: string
+          format: uuid
+        versionA:
+          type: string
+          format: uuid
+        versionB:
+          type: string
+          format: uuid
+    SearchRequest:
+      type: object
+      required:
+      - query
+      properties:
+        query:
+          type: string
+        collectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        mode:
+          $ref: '#/components/schemas/VersionMode'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+    SearchHitLocator:
+      type: object
+      properties:
+        page:
+          type:
+          - integer
+          - 'null'
+        slide:
+          type:
+          - integer
+          - 'null'
+        sheet:
+          type:
+          - string
+          - 'null'
+        spanStart:
+          type: integer
+        spanEnd:
+          type: integer
+    SearchHit:
+      type: object
+      required:
+      - chunkId
+      - collectionId
+      - documentId
+      - versionId
+      - versionNumber
+      - contentSha256
+      - heading
+      - snippet
+      - score
+      - isCurrent
+      - locator
+      properties:
+        chunkId:
+          type: string
+          format: uuid
+        collectionId:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        contentSha256:
+          type: string
+        heading:
+          type: string
+        snippet:
+          type: string
+        score:
+          type: number
+        isCurrent:
+          type: boolean
+        locator:
+          $ref: '#/components/schemas/SearchHitLocator'
+    SearchResponse:
+      type: object
+      required:
+      - hits
+      - warnings
+      - embeddingMode
+      - requestId
+      properties:
+        hits:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchHit'
+        warnings:
+          type: array
+          items:
+            type: string
+        embeddingMode:
+          type: string
+        requestId:
+          type: string
+          format: uuid
+    AskRequest:
+      type: object
+      required:
+      - question
+      properties:
+        question:
+          type: string
+        collectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        mode:
+          $ref: '#/components/schemas/VersionMode'
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 32
+        useProvider:
+          type: boolean
+    AskCitation:
+      type: object
+      required:
+      - citeId
+      - documentId
+      - versionId
+      - versionNumber
+      - contentSha256
+      - chunkId
+      - isCurrent
+      - heading
+      - quote
+      properties:
+        citeId:
+          type: string
+        documentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        contentSha256:
+          type: string
+        chunkId:
+          type: string
+          format: uuid
+        isCurrent:
+          type: boolean
+        heading:
+          type: string
+        quote:
+          type: string
+    AskResponse:
+      type: object
+      required:
+      - answer
+      - citations
+      - mode
+      - grounded
+      - requestId
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/AskCitation'
+        mode:
+          type: string
+        grounded:
+          type: boolean
+        warnings:
+          type: array
+          items:
+            type: string
+        versionContext:
+          type: object
+        conflictWarnings:
+          type: array
+          items:
+            type: object
+        requestId:
+          type: string
+          format: uuid
+    SseEnvelope:
+      type: object
+      description: Canonical JSON object in each text/event-stream data frame (repeated frames, not one
+        JSON body).
+      required:
+      - version
+      - sequence
+      - event
+      - requestId
+      - data
+      properties:
+        version:
+          type: integer
+        sequence:
+          type: integer
+        event:
+          type: string
+          enum:
+          - metadata
+          - token
+          - close
+          - error
+        requestId:
+          type: string
+          format: uuid
+        data: {}

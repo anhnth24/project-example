@@ -2124,6 +2124,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "image",
+ "ipnet",
  "jsonwebtoken",
  "libc",
  "quick-xml 0.41.0",
@@ -2145,6 +2146,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "zip 2.4.2",
 ]

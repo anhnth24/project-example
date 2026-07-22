@@ -40,9 +40,11 @@ const BUSINESS_TABLES: &[&str] = &[
     "quota_reservations",
     "audit_log",
     "download_capabilities",
+    "sse_stream_requests",
+    "sse_stream_events",
 ];
 
-const GLOBAL_TABLES: &[&str] = &["orgs", "users", "permissions"];
+const GLOBAL_TABLES: &[&str] = &["orgs", "users", "permissions", "runtime_readiness"];
 
 const POC_ORG: &str = "11111111-1111-1111-1111-111111111111";
 const POC_USER: &str = "22222222-2222-2222-2222-222222222201";
@@ -205,6 +207,62 @@ async fn schema_migrations_fresh_apply_idempotent_and_exact_columns() {
         .unwrap()
         .get(0);
     assert_eq!(applied, embedded_migrations().len() as i64);
+    assert!(
+        embedded_migrations()
+            .iter()
+            .any(|(name, _)| *name == "0022_expand_runtime_readiness.sql"),
+        "migration 0022 must be embedded"
+    );
+    let checksum_0022 = migration_checksum(
+        embedded_migrations()
+            .iter()
+            .find(|(name, _)| *name == "0022_expand_runtime_readiness.sql")
+            .unwrap()
+            .1,
+    );
+    let stored_0022: String = client
+        .query_one(
+            "SELECT checksum FROM markhand_schema_migrations WHERE name = $1",
+            &[&"0022_expand_runtime_readiness.sql"],
+        )
+        .await
+        .expect("0022 applied")
+        .get(0);
+    assert_eq!(stored_0022, checksum_0022);
+
+    // Exact runtime_readiness + SECURITY DEFINER helpers from 0022.
+    let ready_cols: BTreeSet<String> = client
+        .query(
+            "SELECT column_name FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'runtime_readiness'",
+            &[],
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(
+        ready_cols,
+        BTreeSet::from([
+            "key".into(),
+            "ready".into(),
+            "generation".into(),
+            "certified_generation".into(),
+            "updated_at".into(),
+            "detail".into(),
+        ])
+    );
+    let fn_security: String = client
+        .query_one(
+            "SELECT prosecdef::text FROM pg_proc
+             WHERE proname = 'markhand_pending_reconcile_jobs'",
+            &[],
+        )
+        .await
+        .expect("pending reconcile helper")
+        .get(0);
+    assert_eq!(fn_security, "true");
 
     for table in BUSINESS_TABLES {
         let nullable: String = client

@@ -920,6 +920,39 @@ pub async fn logout_session(
     Ok(())
 }
 
+/// Returns true when the session family still has a non-revoked refresh token.
+///
+/// Used by long-lived SSE auth probes: access JWTs may remain cryptographically
+/// valid after logout/revoke until `exp`, so callers must re-check family liveness.
+pub async fn is_refresh_family_active(
+    pool: &deadpool_postgres::Pool,
+    org_id: Uuid,
+    family_id: Uuid,
+) -> Result<bool, SessionError> {
+    let mut client = pool.get().await.map_err(|_| SessionError::Database)?;
+    let txn = client
+        .transaction()
+        .await
+        .map_err(|_| SessionError::Database)?;
+    set_org_guc_txn(&txn, org_id).await?;
+    let row = txn
+        .query_one(
+            "SELECT EXISTS(
+                 SELECT 1 FROM refresh_tokens
+                 WHERE org_id = $1
+                   AND family_id = $2
+                   AND revoked_at IS NULL
+                   AND expires_at > clock_timestamp()
+             )",
+            &[&org_id, &family_id],
+        )
+        .await
+        .map_err(|_| SessionError::Database)?;
+    let active: bool = row.get(0);
+    txn.commit().await.map_err(|_| SessionError::Database)?;
+    Ok(active)
+}
+
 /// Revokes every refresh-token family for a user (disable / password-reset).
 ///
 /// Takes the user-level advisory lock (shared with login/new-family issuance), then
