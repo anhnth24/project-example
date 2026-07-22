@@ -155,7 +155,17 @@ def docker_compose_argv() -> list[str] | None:
     )
     if info.returncode != 0:
         return None
-    env_file = os.environ.get("MARKHAND_ENV_FILE", str(ROOT / "deploy" / ".env"))
+    env_file = Path(
+        os.environ.get("MARKHAND_ENV_FILE", str(ROOT / "deploy" / ".env"))
+    )
+    if not env_file.is_file():
+        # CI/hermetic runs do not create gitignored deploy/.env; use the committed
+        # example so compose can parse variable substitutions without secrets.
+        example = ROOT / "deploy" / ".env.example"
+        if example.is_file():
+            env_file = example
+        else:
+            return None
     compose = ROOT / "deploy" / "compose.poc.yml"
     return [
         "docker",
@@ -163,7 +173,7 @@ def docker_compose_argv() -> list[str] | None:
         "--project-directory",
         str(ROOT),
         "--env-file",
-        env_file,
+        str(env_file),
         "-f",
         str(compose),
     ]

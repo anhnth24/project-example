@@ -79,6 +79,10 @@ def base_env(tmp: Path) -> dict[str, str]:
             "MARKHAND_RESTORE_TARGET_STATE": str(tmp / "target-state"),
         }
     )
+    env_example = ROOT / "deploy" / ".env.example"
+    env_file = tmp / "deploy.env"
+    env_file.write_text(env_example.read_text(encoding="utf-8"), encoding="utf-8")
+    env["MARKHAND_ENV_FILE"] = str(env_file)
     return env
 
 
