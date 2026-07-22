@@ -242,7 +242,7 @@ where
         self.armed = false;
         let shared = Arc::new(value);
         let mut inner = self.cache.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.active_loaders = inner.active_loaders.saturating_sub(1);
+        Self::release_active_loader(&mut inner);
         let ours = inner
             .entries
             .get(&self.key)
@@ -268,7 +268,7 @@ where
         }
         self.armed = false;
         let mut inner = self.cache.inner.lock().unwrap_or_else(|e| e.into_inner());
-        inner.active_loaders = inner.active_loaders.saturating_sub(1);
+        Self::release_active_loader(&mut inner);
         let ours = inner
             .entries
             .get(&self.key)
@@ -279,6 +279,8 @@ where
             if matches!(*st, SlotState::Loading) {
                 *st = SlotState::Failed;
             }
+            // Notify waiters on the *owned* slot only; a same-key replacement
+            // has its own condvar and is never woken/failed here.
             self.slot.cv.notify_all();
         }
         if ours {
@@ -286,6 +288,15 @@ where
             inner.lru.retain(|k| k != &self.key);
         }
         // If not ours: orphan Failed is fine; map must keep the replacement.
+    }
+
+    /// Decrement in-flight loader count. Underflow is a hard invariant bug
+    /// (double-release or release without `arm`); surface it instead of wrapping.
+    fn release_active_loader(inner: &mut CacheInner<K, V>) {
+        inner.active_loaders = inner
+            .active_loaders
+            .checked_sub(1)
+            .expect("LoadOnceCache active_loaders underflow: release without matching arm");
     }
 }
 
@@ -468,6 +479,50 @@ where
                 SlotState::Failed
             )
         })
+    }
+
+    /// Test-only: whether `key` currently maps to a `Ready` value equal to `expected`.
+    #[cfg(test)]
+    fn is_ready_eq(&self, key: &K, expected: &V) -> bool
+    where
+        V: PartialEq,
+    {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.entries.get(key).is_some_and(|slot| {
+            match &*slot.state.lock().unwrap_or_else(|e| e.into_inner()) {
+                SlotState::Ready(v) => **v == *expected,
+                _ => false,
+            }
+        })
+    }
+
+    /// Test-only: whether the map entry for `key` is still exactly `slot`.
+    #[cfg(test)]
+    fn maps_to_slot(&self, key: &K, slot: &Arc<Slot<V>>) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner
+            .entries
+            .get(key)
+            .is_some_and(|mapped| Arc::ptr_eq(mapped, slot))
+    }
+
+    /// Test-only: forcibly replace the map entry for `key` with a fresh Ready
+    /// slot. Simulates same-key map replacement while an older loader still
+    /// owns its orphaned `Loading` slot (not reachable via the public insert
+    /// path today, which never overwrites an in-flight entry).
+    #[cfg(test)]
+    fn force_replace_with_ready(&self, key: K, value: V) -> Arc<Slot<V>> {
+        let shared = Arc::new(value);
+        let replacement = Arc::new(Slot {
+            state: Mutex::new(SlotState::Ready(Arc::clone(&shared))),
+            cv: Condvar::new(),
+        });
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.entries.insert(key.clone(), Arc::clone(&replacement));
+        touch_lru(&mut inner, &key);
+        let cap = inner.capacity;
+        inner.evict_ready_while(|ready| ready > cap);
+        replacement
     }
 }
 
@@ -1215,12 +1270,11 @@ mod tests {
         assert!(cache.max_active_loaders() >= 1);
     }
 
-    /// While a loader for key A is in-flight (then panics), concurrent inserts of
-    /// other keys may LRU-evict Ready entries and replace map slots. Panic
-    /// cleanup must only fail the owned Loading slot — never clobber a
-    /// replacement entry — and waiters / later loads must still succeed.
+    /// Different-key LRU pressure while a loader panics: survivor Ready entries
+    /// for *other* keys must remain Ready. (Same-key replacement is covered by
+    /// [`load_once_cache_loader_panic_same_key_replacement_not_clobbered`].)
     #[test]
-    fn load_once_cache_loader_panic_does_not_clobber_map_replacement() {
+    fn load_once_cache_loader_panic_other_key_lru_survivor_stays_ready() {
         let cache = Arc::new(LoadOnceCache::<String, u64>::with_capacity(1));
         // Fill the sole Ready slot so later inserts must evict via LRU.
         let held = cache
@@ -1240,7 +1294,7 @@ mod tests {
                     cache_p.get_or_insert_with("panic-key".into(), || {
                         loader_entered_p.wait();
                         release_panic_p.wait();
-                        panic!("injected replacement-safety loader panic");
+                        panic!("injected other-key LRU survivor loader panic");
                     });
             }));
             assert!(caught.is_err());
@@ -1260,7 +1314,7 @@ mod tests {
 
         assert!(cache.is_failed(&"panic-key".to_string()));
         assert_eq!(cache.active_loaders(), 0);
-        // Replacement / survivor Ready entry must remain Ready (not Failed).
+        // Survivor Ready entry for a different key must remain Ready (not Failed).
         let again = cache
             .get_or_insert_with("other".into(), || Ok::<u64, &str>(99))
             .unwrap();
@@ -1274,6 +1328,74 @@ mod tests {
         assert_eq!(cache.active_loaders(), 0);
         assert!(cache.len_ready() <= cache.capacity());
         let _ = held;
+    }
+
+    /// Explicit same-key map replacement while an owned Loading guard unwinds:
+    /// force-replace the map entry mid-load, then panic. Cleanup must fail +
+    /// notify only the orphaned owned slot — never overwrite or re-notify the
+    /// replacement Ready entry — and waiters must observe the replacement.
+    #[test]
+    fn load_once_cache_loader_panic_same_key_replacement_not_clobbered() {
+        let cache = Arc::new(LoadOnceCache::<&'static str, i32>::with_capacity(2));
+        let loader_entered = Arc::new(Barrier::new(2));
+        let release_panic = Arc::new(Barrier::new(2));
+
+        let cache_p = Arc::clone(&cache);
+        let loader_entered_p = Arc::clone(&loader_entered);
+        let release_panic_p = Arc::clone(&release_panic);
+        let panicker = thread::spawn(move || {
+            let caught = catch_unwind(AssertUnwindSafe(|| {
+                let _: Result<Arc<i32>, &str> = cache_p.get_or_insert_with("k", || {
+                    loader_entered_p.wait();
+                    release_panic_p.wait();
+                    panic!("injected same-key replacement loader panic");
+                });
+            }));
+            assert!(caught.is_err());
+        });
+
+        // Own Loading for "k", then park a waiter on that same owned slot.
+        loader_entered.wait();
+        let waiters_ready = Arc::new(Barrier::new(2));
+        let cache_w = Arc::clone(&cache);
+        let waiters_ready_w = Arc::clone(&waiters_ready);
+        let waiter = thread::spawn(move || {
+            waiters_ready_w.wait();
+            // After orphan notify + Failed, the outer loop must resolve via the
+            // same-key replacement Ready value (not a fresh loader).
+            cache_w
+                .get_or_insert_with("k", || -> Result<i32, &str> {
+                    panic!("replacement must satisfy waiter; loader must not run")
+                })
+                .unwrap()
+        });
+        waiters_ready.wait();
+        thread::sleep(Duration::from_millis(30));
+
+        // Same-key replacement while the original guard is still armed.
+        let replacement = cache.force_replace_with_ready("k", 42);
+        assert!(cache.maps_to_slot(&"k", &replacement));
+        assert!(cache.is_ready_eq(&"k", &42));
+        assert!(!cache.is_failed(&"k"));
+
+        release_panic.wait();
+        panicker.join().unwrap();
+
+        // Map still points at the replacement Ready slot — not Failed, not a
+        // new insert. Orphan cleanup must not have overwritten it.
+        assert!(cache.maps_to_slot(&"k", &replacement));
+        assert!(cache.is_ready_eq(&"k", &42));
+        assert!(!cache.is_failed(&"k"));
+        assert_eq!(cache.active_loaders(), 0);
+
+        let got = waiter
+            .join()
+            .expect("waiter must unblock via orphan notify then see replacement");
+        assert_eq!(*got, 42);
+        // No extra load after replacement: still a single Ready entry.
+        assert_eq!(cache.len_ready(), 1);
+        assert!(cache.is_ready_eq(&"k", &42));
+        assert!(cache.maps_to_slot(&"k", &replacement));
     }
 
     #[test]
