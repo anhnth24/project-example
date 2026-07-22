@@ -265,6 +265,12 @@ async fn schema_migrations_fresh_apply_idempotent_and_exact_columns() {
             "certified_generation".into(),
             "updated_at".into(),
             "detail".into(),
+            "zero_drift_certified".into(),
+            "last_reconcile_result".into(),
+            "last_drift_total".into(),
+            "generation_reconcile_completed".into(),
+            "generation_reconcile_drift".into(),
+            "generation_reconcile_error".into(),
         ])
     );
     let fn_security: String = client

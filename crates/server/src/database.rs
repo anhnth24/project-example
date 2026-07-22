@@ -98,6 +98,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0023_expand_audit_append_only.sql",
         include_str!("../migrations/0023_expand_audit_append_only.sql"),
     ),
+    (
+        "0024_expand_runtime_readiness_zero_drift.sql",
+        include_str!("../migrations/0024_expand_runtime_readiness_zero_drift.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

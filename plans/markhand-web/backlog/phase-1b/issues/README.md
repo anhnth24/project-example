@@ -396,11 +396,12 @@ ghi trong issue đã `Done`.
 - **Acceptance/tests:** Clean restore đạt RPO/RTO; missing/orphan detect; readiness
   false until reconcile; PG rebuild; corrupt manifest/upgrade tests.
 - **Evidence (in progress):**
-  - `deploy/backup/**`: fenced backup, signed recovery manifest, staged dry-run
-    restore, reconcile-before-ready via `runtime_readiness` helpers, PG vector rebuild.
-  - Migration safety: immutable checksums + expand→cutover→contract validator.
-  - Hermetic suite: `scripts/check-backup-o03.py` + `make check-backup`.
-  - Report: `bench/markhand_web/reports/p1b-o03-backup-restore.md`.
+  - Correctness rebuild: streamed-WAL PG backup (PITR blocked without archive
+    overlay), AES-GCM envelopes, MinIO version/delete-marker restore mapping,
+    Qdrant collection identity from index signature, read-only dry-run, target-bound
+    shadow restore state, migration `0024` zero-drift readiness + bulk reconcile-once.
+  - Hermetic suite + `make check-backup`; report
+    `bench/markhand_web/reports/p1b-o03-backup-restore.md`.
   - Non-claim: no live restore / Profile-B RPO/RTO pass in this environment.
 - **Security/migration:** Encrypted narrow credentials; expand/cutover/contract.
   **Out:** multi-region DR.

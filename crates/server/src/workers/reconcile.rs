@@ -151,8 +151,8 @@ impl ReconcileWorker {
                 }
                 match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
                     Ok(completed) => {
-                        // Atomically certify ready only when pending/leased is empty.
-                        reconciliation::certify_after_reconcile_success(&self.db_pool)
+                        // Record drift/error; certify only on verified zero-drift + idle queue.
+                        reconciliation::certify_after_reconcile_success(&self.db_pool, &report)
                             .await
                             .map_err(ReconcileWorkerError::Reconciliation)?;
                         Ok(ReconcileWorkerRun::Completed {
@@ -303,10 +303,20 @@ impl ReconcileWorker {
         )
         .await
         {
-            Ok(failed) => Ok(ReconcileWorkerRun::Failed {
-                job_id: failed.id,
-                terminal: failed.status == JobStatus::DeadLetter,
-            }),
+            Ok(failed) => {
+                // Errors must keep readiness false for the current generation.
+                let _ = reconciliation::record_reconcile_outcome(
+                    &self.db_pool,
+                    "error",
+                    0,
+                    "reconcile job error",
+                )
+                .await;
+                Ok(ReconcileWorkerRun::Failed {
+                    job_id: failed.id,
+                    terminal: failed.status == JobStatus::DeadLetter,
+                })
+            }
             Err(JobError::LeaseLost) => Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id }),
             Err(error) => Err(ReconcileWorkerError::Job(error)),
         }

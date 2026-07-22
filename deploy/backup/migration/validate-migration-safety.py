@@ -102,6 +102,17 @@ def validate_phase_discipline(rows: list[tuple[int, str, str, Path]]) -> list[st
     return errors
 
 
+DESTRUCTIVE_SQL = re.compile(
+    r"(?is)\b(DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM)\b"
+)
+SQL_LINE_COMMENT = re.compile(r"--.*?$", re.M)
+SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def sql_without_comments(sql: str) -> str:
+    return SQL_LINE_COMMENT.sub("", SQL_BLOCK_COMMENT.sub("", sql))
+
+
 def validate_checksum_immutability(directory: Path) -> list[str]:
     """Delegate to the published immutable manifest checker."""
     import importlib.util
@@ -119,15 +130,61 @@ def validate_checksum_immutability(directory: Path) -> list[str]:
         return [str(error)]
 
 
-def validate(directory: Path) -> list[str]:
+def validate_sql_semantics(rows: list[tuple[int, str, str, Path]]) -> list[str]:
+    """Catch destructive SQL in expand/cutover; contract requires cutover evidence."""
+    errors: list[str] = []
+    stems_with_cutover = {
+        stem for _n, phase, stem, _p in rows if phase == "cutover"
+    }
+    for _number, phase, stem, path in rows:
+        sql = sql_without_comments(path.read_text(encoding="utf-8"))
+        if DESTRUCTIVE_SQL.search(sql) and phase in {"expand", "cutover", "backfill", "index"}:
+            errors.append(
+                f"{path.name}: destructive DROP/TRUNCATE/DELETE not allowed in {phase}"
+            )
+        if phase == "contract" and stem not in stems_with_cutover:
+            errors.append(
+                f"{path.name}: contract without cutover evidence for stem {stem}"
+            )
+    return errors
+
+
+def validate_base_ref_anchor(directory: Path, base_ref: str | None) -> list[str]:
+    """Compare working tree migration checksums to a git base-ref anchor when set."""
+    if not base_ref:
+        return []
+    import subprocess
+
+    errors: list[str] = []
+    try:
+        raw = subprocess.check_output(
+            ["git", "show", f"{base_ref}:crates/server/migrations/manifest.json"],
+            cwd=ROOT,
+            text=True,
+        )
+        base_manifest = json.loads(raw)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        return [f"base-ref {base_ref} manifest unavailable: {error}"]
+    current = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    base_migrations = base_manifest.get("migrations") or {}
+    current_migrations = current.get("migrations") or {}
+    for name, digest in base_migrations.items():
+        if name not in current_migrations:
+            errors.append(f"base-ref anchor missing migration in working tree: {name}")
+        elif current_migrations[name] != digest:
+            errors.append(f"base-ref checksum drift vs {base_ref}: {name}")
+    return errors
+
+
+def validate(directory: Path, base_ref: str | None = None) -> list[str]:
     errors = validate_checksum_immutability(directory)
     try:
         rows = parse_migrations(directory)
     except MigrationSafetyError as error:
         return errors + [str(error)]
     errors.extend(validate_phase_discipline(rows))
-    # Merged migrations must remain expand-only or already-valid chains —
-    # never rewrite historical files.
+    errors.extend(validate_sql_semantics(rows))
+    errors.extend(validate_base_ref_anchor(directory, base_ref))
     return errors
 
 
@@ -209,12 +266,39 @@ class MigrationSafetyTests(unittest.TestCase):
             errors = validate(directory)
             self.assertTrue(any("checksum changed" in e for e in errors))
 
+    def test_destructive_sql_in_expand_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._write(
+                directory,
+                "0001_expand_widgets.sql",
+                "CREATE TABLE widgets(id int);\nDROP TABLE widgets;\n",
+            )
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "check_migration_manifest", MANIFEST_CHECK
+            )
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            (directory / "manifest.json").write_text(
+                json.dumps(module.expected_manifest(directory), indent=2) + "\n",
+                encoding="utf-8",
+            )
+            errors = validate(directory)
+            self.assertTrue(any("destructive" in e for e in errors), errors)
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, default=DEFAULT_DIRECTORY)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--base-ref",
+        help="Git ref whose migration manifest.json anchors immutable checksums",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -223,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.wasSuccessful() else 1
 
     try:
-        errors = validate(args.directory)
+        errors = validate(args.directory, base_ref=args.base_ref)
     except MigrationSafetyError as error:
         print(f"migration safety error: {error}", file=sys.stderr)
         return 2

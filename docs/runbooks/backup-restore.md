@@ -1,83 +1,82 @@
 # Runbook: Backup and restore (P1B-O03)
 
-Issue: P1B-O03  
-Related: ADR 0012, `deploy/backup/**`, migration `0022_expand_runtime_readiness.sql`  
+Issue: P1B-O03
+Related: ADR 0012, `deploy/backup/**`, migrations `0022`/`0024`
 Out of scope: multi-region DR; claiming Profile-B RPO/RTO without a live drill.
 
 ## Prerequisites
 
-- POC env from `deploy/.env` (never commit). Backup-specific vars in `.env.example`.
-- Narrow credentials only: `MARKHAND_BACKUP_DATABASE_URL`, MinIO backup keys,
-  `MARKHAND_BACKUP_SIGNING_KEY` / `MARKHAND_BACKUP_PG_ENCRYPTION_KEY` (hex key ids).
-- Tools: `pg_basebackup`, `psql`, `mc`, `curl`, `openssl`, `jq` (or hermetic fakes).
-- Docker/compose required for **live** fence/restore; absent → hermetic/static only.
-- Targets (gate-valid only on Profile B): RPO ≤ 15m, query-ready RTO ≤ 60m,
-  full-vector RTO ≤ 240m.
+- Narrow credentials via discrete `MARKHAND_BACKUP_PG*` / MinIO / signing key env
+  (or `PGPASSFILE`); **never** put DB URLs/passwords on argv.
+- Live apply requires HTTPS/TLS verify-full for Qdrant/MinIO endpoints unless
+  `MARKHAND_BACKUP_MODE=hermetic`.
+- PostgreSQL method: **`pg_basebackup_streamed_wal`** (base.tar + pg_wal.tar,
+  encrypt-then-MAC envelope `aes-256-ctr-hmac-sha256-v1`: stdlib HKDF/HMAC +
+  host OpenSSL AES-256-CTR). Continuous PITR stays **blocked** unless archived
+  WAL through the target LSN is packaged/checksummed and restore consumes it.
+  `deploy/backup/compose.wal-archive.yml` is preparatory only (archive_mode).
+- Tools: real `tar`, `pg_basebackup`, `mc`, `curl`, host `openssl` (stdlib +
+  OpenSSL only; no third-party crypto packages).
 
 ## Procedure
 
 ### Backup
 
 ```bash
-# From repo root — sets fence, backs up PG→MinIO→Qdrant, writes signed manifest
-export MARKHAND_BACKUP_MODE=live   # or hermetic for fixtures
-deploy/backup/scripts/backup.sh /var/backups/markhand/$(date -u +%Y%m%dT%H%M%SZ)
-# Resume after interrupt: re-run the same command (checkpoint in .state/stage)
+deploy/backup/scripts/backup.sh /var/backups/markhand/<id>
 ```
 
-Manifest path: `<backup-root>/recovery-manifest.json` (HMAC + artifact sha256).
+Produces signed `recovery-manifest.json` binding PG start/stop LSN + timeline,
+MinIO encrypted inventory digest/count, Qdrant collection=`markhand_chunks_<sig>`.
 
-### Restore (default dry-run)
+### Restore dry-run (default, read-only)
 
 ```bash
 deploy/backup/scripts/restore.sh /var/backups/markhand/<id>
-# Validates manifest/org/schema/signature/migration/checksums; readiness stays false
+# No stop/start, no readiness SQL, no store mutation, no checkpoint writes.
 ```
 
-### Restore (destructive apply)
+### Restore apply (destructive)
 
 ```bash
 export MARKHAND_RESTORE_CONFIRM=I_UNDERSTAND_DESTRUCTIVE_RESTORE
-export MARKHAND_RESTORE_PGDATA=/var/lib/postgresql/restore
+export MARKHAND_RESTORE_TARGET_STATE=/var/markhand/restore-state/<id>
 deploy/backup/scripts/restore.sh /var/backups/markhand/<id> --apply
 ```
 
-Order enforced by scripts:
+Order: fence (real services `api`,`worker-convert`,`worker-index`,`worker-embedding`)
+→ open `runtime_readiness` (fail closed) → shadow PGDATA → MinIO shadow prefix
+(oldest→newest, new version IDs) → Qdrant shadow collection upload
+`priority=snapshot` → bulk reconcile + zero-drift `try_ready`.
 
-1. Fence writes (`fence-writes.sh`)
-2. Open readiness fence — `markhand_runtime_readiness_open('startup_reconciliation', …)`
-3. PostgreSQL PITR to manifest WAL LSN
-4. MinIO version inventory / mirror restore
-5. Qdrant snapshot **or** `rebuild-vectors-from-pg.sh`
-6. Reconcile detect→repair (`reconcile-before-ready.sh`)
-7. `markhand_runtime_readiness_try_ready` only after convergence
+Host-path PGDATA extract is refused when Compose uses named volumes; cutover is
+via shadow artifacts under `MARKHAND_RESTORE_TARGET_STATE`.
 
-### PG-only vector rebuild
+### Reconcile / vector rebuild
 
 ```bash
-deploy/backup/scripts/rebuild-vectors-from-pg.sh 1          # dry-run plan
-MARKHAND_RESTORE_CONFIRM=I_UNDERSTAND_DESTRUCTIVE_RESTORE \
-  deploy/backup/scripts/rebuild-vectors-from-pg.sh 0
-deploy/backup/scripts/reconcile-before-ready.sh repair 0
+# Live (Docker):
+MARKHAND_WORKER_KIND=reconcile \
+MARKHAND_RECONCILE_MODE=repair \
+MARKHAND_RECONCILE_BULK_ENQUEUE=1 \
+MARKHAND_RECONCILE_ONCE=1 \
+fileconv-worker
 ```
+
+Readiness certifies only after verified zero-drift + no pending jobs (0024).
 
 ## Verify
 
-1. `deploy/backup/scripts/validate-manifest.sh <manifest> <backup-root>` exits 0.
-2. `SELECT ready, generation, detail FROM runtime_readiness WHERE key='startup_reconciliation';`
-   is false until reconcile certifies; then true only after convergence.
-3. `curl -fsS http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready`
-4. Missing/orphan: reconcile report under `$MARKHAND_RESTORE_REPORT_DIR`.
-5. Do **not** record RPO/RTO pass unless Profile-B live timings were measured.
+1. `validate-manifest.sh` exits 0.
+2. `runtime_readiness.ready` false until zero-drift; true only after convergence.
+3. MinIO mapping file shows `retainsSourceVersionIds=false`.
+4. Do not record RPO/RTO pass without Profile-B live timings.
 
 ## Rollback
 
-- Keep prior backup root immutable; do not delete until new restore verified.
-- If restore apply fails mid-stage: re-run `restore.sh` (resume via `.state/stage`).
-- If readiness incorrectly true: re-open fence with
-  `SELECT markhand_runtime_readiness_open('startup_reconciliation', 'manual rollback');`
-  and stop API/workers.
-- Application rollback never requires DB downgrade (forward migrations only).
+- Keep backup root immutable; target state holds rollback/shadow artifacts.
+- Anti-replay refuses the same manifestSha256 cutover unless explicitly allowed.
+- Re-open readiness fence on failed apply.
 
 ## Synthetic / hermetic evidence
 
@@ -85,4 +84,4 @@ deploy/backup/scripts/reconcile-before-ready.sh repair 0
 python3 scripts/check-backup-o03.py --self-test
 ```
 
-Uses `deploy/backup/fixtures/fake-bin/*`. Does not claim live restore or G0-DR pass.
+No live restore or G0-DR claim.

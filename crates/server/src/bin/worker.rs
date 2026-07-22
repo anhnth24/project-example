@@ -404,6 +404,25 @@ async fn run_reconcile_worker(
         IndexingOutboxSink::new(&embedding_plan)
             .map_err(|error| format!("reconcile worker outbox sink failed: {error}"))?,
     );
+
+    // Optional bulk enqueue of document reconcile jobs (real JobPayload path).
+    if std::env::var("MARKHAND_RECONCILE_BULK_ENQUEUE")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        let reason =
+            std::env::var("MARKHAND_RECONCILE_REASON").unwrap_or_else(|_| "ops-bulk".to_string());
+        let n = fileconv_server::services::reconciliation::enqueue_reconcile_all_documents(
+            &pool, &ctx, &reason,
+        )
+        .await
+        .map_err(|error| format!("bulk reconcile enqueue failed: {error}"))?;
+        println!("fileconv-worker: bulk enqueued reconcile jobs={n}");
+    }
+
+    let once = std::env::var("MARKHAND_RECONCILE_ONCE").ok().as_deref() == Some("1");
+    let mut idle_rounds = 0u32;
     loop {
         tokio::select! {
             _ = shutdown_signal() => {
@@ -419,11 +438,31 @@ async fn run_reconcile_worker(
             } => {
                 match result {
                     Ok(ReconcileWorkerRun::NoJob) => {
+                        if once {
+                            idle_rounds += 1;
+                            // Wait a couple of empty polls so late enqueues settle.
+                            if idle_rounds >= 2 {
+                                let ready = fileconv_server::services::reconciliation::try_certify_startup_reconciliation(
+                                    &pool,
+                                    "reconcile-once idle try_ready",
+                                )
+                                .await
+                                .map_err(|error| format!("reconcile-once try_ready failed: {error}"))?;
+                                println!("fileconv-worker: reconcile-once complete ready={ready}");
+                                break;
+                            }
+                        }
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
-                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
+                    Ok(outcome) => {
+                        idle_rounds = 0;
+                        println!("fileconv-worker: {outcome:?}");
+                    }
                     Err(error) => {
                         eprintln!("fileconv-worker: reconcile worker error: {error}");
+                        if once {
+                            return Err(error);
+                        }
                         tokio::time::sleep(Duration::from_secs(2)).await;
                     }
                 }

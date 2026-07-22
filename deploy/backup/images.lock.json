@@ -10,7 +10,7 @@
   },
   "tools": {
     "openssl": {
-      "note": "Host OpenSSL 3.x for AES envelope of pg_basebackup tar; key material via env only."
+      "note": "Host OpenSSL 3.x aes-256-ctr for encrypt-then-MAC envelopes (aes-256-ctr-hmac-sha256-v1); HKDF/HMAC via Python stdlib. No cryptography package."
     },
     "pg_basebackup": {
       "note": "PostgreSQL 16+/18 client matching server major when possible."
@@ -18,6 +18,18 @@
   },
   "schema": {
     "recoveryManifestSchemaVersion": 1,
-    "path": "deploy/backup/schema/recovery-manifest.schema.json"
+    "path": "deploy/backup/schema/recovery-manifest.schema.json",
+    "enforcedBy": "deploy/backup/lib/manifest.py + schema_validate.py"
+  },
+  "postgresBackup": {
+    "method": "pg_basebackup_streamed_wal",
+    "continuousPitr": "blocked_unless_archive_wal_packaged_and_consumed",
+    "walArchiveOverlay": "preparatory_only"
+  },
+  "encryption": {
+    "algorithm": "aes-256-ctr-hmac-sha256-v1",
+    "kdf": "hkdf-sha256",
+    "mac": "hmac-sha256",
+    "cipher": "openssl enc -aes-256-ctr"
   }
 }

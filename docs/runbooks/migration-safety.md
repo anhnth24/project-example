@@ -1,8 +1,8 @@
 # Runbook: Migration safety (P1B-O03)
 
-Issue: P1B-O03  
+Issue: P1B-O03
 Related: `crates/server/migrations/**`, `scripts/check-migration-manifest.py`,
-`deploy/backup/migration/validate-migration-safety.py`  
+`deploy/backup/migration/validate-migration-safety.py`
 Out of scope: rewriting merged migrations; multi-region DR; DB downgrade rollbacks.
 
 ## Prerequisites

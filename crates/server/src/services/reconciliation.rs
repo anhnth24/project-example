@@ -73,6 +73,29 @@ pub struct ReconcileReport {
     pub repaired: ReconcileRepairCounts,
 }
 
+impl ReconcileReport {
+    /// Actionable drift that must block readiness certification.
+    pub fn drift_total(&self) -> usize {
+        self.missing_vectors
+            + self.orphan_vectors
+            + self.stale_vectors
+            + self.missing_objects
+            + self.orphan_objects
+    }
+
+    pub fn is_zero_drift(&self) -> bool {
+        self.drift_total() == 0
+    }
+
+    pub fn readiness_result_label(&self) -> &'static str {
+        if self.is_zero_drift() {
+            "success"
+        } else {
+            "drift"
+        }
+    }
+}
+
 /// Pure inventory comparison used by reconcile and hermetic tests.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ObjectInventoryDrift {
@@ -404,6 +427,29 @@ pub async fn enqueue_reconcile(
             })
         }
     })
+    .await
+}
+
+/// Enqueue one reconcile job without advancing the readiness generation.
+/// Callers that already opened a generation (bulk restore/repair) use this.
+pub async fn enqueue_reconcile_job(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    reason: &str,
+) -> Result<EnqueueOutcome, JobError> {
+    jobs::enqueue(
+        pool,
+        ctx,
+        EnqueueJob::new(
+            JobType::Reconcile,
+            JobPayload {
+                document_id: Some(document_id),
+                ..JobPayload::default()
+            },
+            format!("reconcile:{document_id}:{reason}"),
+        ),
+    )
     .await
 }
 
@@ -1455,18 +1501,115 @@ pub async fn pending_reconcile_jobs(pool: &Pool) -> Result<i64, ReconciliationEr
     Ok(pending)
 }
 
-/// Startup bootstrap: open a generation, then certify only if the queue is idle.
-///
-/// An empty queue alone cannot certify a never-ran startup — opening the
-/// generation records that bootstrap explicitly ran.
-pub async fn bootstrap_startup_reconciliation(pool: &Pool) -> Result<bool, ReconciliationError> {
-    let _generation = open_startup_reconciliation_generation(pool, "startup bootstrap").await?;
-    try_certify_startup_reconciliation(pool, "startup bootstrap certified").await
+/// Record one finished reconcile outcome into durable readiness counters.
+pub async fn record_reconcile_outcome(
+    pool: &Pool,
+    result: &str,
+    drift_total: i64,
+    detail: &str,
+) -> Result<bool, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let ready: bool = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_record_reconcile($1, $2, $3, $4)",
+            &[&STARTUP_RECONCILIATION_KEY, &result, &drift_total, &detail],
+        )
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(ready)
 }
 
-/// After a reconcile job reaches a terminal success, re-evaluate the durable marker.
-pub async fn certify_after_reconcile_success(pool: &Pool) -> Result<bool, ReconciliationError> {
-    try_certify_startup_reconciliation(pool, "reconcile generation certified").await
+/// Global document count via SECURITY DEFINER (not RLS-hidden).
+pub async fn document_count(pool: &Pool) -> Result<i64, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let count: i64 = client
+        .query_one("SELECT markhand_document_count()", &[])
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(count)
+}
+
+/// Startup bootstrap: open a generation. Empty catalog may record synthetic
+/// zero-drift success; otherwise readiness stays false until reconcile jobs
+/// verify zero drift (idle queue alone cannot certify).
+pub async fn bootstrap_startup_reconciliation(pool: &Pool) -> Result<bool, ReconciliationError> {
+    let _generation = open_startup_reconciliation_generation(pool, "startup bootstrap").await?;
+    let docs = document_count(pool).await?;
+    if docs == 0 {
+        record_reconcile_outcome(pool, "success", 0, "empty catalog zero-drift").await?;
+        return try_certify_startup_reconciliation(pool, "empty catalog certified").await;
+    }
+    // Documents exist — require reconcile convergence before ready.
+    Ok(false)
+}
+
+/// After a reconcile job completes, record drift/error and only then try_ready.
+pub async fn certify_after_reconcile_success(
+    pool: &Pool,
+    report: &ReconcileReport,
+) -> Result<bool, ReconciliationError> {
+    let result = report.readiness_result_label();
+    let drift = i64::try_from(report.drift_total()).unwrap_or(i64::MAX);
+    record_reconcile_outcome(
+        pool,
+        result,
+        drift,
+        if report.is_zero_drift() {
+            "reconcile job zero-drift"
+        } else {
+            "reconcile job reported drift"
+        },
+    )
+    .await?;
+    if !report.is_zero_drift() {
+        return Ok(false);
+    }
+    try_certify_startup_reconciliation(pool, "zero-drift reconcile generation certified").await
+}
+
+/// Bulk-enqueue document reconcile jobs for an org (actual JobPayload shape).
+pub async fn enqueue_reconcile_all_documents(
+    pool: &Pool,
+    ctx: &OrgContext,
+    reason: &str,
+) -> Result<usize, ReconciliationError> {
+    open_startup_reconciliation_generation(pool, &format!("bulk reconcile:{reason}")).await?;
+    let org_id = ctx.org_id();
+    let ids = crate::db::pool::with_org_txn_typed(pool, ctx, {
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT id FROM documents
+                         WHERE org_id = $1 AND deleted_at IS NULL
+                         ORDER BY id",
+                        &[&org_id],
+                    )
+                    .await
+                    .map_err(DbError::from)?;
+                Ok::<Vec<Uuid>, ReconciliationError>(
+                    rows.into_iter().map(|row| row.get(0)).collect(),
+                )
+            })
+        }
+    })
+    .await?;
+
+    let mut enqueued = 0usize;
+    for document_id in ids {
+        // Generation already opened above — do not reopen per document.
+        let outcome = enqueue_reconcile_job(pool, ctx, document_id, reason).await?;
+        if outcome.created {
+            enqueued += 1;
+        }
+    }
+    // Empty org: record zero-drift so try_ready can succeed after bulk no-op.
+    if enqueued == 0 && document_count(pool).await? == 0 {
+        record_reconcile_outcome(pool, "success", 0, "bulk reconcile empty org").await?;
+    }
+    Ok(enqueued)
 }
 
 impl ReconciliationError {
@@ -1505,6 +1648,22 @@ mod tests {
             ReconcileMode::parse("delete"),
             Err(ReconciliationError::InvalidMode)
         ));
+    }
+
+    #[test]
+    fn reconcile_report_drift_blocks_zero_drift_label() {
+        let mut clean = ReconcileReport::default();
+        assert!(clean.is_zero_drift());
+        assert_eq!(clean.readiness_result_label(), "success");
+        clean.missing_vectors = 1;
+        assert!(!clean.is_zero_drift());
+        assert_eq!(clean.drift_total(), 1);
+        assert_eq!(clean.readiness_result_label(), "drift");
+        let mut objects = ReconcileReport::default();
+        objects.orphan_objects = 2;
+        objects.missing_objects = 3;
+        assert_eq!(objects.drift_total(), 5);
+        assert_eq!(objects.readiness_result_label(), "drift");
     }
 
     #[test]

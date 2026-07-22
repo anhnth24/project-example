@@ -1,0 +1,29 @@
+# PREPARATORY overlay only — enables PostgreSQL archive_mode + archive_command.
+#
+# This file does NOT enable continuous PITR by itself.
+# Continuous PITR may be labeled enabled only when:
+#   1) backup packages and checksums archived WAL through the target LSN, and
+#   2) restore consumes that packaged archive WAL.
+#
+# Default O03 path remains pg_basebackup_streamed_wal with continuousPitr=false.
+#
+#   docker compose -f deploy/compose.poc.yml \
+#     -f deploy/backup/compose.wal-archive.yml up -d postgres
+
+services:
+  postgres:
+    environment:
+      MARKHAND_PG_ARCHIVE_MODE: "on"
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f
+      - -c
+      - archive_timeout=60
+    volumes:
+      - markhand_wal_archive:/var/lib/postgresql/wal_archive
+
+volumes:
+  markhand_wal_archive:

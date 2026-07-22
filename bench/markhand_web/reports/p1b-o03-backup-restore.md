@@ -1,60 +1,51 @@
-# P1B-O03 evidence — backup/restore and migration safety
+# P1B-O03 evidence — backup/restore and migration safety (rebuild)
 
 Status: **In Progress**.
 `claims_live_restore`: **false**
 `claims_rpo_rto_pass`: **false**
-Profile-B DR gate: `unresolved` (targetMatch=false)
+PostgreSQL method: `pg_basebackup_streamed_wal` (continuous PITR: `blocked_unless_archive_wal_packaged_and_consumed`).
 
 ## Evidence classes
 
 ### implemented
 
-- deploy/backup/** scripts and recovery manifest tooling
-- docs/runbooks/backup-restore.md
-- docs/runbooks/migration-safety.md
-- migration expand→cutover→contract validator
+- streamed WAL restorable PG backup + EtM envelope metadata
+- MinIO version/delete-marker inventory + restore mapping
+- Qdrant collection identity from index signature
+- dry-run read-only; fence quiescence; target-bound restore state
+- zero-drift readiness certification (migration 0024)
+- bulk enqueue + reconcile-once worker path
+- recovery-manifest.schema.json enforced (unknown fields fail)
 
 ### static
 
-- layout/executable scripts
-- digest-pinned images.lock.json
-- runbook sections + destructive confirmation
-- migration safety against crates/server/migrations
-- secret hygiene scan under deploy/backup
+- digest pins
+- runbooks
+- migration safety + SQL semantic policy
+- wal-archive overlay labeled preparatory only
+- no host cryptography package lock claim
 
 ### hermetic
 
-- success backup + dry-run restore
-- corrupt manifest
-- wrong org/schema/signature
-- missing artifact/snapshot/WAL
-- command failure fail-closed
-- interrupted/resume
-- path traversal/symlink rejection
-- destructive confirmation
-- readiness fence until reconcile
-- upgrade migrationVersion mismatch
-- redaction
-- PG-only vector rebuild dry-run
+- backup+dry-run+apply
+- drift keeps ready false / zero-drift ready
+- corrupt/duplicate JSON
+- org/schema/signature/migration mismatch
+- missing artifact / command failure
+- path traversal/symlink/destructive confirm
+- OpenSSL CTR+HMAC roundtrip/tamper/wrong-key/truncation
+- schema enforcement + schema/code drift mutation
+- PITR blocked without packaged archive WAL
+- anti-replay target binding
 
 ### pending_live
 
-- Docker compose clean-host restore
-- measured RPO <= 15m / query-ready RTO <= 60m / full-vector RTO <= 240m
-- live missing/orphan detection against real MinIO/Qdrant
-
-## Commands
-
-```bash
-python3 scripts/check-backup-o03.py --self-test
-python3 deploy/backup/migration/validate-migration-safety.py --check
-make check-backup
-```
-
-Machine report: `deploy/backup/evidence/validation-report.json` (ok=true, hermeticTestsRun=13).
+- Docker compose restore with shadow cutover
+- continuous PITR only after packaged archive WAL + restore consume
+- Profile-B RPO/RTO measurements
 
 ## Non-claims / blockers
 
-- Docker unavailable or unused — no live restore claim.
-- Profile-B RPO/RTO gate evidence unresolved.
+- No live Docker restore or Profile-B RPO/RTO pass.
+- Continuous PITR blocked unless archived WAL through target LSN is packaged/checksummed and consumed on restore; wal-archive overlay is preparatory only.
 - Multi-region DR out of scope.
