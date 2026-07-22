@@ -366,8 +366,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
-- **Status:** In Progress — dashboards/alerts/runbooks implementation on branch
-  `cursor/implement-p1b-o02-5007` (stacked on O01).
+- **Status:** Review — implementation ready in PR #265; two bounded review rounds and
+  focused remediation verification report zero findings. Stacked on O01 PR #264.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
 - **Files:** `deploy/observability/**`, `docs/runbooks/**`.
