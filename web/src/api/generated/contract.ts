@@ -810,6 +810,10 @@ export interface components {
             documentId: string;
             /** Format: uuid */
             versionId: string;
+            versionNumber: number;
+            contentSha256: string;
+            markdownSha256: string;
+            isCurrent: boolean;
             markdown: string;
             /** Format: uuid */
             requestId: string;
