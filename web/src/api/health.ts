@@ -1,8 +1,7 @@
 import type { components, paths } from './generated/contract';
 
 type Health = components['schemas']['Health'];
-const readinessPath = '/health/ready' satisfies keyof paths;
-const apiPrefix = '/api/v1';
+const readinessPath = '/api/v1/health/ready' satisfies keyof paths;
 
 export type ConnectionState =
   { kind: 'checking' } | { kind: 'ready'; requestId: string } | { kind: 'unavailable' };
@@ -10,7 +9,7 @@ export type ConnectionState =
 const apiBaseUrl = import.meta.env.VITE_MARKHAND_API_BASE_URL?.replace(/\/$/, '') ?? '';
 
 export async function fetchReadiness(signal: AbortSignal): Promise<Health> {
-  const response = await fetch(`${apiBaseUrl}${apiPrefix}${readinessPath}`, {
+  const response = await fetch(`${apiBaseUrl}${readinessPath}`, {
     headers: { Accept: 'application/json' },
     signal,
   });
