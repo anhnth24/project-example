@@ -128,10 +128,16 @@ impl ReconcileWorker {
                     return Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id });
                 }
                 match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
-                    Ok(completed) => Ok(ReconcileWorkerRun::Completed {
-                        job_id: completed.id,
-                        report,
-                    }),
+                    Ok(completed) => {
+                        // Atomically certify ready only when pending/leased is empty.
+                        reconciliation::certify_after_reconcile_success(&self.db_pool)
+                            .await
+                            .map_err(ReconcileWorkerError::Reconciliation)?;
+                        Ok(ReconcileWorkerRun::Completed {
+                            job_id: completed.id,
+                            report,
+                        })
+                    }
                     Err(JobError::LeaseLost) => {
                         Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id })
                     }

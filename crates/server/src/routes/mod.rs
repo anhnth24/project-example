@@ -6,6 +6,7 @@ pub mod collections;
 mod common;
 pub mod documents;
 pub mod events;
+pub mod health;
 pub mod jobs;
 mod qa_common;
 pub mod search;

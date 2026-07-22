@@ -4,35 +4,605 @@
  */
 
 export interface paths {
-    "/health/live": {
+    "/live": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        /** Process liveness (root) */
+        get: operations["rootLive"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Process liveness (root) (HEAD) */
+        head: operations["rootLiveHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness (root) */
+        get: operations["rootReady"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Readiness (root) (HEAD) */
+        head: operations["rootReadyHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/startup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One-way startup completion (root) */
+        get: operations["rootStartup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** One-way startup completion (root) (HEAD) */
+        head: operations["rootStartupHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Process liveness */
         get: operations["healthLive"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        /** Process liveness (HEAD) */
+        head: operations["healthLiveHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Readiness (deps/signature/reconciliation) */
+        get: operations["healthReady"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Readiness (deps/signature/reconciliation) (HEAD) */
+        head: operations["healthReadyHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/health/startup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One-way startup completion */
+        get: operations["healthStartup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** One-way startup completion (HEAD) */
+        head: operations["healthStartupHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Password login */
+        post: operations["authLogin"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/health/ready": {
+    "/api/v1/auth/refresh": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["healthReady"];
+        get?: never;
+        put?: never;
+        /** Refresh session */
+        post: operations["authRefresh"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Logout / revoke refresh family */
+        post: operations["authLogout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current principal */
+        get: operations["authMe"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
+        /** Current principal (HEAD) */
+        head: operations["authMeHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List collections */
+        get: operations["listCollections"];
+        put?: never;
+        /** Create collection */
+        post: operations["createCollection"];
+        delete?: never;
+        options?: never;
+        /** List collections (HEAD) */
+        head: operations["listCollectionsHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/collections/{collectionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get collection */
+        get: operations["getCollection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Get collection (HEAD) */
+        head: operations["getCollectionHead"];
+        /** Update collection */
+        patch: operations["updateCollection"];
+        trace?: never;
+    };
+    "/api/v1/documents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List documents */
+        get: operations["listDocuments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** List documents (HEAD) */
+        head: operations["listDocumentsHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get document */
+        get: operations["getDocument"];
+        put?: never;
+        post?: never;
+        /** Tombstone document */
+        delete: operations["deleteDocument"];
+        options?: never;
+        /** Get document (HEAD) */
+        head: operations["getDocumentHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enqueue reindex */
+        post: operations["reindexDocument"];
+        delete?: never;
+        options?: never;
         head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List versions */
+        get: operations["listDocumentVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** List versions (HEAD) */
+        head: operations["listDocumentVersionsHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/versions/{versionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get version metadata (no object keys) */
+        get: operations["getDocumentVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Get version metadata (no object keys) (HEAD) */
+        head: operations["getDocumentVersionHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/versions/{versionId}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Publish version */
+        post: operations["publishDocumentVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/versions/{leftVersionId}/diff/{rightVersionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Metadata diff between versions */
+        get: operations["diffDocumentVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Metadata diff between versions (HEAD) */
+        head: operations["diffDocumentVersionsHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/versions/{versionId}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorized markdown preview */
+        get: operations["previewDocumentVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Authorized markdown preview (HEAD) */
+        head: operations["previewDocumentVersionHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/documents/{documentId}/versions/{versionId}/download-capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mint short-lived download capability */
+        post: operations["mintDownloadCapability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/download-capabilities/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Redeem download capability (binary media body) */
+        post: operations["redeemDownloadCapability"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List conflicts */
+        get: operations["listConflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** List conflicts (HEAD) */
+        head: operations["listConflictsHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conflicts/{conflictId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get conflict */
+        get: operations["getConflict"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Get conflict (HEAD) */
+        head: operations["getConflictHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conflicts/{conflictId}/triage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Triage conflict */
+        post: operations["triageConflict"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conflicts/{conflictId}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List conflict evidence */
+        get: operations["listConflictEvidence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** List conflict evidence (HEAD) */
+        head: operations["listConflictEvidenceHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/citations/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve citation locators */
+        post: operations["resolveCitations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List jobs */
+        get: operations["listJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** List jobs (HEAD) */
+        head: operations["listJobsHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{jobId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get job */
+        get: operations["getJob"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Get job (HEAD) */
+        head: operations["getJobHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Streaming quarantine upload */
+        post: operations["createUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tenant-scoped hybrid search */
+        post: operations["search"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Grounded Q&A */
+        post: operations["ask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ask/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Closed-snapshot SSE Q&A delivery */
+        post: operations["askStream"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events/{requestId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resume closed SSE snapshot */
+        get: operations["resumeEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Resume closed SSE snapshot (HEAD) */
+        head: operations["resumeEventsHead"];
         patch?: never;
         trace?: never;
     };
@@ -46,6 +616,14 @@ export interface components {
             /** Format: uuid */
             requestId: string;
         };
+        Startup: {
+            /** @enum {string} */
+            status: "ok" | "degraded" | "starting";
+            completed: boolean;
+            degraded: boolean;
+            /** Format: uuid */
+            requestId: string;
+        };
         ApiError: {
             code: string;
             message: string;
@@ -53,29 +631,656 @@ export interface components {
             requestId: string;
             details?: unknown;
         };
+        RateLimitedError: {
+            /** @enum {string} */
+            code: "rate_limited";
+            message: string;
+            /** Format: uuid */
+            requestId: string;
+            details: {
+                limit: number;
+                remaining: number;
+                resetSecs: number;
+                scope: string;
+                quota?: {
+                    limit: number;
+                    remaining: number;
+                    resetSecs: number;
+                    scope: string;
+                };
+            };
+        };
         PageInfo: {
             nextCursor?: string | null;
             hasMore: boolean;
+        };
+        LoginRequest: {
+            email: string;
+            password: string;
+        };
+        RefreshRequest: {
+            refreshToken: string;
+        };
+        LogoutRequest: {
+            refreshToken: string;
+        };
+        TokenResponse: {
+            accessToken: string;
+            refreshToken: string;
+            /** @enum {string} */
+            tokenType: "Bearer";
+            expiresIn: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            userId: string;
+        };
+        MeResponse: {
+            /** Format: uuid */
+            userId: string;
+            /** Format: uuid */
+            orgId: string;
+            email: string;
+            displayName: string;
+            permissions: string[];
+            allowedCollectionIds: string[];
+            sessionId: string;
+        };
+        Collection: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            slug: string;
+            description?: string | null;
+            visibility: string;
+            /** Format: uuid */
+            ownerUserId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        CollectionList: {
+            items: components["schemas"]["Collection"][];
+            pageInfo: components["schemas"]["PageInfo"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        CollectionCreate: {
+            name: string;
+            slug: string;
+            description?: string;
+            visibility?: string;
+        };
+        CollectionUpdate: {
+            name?: string;
+            description?: string | null;
+            visibility?: string;
+        };
+        Document: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            collectionId: string;
+            title: string;
+            state: string;
+            /** Format: uuid */
+            currentVersionId?: string | null;
+            /** Format: uuid */
+            createdByUserId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            deletedAt?: string | null;
+            /** Format: uuid */
+            requestId: string;
+        };
+        DocumentList: {
+            items: components["schemas"]["Document"][];
+            pageInfo: components["schemas"]["PageInfo"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        /** @description Version metadata only — never exposes storage object keys. */
+        DocumentVersion: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            documentId: string;
+            versionNumber: number;
+            /** Format: uuid */
+            parentVersionId?: string | null;
+            publicationState: string;
+            isCurrent: boolean;
+            contentSha256: string;
+            sourceFilename?: string | null;
+            sourceContentType?: string | null;
+            byteSize?: number | null;
+            /** Format: date-time */
+            effectiveFrom: string;
+            /** Format: date-time */
+            effectiveTo?: string | null;
+            changeSummary?: string | null;
+            /** Format: uuid */
+            createdByUserId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        DocumentVersionList: {
+            items: components["schemas"]["DocumentVersion"][];
+            pageInfo: components["schemas"]["PageInfo"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        VersionDiff: {
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            leftVersionId: string;
+            /** Format: uuid */
+            rightVersionId: string;
+            leftVersionNumber: number;
+            rightVersionNumber: number;
+            contentSha256Changed: boolean;
+            publicationStateChanged: boolean;
+            currentFlagChanged: boolean;
+            changeSummaryChanged: boolean;
+            /** Format: uuid */
+            requestId: string;
+        };
+        ReindexResponse: {
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            /** Format: uuid */
+            jobId: string;
+            created: boolean;
+            /** Format: uuid */
+            requestId: string;
+        };
+        PreviewResponse: {
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            markdown: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        DownloadCapabilityRequest: {
+            /** @enum {string} */
+            purpose: "original" | "markdown";
+            ttlSecs?: number;
+        };
+        DownloadCapabilityResponse: {
+            /** Format: uuid */
+            capabilityId: string;
+            token: string;
+            purpose: string;
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        DownloadRedeemRequest: {
+            token: string;
+        };
+        Conflict: {
+            /** Format: uuid */
+            id: string;
+            status: string;
+            severity: string;
+            conflictType: string;
+            /** Format: uuid */
+            claimAId: string;
+            /** Format: uuid */
+            claimBId: string;
+            /** Format: date-time */
+            firstDetectedAt: string;
+            /** Format: uuid */
+            firstDetectedVersionId?: string | null;
+            /** Format: date-time */
+            resolvedAt?: string | null;
+            resolutionNote?: string | null;
+            /** Format: uuid */
+            resolutionVersionAId?: string | null;
+            /** Format: uuid */
+            resolutionVersionBId?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        ConflictList: {
+            items: components["schemas"]["Conflict"][];
+            pageInfo: components["schemas"]["PageInfo"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        ConflictTriageRequest: {
+            status: string;
+            resolutionNote?: string;
+            /** Format: uuid */
+            resolutionVersionAId?: string;
+            /** Format: uuid */
+            resolutionVersionBId?: string;
+        };
+        ConflictEvidence: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            conflictId: string;
+            /** Format: uuid */
+            claimId: string;
+            evidenceRole: string;
+            citationQuote?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ConflictEvidenceList: {
+            items: components["schemas"]["ConflictEvidence"][];
+            pageInfo: components["schemas"]["PageInfo"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        CitationResolveItem: {
+            /** Format: uuid */
+            chunkId: string;
+            /** Format: uuid */
+            expectedVersionId?: string;
+            /** Format: uuid */
+            expectedDocumentId?: string;
+            expectedContentSha256?: string;
+            expectedQuote?: string;
+            expectedSpanStart?: number;
+            expectedSpanEnd?: number;
+        };
+        StableCitation: {
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            logicalDocumentId: string;
+            /** Format: uuid */
+            versionId: string;
+            versionNumber: number;
+            contentSha256: string;
+            /** Format: uuid */
+            chunkId: string;
+            chunkIdentitySha256: string;
+            page?: number;
+            slide?: number;
+            sheet?: string;
+            spanStart: number;
+            spanEnd: number;
+            quote: string;
+            /** Format: date-time */
+            effectiveFrom: string;
+            /** Format: date-time */
+            effectiveTo?: string | null;
+            isCurrent: boolean;
+            heading: string;
+        };
+        CitationResolveRequest: {
+            citations: components["schemas"]["CitationResolveItem"][];
+        };
+        CitationResolveResponse: {
+            citations: components["schemas"]["StableCitation"][];
+            /** Format: uuid */
+            requestId: string;
+        };
+        Job: {
+            /** Format: uuid */
+            id: string;
+            jobType: string;
+            status: string;
+            attempts: number;
+            maxAttempts: number;
+            /** Format: uuid */
+            documentId?: string | null;
+            /** Format: uuid */
+            versionId?: string | null;
+            /** Format: date-time */
+            availableAt: string;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            finishedAt?: string | null;
+            lastError?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        JobList: {
+            items: components["schemas"]["Job"][];
+            pageInfo: components["schemas"]["PageInfo"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        UploadResponse: {
+            disposition: string;
+            threatClass?: string;
+            reasonCode?: string;
+            /**
+             * Format: uuid
+             * @description Opaque upload identity (not a storage key)
+             */
+            objectId: string;
+            sha256: string;
+            sizeBytes: number;
+            canonicalFormat: string;
+            originalFilename?: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        VersionMode: {
+            /** @enum {string} */
+            type: "current" | "as_of" | "compare" | "history";
+            /** Format: date-time */
+            at?: string;
+            /** Format: uuid */
+            documentId?: string;
+            /** Format: uuid */
+            versionA?: string;
+            /** Format: uuid */
+            versionB?: string;
+        };
+        SearchRequest: {
+            query: string;
+            collectionIds?: string[];
+            mode?: components["schemas"]["VersionMode"];
+            limit?: number;
+        };
+        SearchHitLocator: {
+            page?: number | null;
+            slide?: number | null;
+            sheet?: string | null;
+            spanStart?: number;
+            spanEnd?: number;
+        };
+        SearchHit: {
+            /** Format: uuid */
+            chunkId: string;
+            /** Format: uuid */
+            collectionId: string;
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            versionNumber: number;
+            contentSha256: string;
+            heading: string;
+            snippet: string;
+            score: number;
+            isCurrent: boolean;
+            locator: components["schemas"]["SearchHitLocator"];
+        };
+        SearchResponse: {
+            hits: components["schemas"]["SearchHit"][];
+            warnings: string[];
+            embeddingMode: string;
+            /** Format: uuid */
+            requestId: string;
+        };
+        AskRequest: {
+            question: string;
+            collectionIds?: string[];
+            mode?: components["schemas"]["VersionMode"];
+            limit?: number;
+            useProvider?: boolean;
+        };
+        AskCitation: {
+            citeId: string;
+            /** Format: uuid */
+            documentId: string;
+            /** Format: uuid */
+            versionId: string;
+            versionNumber: number;
+            contentSha256: string;
+            /** Format: uuid */
+            chunkId: string;
+            isCurrent: boolean;
+            heading: string;
+            quote: string;
+        };
+        AskResponse: {
+            answer: string;
+            citations: components["schemas"]["AskCitation"][];
+            mode: string;
+            grounded: boolean;
+            warnings?: string[];
+            versionContext?: Record<string, never>;
+            conflictWarnings?: Record<string, never>[];
+            /** Format: uuid */
+            requestId: string;
+        };
+        /** @description Canonical JSON object in each text/event-stream data frame (repeated frames, not one JSON body). */
+        SseEnvelope: {
+            version: number;
+            sequence: number;
+            /** @enum {string} */
+            event: "metadata" | "token" | "close" | "error";
+            /** Format: uuid */
+            requestId: string;
+            data: unknown;
         };
     };
     responses: {
         /** @description Canonical API error */
         ApiError: {
             headers: {
+                "X-Request-Id": components["headers"]["RequestId"];
                 [name: string]: unknown;
             };
             content: {
                 "application/json": components["schemas"]["ApiError"];
             };
         };
+        /** @description Rate limit exceeded */
+        RateLimited: {
+            headers: {
+                "Retry-After": components["headers"]["RetryAfter"];
+                /** @description Configured request budget for the active scope */
+                "X-RateLimit-Limit"?: number;
+                /** @description Remaining requests in the current window */
+                "X-RateLimit-Remaining"?: number;
+                /** @description Seconds until the current window resets */
+                "X-RateLimit-Reset"?: number;
+                "X-Request-Id": components["headers"]["RequestId"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RateLimitedError"];
+            };
+        };
     };
-    parameters: never;
+    parameters: {
+        Limit: number;
+        Cursor: string;
+        CollectionId: string;
+        DocumentId: string;
+        VersionId: string;
+        ConflictId: string;
+        IdempotencyKey: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Validated or server-generated request id */
+        RequestId: string;
+        /** @description Seconds until rate-limit window resets */
+        RetryAfter: number;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    rootLive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alive */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    rootLiveHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alive */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    rootReady: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    rootReadyHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    rootStartup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Startup completed */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Still starting */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+        };
+    };
+    rootStartupHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Startup completed */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Still starting */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+        };
+    };
     healthLive: {
         parameters: {
             query?: never;
@@ -85,15 +1290,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Process health; does not contact dependencies. */
+            /** @description Alive */
             200: {
                 headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    healthLiveHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alive */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
         };
     };
     healthReady: {
@@ -105,16 +1334,1394 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description PostgreSQL, Qdrant and MinIO are reachable. */
+            /** @description Ready */
             200: {
                 headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Health"];
                 };
             };
+            429: components["responses"]["RateLimited"];
             503: components["responses"]["ApiError"];
+        };
+    };
+    healthReadyHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["ApiError"];
+        };
+    };
+    healthStartup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Startup completed */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Still starting */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+        };
+    };
+    healthStartupHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Startup completed */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            /** @description Still starting */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Startup"];
+                };
+            };
+        };
+    };
+    authLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Tokens */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    authRefresh: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Rotated tokens */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    authLogout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LogoutRequest"];
+            };
+        };
+        responses: {
+            /** @description Logged out */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    authMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current principal */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    authMeHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current principal */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listCollections: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Collection page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionCreate"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listCollectionsHead: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Collection page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Collection */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getCollectionHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Collection */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateCollection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["CollectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CollectionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listDocuments: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listDocumentsHead: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteDocument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tombstoned */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getDocumentHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Document */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    reindexDocument: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reindex enqueued */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReindexResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            409: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listDocumentVersions: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersionList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listDocumentVersionsHead: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersionList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getDocumentVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version metadata */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersion"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getDocumentVersionHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version metadata */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersion"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    publishDocumentVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentVersion"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    diffDocumentVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                leftVersionId: string;
+                rightVersionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metadata diff */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiff"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    diffDocumentVersionsHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                leftVersionId: string;
+                rightVersionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Metadata diff */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionDiff"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    previewDocumentVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preview */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    previewDocumentVersionHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preview */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    mintDownloadCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                documentId: components["parameters"]["DocumentId"];
+                versionId: components["parameters"]["VersionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DownloadCapabilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Capability token */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DownloadCapabilityResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    redeemDownloadCapability: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DownloadRedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description Authorized binary download body */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    /** @description Content digest of the redeemed artifact */
+                    "X-Content-Sha256"?: string;
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listConflicts: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Conflict page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConflictList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listConflictsHead: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Conflict page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConflictList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getConflict: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conflictId: components["parameters"]["ConflictId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Conflict */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conflict"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getConflictHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conflictId: components["parameters"]["ConflictId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Conflict */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conflict"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    triageConflict: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conflictId: components["parameters"]["ConflictId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConflictTriageRequest"];
+            };
+        };
+        responses: {
+            /** @description Triaged */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Conflict"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listConflictEvidence: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                conflictId: components["parameters"]["ConflictId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConflictEvidenceList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listConflictEvidenceHead: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                conflictId: components["parameters"]["ConflictId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Evidence page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConflictEvidenceList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    resolveCitations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CitationResolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Resolved citations */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationResolveResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listJobs: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listJobsHead: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job page */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobList"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getJobHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                jobId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Job */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createUpload: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                    /** Format: uuid */
+                    collectionId?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Upload accepted (opaque objectId only) */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            413: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Authorized hits */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    ask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Grounded answer */
+            200: {
+                headers: {
+                    "X-Request-Id": components["headers"]["RequestId"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    askStream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Closed-snapshot SSE delivery */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SseEnvelope"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    resumeEvents: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resumable closed SSE snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SseEnvelope"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            410: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    resumeEventsHead: {
+        parameters: {
+            query?: never;
+            header?: {
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resumable closed SSE snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["SseEnvelope"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            410: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
 }

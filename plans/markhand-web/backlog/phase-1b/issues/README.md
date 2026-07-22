@@ -312,12 +312,25 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
+- **Status:** Blocked — implementation ready; dependencies R04/R05 Review/Blocked
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
 - **Depends:** R04/R05/F05 + G0-SLO.
 - **Acceptance/tests:** Every route represented; readiness detects required deps/
   signature/reconciliation; 429 metadata; snapshots/rate/trusted-proxy/outage tests.
+- **Evidence (implementation ready):**
+  - Static `openapi/openapi.yaml` + `api/openapi.rs` inventory/drift tests for every
+    wired `/api/v1` route (R02/R04/R05); security scheme, SSE `text/event-stream`,
+    canonical errors; forbidden secret/object-key markers.
+  - Middleware order: request ID → error envelope → CORS → rate → auth extractor.
+    `X-Request-Id` UUID validate/generate/echo; exact-origin CORS (prod wildcard fail);
+    in-process fixed-window limiter (IP + org/user, endpoint classes) with bounded map
+    eviction; trusted-proxy XFF only when peer in CIDRs (else ignore/reject spoof).
+    429 envelope + `Retry-After` + quota metadata. Config caps fail closed.
+  - Health: `/live` `/ready` `/startup` + compat `/api/v1/health/*`; readiness probes
+    PG/MinIO/Qdrant/config/signature/reconciliation with fake-probe hermetic tests;
+    liveness unaffected; HEAD supported. No distributed limiter / O01–O02.
 - **Security/migration:** Conservative CORS/proxy trust. **Out:** distributed limiter.
 
 ## Operations và release

@@ -14,10 +14,16 @@ use super::error::{ApiError, ApiRejection};
 use crate::http::AppState;
 
 fn rejection_request_id(parts: &Parts) -> String {
-    parts
+    if let Some(auth) = parts
         .extensions
         .get::<crate::auth::middleware::AuthenticatedOrg>()
-        .map(|auth| auth.request_id.clone())
+    {
+        return auth.request_id.clone();
+    }
+    parts
+        .extensions
+        .get::<crate::middleware::RequestId>()
+        .map(|id| id.0.clone())
         .unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
@@ -112,6 +118,11 @@ where
             .extensions()
             .get::<crate::auth::middleware::AuthenticatedOrg>()
             .map(|auth| auth.request_id.clone())
+            .or_else(|| {
+                req.extensions()
+                    .get::<crate::middleware::RequestId>()
+                    .map(|id| id.0.clone())
+            })
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         match axum::Json::<T>::from_request(req, state).await {
             Ok(axum::Json(value)) => Ok(Self(value)),
@@ -121,12 +132,22 @@ where
                 "Request body is malformed",
                 request_id,
             )),
-            Err(JsonRejection::BytesRejection(_)) => Err(ApiRejection::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "payload_too_large",
-                "Request body exceeds the configured limit",
-                request_id,
-            )),
+            Err(JsonRejection::BytesRejection(error)) => {
+                let status = error.status();
+                // Only body-too-large maps to 413; preserve other BytesRejection statuses.
+                if status == StatusCode::PAYLOAD_TOO_LARGE {
+                    Err(ApiRejection::new(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "payload_too_large",
+                        "Request body exceeds the configured limit",
+                        request_id,
+                    ))
+                } else {
+                    let (status, code, message) =
+                        map_status_message(status, "Request body is invalid");
+                    Err(ApiRejection::new(status, code, message, request_id))
+                }
+            }
             Err(other) => {
                 let (status, code, message) =
                     map_status_message(other.status(), "Request body is invalid");
@@ -147,6 +168,11 @@ impl FromRequest<Arc<AppState>> for AppMultipart {
             .extensions()
             .get::<crate::auth::middleware::AuthenticatedOrg>()
             .map(|auth| auth.request_id.clone())
+            .or_else(|| {
+                req.extensions()
+                    .get::<crate::middleware::RequestId>()
+                    .map(|id| id.0.clone())
+            })
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         match Multipart::from_request(req, state).await {
             Ok(multipart) => Ok(Self(multipart)),

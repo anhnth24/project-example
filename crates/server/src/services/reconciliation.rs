@@ -363,6 +363,14 @@ pub async fn enqueue_reconcile(
     document_id: Uuid,
     reason: &str,
 ) -> Result<EnqueueOutcome, JobError> {
+    // Close/advance the durable readiness generation before durable enqueue so
+    // readiness cannot race ahead of newly queued reconcile work.
+    open_startup_reconciliation_generation(pool, &format!("reconcile enqueued:{reason}"))
+        .await
+        .map_err(|error| match error {
+            ReconciliationError::Db(db) => JobError::Database(db),
+            other => JobError::Database(DbError::Config(other.to_string())),
+        })?;
     jobs::enqueue(
         pool,
         ctx,
@@ -1327,6 +1335,84 @@ pub enum ReconciliationError {
     InvalidCheckpoint,
     #[error("reconcile qdrant scroll limit exceeded")]
     ScrollLimitExceeded,
+}
+
+/// Durable readiness key written by the reconciliation service (P1B-R06).
+pub const STARTUP_RECONCILIATION_KEY: &str = "startup_reconciliation";
+
+/// Load the durable startup-reconciliation marker (missing → not ready).
+pub async fn is_startup_reconciliation_ready(pool: &Pool) -> Result<bool, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let row = client
+        .query_opt(
+            "SELECT ready FROM runtime_readiness WHERE key = $1",
+            &[&STARTUP_RECONCILIATION_KEY],
+        )
+        .await
+        .map_err(DbError::from)?;
+    Ok(row.map(|row| row.get::<_, bool>(0)).unwrap_or(false))
+}
+
+/// Atomically close readiness and advance the generation (enqueue / bootstrap).
+pub async fn open_startup_reconciliation_generation(
+    pool: &Pool,
+    detail: &str,
+) -> Result<i64, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let generation: i64 = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_open($1, $2)",
+            &[&STARTUP_RECONCILIATION_KEY, &detail],
+        )
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(generation)
+}
+
+/// Atomically certify ready for the current generation when pending/leased is empty.
+///
+/// Generation 0 (never bootstrapped) cannot become ready. Errors from the
+/// SECURITY DEFINER helpers propagate to the caller.
+pub async fn try_certify_startup_reconciliation(
+    pool: &Pool,
+    detail: &str,
+) -> Result<bool, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let ready: bool = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_try_ready($1, $2)",
+            &[&STARTUP_RECONCILIATION_KEY, &detail],
+        )
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(ready)
+}
+
+/// Global pending+leased reconcile count via SECURITY DEFINER (not RLS-hidden).
+pub async fn pending_reconcile_jobs(pool: &Pool) -> Result<i64, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let pending: i64 = client
+        .query_one("SELECT markhand_pending_reconcile_jobs()", &[])
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(pending)
+}
+
+/// Startup bootstrap: open a generation, then certify only if the queue is idle.
+///
+/// An empty queue alone cannot certify a never-ran startup — opening the
+/// generation records that bootstrap explicitly ran.
+pub async fn bootstrap_startup_reconciliation(pool: &Pool) -> Result<bool, ReconciliationError> {
+    let _generation = open_startup_reconciliation_generation(pool, "startup bootstrap").await?;
+    try_certify_startup_reconciliation(pool, "startup bootstrap certified").await
+}
+
+/// After a reconcile job reaches a terminal success, re-evaluate the durable marker.
+pub async fn certify_after_reconcile_success(pool: &Pool) -> Result<bool, ReconciliationError> {
+    try_certify_startup_reconciliation(pool, "reconcile generation certified").await
 }
 
 impl ReconciliationError {

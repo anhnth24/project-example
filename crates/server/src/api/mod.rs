@@ -2,6 +2,7 @@
 
 mod error;
 mod extract;
+pub mod openapi;
 mod pagination;
 pub mod sse;
 mod types;
@@ -41,10 +42,20 @@ mod tests {
             serde_json::from_str(include_str!("../../openapi/fixtures/pagination.json")).unwrap();
         assert!(page.has_more);
 
-        let event: SseEnvelope =
-            serde_json::from_str(include_str!("../../openapi/fixtures/sse.json")).unwrap();
-        assert_eq!(event.version, 1);
-        assert_eq!(event.sequence, 42);
+        let frames = crate::api::openapi::parse_sse_fixture_envelopes(include_str!(
+            "../../openapi/fixtures/sse.event-stream"
+        ))
+        .unwrap();
+        assert!(frames.len() >= 2);
+        assert_eq!(frames[0].version, 1);
+        assert_eq!(frames[0].sequence, 42);
+        let _ = SseEnvelope {
+            version: frames[0].version,
+            sequence: frames[0].sequence,
+            event: frames[0].event.clone(),
+            request_id: frames[0].request_id.clone(),
+            data: frames[0].data.clone(),
+        };
     }
 
     #[test]

@@ -3,8 +3,10 @@
 Markhand Web API and worker boundary. The first Phase 1B increment starts a real HTTP
 server, applies checksum-verified PostgreSQL migrations, and exposes:
 
-- `GET /api/v1/health/live` — process liveness;
-- `GET /api/v1/health/ready` — PostgreSQL, Qdrant and MinIO readiness.
+- `GET /live` (compat `GET /api/v1/health/live`) — process liveness;
+- `GET /ready` (compat `GET /api/v1/health/ready`) — PG/MinIO/Qdrant + signature/
+  reconciliation readiness (no sensitive detail to unauthenticated callers);
+- `GET /startup` (compat `GET /api/v1/health/startup`) — one-way startup completion.
 
 For a local run, start the real dependency stack and export endpoints from
 `deploy/dev/.env.example`:

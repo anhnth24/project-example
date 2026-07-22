@@ -1416,6 +1416,17 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
                 "created_at",
             ],
         ),
+        (
+            "runtime_readiness",
+            &[
+                "key",
+                "ready",
+                "generation",
+                "certified_generation",
+                "updated_at",
+                "detail",
+            ],
+        ),
     ]
 }
 

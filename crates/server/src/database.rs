@@ -90,6 +90,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0021_expand_sse_stream_events.sql",
         include_str!("../migrations/0021_expand_sse_stream_events.sql"),
     ),
+    (
+        "0022_expand_runtime_readiness.sql",
+        include_str!("../migrations/0022_expand_runtime_readiness.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
