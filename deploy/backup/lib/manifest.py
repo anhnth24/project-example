@@ -375,6 +375,12 @@ def build_manifest(**kwargs: Any) -> dict[str, Any]:
         "qdrant": kwargs["qdrant"],
         "artifacts": {"relativePaths": kwargs["relative_paths"]},
         "checksums": kwargs["checksums"],
+        "compatibleAppVersionRange": kwargs.get("compatible_app_version_range")
+        or {
+            "min": kwargs["app_version"],
+            "max": kwargs["app_version"],
+            "policy": "exact-or-within-declared-range",
+        },
         "notes": kwargs.get("notes") or [],
     }
     payload["signature"] = sign_payload(payload, key_id, key)

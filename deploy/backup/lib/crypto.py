@@ -1,34 +1,37 @@
 #!/usr/bin/env python3
-"""Dependency-free encrypt-then-MAC envelope for O03 backup artifacts.
+"""Streaming encrypt-then-MAC for O03 (stdlib HMAC/HKDF + libcrypto AES-CTR).
 
 Algorithm id: ``aes-256-ctr-hmac-sha256-v1``
 
 Construction (NOT GCM, NOT AEAD):
 1. Random 32-byte salt + 16-byte IV.
-2. HKDF-SHA256 (RFC 5869, stdlib HMAC) from master key + salt derives two
-   independent 32-byte keys with distinct info labels:
-   ``markhand-enc-v1`` / ``markhand-mac-v1``.
-3. Host OpenSSL ``enc -aes-256-ctr`` encrypts plaintext with the enc key + IV.
-4. HMAC-SHA256 over length-prefixed canonical fields
-   (algorithm, keyId, salt, iv, AAD, ciphertext) using the MAC key.
-5. Decrypt verifies MAC with ``hmac.compare_digest`` before CTR decrypt.
+2. HKDF-SHA256 derives independent enc/mac keys (info labels markhand-enc-v1 /
+   markhand-mac-v1).
+3. AES-256-CTR via host libcrypto (ctypes) streams plaintext→ciphertext without
+   whole-file reads; raw derived keys never appear on argv.
+4. HMAC-SHA256 streams over length-prefixed canonical header fields then
+   ciphertext chunks (encrypt-then-MAC).
+5. Decrypt verifies MAC with ``hmac.compare_digest`` before exposing plaintext
+   via atomic temp+fsync+rename.
 
-No third-party crypto libraries. Temp key material uses mode-0600 files and is
-zeroed before unlink.
+Limits: Python ``bytes``/``str`` are immutable — secure erasure of key material
+is best-effort only (overwrite mutable ``bytearray`` copies and drop references).
+Do not claim cryptographic wipe of immutable objects.
 """
 
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
 import hashlib
 import hmac
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 
 ALGORITHM = "aes-256-ctr-hmac-sha256-v1"
@@ -37,6 +40,7 @@ KEY_LEN = 32
 SALT_LEN = 32
 IV_LEN = 16
 MAC_LEN = 32
+CHUNK = 1024 * 1024
 ENC_INFO = b"markhand-enc-v1"
 MAC_INFO = b"markhand-mac-v1"
 
@@ -45,162 +49,194 @@ class CryptoError(ValueError):
     """Fail-closed crypto error."""
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _load_libcrypto() -> ctypes.CDLL:
+    name = ctypes.util.find_library("crypto") or "libcrypto.so.3"
+    try:
+        return ctypes.CDLL(name)
+    except OSError as error:
+        raise CryptoError(f"libcrypto unavailable: {error}") from error
 
 
-def _load_key(env_name: str) -> bytes:
+class _AesCtr:
+    """Minimal EVP AES-256-CTR wrapper (streaming)."""
+
+    def __init__(self, key: bytes, iv: bytes, *, decrypt: bool) -> None:
+        if len(key) != KEY_LEN or len(iv) != IV_LEN:
+            raise CryptoError("AES-CTR key/iv length invalid")
+        self._lib = _load_libcrypto()
+        self._lib.EVP_CIPHER_CTX_new.restype = ctypes.c_void_p
+        self._lib.EVP_aes_256_ctr.restype = ctypes.c_void_p
+        self._ctx = self._lib.EVP_CIPHER_CTX_new()
+        if not self._ctx:
+            raise CryptoError("EVP_CIPHER_CTX_new failed")
+        cipher = self._lib.EVP_aes_256_ctr()
+        key_buf = (ctypes.c_ubyte * KEY_LEN).from_buffer_copy(key)
+        iv_buf = (ctypes.c_ubyte * IV_LEN).from_buffer_copy(iv)
+        if decrypt:
+            rc = self._lib.EVP_DecryptInit_ex(
+                ctypes.c_void_p(self._ctx),
+                ctypes.c_void_p(cipher),
+                None,
+                key_buf,
+                iv_buf,
+            )
+        else:
+            rc = self._lib.EVP_EncryptInit_ex(
+                ctypes.c_void_p(self._ctx),
+                ctypes.c_void_p(cipher),
+                None,
+                key_buf,
+                iv_buf,
+            )
+        if rc != 1:
+            self.close()
+            raise CryptoError("EVP_*Init_ex failed")
+        self._decrypt = decrypt
+        # Zero local ctypes copies best-effort.
+        for i in range(KEY_LEN):
+            key_buf[i] = 0
+        for i in range(IV_LEN):
+            iv_buf[i] = 0
+
+    def update(self, data: bytes) -> bytes:
+        if not data:
+            return b""
+        out = (ctypes.c_ubyte * (len(data) + 32))()
+        out_len = ctypes.c_int(0)
+        inp = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+        if self._decrypt:
+            rc = self._lib.EVP_DecryptUpdate(
+                ctypes.c_void_p(self._ctx),
+                out,
+                ctypes.byref(out_len),
+                inp,
+                len(data),
+            )
+        else:
+            rc = self._lib.EVP_EncryptUpdate(
+                ctypes.c_void_p(self._ctx),
+                out,
+                ctypes.byref(out_len),
+                inp,
+                len(data),
+            )
+        if rc != 1:
+            raise CryptoError("EVP_*Update failed")
+        return bytes(out[: out_len.value])
+
+    def finalize(self) -> bytes:
+        out = (ctypes.c_ubyte * 32)()
+        out_len = ctypes.c_int(0)
+        if self._decrypt:
+            rc = self._lib.EVP_DecryptFinal_ex(
+                ctypes.c_void_p(self._ctx), out, ctypes.byref(out_len)
+            )
+        else:
+            rc = self._lib.EVP_EncryptFinal_ex(
+                ctypes.c_void_p(self._ctx), out, ctypes.byref(out_len)
+            )
+        if rc != 1:
+            raise CryptoError("EVP_*Final_ex failed")
+        return bytes(out[: out_len.value])
+
+    def close(self) -> None:
+        if getattr(self, "_ctx", None):
+            self._lib.EVP_CIPHER_CTX_free(ctypes.c_void_p(self._ctx))
+            self._ctx = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def _load_key(env_name: str) -> bytearray:
     raw = os.environ.get(env_name, "").strip()
     if len(raw) != 64 or any(ch not in "0123456789abcdef" for ch in raw):
         raise CryptoError(f"{env_name} must be 64 lowercase hex chars")
-    key = bytes.fromhex(raw)
-    if len(key) != KEY_LEN:
-        raise CryptoError(f"{env_name} must decode to {KEY_LEN} bytes")
-    return key
+    return bytearray(bytes.fromhex(raw))
 
 
 def hkdf_sha256(ikm: bytes, salt: bytes, info: bytes, length: int) -> bytes:
-    """RFC 5869 HKDF-SHA256 (stdlib only)."""
-    if length <= 0 or length > 255 * hashlib.sha256().digest_size:
+    if length <= 0 or length > 255 * 32:
         raise CryptoError("HKDF length invalid")
     if not salt:
-        salt = b"\x00" * hashlib.sha256().digest_size
+        salt = b"\x00" * 32
     prk = hmac.new(salt, ikm, hashlib.sha256).digest()
     okm = b""
     previous = b""
     counter = 1
     while len(okm) < length:
-        previous = hmac.new(
-            prk, previous + info + bytes([counter]), hashlib.sha256
-        ).digest()
+        previous = hmac.new(prk, previous + info + bytes([counter]), hashlib.sha256).digest()
         okm += previous
         counter += 1
     return okm[:length]
 
 
-def derive_keys(master: bytes, salt: bytes) -> tuple[bytes, bytes]:
-    enc_key = hkdf_sha256(master, salt, ENC_INFO, KEY_LEN)
-    mac_key = hkdf_sha256(master, salt, MAC_INFO, KEY_LEN)
-    if hmac.compare_digest(enc_key, mac_key):
-        raise CryptoError("enc/mac key collision (fail closed)")
-    return enc_key, mac_key
+def derive_keys(master: bytes | bytearray, salt: bytes) -> tuple[bytearray, bytearray]:
+    enc = bytearray(hkdf_sha256(bytes(master), salt, ENC_INFO, KEY_LEN))
+    mac = bytearray(hkdf_sha256(bytes(master), salt, MAC_INFO, KEY_LEN))
+    if hmac.compare_digest(bytes(enc), bytes(mac)):
+        raise CryptoError("enc/mac key collision")
+    return enc, mac
 
 
-def canonical_mac_message(
+def _lp(data: bytes) -> bytes:
+    return len(data).to_bytes(8, "big") + data
+
+
+def canonical_header(
     *,
     algorithm: str,
     key_id: str,
     salt: bytes,
     iv: bytes,
     aad: bytes,
-    ciphertext: bytes,
 ) -> bytes:
-    """Length-prefixed canonical field binding for HMAC."""
-    parts = [
-        algorithm.encode("utf-8"),
-        key_id.encode("utf-8"),
-        salt,
-        iv,
-        aad,
-        ciphertext,
-    ]
-    out = bytearray()
-    for part in parts:
-        out.extend(len(part).to_bytes(8, "big"))
-        out.extend(part)
-    return bytes(out)
+    return b"".join(
+        [
+            _lp(algorithm.encode()),
+            _lp(key_id.encode()),
+            _lp(salt),
+            _lp(iv),
+            _lp(aad),
+        ]
+    )
 
 
-def _private_temp(prefix: str) -> tuple[tempfile.TemporaryDirectory[str], Path]:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _private_dir(prefix: str) -> tempfile.TemporaryDirectory[str]:
     tmp = tempfile.TemporaryDirectory(prefix=prefix)
-    path = Path(tmp.name)
-    path.chmod(0o700)
-    return tmp, path
+    Path(tmp.name).chmod(0o700)
+    return tmp
 
 
-def _write_private(path: Path, data: bytes) -> None:
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        raise
-    path.chmod(0o600)
-
-
-def _zero_file(path: Path) -> None:
-    if not path.is_file():
-        return
-    size = path.stat().st_size
-    with path.open("r+b") as handle:
-        handle.write(b"\x00" * size)
+def _atomic_replace(tmp_path: Path, final_path: Path) -> None:
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    with tmp_path.open("r+b") as handle:
         handle.flush()
         os.fsync(handle.fileno())
-
-
-def _openssl_ctr(
-    *,
-    decrypt: bool,
-    key: bytes,
-    iv: bytes,
-    infile: Path,
-    outfile: Path,
-) -> None:
-    if len(key) != KEY_LEN or len(iv) != IV_LEN:
-        raise CryptoError("OpenSSL CTR key/iv length invalid")
-    tmp, tmp_dir = _private_temp("markhand-openssl-")
+    os.replace(tmp_path, final_path)
+    # Best-effort dir fsync.
+    dir_fd = os.open(str(final_path.parent), os.O_RDONLY)
     try:
-        key_file = tmp_dir / "key.hex"
-        iv_file = tmp_dir / "iv.hex"
-        _write_private(key_file, key.hex().encode("ascii"))
-        _write_private(iv_file, iv.hex().encode("ascii"))
-        # OpenSSL enc requires -K/-iv hex on argv; keep material only in 0600
-        # temp files until the short-lived subprocess starts, then zero files.
-        key_hex = key_file.read_text(encoding="ascii").strip()
-        iv_hex = iv_file.read_text(encoding="ascii").strip()
-        args = [
-            "openssl",
-            "enc",
-            "-aes-256-ctr",
-            "-K",
-            key_hex,
-            "-iv",
-            iv_hex,
-            "-in",
-            str(infile),
-            "-out",
-            str(outfile),
-        ]
-        if decrypt:
-            args.insert(2, "-d")
-        completed = subprocess.run(
-            args,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        key_hex = "0" * len(key_hex)
-        iv_hex = "0" * len(iv_hex)
-        if completed.returncode != 0:
-            raise CryptoError(
-                f"openssl aes-256-ctr failed: {completed.stderr.strip() or completed.returncode}"
-            )
-        outfile.chmod(0o600)
+        os.fsync(dir_fd)
     finally:
-        for name in ("key.hex", "iv.hex"):
-            _zero_file(tmp_dir / name)
-        tmp.cleanup()
+        os.close(dir_fd)
+    final_path.chmod(0o600)
+
+
+def _zero_mutable(buf: bytearray) -> None:
+    for i in range(len(buf)):
+        buf[i] = 0
 
 
 def encrypt_file(
@@ -212,50 +248,62 @@ def encrypt_file(
     aad: bytes,
 ) -> dict[str, Any]:
     if not key_id or any(ord(ch) < 32 for ch in key_id):
-        raise CryptoError("key_id must be non-empty without control chars")
+        raise CryptoError("key_id invalid")
     try:
         aad_text = aad.decode("utf-8")
     except UnicodeDecodeError as error:
         raise CryptoError("AAD must be UTF-8") from error
     if plaintext.is_symlink() or ciphertext.is_symlink():
-        raise CryptoError("symlink rejected for envelope IO")
+        raise CryptoError("symlink rejected")
     master = _load_key(key_env)
     salt = os.urandom(SALT_LEN)
     iv = os.urandom(IV_LEN)
     enc_key, mac_key = derive_keys(master, salt)
-    data = plaintext.read_bytes()
-    ciphertext.parent.mkdir(parents=True, exist_ok=True)
-    tmp, tmp_dir = _private_temp("markhand-enc-")
+    tmp = _private_dir("markhand-enc-")
     try:
-        raw_ct = tmp_dir / "ct.bin"
-        _openssl_ctr(decrypt=False, key=enc_key, iv=iv, infile=plaintext, outfile=raw_ct)
-        ct = raw_ct.read_bytes()
-        message = canonical_mac_message(
-            algorithm=ALGORITHM,
-            key_id=key_id,
-            salt=salt,
-            iv=iv,
-            aad=aad,
-            ciphertext=ct,
-        )
-        mac = hmac.new(mac_key, message, hashlib.sha256).digest()
-        _write_private(ciphertext, ct)
+        out_tmp = Path(tmp.name) / "out.enc"
+        mac = hmac.new(bytes(mac_key), digestmod=hashlib.sha256)
+        mac.update(canonical_header(algorithm=ALGORITHM, key_id=key_id, salt=salt, iv=iv, aad=aad))
+        plain_digest = hashlib.sha256()
+        cipher_digest = hashlib.sha256()
+        ctr = _AesCtr(bytes(enc_key), iv, decrypt=False)
+        try:
+            with plaintext.open("rb") as src, out_tmp.open("wb") as dst:
+                while True:
+                    chunk = src.read(CHUNK)
+                    if not chunk:
+                        break
+                    plain_digest.update(chunk)
+                    ct = ctr.update(chunk)
+                    mac.update(ct)
+                    cipher_digest.update(ct)
+                    dst.write(ct)
+                tail = ctr.finalize()
+                if tail:
+                    mac.update(tail)
+                    cipher_digest.update(tail)
+                    dst.write(tail)
+                dst.flush()
+                os.fsync(dst.fileno())
+        finally:
+            ctr.close()
+        tag = mac.digest()
+        _atomic_replace(out_tmp, ciphertext)
         return {
             "algorithm": ALGORITHM,
             "keyId": key_id,
             "kdf": KDF,
             "saltHex": salt.hex(),
             "ivHex": iv.hex(),
-            "macHex": mac.hex(),
+            "macHex": tag.hex(),
             "aad": aad_text,
-            "ciphertextSha256": _sha256_file(ciphertext),
-            "plaintextSha256": hashlib.sha256(data).hexdigest(),
+            "plaintextSha256": plain_digest.hexdigest(),
+            "ciphertextSha256": cipher_digest.hexdigest(),
         }
     finally:
-        _zero_file(tmp_dir / "ct.bin")
-        enc_key = b"\x00" * KEY_LEN
-        mac_key = b"\x00" * KEY_LEN
-        master = b"\x00" * KEY_LEN
+        _zero_mutable(enc_key)
+        _zero_mutable(mac_key)
+        _zero_mutable(master)
         tmp.cleanup()
 
 
@@ -279,50 +327,63 @@ def decrypt_file(
         raise CryptoError("envelope keyId mismatch")
     if meta.get("aad") != aad.decode("utf-8"):
         raise CryptoError("AAD mismatch")
-    master = _load_key(key_env)
     try:
         salt = bytes.fromhex(str(meta["saltHex"]))
         iv = bytes.fromhex(str(meta["ivHex"]))
-        mac = bytes.fromhex(str(meta["macHex"]))
+        tag = bytes.fromhex(str(meta["macHex"]))
     except (KeyError, ValueError) as error:
         raise CryptoError(f"envelope metadata incomplete: {error}") from error
-    if len(salt) != SALT_LEN or len(iv) != IV_LEN or len(mac) != MAC_LEN:
+    if len(salt) != SALT_LEN or len(iv) != IV_LEN or len(tag) != MAC_LEN:
         raise CryptoError("salt/iv/mac length invalid")
-    actual_digest = _sha256_file(ciphertext)
-    if actual_digest != meta.get("ciphertextSha256"):
+    if _sha256_file(ciphertext) != meta.get("ciphertextSha256"):
         raise CryptoError("ciphertext digest mismatch")
-    ct = ciphertext.read_bytes()
-    if not ct:
+    if ciphertext.stat().st_size <= 0:
         raise CryptoError("ciphertext truncated/empty")
+
+    master = _load_key(key_env)
     enc_key, mac_key = derive_keys(master, salt)
-    message = canonical_mac_message(
-        algorithm=ALGORITHM,
-        key_id=key_id,
-        salt=salt,
-        iv=iv,
-        aad=aad,
-        ciphertext=ct,
-    )
-    expected_mac = hmac.new(mac_key, message, hashlib.sha256).digest()
-    if not hmac.compare_digest(expected_mac, mac):
-        raise CryptoError("HMAC verification failed (tamper/wrong key)")
-    plaintext.parent.mkdir(parents=True, exist_ok=True)
-    tmp, tmp_dir = _private_temp("markhand-dec-")
+    tmp = _private_dir("markhand-dec-")
     try:
-        ct_path = tmp_dir / "ct.bin"
-        _write_private(ct_path, ct)
-        out_tmp = tmp_dir / "pt.bin"
-        _openssl_ctr(decrypt=True, key=enc_key, iv=iv, infile=ct_path, outfile=out_tmp)
-        plain = out_tmp.read_bytes()
-        if hashlib.sha256(plain).hexdigest() != meta.get("plaintextSha256"):
+        # Pass 1: authenticate ciphertext stream before exposing plaintext.
+        mac = hmac.new(bytes(mac_key), digestmod=hashlib.sha256)
+        mac.update(canonical_header(algorithm=ALGORITHM, key_id=key_id, salt=salt, iv=iv, aad=aad))
+        with ciphertext.open("rb") as src:
+            while True:
+                chunk = src.read(CHUNK)
+                if not chunk:
+                    break
+                mac.update(chunk)
+        if not hmac.compare_digest(mac.digest(), tag):
+            raise CryptoError("HMAC verification failed (tamper/wrong key)")
+
+        # Pass 2: decrypt to private temp, then atomic publish.
+        out_tmp = Path(tmp.name) / "out.bin"
+        plain_digest = hashlib.sha256()
+        ctr = _AesCtr(bytes(enc_key), iv, decrypt=True)
+        try:
+            with ciphertext.open("rb") as src, out_tmp.open("wb") as dst:
+                while True:
+                    chunk = src.read(CHUNK)
+                    if not chunk:
+                        break
+                    pt = ctr.update(chunk)
+                    plain_digest.update(pt)
+                    dst.write(pt)
+                tail = ctr.finalize()
+                if tail:
+                    plain_digest.update(tail)
+                    dst.write(tail)
+                dst.flush()
+                os.fsync(dst.fileno())
+        finally:
+            ctr.close()
+        if plain_digest.hexdigest() != meta.get("plaintextSha256"):
             raise CryptoError("plaintext digest mismatch after decrypt")
-        _write_private(plaintext, plain)
+        _atomic_replace(out_tmp, plaintext)
     finally:
-        _zero_file(tmp_dir / "ct.bin")
-        _zero_file(tmp_dir / "pt.bin")
-        enc_key = b"\x00" * KEY_LEN
-        mac_key = b"\x00" * KEY_LEN
-        master = b"\x00" * KEY_LEN
+        _zero_mutable(enc_key)
+        _zero_mutable(mac_key)
+        _zero_mutable(master)
         tmp.cleanup()
 
 

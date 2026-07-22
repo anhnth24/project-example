@@ -10,13 +10,16 @@ Out of scope: multi-region DR; claiming Profile-B RPO/RTO without a live drill.
   (or `PGPASSFILE`); **never** put DB URLs/passwords on argv.
 - Live apply requires HTTPS/TLS verify-full for Qdrant/MinIO endpoints unless
   `MARKHAND_BACKUP_MODE=hermetic`.
-- PostgreSQL method: **`pg_basebackup_streamed_wal`** (base.tar + pg_wal.tar,
-  encrypt-then-MAC envelope `aes-256-ctr-hmac-sha256-v1`: stdlib HKDF/HMAC +
-  host OpenSSL AES-256-CTR). Continuous PITR stays **blocked** unless archived
-  WAL through the target LSN is packaged/checksummed and restore consumes it.
+- PostgreSQL method: **`pg_basebackup_streamed_wal`** with PG18
+  `backup_label` + `backup_manifest` WAL-Ranges (no LSN fallbacks). Restore
+  configures shadow recovery (`restore_command`, `recovery.signal`,
+  `recovery_target_lsn`) and verifies before cutover. Envelope:
+  `aes-256-ctr-hmac-sha256-v1` (stdlib HKDF/HMAC + libcrypto AES-CTR streaming).
+  Continuous PITR stays **blocked** unless archived WAL through the target LSN
+  is packaged/checksummed and restore consumes it.
   `deploy/backup/compose.wal-archive.yml` is preparatory only (archive_mode).
-- Tools: real `tar`, `pg_basebackup`, `mc`, `curl`, host `openssl` (stdlib +
-  OpenSSL only; no third-party crypto packages).
+- Tools: real `tar`, `pg_basebackup`, `curl` (private configs), `mc` listing via
+  `MC_CONFIG_DIR` only; object bodies via signed HTTP (no secret/object-key argv).
 
 ## Procedure
 

@@ -1,11 +1,33 @@
 #!/usr/bin/env bash
-# Hermetic fake MinIO client
+# Fake mc: credentials only via MC_CONFIG_DIR; rejects secret argv.
 set -euo pipefail
+STATE_DIR="${MARKHAND_FAKE_MC_STATE:-${TMPDIR:-/tmp}/markhand-fake-mc}"
+mkdir -p "$STATE_DIR"
 cmd="${1:-}"
 shift || true
+
+# Reject obvious secret argv patterns.
+for a in "$@"; do
+  if [[ "$a" == *Secret* || "$a" == *password* || "$a" == backup-secret* ]]; then
+    echo "mc: secret argv rejected" >&2
+    exit 2
+  fi
+done
+
 case "$cmd" in
-  alias) exit 0 ;;
+  alias)
+    # Only allow 'alias list' — set with credentials is rejected.
+    if [[ "${1:-}" == "set" ]]; then
+      echo "mc alias set with credentials on argv is disallowed" >&2
+      exit 2
+    fi
+    exit 0
+    ;;
   version)
+    if [[ -z "${MC_CONFIG_DIR:-}" || ! -d "${MC_CONFIG_DIR}" ]]; then
+      echo "MC_CONFIG_DIR required" >&2
+      exit 2
+    fi
     printf '%s\n' '{"status":"Enabled"}'
     exit 0
     ;;
@@ -14,20 +36,27 @@ case "$cmd" in
       echo "mc ls failed" >&2
       exit 1
     fi
-    if [[ -n "${MARKHAND_FAKE_MINIO_INVENTORY:-}" ]]; then
-      printf '%s\n' "$MARKHAND_FAKE_MINIO_INVENTORY"
+    if [[ -z "${MC_CONFIG_DIR:-}" ]]; then
+      echo "MC_CONFIG_DIR required" >&2
+      exit 2
+    fi
+    # Emit version listing JSON (keys only in stdout for inventory parse tests;
+    # production object bodies use signed HTTP, not mc cp).
+    if [[ -n "${MARKHAND_FAKE_MINIO_JSONL:-}" ]]; then
+      printf '%s\n' "$MARKHAND_FAKE_MINIO_JSONL"
     else
-      printf '%s\n' $'v1\thashA\t111\n' $'v2\thashB\t222\n'
+      cat <<'EOF'
+{"key":"docs/a","versionId":"v1","isDeleteMarker":false,"size":4,"lastModified":"2026-07-22T00:00:00Z"}
+{"key":"docs/a","versionId":"v2","isDeleteMarker":false,"size":4,"lastModified":"2026-07-22T00:00:01Z"}
+{"key":"docs/a","versionId":"v3","isDeleteMarker":true,"size":0,"lastModified":"2026-07-22T00:00:02Z"}
+{"key":"docs/b","versionId":"v1","isDeleteMarker":false,"size":4,"lastModified":"2026-07-22T00:00:03Z"}
+EOF
     fi
     exit 0
     ;;
-  mirror)
-    dest=""
-    # last arg is destination
-    for arg in "$@"; do dest="$arg"; done
-    mkdir -p "$dest"
-    printf 'mirrored\n' >"$dest/.fake-mirror"
-    exit 0
+  cp|mirror|rm)
+    echo "mc object mutation path disallowed; use signed HTTP private curl config" >&2
+    exit 2
     ;;
   *)
     echo "fake mc: unknown command $cmd" >&2

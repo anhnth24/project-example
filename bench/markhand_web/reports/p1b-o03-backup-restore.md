@@ -1,4 +1,4 @@
-# P1B-O03 evidence — backup/restore and migration safety (rebuild)
+# P1B-O03 evidence — backup/restore and migration safety
 
 Status: **In Progress**.
 `claims_live_restore`: **false**
@@ -9,43 +9,36 @@ PostgreSQL method: `pg_basebackup_streamed_wal` (continuous PITR: `blocked_unles
 
 ### implemented
 
-- streamed WAL restorable PG backup + EtM envelope metadata
-- MinIO version/delete-marker inventory + restore mapping
-- Qdrant collection identity from index signature
-- dry-run read-only; fence quiescence; target-bound restore state
-- zero-drift readiness certification (migration 0024)
-- bulk enqueue + reconcile-once worker path
-- recovery-manifest.schema.json enforced (unknown fields fail)
+- PG18 backup_label/backup_manifest WAL-Ranges + junk rejection
+- shadow recovery configure+verify via pinned pg_ctl/docker path
+- campaign identity + atomic checkpoints + cutover receipts from ops
+- MinIO encrypted opaque object bodies; keys not used as paths
+- Qdrant v1.18.2 schema parse + alias cutover after verify
+- streaming EtM crypto; readiness sealed campaign; fence opt-in
+- migration base-ref + SQL lexer; JSON NaN reject; appVersion range
 
 ### static
 
 - digest pins
 - runbooks
-- migration safety + SQL semantic policy
-- wal-archive overlay labeled preparatory only
-- no host cryptography package lock claim
+- migration safety + base-ref anchor
+- wal-archive overlay preparatory only
 
-### hermetic
+### contract
 
-- backup+dry-run+apply
-- drift keeps ready false / zero-drift ready
-- corrupt/duplicate JSON
-- org/schema/signature/migration mismatch
-- missing artifact / command failure
-- path traversal/symlink/destructive confirm
-- OpenSSL CTR+HMAC roundtrip/tamper/wrong-key/truncation
-- schema enforcement + schema/code drift mutation
-- PITR blocked without packaged archive WAL
-- anti-replay target binding
+- stateful fake CLI/HTTP adapters (no hermetic shortcuts)
+- junk WAL / Qdrant schema / cross-manifest resume
+- MinIO traversal + encrypted bodies
+- TLS/credential non-argv
+- apply success + drift/repair + stage failure paths
 
 ### pending_live
 
-- Docker compose restore with shadow cutover
+- Docker compose restore with measured RPO/RTO
 - continuous PITR only after packaged archive WAL + restore consume
-- Profile-B RPO/RTO measurements
 
-## Non-claims / blockers
+## Remaining blockers
 
-- No live Docker restore or Profile-B RPO/RTO pass.
-- Continuous PITR blocked unless archived WAL through target LSN is packaged/checksummed and consumed on restore; wal-archive overlay is preparatory only.
-- Multi-region DR out of scope.
+- No Docker daemon in this environment for live compose cutover drill
+- Profile-B RPO≤15m / RTO gates unresolved
+- Live MinIO/Qdrant/PG with real TLS certs not exercised here

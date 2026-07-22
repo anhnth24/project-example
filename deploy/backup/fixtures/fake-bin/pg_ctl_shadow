@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Stateful fake pg_ctl for shadow recovery start-and-verify.
+set -euo pipefail
+cmd="${1:-}"
+shadow="${2:-${MARKHAND_SHADOW_PGDATA:-}}"
+STATE_DIR="${MARKHAND_FAKE_PG_CTL_STATE:-${TMPDIR:-/tmp}/markhand-fake-pg-ctl}"
+mkdir -p "$STATE_DIR"
+if [[ "$cmd" != "start-and-verify" ]]; then
+  echo "usage: pg_ctl_shadow start-and-verify <pgdata>" >&2
+  exit 2
+fi
+if [[ -z "$shadow" || ! -d "$shadow" ]]; then
+  echo "shadow pgdata missing" >&2
+  exit 1
+fi
+if [[ ! -f "$shadow/recovery.signal" ]]; then
+  echo "recovery.signal missing" >&2
+  exit 1
+fi
+if [[ ! -f "$shadow/postgresql.auto.conf" ]]; then
+  echo "postgresql.auto.conf missing" >&2
+  exit 1
+fi
+if ! grep -q 'restore_command' "$shadow/postgresql.auto.conf"; then
+  echo "restore_command missing" >&2
+  exit 1
+fi
+if ! grep -q 'recovery_target_lsn' "$shadow/postgresql.auto.conf"; then
+  echo "recovery_target_lsn missing" >&2
+  exit 1
+fi
+TL="${MARKHAND_RECOVERY_TIMELINE:-1}"
+LSN="${MARKHAND_RECOVERY_TARGET_LSN:-0/16B3740}"
+# Simulate promote: remove recovery.signal after verify.
+rm -f "$shadow/recovery.signal"
+printf 'promoted\n' >"$STATE_DIR/last-action"
+cat <<EOF
+{"recovered": true, "timelineId": ${TL}, "recoveryTargetLsn": "${LSN}", "inRecovery": false, "tool": "pg_ctl_shadow"}
+EOF
+exit 0

@@ -9,8 +9,8 @@
     "minio-mc": "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
   },
   "tools": {
-    "openssl": {
-      "note": "Host OpenSSL 3.x aes-256-ctr for encrypt-then-MAC envelopes (aes-256-ctr-hmac-sha256-v1); HKDF/HMAC via Python stdlib. No cryptography package."
+    "openssl-libcrypto": {
+      "note": "Host libcrypto.so AES-256-CTR streaming for encrypt-then-MAC envelopes (aes-256-ctr-hmac-sha256-v1); HKDF/HMAC via Python stdlib. Keys never on argv. No cryptography package."
     },
     "pg_basebackup": {
       "note": "PostgreSQL 16+/18 client matching server major when possible."

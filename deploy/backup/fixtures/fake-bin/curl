@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
-# Hermetic fake curl for Qdrant snapshot APIs
+# Stateful fake curl: honors -K private config (no secret argv required).
 set -euo pipefail
+STATE_DIR="${MARKHAND_FAKE_CURL_STATE:-${TMPDIR:-/tmp}/markhand-fake-curl}"
+mkdir -p "$STATE_DIR"
+cfg=""
 out=""
 args=("$@")
-url=""
-method="GET"
 i=0
 while [[ $i -lt ${#args[@]} ]]; do
   a="${args[$i]}"
   case "$a" in
+    -K)
+      i=$((i + 1))
+      cfg="${args[$i]}"
+      ;;
     -o)
       i=$((i + 1))
       out="${args[$i]}"
       ;;
-    -X)
-      i=$((i + 1))
-      method="${args[$i]}"
+    -fsS|-f|-s|-S|-v) ;;
+    *)
+      # Reject secrets on argv
+      if [[ "$a" == *Secret* || "$a" == *password* || "$a" == *Authorization:* ]]; then
+        echo "secret-like argv rejected" >&2
+        exit 2
+      fi
       ;;
-    -fsS|-f|-s|-S) ;;
-    -H|--data-binary) i=$((i + 1)) ;;
-    http*|https*) url="$a" ;;
   esac
   i=$((i + 1))
 done
@@ -29,18 +35,85 @@ if [[ "${MARKHAND_FAKE_CURL_FAIL:-0}" == "1" ]]; then
   exit 1
 fi
 
+url=""
+method="GET"
+header_auth=0
+output_from_cfg=""
+if [[ -n "$cfg" ]]; then
+  [[ -f "$cfg" ]] || { echo "curl config missing" >&2; exit 2; }
+  # shellcheck disable=SC2162
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      url\ =*)
+        url="${line#url = }"
+        url="${url%\"}"
+        url="${url#\"}"
+        ;;
+      request\ =*)
+        method="${line#request = }"
+        method="${method%\"}"
+        method="${method#\"}"
+        ;;
+      header\ =*api-key*|header\ =*Authorization*)
+        header_auth=1
+        ;;
+      output\ =*)
+        output_from_cfg="${line#output = }"
+        output_from_cfg="${output_from_cfg%\"}"
+        output_from_cfg="${output_from_cfg#\"}"
+        ;;
+    esac
+  done <"$cfg"
+fi
+[[ -n "$out" ]] || out="$output_from_cfg"
+
+# Log request metadata without secrets/object key bodies
+printf '%s\n' "$method ${url%%\?*}" >>"$STATE_DIR/requests.log"
+
+# MinIO / S3-ish paths
+if [[ "$url" == *"/minio/"* || "$url" == *"X-Amz-"* || "$url" == *"/markhand-documents/"* || "$url" == *"amazonaws"* || "$url" == *"/shadow-bucket/"* ]]; then
+  if [[ "$method" == "GET" && -n "$out" ]]; then
+    printf 'MINIOOBJECT' >"$out"
+    exit 0
+  fi
+  printf '%s\n' '{"status":"ok"}'
+  exit 0
+fi
+
+# Qdrant snapshot create
 if [[ "$url" == *"/snapshots" && "$method" == "POST" && "$url" != *"/upload"* ]]; then
-  printf '%s\n' '{"result":{"name":"snap-hermetic-001"}}'
+  printf '%s\n' '{"result":{"name":"snap-contract-001"},"status":"ok"}'
   exit 0
 fi
 
-if [[ -n "$out" ]]; then
-  printf '%s' "${MARKHAND_FAKE_QDRANT_SNAPSHOT_BYTES:-FAKE_QDRANT_SNAPSHOT}" >"$out"
+# Qdrant snapshot download
+if [[ "$url" == *"/snapshots/"* && "$method" == "GET" && -n "$out" ]]; then
+  printf '%s' "${MARKHAND_FAKE_QDRANT_SNAPSHOT_BYTES:-FAKE_QDRANT_SNAPSHOT_V1182}" >"$out"
   exit 0
 fi
 
-if [[ "$url" == *"/collections/"* && "$method" == "GET" ]]; then
-  printf '%s\n' '{"result":{"status":1}}'
+# Qdrant upload/recover
+if [[ "$url" == *"/upload"* || "$url" == *"/recover"* ]]; then
+  printf '%s\n' '{"result":true,"status":"ok"}' >"$STATE_DIR/last-recover.json"
+  printf '%s\n' '{"result":true,"status":"ok"}'
+  exit 0
+fi
+
+# Qdrant aliases
+if [[ "$url" == *"/aliases"* ]]; then
+  printf '%s\n' '{"result":true,"status":"ok"}'
+  echo "alias-cutover" >>"$STATE_DIR/actions.log"
+  exit 0
+fi
+
+# Qdrant collection info — real v1.18.2 shape
+if [[ "$url" == *"/collections/"* ]]; then
+  points="${MARKHAND_FAKE_QDRANT_POINTS:-0}"
+  indexed="${MARKHAND_FAKE_QDRANT_INDEXED:-0}"
+  status="${MARKHAND_FAKE_QDRANT_STATUS:-green}"
+  cat <<EOF
+{"result":{"status":"${status}","optimizer_status":"ok","indexed_vectors_count":${indexed},"points_count":${points},"segments_count":1,"config":{"params":{"vectors":{"size":8,"distance":"Cosine"},"shard_number":1,"replication_factor":1}}},"status":"ok"}
+EOF
   exit 0
 fi
 

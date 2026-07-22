@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""Migration safety: immutable checksums + expand→cutover→contract discipline.
-
-Does not modify already-merged migrations. Builds on
-`scripts/check-migration-manifest.py` checksum immutability and adds
-phase-ordering rules for feature stems that introduce cutover/contract.
-"""
+"""Migration safety: immutable checksums + expand→cutover→contract + SQL lexer."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,6 +17,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DIRECTORY = ROOT / "crates" / "server" / "migrations"
 MANIFEST_CHECK = ROOT / "scripts" / "check-migration-manifest.py"
+LIB = Path(__file__).resolve().parents[1] / "lib"
+if str(LIB) not in sys.path:
+    sys.path.insert(0, str(LIB))
+
+from sql_lexer import SqlLexError, assert_phase_allows_sql, find_destructive_operations  # noqa: E402
+
+import re
 
 NAME = re.compile(
     r"^(?P<number>\d{4})_(?P<phase>expand|backfill|cutover|contract|index)_"
@@ -62,7 +65,6 @@ def parse_migrations(directory: Path) -> list[tuple[int, str, str, Path]]:
 
 
 def validate_phase_discipline(rows: list[tuple[int, str, str, Path]]) -> list[str]:
-    """Expand → (backfill|index)* → cutover → contract for a given stem."""
     errors: list[str] = []
     by_stem: dict[str, list[tuple[int, str]]] = defaultdict(list)
     for number, phase, stem, _path in rows:
@@ -82,11 +84,7 @@ def validate_phase_discipline(rows: list[tuple[int, str, str, Path]]) -> list[st
         if "cutover" in names and "expand" not in names:
             errors.append(f"stem {stem}: cutover without expand")
         if "contract" in names and "cutover" not in names:
-            # Allow contract after expand-only only when an explicit cutover exists.
-            errors.append(
-                f"stem {stem}: contract requires a prior cutover migration"
-            )
-        # Monotonic sequence across phases for the stem.
+            errors.append(f"stem {stem}: contract requires a prior cutover migration")
         last_number = -1
         last_order = -1
         for number, phase in phases_sorted:
@@ -94,27 +92,13 @@ def validate_phase_discipline(rows: list[tuple[int, str, str, Path]]) -> list[st
             if number < last_number:
                 errors.append(f"stem {stem}: non-monotonic sequence at {number:04d}")
             if order < last_order:
-                errors.append(
-                    f"stem {stem}: phase regression at {number:04d}_{phase}"
-                )
+                errors.append(f"stem {stem}: phase regression at {number:04d}_{phase}")
             last_number = number
             last_order = order
     return errors
 
 
-DESTRUCTIVE_SQL = re.compile(
-    r"(?is)\b(DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM)\b"
-)
-SQL_LINE_COMMENT = re.compile(r"--.*?$", re.M)
-SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
-
-
-def sql_without_comments(sql: str) -> str:
-    return SQL_LINE_COMMENT.sub("", SQL_BLOCK_COMMENT.sub("", sql))
-
-
 def validate_checksum_immutability(directory: Path) -> list[str]:
-    """Delegate to the published immutable manifest checker."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -131,30 +115,56 @@ def validate_checksum_immutability(directory: Path) -> list[str]:
 
 
 def validate_sql_semantics(rows: list[tuple[int, str, str, Path]]) -> list[str]:
-    """Catch destructive SQL in expand/cutover; contract requires cutover evidence."""
     errors: list[str] = []
-    stems_with_cutover = {
-        stem for _n, phase, stem, _p in rows if phase == "cutover"
-    }
+    stems_with_cutover = {stem for _n, phase, stem, _p in rows if phase == "cutover"}
     for _number, phase, stem, path in rows:
-        sql = sql_without_comments(path.read_text(encoding="utf-8"))
-        if DESTRUCTIVE_SQL.search(sql) and phase in {"expand", "cutover", "backfill", "index"}:
-            errors.append(
-                f"{path.name}: destructive DROP/TRUNCATE/DELETE not allowed in {phase}"
-            )
+        sql = path.read_text(encoding="utf-8")
+        try:
+            for msg in assert_phase_allows_sql(phase, sql):
+                errors.append(f"{path.name}: {msg}")
+        except SqlLexError as error:
+            errors.append(f"{path.name}: SQL lex error: {error}")
         if phase == "contract" and stem not in stems_with_cutover:
-            errors.append(
-                f"{path.name}: contract without cutover evidence for stem {stem}"
-            )
+            errors.append(f"{path.name}: contract without cutover evidence for stem {stem}")
     return errors
 
 
-def validate_base_ref_anchor(directory: Path, base_ref: str | None) -> list[str]:
-    """Compare working tree migration checksums to a git base-ref anchor when set."""
-    if not base_ref:
-        return []
-    import subprocess
+def resolve_base_ref(explicit: str | None) -> str | None:
+    if explicit:
+        return explicit
+    for key in ("MARKHAND_MIGRATION_BASE_REF", "GITHUB_BASE_REF", "GITHUB_BASE_SHA"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            # GITHUB_BASE_REF is often "master" without origin/ — normalize.
+            if key == "GITHUB_BASE_REF" and "/" not in value:
+                return f"origin/{value}"
+            return value
+    # Safe local/CI default: merge-base with origin/master or master.
+    for candidate in ("origin/master", "master", "origin/main", "main"):
+        try:
+            out = subprocess.check_output(
+                ["git", "merge-base", "HEAD", candidate],
+                cwd=ROOT,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            if out:
+                return out
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    return None
 
+
+def validate_base_ref_anchor(
+    directory: Path, base_ref: str | None, *, required: bool
+) -> list[str]:
+    if not base_ref:
+        if required:
+            return [
+                "migration base-ref anchor mandatory but unresolved "
+                "(set MARKHAND_MIGRATION_BASE_REF / GITHUB_BASE_REF or pass --base-ref)"
+            ]
+        return []
     errors: list[str] = []
     try:
         raw = subprocess.check_output(
@@ -176,7 +186,12 @@ def validate_base_ref_anchor(directory: Path, base_ref: str | None) -> list[str]
     return errors
 
 
-def validate(directory: Path, base_ref: str | None = None) -> list[str]:
+def validate(
+    directory: Path,
+    base_ref: str | None = None,
+    *,
+    require_base_ref: bool = True,
+) -> list[str]:
     errors = validate_checksum_immutability(directory)
     try:
         rows = parse_migrations(directory)
@@ -184,13 +199,30 @@ def validate(directory: Path, base_ref: str | None = None) -> list[str]:
         return errors + [str(error)]
     errors.extend(validate_phase_discipline(rows))
     errors.extend(validate_sql_semantics(rows))
-    errors.extend(validate_base_ref_anchor(directory, base_ref))
+    resolved = resolve_base_ref(base_ref)
+    errors.extend(
+        validate_base_ref_anchor(directory, resolved, required=require_base_ref)
+    )
     return errors
 
 
 class MigrationSafetyTests(unittest.TestCase):
     def _write(self, directory: Path, name: str, body: str = "-- test\n") -> None:
         (directory / name).write_text(body, encoding="utf-8")
+
+    def _manifest(self, directory: Path) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "check_migration_manifest", MANIFEST_CHECK
+        )
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        (directory / "manifest.json").write_text(
+            json.dumps(module.expected_manifest(directory), indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def test_existing_repo_migrations_pass(self) -> None:
         self.assertEqual(validate(DEFAULT_DIRECTORY), [])
@@ -200,20 +232,8 @@ class MigrationSafetyTests(unittest.TestCase):
             directory = Path(tmp)
             self._write(directory, "0001_expand_widgets.sql")
             self._write(directory, "0002_contract_widgets.sql")
-            # Minimal manifest for checksum path.
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "check_migration_manifest", MANIFEST_CHECK
-            )
-            assert spec and spec.loader
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            (directory / "manifest.json").write_text(
-                json.dumps(module.expected_manifest(directory), indent=2) + "\n",
-                encoding="utf-8",
-            )
-            errors = validate(directory)
+            self._manifest(directory)
+            errors = validate(directory, require_base_ref=False)
             self.assertTrue(any("contract requires a prior cutover" in e for e in errors))
 
     def test_phase_order_regression_fails(self) -> None:
@@ -222,26 +242,14 @@ class MigrationSafetyTests(unittest.TestCase):
             self._write(directory, "0001_expand_widgets.sql")
             self._write(directory, "0002_cutover_widgets.sql")
             self._write(directory, "0003_expand_widgets_extra.sql")
-            # different stem ok; same stem regression:
             self._write(directory, "0004_expand_widgets.sql")
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "check_migration_manifest", MANIFEST_CHECK
-            )
-            assert spec and spec.loader
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            # Duplicate stem expand after cutover via higher number — invalid name
-            # duplicate stem with expand after cutover:
-            # Actually 0004_expand_widgets has same stem as 0001/0002 — order regresses.
-            (directory / "manifest.json").write_text(
-                json.dumps(module.expected_manifest(directory), indent=2) + "\n",
-                encoding="utf-8",
-            )
-            errors = validate(directory)
+            self._manifest(directory)
+            errors = validate(directory, require_base_ref=False)
             self.assertTrue(
-                any("out of expand→cutover→contract order" in e or "phase regression" in e for e in errors),
+                any(
+                    "out of expand→cutover→contract order" in e or "phase regression" in e
+                    for e in errors
+                ),
                 errors,
             )
 
@@ -250,20 +258,9 @@ class MigrationSafetyTests(unittest.TestCase):
             directory = Path(tmp)
             path = directory / "0001_expand_widgets.sql"
             path.write_text("-- a\n", encoding="utf-8")
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "check_migration_manifest", MANIFEST_CHECK
-            )
-            assert spec and spec.loader
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            (directory / "manifest.json").write_text(
-                json.dumps(module.expected_manifest(directory), indent=2) + "\n",
-                encoding="utf-8",
-            )
+            self._manifest(directory)
             path.write_text("-- mutated\n", encoding="utf-8")
-            errors = validate(directory)
+            errors = validate(directory, require_base_ref=False)
             self.assertTrue(any("checksum changed" in e for e in errors))
 
     def test_destructive_sql_in_expand_fails(self) -> None:
@@ -274,20 +271,54 @@ class MigrationSafetyTests(unittest.TestCase):
                 "0001_expand_widgets.sql",
                 "CREATE TABLE widgets(id int);\nDROP TABLE widgets;\n",
             )
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "check_migration_manifest", MANIFEST_CHECK
-            )
-            assert spec and spec.loader
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            (directory / "manifest.json").write_text(
-                json.dumps(module.expected_manifest(directory), indent=2) + "\n",
-                encoding="utf-8",
-            )
-            errors = validate(directory)
+            self._manifest(directory)
+            errors = validate(directory, require_base_ref=False)
             self.assertTrue(any("destructive" in e for e in errors), errors)
+
+    def test_literal_and_comment_bypass_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._write(
+                directory,
+                "0001_expand_widgets.sql",
+                "-- DROP TABLE evil;\n"
+                "CREATE TABLE widgets(id int);\n"
+                "COMMENT ON TABLE widgets IS 'DROP TABLE widgets';\n"
+                "DO $$ BEGIN\n"
+                "  PERFORM 'DROP COLUMN x';\n"
+                "END $$;\n",
+            )
+            self._manifest(directory)
+            errors = validate(directory, require_base_ref=False)
+            self.assertFalse(any("destructive" in e for e in errors), errors)
+
+    def test_drop_column_detected_outside_literals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._write(
+                directory,
+                "0001_expand_widgets.sql",
+                "ALTER TABLE widgets DROP COLUMN legacy;\n",
+            )
+            self._manifest(directory)
+            errors = validate(directory, require_base_ref=False)
+            self.assertTrue(any("DROP COLUMN" in e.upper() for e in errors), errors)
+
+    def test_missing_base_ref_fails_when_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self._write(directory, "0001_expand_widgets.sql")
+            self._manifest(directory)
+            env = os.environ.copy()
+            for key in (
+                "MARKHAND_MIGRATION_BASE_REF",
+                "GITHUB_BASE_REF",
+                "GITHUB_BASE_SHA",
+            ):
+                env.pop(key, None)
+            # Force unresolved by pointing git to empty.
+            errors = validate_base_ref_anchor(directory, None, required=True)
+            self.assertTrue(any("mandatory" in e for e in errors))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -299,6 +330,11 @@ def main(argv: list[str] | None = None) -> int:
         "--base-ref",
         help="Git ref whose migration manifest.json anchors immutable checksums",
     )
+    parser.add_argument(
+        "--allow-missing-base-ref",
+        action="store_true",
+        help="Unsafe: skip mandatory base-ref (tests only)",
+    )
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -307,7 +343,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.wasSuccessful() else 1
 
     try:
-        errors = validate(args.directory, base_ref=args.base_ref)
+        errors = validate(
+            args.directory,
+            base_ref=args.base_ref,
+            require_base_ref=not args.allow_missing_base_ref,
+        )
     except MigrationSafetyError as error:
         print(f"migration safety error: {error}", file=sys.stderr)
         return 2

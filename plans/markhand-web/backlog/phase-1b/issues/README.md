@@ -396,11 +396,12 @@ ghi trong issue đã `Done`.
 - **Acceptance/tests:** Clean restore đạt RPO/RTO; missing/orphan detect; readiness
   false until reconcile; PG rebuild; corrupt manifest/upgrade tests.
 - **Evidence (in progress):**
-  - Correctness rebuild: streamed-WAL PG backup (PITR blocked without archive
-    overlay), AES-GCM envelopes, MinIO version/delete-marker restore mapping,
-    Qdrant collection identity from index signature, read-only dry-run, target-bound
-    shadow restore state, migration `0024` zero-drift readiness + bulk reconcile-once.
-  - Hermetic suite + `make check-backup`; report
+  - Final-round remediation: PG18 WAL-Ranges + shadow recovery verify, campaign
+    identity/atomic checkpoints/cutover receipts, MinIO encrypted opaque bodies,
+    Qdrant v1.18.2 schema parse + alias cutover, streaming EtM crypto, sealed
+    readiness campaigns, fence opt-in + restart, TLS/credential non-argv,
+    migration base-ref + SQL lexer, JSON NaN reject + appVersion range.
+  - Contract suite (stateful fake CLIs) + `make check-backup`; report
     `bench/markhand_web/reports/p1b-o03-backup-restore.md`.
   - Non-claim: no live restore / Profile-B RPO/RTO pass in this environment.
 - **Security/migration:** Encrypted narrow credentials; expand/cutover/contract.

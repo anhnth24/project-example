@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Strict JSON loader that rejects duplicate keys and unknown fields."""
+"""Strict JSON loader: reject duplicates, NaN/Infinity, and unknown fields."""
 
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any, Callable
 
 
 class StrictJsonError(ValueError):
     """Fail-closed JSON error."""
+
+
+_NONFINITE_TOKEN = re.compile(r"(?i)(?:^|[^A-Za-z0-9_])(NaN|-?Infinity)(?:[^A-Za-z0-9_]|$)")
 
 
 def object_pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -20,11 +25,31 @@ def object_pairs_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _reject_nonfinite_tokens(text: str) -> None:
+    if _NONFINITE_TOKEN.search(text):
+        raise StrictJsonError("NaN/Infinity JSON tokens are rejected")
+
+
+def reject_nonfinite(node: Any, path: str = "$") -> None:
+    if isinstance(node, float):
+        if math.isnan(node) or math.isinf(node):
+            raise StrictJsonError(f"non-finite number at {path}")
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            reject_nonfinite(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for idx, value in enumerate(node):
+            reject_nonfinite(value, f"{path}[{idx}]")
+
+
 def loads(text: str) -> Any:
+    _reject_nonfinite_tokens(text)
     try:
-        return json.loads(text, object_pairs_hook=object_pairs_hook)
+        data = json.loads(text, object_pairs_hook=object_pairs_hook, parse_constant=lambda s: (_ for _ in ()).throw(StrictJsonError(f"unsupported constant {s}")))
     except json.JSONDecodeError as error:
         raise StrictJsonError(str(error)) from error
+    reject_nonfinite(data)
+    return data
 
 
 def load_path(path: str) -> Any:

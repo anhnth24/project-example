@@ -26,10 +26,14 @@ check-boundaries:
 	python3 scripts/check-architecture-boundaries.py
 	python3 scripts/check-architecture-boundaries.py --self-test
 
+# Migration base-ref anchor: CI PR sets GITHUB_BASE_REF; local defaults to merge-base.
+MARKHAND_MIGRATION_BASE_REF ?= $(or $(GITHUB_BASE_SHA),$(if $(GITHUB_BASE_REF),origin/$(GITHUB_BASE_REF),$(shell git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD master 2>/dev/null)))
+
 check-migrations:
 	python3 scripts/check-migration-manifest.py --check
 	python3 scripts/check-migration-manifest.py --self-test
-	python3 deploy/backup/migration/validate-migration-safety.py --check
+	@test -n "$(MARKHAND_MIGRATION_BASE_REF)" || (echo "MARKHAND_MIGRATION_BASE_REF unresolved" >&2; exit 2)
+	MARKHAND_MIGRATION_BASE_REF="$(MARKHAND_MIGRATION_BASE_REF)" python3 deploy/backup/migration/validate-migration-safety.py --check --base-ref "$(MARKHAND_MIGRATION_BASE_REF)"
 	python3 deploy/backup/migration/validate-migration-safety.py --self-test
 
 check-fixtures:

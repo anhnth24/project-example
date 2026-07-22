@@ -1531,17 +1531,50 @@ pub async fn document_count(pool: &Pool) -> Result<i64, ReconciliationError> {
     Ok(count)
 }
 
+/// Record campaign expected job count (pre-seal).
+pub async fn set_campaign_expected(
+    pool: &Pool,
+    expected: i64,
+) -> Result<bool, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let ok: bool = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_set_campaign_expected($1, $2)",
+            &[&STARTUP_RECONCILIATION_KEY, &expected],
+        )
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(ok)
+}
+
+/// Seal campaign after all enqueue writes committed.
+pub async fn seal_campaign(pool: &Pool, expected: i64) -> Result<bool, ReconciliationError> {
+    let client = pool.get().await.map_err(DbError::from)?;
+    let ok: bool = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_seal_campaign($1, $2)",
+            &[&STARTUP_RECONCILIATION_KEY, &expected],
+        )
+        .await
+        .map_err(DbError::from)?
+        .get(0);
+    Ok(ok)
+}
+
 /// Startup bootstrap: open a generation. Empty catalog may record synthetic
-/// zero-drift success; otherwise readiness stays false until reconcile jobs
-/// verify zero drift (idle queue alone cannot certify).
+/// zero-drift success after sealing an empty campaign; otherwise readiness
+/// stays false until reconcile jobs verify zero drift.
 pub async fn bootstrap_startup_reconciliation(pool: &Pool) -> Result<bool, ReconciliationError> {
     let _generation = open_startup_reconciliation_generation(pool, "startup bootstrap").await?;
     let docs = document_count(pool).await?;
     if docs == 0 {
+        set_campaign_expected(pool, 0).await?;
+        seal_campaign(pool, 0).await?;
         record_reconcile_outcome(pool, "success", 0, "empty catalog zero-drift").await?;
         return try_certify_startup_reconciliation(pool, "empty catalog certified").await;
     }
-    // Documents exist — require reconcile convergence before ready.
+    // Documents exist — require sealed bulk campaign convergence before ready.
     Ok(false)
 }
 
@@ -1570,6 +1603,10 @@ pub async fn certify_after_reconcile_success(
 }
 
 /// Bulk-enqueue document reconcile jobs for an org (actual JobPayload shape).
+///
+/// Records expected count, enqueues inside org transactions, then seals the
+/// campaign only after all job rows are committed. Partial failure leaves the
+/// campaign unsealed so readiness cannot certify.
 pub async fn enqueue_reconcile_all_documents(
     pool: &Pool,
     ctx: &OrgContext,
@@ -1597,6 +1634,9 @@ pub async fn enqueue_reconcile_all_documents(
     })
     .await?;
 
+    let expected = i64::try_from(ids.len()).unwrap_or(i64::MAX);
+    set_campaign_expected(pool, expected).await?;
+
     let mut enqueued = 0usize;
     for document_id in ids {
         // Generation already opened above — do not reopen per document.
@@ -1605,8 +1645,13 @@ pub async fn enqueue_reconcile_all_documents(
             enqueued += 1;
         }
     }
-    // Empty org: record zero-drift so try_ready can succeed after bulk no-op.
-    if enqueued == 0 && document_count(pool).await? == 0 {
+    if i64::try_from(enqueued).unwrap_or(i64::MAX) != expected {
+        // Refuse to seal a partial campaign.
+        return Err(ReconciliationError::InvalidCheckpoint);
+    }
+    seal_campaign(pool, expected).await?;
+    // Empty org: record zero-drift so try_ready can succeed after sealed no-op.
+    if enqueued == 0 {
         record_reconcile_outcome(pool, "success", 0, "bulk reconcile empty org").await?;
     }
     Ok(enqueued)

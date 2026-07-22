@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermetic fake pg_basebackup
+# Stateful fake pg_basebackup (-Ft -X stream) producing PG18-shaped artifacts.
 set -euo pipefail
 out=""
 while [[ $# -gt 0 ]]; do
@@ -8,8 +8,47 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
-mkdir -p "${out:-/tmp/fake-pgdata}"
-printf 'FAKE_PG_BASEBACKUP\n' >"${out:-/tmp/fake-pgdata}/base.tar"
-# Also produce directory content for tar fallback.
-printf 'PG_VERSION\n' >"${out:-/tmp/fake-pgdata}/PG_VERSION"
+out="${out:-/tmp/fake-pgdata}"
+mkdir -p "$out"
+STATE_DIR="${MARKHAND_FAKE_PG_STATE:-${TMPDIR:-/tmp}/markhand-fake-pg}"
+mkdir -p "$STATE_DIR"
+START_LSN="${MARKHAND_FAKE_PG_START_LSN:-0/1600000}"
+STOP_LSN="${MARKHAND_FAKE_PG_STOP_LSN:-0/16B3740}"
+TL="${MARKHAND_FAKE_PG_TIMELINE:-1}"
+SEG="${MARKHAND_FAKE_PG_WAL_SEG:-000000010000000000000001}"
+
+tmpdir="$(mktemp -d)"
+trap 'rm -rf "$tmpdir"' EXIT
+mkdir -p "$tmpdir/base" "$tmpdir/wal"
+cat >"$tmpdir/base/backup_label" <<EOF
+START WAL LOCATION: ${START_LSN} (file ${SEG})
+CHECKPOINT LOCATION: ${START_LSN}
+BACKUP METHOD: streamed
+BACKUP FROM: primary
+START TIME: 2026-07-22 00:00:00 UTC
+LABEL: markhand-fake
+START TIMELINE: ${TL}
+STOP WAL LOCATION: ${STOP_LSN} (file ${SEG})
+STOP TIME: 2026-07-22 00:00:01 UTC
+EOF
+cat >"$tmpdir/base/backup_manifest" <<EOF
+{
+  "PostgreSQL-Backup-Manifest-Version": 2,
+  "Files": [{"Path": "backup_label", "Size": 1}],
+  "WAL-Ranges": [
+    {"Timeline": ${TL}, "Start-LSN": "${START_LSN}", "End-LSN": "${STOP_LSN}"}
+  ]
+}
+EOF
+printf '18\n' >"$tmpdir/base/PG_VERSION"
+# Valid WAL segment (+ optional junk injection for negative tests)
+printf 'WALDATA' >"$tmpdir/wal/${SEG}"
+if [[ "${MARKHAND_FAKE_PG_JUNK_WAL:-0}" == "1" ]]; then
+  printf 'junk' >"$tmpdir/wal/not-a-wal-file.txt"
+fi
+tar -C "$tmpdir/base" -cf "$out/base.tar" .
+tar -C "$tmpdir/wal" -cf "$out/pg_wal.tar" .
+printf '%s\n' "$START_LSN" >"$STATE_DIR/last-start-lsn"
+printf '%s\n' "$STOP_LSN" >"$STATE_DIR/last-stop-lsn"
+printf '%s\n' "$TL" >"$STATE_DIR/last-timeline"
 exit 0

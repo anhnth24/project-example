@@ -2,10 +2,10 @@
 
 Fail-closed control plane aligned with ADR 0012.
 
-**Status: In Progress.** Hermetic/static evidence only. Continuous PITR stays
-**blocked** unless archived WAL through the target LSN is packaged, checksummed,
-and consumed on restore. `compose.wal-archive.yml` is preparatory only. No
-live/RPO/RTO claim.
+**Status: In Progress.** Contract/static evidence via stateful fake CLIs (no
+hermetic shortcuts). Continuous PITR stays **blocked** unless archived WAL
+through the target LSN is packaged, checksummed, and consumed on restore.
+`compose.wal-archive.yml` is preparatory only. No live/RPO/RTO claim.
 
 ## Validate
 

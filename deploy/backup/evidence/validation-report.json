@@ -3,49 +3,42 @@
   "claims_rpo_rto_pass": false,
   "commands": [
     "python3 scripts/check-backup-o03.py --self-test",
-    "python3 deploy/backup/migration/validate-migration-safety.py --check",
+    "make check-migrations",
     "make check-backup",
     "cargo test -p fileconv-server reconcile_report_drift_blocks_zero_drift_label"
   ],
   "continuousPitr": "blocked_unless_archive_wal_packaged_and_consumed",
-  "encryption": "aes-256-ctr-hmac-sha256-v1 (stdlib HKDF/HMAC + openssl aes-256-ctr; not GCM/AEAD)",
+  "encryption": "aes-256-ctr-hmac-sha256-v1 streaming (libcrypto AES-CTR + stdlib HKDF/HMAC; not GCM/AEAD)",
   "evidenceClasses": {
-    "hermetic": [
-      "backup+dry-run+apply",
-      "drift keeps ready false / zero-drift ready",
-      "corrupt/duplicate JSON",
-      "org/schema/signature/migration mismatch",
-      "missing artifact / command failure",
-      "path traversal/symlink/destructive confirm",
-      "OpenSSL CTR+HMAC roundtrip/tamper/wrong-key/truncation",
-      "schema enforcement + schema/code drift mutation",
-      "PITR blocked without packaged archive WAL",
-      "anti-replay target binding"
+    "contract": [
+      "stateful fake CLI/HTTP adapters (no hermetic shortcuts)",
+      "junk WAL / Qdrant schema / cross-manifest resume",
+      "MinIO traversal + encrypted bodies",
+      "TLS/credential non-argv",
+      "apply success + drift/repair + stage failure paths"
     ],
     "implemented": [
-      "streamed WAL restorable PG backup + EtM envelope metadata",
-      "MinIO version/delete-marker inventory + restore mapping",
-      "Qdrant collection identity from index signature",
-      "dry-run read-only; fence quiescence; target-bound restore state",
-      "zero-drift readiness certification (migration 0024)",
-      "bulk enqueue + reconcile-once worker path",
-      "recovery-manifest.schema.json enforced (unknown fields fail)"
+      "PG18 backup_label/backup_manifest WAL-Ranges + junk rejection",
+      "shadow recovery configure+verify via pinned pg_ctl/docker path",
+      "campaign identity + atomic checkpoints + cutover receipts from ops",
+      "MinIO encrypted opaque object bodies; keys not used as paths",
+      "Qdrant v1.18.2 schema parse + alias cutover after verify",
+      "streaming EtM crypto; readiness sealed campaign; fence opt-in",
+      "migration base-ref + SQL lexer; JSON NaN reject; appVersion range"
     ],
     "pending_live": [
-      "Docker compose restore with shadow cutover",
-      "continuous PITR only after packaged archive WAL + restore consume",
-      "Profile-B RPO/RTO measurements"
+      "Docker compose restore with measured RPO/RTO",
+      "continuous PITR only after packaged archive WAL + restore consume"
     ],
     "static": [
       "digest pins",
       "runbooks",
-      "migration safety + SQL semantic policy",
-      "wal-archive overlay labeled preparatory only",
-      "no host cryptography package lock claim"
+      "migration safety + base-ref anchor",
+      "wal-archive overlay preparatory only"
     ]
   },
   "hermeticFailures": [],
-  "hermeticTestsRun": 13,
+  "hermeticTestsRun": 15,
   "issue": "P1B-O03",
   "ok": true,
   "postgresMethod": "pg_basebackup_streamed_wal",
@@ -54,7 +47,13 @@
     "status": "unresolved",
     "targetMatch": false
   },
+  "remainingBlockers": [
+    "No Docker daemon in this environment for live compose cutover drill",
+    "Profile-B RPO\u226415m / RTO gates unresolved",
+    "Live MinIO/Qdrant/PG with real TLS certs not exercised here"
+  ],
   "staticErrors": [],
-  "version": 2,
+  "status": "in_progress",
+  "version": 3,
   "walArchiveOverlay": "preparatory_only"
 }

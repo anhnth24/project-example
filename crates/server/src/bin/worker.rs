@@ -449,6 +449,12 @@ async fn run_reconcile_worker(
                                 .await
                                 .map_err(|error| format!("reconcile-once try_ready failed: {error}"))?;
                                 println!("fileconv-worker: reconcile-once complete ready={ready}");
+                                if !ready {
+                                    return Err(
+                                        "reconcile-once completed without ready certification"
+                                            .to_string(),
+                                    );
+                                }
                                 break;
                             }
                         }
