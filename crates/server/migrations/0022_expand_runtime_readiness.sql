@@ -1,6 +1,6 @@
 -- P1B-R06: durable generation-aware startup reconciliation / readiness fence.
 -- Default is not ready until startup bootstrap records a generation and that
--- generation is certified with no pending/leased reconcile jobs.
+-- generation is certified with no pending/leased/running reconcile jobs.
 --
 -- Global pending-job counts must use SECURITY DEFINER helpers: jobs are RLS
 -- forced, so a raw SELECT without org context would under-count.
@@ -17,7 +17,7 @@ CREATE TABLE runtime_readiness (
 INSERT INTO runtime_readiness (key, ready, generation, certified_generation, detail)
 VALUES ('startup_reconciliation', false, 0, 0, 'awaiting startup bootstrap');
 
--- Cross-tenant active reconcile count (bypasses RLS via SECURITY DEFINER).
+-- Cross-tenant pending/leased/running reconcile count (bypasses RLS via SECURITY DEFINER).
 CREATE OR REPLACE FUNCTION markhand_pending_reconcile_jobs()
 RETURNS bigint
 LANGUAGE sql

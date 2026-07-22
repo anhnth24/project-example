@@ -1424,7 +1424,7 @@ pub async fn open_startup_reconciliation_generation(
     Ok(generation)
 }
 
-/// Atomically certify ready for the current generation when pending/leased is empty.
+/// Atomically certify ready for the current generation when pending/leased/running is empty.
 ///
 /// Generation 0 (never bootstrapped) cannot become ready. Errors from the
 /// SECURITY DEFINER helpers propagate to the caller.
@@ -1444,7 +1444,7 @@ pub async fn try_certify_startup_reconciliation(
     Ok(ready)
 }
 
-/// Global pending+leased reconcile count via SECURITY DEFINER (not RLS-hidden).
+/// Global pending+leased+running reconcile count via SECURITY DEFINER (not RLS-hidden).
 pub async fn pending_reconcile_jobs(pool: &Pool) -> Result<i64, ReconciliationError> {
     let client = pool.get().await.map_err(DbError::from)?;
     let pending: i64 = client
