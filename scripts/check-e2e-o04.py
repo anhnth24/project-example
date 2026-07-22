@@ -725,6 +725,25 @@ class O04SelfTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(len(result.errors), 3)
 
+    def test_cleanup_isolation_rejects_test_substrings_without_name_segments(
+        self,
+    ) -> None:
+        from harness.cleanup import IsolationError, verify_cleanup_isolation
+
+        with self.assertRaisesRegex(IsolationError, "MARKHAND_COMPOSE_PROJECT"):
+            verify_cleanup_isolation(
+                compose_project="contest",
+                postgres_db="attestation",
+                minio_bucket="latest-documents",
+                stack_tag="test",
+            )
+        verify_cleanup_isolation(
+            compose_project="markhand-e2e-ci",
+            postgres_db="markhand_e2e",
+            minio_bucket="markhand-test-documents",
+            stack_tag="test",
+        )
+
     def test_confirm_wrong_phrase(self) -> None:
         result = validate_live_gates(
             environ={
@@ -874,6 +893,27 @@ class O04SelfTests(unittest.TestCase):
         self.assertFalse(ok4)
         self.assertIn("unexpected case: shadow-failure", err4)
 
+        duplicate = list(all_required_pass[:-1])
+        duplicate.append(
+            CaseResult(id=required[0]["id"], matrix="format", status="pass")
+        )
+        ok5, err5 = evaluate_claims_live_vertical_slice(suite, duplicate)
+        self.assertFalse(ok5)
+        self.assertIn(f"duplicate case: {required[0]['id']}", err5)
+
+        wrong_matrix = list(all_required_pass[:-1])
+        wrong_matrix[0] = CaseResult(
+            id=required[0]["id"], matrix="security", status="pass"
+        )
+        ok6, err6 = evaluate_claims_live_vertical_slice(suite, wrong_matrix)
+        self.assertFalse(ok6)
+        self.assertTrue(
+            any(
+                error.startswith(f"{required[0]['id']}: matrix mismatch")
+                for error in err6
+            )
+        )
+
     def test_mutation_bridge_scan_clean(self) -> None:
         validate_no_bridge_mutations()
 
@@ -883,11 +923,45 @@ class O04SelfTests(unittest.TestCase):
         _w, _h, dark = _png_pixel_stats((E2E / "fixtures" / png["path"]).read_bytes())
         self.assertGreaterEqual(dark, 80)
 
-    def test_reject_or_quarantine_logic_rejects_accepted(self) -> None:
-        # Mirror runner rule: accepted must not satisfy reject_or_quarantine.
-        for disposition in ("rejected", "quarantined"):
-            self.assertTrue(disposition in ("rejected", "quarantined"))
-        self.assertFalse("accepted" in ("rejected", "quarantined"))
+    def test_reject_or_quarantine_runner_rejects_accepted(self) -> None:
+        from harness.api_client import HttpResult
+        from harness.cleanup import CleanupStack
+        from harness.runner import run_security_case_live
+
+        case = next(
+            item
+            for item in load_suite_manifest()["security"]
+            if item["id"] == "sec-zip-bomb"
+        )
+        for disposition, status, expected in (
+            ("rejected", 422, "pass"),
+            ("quarantined", 201, "pass"),
+            ("accepted", 201, "fail"),
+        ):
+            with self.subTest(disposition=disposition):
+                admin = mock.Mock()
+                admin.upload.return_value = HttpResult(
+                    status=status,
+                    headers={},
+                    body=json.dumps({"disposition": disposition}).encode(),
+                )
+                result = run_security_case_live(
+                    case,
+                    admin=admin,
+                    victim=mock.Mock(),
+                    foreign=mock.Mock(),
+                    compose=["docker", "compose"],
+                    env={"MARKHAND_POSTGRES_DB": "markhand_e2e"},
+                    collection_id="55555555-5555-4555-8555-555555555555",
+                    seeded_token="MAHOA_E2E_TXT_7F3A",
+                    seeded_document_id=None,
+                    cleanup=CleanupStack(),
+                )
+                self.assertEqual(result.status, expected)
+                self.assertEqual(
+                    result.postconditions["not_accepted"],
+                    disposition != "accepted",
+                )
 
     def test_required_format_rejects_quarantined_upload(self) -> None:
         from harness.api_client import HttpResult
@@ -970,6 +1044,60 @@ class O04SelfTests(unittest.TestCase):
         false_hermetic_pass["summary"]["blocked"] -= 1
         with self.assertRaisesRegex(HarnessError, "hermetic case fmt-txt"):
             validate_evidence_semantics(suite, false_hermetic_pass)
+
+        duplicate = load_json(REPORT_JSON)
+        duplicate["cases"].append(dict(duplicate["cases"][0]))
+        with self.assertRaisesRegex(HarnessError, "duplicates="):
+            validate_evidence_semantics(suite, duplicate)
+
+        extra = load_json(REPORT_JSON)
+        extra["cases"].append(
+            {
+                **extra["cases"][0],
+                "id": "shadow-case",
+                "matrix": "security",
+            }
+        )
+        with self.assertRaisesRegex(HarnessError, "extra="):
+            validate_evidence_semantics(suite, extra)
+
+        wrong_severity = load_json(REPORT_JSON)
+        wrong_severity["severity"] = "none"
+        with self.assertRaisesRegex(HarnessError, "severity does not match"):
+            validate_evidence_semantics(suite, wrong_severity)
+
+        false_live_claim = load_json(REPORT_JSON)
+        false_live_claim["claimsLiveVerticalSlice"] = True
+        with self.assertRaisesRegex(HarnessError, "without exact passing coverage"):
+            validate_evidence_semantics(suite, false_live_claim)
+
+        hermetic_live_claim = load_json(REPORT_JSON)
+        required_ids = {
+            *REQUIRED_FORMAT_IDS,
+            *REQUIRED_SECURITY_IDS,
+            *REQUIRED_ADVERSARIAL_IDS,
+            *REQUIRED_FAULT_IDS,
+        }
+        for item in hermetic_live_claim["cases"]:
+            if item["id"] in required_ids:
+                item["status"] = "pass"
+        cases = hermetic_live_claim["cases"]
+        hermetic_live_claim["summary"] = {
+            "passed": sum(item["status"] == "pass" for item in cases),
+            "failed": sum(item["status"] == "fail" for item in cases),
+            "blocked": sum(item["status"] == "blocked" for item in cases),
+            "skippedOptional": sum(
+                item["status"] == "optional_unavailable" for item in cases
+            ),
+            "highCritical": sum(
+                SEVERITY_RANK.get(item.get("severity", "none"), 0)
+                >= SEVERITY_RANK["high"]
+                for item in cases
+            ),
+        }
+        hermetic_live_claim["claimsLiveVerticalSlice"] = True
+        with self.assertRaisesRegex(HarnessError, "hermetic evidence cannot claim"):
+            validate_evidence_semantics(suite, hermetic_live_claim)
 
     def test_redaction_preserves_case_ids_rejects_passwords_uuids(self) -> None:
         dirty = (
@@ -1058,7 +1186,9 @@ class O04SelfTests(unittest.TestCase):
             stack.run_all()
             self.assertEqual(execute.call_count, 2)
             restore = execute.call_args.kwargs
-            self.assertIn("INSERT INTO collection_user_access", restore["sql"])
+            delete_at = restore["sql"].index("DELETE FROM collection_user_access")
+            insert_at = restore["sql"].index("INSERT INTO collection_user_access")
+            self.assertLess(delete_at, insert_at)
             self.assertEqual(restore["variables"]["acl_snapshot"], snapshot)
 
 
