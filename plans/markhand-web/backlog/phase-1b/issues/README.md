@@ -337,8 +337,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
-- **Status:** In Progress — implementation is in bounded review; F01/F05/I03 and R06
-  are Done.
+- **Status:** Review — implementation ready in PR #264; final bounded reviewer
+  verification reports zero findings. F01/F05/I03 and R06 are Done.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`, OTel config.
