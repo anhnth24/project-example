@@ -270,6 +270,10 @@ async fn ensure_published_version_for_document(
 
 /// Authorized evidence page: every claim's document/collection is checked before
 /// any citation quote is returned. Unauthorized claim rows are omitted.
+///
+/// Fresh ACL mirrors authorized conflict evidence in `search`: the claim's pinned
+/// `document_versions` row selects `qa.query` vs `qa.history` via
+/// `CASE WHEN dv.is_current THEN 'qa.query' ELSE 'qa.history' END`.
 pub async fn list_authorized_evidence_page(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -293,20 +297,62 @@ pub async fn list_authorized_evidence_page(
                ON c.org_id = ce.org_id AND c.id = ce.claim_id
              JOIN documents d
                ON d.org_id = c.org_id AND d.id = c.document_id
+             JOIN document_versions dv
+               ON dv.org_id = c.org_id
+              AND dv.document_id = c.document_id
+              AND dv.id = c.version_id
              WHERE ce.org_id = $1
                AND ce.conflict_id = $2
                AND d.collection_id = ANY($3)
                AND d.deleted_at IS NULL
+               AND d.state = 'indexed'
+               AND dv.publication_state = 'published'
+               AND EXISTS (
+                 SELECT 1
+                 FROM collections acl_c
+                 JOIN org_memberships acl_m
+                   ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
+                 JOIN users acl_u ON acl_u.id = acl_m.user_id
+                 JOIN roles acl_r
+                   ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                 JOIN role_permissions acl_rp
+                   ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                 JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                 WHERE acl_c.org_id = d.org_id
+                   AND acl_c.id = d.collection_id
+                   AND acl_c.deleted_at IS NULL
+                   AND acl_u.disabled_at IS NULL
+                   AND acl_p.code = CASE WHEN dv.is_current THEN 'qa.query' ELSE 'qa.history' END
+                   AND EXISTS (
+                     SELECT 1
+                     FROM role_permissions query_rp
+                     JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                     WHERE query_rp.org_id = acl_r.org_id
+                       AND query_rp.role_id = acl_r.id
+                       AND query_p.code = 'qa.query'
+                   )
+                   AND (
+                     acl_c.visibility = 'org'
+                     OR acl_c.owner_user_id = $4
+                     OR EXISTS (
+                       SELECT 1 FROM collection_user_access cua
+                       WHERE cua.org_id = acl_c.org_id
+                         AND cua.collection_id = acl_c.id
+                         AND cua.user_id = $4
+                     )
+                   )
+               )
                AND (
-                 $4::timestamptz IS NULL
-                 OR (ce.created_at, ce.id) > ($4::timestamptz, $5::uuid)
+                 $5::timestamptz IS NULL
+                 OR (ce.created_at, ce.id) > ($5::timestamptz, $6::uuid)
                )
              ORDER BY ce.created_at, ce.id
-             LIMIT $6",
+             LIMIT $7",
             &[
                 &ctx.org_id(),
                 &conflict_id,
                 &allowed_collection_ids,
+                &ctx.user_id(),
                 &after_created_at,
                 &after_id,
                 &limit,

@@ -368,6 +368,61 @@ async fn resolve(pool: &Pool, org: Uuid, user: Uuid) -> OrgContext {
         .expect("resolve org context")
 }
 
+async fn grant_permission(pool: &Pool, org: Uuid, role: &str, code: &str) {
+    let provisional = OrgContext::try_new(org, Uuid::new_v4(), [] as [&str; 0], []).unwrap();
+    let role = role.to_string();
+    let code = code.to_string();
+    with_org_txn(pool, &provisional, {
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO permissions (id, code, description)
+                     VALUES ($1, $2, $2)
+                     ON CONFLICT (code) DO NOTHING",
+                    &[&Uuid::new_v4(), &code],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, r.id, p.id
+                     FROM roles r
+                     CROSS JOIN permissions p
+                     WHERE r.org_id = $1 AND r.code = $2 AND p.code = $3
+                     ON CONFLICT DO NOTHING",
+                    &[&org, &role, &code],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("grant permission");
+}
+
+async fn revoke_permission(pool: &Pool, org: Uuid, role: &str, code: &str) {
+    let provisional = OrgContext::try_new(org, Uuid::new_v4(), [] as [&str; 0], []).unwrap();
+    let role = role.to_string();
+    let code = code.to_string();
+    with_org_txn(pool, &provisional, {
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "DELETE FROM role_permissions
+                     WHERE org_id = $1
+                       AND role_id = (SELECT id FROM roles WHERE org_id = $1 AND code = $2)
+                       AND permission_id = (SELECT id FROM permissions WHERE code = $3)",
+                    &[&org, &role, &code],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("revoke permission");
+}
+
 async fn seed_member(
     pool: &Pool,
     org: Uuid,
@@ -1099,6 +1154,69 @@ async fn rest_collections_documents_jobs_contract() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_stable_error(&body, "version_superseded");
 
+    // Without qa.history, superseded version metadata is omitted from the list.
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions", fx.document),
+        None,
+        Some(&fx.viewer_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let viewer_ids: Vec<String> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(viewer_ids, vec![draft_version.to_string()]);
+    assert!(!viewer_ids.contains(&fx.version.to_string()));
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions", fx.document),
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let owner_ids: Vec<String> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        owner_ids,
+        vec![draft_version.to_string()],
+        "owner fixture lacks qa.history so superseded rows stay hidden"
+    );
+
+    grant_permission(&fx.pool, fx.org, "owner", "qa.history").await;
+    let history_access = refresh_owner_access(&fx).await;
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions", fx.document),
+        None,
+        Some(&history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let history_ids: Vec<String> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(history_ids.contains(&fx.version.to_string()));
+    assert!(history_ids.contains(&draft_version.to_string()));
+
     // Identical Idempotency-Key replay; mismatched document reuse conflicts.
     let (status, first) = json_request(
         fx.app.clone(),
@@ -1465,6 +1583,92 @@ async fn rest_collections_documents_jobs_contract() {
     assert_ne!(
         page2["items"][0]["id"], page1["items"][0]["id"],
         "evidence keyset must advance"
+    );
+
+    // Supersede claim-pinned versions → evidence quotes require qa.history.
+    with_org_txn(&fx.pool, &owner_ctx, {
+        let owned = owner_ctx.clone();
+        let version_a = conflict.version_a;
+        let version_b = conflict.version_b;
+        move |txn| {
+            Box::pin(async move {
+                for version_id in [version_a, version_b] {
+                    let document_id: Uuid = txn
+                        .query_one(
+                            "SELECT document_id FROM document_versions
+                             WHERE org_id = $1 AND id = $2",
+                            &[&owned.org_id(), &version_id],
+                        )
+                        .await?
+                        .get(0);
+                    let draft_id = Uuid::new_v4();
+                    txn.execute(
+                        "INSERT INTO document_versions (
+                            id, org_id, document_id, version_number, parent_version_id,
+                            publication_state, is_current, content_sha256, original_object_key,
+                            effective_from, created_by_user_id
+                         )
+                         SELECT $1, org_id, document_id, version_number + 1, id,
+                                'draft', false,
+                                'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                                original_object_key, clock_timestamp() - interval '1 hour', $3
+                         FROM document_versions
+                         WHERE org_id = $2 AND id = $4",
+                        &[&draft_id, &owned.org_id(), &owned.user_id(), &version_id],
+                    )
+                    .await?;
+                    txn.query_one(
+                        "SELECT markhand_publish_document_version($1, $2, $3)",
+                        &[&owned.org_id(), &document_id, &draft_id],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("supersede conflict claim versions");
+
+    revoke_permission(&fx.pool, fx.org, "owner", "qa.history").await;
+    let no_history_access = refresh_owner_access(&fx).await;
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/conflicts/{}/evidence?limit=10",
+            conflict.conflict_id
+        ),
+        None,
+        Some(&no_history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["items"].as_array().unwrap().is_empty(),
+        "superseded claim evidence must not leak without qa.history: {body}"
+    );
+
+    grant_permission(&fx.pool, fx.org, "owner", "qa.history").await;
+    let with_history_access = refresh_owner_access(&fx).await;
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/conflicts/{}/evidence?limit=10",
+            conflict.conflict_id
+        ),
+        None,
+        Some(&with_history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["items"].as_array().unwrap().len(),
+        3,
+        "qa.history restores superseded claim evidence: {body}"
     );
 
     // Triage requires publish permission and a terminal status.
