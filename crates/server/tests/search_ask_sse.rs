@@ -620,6 +620,87 @@ async fn search_ask_closed_snapshot_restart_expiry_revoke() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["code"], "validation_failed");
 
+    // Non-stream ask returns the grounded response contract.
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "POST",
+        "/api/v1/ask",
+        Some(serde_json::json!({
+            "question": "doi soat giao dich",
+            "collectionIds": [fx.collection],
+            "limit": 5,
+            "useProvider": false
+        })),
+        Some(&fx.access),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body["answer"].as_str().unwrap_or_default().is_empty());
+    assert!(!body["citations"].as_array().unwrap().is_empty());
+    assert_eq!(body["citations"][0]["documentId"], fx.document.to_string());
+    assert_eq!(body["citations"][0]["versionId"], fx.version.to_string());
+    assert_eq!(
+        body["citations"][0]["quote"].as_str().unwrap_or_default(),
+        "Đối soát giao dịch theo ngày ngân hàng"
+    );
+    assert_eq!(body["versionContext"]["mode"], "current");
+    assert_eq!(body["grounded"], true);
+    assert!(body["requestId"].as_str().is_some_and(|id| !id.is_empty()));
+
+    // Both query routes require a freshly resolved qa.query permission.
+    let no_query_user = Uuid::new_v4();
+    let no_query_email = format!("no-query-{}@example.com", no_query_user.simple());
+    seed_member(
+        &fx.pool,
+        fx.org,
+        no_query_user,
+        &no_query_email,
+        "correct-horse-battery",
+        "no-query",
+        &["doc.upload"],
+    )
+    .await;
+    let no_query_keys = JwtKeys::from_auth(&fx.auth).expect("jwt keys");
+    let no_query_provider =
+        PasswordAuthProvider::new(fx.pool.clone(), fx.auth.clone(), no_query_keys);
+    let no_query_session = no_query_provider
+        .login_password(
+            &no_query_email,
+            "correct-horse-battery",
+            &AuthRequestMeta {
+                request_id: "r05-no-query-login".into(),
+            },
+        )
+        .await
+        .expect("no-query login");
+    let no_query_access = no_query_session.tokens.access_token.expose().to_string();
+    for path in ["/api/v1/search", "/api/v1/ask"] {
+        let request_body = if path.ends_with("search") {
+            serde_json::json!({
+                "query": "doi soat",
+                "collectionIds": [fx.collection],
+                "limit": 1
+            })
+        } else {
+            serde_json::json!({
+                "question": "doi soat",
+                "collectionIds": [fx.collection],
+                "limit": 1,
+                "useProvider": false
+            })
+        };
+        let (status, denied) = json_request(
+            fx.app.clone(),
+            "POST",
+            path,
+            Some(request_body),
+            Some(&no_query_access),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {denied}");
+        assert_eq!(denied["code"], "permission_denied");
+    }
+
     // Closed snapshot stream: contiguous sequences, metadata→token*→close.
     let (status, headers, sse_body) = sse_request(
         fx.app.clone(),
@@ -696,6 +777,24 @@ async fn search_ask_closed_snapshot_restart_expiry_revoke() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
+    // Last-Event-ID beyond the persisted high-water mark is rejected.
+    let (status, _h, body) = sse_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/events/{stream_id}"),
+        None,
+        Some(&fx.access),
+        Some("999999"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let invalid_range: Value = serde_json::from_str(&body).expect("range error json");
+    assert_eq!(invalid_range["code"], "validation_failed");
+    assert_eq!(
+        invalid_range["details"]["code"],
+        "last_event_id_out_of_range"
+    );
+
     // Reconstruct router/AppState to simulate worker/server restart from DB.
     let restarted = build_app(&fx.database_url, &fx.pool, &fx.auth);
     let (status, _h, restart_body) = sse_request(
@@ -727,6 +826,43 @@ async fn search_ask_closed_snapshot_restart_expiry_revoke() {
         &format!("/api/v1/events/{stream_id}"),
         None,
         Some(&fx.other_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    // Same-org cross-user stream IDs are also owner-bound.
+    let same_org_bystander = Uuid::new_v4();
+    let bystander_email = format!("bystander-{}@example.com", same_org_bystander.simple());
+    seed_member(
+        &fx.pool,
+        fx.org,
+        same_org_bystander,
+        &bystander_email,
+        "correct-horse-battery",
+        "bystander",
+        &["qa.query"],
+    )
+    .await;
+    let keys = JwtKeys::from_auth(&fx.auth).expect("jwt keys");
+    let provider = PasswordAuthProvider::new(fx.pool.clone(), fx.auth.clone(), keys);
+    let bystander_session = provider
+        .login_password(
+            &bystander_email,
+            "correct-horse-battery",
+            &AuthRequestMeta {
+                request_id: "r05-same-org-login".into(),
+            },
+        )
+        .await
+        .expect("same-org login");
+    let bystander_access = bystander_session.tokens.access_token.expose().to_string();
+    let (status, _h, body) = sse_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/events/{stream_id}"),
+        None,
+        Some(&bystander_access),
         None,
     )
     .await;
