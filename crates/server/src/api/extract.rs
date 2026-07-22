@@ -189,3 +189,173 @@ pub fn map_multipart_stream_error(
         ApiRejection::validation("Multipart stream is invalid", request_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::extract::DefaultBodyLimit;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::{get, post};
+    use axum::{Extension, Json, Router};
+    use http_body_util::BodyExt;
+    use serde::Deserialize;
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use super::{AppJson, AppMultipart, AppPath, AppQuery};
+    use crate::auth::context::OrgContext;
+    use crate::auth::jwt::AccessClaims;
+    use crate::auth::middleware::AuthenticatedOrg;
+    use crate::config::{RuntimeEndpoints, SecretString, ServerConfig};
+    use crate::db::pool::create_pool;
+    use crate::http::AppState;
+    use crate::state::RuntimeState;
+
+    #[derive(Deserialize)]
+    struct QueryInput {
+        limit: u32,
+    }
+
+    #[derive(Deserialize)]
+    struct JsonInput {
+        name: String,
+    }
+
+    async fn path_handler(AppPath(_id): AppPath<Uuid>) -> StatusCode {
+        StatusCode::OK
+    }
+
+    async fn query_handler(AppQuery(query): AppQuery<QueryInput>) -> Json<Value> {
+        Json(json!({ "limit": query.limit }))
+    }
+
+    async fn json_handler(AppJson(input): AppJson<JsonInput>) -> Json<Value> {
+        Json(json!({ "name": input.name }))
+    }
+
+    async fn multipart_handler(AppMultipart(_multipart): AppMultipart) -> StatusCode {
+        StatusCode::OK
+    }
+
+    fn test_state() -> Arc<AppState> {
+        let runtime =
+            RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
+                database_url: SecretString::new("postgres://unused"),
+                qdrant_url: "http://127.0.0.1:1".into(),
+                minio_url: "http://127.0.0.1:1".into(),
+            }))
+            .unwrap();
+        let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
+            .expect("pool");
+        Arc::new(AppState::from_parts(runtime, pool, None).unwrap())
+    }
+
+    fn extractor_auth() -> AuthenticatedOrg {
+        let org = Uuid::new_v4();
+        let user = Uuid::new_v4();
+        AuthenticatedOrg {
+            context: OrgContext::try_new(org, user, [] as [&str; 0], []).unwrap(),
+            claims: AccessClaims {
+                sub: user.to_string(),
+                iss: "test".into(),
+                aud: "test".into(),
+                iat: 1,
+                nbf: 1,
+                exp: i64::MAX,
+                org_id: org.to_string(),
+                sid: Uuid::new_v4().to_string(),
+            },
+            request_id: "extractor-request".into(),
+        }
+    }
+
+    fn test_app() -> Router {
+        Router::new()
+            .route("/path/{id}", get(path_handler))
+            .route("/query", get(query_handler))
+            .route("/json", post(json_handler).layer(DefaultBodyLimit::max(32)))
+            .route("/multipart", post(multipart_handler))
+            .layer(Extension(extractor_auth()))
+            .with_state(test_state())
+    }
+
+    async fn json_body(response: axum::response::Response) -> Value {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn assert_error(request: Request<Body>, status: StatusCode, code: &str) {
+        let response = test_app().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), status);
+        let body = json_body(response).await;
+        assert_eq!(body["code"], code, "{body}");
+        assert_eq!(body["requestId"], "extractor-request", "{body}");
+    }
+
+    #[tokio::test]
+    async fn path_query_and_json_rejections_are_canonical() {
+        assert_error(
+            Request::builder()
+                .uri("/path/not-a-uuid")
+                .body(Body::empty())
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "validation_failed",
+        )
+        .await;
+
+        assert_error(
+            Request::builder()
+                .uri("/query?limit=not-a-number")
+                .body(Body::empty())
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "validation_failed",
+        )
+        .await;
+
+        assert_error(
+            Request::builder()
+                .method("POST")
+                .uri("/json")
+                .header("content-type", "application/json")
+                .body(Body::from("{not-json"))
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "validation_failed",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn oversized_json_and_invalid_multipart_have_stable_errors() {
+        assert_error(
+            Request::builder()
+                .method("POST")
+                .uri("/json")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "name": "x".repeat(128) })).unwrap(),
+                ))
+                .unwrap(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+        )
+        .await;
+
+        assert_error(
+            Request::builder()
+                .method("POST")
+                .uri("/multipart")
+                .header("content-type", "multipart/form-data")
+                .body(Body::empty())
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "validation_failed",
+        )
+        .await;
+    }
+}

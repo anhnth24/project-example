@@ -838,6 +838,38 @@ async fn rest_collections_documents_jobs_contract() {
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let created_id = created["id"].as_str().unwrap().to_string();
 
+    // Collection validation and uniqueness conflicts use stable API errors.
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "POST",
+        "/api/v1/collections",
+        Some(serde_json::json!({
+            "name": "Duplicate Slug",
+            "slug": "new-library",
+            "visibility": "org"
+        })),
+        Some(&fx.access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_stable_error(&body, "collection_conflict");
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "POST",
+        "/api/v1/collections",
+        Some(serde_json::json!({
+            "name": "Invalid Slug",
+            "slug": "Produces_Invalid_Slug"
+        })),
+        Some(&fx.access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_stable_error(&body, "validation_failed");
+
     let access = refresh_owner_access(&fx).await;
 
     let (status, updated) = json_request(
@@ -851,6 +883,18 @@ async fn rest_collections_documents_jobs_contract() {
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["name"], "Renamed Library");
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "PATCH",
+        &format!("/api/v1/collections/{created_id}"),
+        Some(serde_json::json!({})),
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_stable_error(&body, "validation_failed");
 
     let (status, body) = json_request(
         fx.app.clone(),
@@ -949,6 +993,20 @@ async fn rest_collections_documents_jobs_contract() {
     assert_eq!(body["items"][0]["id"], fx.version.to_string());
     assert!(body["items"][0].get("originalObjectKey").is_none());
     assert!(body["items"][0].get("markdownObjectKey").is_none());
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions/{}", fx.document, fx.version),
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], fx.version.to_string());
+    assert_eq!(body["documentId"], fx.document.to_string());
+    assert!(body.get("originalObjectKey").is_none());
 
     let (status, body) = json_request(
         fx.app.clone(),
@@ -1303,6 +1361,33 @@ async fn rest_collections_documents_jobs_contract() {
     let (status, body) = json_request(
         fx.app.clone(),
         "GET",
+        "/api/v1/conflicts?status=open&limit=1",
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["items"][0]["id"], conflict.conflict_id.to_string());
+    assert_eq!(body["items"][0]["status"], "open");
+    assert!(body.get("pageInfo").is_some());
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        "/api/v1/conflicts?status=not-a-status",
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_stable_error(&body, "validation_failed");
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
         &format!("/api/v1/conflicts/{}", conflict.conflict_id),
         None,
         Some(&access),
@@ -1382,7 +1467,32 @@ async fn rest_collections_documents_jobs_contract() {
         "evidence keyset must advance"
     );
 
-    // Triage: invalid resolution version → stable 4xx (not FK 500).
+    // Triage requires publish permission and a terminal status.
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "POST",
+        &format!("/api/v1/conflicts/{}/triage", conflict.conflict_id),
+        Some(serde_json::json!({ "status": "resolved" })),
+        Some(&fx.viewer_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_stable_error(&body, "permission_denied");
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "POST",
+        &format!("/api/v1/conflicts/{}/triage", conflict.conflict_id),
+        Some(serde_json::json!({ "status": "open" })),
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_stable_error(&body, "validation_failed");
+
+    // Invalid resolution version → stable 4xx (not FK 500).
     let (status, body) = json_request(
         fx.app.clone(),
         "POST",
@@ -1443,6 +1553,41 @@ async fn rest_collections_documents_jobs_contract() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["state"], "tombstoned");
+
+    let (status, undisclosed) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents?collectionId={}", fx.collection),
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{undisclosed}");
+    assert!(!undisclosed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == fx.document.to_string()));
+
+    let (status, disclosed) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/documents?collectionId={}&includeDeleted=true",
+            fx.collection
+        ),
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disclosed}");
+    assert!(disclosed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == fx.document.to_string() && item["state"] == "tombstoned"));
 
     let (status, body) = json_request(
         fx.app.clone(),

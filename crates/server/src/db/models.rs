@@ -1361,6 +1361,23 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
             ],
         ),
         (
+            "api_idempotency_keys",
+            &[
+                "id",
+                "org_id",
+                "user_id",
+                "scope",
+                "idempotency_key",
+                "state",
+                "request_hash",
+                "response_status",
+                "response_body",
+                "created_at",
+                "updated_at",
+                "expires_at",
+            ],
+        ),
+        (
             "download_capabilities",
             &[
                 "id",
