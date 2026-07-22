@@ -131,6 +131,8 @@ pub enum RetrievalError {
     InvalidRequest(&'static str),
     #[error("compare/history versions are not in one lineage")]
     LineageMismatch,
+    #[error("search dependency unavailable")]
+    DependencyUnavailable,
     #[error("database error")]
     Database(#[from] DbError),
     #[error("storage error")]
@@ -148,6 +150,7 @@ impl RetrievalError {
             Self::PermissionDenied => "retrieval_permission_denied",
             Self::InvalidRequest(_) => "retrieval_invalid_request",
             Self::LineageMismatch => "retrieval_lineage_mismatch",
+            Self::DependencyUnavailable => "dependency_unavailable",
             Self::Database(_) => "retrieval_database",
             Self::Storage(_) => "retrieval_storage",
             Self::Embedding(_) => "retrieval_embedding",
@@ -241,6 +244,21 @@ fn require_mode_permissions(ctx: &OrgContext, mode: &VersionMode) -> Result<(), 
         require_permission(ctx, PERMISSION_QA_HISTORY)?;
     }
     Ok(())
+}
+
+/// Wire pool + optional vector/embed backends, then run hybrid search.
+///
+/// Routes must call this (or [`hybrid_search`]) instead of touching Qdrant/storage
+/// clients directly (ADR 0001).
+pub async fn hybrid_search_with_backends(
+    pool: &Pool,
+    qdrant: Option<&QdrantClient>,
+    embedder: Option<&ApprovedEmbeddingRuntime>,
+    ctx: &OrgContext,
+    request: RetrievalRequest,
+) -> Result<RetrievalResponse, RetrievalError> {
+    let qdrant = qdrant.ok_or(RetrievalError::DependencyUnavailable)?;
+    hybrid_search(pool, qdrant, embedder, ctx, request).await
 }
 
 /// Tenant-scoped hybrid search. OrgContext is mandatory on every path.
