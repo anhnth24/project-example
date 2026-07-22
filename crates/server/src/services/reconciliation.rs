@@ -363,26 +363,47 @@ pub async fn enqueue_reconcile(
     document_id: Uuid,
     reason: &str,
 ) -> Result<EnqueueOutcome, JobError> {
-    // Close/advance the durable readiness generation before durable enqueue so
-    // readiness cannot race ahead of newly queued reconcile work.
-    open_startup_reconciliation_generation(pool, &format!("reconcile enqueued:{reason}"))
-        .await
-        .map_err(|error| match error {
-            ReconciliationError::Db(db) => JobError::Database(db),
-            other => JobError::Database(DbError::Config(other.to_string())),
-        })?;
-    jobs::enqueue(
-        pool,
-        ctx,
-        EnqueueJob::new(
-            JobType::Reconcile,
-            JobPayload {
-                document_id: Some(document_id),
-                ..JobPayload::default()
-            },
-            format!("reconcile:{document_id}:{reason}"),
-        ),
-    )
+    let detail = format!("reconcile enqueued:{reason}");
+    let input = EnqueueJob::new(
+        JobType::Reconcile,
+        JobPayload {
+            document_id: Some(document_id),
+            ..JobPayload::default()
+        },
+        format!("reconcile:{document_id}:{reason}"),
+    );
+    // Hold the readiness row lock until the job and outbox commit. A concurrent
+    // certification then observes either the old state or the committed job,
+    // never a newly certified generation immediately followed by hidden work.
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.query_one(
+                    "SELECT markhand_runtime_readiness_open($1, $2)",
+                    &[&STARTUP_RECONCILIATION_KEY, &detail],
+                )
+                .await
+                .map_err(DbError::from)?;
+                let outcome = jobs::enqueue_within_txn(txn, &ctx, input).await?;
+                if !outcome.created {
+                    // An idempotent replay can resolve to an already-terminal job.
+                    // Re-evaluate now so opening the generation cannot strand the
+                    // service not-ready when no worker will run for the replay.
+                    txn.query_one(
+                        "SELECT markhand_runtime_readiness_try_ready($1, $2)",
+                        &[
+                            &STARTUP_RECONCILIATION_KEY,
+                            &"idempotent reconcile enqueue re-evaluated",
+                        ],
+                    )
+                    .await
+                    .map_err(DbError::from)?;
+                }
+                Ok(outcome)
+            })
+        }
+    })
     .await
 }
 
@@ -1340,12 +1361,16 @@ pub enum ReconciliationError {
 /// Durable readiness key written by the reconciliation service (P1B-R06).
 pub const STARTUP_RECONCILIATION_KEY: &str = "startup_reconciliation";
 
-/// Load the durable startup-reconciliation marker (missing → not ready).
+/// Load the durable startup-reconciliation fence (missing or active work → not ready).
 pub async fn is_startup_reconciliation_ready(pool: &Pool) -> Result<bool, ReconciliationError> {
     let client = pool.get().await.map_err(DbError::from)?;
     let row = client
         .query_opt(
-            "SELECT ready FROM runtime_readiness WHERE key = $1",
+            "SELECT ready
+                    AND generation = certified_generation
+                    AND markhand_pending_reconcile_jobs() = 0
+             FROM runtime_readiness
+             WHERE key = $1",
             &[&STARTUP_RECONCILIATION_KEY],
         )
         .await
