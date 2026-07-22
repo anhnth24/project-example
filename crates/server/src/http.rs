@@ -171,6 +171,11 @@ impl AppState {
         self.qdrant.as_ref()
     }
 
+    /// Vector-store backend for retrieval services (route-safe name; ADR 0001).
+    pub fn vector_store(&self) -> Option<&QdrantClient> {
+        self.qdrant.as_ref()
+    }
+
     pub fn embedder(&self) -> Option<&ApprovedEmbeddingRuntime> {
         self.embedder.as_ref()
     }

@@ -8,6 +8,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::api::sse::{
@@ -16,24 +17,19 @@ use crate::api::sse::{
 use crate::api::{ApiRejection, AppJson};
 use crate::auth::context::OrgContext;
 use crate::auth::middleware::AuthenticatedOrg;
-use crate::db::pool::with_org_txn;
-use crate::db::sse_streams::{
-    self, NewClosedSnapshot, SseStreamKind, SseStreamStatus, DEFAULT_CLEANUP_LIMIT,
-    DEFAULT_MAX_BYTES, DEFAULT_MAX_EVENTS, DEFAULT_TTL_SECS,
-};
 use crate::http::AppState;
 use crate::routes::common::map_db;
 use crate::routes::qa_common::{
-    answer_to_json, build_auth_scope, event_row_to_envelope, exact_collection_ids,
-    fresh_org_context, make_auth_probe, parse_ask_limit, parse_collection_ids, parse_query_text,
-    parse_version_mode, plan_closed_events, probe_rejection, require_history_if_needed,
-    require_query_perm, revalidate_stream_scope, run_hybrid_search, SnapshotPlanBounds,
-    VersionModeBody,
+    answer_to_json, build_auth_scope, default_snapshot_plan_bounds, event_row_to_envelope,
+    exact_collection_ids, fresh_org_context, make_auth_probe, parse_ask_limit,
+    parse_collection_ids, parse_query_text, parse_version_mode, plan_closed_events,
+    probe_rejection, require_history_if_needed, require_query_perm, revalidate_stream_scope,
+    run_hybrid_search, VersionModeBody,
 };
 use crate::services::qa::stream::{AuthProbeDecision, StreamCancel};
 use crate::services::qa::{answer_question, QaRequest};
 use crate::services::retrieval::{RetrievalRequest, RetrievalResponse, VersionMode};
-use tokio::time::timeout;
+use crate::services::sse_stream;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -155,54 +151,29 @@ async fn ask_stream(
 
     let auth_scope = build_auth_scope(&prepared.mode, prepared.collection_ids, &answer);
     // Probe immediately after QA/provider and before any sensitive persist.
-    let mut probe = make_auth_probe(state.clone(), auth.claims.clone(), auth_scope.clone());
+    let mut probe = make_auth_probe(&state, auth.claims.clone(), auth_scope.clone());
     match timeout(SSE_AUTH_PROBE_TIMEOUT, probe()).await {
         Ok(AuthProbeDecision::Allow) => {}
         Ok(other) => return Err(probe_rejection(other, http_request_id)),
         Err(_) => return Err(probe_rejection(AuthProbeDecision::Deny, http_request_id)),
     }
 
-    let plan_bounds = SnapshotPlanBounds {
-        max_events: DEFAULT_MAX_EVENTS,
-        max_bytes: DEFAULT_MAX_BYTES,
-        ..SnapshotPlanBounds::default()
-    };
+    let plan_bounds = default_snapshot_plan_bounds();
     let (planned, close_reason) = plan_closed_events(&answer, plan_bounds);
-    let status = if close_reason == "completed" {
-        SseStreamStatus::Closed
-    } else {
-        SseStreamStatus::Error
-    };
     let stream_id = Uuid::new_v4();
 
-    let (snapshot, events) = with_org_txn(state.pool(), &prepared.ctx, {
-        let ctx = prepared.ctx.clone();
-        let auth_scope = auth_scope.clone();
-        move |txn| {
-            Box::pin(async move {
-                // Exclude the stream about to be inserted; grace keeps 410 deterministic.
-                let _ =
-                    sse_streams::cleanup_expired(txn, &ctx, DEFAULT_CLEANUP_LIMIT, Some(stream_id))
-                        .await?;
-                sse_streams::persist_closed_snapshot(
-                    txn,
-                    &ctx,
-                    NewClosedSnapshot {
-                        id: stream_id,
-                        kind: SseStreamKind::Ask,
-                        status,
-                        close_reason,
-                        auth_scope,
-                        events: planned,
-                        max_events: DEFAULT_MAX_EVENTS,
-                        max_bytes: DEFAULT_MAX_BYTES,
-                        ttl_secs: DEFAULT_TTL_SECS,
-                    },
-                )
-                .await
-            })
-        }
-    })
+    let (snapshot, events) = sse_stream::persist_ask_closed_snapshot(
+        state.pool(),
+        &prepared.ctx,
+        sse_stream::PersistAskSnapshot {
+            stream_id,
+            auth_scope,
+            planned,
+            close_reason,
+            max_events: plan_bounds.max_events,
+            max_bytes: plan_bounds.max_bytes,
+        },
+    )
     .await
     .map_err(|error| map_db(error, &http_request_id))?;
 
@@ -215,11 +186,7 @@ async fn ask_stream(
     )
     .await?;
     revalidate_stream_scope(&ctx, &snapshot.auth_scope, &http_request_id)?;
-    let mut probe = make_auth_probe(
-        state.clone(),
-        auth.claims.clone(),
-        snapshot.auth_scope.clone(),
-    );
+    let mut probe = make_auth_probe(&state, auth.claims.clone(), snapshot.auth_scope.clone());
     match timeout(SSE_AUTH_PROBE_TIMEOUT, probe()).await {
         Ok(AuthProbeDecision::Allow) => {}
         Ok(other) => return Err(probe_rejection(other, http_request_id)),
@@ -231,11 +198,7 @@ async fn ask_stream(
         .map(|row| event_row_to_envelope(row, &stream_id.to_string()))
         .collect();
     let cancel = StreamCancel::new();
-    let delivery_probe = make_auth_probe(
-        state.clone(),
-        auth.claims.clone(),
-        snapshot.auth_scope.clone(),
-    );
+    let delivery_probe = make_auth_probe(&state, auth.claims.clone(), snapshot.auth_scope.clone());
     let stream = deliver_closed_snapshot(
         envelopes,
         cancel,

@@ -17,4 +17,5 @@ pub mod qa;
 pub mod quota;
 pub mod reconciliation;
 pub mod retrieval;
+pub mod sse_stream;
 pub mod upload;
