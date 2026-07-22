@@ -225,11 +225,22 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
+- **Status:** Blocked — implementation ready on stacked branch; dependencies R01/R02
+  remain Review. Evidence: hermetic `services/qa/{mod,prompt,provider,grounding,stream}.rs`
+  + `tests/qa.rs`: policy-separated untrusted framing; claims-only provider with
+  bounded HTTPS/local config (no redirects/proxy; secrets/model redacted); server
+  validates cite-ID subset and renders markers; current/compare/history mode rules;
+  conflict notes only from authorized `RetrievalResponse.conflict_evidence`;
+  extractive fallback with `[CITE-*]` neutralization; streaming is **bounded
+  validated replay** (validate whole answer, then UTF-8-safe chunks via bounded
+  channel + caller auth probe before each app chunk; no further chunks after deny —
+  no claim of recalling bytes already handed to HTTP/kernel). No DB/ACL/lock/migration.
+  Routes/SSE resume remain R05.
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
   deterministic extractive fallback.
-- **Files:** `services/qa/{prompt,provider,grounding,stream}.rs`.
+- **Files:** `services/qa/{mod,prompt,provider,grounding,stream}.rs`, `tests/qa.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
 - **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
   compare cite old+new và đúng delta; injection không tool/scope change; provider

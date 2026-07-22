@@ -56,6 +56,7 @@ tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4", "with-serd
 tokio-postgres-rustls = "0.14.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+url = "2.5.8"
 uuid = { version = "1.24.0", features = ["serde", "v4", "v8"] }
 zip = "2.2"
 
