@@ -85,7 +85,7 @@ fn metadata_data_slim(answer: &QaAnswer) -> JsonValue {
     })
 }
 
-fn json_payload_bytes(value: &JsonValue) -> i32 {
+pub(crate) fn json_payload_bytes(value: &JsonValue) -> i32 {
     i32::try_from(serde_json::to_vec(value).unwrap_or_default().len()).unwrap_or(i32::MAX)
 }
 

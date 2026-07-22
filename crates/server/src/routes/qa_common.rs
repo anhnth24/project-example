@@ -34,7 +34,7 @@ pub const MAX_SEARCH_LIMIT: usize = 100;
 pub const MAX_ASK_LIMIT: usize = 32;
 
 pub use crate::services::sse_stream::{
-    build_auth_scope, default_snapshot_plan_bounds, plan_closed_events,
+    build_auth_scope, default_snapshot_plan_bounds, plan_closed_events, SnapshotPlanBounds,
 };
 
 #[derive(Debug, Deserialize)]
@@ -346,8 +346,12 @@ pub fn require_history_if_needed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::sse::{EVENT_ERROR, EVENT_METADATA, EVENT_TOKEN};
+    use crate::db::sse_streams::MAX_EVENT_PAYLOAD_BYTES;
     use crate::services::qa::grounding::VersionContext;
+    use crate::services::qa::stream::{DEFAULT_MAX_STREAM_BYTES, DEFAULT_MAX_STREAM_TOKENS};
     use crate::services::qa::{AnswerMode, QaAuditMetadata};
+    use crate::services::sse_stream::json_payload_bytes;
 
     fn mode_body(mode_type: &str) -> VersionModeBody {
         VersionModeBody {

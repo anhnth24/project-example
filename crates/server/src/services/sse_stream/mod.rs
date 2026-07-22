@@ -27,6 +27,7 @@ pub use crate::db::sse_streams::{
 };
 pub use auth::{make_auth_probe, probe_cited_pins};
 pub use plan::{citation_to_json, metadata_data, plan_closed_events, SnapshotPlanBounds};
+pub(crate) use plan::json_payload_bytes;
 
 pub fn version_mode_label(mode: &VersionMode) -> &'static str {
     match mode {
