@@ -47,7 +47,7 @@
       "owner": "phase1b-o04-e2e",
       "path": "files/vi-memo.docx",
       "sensitive": false,
-      "sha256": "7aa42eea3f1af77ac94c29f404422c6736d8985949170a5c97107b0468003847",
+      "sha256": "30bdff0f9fa66306b6e1e73f689a63160b7ba8e9fee4e968a749250d876740ed",
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
     },
     {
@@ -57,7 +57,7 @@
       "owner": "phase1b-o04-e2e",
       "path": "files/vi-slides.pptx",
       "sensitive": false,
-      "sha256": "71568e9d4112950984f67858bd543f374603f53996cc8fc1fd6c1bd04a289851",
+      "sha256": "7665cc1d94edd139e1d39e7411c757bc60e24a923824df4896d855cb5905633d",
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
     },
     {
@@ -67,7 +67,7 @@
       "owner": "phase1b-o04-e2e",
       "path": "files/vi-sheet.xlsx",
       "sensitive": false,
-      "sha256": "5c1ef32baffb4e922b046af934ff8b9cea0cd709476ab740bb053646b2759129",
+      "sha256": "bf06815dbd53c67841c51cb6680041f6c76b3dd44b50a2e4c72c896a03adb99c",
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
     },
     {
@@ -82,12 +82,12 @@
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
     },
     {
-      "id": "e2e-vi-wav",
-      "kind": "audio",
+      "id": "e2e-adv-silence-wav",
+      "kind": "adversarial",
       "license": "CC0-1.0",
-      "notes": "Optional only when server explicitly disables audio; never auto-pass",
+      "notes": "Adversarial silence: no-hallucination test; cannot satisfy spoken-audio coverage",
       "owner": "phase1b-o04-e2e",
-      "path": "files/vi-silence.wav",
+      "path": "files/adv-silence.wav",
       "sensitive": false,
       "sha256": "59460d5690616336b990fc7b1629428e3bd825e422da84469d2c8c8ecfaff43b",
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
@@ -119,7 +119,7 @@
       "owner": "phase1b-o04-e2e",
       "path": "files/adv-traversal.docx",
       "sensitive": false,
-      "sha256": "dfaaf15fbc81176549129a7879d55de772fb8ecbfb58a5d42ccbe9c0d89ea40d",
+      "sha256": "d773915b1422133fb4ef092b46e8d328165ae2e6eda393421784f52f37667d1b",
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
     },
     {
@@ -129,7 +129,7 @@
       "owner": "phase1b-o04-e2e",
       "path": "files/adv-zip-bomb.docx",
       "sensitive": false,
-      "sha256": "1fc7f967af9c7b8fb74d0d138433ebb8db8eb21eb609f9607351eeefe650ea41",
+      "sha256": "d9f9ab332c60ce0581d2448f4b05efe4002ac7c85978f4b6f52ec95268b3cfe4",
       "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
     },
     {

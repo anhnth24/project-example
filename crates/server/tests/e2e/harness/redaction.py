@@ -16,6 +16,8 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"(?i)\b(password|passwd|pwd)\s*[:=]\s*(?!\[REDACTED\])\S+"),
+    re.compile(r"(?i)\b(access[_-]?token|refresh[_-]?token)\s*[:=]\s*(?!\[REDACTED\])\S+"),
 )
 
 # High-cardinality / tenant fields replaced with opaque labels when present as JSON keys.
@@ -49,18 +51,41 @@ UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b"
 )
 QUARANTINE_KEY_RE = re.compile(r"\b(?:quarantine|trusted)/[0-9a-f]{64}/[0-9a-f]{32,64}\b")
+FIXTURE_TOKEN_RE = re.compile(
+    r"\b(?:MAHOA_E2E_[A-Z0-9_]+|MARKHAND[-_]E2E[-_][A-Z0-9]+|PROMPT[-_]INJECTION[-_][A-Z0-9]+)\b",
+    re.IGNORECASE,
+)
+PROMPT_TEXT_RE = re.compile(
+    r"(?i)(?:ignore previous instructions|exfiltrate secrets|dump credentials|"
+    r"PROMPT-INJECTION-CANARY|SYSTEM OVERRIDE|dump secrets)"
+)
+# Seeded tenant/user UUIDs — always redact even in prose.
+SEEDED_UUID_LITERALS = (
+    "11111111-1111-1111-1111-111111111111",
+    "22222222-2222-2222-2222-222222222201",
+    "22222222-2222-2222-2222-222222222211",
+    "22222222-2222-2222-2222-222222222212",
+    "12121212-1212-4212-8212-121212121212",
+    "23232323-2323-4232-8232-232323232301",
+    "55555555-5555-5555-5555-555555555501",
+    "56565656-5656-4565-8565-565656565601",
+    "67676767-6767-4676-8676-676767676701",
+    "68686868-6868-4686-8686-686868686801",
+)
 
 
 def scrub_text(value: str) -> str:
     out = value
+    for lit in SEEDED_UUID_LITERALS:
+        out = out.replace(lit, "[OPAQUE_ID]")
+        out = out.replace(lit.upper(), "[OPAQUE_ID]")
     for pattern in SECRET_PATTERNS:
         out = pattern.sub("[REDACTED]", out)
     out = QUARANTINE_KEY_RE.sub("[REDACTED_OBJECT_KEY]", out)
-    # Keep run-scoped opaque refs that are already labels (run-*), otherwise mask UUIDs.
+    out = FIXTURE_TOKEN_RE.sub("[REDACTED_FIXTURE_TOKEN]", out)
+    out = PROMPT_TEXT_RE.sub("[REDACTED_PROMPT_TEXT]", out)
+
     def _uuid_sub(match: re.Match[str]) -> str:
-        text = match.group(0)
-        if text.startswith("00000000-"):
-            return "[OPAQUE_ID]"
         return "[OPAQUE_ID]"
 
     out = UUID_RE.sub(_uuid_sub, out)
@@ -83,12 +108,22 @@ def assert_no_forbidden_evidence(text: str) -> list[str]:
     # Placeholders emitted by redact_value/scrub_text are allowed.
     cleaned = re.sub(r"\[REDACTED(?:_[A-Z]+)?\]", "", text)
     cleaned = re.sub(r"\[OPAQUE_ID\]", "", cleaned)
+    cleaned = re.sub(r"\[REDACTED_FIXTURE_TOKEN\]", "", cleaned)
+    cleaned = re.sub(r"\[REDACTED_PROMPT_TEXT\]", "", cleaned)
     errors: list[str] = []
     for pattern in SECRET_PATTERNS:
         if pattern.search(cleaned):
             errors.append(f"secret pattern leaked: {pattern.pattern[:48]}")
     if QUARANTINE_KEY_RE.search(cleaned):
         errors.append("raw object key leaked")
+    if FIXTURE_TOKEN_RE.search(cleaned):
+        errors.append("fixture token leaked")
+    if PROMPT_TEXT_RE.search(cleaned):
+        errors.append("prompt injection text leaked")
+    for lit in SEEDED_UUID_LITERALS:
+        if lit in cleaned or lit.upper() in cleaned:
+            errors.append("seeded tenant/user UUID leaked")
+            break
     lowered = cleaned.lower()
     for needle in ("password=", "bearer ey", "refresh_token", "access_token"):
         if needle in lowered:

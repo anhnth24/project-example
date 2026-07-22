@@ -57,4 +57,42 @@ INSERT INTO org_quotas (org_id, max_storage_bytes, max_documents, max_concurrent
 VALUES ('12121212-1212-4212-8212-121212121212', 1073741824, 1000, 2, 100000)
 ON CONFLICT (org_id) DO NOTHING;
 
+-- Foreign document/version IDs for IDOR matrix (org B only).
+INSERT INTO documents (
+  id, org_id, collection_id, title, state, created_by_user_id
+) VALUES (
+  '67676767-6767-4676-8676-676767676701',
+  '12121212-1212-4212-8212-121212121212',
+  '56565656-5656-4565-8565-565656565601',
+  'E2E Foreign IDOR Document',
+  'indexed',
+  '23232323-2323-4232-8232-232323232301'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO document_versions (
+  id, org_id, document_id, version_number, publication_state, is_current,
+  content_sha256, original_object_key, source_filename, source_content_type,
+  byte_size, created_by_user_id
+) VALUES (
+  '68686868-6868-4686-8686-686868686801',
+  '12121212-1212-4212-8212-121212121212',
+  '67676767-6767-4676-8676-676767676701',
+  1,
+  'published',
+  true,
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  'e2e/foreign/idor-seed.txt',
+  'idor-seed.txt',
+  'text/plain',
+  32,
+  '23232323-2323-4232-8232-232323232301'
+)
+ON CONFLICT (id) DO NOTHING;
+
+UPDATE documents
+SET current_version_id = '68686868-6868-4686-8686-686868686801'
+WHERE id = '67676767-6767-4676-8676-676767676701'
+  AND current_version_id IS NULL;
+
 COMMIT;

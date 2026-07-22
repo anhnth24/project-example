@@ -2,8 +2,9 @@
 
 Status mode: `hermetic` · `claimsLiveVerticalSlice`: **false**
 
-Run id (opaque): `d07b8ddd-6beb-47d5-86ca-befc739b949d`
-Git: `cursor/implement-p1b-o04-5007` @ `8428c69fc7b7`
+Identity: hermetic deterministic (no runtime timestamp / branch / HEAD).
+Run id (stable): `00000000-0000-4000-8000-000000000004`
+
 Severity: `high`
 
 ## Summary
@@ -11,8 +12,8 @@ Severity: `high`
 - passed: 1
 - failed: 0
 - blocked: 31
-- optional unavailable: 0
-- high/critical cases: 9
+- optional unavailable: 1
+- high/critical cases: 8
 
 ## Blockers
 
@@ -41,8 +42,8 @@ Severity: `high`
   - blocked: Docker unavailable; production intake wiring unverified
 - `fmt-image-ocr` [format] → **blocked** (severity=high; blocker=production_intake_not_wired; http=[])
   - blocked: Docker unavailable; production intake wiring unverified
-- `fmt-audio` [format] → **blocked** (severity=high; blocker=production_intake_not_wired; http=[])
-  - blocked: Docker unavailable; production intake wiring unverified
+- `fmt-audio-spoken` [format] → **optional_unavailable** (severity=none; blocker=none; http=[])
+  - optional spoken-audio coverage requires approved spoken-token fixture/model; silence cannot satisfy all-formats claim
 - `sec-user-disabled` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `sec-user-suspended` [security] → **blocked** (severity=medium; blocker=none; http=[])
@@ -67,7 +68,7 @@ Severity: `high`
   - live stack unavailable in this environment
 - `sec-idor-cross-org` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
-- `sec-prompt-injection-untrusted` [security] → **blocked** (severity=medium; blocker=none; http=[])
+- `sec-[REDACTED_FIXTURE_TOKEN]` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `sec-zip-bomb` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
@@ -78,6 +79,8 @@ Severity: `high`
 - `sec-oversize` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `sec-malformed-format` [security] → **blocked** (severity=medium; blocker=none; http=[])
+  - live stack unavailable in this environment
+- `adv-audio-silence-no-hallucination` [adversarial] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `fault-kill-convert-after-claim` [fault] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
@@ -95,3 +98,5 @@ Severity: `high`
   signed URLs, raw object keys, or tenant IDs.
 - Live vertical-slice pass requires Docker POC stack + confirm gates
   **and** production upload→documentId/versionId/jobId wiring.
+- Runtime live evidence is written to a gitignored `.live` artifact;
+  the tracked hermetic report stays deterministic.

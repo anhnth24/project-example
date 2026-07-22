@@ -379,13 +379,14 @@ def build_png() -> bytes:
     )
 
 
-def build_wav() -> bytes:
+def build_silence_wav() -> bytes:
+    """Silence WAV for adversarial no-hallucination coverage (not spoken transcription)."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(16000)
-        # 0.25s silence — audio conversion is optional/disabled in convert worker.
+        # 0.25s silence — must never be treated as a passing spoken-audio transcription.
         wf.writeframes(b"\x00\x00" * 4000)
     return buf.getvalue()
 
@@ -477,11 +478,11 @@ def generate() -> dict:
             "High-contrast rendered token bitmap for OCR (stdlib zlib PNG)",
         ),
         (
-            "e2e-vi-wav",
-            "files/vi-silence.wav",
-            build_wav,
-            "audio",
-            "Optional only when server explicitly disables audio; never auto-pass",
+            "e2e-adv-silence-wav",
+            "files/adv-silence.wav",
+            build_silence_wav,
+            "adversarial",
+            "Adversarial silence: no-hallucination test; cannot satisfy spoken-audio coverage",
         ),
         ("e2e-adv-spoof-pdf", "files/adv-plain-text.pdf", build_adversarial_spoof_pdf, "adversarial"),
         (

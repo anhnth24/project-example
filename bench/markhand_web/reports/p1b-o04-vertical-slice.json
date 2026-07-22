@@ -106,15 +106,15 @@
       "status": "blocked"
     },
     {
-      "blockerCode": "production_intake_not_wired",
+      "blockerCode": null,
       "httpStatuses": [],
-      "id": "fmt-audio",
+      "id": "fmt-audio-spoken",
       "matrix": "format",
-      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "notes": "optional spoken-audio coverage requires approved spoken-token fixture/model; silence cannot satisfy all-formats claim",
       "opaqueRefs": {},
       "postconditions": {},
-      "severity": "high",
-      "status": "blocked"
+      "severity": "none",
+      "status": "optional_unavailable"
     },
     {
       "blockerCode": null,
@@ -251,7 +251,7 @@
     {
       "blockerCode": null,
       "httpStatuses": [],
-      "id": "sec-prompt-injection-untrusted",
+      "id": "sec-[REDACTED_FIXTURE_TOKEN]",
       "matrix": "security",
       "notes": "live stack unavailable in this environment",
       "opaqueRefs": {},
@@ -317,6 +317,17 @@
     {
       "blockerCode": null,
       "httpStatuses": [],
+      "id": "adv-audio-silence-no-hallucination",
+      "matrix": "adversarial",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
       "id": "fault-kill-convert-after-claim",
       "matrix": "fault",
       "notes": "live stack unavailable in this environment",
@@ -360,21 +371,21 @@
     }
   ],
   "claimsLiveVerticalSlice": false,
-  "generatedAt": "2026-07-22T08:21:31Z",
+  "generatedAt": "1970-01-01T00:00:00Z",
   "git": {
-    "branch": "cursor/implement-p1b-o04-5007",
-    "commit": "8428c69fc7b7c5699506ac190ee0a1fccabfa071"
+    "branch": "hermetic",
+    "commit": "0000000000000000000000000000000000000000"
   },
   "issue": "P1B-O04",
   "mode": "hermetic",
-  "runId": "d07b8ddd-6beb-47d5-86ca-befc739b949d",
+  "runId": "00000000-0000-4000-8000-000000000004",
   "severity": "high",
   "summary": {
     "blocked": 31,
     "failed": 0,
-    "highCritical": 9,
+    "highCritical": 8,
     "passed": 1,
-    "skippedOptional": 0
+    "skippedOptional": 1
   },
   "version": 1
 }

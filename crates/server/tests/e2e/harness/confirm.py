@@ -49,14 +49,22 @@ def validate_live_gates(
             "MARKHAND_COMPOSE_PROJECT must contain 'e2e' or 'test' "
             f"(got {project!r})"
         )
+    if project in {"markhand", "markhand-poc"}:
+        errors.append(
+            f"MARKHAND_COMPOSE_PROJECT refuses untagged/human stack {project!r}"
+        )
 
     db = postgres_db if postgres_db is not None else env.get("MARKHAND_POSTGRES_DB")
     if not _looks_testish(db):
         errors.append(f"MARKHAND_POSTGRES_DB must contain 'e2e' or 'test' (got {db!r})")
+    if db == "markhand":
+        errors.append("MARKHAND_POSTGRES_DB refuses human db 'markhand'")
 
     bucket = minio_bucket if minio_bucket is not None else env.get("MARKHAND_MINIO_BUCKET")
     if not _looks_testish(bucket):
         errors.append(f"MARKHAND_MINIO_BUCKET must contain 'e2e' or 'test' (got {bucket!r})")
+    if bucket == "markhand-documents":
+        errors.append("MARKHAND_MINIO_BUCKET refuses human bucket 'markhand-documents'")
 
     tag = stack_tag if stack_tag is not None else env.get(STACK_TAG_ENV)
     if tag != "test":

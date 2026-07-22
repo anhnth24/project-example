@@ -194,11 +194,11 @@
       ]
     },
     {
-      "id": "fmt-audio",
-      "fixtureId": "e2e-vi-wav",
+      "id": "fmt-audio-spoken",
+      "fixtureId": "e2e-vi-spoken-wav",
       "canonicalFormat": "wav",
       "requirement": "optional_model",
-      "prerequisite": "approved whisper/PhoWhisper runtime (convert currently AudioConversionDisabled)",
+      "prerequisite": "approved spoken-token WAV fixture + whisper/PhoWhisper model (silence cannot pass)",
       "uniqueToken": "MAHOA_E2E_AUD_6A12",
       "steps": [
         "upload",
@@ -309,6 +309,14 @@
       "class": "upload_abuse",
       "fixtureId": "e2e-adv-malformed-docx",
       "expect": "reject_or_quarantine"
+    }
+  ],
+  "adversarial": [
+    {
+      "id": "adv-audio-silence-no-hallucination",
+      "class": "audio_no_hallucination",
+      "fixtureId": "e2e-adv-silence-wav",
+      "expect": "no_hallucinated_transcript"
     }
   ],
   "fault": [

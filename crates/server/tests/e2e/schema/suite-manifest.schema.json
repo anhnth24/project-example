@@ -11,6 +11,7 @@
     "confirmPhrase",
     "formats",
     "security",
+    "adversarial",
     "fault",
     "evidence"
   ],
@@ -85,6 +86,22 @@
       }
     },
     "security": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "class", "expect"],
+        "properties": {
+          "id": { "type": "string" },
+          "class": { "type": "string" },
+          "expect": { "type": "string" },
+          "fixtureId": { "type": "string" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "adversarial": {
       "type": "array",
       "minItems": 1,
       "items": {

@@ -55,7 +55,10 @@
         "required": ["id", "matrix", "status", "httpStatuses", "postconditions"],
         "properties": {
           "id": { "type": "string" },
-          "matrix": { "type": "string", "enum": ["format", "security", "fault", "harness"] },
+          "matrix": {
+            "type": "string",
+            "enum": ["format", "security", "adversarial", "fault", "harness"]
+          },
           "status": {
             "type": "string",
             "enum": ["pass", "fail", "blocked", "optional_unavailable"]
