@@ -1108,6 +1108,87 @@ mod tests {
         assert_eq!(cache.len_ready(), 1);
     }
 
+    /// A normal loader error (the production Whisper failure mode) must wake
+    /// callers already waiting on Loading. Exactly one waiter claims the
+    /// Failed slot for retry and publishes the shared Ready value.
+    #[test]
+    fn load_once_cache_loader_err_unblocks_waiters_single_retry_succeeds() {
+        let cache = Arc::new(LoadOnceCache::<&'static str, i32>::with_capacity(2));
+        let failed_loads = Arc::new(AtomicUsize::new(0));
+        let retry_loads = Arc::new(AtomicUsize::new(0));
+        let retry_active = Arc::new(AtomicUsize::new(0));
+        let retry_max_active = Arc::new(AtomicUsize::new(0));
+        let loader_entered = Arc::new(Barrier::new(2));
+        let release_error = Arc::new(Barrier::new(2));
+
+        let failing_cache = Arc::clone(&cache);
+        let failing_loads = Arc::clone(&failed_loads);
+        let failing_loader_entered = Arc::clone(&loader_entered);
+        let failing_release_error = Arc::clone(&release_error);
+        let failing_loader = thread::spawn(move || {
+            let result = failing_cache.get_or_insert_with("k", || {
+                failing_loads.fetch_add(1, Ordering::SeqCst);
+                failing_loader_entered.wait();
+                failing_release_error.wait();
+                Err::<i32, &'static str>("boom")
+            });
+            assert_eq!(result, Err("boom"));
+        });
+
+        // The failing loader owns Loading before waiters arrive.
+        loader_entered.wait();
+
+        const WAITERS: usize = 4;
+        let waiters_ready = Arc::new(Barrier::new(WAITERS + 1));
+        let mut waiter_handles = Vec::with_capacity(WAITERS);
+        for _ in 0..WAITERS {
+            let cache = Arc::clone(&cache);
+            let retry_loads = Arc::clone(&retry_loads);
+            let retry_active = Arc::clone(&retry_active);
+            let retry_max_active = Arc::clone(&retry_max_active);
+            let waiters_ready = Arc::clone(&waiters_ready);
+            waiter_handles.push(thread::spawn(move || {
+                waiters_ready.wait();
+                cache
+                    .get_or_insert_with("k", || {
+                        let now = retry_active.fetch_add(1, Ordering::SeqCst) + 1;
+                        retry_max_active.fetch_max(now, Ordering::SeqCst);
+                        retry_loads.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(40));
+                        retry_active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<i32, &str>(99)
+                    })
+                    .unwrap()
+            }));
+        }
+
+        // Park waiters on the Loading slot, then publish the ordinary error.
+        waiters_ready.wait();
+        thread::sleep(Duration::from_millis(30));
+        release_error.wait();
+        failing_loader.join().unwrap();
+
+        let values: Vec<Arc<i32>> = waiter_handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .expect("waiter must unblock after loader error")
+            })
+            .collect();
+        assert!(values.iter().all(|value| **value == 99));
+        assert!(values
+            .windows(2)
+            .all(|pair| Arc::ptr_eq(&pair[0], &pair[1])));
+        assert_eq!(failed_loads.load(Ordering::SeqCst), 1);
+        assert_eq!(retry_loads.load(Ordering::SeqCst), 1);
+        assert_eq!(retry_max_active.load(Ordering::SeqCst), 1);
+        assert_eq!(cache.max_active_loaders(), 1);
+        assert_eq!(cache.active_loaders(), 0);
+        assert_eq!(cache.len_ready(), 1);
+        assert_eq!(cache.len_entries(), 1);
+    }
+
     /// Loader panic with concurrent waiters: all waiters unblock, exactly one
     /// retry loader runs at a time, later retry succeeds, cache stays bounded.
     /// `catch_unwind` is test-only; production lets the initiating panic propagate.
