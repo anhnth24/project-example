@@ -251,14 +251,33 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
+- **Status:** Blocked — implementation ready; R02 dependency Review
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
-- **Files:** `routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`.
+- **Files:** `routes/{collections,documents,jobs}.rs`, `api/{mod,types,error,pagination}.rs`,
+  `db/{conflicts,collections,documents,jobs,document_versions}.rs` helpers, `tests/api_rest.rs`.
 - **Depends:** F04/F05/I01/I03/I07/R02.
 - **Acceptance/tests:** Org context + permissions; stable errors; idempotent reindex;
-  HTTP contract/pagination/IDOR/malformed tests.
-- **Security/migration:** Bounded body/page, no internals. **Out:** admin membership API.
+  HTTP contract/pagination/IDOR/malformed tests (`tests/api_rest.rs`; live PG ignored
+  without `MARKHAND_TEST_DATABASE_URL`).
+- **Evidence (implementation ready):**
+  - Shared envelope/`ApiRejection` + `AppPath`/`AppQuery`/`AppJson`, page 1..=100 + opaque
+    keyset cursors (`pageInfo`), request ID via existing auth middleware.
+  - Collections list/get/create/update require `doc.upload`; update ownership/allow-list;
+    viewers denied; no membership admin APIs.
+  - Documents list/get, R02 preview/citation/download reuse, tombstone delete; one-txn
+    reindex (lock document/current version/generation, reject tombstone,
+    `enqueue_within_txn`); persisted Idempotency-Key replay for upload/reindex
+    (`api_idempotency_keys`); version list/get/metadata-diff (no object keys); conflict
+    list/detail/triage with lineage-checked resolution versions (stable 4xx); evidence
+    authorizes each claim collection before quotes + bounded keyset pages.
+  - Publish: `POST .../versions/{id}/publish` uses atomic `publish_current_version` +
+    same-txn reindex enqueue with `doc.publish`.
+  - Jobs get/list scoped by org + collection allow-list.
+  - Upload remains `POST /api/v1/uploads` — opaque `objectId` only (no quarantine key).
+- **Security/migration:** Bounded body/page, no internals; additive `0020_expand_api_idempotency`.
+  **Out:** admin membership API.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 

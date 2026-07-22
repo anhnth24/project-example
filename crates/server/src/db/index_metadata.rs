@@ -184,7 +184,7 @@ pub async fn list_active_for_collections(
     rows.iter().map(map_index_metadata).collect()
 }
 
-async fn find_active_for_update(
+pub async fn find_active_for_update(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     collection_id: Option<Uuid>,

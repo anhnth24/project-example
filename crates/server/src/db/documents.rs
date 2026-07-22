@@ -183,6 +183,55 @@ pub async fn count(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbErr
     Ok(row.get(0))
 }
 
+/// Filters for a keyset document list page.
+#[derive(Debug, Clone)]
+pub struct DocumentListPage {
+    pub collection_id: Option<Uuid>,
+    pub include_deleted: bool,
+    pub limit: i64,
+    pub after_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub after_id: Option<Uuid>,
+}
+
+/// Keyset page of documents in allowed collections (optionally one collection).
+pub async fn list_page(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    allowed_collection_ids: &[Uuid],
+    page: DocumentListPage,
+) -> Result<Vec<Document>, DbError> {
+    if allowed_collection_ids.is_empty() || page.limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let rows = txn
+        .query(
+            "SELECT id, org_id, collection_id, title, state, current_version_id,
+                    created_by_user_id, created_at, updated_at, deleted_at
+             FROM documents
+             WHERE org_id = $1
+               AND collection_id = ANY($2)
+               AND ($3::uuid IS NULL OR collection_id = $3)
+               AND ($4 OR deleted_at IS NULL)
+               AND (
+                 $5::timestamptz IS NULL
+                 OR (created_at, id) > ($5::timestamptz, $6::uuid)
+               )
+             ORDER BY created_at, id
+             LIMIT $7",
+            &[
+                &ctx.org_id(),
+                &allowed_collection_ids,
+                &page.collection_id,
+                &page.include_deleted,
+                &page.after_created_at,
+                &page.after_id,
+                &page.limit,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_document).collect()
+}
+
 pub async fn get_version_source_for_convert(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

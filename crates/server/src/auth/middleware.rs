@@ -141,11 +141,14 @@ impl FromRequestParts<Arc<crate::http::AppState>> for AuthenticatedOrg {
             .await
             .map_err(|error| map_resolve_error(error, &request_id))?;
 
-        Ok(Self {
+        let auth = Self {
             context,
             claims,
             request_id,
-        })
+        };
+        // Stash for Path/Query/Json extractors that map rejections to ApiError.
+        parts.extensions.insert(auth.clone());
+        Ok(auth)
     }
 }
 

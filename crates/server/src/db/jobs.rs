@@ -211,6 +211,74 @@ pub async fn get_by_id_for_update(
     row.map(|row| map_job(&row)).transpose()
 }
 
+/// Read-only job lookup for API status routes (no row lock).
+pub async fn get_by_id(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<Option<Job>, DbError> {
+    let row = txn
+        .query_opt(
+            &format!(
+                "SELECT {JOB_COLUMNS}
+                 FROM jobs
+                 WHERE org_id = $1 AND id = $2"
+            ),
+            &[&ctx.org_id(), &job_id],
+        )
+        .await?;
+    row.map(|row| map_job(&row)).transpose()
+}
+
+/// Keyset page of jobs for API list routes.
+///
+/// Jobs with a `document_id` are visible only when that document's collection is
+/// in `allowed_collection_ids`. Jobs without a document remain visible to the org.
+pub async fn list_page(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    allowed_collection_ids: &[Uuid],
+    document_id: Option<Uuid>,
+    limit: i64,
+    after_created_at: Option<DateTime<Utc>>,
+    after_id: Option<Uuid>,
+) -> Result<Vec<Job>, DbError> {
+    if limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let rows = txn
+        .query(
+            &format!(
+                "SELECT {JOB_COLUMNS_J}
+                 FROM jobs j
+                 LEFT JOIN documents d
+                   ON d.org_id = j.org_id AND d.id = j.document_id
+                 WHERE j.org_id = $1
+                   AND ($2::uuid IS NULL OR j.document_id = $2)
+                   AND (
+                     j.document_id IS NULL
+                     OR d.collection_id = ANY($3)
+                   )
+                   AND (
+                     $4::timestamptz IS NULL
+                     OR (j.created_at, j.id) > ($4::timestamptz, $5::uuid)
+                   )
+                 ORDER BY j.created_at, j.id
+                 LIMIT $6"
+            ),
+            &[
+                &ctx.org_id(),
+                &document_id,
+                &allowed_collection_ids,
+                &after_created_at,
+                &after_id,
+                &limit,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_job).collect()
+}
+
 pub async fn claim_pending(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
