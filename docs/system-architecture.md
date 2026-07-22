@@ -86,7 +86,7 @@ Chi tiết: [`../bench/REPORT_CASAN_PDF.md`](../bench/REPORT_CASAN_PDF.md).
 | xlsx | calamine 0.35 | mọi sheet; xls/xlsb/ods; merge/multiline → rowspan/colspan |
 | pptx | zip + quick-xml | text Markdown + structured preview text/image/shape |
 | html | htmd 0.5 | skip script/style/noscript; thay html2md (cũ phình output) |
-| csv/text | csv + legacy maps | UTF-8/TCVN3/VNI/VPS; delimiter sniff; plain `.txt/.log` |
+| csv/text | csv + legacy maps | UTF-8/TCVN3/VNI/VPS; delimiter sniff; plain `.txt/.log` (TCVN-3-2 hoa chỉ qua opt-in hint, không suy từ TXT/CSV) |
 | image | Tesseract/Paddle | preprocess, split scan columns, PSM retry; Paddle opt-in/fallback |
 | audio | whisper-rs 0.16 + symphonia 0.5 | 16k mono; tự tìm PhoWhisper; lọc segment no-speech/marker nhạc |
 
@@ -102,7 +102,7 @@ Mọi output: NFC (bắt buộc) → optional cắt tại `max_chars` kèm `<!--
 ### Module công khai
 `audio` (AudioEngine, Transcript, decode_to_pcm16k_mono) · `image_ocr` (ocr_image, ocr_dynimage, tesseract_available) ·
 `chunk` · `probe` · `pptx_preview` · `tables` · `viet_legacy`
-(TCVN3/VNI/VPS detect/decode) ·
+(TCVN3/VNI/VPS detect/decode; `Tcvn3CaseHint` opt-in cho font hoa) ·
 `llm`/`llm_cli` (HTTP chat/vision, neural embeddings, Cursor/Codex subscription transport).
 `conv::*` **private** — chỉ qua `convert_path`.
 
