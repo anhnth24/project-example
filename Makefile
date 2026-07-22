@@ -2,6 +2,7 @@ SHELL := /bin/bash
 
 .PHONY: install check-toolchain check-static check-ci check-boundaries check-migrations \
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-observability \
+	check-backup \
 	check-rust check-rust-tests \
 	check-rust-tests-scoped check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
@@ -28,6 +29,8 @@ check-boundaries:
 check-migrations:
 	python3 scripts/check-migration-manifest.py --check
 	python3 scripts/check-migration-manifest.py --self-test
+	python3 deploy/backup/migration/validate-migration-safety.py --check
+	python3 deploy/backup/migration/validate-migration-safety.py --self-test
 
 check-fixtures:
 	python3 scripts/check-fixtures.py
@@ -61,7 +64,12 @@ check-observability:
 	python3 scripts/check-observability-o02.py --self-test \
 		--json-report deploy/observability/evidence/validation-report.json
 
-check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-observability check-spike check-desktop-baseline
+check-backup:
+	python3 scripts/check-backup-o03.py
+	python3 scripts/check-backup-o03.py --self-test \
+		--json-report deploy/backup/evidence/validation-report.json
+
+check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-observability check-backup check-spike check-desktop-baseline
 
 check-rust:
 	bash scripts/check-rust-quality.sh

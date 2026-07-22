@@ -386,12 +386,22 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
+- **Status:** In Progress — control plane + hermetic/static evidence on branch
+  `cursor/implement-p1b-o03-5007` (stacked on O02). Live Profile-B RPO/RTO restore
+  drill still pending (Docker/services unavailable in this environment).
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, restore/migration runbooks, restore guard.
 - **Depends:** F02/F03/F06/I07 + G0-ARCH/G0-SLO.
 - **Acceptance/tests:** Clean restore đạt RPO/RTO; missing/orphan detect; readiness
   false until reconcile; PG rebuild; corrupt manifest/upgrade tests.
+- **Evidence (in progress):**
+  - `deploy/backup/**`: fenced backup, signed recovery manifest, staged dry-run
+    restore, reconcile-before-ready via `runtime_readiness` helpers, PG vector rebuild.
+  - Migration safety: immutable checksums + expand→cutover→contract validator.
+  - Hermetic suite: `scripts/check-backup-o03.py` + `make check-backup`.
+  - Report: `bench/markhand_web/reports/p1b-o03-backup-restore.md`.
+  - Non-claim: no live restore / Profile-B RPO/RTO pass in this environment.
 - **Security/migration:** Encrypted narrow credentials; expand/cutover/contract.
   **Out:** multi-region DR.
 

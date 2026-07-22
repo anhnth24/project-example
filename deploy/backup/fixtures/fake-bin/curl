@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Hermetic fake curl for Qdrant snapshot APIs
+set -euo pipefail
+out=""
+args=("$@")
+url=""
+method="GET"
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  a="${args[$i]}"
+  case "$a" in
+    -o)
+      i=$((i + 1))
+      out="${args[$i]}"
+      ;;
+    -X)
+      i=$((i + 1))
+      method="${args[$i]}"
+      ;;
+    -fsS|-f|-s|-S) ;;
+    -H|--data-binary) i=$((i + 1)) ;;
+    http*|https*) url="$a" ;;
+  esac
+  i=$((i + 1))
+done
+
+if [[ "${MARKHAND_FAKE_CURL_FAIL:-0}" == "1" ]]; then
+  echo "curl failed" >&2
+  exit 1
+fi
+
+if [[ "$url" == *"/snapshots" && "$method" == "POST" && "$url" != *"/upload"* ]]; then
+  printf '%s\n' '{"result":{"name":"snap-hermetic-001"}}'
+  exit 0
+fi
+
+if [[ -n "$out" ]]; then
+  printf '%s' "${MARKHAND_FAKE_QDRANT_SNAPSHOT_BYTES:-FAKE_QDRANT_SNAPSHOT}" >"$out"
+  exit 0
+fi
+
+if [[ "$url" == *"/collections/"* && "$method" == "GET" ]]; then
+  printf '%s\n' '{"result":{"status":1}}'
+  exit 0
+fi
+
+printf '%s\n' '{"status":"ok"}'
+exit 0

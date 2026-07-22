@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://markhand.local/schemas/recovery-manifest-v1.json",
+  "title": "Markhand recovery manifest",
+  "description": "Versioned cross-store recovery binding for PostgreSQL, MinIO, and Qdrant. Must not contain secrets, object content, or object keys beyond operational inventory digests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestId",
+    "createdAt",
+    "orgId",
+    "appVersion",
+    "migrationVersion",
+    "indexSignatureSha256",
+    "consistencyFence",
+    "postgres",
+    "minio",
+    "qdrant",
+    "artifacts",
+    "checksums",
+    "signature"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "manifestId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "orgId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "appVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "migrationVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "Highest applied migration filename stem or sequence marker."
+    },
+    "indexSignatureSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "schemaName": {
+      "type": "string",
+      "default": "public",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "consistencyFence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "writesFenced",
+        "fenceStartedAt",
+        "fenceCompletedAt",
+        "ordering",
+        "boundedInconsistencyNotes"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["strict-write-fence", "ordered-bounded"]
+        },
+        "writesFenced": { "type": "boolean" },
+        "fenceStartedAt": { "type": "string", "format": "date-time" },
+        "fenceCompletedAt": { "type": "string", "format": "date-time" },
+        "ordering": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string",
+            "enum": ["postgres", "minio", "qdrant", "manifest"]
+          }
+        },
+        "boundedInconsistencyNotes": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backupId",
+        "method",
+        "timelineId",
+        "walBoundaryLsn",
+        "baseBackupDigestSha256",
+        "encrypted"
+      ],
+      "properties": {
+        "backupId": { "type": "string", "minLength": 4, "maxLength": 128 },
+        "method": { "type": "string", "enum": ["pg_basebackup_pitr"] },
+        "timelineId": { "type": "integer", "minimum": 1 },
+        "walBoundaryLsn": {
+          "type": "string",
+          "pattern": "^[0-9A-F]+/[0-9A-F]+$"
+        },
+        "baseBackupDigestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "walArchiveDigestSha256": {
+          "type": ["string", "null"],
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "encrypted": { "type": "boolean" },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "algorithm": { "type": "string", "enum": ["aes-256-gcm"] },
+            "keyId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "description": "Key identifier only — never the key material."
+            }
+          }
+        }
+      }
+    },
+    "minio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bucket",
+        "versioningEnabled",
+        "inventoryDigestSha256",
+        "objectVersionCount",
+        "capturedAt"
+      ],
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 63,
+          "pattern": "^[a-z0-9][a-z0-9.-]+[a-z0-9]$"
+        },
+        "versioningEnabled": { "type": "boolean" },
+        "inventoryDigestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Digest over canonical version inventory rows; object keys are not stored in the manifest."
+        },
+        "objectVersionCount": { "type": "integer", "minimum": 0 },
+        "capturedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "qdrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshotId",
+        "collectionGeneration",
+        "indexSignatureSha256",
+        "snapshotDigestSha256",
+        "capturedAt"
+      ],
+      "properties": {
+        "snapshotId": { "type": "string", "minLength": 4, "maxLength": 256 },
+        "collectionGeneration": { "type": "integer", "minimum": 0 },
+        "indexSignatureSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "snapshotDigestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "capturedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relativePaths"],
+      "properties": {
+        "relativePaths": {
+          "type": "object",
+          "description": "Logical artifact roles → relative paths under the backup root (no absolute/parent traversal).",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^(?!/)(?!.*\\.\\./)[A-Za-z0-9._/-]+$"
+          }
+        }
+      }
+    },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      },
+      "description": "sha256 of each relative artifact path (path → digest)."
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "keyId", "value"],
+      "properties": {
+        "algorithm": { "type": "string", "enum": ["hmac-sha256"] },
+        "keyId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 500 }
+    }
+  }
+}

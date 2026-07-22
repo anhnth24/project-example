@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Minimal jq fake for qdrant snapshot JSON.
+set -euo pipefail
+expr="${1:-}"
+input="$(cat)"
+EXPR="$expr" INPUT="$input" python3 <<'PY'
+import json, os
+expr = os.environ["EXPR"]
+data = json.loads(os.environ["INPUT"])
+if expr == ".result.name // .result // empty":
+    result = data.get("result")
+    if isinstance(result, dict):
+        print(result.get("name") or "")
+    else:
+        print(result or "")
+elif expr == ".result.status // .result // 0":
+    result = data.get("result")
+    if isinstance(result, dict):
+        print(result.get("status", 0))
+    else:
+        print(result if result is not None else 0)
+else:
+    print("")
+PY

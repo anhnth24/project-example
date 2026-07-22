@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Hermetic fake pg_basebackup
+set -euo pipefail
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -D) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "${out:-/tmp/fake-pgdata}"
+printf 'FAKE_PG_BASEBACKUP\n' >"${out:-/tmp/fake-pgdata}/base.tar"
+# Also produce directory content for tar fallback.
+printf 'PG_VERSION\n' >"${out:-/tmp/fake-pgdata}/PG_VERSION"
+exit 0

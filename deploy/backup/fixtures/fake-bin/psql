@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Hermetic fake psql — never prints connection strings.
+set -euo pipefail
+if [[ "${MARKHAND_FAKE_PSQL_FAIL:-0}" == "1" ]]; then
+  echo "ERROR: fake psql failure" >&2
+  exit 1
+fi
+# Emit timeline + LSN for backup-postgres boundary query.
+if [[ -n "${MARKHAND_FAKE_PSQL_OUTPUT:-}" ]]; then
+  printf '%s\n' "$MARKHAND_FAKE_PSQL_OUTPUT"
+  exit 0
+fi
+printf '%s\n' "${MARKHAND_FAKE_PG_TIMELINE:-1}"
+printf '%s\n' "${MARKHAND_FAKE_PG_LSN:-0/16B3740}"
+# For -c readiness helpers, succeed silently after.
+exit 0

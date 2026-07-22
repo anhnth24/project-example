@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Support: tar -C dir -cf out .   and tar -C dir -xf archive
+if [[ "$*" == *"-cf"* ]]; then
+  out=""
+  dir="."
+  args=("$@")
+  i=0
+  while [[ $i -lt ${#args[@]} ]]; do
+    case "${args[$i]}" in
+      -C) i=$((i+1)); dir="${args[$i]}" ;;
+      -cf) i=$((i+1)); out="${args[$i]}" ;;
+    esac
+    i=$((i+1))
+  done
+  # Prefer existing base.tar from fake pg_basebackup
+  if [[ -f "$dir/base.tar" ]]; then
+    cp "$dir/base.tar" "$out"
+  else
+    printf 'FAKE_TAR\n' >"$out"
+  fi
+  exit 0
+fi
+if [[ "$*" == *"-xf"* ]]; then
+  dir="."
+  archive=""
+  args=("$@")
+  i=0
+  while [[ $i -lt ${#args[@]} ]]; do
+    case "${args[$i]}" in
+      -C) i=$((i+1)); dir="${args[$i]}" ;;
+      -xf) i=$((i+1)); archive="${args[$i]}" ;;
+    esac
+    i=$((i+1))
+  done
+  mkdir -p "$dir"
+  cp "$archive" "$dir/restored.tar" 2>/dev/null || printf 'restored\n' >"$dir/PG_VERSION"
+  exit 0
+fi
+exit 0

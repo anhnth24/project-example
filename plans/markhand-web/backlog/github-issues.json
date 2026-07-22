@@ -812,15 +812,15 @@
       "phase": "1B",
       "id": "P1B-O03",
       "title": "P1B-O03 — Backup/restore và migration safety",
-      "status": "blocked",
+      "status": "in_progress",
       "milestone": "Phase 1B — Single-org POC",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1b",
-        "blocked"
+        "in_progress"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-O03\n- Status: `blocked`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nPG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/\nmanifest, restore order, reconcile-before-ready, vector rebuild.\n\n## Files/modules\n\n`deploy/backup/**`, restore/migration runbooks, restore guard.\n\n## Dependencies / blocks\n\nF02/F03/F06/I07 + G0-ARCH/G0-SLO.\n\n## Required tests / evidence\n\nClean restore đạt RPO/RTO; missing/orphan detect; readiness\nfalse until reconcile; PG rebuild; corrupt manifest/upgrade tests.\n\n## Security and migration notes\n\nEncrypted narrow credentials; expand/cutover/contract.\n**Out:** multi-region DR.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-O03\n- Status: `in_progress`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nPG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/\nmanifest, restore order, reconcile-before-ready, vector rebuild.\n\n## Files/modules\n\n`deploy/backup/**`, restore/migration runbooks, restore guard.\n\n## Dependencies / blocks\n\nF02/F03/F06/I07 + G0-ARCH/G0-SLO.\n\n## Required tests / evidence\n\nClean restore đạt RPO/RTO; missing/orphan detect; readiness\nfalse until reconcile; PG rebuild; corrupt manifest/upgrade tests.\n\n## Security and migration notes\n\nEncrypted narrow credentials; expand/cutover/contract.\n**Out:** multi-region DR.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {

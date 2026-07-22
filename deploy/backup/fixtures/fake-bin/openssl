@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Hermetic fake openssl — encrypt/decrypt by copy; rand returns fixed bytes.
+set -euo pipefail
+if [[ "${1:-}" == "rand" ]]; then
+  # produce hex of requested length
+  n="${3:-16}"
+  python3 -c "print(('ab'*100)[:int('$n')*2])"
+  exit 0
+fi
+if [[ "${1:-}" == "enc" ]]; then
+  shift
+  in=""; out=""; decrypt=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d) decrypt=1; shift ;;
+      -in) in="$2"; shift 2 ;;
+      -out) out="$2"; shift 2 ;;
+      -K|-iv|-aes-256-gcm|-aes-256-cbc) shift ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "$in" && -n "$out" ]] || exit 2
+  # Prefix marker so decrypt is symmetric for tests.
+  if [[ "$decrypt" == "1" ]]; then
+    tail -c +6 "$in" >"$out" 2>/dev/null || cp "$in" "$out"
+  else
+    printf 'ENC1:' >"$out"
+    cat "$in" >>"$out"
+  fi
+  exit 0
+fi
+if [[ "${1:-}" == "dgst" ]]; then
+  shift
+  file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -sha256) shift ;;
+      *) file="$1"; shift ;;
+    esac
+  done
+  sha256sum "$file" | awk '{print $1}'
+  exit 0
+fi
+echo "fake openssl: unsupported $*" >&2
+exit 2

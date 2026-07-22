@@ -12,6 +12,12 @@ Prometheus/Grafana/Alertmanager artifacts, OTel Prometheus export, synthetic ale
 fixtures, and operator runbooks live under [`observability/`](observability/).
 Validate with `make check-observability`.
 
+## Backup / restore (P1B-O03)
+
+Cross-store backup, signed recovery manifest, staged restore, and migration safety
+live under [`backup/`](backup/). Validate with `make check-backup` (hermetic; does
+not claim live RPO/RTO when Docker is unavailable).
+
 ## POC stack (P1B-F02)
 
 Pinned compose stack for a secure single-org POC: API + convert/index/embedding

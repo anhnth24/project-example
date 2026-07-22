@@ -1,0 +1,65 @@
+{
+  "claims_live_restore": false,
+  "claims_rpo_rto_pass": false,
+  "commands": [
+    "python3 scripts/check-backup-o03.py",
+    "python3 scripts/check-backup-o03.py --self-test",
+    "python3 deploy/backup/migration/validate-migration-safety.py --check",
+    "make check-backup"
+  ],
+  "evidenceClasses": {
+    "hermetic": [
+      "success backup + dry-run restore",
+      "corrupt manifest",
+      "wrong org/schema/signature",
+      "missing artifact/snapshot/WAL",
+      "command failure fail-closed",
+      "interrupted/resume",
+      "path traversal/symlink rejection",
+      "destructive confirmation",
+      "readiness fence until reconcile",
+      "upgrade migrationVersion mismatch",
+      "redaction",
+      "PG-only vector rebuild dry-run"
+    ],
+    "implemented": [
+      "deploy/backup/** scripts and recovery manifest tooling",
+      "docs/runbooks/backup-restore.md",
+      "docs/runbooks/migration-safety.md",
+      "migration expand\u2192cutover\u2192contract validator"
+    ],
+    "pending_live": [
+      "Docker compose clean-host restore",
+      "measured RPO <= 15m / query-ready RTO <= 60m / full-vector RTO <= 240m",
+      "live missing/orphan detection against real MinIO/Qdrant"
+    ],
+    "static": [
+      "layout/executable scripts",
+      "digest-pinned images.lock.json",
+      "runbook sections + destructive confirmation",
+      "migration safety against crates/server/migrations",
+      "secret hygiene scan under deploy/backup"
+    ]
+  },
+  "hermeticFailures": [],
+  "hermeticTestsRun": 13,
+  "issue": "P1B-O03",
+  "notes": [
+    "Hermetic fake CLIs validate control-plane safety only.",
+    "No live PostgreSQL/MinIO/Qdrant restore was executed in this gate.",
+    "Do not treat hermetic timings as G0-DR / Profile-B evidence."
+  ],
+  "ok": true,
+  "profileBDrGate": {
+    "note": "Profile-B on-prem-reference restore drill with measured RPO/RTO remains pending.",
+    "status": "unresolved",
+    "targetMatch": false
+  },
+  "staticErrors": [],
+  "targets": {
+    "fullVectorRtoMinutes": 240,
+    "queryReadyRtoMinutes": 60,
+    "rpoMinutes": 15
+  },
+  "version": 1
+}

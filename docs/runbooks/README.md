@@ -26,4 +26,13 @@ with an explicit **rollback** section.
 
 Blocked (not loaded): filtered-query P99 SLO alert; GLM blackbox probe.
 Artifacts/validation: `deploy/observability/` + `make check-observability` (pinned promtool).
-Backup/restore runbooks are **P1B-O03** (out of O02 scope).
+
+## P1B-O03 backup / migration
+
+| Runbook | Purpose |
+|---|---|
+| [Backup and restore](backup-restore.md) | PG PITR, MinIO inventory, Qdrant snapshot, reconcile-before-ready |
+| [Migration safety](migration-safety.md) | Immutable checksums + expand→cutover→contract |
+
+Artifacts/validation: `deploy/backup/` + `make check-backup` (hermetic fake CLIs).
+Live Profile-B RPO/RTO evidence remains pending when Docker/services are unavailable.

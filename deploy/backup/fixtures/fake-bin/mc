@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Hermetic fake MinIO client
+set -euo pipefail
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+  alias) exit 0 ;;
+  version)
+    printf '%s\n' '{"status":"Enabled"}'
+    exit 0
+    ;;
+  ls)
+    if [[ "${MARKHAND_FAKE_MC_FAIL:-0}" == "1" ]]; then
+      echo "mc ls failed" >&2
+      exit 1
+    fi
+    if [[ -n "${MARKHAND_FAKE_MINIO_INVENTORY:-}" ]]; then
+      printf '%s\n' "$MARKHAND_FAKE_MINIO_INVENTORY"
+    else
+      printf '%s\n' $'v1\thashA\t111\n' $'v2\thashB\t222\n'
+    fi
+    exit 0
+    ;;
+  mirror)
+    dest=""
+    # last arg is destination
+    for arg in "$@"; do dest="$arg"; done
+    mkdir -p "$dest"
+    printf 'mirrored\n' >"$dest/.fake-mirror"
+    exit 0
+    ;;
+  *)
+    echo "fake mc: unknown command $cmd" >&2
+    exit 2
+    ;;
+esac

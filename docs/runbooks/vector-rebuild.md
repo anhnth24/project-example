@@ -3,7 +3,8 @@
 Issue: P1B-O02
 Alerts: `MarkhandDriftDetected`, `MarkhandReconcileErrors`
 Dashboard: `markhand-ops`
-Related: ADR 0006/0011. Full backup/restore ordering is **P1B-O03** (out of scope).
+Related: ADR 0006/0011. Full backup/restore ordering: [backup-restore.md](backup-restore.md)
+(`deploy/backup/scripts/rebuild-vectors-from-pg.sh`).
 
 ## Prerequisites
 
