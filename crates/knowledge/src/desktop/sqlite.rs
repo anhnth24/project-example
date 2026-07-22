@@ -46,6 +46,8 @@ pub struct StoreIndexResult {
     pub skipped: usize,
     pub metadata: IndexMetadata,
     pub replaced_incompatible_index: bool,
+    /// HNSW clear is best-effort after SQLite commit (not one shared transaction).
+    pub hnsw_clear_error: Option<String>,
 }
 
 pub struct SqliteKnowledgeStore {
@@ -202,7 +204,9 @@ impl SqliteKnowledgeStore {
             validate_writable_dimensions(metadata.dimensions)?;
             finalize_signature(&mut metadata, signature_plan)?;
         }
-        let cleared = indexed_documents > 0 && current_metadata.signature != metadata.signature;
+        let cleared = indexed_documents > 0
+            && (current_metadata.signature != metadata.signature
+                || current_metadata.id_scheme != metadata.id_scheme);
 
         let mut indexed = 0;
         let mut skipped = 0;
@@ -370,9 +374,17 @@ impl SqliteKnowledgeStore {
 
         write_metadata(&transaction, &metadata)?;
         transaction.commit().map_err(sql)?;
-        if cleared {
-            on_cleared()?;
-        }
+        // SQLite and HNSW cannot share a transaction. Clear is best-effort; a
+        // failure must not undo the committed SQLite ID scheme. Callers rely on
+        // scheme-aware HNSW manifests so a stale ANN cannot stay usable.
+        let hnsw_clear_error = if cleared {
+            match on_cleared() {
+                Ok(()) => None,
+                Err(error) => Some(error.to_string()),
+            }
+        } else {
+            None
+        };
         Ok(StoreIndexResult {
             documents: documents.len(),
             chunks: total_chunks,
@@ -380,6 +392,7 @@ impl SqliteKnowledgeStore {
             skipped,
             metadata,
             replaced_incompatible_index: cleared,
+            hnsw_clear_error,
         })
     }
 
@@ -616,12 +629,15 @@ fn read_metadata(connection: &Connection) -> Result<IndexMetadata> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(LOCAL_VECTOR_DIMENSIONS);
     let signature = read("embedding_signature")?.unwrap_or_else(|| LOCAL_EMBEDDING_MODE.into());
+    // Missing key ⇒ legacy store without durable intelligence ID scheme.
+    let id_scheme = read("intelligence_id_scheme")?.unwrap_or_default();
     Ok(IndexMetadata {
         mode,
         provider,
         model,
         dimensions,
         signature,
+        id_scheme,
     })
 }
 
@@ -632,6 +648,7 @@ fn write_metadata(transaction: &rusqlite::Transaction<'_>, metadata: &IndexMetad
         ("embedding_model", metadata.model.clone()),
         ("embedding_dimensions", metadata.dimensions.to_string()),
         ("embedding_signature", metadata.signature.clone()),
+        ("intelligence_id_scheme", metadata.id_scheme.clone()),
     ] {
         transaction
             .execute(
@@ -720,6 +737,7 @@ mod tests {
 
     use super::*;
     use crate::embedding::local_vector;
+    use fileconv_core::intelligence::INTELLIGENCE_ID_SCHEME;
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -748,6 +766,7 @@ mod tests {
             model: LOCAL_EMBEDDING_MODE.into(),
             dimensions: LOCAL_VECTOR_DIMENSIONS,
             signature: LOCAL_EMBEDDING_MODE.into(),
+            id_scheme: INTELLIGENCE_ID_SCHEME.into(),
         }
     }
 
@@ -861,6 +880,7 @@ mod tests {
             model: "mock-model".into(),
             dimensions: LOCAL_VECTOR_DIMENSIONS,
             signature: "different-signature".into(),
+            id_scheme: INTELLIGENCE_ID_SCHEME.into(),
         };
         let mut cleared = false;
         let error = store
@@ -897,6 +917,7 @@ mod tests {
             model: "mock-model".into(),
             dimensions: LOCAL_VECTOR_DIMENSIONS,
             signature: "replacement-signature".into(),
+            id_scheme: INTELLIGENCE_ID_SCHEME.into(),
         };
         let mut cleared = false;
         let result = store
@@ -919,6 +940,139 @@ mod tests {
         assert!(result.replaced_incompatible_index);
         assert!(cleared);
         assert_eq!(store.metadata().unwrap().signature, "replacement-signature");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn missing_intelligence_id_scheme_forces_sqlite_rebuild() {
+        let path = temp_path("id_scheme_rebuild");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        let original = document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.");
+        index(&mut store, &[original.clone()]);
+        // Simulate a pre-CORE-T9 store: same embedding signature, no id scheme key.
+        store
+            .connection
+            .execute(
+                "DELETE FROM index_meta WHERE key = 'intelligence_id_scheme'",
+                [],
+            )
+            .unwrap();
+        let legacy = store.metadata().unwrap();
+        assert!(legacy.id_scheme.is_empty());
+        assert_eq!(legacy.signature, LOCAL_EMBEDDING_MODE);
+
+        let mut cleared = false;
+        let result = store
+            .index_documents(
+                &[original],
+                local_metadata(),
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || {
+                    cleared = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(result.replaced_incompatible_index);
+        assert!(cleared);
+        assert!(result.hnsw_clear_error.is_none());
+        let upgraded = store.metadata().unwrap();
+        assert_eq!(upgraded.id_scheme, INTELLIGENCE_ID_SCHEME);
+        assert!(store
+            .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
+            .unwrap()
+            .iter()
+            .all(|chunk| chunk.id.contains(INTELLIGENCE_ID_SCHEME)));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn hnsw_clear_failure_after_commit_keeps_sqlite_and_surfaces_error() {
+        let path = temp_path("hnsw_clear_fail");
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        let original = document("# Đối soát\n\nGiao dịch được đối soát mỗi ngày.");
+        index(&mut store, &[original.clone()]);
+        store
+            .connection
+            .execute(
+                "DELETE FROM index_meta WHERE key = 'intelligence_id_scheme'",
+                [],
+            )
+            .unwrap();
+        let result = store
+            .index_documents(
+                &[original],
+                local_metadata(),
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || {
+                    Err(KnowledgeError::AdapterFailure(
+                        "simulated HNSW clear failure".into(),
+                    ))
+                },
+            )
+            .unwrap();
+        assert!(result.replaced_incompatible_index);
+        assert!(result
+            .hnsw_clear_error
+            .as_deref()
+            .is_some_and(|error| error.contains("simulated HNSW clear failure")));
+        assert_eq!(store.metadata().unwrap().id_scheme, INTELLIGENCE_ID_SCHEME);
+        assert!(store
+            .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
+            .unwrap()
+            .iter()
+            .all(|chunk| chunk.id.contains(INTELLIGENCE_ID_SCHEME)));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_sqlite_fixture_missing_id_scheme_upgrades_via_rebuild() {
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/legacy-sqlite-v1.sqlite");
+        let path = temp_path("legacy_id_scheme");
+        std::fs::copy(fixture, &path).unwrap();
+        let mut store = SqliteKnowledgeStore::open(&path).unwrap();
+        assert!(store.metadata().unwrap().id_scheme.is_empty());
+        let mut cleared = false;
+        let result = store
+            .index_documents(
+                &[document("# Legacy\n\nNội dung sau rebuild.")],
+                local_metadata(),
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || {
+                    cleared = true;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(result.replaced_incompatible_index);
+        assert!(cleared);
+        assert_eq!(store.metadata().unwrap().id_scheme, INTELLIGENCE_ID_SCHEME);
+        // Legacy rows must not coexist with sha256-v1 chunk IDs.
+        assert!(!store
+            .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
+            .unwrap()
+            .iter()
+            .any(|chunk| chunk.id == "legacy-chunk-001"));
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 
@@ -1025,6 +1179,10 @@ mod tests {
         let metadata = store.metadata().unwrap();
         assert_eq!(metadata.signature, LOCAL_EMBEDDING_MODE);
         assert_eq!(metadata.dimensions, LOCAL_VECTOR_DIMENSIONS);
+        assert!(
+            metadata.id_scheme.is_empty(),
+            "legacy fixture must not invent an intelligence ID scheme"
+        );
         let chunks = store
             .load_chunks(&HashSet::new(), LOCAL_VECTOR_DIMENSIONS)
             .unwrap();

@@ -10,6 +10,17 @@
       "source": "synthetic",
       "license": "CC0-1.0",
       "sensitive": false
+    },
+    {
+      "id": "core.pdf.needs_ocr_untrusted_fallback.v1",
+      "path": "pdf/needs_ocr_untrusted_fallback.pdf",
+      "sha256": "0d305a64c19c1353b2ed43c9f263376f6db3efa148db073044d259d365735253",
+      "kind": "pdf",
+      "owner": "markhand-core",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false,
+      "notes": "Synthetic Helvetica garbage-punctuation page; pdf-inspector is_garbage_text \u2192 needs_ocr for CORE-T7 partial-success"
     }
   ]
 }

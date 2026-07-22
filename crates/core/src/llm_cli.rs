@@ -109,54 +109,303 @@ fn read_pipe<T: Read + Send + 'static>(mut pipe: T) -> std::thread::JoinHandle<V
     })
 }
 
+/// Join a helper thread without exceeding `deadline`. Abandoned joins are reaped
+/// in the background so a stuck pipe cannot block the caller past the budget.
+fn join_with_deadline<T: Send + 'static>(
+    handle: std::thread::JoinHandle<T>,
+    deadline: Instant,
+) -> Option<T> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        std::thread::spawn(move || {
+            let _ = handle.join();
+        });
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(handle.join());
+    });
+    match rx.recv_timeout(remaining) {
+        Ok(Ok(value)) => Some(value),
+        _ => None,
+    }
+}
+
+#[cfg(unix)]
+fn prepare_unix_containment(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // New process group (= child pid) so SIGKILL to -pgid reaps grandchildren.
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+mod win_job {
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Child, Command};
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    };
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenThread, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED, THREAD_SUSPEND_RESUME,
+    };
+
+    pub struct WindowsJob(HANDLE);
+
+    impl WindowsJob {
+        pub fn create() -> Option<Self> {
+            unsafe {
+                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+                    return None;
+                }
+                let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const _,
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 {
+                    let _ = CloseHandle(handle);
+                    return None;
+                }
+                Some(Self(handle))
+            }
+        }
+
+        pub fn assign(&self, child: &Child) -> bool {
+            unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
+        }
+
+        pub fn terminate(&self) {
+            unsafe {
+                let _ = TerminateJobObject(self.0, 1);
+            }
+        }
+    }
+
+    impl Drop for WindowsJob {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// Resume the primary thread of a CREATE_SUSPENDED process (std::process::Child
+    /// does not expose PROCESS_INFORMATION.hThread).
+    pub fn resume_primary_thread(pid: u32) -> bool {
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let mut entry = THREADENTRY32 {
+                dwSize: size_of::<THREADENTRY32>() as u32,
+                ..std::mem::zeroed()
+            };
+            let mut found = Thread32First(snap, &mut entry) != 0;
+            let mut resumed = false;
+            while found {
+                if entry.th32OwnerProcessID == pid {
+                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
+                    if !thread.is_null() && thread != INVALID_HANDLE_VALUE {
+                        resumed = ResumeThread(thread) != u32::MAX;
+                        let _ = CloseHandle(thread);
+                    }
+                    break;
+                }
+                found = Thread32Next(snap, &mut entry) != 0;
+            }
+            let _ = CloseHandle(snap);
+            resumed
+        }
+    }
+
+    pub fn apply_suspended_flags(command: &mut Command) {
+        command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
+    }
+}
+
+/// Containment token kept for the lifetime of the child.
+struct ProcessContainment {
+    #[cfg(unix)]
+    pgid: u32,
+    #[cfg(windows)]
+    job: win_job::WindowsJob,
+}
+
+impl ProcessContainment {
+    fn begin(command: &mut Command) -> Result<Self, ConvertError> {
+        #[cfg(unix)]
+        {
+            prepare_unix_containment(command);
+            Ok(Self { pgid: 0 })
+        }
+        #[cfg(windows)]
+        {
+            let job = win_job::WindowsJob::create().ok_or_else(|| {
+                fail("không tạo được Windows Job Object cho subscription CLI (fail-closed)")
+            })?;
+            win_job::apply_suspended_flags(command);
+            Ok(Self { job })
+        }
+    }
+
+    fn after_spawn(&mut self, child: &std::process::Child) -> Result<(), ConvertError> {
+        #[cfg(unix)]
+        {
+            self.pgid = child.id();
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            if !self.job.assign(child) {
+                return Err(fail(
+                    "không gán được CLI vào Windows Job Object (fail-closed)",
+                ));
+            }
+            // Process stayed suspended until job assignment — no grandchild race.
+            if !win_job::resume_primary_thread(child.id()) {
+                self.job.terminate();
+                return Err(fail(
+                    "không resume được CLI sau khi gán Job Object (fail-closed)",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn kill_tree(&self) {
+        #[cfg(unix)]
+        {
+            if self.pgid != 0 {
+                extern "C" {
+                    fn kill(pid: i32, sig: i32) -> i32;
+                }
+                const SIGKILL: i32 = 9;
+                unsafe {
+                    let _ = kill(-(self.pgid as i32), SIGKILL);
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            self.job.terminate();
+        }
+    }
+}
+
+fn terminate_contained(child: &mut std::process::Child, containment: &ProcessContainment) {
+    containment.kill_tree();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run_command(
     mut command: Command,
     input: Option<&str>,
     timeout: Duration,
 ) -> Result<CliOutput, ConvertError> {
+    // Absolute deadline covers spawn, stdin write, wait, and pipe joins.
+    let deadline = Instant::now() + timeout;
+    let mut containment = ProcessContainment::begin(&mut command)?;
     let mut child = command
         .spawn()
         .map_err(|error| fail(format!("không khởi chạy được CLI: {error}")))?;
+    if let Err(error) = containment.after_spawn(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
     let stdout_reader = child.stdout.take().map(read_pipe);
     let stderr_reader = child.stderr.take().map(read_pipe);
-    if let Some(input) = input {
+    let stdin_writer = if let Some(input) = input {
         let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| fail("không mở được stdin cho CLI"))?;
-        stdin
-            .write_all(input.as_bytes())
-            .map_err(|error| fail(format!("không gửi được prompt tới CLI: {error}")))?;
-    }
-    drop(child.stdin.take());
+        let bytes = input.as_bytes().to_vec();
+        Some(std::thread::spawn(move || {
+            stdin.write_all(&bytes).and_then(|_| stdin.flush())
+        }))
+    } else {
+        drop(child.stdin.take());
+        None
+    };
 
-    let started = Instant::now();
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < timeout => {
+            Ok(Some(status)) => {
+                // Parent may exit while grandchildren still hold pipes
+                // (`sleep 30 & exit 0`). Reap the process group / job first.
+                containment.kill_tree();
+                break status;
+            }
+            Ok(None) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(40));
             }
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_contained(&mut child, &containment);
+                if let Some(handle) = stdin_writer {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stdout_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stderr_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
                 return Err(fail(format!(
                     "subscription CLI timeout sau {} giây",
                     timeout.as_secs()
                 )));
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_contained(&mut child, &containment);
+                if let Some(handle) = stdin_writer {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stdout_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
+                if let Some(handle) = stderr_reader {
+                    let _ = join_with_deadline(handle, deadline);
+                }
                 return Err(fail(format!("không chờ được CLI: {error}")));
             }
         }
     };
+
+    if let Some(handle) = stdin_writer {
+        match join_with_deadline(handle, deadline) {
+            Some(Err(error))
+                if status.success() && error.kind() != std::io::ErrorKind::BrokenPipe =>
+            {
+                return Err(fail(format!("không gửi được prompt tới CLI: {error}")));
+            }
+            _ => {}
+        }
+    }
+
     let stdout = stdout_reader
-        .and_then(|reader| reader.join().ok())
+        .and_then(|reader| join_with_deadline(reader, deadline))
         .unwrap_or_default();
     // Drain stderr without exposing OAuth URLs, tokens, or local paths to UI logs.
-    let _ = stderr_reader.and_then(|reader| reader.join().ok());
+    if let Some(reader) = stderr_reader {
+        let _ = join_with_deadline(reader, deadline);
+    }
     Ok(CliOutput {
         status,
         stdout: String::from_utf8_lossy(&stdout).into_owned(),
@@ -440,5 +689,72 @@ printf '{"type":"result","result":"Grounded mock answer"}\n'
         let error = run_command(command, None, Duration::from_millis(30)).unwrap_err();
         assert!(error.to_string().contains("timeout"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_timeout_covers_blocking_large_stdin_write() {
+        // Child never reads stdin; a large write fills the pipe and would block
+        // forever if timeout only started after write_all returned.
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let input = "x".repeat(512 * 1024);
+        let started = Instant::now();
+        let error = run_command(command, Some(&input), Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_nested_grandchildren_via_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sh -c 'sh -c \"sleep 30\"'"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let error = run_command(command, None, Duration::from_millis(200)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn early_parent_exit_reaps_orphans_without_hanging_pipes() {
+        // Parent exits immediately while a background grandchild keeps pipes open
+        // unless the process group is reaped.
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & exit 0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let input = "x".repeat(256 * 1024);
+        let started = Instant::now();
+        let result = run_command(command, Some(&input), Duration::from_secs(5));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(result.is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_timeout_kills_nested_cmd_tree_via_job_object() {
+        // Nested `cmd /C` grandchildren must be reaped by the Job Object.
+        let mut command = Command::new("cmd");
+        command
+            .args(["/C", "cmd /C ping -n 30 127.0.0.1 >NUL"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let error = run_command(command, None, Duration::from_millis(300)).unwrap_err();
+        assert!(error.to_string().contains("timeout"));
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 }

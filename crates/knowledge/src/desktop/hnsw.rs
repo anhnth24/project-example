@@ -1,7 +1,10 @@
 //! Persistent HNSW cache for the SQLite vector source of truth.
 //!
-//! Corruption or signature mismatch is non-fatal to callers: SQLite remains
-//! authoritative and desktop search falls back to exact cosine.
+//! Corruption, embedding-signature mismatch, or intelligence ID scheme mismatch
+//! is non-fatal to callers: SQLite remains authoritative and desktop search
+//! falls back to exact cosine. SQLite and HNSW are **not** one atomic
+//! transaction — manifests carry `idScheme` so a stale ANN partition can never
+//! stay usable after SQLite moves to a new durable ID scheme.
 
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
@@ -33,6 +36,9 @@ static TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 struct Manifest {
     format_version: u32,
     signature: String,
+    /// Intelligence durable ID scheme (`sha256-v1`). Missing/empty = legacy.
+    #[serde(default)]
+    id_scheme: String,
     dimensions: usize,
     chunk_ids: Vec<String>,
     basename: String,
@@ -143,16 +149,22 @@ fn valid_partition_name(value: &str) -> bool {
             .all(|character| character.is_ascii_digit())
 }
 
-fn partition_name(signature: &str, dimensions: usize) -> String {
-    // Explicit SipHash-1-3 preserves the legacy DefaultHasher partition path.
+fn partition_name(signature: &str, id_scheme: &str, dimensions: usize) -> String {
+    // Explicit SipHash-1-3: empty id_scheme preserves the legacy partition path
+    // (signature-only). Non-empty schemes domain-separate generations so a
+    // stale ANN directory cannot be addressed under a new SQLite ID scheme.
     let mut hasher = SipHasher13::new();
     signature.hash(&mut hasher);
+    if !id_scheme.is_empty() {
+        0xff_u8.hash(&mut hasher);
+        id_scheme.hash(&mut hasher);
+    }
     format!("{:016x}-{dimensions}", hasher.finish())
 }
 
-fn index_directory(root: &Path, signature: &str, dimensions: usize) -> PathBuf {
+fn index_directory(root: &Path, signature: &str, id_scheme: &str, dimensions: usize) -> PathBuf {
     root.join(".markhand/vector-index")
-        .join(partition_name(signature, dimensions))
+        .join(partition_name(signature, id_scheme, dimensions))
 }
 
 fn manifest_path(directory: &Path) -> PathBuf {
@@ -168,9 +180,15 @@ fn validate_dimensions(dimensions: usize) -> Result<()> {
     Ok(())
 }
 
-fn validate_manifest(manifest: &Manifest, signature: &str, dimensions: usize) -> Result<()> {
+fn validate_manifest(
+    manifest: &Manifest,
+    signature: &str,
+    id_scheme: &str,
+    dimensions: usize,
+) -> Result<()> {
     if manifest.format_version != FORMAT_VERSION
         || manifest.signature != signature
+        || manifest.id_scheme != id_scheme
         || manifest.dimensions != dimensions
     {
         return Err(KnowledgeError::IncompatibleIndex(
@@ -207,7 +225,12 @@ fn validate_manifest(manifest: &Manifest, signature: &str, dimensions: usize) ->
     Ok(())
 }
 
-fn read_manifest(directory: &Path, signature: &str, dimensions: usize) -> Result<Manifest> {
+fn read_manifest(
+    directory: &Path,
+    signature: &str,
+    id_scheme: &str,
+    dimensions: usize,
+) -> Result<Manifest> {
     validate_dimensions(dimensions)?;
     let path = manifest_path(directory);
     let metadata = std::fs::metadata(&path)
@@ -221,7 +244,7 @@ fn read_manifest(directory: &Path, signature: &str, dimensions: usize) -> Result
         .map_err(|error| failure(format!("cannot read HNSW manifest: {error}")))?;
     let manifest: Manifest = serde_json::from_slice(&bytes)
         .map_err(|_| KnowledgeError::IncompatibleIndex("HNSW manifest is corrupt"))?;
-    validate_manifest(&manifest, signature, dimensions)?;
+    validate_manifest(&manifest, signature, id_scheme, dimensions)?;
     Ok(manifest)
 }
 
@@ -257,10 +280,10 @@ pub fn clear(root: &Path) -> Result<()> {
     })
 }
 
-pub fn is_available(root: &Path, signature: &str, dimensions: usize) -> bool {
+pub fn is_available(root: &Path, signature: &str, id_scheme: &str, dimensions: usize) -> bool {
     with_cache_lock(root, true, || {
-        let directory = index_directory(root, signature, dimensions);
-        let manifest = read_manifest(&directory, signature, dimensions)?;
+        let directory = index_directory(root, signature, id_scheme, dimensions);
+        let manifest = read_manifest(&directory, signature, id_scheme, dimensions)?;
         validate_index_files(&directory, &manifest, dimensions)
     })
     .is_ok()
@@ -269,22 +292,24 @@ pub fn is_available(root: &Path, signature: &str, dimensions: usize) -> bool {
 pub fn rebuild(
     root: &Path,
     signature: &str,
+    id_scheme: &str,
     dimensions: usize,
     points: &[(String, Vec<f32>)],
 ) -> Result<bool> {
     with_cache_lock(root, true, || {
-        rebuild_locked(root, signature, dimensions, points)
+        rebuild_locked(root, signature, id_scheme, dimensions, points)
     })
 }
 
 fn rebuild_locked(
     root: &Path,
     signature: &str,
+    id_scheme: &str,
     dimensions: usize,
     points: &[(String, Vec<f32>)],
 ) -> Result<bool> {
     validate_dimensions(dimensions)?;
-    let directory = index_directory(root, signature, dimensions);
+    let directory = index_directory(root, signature, id_scheme, dimensions);
     if points.len() < MIN_HNSW_POINTS {
         match std::fs::remove_dir_all(directory) {
             Ok(()) => {}
@@ -336,7 +361,7 @@ fn rebuild_locked(
         ))?;
     std::fs::create_dir_all(parent)
         .map_err(|error| failure(format!("cannot create HNSW parent: {error}")))?;
-    let partition = partition_name(signature, dimensions);
+    let partition = partition_name(signature, id_scheme, dimensions);
     let nonce = TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
     let temporary = parent.join(format!(".{partition}.{}.{nonce}.tmp", std::process::id()));
     match std::fs::remove_dir_all(&temporary) {
@@ -370,11 +395,12 @@ fn rebuild_locked(
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
         signature: signature.into(),
+        id_scheme: id_scheme.into(),
         dimensions,
         chunk_ids: points.iter().map(|(id, _)| id.clone()).collect(),
         basename,
     };
-    if let Err(error) = validate_manifest(&manifest, signature, dimensions) {
+    if let Err(error) = validate_manifest(&manifest, signature, id_scheme, dimensions) {
         let _ = std::fs::remove_dir_all(&temporary);
         return Err(error);
     }
@@ -423,18 +449,20 @@ fn rebuild_locked(
 pub fn search(
     root: &Path,
     signature: &str,
+    id_scheme: &str,
     dimensions: usize,
     query: &[f32],
     limit: usize,
 ) -> Result<Vec<(String, f32)>> {
     with_cache_lock(root, false, || {
-        search_locked(root, signature, dimensions, query, limit)
+        search_locked(root, signature, id_scheme, dimensions, query, limit)
     })
 }
 
 fn search_locked(
     root: &Path,
     signature: &str,
+    id_scheme: &str,
     dimensions: usize,
     query: &[f32],
     limit: usize,
@@ -449,8 +477,8 @@ fn search_locked(
     if limit == 0 {
         return Ok(Vec::new());
     }
-    let directory = index_directory(root, signature, dimensions);
-    let manifest = read_manifest(&directory, signature, dimensions)?;
+    let directory = index_directory(root, signature, id_scheme, dimensions);
+    let manifest = read_manifest(&directory, signature, id_scheme, dimensions)?;
     catch_unwind(AssertUnwindSafe(|| {
         let mut loader = HnswIo::new(&directory, &manifest.basename);
         let hnsw: Hnsw<f32, DistCosine> = loader
@@ -485,6 +513,8 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
 
+    const SCHEME: &str = "sha256-v1";
+
     fn temp_root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
             "markhand_hnsw_{label}_{}_{}",
@@ -515,12 +545,12 @@ mod tests {
     fn persistent_round_trip_finds_identical_vector() {
         let root = temp_root("round_trip");
         let points = points();
-        assert!(rebuild(&root, "test-signature", 16, &points).unwrap());
-        assert!(is_available(&root, "test-signature", 16));
-        let result = search(&root, "test-signature", 16, &points[173].1, 10).unwrap();
+        assert!(rebuild(&root, "test-signature", SCHEME, 16, &points).unwrap());
+        assert!(is_available(&root, "test-signature", SCHEME, 16));
+        let result = search(&root, "test-signature", SCHEME, 16, &points[173].1, 10).unwrap();
         assert_eq!(result[0].0, "chunk-173");
         clear(&root).unwrap();
-        assert!(!is_available(&root, "test-signature", 16));
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -528,9 +558,9 @@ mod tests {
     fn too_few_points_remove_stale_partition() {
         let root = temp_root("small");
         let points = points();
-        rebuild(&root, "test-signature", 16, &points).unwrap();
-        assert!(!rebuild(&root, "test-signature", 16, &points[..2]).unwrap());
-        assert!(!is_available(&root, "test-signature", 16));
+        rebuild(&root, "test-signature", SCHEME, 16, &points).unwrap();
+        assert!(!rebuild(&root, "test-signature", SCHEME, 16, &points[..2]).unwrap());
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -540,7 +570,7 @@ mod tests {
         let mut points = points();
         points[0].1[0] = f32::NAN;
         assert!(matches!(
-            rebuild(&root, "test-signature", 16, &points),
+            rebuild(&root, "test-signature", SCHEME, 16, &points),
             Err(KnowledgeError::InvalidInput(_))
         ));
         let _ = std::fs::remove_dir_all(root);
@@ -549,22 +579,22 @@ mod tests {
     #[test]
     fn corrupt_mismatch_and_count_do_not_become_available() {
         let root = temp_root("corrupt");
-        let directory = index_directory(&root, "test-signature", 16);
+        let directory = index_directory(&root, "test-signature", SCHEME, 16);
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(manifest_path(&directory), b"not-json").unwrap();
-        assert!(!is_available(&root, "test-signature", 16));
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
 
         let points = points();
-        rebuild(&root, "test-signature", 16, &points).unwrap();
-        assert!(!is_available(&root, "other-signature", 16));
-        let mut manifest = read_manifest(&directory, "test-signature", 16).unwrap();
+        rebuild(&root, "test-signature", SCHEME, 16, &points).unwrap();
+        assert!(!is_available(&root, "other-signature", SCHEME, 16));
+        let mut manifest = read_manifest(&directory, "test-signature", SCHEME, 16).unwrap();
         manifest.chunk_ids.pop();
         std::fs::write(
             manifest_path(&directory),
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        assert!(search(&root, "test-signature", 16, &points[0].1, 1).is_err());
+        assert!(search(&root, "test-signature", SCHEME, 16, &points[0].1, 1).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -572,16 +602,16 @@ mod tests {
     fn corrupt_index_files_return_error_instead_of_panicking() {
         let root = temp_root("corrupt_index");
         let points = points();
-        rebuild(&root, "test-signature", 16, &points).unwrap();
-        let directory = index_directory(&root, "test-signature", 16);
+        rebuild(&root, "test-signature", SCHEME, 16, &points).unwrap();
+        let directory = index_directory(&root, "test-signature", SCHEME, 16);
         for entry in std::fs::read_dir(&directory).unwrap() {
             let path = entry.unwrap().path();
             if path.file_name().and_then(|name| name.to_str()) != Some("manifest.json") {
                 std::fs::write(path, b"corrupt-index").unwrap();
             }
         }
-        assert!(!is_available(&root, "test-signature", 16));
-        assert!(search(&root, "test-signature", 16, &points[0].1, 1).is_err());
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
+        assert!(search(&root, "test-signature", SCHEME, 16, &points[0].1, 1).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -597,7 +627,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    rebuild(&root, "test-signature", 16, &points)
+                    rebuild(&root, "test-signature", SCHEME, 16, &points)
                 })
             })
             .collect::<Vec<_>>();
@@ -605,7 +635,7 @@ mod tests {
         for handle in handles {
             assert!(handle.join().unwrap().unwrap());
         }
-        let result = search(&root, "test-signature", 16, &points[173].1, 1).unwrap();
+        let result = search(&root, "test-signature", SCHEME, 16, &points[173].1, 1).unwrap();
         assert_eq!(result[0].0, "chunk-173");
         let _ = std::fs::remove_dir_all(root.as_ref());
     }
@@ -614,16 +644,16 @@ mod tests {
     fn interrupted_replacement_restores_backup_on_next_exclusive_lock() {
         let root = temp_root("recovery");
         let points = points();
-        rebuild(&root, "test-signature", 16, &points).unwrap();
-        let directory = index_directory(&root, "test-signature", 16);
-        let partition = partition_name("test-signature", 16);
+        rebuild(&root, "test-signature", SCHEME, 16, &points).unwrap();
+        let directory = index_directory(&root, "test-signature", SCHEME, 16);
+        let partition = partition_name("test-signature", SCHEME, 16);
         let backup = directory
             .parent()
             .unwrap()
             .join(format!(".{partition}.999.1.old"));
         std::fs::rename(&directory, &backup).unwrap();
         assert!(!directory.exists());
-        assert!(is_available(&root, "test-signature", 16));
+        assert!(is_available(&root, "test-signature", SCHEME, 16));
         assert!(directory.exists());
         assert!(!backup.exists());
         let _ = std::fs::remove_dir_all(root);
@@ -632,11 +662,11 @@ mod tests {
     #[test]
     fn oversized_manifest_is_rejected_before_reading() {
         let root = temp_root("oversized");
-        let directory = index_directory(&root, "test-signature", 16);
+        let directory = index_directory(&root, "test-signature", SCHEME, 16);
         std::fs::create_dir_all(&directory).unwrap();
         let file = File::create(manifest_path(&directory)).unwrap();
         file.set_len(MAX_MANIFEST_BYTES + 1).unwrap();
-        assert!(!is_available(&root, "test-signature", 16));
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -647,26 +677,62 @@ mod tests {
         let signature = fixture["signature"].as_str().unwrap();
         let dimensions = fixture["dimensions"].as_u64().unwrap() as usize;
         assert_eq!(
-            partition_name(signature, dimensions),
+            partition_name(signature, "", dimensions),
             fixture["partition"].as_str().unwrap()
         );
+    }
+
+    #[test]
+    fn id_scheme_mismatch_makes_stale_partition_unusable() {
+        let root = temp_root("scheme_mismatch");
+        let points = points();
+        rebuild(&root, "test-signature", "", 16, &points).unwrap();
+        assert!(is_available(&root, "test-signature", "", 16));
+        // New SQLite ID scheme must not resolve/use the legacy ANN partition.
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
+        assert!(search(&root, "test-signature", SCHEME, 16, &points[0].1, 1).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persisted_manifest_rejects_missing_or_wrong_id_scheme() {
+        let root = temp_root("manifest_scheme");
+        let points = points();
+        rebuild(&root, "test-signature", SCHEME, 16, &points).unwrap();
+        let directory = index_directory(&root, "test-signature", SCHEME, 16);
+        let mut manifest = read_manifest(&directory, "test-signature", SCHEME, 16).unwrap();
+        manifest.id_scheme.clear();
+        std::fs::write(
+            manifest_path(&directory),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
+        manifest.id_scheme = "sip13-v1".into();
+        std::fs::write(
+            manifest_path(&directory),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_available(&root, "test-signature", SCHEME, 16));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn legacy_binary_fixture_opens_and_searches() {
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/legacy-hnsw-index-v1/.markhand/vector-index")
-            .join(partition_name("local_hash_v1", 256));
+            .join(partition_name("local_hash_v1", "", 256));
         let root = temp_root("legacy_fixture");
-        let target = index_directory(&root, "local_hash_v1", 256);
+        let target = index_directory(&root, "local_hash_v1", "", 256);
         std::fs::create_dir_all(&target).unwrap();
         for name in ["manifest.json", "index.hnsw.data", "index.hnsw.graph"] {
             std::fs::copy(fixture.join(name), target.join(name)).unwrap();
         }
         let mut query = vec![0.0; 256];
         query[0] = 1.0;
-        assert!(is_available(&root, "local_hash_v1", 256));
-        let result = search(&root, "local_hash_v1", 256, &query, 3).unwrap();
+        assert!(is_available(&root, "local_hash_v1", "", 256));
+        let result = search(&root, "local_hash_v1", "", 256, &query, 3).unwrap();
         assert_eq!(result[0].0, "legacy-chunk-000");
         let _ = std::fs::remove_dir_all(root);
     }

@@ -1,6 +1,8 @@
 //! Pure markdown chunk preparation for indexing.
 
-use fileconv_core::chunk::chunk_markdown;
+#[cfg(test)]
+use fileconv_core::chunk::normalize_newlines;
+use fileconv_core::chunk::{chunk_markdown, locate_chunk_span};
 use fileconv_core::intelligence::page_before;
 use fileconv_knowledge::citation::infer_source_anchor;
 use fileconv_knowledge::identity::{chunk_identity, BODY_TEXT_VERSION};
@@ -59,20 +61,9 @@ pub fn prepare_chunks(
             );
 
             // Định vị body trong Markdown gốc để lấy byte span + trang.
-            // Cùng thuật toán con trỏ với `fileconv_core::intelligence::build_corpus`
-            // để anchor server khớp desktop.
-            cursor = cursor.min(markdown.len());
-            while cursor < markdown.len() && !markdown.is_char_boundary(cursor) {
-                cursor += 1;
-            }
-            let start = markdown[cursor..]
-                .find(&chunk.text)
-                .map(|relative| cursor + relative)
-                .unwrap_or(cursor);
-            let mut end = (start + chunk.text.len()).min(markdown.len());
-            while end > start && !markdown.is_char_boundary(end) {
-                end -= 1;
-            }
+            // Cùng `locate_chunk_span` với `fileconv_core::intelligence::build_corpus`
+            // (khớp LF/CRLF, UTF-8-safe; failure → (cursor,cursor) — không drop chunk).
+            let (start, end) = locate_chunk_span(markdown, cursor, &chunk.text);
             cursor = end;
 
             let page = page_before(markdown, start);
@@ -146,5 +137,75 @@ mod tests {
         // Non-xlsx không suy sheet.
         let not_sheet = prepare_chunks(document_id, version_id, sheet_md, "pdf");
         assert_eq!(not_sheet[0].sheet, None);
+    }
+
+    #[test]
+    fn prepare_chunks_multiline_crlf_span_matches_exact_quoted_content() {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let markdown = "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu.\r\nDòng hai vẫn khớp.\r\n";
+        let chunks = prepare_chunks(document_id, version_id, markdown, "");
+        let body = chunks
+            .iter()
+            .find(|chunk| chunk.body.contains("giữ dấu"))
+            .expect("body chunk");
+        let start = body.span_start as usize;
+        let end = body.span_end as usize;
+        assert!(markdown.is_char_boundary(start));
+        assert!(markdown.is_char_boundary(end));
+        assert_eq!(
+            &markdown[start..end],
+            "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
+        );
+        // Body canonical LF (identity/indexing); span trỏ đúng byte CRLF trên nguồn.
+        assert_eq!(body.body, "Hệ thống phải giữ dấu.\nDòng hai vẫn khớp.");
+        assert_eq!(
+            normalize_newlines(&markdown[start..end]).as_ref(),
+            body.body.as_str()
+        );
+    }
+
+    #[test]
+    fn prepare_chunks_standalone_cr_before_crlf_keeps_nonempty_exact_span() {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let markdown = "a\r\r\nb";
+        let chunks = prepare_chunks(document_id, version_id, markdown, "");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].body, "a\r\nb");
+        assert!(chunks[0].span_end > chunks[0].span_start);
+        let start = chunks[0].span_start as usize;
+        let end = chunks[0].span_end as usize;
+        assert_eq!(&markdown[start..end], "a\r\r\nb");
+        assert!(markdown.as_bytes().windows(3).any(|w| w == b"\r\r\n"));
+        assert_eq!(
+            normalize_newlines(&markdown[start..end]).as_ref(),
+            chunks[0].body.as_str()
+        );
+    }
+
+    #[test]
+    fn prepare_chunks_keeps_duplicate_mixed_newline_bodies_with_earliest_anchors() {
+        let document_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let markdown = "# A\r\n\r\nLine one.\r\nLine two.\r\n\r\n# B\n\nLine one.\nLine two.\n";
+        let chunks = prepare_chunks(document_id, version_id, markdown, "");
+        let bodies: Vec<_> = chunks
+            .iter()
+            .filter(|chunk| chunk.body == "Line one.\nLine two.")
+            .collect();
+        assert_eq!(bodies.len(), 2, "duplicate bodies must not be dropped");
+        let first = bodies[0];
+        let second = bodies[1];
+        assert_eq!(
+            &markdown[first.span_start as usize..first.span_end as usize],
+            "Line one.\r\nLine two."
+        );
+        assert_eq!(
+            &markdown[second.span_start as usize..second.span_end as usize],
+            "Line one.\nLine two."
+        );
+        assert!(second.span_start > first.span_end);
+        assert_eq!(first.body, second.body);
     }
 }

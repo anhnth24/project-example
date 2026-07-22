@@ -11,16 +11,17 @@
 //!   - Ảnh quá lớn (cạnh dài > 2400px) → thu xuống (giữ tốc độ).
 //!   - Còn lại (trang giấy tờ đủ nét) → GIỮ NGUYÊN.
 
-use std::cell::{Cell, RefCell};
-use std::io;
+use std::cell::Cell;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use image::{imageops, DynamicImage, GrayImage};
+use image::{imageops, DynamicImage, GrayImage, ImageReader, Limits};
+use tempfile::NamedTempFile;
 
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+use crate::diagnostics::{ConvertErrorKind, DetailedConvertError};
+
 static TESSERACT_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,9 +41,132 @@ impl OcrEngine {
     }
 }
 
+/// Per-call OCR configuration (no process-wide / TLS error collector).
+#[derive(Debug, Clone, Default)]
+pub struct OcrRunConfig {
+    /// Override Tesseract binary; `None` uses `FILECONV_TESSERACT` / `tesseract`.
+    pub tesseract_binary: Option<PathBuf>,
+}
+
+/// Pipeline stage where an OCR attempt failed (stable, not localized).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrStage {
+    Decode,
+    Bounds,
+    Preprocess,
+    Render,
+    Tesseract,
+    Paddle,
+}
+
+impl OcrStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Bounds => "bounds",
+            Self::Preprocess => "preprocess",
+            Self::Render => "render",
+            Self::Tesseract => "tesseract",
+            Self::Paddle => "paddle",
+        }
+    }
+}
+
+/// Typed OCR attempt failure returned explicitly to callers (PDF/image).
+///
+/// No TLS / process-global collector — safe under nested calls, concurrency, and panics.
+#[derive(Debug, Clone)]
+pub enum OcrAttemptError {
+    /// Exact stage: `Command::output` for Tesseract returned `ErrorKind::NotFound`.
+    TesseractNotFound {
+        stage: OcrStage,
+        binary: PathBuf,
+        message: String,
+    },
+    /// Other OCR/decode/render failure; stage + message + io kind (no string reclassification).
+    Failed {
+        stage: OcrStage,
+        message: String,
+        io_kind: io::ErrorKind,
+    },
+}
+
+impl std::fmt::Display for OcrAttemptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TesseractNotFound { message, .. } | Self::Failed { message, .. } => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+impl std::error::Error for OcrAttemptError {}
+
+impl OcrAttemptError {
+    pub fn stage(&self) -> OcrStage {
+        match self {
+            Self::TesseractNotFound { stage, .. } | Self::Failed { stage, .. } => *stage,
+        }
+    }
+
+    /// Maps to [`ConvertErrorKind`] for detailed convert surfaces.
+    pub fn kind(&self) -> ConvertErrorKind {
+        match self {
+            Self::TesseractNotFound { .. } => ConvertErrorKind::DependencyMissing,
+            Self::Failed { .. } => ConvertErrorKind::Failed,
+        }
+    }
+
+    pub fn convert_kind(&self) -> ConvertErrorKind {
+        self.kind()
+    }
+
+    pub fn to_detailed(self) -> DetailedConvertError {
+        match self {
+            Self::TesseractNotFound { message, .. } => {
+                DetailedConvertError::dependency_missing(message)
+            }
+            Self::Failed { message, .. } => DetailedConvertError::failed(message),
+        }
+    }
+
+    pub fn into_io(self) -> io::Error {
+        match self {
+            Self::TesseractNotFound {
+                message, binary, ..
+            } => io::Error::new(
+                io::ErrorKind::NotFound,
+                TesseractNotFoundError {
+                    message: format!("{message} ({})", binary.display()),
+                },
+            ),
+            Self::Failed {
+                message, io_kind, ..
+            } => io::Error::new(io_kind, message),
+        }
+    }
+
+    pub(crate) fn failed(stage: OcrStage, error: impl std::fmt::Display) -> Self {
+        Self::Failed {
+            stage,
+            message: error.to_string(),
+            io_kind: io::ErrorKind::Other,
+        }
+    }
+
+    pub(crate) fn from_io(stage: OcrStage, error: io::Error) -> Self {
+        Self::Failed {
+            stage,
+            message: error.to_string(),
+            io_kind: error.kind(),
+        }
+    }
+}
+
 thread_local! {
     static OCR_ENGINE: Cell<OcrEngine> = const { Cell::new(OcrEngine::Tesseract) };
-    static LAST_OCR_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T {
@@ -59,18 +183,6 @@ pub fn with_ocr_engine<T>(engine: OcrEngine, operation: impl FnOnce() -> T) -> T
     })
 }
 
-pub(crate) fn clear_last_ocr_error() {
-    LAST_OCR_ERROR.with(|error| *error.borrow_mut() = None);
-}
-
-pub(crate) fn record_ocr_error(error: impl std::fmt::Display) {
-    LAST_OCR_ERROR.with(|last| *last.borrow_mut() = Some(error.to_string()));
-}
-
-pub(crate) fn take_last_ocr_error() -> Option<String> {
-    LAST_OCR_ERROR.with(|error| error.borrow_mut().take())
-}
-
 fn active_engine() -> OcrEngine {
     OCR_ENGINE.with(Cell::get)
 }
@@ -79,31 +191,115 @@ fn active_engine() -> OcrEngine {
 const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
 /// Cạnh dài tối đa; lớn hơn ⇒ thu xuống để OCR không quá chậm.
 const MAX_LONG_SIDE: u32 = 2400;
+/// Cạnh tối đa khi decode (strict, qua `image::Limits`). Cho phép trang lớn
+/// (A3@~600 DPI ≈ 5k×7k, A1@300 DPI ≈ 10k) nhưng chặn decompression bomb.
+/// Giữ `Limits::default().max_alloc` (512 MiB) của crate `image`.
+const MAX_DECODE_SIDE: u32 = 12_000;
+
+/// Limits decode OCR: giữ max_alloc mặc định của `image`, thêm trần cạnh.
+fn ocr_image_limits() -> Limits {
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_SIDE);
+    limits.max_image_height = Some(MAX_DECODE_SIDE);
+    limits
+}
+
+fn image_error_to_io(error: image::ImageError) -> io::Error {
+    match error {
+        image::ImageError::IoError(inner) => inner,
+        image::ImageError::Limits(_) => {
+            io::Error::new(io::ErrorKind::InvalidData, error.to_string())
+        }
+        other => io::Error::new(io::ErrorKind::Other, other.to_string()),
+    }
+}
+
+fn is_image_limit_error(error: &image::ImageError) -> bool {
+    matches!(error, image::ImageError::Limits(_))
+}
+
+fn ensure_ocr_image_bounds(width: u32, height: u32) -> io::Result<()> {
+    ocr_image_limits()
+        .check_dimensions(width, height)
+        .map_err(image_error_to_io)
+}
+
+/// Mở ảnh với giới hạn dimension/alloc **trước** khi decode đầy đủ buffer.
+fn load_image_for_ocr(path: &Path) -> Result<DynamicImage, image::ImageError> {
+    let mut reader = ImageReader::open(path)?;
+    reader.limits(ocr_image_limits());
+    reader.decode()
+}
+
+/// Ghi PNG OCR vào temp exclusive (`O_EXCL`/random name) — tránh path đoán được.
+fn write_ocr_temp_png(img: &DynamicImage) -> io::Result<NamedTempFile> {
+    let mut tmp = tempfile::Builder::new()
+        .prefix("fileconv_ocr_")
+        .suffix(".png")
+        .tempfile()?;
+    img.write_to(&mut tmp, image::ImageFormat::Png)
+        .map_err(image_error_to_io)?;
+    tmp.flush()?;
+    Ok(tmp)
+}
+
+fn write_ocr_temp_gray_png(img: &GrayImage) -> io::Result<NamedTempFile> {
+    write_ocr_temp_png(&DynamicImage::ImageLuma8(img.clone()))
+}
 
 /// OCR một file ảnh. `langs` ví dụ "vie+eng".
+///
+/// Legacy `io::Result` surface. Prefer [`ocr_image_detailed`] for typed errors.
 pub fn ocr_image(path: &Path, langs: &str) -> io::Result<String> {
-    match image::open(path) {
-        Ok(img) => ocr_dynimage(&img, langs),
+    ocr_image_detailed(path, langs, &OcrRunConfig::default()).map_err(OcrAttemptError::into_io)
+}
+
+/// Additive detailed image OCR with typed attempt errors (no TLS collector).
+pub fn ocr_image_detailed(
+    path: &Path,
+    langs: &str,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    match load_image_for_ocr(path) {
+        Ok(img) => ocr_dynimage_detailed(&img, langs, config),
+        // Vượt giới hạn kích thước/alloc → fail rõ, KHÔNG đẩy bomb sang tesseract.
+        Err(error) if is_image_limit_error(&error) => Err(OcrAttemptError::from_io(
+            OcrStage::Bounds,
+            image_error_to_io(error),
+        )),
         // Không đọc/giải mã được bằng crate image → OCR thẳng file gốc.
-        Err(_) => run_tesseract(path, langs),
+        Err(_) => run_tesseract_detailed(path, langs, config),
     }
 }
 
 /// OCR một ảnh đã có trong bộ nhớ (vd trang PDF render ra) — có tiền xử lý.
 pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
+    ocr_dynimage_detailed(img, langs, &OcrRunConfig::default()).map_err(OcrAttemptError::into_io)
+}
+
+/// Additive detailed in-memory OCR with typed attempt errors.
+pub fn ocr_dynimage_detailed(
+    img: &DynamicImage,
+    langs: &str,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    ensure_ocr_image_bounds(img.width(), img.height())
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Bounds, error))?;
     let pre = preprocess(img);
-    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    let tmp = std::env::temp_dir().join(format!("fileconv_ocr_{}_{seq}.png", std::process::id()));
-    pre.save(&tmp)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-    let tesseract = || run_tesseract_with_columns(&pre.to_luma8(), &tmp, langs);
+    let tmp = write_ocr_temp_png(&pre)
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
+    let tmp_path = tmp.path();
+    let tesseract =
+        || run_tesseract_with_columns_detailed(&pre.to_luma8(), tmp_path, langs, config);
     let text = match active_engine() {
         OcrEngine::Tesseract => tesseract(),
-        OcrEngine::Paddle => run_paddle(&tmp, langs).or_else(|_| tesseract()),
+        OcrEngine::Paddle => run_paddle(tmp_path, langs)
+            .map_err(|error| OcrAttemptError::from_io(OcrStage::Paddle, error))
+            .or_else(|_| tesseract()),
         OcrEngine::Auto => {
             let baseline = tesseract()?;
             if should_retry_layout(&baseline) {
-                match run_paddle(&tmp, langs) {
+                match run_paddle(tmp_path, langs) {
                     Ok(paddle) if ocr_text_score(&paddle) > ocr_text_score(&baseline) => Ok(paddle),
                     _ => Ok(baseline),
                 }
@@ -112,10 +308,8 @@ pub fn ocr_dynimage(img: &DynamicImage, langs: &str) -> io::Result<String> {
             }
         }
     };
-    let _ = std::fs::remove_file(&tmp);
-    if let Err(error) = &text {
-        record_ocr_error(error);
-    }
+    // `tmp` drop → xoá exclusive temp; không dùng path đoán được theo pid/seq.
+    drop(tmp);
     text
 }
 
@@ -237,33 +431,27 @@ fn detect_column_ranges(image: &GrayImage) -> Vec<(u32, u32)> {
     }
 }
 
-fn run_tesseract_with_columns(
+fn run_tesseract_with_columns_detailed(
     image: &GrayImage,
     whole_path: &Path,
     langs: &str,
-) -> io::Result<String> {
-    let whole = run_tesseract(whole_path, langs)?;
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    let whole = run_tesseract_detailed(whole_path, langs, config)?;
     let ranges = detect_column_ranges(image);
     if ranges.len() <= 1 {
         return Ok(whole);
     }
     let mut columns = Vec::new();
-    for (column, (left, right)) in ranges.into_iter().enumerate() {
+    for (left, right) in ranges {
         let cropped = imageops::crop_imm(image, left, 0, right - left, image.height()).to_image();
-        let sequence = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "fileconv_ocr_{}_{}_col{}.png",
-            std::process::id(),
-            sequence,
-            column + 1
-        ));
-        cropped
-            .save(&path)
-            .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
-        let automatic = run_tesseract_psm(&path, langs, 4);
+        let tmp = write_ocr_temp_gray_png(&cropped)
+            .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
+        let path = tmp.path();
+        let automatic = run_tesseract_psm_detailed(path, langs, 4, config);
         let text = match automatic {
             Ok(value) if should_retry_layout(&value) => {
-                let block = run_tesseract_psm(&path, langs, 6).unwrap_or_default();
+                let block = run_tesseract_psm_detailed(path, langs, 6, config).unwrap_or_default();
                 if ocr_text_score(&block) > ocr_text_score(&value) {
                     block
                 } else {
@@ -271,12 +459,9 @@ fn run_tesseract_with_columns(
                 }
             }
             Ok(value) => value,
-            Err(error) => {
-                let _ = std::fs::remove_file(path);
-                return Err(error);
-            }
+            Err(error) => return Err(error),
         };
-        let _ = std::fs::remove_file(path);
+        drop(tmp);
         if !text.trim().is_empty() {
             columns.push(text.trim().to_string());
         }
@@ -400,12 +585,16 @@ fn run_paddle(path: &Path, langs: &str) -> io::Result<String> {
     Ok(parsed.text)
 }
 
-fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
-    let automatic = run_tesseract_psm(path, langs, 3)?;
+fn run_tesseract_detailed(
+    path: &Path,
+    langs: &str,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    let automatic = run_tesseract_psm_detailed(path, langs, 3, config)?;
     if !should_retry_layout(&automatic) {
         return Ok(automatic);
     }
-    let block = run_tesseract_psm(path, langs, 6)?;
+    let block = run_tesseract_psm_detailed(path, langs, 6, config)?;
     if ocr_text_score(&block) > ocr_text_score(&automatic) {
         Ok(block)
     } else {
@@ -413,9 +602,22 @@ fn run_tesseract(path: &Path, langs: &str) -> io::Result<String> {
     }
 }
 
-fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
-    let binary = tesseract_binary();
-    let mut cmd = crate::proc::background_command(&binary);
+fn run_tesseract_psm_detailed(
+    path: &Path,
+    langs: &str,
+    psm: u8,
+    config: &OcrRunConfig,
+) -> Result<String, OcrAttemptError> {
+    let binary = config
+        .tesseract_binary
+        .clone()
+        .unwrap_or_else(tesseract_binary);
+    run_tesseract_psm_with_binary(&binary, path, langs, psm)
+}
+
+/// Xây `Command` tesseract (argv rời, không shell). `binary` inject được cho test.
+fn build_tesseract_psm_command(binary: &Path, path: &Path, langs: &str, psm: u8) -> Command {
+    let mut cmd = crate::proc::background_command(binary);
     apply_ocr_runtime_env(&mut cmd);
     cmd.arg(path)
         .arg("stdout")
@@ -429,22 +631,79 @@ fn run_tesseract_psm(path: &Path, langs: &str, psm: u8) -> io::Result<String> {
     if let Some(dir) = tessdata_dir() {
         cmd.env("TESSDATA_PREFIX", dir);
     }
-    let output = cmd.output()?;
+    cmd
+}
+
+/// Marker set only when `Command::output` for Tesseract returns `NotFound`.
+#[derive(Debug)]
+struct TesseractNotFoundError {
+    message: String,
+}
+
+impl std::fmt::Display for TesseractNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TesseractNotFoundError {}
+
+/// True only when the error was tagged at the Tesseract spawn-`NotFound` stage.
+pub fn error_is_tesseract_not_found(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<TesseractNotFoundError>())
+}
+
+fn run_tesseract_psm_with_binary(
+    binary: &Path,
+    path: &Path,
+    langs: &str,
+    psm: u8,
+) -> Result<String, OcrAttemptError> {
+    let output = match build_tesseract_psm_command(binary, path, langs, psm).output() {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(OcrAttemptError::TesseractNotFound {
+                stage: OcrStage::Tesseract,
+                binary: binary.to_path_buf(),
+                message: format!(
+                    "không tìm thấy binary Tesseract ({}): {error}",
+                    binary.display()
+                ),
+            });
+        }
+        Err(error) => return Err(OcrAttemptError::from_io(OcrStage::Tesseract, error)),
+    };
 
     if !output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("tesseract lỗi: {}", String::from_utf8_lossy(&output.stderr)),
-        ));
+        return Err(OcrAttemptError::Failed {
+            stage: OcrStage::Tesseract,
+            message: format!("tesseract lỗi: {}", String::from_utf8_lossy(&output.stderr)),
+            io_kind: io::ErrorKind::Other,
+        });
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn tesseract_binary() -> PathBuf {
-    std::env::var_os("FILECONV_TESSERACT")
+/// Resolve binary: `FILECONV_TESSERACT` override (nếu non-empty) → `tesseract`.
+fn resolve_tesseract_binary(override_bin: Option<&std::ffi::OsStr>) -> PathBuf {
+    override_bin
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("tesseract"))
+}
+
+fn tesseract_binary() -> PathBuf {
+    resolve_tesseract_binary(std::env::var_os("FILECONV_TESSERACT").as_deref())
+}
+
+/// Binary used for a run config (config override → env → default).
+pub fn effective_tesseract_binary(config: &OcrRunConfig) -> PathBuf {
+    config
+        .tesseract_binary
+        .clone()
+        .unwrap_or_else(tesseract_binary)
 }
 
 fn apply_ocr_runtime_env(command: &mut Command) {
@@ -577,5 +836,234 @@ mod tests {
         assert_eq!(OcrEngine::from_name("paddle"), OcrEngine::Paddle);
         assert_eq!(OcrEngine::from_name("auto"), OcrEngine::Auto);
         assert_eq!(OcrEngine::from_name("unknown"), OcrEngine::Tesseract);
+    }
+
+    #[test]
+    fn decode_limits_keep_image_default_alloc_and_allow_scanned_pages() {
+        let limits = ocr_image_limits();
+        assert_eq!(limits.max_alloc, Limits::default().max_alloc);
+        assert_eq!(limits.max_image_width, Some(MAX_DECODE_SIDE));
+        assert_eq!(limits.max_image_height, Some(MAX_DECODE_SIDE));
+        // A4 @ 300 DPI and A3 @ ~600 DPI must remain acceptable.
+        assert!(ensure_ocr_image_bounds(2480, 3508).is_ok());
+        assert!(ensure_ocr_image_bounds(4961, 7016).is_ok());
+        assert!(ensure_ocr_image_bounds(MAX_DECODE_SIDE, MAX_DECODE_SIDE).is_ok());
+        assert!(ensure_ocr_image_bounds(MAX_DECODE_SIDE + 1, 100).is_err());
+        assert!(ensure_ocr_image_bounds(100, MAX_DECODE_SIDE + 1).is_err());
+    }
+
+    #[test]
+    fn load_image_rejects_oversized_png_header_before_full_decode() {
+        // IHDR-only PNG claiming 20000×20000 — dimension check fails before pixel decode.
+        let bytes = hex_literal_png_ihdr(20_000, 20_000);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bomb.png");
+        std::fs::write(&path, bytes).expect("write bomb png");
+        let err = load_image_for_ocr(&path).expect_err("oversized header must fail");
+        assert!(is_image_limit_error(&err), "got {err:?}");
+    }
+
+    #[test]
+    fn ocr_image_does_not_fallback_tesseract_on_dimension_limit() {
+        // Limit path must fail before any tesseract spawn (no stub required).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("bomb.png");
+        std::fs::write(&path, hex_literal_png_ihdr(20_000, 20_000)).expect("write");
+        let err = ocr_image(&path, "eng").expect_err("limit must surface");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let detailed = ocr_image_detailed(&path, "eng", &OcrRunConfig::default())
+            .expect_err("limit must surface as typed OCR error");
+        assert!(
+            matches!(
+                detailed,
+                OcrAttemptError::Failed {
+                    stage: OcrStage::Bounds,
+                    io_kind: io::ErrorKind::InvalidData,
+                    ..
+                }
+            ),
+            "got {detailed:?}"
+        );
+        assert_eq!(detailed.kind(), ConvertErrorKind::Failed);
+        assert_eq!(detailed.stage(), OcrStage::Bounds);
+        assert!(
+            detailed.to_string().to_ascii_lowercase().contains("limit")
+                || detailed.to_string().contains("dimension"),
+            "limit detail preserved: {detailed}"
+        );
+    }
+
+    #[test]
+    fn ocr_temp_png_uses_exclusive_random_path() {
+        let img = DynamicImage::ImageLuma8(GrayImage::from_pixel(16, 16, image::Luma([128])));
+        let first = write_ocr_temp_png(&img).expect("temp 1");
+        let second = write_ocr_temp_png(&img).expect("temp 2");
+        assert_ne!(first.path(), second.path());
+        let name = first
+            .path()
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        assert!(name.starts_with("fileconv_ocr_"));
+        assert!(name.ends_with(".png"));
+        // Old predictable pattern was `fileconv_ocr_{pid}_{seq}.png`.
+        assert!(
+            !name
+                .trim_start_matches("fileconv_ocr_")
+                .starts_with(&format!("{}_", std::process::id())),
+            "temp name should not be pid-prefixed: {name}"
+        );
+        assert!(first.path().exists());
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(!path.exists(), "NamedTempFile must unlink on drop");
+    }
+
+    #[test]
+    fn resolve_tesseract_binary_honors_override_and_default() {
+        assert_eq!(resolve_tesseract_binary(None).as_os_str(), "tesseract");
+        assert_eq!(
+            resolve_tesseract_binary(Some(std::ffi::OsStr::new(""))).as_os_str(),
+            "tesseract"
+        );
+        assert_eq!(
+            resolve_tesseract_binary(Some(std::ffi::OsStr::new("/opt/custom-tess"))),
+            PathBuf::from("/opt/custom-tess")
+        );
+    }
+
+    /// Injected binary must receive the OCR tempfile as argv[1] and be able to read it.
+    #[cfg(unix)]
+    #[test]
+    fn injected_tesseract_binary_opens_ocr_tempfile() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = install_readable_tesseract_stub(dir.path());
+        let img = DynamicImage::ImageLuma8(GrayImage::from_pixel(32, 32, image::Luma([40])));
+        let tmp = write_ocr_temp_png(&img).expect("ocr temp");
+        let text =
+            run_tesseract_psm_with_binary(&stub, tmp.path(), "eng", 3).expect("injected stub OCR");
+        assert!(
+            text.contains("FILECONV_TESSERACT_STUB_OK"),
+            "unexpected stub output: {text:?}"
+        );
+        assert!(
+            text.contains("READ_OK"),
+            "stub must confirm argv[1] was readable: {text:?}"
+        );
+    }
+
+    /// Production `FILECONV_TESSERACT` override: set only on a child process via
+    /// `Command::env` — never mutate the in-process environment (parallel-safe).
+    #[cfg(unix)]
+    #[test]
+    fn ocr_image_honors_fileconv_tesseract_env_in_child() {
+        const CHILD_FLAG: &str = "FILECONV_OCR_TEST_CHILD";
+        const CHILD_IMAGE: &str = "FILECONV_OCR_TEST_IMAGE";
+
+        if std::env::var_os(CHILD_FLAG).is_some() {
+            let image = std::env::var(CHILD_IMAGE).expect("child image path");
+            let text = ocr_image(Path::new(&image), "eng").expect("child OCR via env override");
+            assert!(
+                text.contains("FILECONV_TESSERACT_STUB_OK") && text.contains("READ_OK"),
+                "child OCR output: {text:?}"
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = install_readable_tesseract_stub(dir.path());
+        let image_path = dir.path().join("sample.png");
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(64, 64, image::Luma([0])))
+            .save(&image_path)
+            .expect("sample png");
+
+        let exe = std::env::current_exe().expect("test executable");
+        let output = Command::new(&exe)
+            .args([
+                "--exact",
+                "image_ocr::tests::ocr_image_honors_fileconv_tesseract_env_in_child",
+            ])
+            .env(CHILD_FLAG, "1")
+            .env(CHILD_IMAGE, &image_path)
+            .env("FILECONV_TESSERACT", &stub)
+            .env("RUST_TEST_THREADS", "1")
+            .output()
+            .expect("spawn child test process");
+        assert!(
+            output.status.success(),
+            "child failed status={:?}\nstdout={}\nstderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn missing_tesseract_binary_is_typed_dependency_missing_with_stage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.png");
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(32, 32, image::Luma([40])))
+            .save(&path)
+            .expect("sample png");
+        let cfg = OcrRunConfig {
+            tesseract_binary: Some(PathBuf::from(
+                "/nonexistent/fileconv-core-t7-missing-tesseract",
+            )),
+        };
+        let err = ocr_image_detailed(&path, "eng", &cfg).expect_err("missing binary");
+        assert!(
+            matches!(
+                err,
+                OcrAttemptError::TesseractNotFound {
+                    stage: OcrStage::Tesseract,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+        assert_eq!(err.stage(), OcrStage::Tesseract);
+        assert_eq!(err.kind(), ConvertErrorKind::DependencyMissing);
+        let detailed = err.clone().to_detailed();
+        assert_eq!(detailed.kind, ConvertErrorKind::DependencyMissing);
+        // Legacy surface stays io::NotFound with marker type.
+        let io_err = err.into_io();
+        assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
+        assert!(error_is_tesseract_not_found(&io_err));
+    }
+
+    /// Minimal PNG with only an IHDR chunk (precomputed CRC for given size).
+    fn hex_literal_png_ihdr(width: u32, height: u32) -> Vec<u8> {
+        // Signature + IHDR length/type/data/CRC for 20000×20000 grayscale.
+        match (width, height) {
+            (20_000, 20_000) => vec![
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+                0x44, 0x52, 0x00, 0x00, 0x4e, 0x20, 0x00, 0x00, 0x4e, 0x20, 0x08, 0x00, 0x00, 0x00,
+                0x00, 0xc6, 0x1b, 0x19, 0xe5,
+            ],
+            _ => panic!("add CRC fixture for {width}x{height}"),
+        }
+    }
+
+    /// Unix stub: open/read argv[1] (image path), then print markers to stdout.
+    #[cfg(unix)]
+    fn install_readable_tesseract_stub(dir: &Path) -> PathBuf {
+        let stub = dir.join("fake-tesseract");
+        // Portable POSIX: require readable argv[1], read 8 bytes (PNG sig), then OK.
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             set -eu\n\
+             image=${1:-}\n\
+             if [ -z \"$image\" ] || [ ! -r \"$image\" ]; then\n\
+               echo \"stub: image not readable: ${image:-<missing>}\" >&2\n\
+               exit 2\n\
+             fi\n\
+             head -c 8 \"$image\" >/dev/null\n\
+             printf '%s\\n' 'READ_OK FILECONV_TESSERACT_STUB_OK'\n",
+        )
+        .expect("write stub");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        stub
     }
 }

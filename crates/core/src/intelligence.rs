@@ -4,20 +4,51 @@
 //! [`crate::Converter::convert_path`] unchanged and provides deterministic
 //! baselines for handoff packs, cited search, quality, PII, tables, schema,
 //! versions and automation. Optional LLM enhancement remains behind `llm`.
+//!
+//! Persisted chunk/table/handoff IDs use [`INTELLIGENCE_ID_SCHEME`] (`sha256-v1`):
+//! length-delimited SHA-256 with per-purpose domains. Visible IDs embed the
+//! scheme; desktop knowledge stores persist the same scheme in SQLite metadata
+//! and HNSW manifests. SQLite/FTS wipe is transactional; HNSW clear/rebuild is
+//! separate and best-effort (ADR 0013) — stale ANN is rejected by scheme, not
+//! by cross-store atomicity. ADR 0006 server index signatures / knowledge chunk
+//! identity remain a separate contract.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
-use crate::chunk::chunk_markdown;
+use crate::chunk::{chunk_markdown, clamp_to_char_boundary, locate_chunk_span};
 use crate::ConvertError;
 
 const DEFAULT_CHUNK_CHARS: usize = 2_000;
+
+/// Durable core-intelligence ID scheme (chunk / table / handoff fingerprints).
+///
+/// `sha256-v1` = SHA-256 over a fixed framing:
+/// length-prefixed (`u64` BE) fields for
+/// `markhand-intelligence-id`, scheme, purpose domain, then payload parts.
+/// Integers use fixed-width `u64` BE bytes. No `std::hash::Hash` serialization.
+///
+/// Migration: not compatible with historical `DefaultHasher` or interim
+/// `sip13-v1` digests. Desktop indexes missing this scheme wipe SQLite/FTS in
+/// one transaction and best-effort clear/rebuild HNSW separately (ADR 0013);
+/// scheme-gated ANN + exact cosine cover clear/rebuild failures. ADR 0006
+/// server identity is out of scope.
+pub const INTELLIGENCE_ID_SCHEME: &str = "sha256-v1";
+
+/// Handoff pack JSON schema that carries [`INTELLIGENCE_ID_SCHEME`].
+pub const HANDOFF_SCHEMA_VERSION: u32 = 2;
+
+const ID_NAMESPACE: &[u8] = b"markhand-intelligence-id";
+const DOMAIN_CHUNK: &str = "chunk";
+const DOMAIN_TABLE: &str = "table";
+const DOMAIN_HANDOFF_DOCUMENT: &str = "handoff-document";
+const DOMAIN_HANDOFF_PACK: &str = "handoff-pack";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,6 +361,8 @@ pub struct HandoffValidation {
 #[serde(rename_all = "camelCase")]
 pub struct HandoffPack {
     pub schema_version: u32,
+    /// Mirrors [`INTELLIGENCE_ID_SCHEME`]; present so consumers can refuse mixed packs.
+    pub id_scheme: String,
     pub pack_id: String,
     pub product_name: String,
     pub product_slug: String,
@@ -358,13 +391,86 @@ fn now_nonce() -> u128 {
         .as_nanos()
 }
 
-fn stable_hash(parts: impl IntoIterator<Item = impl AsRef<str>>) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for part in parts {
-        part.as_ref().hash(&mut hasher);
-        0xff_u8.hash(&mut hasher);
+fn update_id_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
     }
-    format!("{:016x}", hasher.finish())
+    out
+}
+
+/// Length-delimited SHA-256 digest for a purpose domain + raw byte fields.
+pub(crate) fn intelligence_digest(domain: &str, fields: &[&[u8]]) -> String {
+    let mut hasher = Sha256::new();
+    update_id_field(&mut hasher, ID_NAMESPACE);
+    update_id_field(&mut hasher, INTELLIGENCE_ID_SCHEME.as_bytes());
+    update_id_field(&mut hasher, domain.as_bytes());
+    for field in fields {
+        update_id_field(&mut hasher, field);
+    }
+    hex_encode(&hasher.finalize())
+}
+
+fn visible_id(kind: &str, digest: &str) -> String {
+    format!("{kind}-{INTELLIGENCE_ID_SCHEME}-{digest}")
+}
+
+pub(crate) fn corpus_chunk_id(source_rel: &str, heading: &str, start: usize) -> String {
+    let start_be = (start as u64).to_be_bytes();
+    visible_id(
+        "chunk",
+        &intelligence_digest(
+            DOMAIN_CHUNK,
+            &[source_rel.as_bytes(), heading.as_bytes(), &start_be],
+        ),
+    )
+}
+
+pub(crate) fn markdown_table_id(source_rel: &str, index: usize, start: usize) -> String {
+    let index_be = (index as u64).to_be_bytes();
+    let start_be = (start as u64).to_be_bytes();
+    visible_id(
+        "table",
+        &intelligence_digest(DOMAIN_TABLE, &[source_rel.as_bytes(), &index_be, &start_be]),
+    )
+}
+
+pub(crate) fn handoff_document_digest(source_rel: &str, markdown: &str) -> String {
+    intelligence_digest(
+        DOMAIN_HANDOFF_DOCUMENT,
+        &[source_rel.as_bytes(), markdown.as_bytes()],
+    )
+}
+
+fn handoff_mode_tag(mode: &HandoffMode) -> &'static str {
+    match mode {
+        HandoffMode::Deterministic => "deterministic",
+        HandoffMode::LlmAssisted => "llm_assisted",
+    }
+}
+
+pub(crate) fn handoff_pack_digest(
+    product_slug: &str,
+    mode: &HandoffMode,
+    document_digests: &[String],
+) -> String {
+    let mut hasher = Sha256::new();
+    update_id_field(&mut hasher, ID_NAMESPACE);
+    update_id_field(&mut hasher, INTELLIGENCE_ID_SCHEME.as_bytes());
+    update_id_field(&mut hasher, DOMAIN_HANDOFF_PACK.as_bytes());
+    update_id_field(&mut hasher, product_slug.as_bytes());
+    update_id_field(&mut hasher, handoff_mode_tag(mode).as_bytes());
+    for digest in document_digests {
+        update_id_field(&mut hasher, digest.as_bytes());
+    }
+    hex_encode(&hasher.finalize())
 }
 
 fn accent_fold(text: &str) -> String {
@@ -394,8 +500,12 @@ fn tokens(text: &str) -> Vec<String> {
 /// Trang gần nhất trước `offset`, suy từ marker `<!-- Page N -->` hoặc
 /// `<!-- Trang N (OCR) -->` mà converter chèn cho mỗi trang PDF. Dùng chung cho
 /// citation anchor ở cả desktop lẫn index server.
+///
+/// `offset` không cần là char boundary: hàm clamp về boundary gần nhất bên trái
+/// trước khi slice (tránh panic khi caller truyền offset thô giữa glyph UTF-8).
 pub fn page_before(markdown: &str, offset: usize) -> Option<u32> {
-    let prefix = &markdown[..offset.min(markdown.len())];
+    let end = clamp_to_char_boundary(markdown, offset.min(markdown.len()));
+    let prefix = &markdown[..end];
     prefix.lines().rev().find_map(|line| {
         let line = line.trim();
         line.strip_prefix("<!-- Trang ")
@@ -423,31 +533,15 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
             if marker_only {
                 continue;
             }
-            cursor = cursor.min(document.markdown.len());
-            while cursor < document.markdown.len() && !document.markdown.is_char_boundary(cursor) {
-                cursor += 1;
-            }
-            let start = document.markdown[cursor..]
-                .find(&chunk.text)
-                .map(|relative| cursor + relative)
-                .unwrap_or(cursor);
-            let mut end = (start + chunk.text.len()).min(document.markdown.len());
-            while end > start && !document.markdown.is_char_boundary(end) {
-                end -= 1;
-            }
+            // Cùng `locate_chunk_span` với server: giữ chunk khi không khớp; body luôn LF.
+            let (start, end) = locate_chunk_span(&document.markdown, cursor, &chunk.text);
             cursor = end;
             corpus.push(CorpusChunk {
-                id: format!(
-                    "chunk-{}",
-                    stable_hash([
-                        document.source_rel.as_str(),
-                        chunk.heading.as_str(),
-                        &start.to_string(),
-                    ])
-                ),
+                id: corpus_chunk_id(&document.source_rel, &chunk.heading, start),
                 source_rel: document.source_rel.clone(),
                 md_rel: document.md_rel.clone(),
                 heading: chunk.heading,
+                // Canonical LF body — parity với server indexing/identity.
                 text: chunk.text,
                 start,
                 end,
@@ -458,13 +552,27 @@ pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<Corpu
     corpus
 }
 
-fn citation_from_chunk(chunk: &CorpusChunk, index: usize) -> Citation {
+/// Quote citation = đúng byte trên nguồn tại span (CRLF giữ nguyên); fallback body LF.
+fn citation_quote_from_source(chunk: &CorpusChunk, source_markdown: &str) -> String {
+    if chunk.start < chunk.end
+        && chunk.end <= source_markdown.len()
+        && source_markdown.is_char_boundary(chunk.start)
+        && source_markdown.is_char_boundary(chunk.end)
+    {
+        source_markdown[chunk.start..chunk.end].to_string()
+    } else {
+        chunk.text.clone()
+    }
+}
+
+fn citation_from_chunk(chunk: &CorpusChunk, index: usize, source_markdown: &str) -> Citation {
+    let quote = citation_quote_from_source(chunk, source_markdown);
     Citation {
         id: format!("CITE-{:04}", index + 1),
         source_rel: chunk.source_rel.clone(),
         md_rel: chunk.md_rel.clone(),
         heading: chunk.heading.clone(),
-        quote: chunk.text.clone(),
+        quote,
         start: chunk.start,
         end: chunk.end,
         page: chunk.page,
@@ -474,6 +582,14 @@ fn citation_from_chunk(chunk: &CorpusChunk, index: usize) -> Citation {
             1.0
         },
     }
+}
+
+fn markdown_for_source<'a>(documents: &'a [CorpusDocument], source_rel: &str) -> &'a str {
+    documents
+        .iter()
+        .find(|document| document.source_rel == source_rel)
+        .map(|document| document.markdown.as_str())
+        .unwrap_or("")
 }
 
 pub fn search_corpus(documents: &[CorpusDocument], query: &str, limit: usize) -> Vec<SearchHit> {
@@ -524,7 +640,13 @@ pub fn ask_corpus(documents: &[CorpusDocument], question: &str, top_k: usize) ->
     let citations: Vec<Citation> = hits
         .iter()
         .enumerate()
-        .map(|(index, hit)| citation_from_chunk(&hit.chunk, index))
+        .map(|(index, hit)| {
+            citation_from_chunk(
+                &hit.chunk,
+                index,
+                markdown_for_source(documents, &hit.chunk.source_rel),
+            )
+        })
         .collect();
     let answer = if hits.is_empty() {
         "Không tìm thấy nội dung phù hợp trong phạm vi đã chọn.".to_string()
@@ -654,63 +776,1036 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
     }
 }
 
+// PII recall policy (conservative, Vietnamese-document oriented):
+//
+// - Spans are exact candidate bytes (email / phone / number run), never the
+//   surrounding whitespace token, Markdown table pipes, link wrappers, or labels.
+// - Email: dot-atom local (incl. `'` / numeric); reject `price@100.00`, local-dot
+//   abuse, domain-label hyphen abuse; strict delimiter boundaries on both sides.
+// - Phone: maintained active VN mobile prefixes (incl. `055`/`087`) + exact
+//   landline area/length tables; leading `+` must be `+84`; optional `(0)` trunk;
+//   grouped separators; Unicode boundaries; consecutive phones remain independent.
+// - Labels: nearest explicit label cannot cross newline, table or clause boundaries;
+//   Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
+// - Email wrappers: recursively peel balanced Markdown wrappers and redact only the
+//   inner address; unwrapped locals may still contain marker characters.
+// - Bank/CCCD: nearest scoped label or table header only; generic bank prose does
+//   not classify transaction counts. Explicit phone header/label beats bank.
+// Redaction also checks UTF-8 boundaries, stale finding text, and overlapping spans.
+
+/// Intended dot-atom atext (RFC 5322 subset) plus `.` with separate dot rules.
+/// `|` is excluded so Markdown table delimiters stay outside the email span.
+fn is_email_local_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '/'
+                | '='
+                | '?'
+                | '^'
+                | '_'
+                | '`'
+                | '{'
+                | '}'
+                | '~'
+                | '.'
+        )
+}
+
+fn is_email_domain_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-')
+}
+
+fn is_email_boundary_char(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '(' | ')'
+                | '<'
+                | '>'
+                | '['
+                | ']'
+                | ':'
+                | ';'
+                | ','
+                | '.'
+                | '"'
+                | '\''
+                | '|'
+                | '{'
+                | '}'
+                | '/'
+                | '\\'
+                | '!'
+                | '?'
+        )
+}
+
+/// Conservative email shape on an exact `local@domain` candidate.
+fn looks_like_email(token: &str) -> bool {
+    let Some((local, domain)) = token.split_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || local.contains('@')
+        || !domain.contains('.')
+        || token.starts_with('@')
+        || token.ends_with('.')
+    {
+        return false;
+    }
+    if !(local.chars().all(is_email_local_char)
+        && !local.starts_with('.')
+        && !local.ends_with('.')
+        && !local.contains(".."))
+    {
+        return false;
+    }
+    let labels: Vec<&str> = domain.split('.').collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    let tld = *labels.last().unwrap_or(&"");
+    if tld.len() < 2 || !tld.chars().all(|ch| ch.is_ascii_alphabetic()) {
+        return false;
+    }
+    labels.iter().all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+            && label.chars().any(|ch| ch.is_ascii_alphabetic())
+    })
+}
+
+fn is_markdown_wrapper_char(ch: char) -> bool {
+    matches!(ch, '*' | '_' | '~' | '`')
+}
+
+/// Recursively peel balanced Markdown wrappers (`***` / `**` / `~~` / `__` / `*` /
+/// `_` / `` ` `` and nested combinations). Only paired closers; unwrapped locals
+/// keep legitimate marker characters inside the address.
+fn peel_markdown_email_wrappers(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+    // Longest markers first so `***` wins over `**`/`*`.
+    const MARKERS: &[&str] = &["***", "**", "~~", "__", "`", "*", "_"];
+
+    // Include leading/trailing wrapper markers around the expanded candidate so
+    // nested forms like `**_email_**` / `~~**email**~~` peel outside-in.
+    let mut region_start = start;
+    let mut region_end = end;
+    loop {
+        let mut extended = false;
+        for &marker in MARKERS {
+            let m = marker.len();
+            if region_start >= m && text.get(region_start - m..region_start) == Some(marker) {
+                region_start -= m;
+                extended = true;
+                break;
+            }
+        }
+        if !extended {
+            break;
+        }
+    }
+    loop {
+        let mut extended = false;
+        for &marker in MARKERS {
+            let m = marker.len();
+            if region_end + m <= text.len() && text.get(region_end..region_end + m) == Some(marker)
+            {
+                region_end += m;
+                extended = true;
+                break;
+            }
+        }
+        if !extended {
+            break;
+        }
+    }
+
+    // Do not invent wrappers from ordinary prose — region must actually grow or
+    // the expanded candidate itself must begin/end with wrapper markers.
+    let expanded_has_wrapper_edge = text
+        .get(start..end)
+        .map(|s| {
+            s.chars()
+                .next()
+                .map(is_markdown_wrapper_char)
+                .unwrap_or(false)
+                || s.chars()
+                    .next_back()
+                    .map(is_markdown_wrapper_char)
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if region_start == start && region_end == end && !expanded_has_wrapper_edge {
+        return None;
+    }
+
+    let mut s = region_start;
+    let mut e = region_end;
+    let mut peeled = false;
+    loop {
+        let mut progress = false;
+        for &marker in MARKERS {
+            let m = marker.len();
+            if e >= s + 2 * m + 3
+                && text.get(s..s + m) == Some(marker)
+                && text.get(e - m..e) == Some(marker)
+            {
+                let inner = text.get(s + m..e - m)?;
+                // Allow intermediate nested wrappers; final span must be an email.
+                if inner.contains('@') {
+                    s += m;
+                    e -= m;
+                    peeled = true;
+                    progress = true;
+                    break;
+                }
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+
+    if peeled && looks_like_email(text.get(s..e)?) {
+        Some((s, e))
+    } else {
+        None
+    }
+}
+
+fn email_candidate_at(text: &str, at: usize) -> Option<(usize, usize)> {
+    if !text.is_char_boundary(at) || !text[at..].starts_with('@') {
+        return None;
+    }
+    let mut start = at;
+    for (idx, ch) in text[..at].char_indices().rev() {
+        if is_email_local_char(ch) {
+            start = idx;
+        } else {
+            break;
+        }
+    }
+    if start == at {
+        return None;
+    }
+    let mut end = at + 1;
+    for (rel, ch) in text[at + 1..].char_indices() {
+        if is_email_domain_char(ch) {
+            end = at + 1 + rel + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    while end > at + 1 && text[..end].ends_with('.') {
+        end -= 1;
+    }
+    let candidate = text.get(start..end)?;
+    if !looks_like_email(candidate) {
+        return None;
+    }
+    if let Some((inner_start, inner_end)) = peel_markdown_email_wrappers(text, start, end) {
+        return Some((inner_start, inner_end));
+    }
+    // Strict both-side delimiters — reject partial carve-outs.
+    let left_ok = start == 0
+        || text[..start]
+            .chars()
+            .last()
+            .map(is_email_boundary_char)
+            .unwrap_or(false);
+    let right_ok = end >= text.len()
+        || text[end..]
+            .chars()
+            .next()
+            .map(is_email_boundary_char)
+            .unwrap_or(false);
+    if left_ok && right_ok {
+        Some((start, end))
+    } else {
+        None
+    }
+}
+
+fn scan_emails(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if text.as_bytes()[i] == b'@' {
+            if let Some((start, end)) = email_candidate_at(text, i) {
+                if out
+                    .last()
+                    .map(|&(_, prev_end)| start >= prev_end)
+                    .unwrap_or(true)
+                {
+                    out.push((start, end));
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+        while i < text.len() && !text.is_char_boundary(i) {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Maintained active VN mobile prefixes (national form with leading `0`, length 10).
+/// Includes MVNO `055` (Wintel) and `087` (iTel); omits obsolete `095`.
+const VN_MOBILE_PREFIXES: &[&str] = &[
+    "032", "033", "034", "035", "036", "037", "038", "039", "052", "055", "056", "058", "059",
+    "070", "076", "077", "078", "079", "081", "082", "083", "084", "085", "086", "087", "088",
+    "089", "090", "091", "092", "093", "094", "096", "097", "098", "099",
+];
+
+/// 2-digit geographic area codes (after trunk `0`): Hanoi / HCMC → subscriber len 8.
+const VN_LANDLINE_AREA_2: &[&str] = &["24", "28"];
+
+/// 3-digit geographic area codes (after trunk `0`) → subscriber len 7. `030` absent.
+const VN_LANDLINE_AREA_3: &[&str] = &[
+    "203", "204", "205", "206", "207", "208", "209", "210", "211", "212", "213", "214", "215",
+    "216", "218", "219", "220", "221", "222", "225", "226", "227", "228", "229", "232", "233",
+    "234", "235", "236", "237", "238", "239", "251", "252", "254", "255", "256", "257", "258",
+    "259", "260", "261", "262", "263", "269", "270", "271", "272", "273", "274", "275", "276",
+    "277", "290", "291", "292", "293", "294", "296", "297", "299",
+];
+
+fn normalize_vn_phone_digits(digits: &str) -> Option<String> {
+    if !digits.chars().all(|ch| ch.is_ascii_digit()) || digits.is_empty() {
+        return None;
+    }
+    if digits.starts_with("840") && digits.len() >= 12 {
+        Some(format!("0{}", &digits[3..]))
+    } else if digits.starts_with("84") && digits.len() >= 11 {
+        Some(format!("0{}", &digits[2..]))
+    } else if digits.starts_with('0') {
+        Some(digits.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_vn_mobile_national0(national0: &str) -> bool {
+    national0.len() == 10
+        && VN_MOBILE_PREFIXES
+            .iter()
+            .any(|prefix| national0.starts_with(prefix))
+}
+
+fn is_vn_landline_national0(national0: &str) -> bool {
+    if !national0.starts_with('0') || national0.starts_with("030") || national0.len() != 11 {
+        return false;
+    }
+    let rest = &national0[1..];
+    for area in VN_LANDLINE_AREA_2 {
+        if let Some(subscriber) = rest.strip_prefix(area) {
+            return subscriber.len() == 8 && subscriber.chars().all(|ch| ch.is_ascii_digit());
+        }
+    }
+    for area in VN_LANDLINE_AREA_3 {
+        if let Some(subscriber) = rest.strip_prefix(area) {
+            return subscriber.len() == 7 && subscriber.chars().all(|ch| ch.is_ascii_digit());
+        }
+    }
+    false
+}
+
+fn looks_like_vn_phone_digits(digits: &str) -> bool {
+    let Some(national0) = normalize_vn_phone_digits(digits) else {
+        return false;
+    };
+    is_vn_mobile_national0(&national0) || is_vn_landline_national0(&national0)
+}
+
+fn is_phone_separator(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '-' | '.' | '(' | ')')
+}
+
+fn first_valid_phone_prefix_len(digits: &str, require_plus84: bool) -> Option<usize> {
+    if require_plus84 && !digits.starts_with("84") {
+        return None;
+    }
+    // Shortest-first so consecutive phones split (`0912… 0987…`).
+    (10..=digits.len().min(13)).find(|&len| looks_like_vn_phone_digits(&digits[..len]))
+}
+
+/// True when text after `ws_idx` (at whitespace) begins an independent valid VN phone.
+fn lookahead_begins_independent_vn_phone(chars: &[(usize, char)], ws_idx: usize) -> bool {
+    let mut idx = ws_idx;
+    while idx < chars.len() && matches!(chars[idx].1, ' ' | '\t') {
+        idx += 1;
+    }
+    if idx >= chars.len() || !chars[idx].1.is_ascii_digit() {
+        return false;
+    }
+    let mut digits = String::new();
+    while idx < chars.len() {
+        let ch = chars[idx].1;
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            idx += 1;
+            if digits.len() >= 13 {
+                break;
+            }
+        } else if matches!(ch, '-' | '.' | '(' | ')') {
+            idx += 1;
+        } else if matches!(ch, ' ' | '\t') {
+            if digits.len() >= 9 {
+                break;
+            }
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    first_valid_phone_prefix_len(&digits, false).is_some()
+}
+
+/// Skip one plausible phone-shaped number group after a failed leading `+`.
+/// At whitespace, stop when collected digits cannot form `+84` **or** the
+/// lookahead begins an independent valid VN phone — so
+/// `+12345678 0987654321` skips only the invalid group.
+fn skip_one_phone_shaped_group(chars: &[(usize, char)], start_idx: usize) -> usize {
+    let mut idx = start_idx;
+    if chars.get(idx).map(|(_, ch)| *ch) == Some('+') {
+        idx += 1;
+    }
+    let mut digits = String::new();
+    let mut last_digit_end = idx;
+    while idx < chars.len() {
+        let ch = chars[idx].1;
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            idx += 1;
+            last_digit_end = idx;
+            if digits.len() >= 13 {
+                break;
+            }
+        } else if matches!(ch, '-' | '.' | '(' | ')') {
+            idx += 1;
+        } else if matches!(ch, ' ' | '\t') {
+            let can_form_plus84 = digits.starts_with("84");
+            if !can_form_plus84 || lookahead_begins_independent_vn_phone(chars, idx) {
+                break;
+            }
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    if digits.is_empty() {
+        return (start_idx + 1).min(chars.len());
+    }
+    last_digit_end
+}
+
+/// Consume one phone candidate starting at `chars[start_idx]`.
+/// Preserves leading `+` and requires `+84` when `+` is present.
+fn consume_phone_candidate(chars: &[(usize, char)], start_idx: usize) -> Option<(usize, String)> {
+    let mut idx = start_idx;
+    let require_plus84 = chars.get(idx).map(|(_, ch)| *ch) == Some('+');
+    if require_plus84 {
+        idx += 1;
+    }
+    let mut digits = String::new();
+    let mut digit_end_idx = Vec::new();
+    while idx < chars.len() {
+        let ch = chars[idx].1;
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+            digit_end_idx.push(idx + 1);
+            idx += 1;
+            if digits.len() > 13 {
+                break;
+            }
+        } else if is_phone_separator(ch) {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    let len = first_valid_phone_prefix_len(&digits, require_plus84)?;
+    let end_idx = digit_end_idx[len - 1];
+    // Unicode alphanumeric boundaries on both sides of the full span.
+    if start_idx > 0 && chars[start_idx - 1].1.is_alphanumeric() {
+        return None;
+    }
+    if chars
+        .get(end_idx)
+        .map(|(_, ch)| ch.is_alphanumeric())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    Some((end_idx, digits[..len].to_string()))
+}
+
+fn scan_phone_spans(text: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i].1;
+        let left_ok = i == 0 || !chars[i - 1].1.is_alphanumeric();
+        let can_start = left_ok && (ch == '+' || ch == '(' || ch.is_ascii_digit());
+        if can_start {
+            if let Some((end_idx, _)) = consume_phone_candidate(&chars, i) {
+                let start = chars[i].0;
+                let end = chars[end_idx - 1].0 + chars[end_idx - 1].1.len_utf8();
+                out.push((start, end));
+                i = end_idx;
+                continue;
+            }
+            // Failed `+…`: skip one plausible group only (no retry inside), then
+            // continue so a later whitespace-separated valid phone can match.
+            if ch == '+' {
+                i = skip_one_phone_shaped_group(&chars, i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Digit group with internal spaces/dashes (bank / CCCD).
+fn scan_digit_group_spans(text: &str) -> Vec<(usize, usize, String)> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !chars[i].1.is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        if i > 0 && chars[i - 1].1.is_alphanumeric() {
+            i += 1;
+            continue;
+        }
+        let start_idx = i;
+        let mut digits = String::new();
+        let mut end_idx = i;
+        while i < chars.len() {
+            let ch = chars[i].1;
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+                end_idx = i + 1;
+                i += 1;
+            } else if matches!(ch, ' ' | '\t' | '-')
+                && i + 1 < chars.len()
+                && chars[i + 1].1.is_ascii_digit()
+            {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        if (8..=19).contains(&digits.len())
+            && !chars
+                .get(end_idx)
+                .map(|(_, ch)| ch.is_alphanumeric())
+                .unwrap_or(false)
+        {
+            let start = chars[start_idx].0;
+            let end = chars[end_idx - 1].0 + chars[end_idx - 1].1.len_utf8();
+            out.push((start, end, digits));
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ExplicitLabel {
+    Phone,
+    Bank,
+    NationalId,
+}
+
+fn label_char_boundary(folded: &str, start: usize, end: usize) -> bool {
+    let before_ok = start == 0
+        || !folded
+            .get(..start)
+            .and_then(|s| s.chars().last())
+            .map(|ch| ch.is_alphanumeric())
+            .unwrap_or(false);
+    let after_ok = end >= folded.len()
+        || !folded
+            .get(end..)
+            .and_then(|s| s.chars().next())
+            .map(|ch| ch.is_alphanumeric())
+            .unwrap_or(false);
+    before_ok && after_ok
+}
+
+/// Accent-fold one source char to lowercase ASCII-ish letters (may be empty for marks).
+fn fold_label_char(ch: char) -> String {
+    ch.nfd()
+        .filter(|c| !('\u{0300}'..='\u{036f}').contains(c))
+        .map(|c| match c {
+            'đ' => 'd',
+            'Đ' => 'D',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Folded label/competing-key text plus byte map back into the source slice.
+///
+/// Matching uses accent-fold + Unicode whitespace collapsed to single ASCII
+/// spaces (NBSP, runs, …). `orig_at[i]` is the source byte offset that produced
+/// folded byte `i`; `orig_at[text.len()]` is `source.len()`. PII value spans
+/// still come from scanning the original markdown — this map only reconnects
+/// phrase-match ends to the original between-text for `field_value_link`.
+struct LabelPhraseFold {
+    text: String,
+    orig_at: Vec<usize>,
+}
+
+fn fold_label_phrase_mapped(source: &str) -> LabelPhraseFold {
+    let mut text = String::with_capacity(source.len());
+    let mut orig_at = Vec::with_capacity(source.len() + 1);
+    let mut last_was_space = false;
+    for (src_idx, ch) in source.char_indices() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                orig_at.push(src_idx);
+                text.push(' ');
+                last_was_space = true;
+            }
+            continue;
+        }
+        last_was_space = false;
+        for fc in fold_label_char(ch).chars() {
+            let byte_start = text.len();
+            text.push(fc);
+            for _ in byte_start..text.len() {
+                orig_at.push(src_idx);
+            }
+        }
+    }
+    orig_at.push(source.len());
+    debug_assert_eq!(orig_at.len(), text.len() + 1);
+    LabelPhraseFold { text, orig_at }
+}
+
+/// Accent-fold and collapse Unicode whitespace runs to a single ASCII space.
+fn fold_label_phrase(text: &str) -> String {
+    fold_label_phrase_mapped(text).text
+}
+
+/// Longer compound phrases first so `tai khoan ngan hang` wins over `tai khoan`.
+const LABEL_PATTERNS: &[(&str, ExplicitLabel)] = &[
+    ("can cuoc cong dan so", ExplicitLabel::NationalId),
+    ("so tai khoan ngan hang", ExplicitLabel::Bank),
+    ("tai khoan ngan hang", ExplicitLabel::Bank),
+    ("so tk ngan hang", ExplicitLabel::Bank),
+    ("stk ngan hang", ExplicitLabel::Bank),
+    ("so dien thoai", ExplicitLabel::Phone),
+    ("can cuoc cong dan", ExplicitLabel::NationalId),
+    ("so tai khoan", ExplicitLabel::Bank),
+    ("dien thoai", ExplicitLabel::Phone),
+    ("cccd so", ExplicitLabel::NationalId),
+    ("cmnd so", ExplicitLabel::NationalId),
+    ("can cuoc so", ExplicitLabel::NationalId),
+    ("can cuoc", ExplicitLabel::NationalId),
+    ("tai khoan", ExplicitLabel::Bank),
+    ("hotline", ExplicitLabel::Phone),
+    ("mobile", ExplicitLabel::Phone),
+    ("phone", ExplicitLabel::Phone),
+    ("so tk", ExplicitLabel::Bank),
+    ("cccd", ExplicitLabel::NationalId),
+    ("cmnd", ExplicitLabel::NationalId),
+    ("sdt", ExplicitLabel::Phone),
+    ("tel", ExplicitLabel::Phone),
+    ("stk", ExplicitLabel::Bank),
+];
+
+/// Competing field keys (folded) — not bare conjunctions like `và` (joint owners).
+const COMPETING_FIELD_KEYS: &[&str] = &[
+    "ma giao dich",
+    "ma gd",
+    "so tham chieu",
+    "ma tham chieu",
+    "so dien thoai",
+    "dien thoai",
+    "hotline",
+    "mobile",
+    "phone",
+    "sdt",
+    "tel",
+    "cccd",
+    "cmnd",
+    "stk",
+    "so tk",
+];
+
+/// Match `needle` in `haystack` with Unicode alphanumeric token borders so
+/// `(mã giao dịch)`, `/mã giao dịch`, and `—mã giao dịch` all count.
+fn contains_token_phrase(haystack: &str, needle: &str) -> bool {
+    let mut base = 0usize;
+    while base < haystack.len() {
+        let Some(rel) = haystack[base..].find(needle) else {
+            break;
+        };
+        let start = base + rel;
+        let end = start + needle.len();
+        let before_ok = start == 0
+            || !haystack[..start]
+                .chars()
+                .last()
+                .map(|ch| ch.is_alphanumeric())
+                .unwrap_or(false);
+        let after_ok = end >= haystack.len()
+            || !haystack[end..]
+                .chars()
+                .next()
+                .map(|ch| ch.is_alphanumeric())
+                .unwrap_or(false);
+        if before_ok && after_ok {
+            return true;
+        }
+        base = start + 1;
+        while base < haystack.len() && !haystack.is_char_boundary(base) {
+            base += 1;
+        }
+    }
+    false
+}
+
+/// Competing field keys in the qualifier before `:/=` break the field link
+/// (e.g. closed-account prose + `mã giao dịch`). Bare `và` alone does not.
+fn between_has_soft_clause_break(before_sep: &str) -> bool {
+    let normalized = fold_label_phrase(before_sep);
+    COMPETING_FIELD_KEYS
+        .iter()
+        .any(|key| contains_token_phrase(&normalized, key))
+}
+
+fn classify_label_text(text: &str) -> Option<ExplicitLabel> {
+    let folded = fold_label_phrase(text);
+    let mut best: Option<(usize, usize, ExplicitLabel)> = None;
+    for &(pat, kind) in LABEL_PATTERNS {
+        let mut base = 0usize;
+        while base < folded.len() {
+            let Some(rel) = folded[base..].find(pat) else {
+                break;
+            };
+            let start = base + rel;
+            let end = start + pat.len();
+            if label_char_boundary(&folded, start, end) {
+                let take = match best {
+                    None => true,
+                    Some((prev_start, prev_end, _)) => {
+                        end > prev_end || (end == prev_end && start >= prev_start)
+                    }
+                };
+                if take {
+                    best = Some((start, end, kind));
+                }
+            }
+            base = start + 1;
+            while base < folded.len() && !folded.is_char_boundary(base) {
+                base += 1;
+            }
+        }
+    }
+    best.map(|(_, _, kind)| kind)
+}
+
+/// Field-value link between a label and the candidate at the end of `source_between`.
+/// - No-colon compound labels: tight whitespace only (`Tài khoản ngân hàng 123…`).
+/// - Terminal `:/=/：` strongly binds and allows a longer qualifier before the sep,
+///   unless a competing field key breaks the clause.
+///
+/// `source_between` is a slice of the **original** markdown (via phrase-fold map).
+fn field_value_link(between: &str) -> bool {
+    const MAX_BETWEEN_CHARS: usize = 64;
+    if between.chars().count() > MAX_BETWEEN_CHARS {
+        return false;
+    }
+    if between.chars().any(is_label_scope_boundary) {
+        return false;
+    }
+    let trimmed = between.trim();
+    if trimmed.is_empty() {
+        // Tight `Label 123…` / compound no-colon — only a few spaces.
+        return between.chars().count() <= 3;
+    }
+    let sep = trimmed.rfind([':', '=', '：']);
+    let Some(sep_at) = sep else {
+        // Without a terminal binder, letters between label and value are prose.
+        return false;
+    };
+    let sep_ch = trimmed[sep_at..].chars().next().unwrap_or(':');
+    let after = trimmed[sep_at + sep_ch.len_utf8()..].trim();
+    if !after.is_empty() {
+        return false;
+    }
+    let before = trimmed[..sep_at].trim();
+    // Strong `:/=` bind: allow a longer qualifier, still no nested clause punctuation
+    // or competing field keys (`mã giao dịch`, `SĐT`, `STK`, …). Bare `và` is fine.
+    before.chars().count() <= 48
+        && !before
+            .chars()
+            .any(|ch| is_label_scope_boundary(ch) || matches!(ch, ',' | '，' | '、'))
+        && !between_has_soft_clause_break(before)
+}
+
+/// Nearest explicit label in scoped **original** prefix that field-links to the value.
+fn nearest_explicit_label(source_prefix: &str) -> Option<ExplicitLabel> {
+    let fold = fold_label_phrase_mapped(source_prefix);
+    let mut best: Option<(usize, ExplicitLabel)> = None;
+    for &(pat, kind) in LABEL_PATTERNS {
+        let mut base = 0usize;
+        while base < fold.text.len() {
+            let Some(rel) = fold.text[base..].find(pat) else {
+                break;
+            };
+            let start = base + rel;
+            let end = start + pat.len();
+            let src_between_at = fold.orig_at[end];
+            if label_char_boundary(&fold.text, start, end)
+                && field_value_link(&source_prefix[src_between_at..])
+            {
+                let take = best.map(|(prev_end, _)| end >= prev_end).unwrap_or(true);
+                if take {
+                    best = Some((end, kind));
+                }
+            }
+            base = start + 1;
+            while base < fold.text.len() && !fold.text.is_char_boundary(base) {
+                base += 1;
+            }
+        }
+    }
+    best.map(|(_, kind)| kind)
+}
+
+fn spans_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+fn is_label_scope_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        // Vertical line/paragraph breaks (CR/LF + NEL/LS/PS/VT/FF).
+        '\n'
+            | '\r'
+            | '\u{000B}' // VT
+            | '\u{000C}' // FF
+            | '\u{0085}' // NEL
+            | '\u{2028}' // LINE SEPARATOR
+            | '\u{2029}' // PARAGRAPH SEPARATOR
+            | '|'
+            | '.'
+            | '!'
+            | '?'
+            | ';'
+            | ','
+            | '，'
+            | '、'
+            | '…'
+            | '。'
+            | '！'
+            | '？'
+    )
+}
+
+/// Prefix for label association: cannot cross newline, table pipe, or clause boundary.
+fn label_scope_before(markdown: &str, start: usize) -> &str {
+    let prefix_end = start.min(markdown.len());
+    let prefix = markdown.get(..prefix_end).unwrap_or("");
+    let mut cut = 0usize;
+    for (idx, ch) in prefix.char_indices() {
+        if is_label_scope_boundary(ch) {
+            cut = idx + ch.len_utf8();
+        }
+    }
+    &prefix[cut..]
+}
+
+/// Map a byte offset inside a Markdown table body cell to its column-header label.
+fn table_column_label_at(markdown: &str, offset: usize) -> Option<ExplicitLabel> {
+    let doc = CorpusDocument {
+        source_rel: "_pii_table_".into(),
+        md_rel: "_pii_table_.md".into(),
+        format: "markdown".into(),
+        markdown: markdown.to_string(),
+    };
+    for table in parse_markdown_tables(&doc) {
+        if offset < table.start || offset >= table.end || table.rows.len() < 2 {
+            continue;
+        }
+        let headers = &table.rows[0];
+        let region = &markdown[table.start..table.end];
+        let mut line_start = table.start;
+        let mut row_idx = 0usize;
+        for line in region.split_inclusive('\n') {
+            let line_end = line_start + line.len();
+            if offset >= line_start && offset < line_end {
+                // rows[0]=header, rows[1]=separator; data starts at row_idx>=2 in line walk
+                // when separator consumed as line 1.
+                if row_idx < 2 {
+                    return None;
+                }
+                let content = line.trim_end_matches('\n').trim_end_matches('\r');
+                let line_body_start = line_start + line.len() - line.trim_start().len();
+                if !content.trim_start().starts_with('|') {
+                    return None;
+                }
+                let mut i = line_body_start;
+                if markdown.as_bytes().get(i) == Some(&b'|') {
+                    i += 1;
+                }
+                let line_content_end = line_start + content.len();
+                let mut scan_end = line_content_end;
+                if content.trim_start().ends_with('|') {
+                    scan_end = line_content_end - 1;
+                }
+                let mut col = 0usize;
+                let mut cell_start = i;
+                let mut escaped = false;
+                let bytes = markdown.as_bytes();
+                while i < scan_end {
+                    let ch = bytes[i];
+                    if escaped {
+                        escaped = false;
+                        i += 1;
+                        continue;
+                    }
+                    if ch == b'\\' {
+                        escaped = true;
+                        i += 1;
+                        continue;
+                    }
+                    if ch == b'|' {
+                        if offset >= cell_start && offset < i {
+                            return classify_label_text(headers.get(col)?.as_str());
+                        }
+                        col += 1;
+                        cell_start = i + 1;
+                    }
+                    i += 1;
+                }
+                if offset >= cell_start && offset < line_end {
+                    return classify_label_text(headers.get(col)?.as_str());
+                }
+                return None;
+            }
+            line_start = line_end;
+            row_idx += 1;
+        }
+    }
+    None
+}
+
+fn resolve_label(markdown: &str, start: usize) -> Option<ExplicitLabel> {
+    table_column_label_at(markdown, start)
+        .or_else(|| nearest_explicit_label(label_scope_before(markdown, start)))
+}
+
+fn detect_pii_in_markdown(markdown: &str, source_rel: &str) -> Vec<PiiFinding> {
+    let emails = scan_emails(markdown);
+    let mut occupied: Vec<(usize, usize)> = emails.clone();
+    let mut findings = Vec::new();
+
+    for (start, end) in emails {
+        findings.push(PiiFinding {
+            kind: PiiKind::Email,
+            text: markdown[start..end].to_string(),
+            source_rel: source_rel.into(),
+            start,
+            end,
+            confidence: 0.98,
+        });
+    }
+
+    for (start, end) in scan_phone_spans(markdown) {
+        if occupied
+            .iter()
+            .any(|&span| spans_overlap(span, (start, end)))
+        {
+            continue;
+        }
+        let label = resolve_label(markdown, start);
+        let (kind, confidence) = if label == Some(ExplicitLabel::Bank) {
+            (PiiKind::BankAccount, 0.8)
+        } else {
+            let confidence = if label == Some(ExplicitLabel::Phone) {
+                0.92
+            } else {
+                0.9
+            };
+            (PiiKind::Phone, confidence)
+        };
+        findings.push(PiiFinding {
+            kind,
+            text: markdown[start..end].to_string(),
+            source_rel: source_rel.into(),
+            start,
+            end,
+            confidence,
+        });
+        occupied.push((start, end));
+    }
+
+    for (start, end, digits) in scan_digit_group_spans(markdown) {
+        if occupied
+            .iter()
+            .any(|&span| spans_overlap(span, (start, end)))
+        {
+            continue;
+        }
+        let label = resolve_label(markdown, start);
+        let kind = match label {
+            Some(ExplicitLabel::Bank) if (8..=19).contains(&digits.len()) => {
+                Some((PiiKind::BankAccount, 0.8))
+            }
+            Some(ExplicitLabel::NationalId) if digits.len() == 9 || digits.len() == 12 => {
+                Some((PiiKind::NationalId, 0.95))
+            }
+            _ => None,
+        };
+        if let Some((kind, confidence)) = kind {
+            findings.push(PiiFinding {
+                kind,
+                text: markdown[start..end].to_string(),
+                source_rel: source_rel.into(),
+                start,
+                end,
+                confidence,
+            });
+            occupied.push((start, end));
+        }
+    }
+
+    findings.sort_by(|a, b| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+    findings
+}
+
 pub fn detect_pii(documents: &[CorpusDocument]) -> PiiReport {
     let mut findings = Vec::new();
     for document in documents {
-        let mut offset = 0usize;
-        for line in document.markdown.split_inclusive('\n') {
-            let lower = accent_fold(line);
-            let mut search_from = 0usize;
-            for token in line.split_whitespace() {
-                let token_start = line[search_from..]
-                    .find(token)
-                    .map(|relative| search_from + relative)
-                    .unwrap_or(search_from);
-                search_from = (token_start + token.len()).min(line.len());
-                let clean = token.trim_matches(|ch: char| {
-                    matches!(ch, ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']')
-                });
-                let digits: String = clean.chars().filter(|ch| ch.is_ascii_digit()).collect();
-                let kind = if clean.contains('@')
-                    && clean.contains('.')
-                    && !clean.starts_with('@')
-                    && !clean.ends_with('.')
-                {
-                    Some((PiiKind::Email, 0.98))
-                } else if (digits.len() == 10 && digits.starts_with('0'))
-                    || (digits.len() == 11 && digits.starts_with("84"))
-                {
-                    Some((PiiKind::Phone, 0.9))
-                } else if (digits.len() == 9 || digits.len() == 12)
-                    && (lower.contains("cccd")
-                        || lower.contains("cmnd")
-                        || lower.contains("can cuoc"))
-                {
-                    Some((PiiKind::NationalId, 0.95))
-                } else if (8..=19).contains(&digits.len())
-                    && (lower.contains("tai khoan") || lower.contains("ngan hang"))
-                {
-                    Some((PiiKind::BankAccount, 0.75))
-                } else {
-                    None
-                };
-                if let Some((kind, confidence)) = kind {
-                    if let Some(clean_start) = token.find(clean) {
-                        let start = offset + token_start + clean_start;
-                        let end = start + clean.len();
-                        findings.push(PiiFinding {
-                            kind,
-                            text: clean.to_string(),
-                            source_rel: document.source_rel.clone(),
-                            start,
-                            end,
-                            confidence,
-                        });
-                    }
-                }
-            }
-            offset += line.len();
-        }
+        findings.extend(detect_pii_in_markdown(
+            &document.markdown,
+            &document.source_rel,
+        ));
     }
     let mut counts = BTreeMap::new();
     for finding in &findings {
@@ -723,11 +1818,30 @@ pub fn redact_pii(markdown: &str, findings: &[PiiFinding]) -> String {
     let mut output = markdown.to_string();
     let mut spans: Vec<(usize, usize, &PiiKind)> = findings
         .iter()
-        .filter(|finding| finding.end <= output.len() && finding.start < finding.end)
+        .filter(|finding| {
+            finding.end <= output.len()
+                && finding.start < finding.end
+                && output.is_char_boundary(finding.start)
+                && output.is_char_boundary(finding.end)
+                // Stale findings (edited markdown / shifted spans) must not punch holes.
+                && output.get(finding.start..finding.end) == Some(finding.text.as_str())
+        })
         .map(|finding| (finding.start, finding.end, &finding.kind))
         .collect();
-    spans.sort_by_key(|span| std::cmp::Reverse(span.0));
-    for (start, end, kind) in spans {
+    // Coalesce overlapping / crossing / nested ranges — tránh lộ suffix nhạy cảm.
+    spans.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+    let mut merged: Vec<(usize, usize, &PiiKind)> = Vec::new();
+    for span in spans {
+        if let Some(last) = merged.last_mut() {
+            if span.0 < last.1 {
+                last.1 = last.1.max(span.1);
+                continue;
+            }
+        }
+        merged.push(span);
+    }
+    // Áp từ phải sang trái để offset bên trái không lệch.
+    for (start, end, kind) in merged.into_iter().rev() {
         output.replace_range(start..end, &format!("[REDACTED_{kind:?}]"));
     }
     output
@@ -818,14 +1932,7 @@ pub fn parse_markdown_tables(document: &CorpusDocument) -> Vec<MarkdownTable> {
             document.markdown.len()
         };
         tables.push(MarkdownTable {
-            id: format!(
-                "table-{}",
-                stable_hash([
-                    document.source_rel.as_str(),
-                    &tables.len().to_string(),
-                    &start.to_string(),
-                ])
-            ),
+            id: markdown_table_id(&document.source_rel, tables.len(), start),
             source_rel: document.source_rel.clone(),
             index: tables.len(),
             start,
@@ -873,8 +1980,30 @@ pub fn update_markdown_table(
     table: &MarkdownTable,
     rows: &[Vec<String>],
 ) -> Result<String, ConvertError> {
-    if table.end > markdown.len() || table.start > table.end {
+    if table.end > markdown.len()
+        || table.start >= table.end
+        || !markdown.is_char_boundary(table.start)
+        || !markdown.is_char_boundary(table.end)
+    {
         return Err(ConvertError::Failed("span bảng không hợp lệ".into()));
+    }
+    // Reparse current markdown and require an exact table match (id/start/end/rows).
+    let doc = CorpusDocument {
+        source_rel: table.source_rel.clone(),
+        md_rel: table.source_rel.clone(),
+        format: "markdown".into(),
+        markdown: markdown.to_string(),
+    };
+    let matched = parse_markdown_tables(&doc).into_iter().any(|current| {
+        current.id == table.id
+            && current.start == table.start
+            && current.end == table.end
+            && current.rows == table.rows
+    });
+    if !matched {
+        return Err(ConvertError::Failed(
+            "conflict: bảng đã thay đổi hoặc span không khớp".into(),
+        ));
     }
     let rendered = render_markdown_table(rows);
     let mut updated = markdown.to_string();
@@ -1640,31 +2769,30 @@ pub fn generate_handoff_pack(
     let citations: Vec<Citation> = chunks
         .iter()
         .enumerate()
-        .map(|(index, chunk)| citation_from_chunk(chunk, index))
+        .map(|(index, chunk)| {
+            citation_from_chunk(
+                chunk,
+                index,
+                markdown_for_source(documents, &chunk.source_rel),
+            )
+        })
         .collect();
     let (items, traceability) = extract_handoff_items(&chunks, &citations);
     let validation = validate_handoff(&items, &citations, &traceability, options.strict_citations);
     let artifacts = render_handoff_artifacts(options, &items, &traceability, &citations);
     let created_at = now_epoch();
     let nonce = now_nonce();
-    let fingerprint: Vec<String> = documents
+    let document_digests: Vec<String> = documents
         .iter()
-        .map(|document| {
-            format!(
-                "{}:{}",
-                document.source_rel,
-                stable_hash([document.markdown.as_str()])
-            )
-        })
-        .chain(std::iter::once(format!("{:?}", options.mode)))
+        .map(|document| handoff_document_digest(&document.source_rel, &document.markdown))
         .collect();
+    let pack_digest = handoff_pack_digest(&options.product_slug, &options.mode, &document_digests);
     HandoffPack {
-        schema_version: 1,
+        schema_version: HANDOFF_SCHEMA_VERSION,
+        id_scheme: INTELLIGENCE_ID_SCHEME.into(),
         pack_id: format!(
-            "handoff-{}-{}-{}",
+            "handoff-{INTELLIGENCE_ID_SCHEME}-{}-{nonce}-{pack_digest}",
             options.product_slug,
-            nonce,
-            stable_hash(fingerprint.iter())
         ),
         product_name: options.product_name.clone(),
         product_slug: options.product_slug.clone(),
@@ -1773,6 +2901,7 @@ pub fn export_handoff_zip(pack: &HandoffPack, output: &Path) -> Result<(), Conve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunk::normalize_newlines;
 
     fn sample_document() -> CorpusDocument {
         CorpusDocument {
@@ -1883,6 +3012,220 @@ mod tests {
     }
 
     #[test]
+    fn corpus_multiline_crlf_spans_match_exact_quoted_content() {
+        let markdown =
+            "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu.\r\nDòng hai vẫn khớp.\r\n".to_string();
+        let doc = CorpusDocument {
+            source_rel: "crlf-multi.md".into(),
+            md_rel: "crlf-multi.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 1);
+        let chunk = &chunks[0];
+        assert!(markdown.is_char_boundary(chunk.start));
+        assert!(markdown.is_char_boundary(chunk.end));
+        // Body canonical LF (indexing/identity parity with server).
+        assert_eq!(
+            chunk.text.as_str(),
+            "Hệ thống phải giữ dấu.\nDòng hai vẫn khớp."
+        );
+        // Source span quote exact (CRLF preserved).
+        assert_eq!(
+            &markdown[chunk.start..chunk.end],
+            "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
+        );
+        assert_eq!(
+            normalize_newlines(&markdown[chunk.start..chunk.end]).as_ref(),
+            chunk.text.as_str()
+        );
+        let cite = citation_from_chunk(chunk, 0, &markdown);
+        assert_eq!(cite.quote, markdown[chunk.start..chunk.end]);
+        assert_eq!(
+            page_before(&markdown, chunk.start),
+            None,
+            "no page marker before body"
+        );
+    }
+
+    #[test]
+    fn corpus_standalone_cr_before_crlf_keeps_nonempty_exact_span() {
+        let markdown = "a\r\r\nb".to_string();
+        let doc = CorpusDocument {
+            source_rel: "cr-crlf.md".into(),
+            md_rel: "cr-crlf.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "a\r\nb");
+        assert!(chunks[0].end > chunks[0].start);
+        assert_eq!(&markdown[chunks[0].start..chunks[0].end], "a\r\r\nb");
+        assert!(markdown.as_bytes().windows(3).any(|w| w == b"\r\r\n"));
+        assert_eq!(
+            normalize_newlines(&markdown[chunks[0].start..chunks[0].end]).as_ref(),
+            chunks[0].text.as_str()
+        );
+    }
+
+    #[test]
+    fn corpus_keeps_duplicate_mixed_newline_chunks_with_earliest_anchors() {
+        let markdown =
+            "# A\r\n\r\nLine one.\r\nLine two.\r\n\r\n# B\n\nLine one.\nLine two.\n".to_string();
+        let doc = CorpusDocument {
+            source_rel: "dup.md".into(),
+            md_rel: "dup.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        assert_eq!(chunks.len(), 2, "duplicate bodies must not be dropped");
+        assert_eq!(chunks[0].text, "Line one.\nLine two.");
+        assert_eq!(chunks[1].text, "Line one.\nLine two.");
+        assert_eq!(
+            &markdown[chunks[0].start..chunks[0].end],
+            "Line one.\r\nLine two."
+        );
+        assert_eq!(
+            &markdown[chunks[1].start..chunks[1].end],
+            "Line one.\nLine two."
+        );
+        assert!(chunks[1].start > chunks[0].end);
+    }
+
+    #[test]
+    fn corpus_crlf_page_marker_anchors_correct_span() {
+        let markdown =
+            "<!-- Page 3 -->\r\n\r\n# Mục\r\n\r\nNội dung trang ba.\r\nDòng kế.\r\n".to_string();
+        let doc = CorpusDocument {
+            source_rel: "page.md".into(),
+            md_rel: "page.md".into(),
+            format: "markdown".into(),
+            markdown: markdown.clone(),
+        };
+        let chunks = build_corpus(&[doc], 2_000);
+        let body = chunks
+            .iter()
+            .find(|c| c.text.contains("Nội dung trang ba"))
+            .expect("body chunk");
+        assert_eq!(body.text, "Nội dung trang ba.\nDòng kế.");
+        assert_eq!(
+            &markdown[body.start..body.end],
+            "Nội dung trang ba.\r\nDòng kế."
+        );
+        assert_eq!(body.page, Some(3));
+        assert_eq!(page_before(&markdown, body.start), Some(3));
+    }
+
+    #[test]
+    fn page_before_tolerates_non_char_boundary_offset() {
+        let markdown = "<!-- Page 2 -->\nệ chữ Việt";
+        // Byte 1 of "ệ" (U+ệ is 3 bytes after the marker prefix).
+        let ye_start = markdown.find('ệ').expect("glyph");
+        assert!(!markdown.is_char_boundary(ye_start + 1));
+        assert_eq!(page_before(markdown, ye_start + 1), Some(2));
+        assert_eq!(page_before(markdown, usize::MAX), Some(2));
+    }
+
+    #[test]
+    fn redact_pii_ignores_non_boundary_and_malformed_spans() {
+        let markdown = "Liên hệ: a@b.co và ệ";
+        let email_start = markdown.find("a@b.co").unwrap();
+        let email_end = email_start + "a@b.co".len();
+        let ye = markdown.find('ệ').unwrap();
+        assert!(!markdown.is_char_boundary(ye + 1));
+        let findings = [
+            PiiFinding {
+                kind: PiiKind::Email,
+                text: "a@b.co".into(),
+                source_rel: "a.md".into(),
+                start: email_start,
+                end: email_end,
+                confidence: 1.0,
+            },
+            // Non-boundary span — must be ignored (no panic).
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "x".into(),
+                source_rel: "a.md".into(),
+                start: ye + 1,
+                end: ye + 2,
+                confidence: 1.0,
+            },
+            // Malformed start >= end — ignored.
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "x".into(),
+                source_rel: "a.md".into(),
+                start: 5,
+                end: 5,
+                confidence: 1.0,
+            },
+        ];
+        let redacted = redact_pii(markdown, &findings);
+        assert!(redacted.contains("[REDACTED_Email]"));
+        assert!(redacted.contains('ệ'));
+        assert!(!redacted.contains("a@b.co"));
+    }
+
+    #[test]
+    fn redact_pii_coalesces_crossing_nested_duplicate_and_reversed_spans() {
+        //                    012345678901234567890123
+        let markdown = "secret=ABCDEFGHtail and more";
+        let outer = (7, 15); // ABCDEFGH
+        let nested = (9, 12); // CDE
+        let crossing = (12, 19); // FGHtail — crosses outer; suffix "tail" must not leak
+        let duplicate = outer;
+        let findings_reversed = [
+            PiiFinding {
+                kind: PiiKind::Phone,
+                text: "FGHtail".into(),
+                source_rel: "a.md".into(),
+                start: crossing.0,
+                end: crossing.1,
+                confidence: 1.0,
+            },
+            PiiFinding {
+                kind: PiiKind::Email,
+                text: "CDE".into(),
+                source_rel: "a.md".into(),
+                start: nested.0,
+                end: nested.1,
+                confidence: 1.0,
+            },
+            PiiFinding {
+                kind: PiiKind::BankAccount,
+                text: "ABCDEFGH".into(),
+                source_rel: "a.md".into(),
+                start: duplicate.0,
+                end: duplicate.1,
+                confidence: 1.0,
+            },
+            PiiFinding {
+                kind: PiiKind::NationalId,
+                text: "ABCDEFGH".into(),
+                source_rel: "a.md".into(),
+                start: outer.0,
+                end: outer.1,
+                confidence: 1.0,
+            },
+        ];
+        let redacted = redact_pii(markdown, &findings_reversed);
+        assert!(!redacted.contains("ABCDEFGH"));
+        assert!(
+            !redacted.contains("tail"),
+            "crossing suffix must be redacted: {redacted}"
+        );
+        assert!(redacted.contains("secret="));
+        assert!(redacted.contains(" and more"));
+        assert!(redacted.contains("[REDACTED_"));
+        // Single coalesced hole — not multiple adjacent redaction tokens for the cluster.
+        assert_eq!(redacted.matches("[REDACTED_").count(), 1);
+    }
+
+    #[test]
     fn diff_and_merge_cover_clean_and_conflict_cases() {
         assert_eq!(diff_markdown("a\nb", "a\nc")[0].kind, DiffKind::Modified);
         let clean = three_way_merge("base", "ours", "base");
@@ -1909,5 +3252,89 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "REPLACEMENT_CHARACTER"));
+    }
+}
+
+#[cfg(test)]
+mod intelligence_id_tests {
+    use super::{
+        corpus_chunk_id, handoff_document_digest, handoff_pack_digest, intelligence_digest,
+        markdown_table_id, HandoffMode, DOMAIN_CHUNK, DOMAIN_HANDOFF_DOCUMENT, DOMAIN_TABLE,
+        HANDOFF_SCHEMA_VERSION, INTELLIGENCE_ID_SCHEME,
+    };
+
+    #[test]
+    fn sha256_v1_domain_vectors_are_independent_and_pinned() {
+        assert_eq!(INTELLIGENCE_ID_SCHEME, "sha256-v1");
+        assert_eq!(HANDOFF_SCHEMA_VERSION, 2);
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[]),
+            "3d209f021406f03ded91cc145d3505de3d811d8c84407450fd0103e9c8ac762e"
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"alpha"]),
+            "035a5386d593c4334c79fe2c76dc8d0855bbb4406c02a06bba42d69b06f032dd"
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"a", b"b", b"c"]),
+            "ab08d8cb024ca089b89c89d26a2bad0c4f8b9c1a56177526dabffbb0b9b5564e"
+        );
+        let zero = 0u64.to_be_bytes();
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &["yêu cầu".as_bytes(), &zero]),
+            "1c7d0e2597701f6b5f510444c92557f01d5161482986d582bf47da32bc50cc9d"
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_TABLE, &[b"sheet.md", &zero, &12u64.to_be_bytes()]),
+            "890c11209f0ade11d5307d3344bbbb8f37b10775ab4d806b5b9c24c8a36bdb7a"
+        );
+        assert_eq!(
+            intelligence_digest(
+                DOMAIN_HANDOFF_DOCUMENT,
+                &[b"doc.md", b"# Title\n\nBody text.\n"]
+            ),
+            "d847104aef03239f6e19f30d970ee9cf47817f5de8c85d6d66cf020456f6cfb9"
+        );
+    }
+
+    #[test]
+    fn sha256_v1_length_prefix_and_domain_separate_collisions() {
+        assert_ne!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"ab", b"c"]),
+            intelligence_digest(DOMAIN_CHUNK, &[b"a", b"bc"])
+        );
+        assert_ne!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"alpha"]),
+            intelligence_digest(DOMAIN_TABLE, &[b"alpha"])
+        );
+        assert_eq!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"x", b"y"]),
+            intelligence_digest(DOMAIN_CHUNK, &[b"x", b"y"])
+        );
+        assert_ne!(
+            intelligence_digest(DOMAIN_CHUNK, &[b"x", b"y"]),
+            intelligence_digest(DOMAIN_CHUNK, &[b"y", b"x"])
+        );
+    }
+
+    #[test]
+    fn visible_ids_encode_scheme_and_are_stable() {
+        assert_eq!(
+            corpus_chunk_id("doc.md", "Heading", 0),
+            "chunk-sha256-v1-f243a448d7403a66a04ddb2f8505673c3b938e710b374df23ed189b70c85614f"
+        );
+        assert_eq!(
+            markdown_table_id("sheet.md", 0, 12),
+            "table-sha256-v1-890c11209f0ade11d5307d3344bbbb8f37b10775ab4d806b5b9c24c8a36bdb7a"
+        );
+        let doc = handoff_document_digest("doc.md", "# Title\n\nBody text.\n");
+        assert_eq!(
+            doc,
+            "d847104aef03239f6e19f30d970ee9cf47817f5de8c85d6d66cf020456f6cfb9"
+        );
+        assert_eq!(
+            handoff_pack_digest("probe", &HandoffMode::Deterministic, &[doc]),
+            "0e15d4a58dc945c6f96037d3fbafedb0a7df4d0f0cf49ec62f820be0bd6768a2"
+        );
     }
 }

@@ -30,9 +30,15 @@ PDF và whisper **đắt** → phải giữ pattern cache. Đừng "dọn" thàn
   **libpdfium KHÔNG thread-safe**: mỗi region dùng PDFium (cả render+OCR) phải acquire `PDFIUM_CALL: Mutex<()>` trước.
   Concurrent scanned-PDF conversions sẽ queue tại lock (trade-off vs throughput).
   Đường dẫn lib qua env `FILECONV_PDFIUM_LIB` → `pdfium/lib/*` → thư viện hệ thống.
-- **AudioEngine OnceLock** (`crates/core/src/lib.rs`): `Converter.engine: OnceLock<AudioEngine>`,
-  lazy load model Whisper GGML **một lần** mỗi `Converter`. Gọi audio sau dùng lại. Trả `Unsupported`
-  nếu chưa set `whisper_model`. (Có race benign được tài liệu hoá: nếu thread khác set trước, `set` bị bỏ qua.)
+- **Whisper process-wide LRU cache** (`crates/core/src/audio.rs`): `LoadOnceCache` keyed by
+  `WhisperModelKey` (canonical model path + immutable load knobs: `use_gpu`/`flash_attn`/`gpu_device`).
+  Per-key state is `Loading | Ready | Failed` with a condvar (fail/retry never overlaps loaders).
+  Ready set is LRU-bounded (default 2, override `FILECONV_WHISPER_CACHE_CAPACITY`); eviction drops
+  the cache entry while outstanding `AudioEngine` `Arc`s keep in-flight contexts alive. Production
+  loader derives all behavior from the complete key (no public injectable loader). Runtime knobs
+  (`audio_threads`, `audio_no_speech_threshold`) stay on `AudioEngine` and are **not** part of the
+  cache key. Resample to 16 kHz uses `rubato` FFT with partial/flush + `output_delay` trim;
+  returns `Result` (never invents silence on failure). Trả `Unsupported` nếu chưa có model.
 - **Tesseract**: spawn mỗi lần qua `crate::proc::background_command()` (không cache process). Temp PNG dùng bộ đếm `AtomicU64`.
 
 ## Subprocess spawning — MUST dùng `crate::proc::background_command`

@@ -77,6 +77,63 @@ fn corpus_ids_are_unique_across_documents() {
     assert_eq!(ids.len(), 2);
 }
 
+/// Consumer ID stability under `INTELLIGENCE_ID_SCHEME` (`sha256-v1`).
+/// Fixture bodies are fixed; digests must not drift across toolchains/runs.
+#[test]
+fn sha256_v1_consumer_ids_are_stable() {
+    assert_eq!(INTELLIGENCE_ID_SCHEME, "sha256-v1");
+    assert_eq!(HANDOFF_SCHEMA_VERSION, 2);
+    let markdown = "# Heading\n\nBody text for corpus.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+    let document = doc("doc.md", markdown);
+
+    let corpus = build_corpus(&[document.clone()], 2_000);
+    assert_eq!(corpus.len(), 1);
+    assert_eq!(corpus[0].heading, "Heading");
+    assert_eq!(corpus[0].start, 11);
+    assert_eq!(
+        corpus[0].id,
+        "chunk-sha256-v1-5c9caedfab489c26935e66e1b4e06016a670e011b174d324e236c40a87ed21ee"
+    );
+    assert!(corpus[0].id.contains(INTELLIGENCE_ID_SCHEME));
+
+    let tables = parse_markdown_tables(&document);
+    assert_eq!(tables.len(), 1);
+    assert_eq!(
+        tables[0].id,
+        "table-sha256-v1-7de19ebea10d6579f97772d6e4f8a6d75186198ce075d6e14a472beec81aa68a"
+    );
+    assert!(tables[0].id.contains(INTELLIGENCE_ID_SCHEME));
+
+    // Pack id embeds a wall-clock nonce; trailing digest + schema encode the scheme.
+    let pack = generate_handoff_pack(
+        &[document],
+        &HandoffOptions {
+            product_slug: "probe".into(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(pack.schema_version, HANDOFF_SCHEMA_VERSION);
+    assert_eq!(pack.id_scheme, INTELLIGENCE_ID_SCHEME);
+    let fingerprint = pack
+        .pack_id
+        .rsplit('-')
+        .next()
+        .expect("pack_id ends with fingerprint digest");
+    assert_eq!(
+        fingerprint,
+        "a501848e6a9bdc8a6e9ecb767558726e845f10e185dcd6faa02220ef959e4e5d"
+    );
+    assert!(
+        pack.pack_id
+            .starts_with(&format!("handoff-{INTELLIGENCE_ID_SCHEME}-")),
+        "pack_id={}",
+        pack.pack_id
+    );
+
+    let again = build_corpus(&[doc("doc.md", markdown)], 2_000);
+    assert_eq!(again[0].id, corpus[0].id);
+}
+
 #[test]
 fn corpus_parses_page_anchor_comments() {
     let corpus = build_corpus(
@@ -168,10 +225,70 @@ fn quality_aggregates_multiple_documents() {
     assert!(report.score > 0.0 && report.score < 1.0);
 }
 
+fn assert_single_span(report: &PiiReport, kind: PiiKind, exact: &str) {
+    let hits: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == kind)
+        .collect();
+    assert_eq!(hits.len(), 1, "{kind:?} hits: {:?}", report.findings);
+    assert_eq!(hits[0].text, exact);
+}
+
 #[test]
 fn pii_detects_plus84_phone() {
     let report = detect_pii(&[doc("phone.md", "Liên hệ +84912345678 ngay.")]);
-    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert_single_span(&report, PiiKind::Phone, "+84912345678");
+}
+
+#[test]
+fn pii_detects_leading_zero_vn_mobile() {
+    let report = detect_pii(&[doc("phone0.md", "Gọi 0912345678 giúp tôi.")]);
+    assert_single_span(&report, PiiKind::Phone, "0912345678");
+}
+
+#[test]
+fn pii_rejects_price_at_numeric_as_email() {
+    let report = detect_pii(&[doc("price.md", "Giá price@100.00 không phải email.")]);
+    assert!(
+        !report.counts.contains_key(&PiiKind::Email),
+        "price@100.00 must not be email: {:?}",
+        report.findings
+    );
+    let real = detect_pii(&[doc("mail.md", "Liên hệ lan@example.com ngay.")]);
+    assert_single_span(&real, PiiKind::Email, "lan@example.com");
+}
+
+#[test]
+fn pii_rejects_arbitrary_bare_ten_digit_numbers() {
+    let bare = detect_pii(&[doc(
+        "nums.md",
+        "Mã đơn 1234567890 và chuỗi 0123456789 không phải SĐT.",
+    )]);
+    assert!(
+        !bare.counts.contains_key(&PiiKind::Phone),
+        "bare 10-digit runs must not be phone: {:?}",
+        bare.findings
+    );
+    let mobile = detect_pii(&[doc("ok.md", "SĐT 0912345678")]);
+    assert_eq!(mobile.counts.get(&PiiKind::Phone), Some(&1));
+}
+
+#[test]
+fn pii_phone_vs_bank_prefers_bank_context() {
+    let bankish = detect_pii(&[doc(
+        "bank-phone.md",
+        "Tài khoản ngân hàng: 0912345678 cần đối soát.",
+    )]);
+    assert_eq!(bankish.counts.get(&PiiKind::BankAccount), Some(&1));
+    assert!(
+        !bankish.counts.contains_key(&PiiKind::Phone),
+        "bank label must win over phone shape: {:?}",
+        bankish.findings
+    );
+    let phone = detect_pii(&[doc("phone-only.md", "Điện thoại: 0912345678")]);
+    assert_eq!(phone.counts.get(&PiiKind::Phone), Some(&1));
+    assert!(!phone.counts.contains_key(&PiiKind::BankAccount));
 }
 
 #[test]
@@ -189,6 +306,597 @@ fn pii_detects_bank_account_with_context() {
 }
 
 #[test]
+fn pii_email_exact_span_in_table_wrappers_labels_and_links() {
+    let cases = [
+        (
+            "| lan@example.com |",
+            "lan@example.com",
+            "| [REDACTED_Email] |",
+        ),
+        (
+            "Email:lan@example.com",
+            "lan@example.com",
+            "Email:[REDACTED_Email]",
+        ),
+        (
+            "Liên hệ (lan@example.com).",
+            "lan@example.com",
+            "Liên hệ ([REDACTED_Email]).",
+        ),
+        ("<lan@example.com>", "lan@example.com", "<[REDACTED_Email]>"),
+        (
+            "[gửi](mailto:lan@example.com)",
+            "lan@example.com",
+            "[gửi](mailto:[REDACTED_Email])",
+        ),
+        (
+            "\"lan@example.com\"",
+            "lan@example.com",
+            "\"[REDACTED_Email]\"",
+        ),
+    ];
+    for (markdown, exact, redacted_shape) in cases {
+        let report = detect_pii(&[doc("wrap.md", markdown)]);
+        assert_single_span(&report, PiiKind::Email, exact);
+        let redacted = redact_pii(markdown, &report.findings);
+        assert_eq!(redacted, redacted_shape, "input={markdown:?}");
+    }
+}
+
+#[test]
+fn pii_email_accepts_numeric_local_and_rejects_dot_hyphen_rules() {
+    let ok = detect_pii(&[doc("num-local.md", "Liên hệ 123@example.com")]);
+    assert_single_span(&ok, PiiKind::Email, "123@example.com");
+
+    for bad in [
+        ".user@example.com",
+        "user.@example.com",
+        "us..er@example.com",
+        "user@-example.com",
+        "user@example-.com",
+        "price@100.00",
+    ] {
+        let report = detect_pii(&[doc("bad-mail.md", bad)]);
+        assert!(
+            !report.counts.contains_key(&PiiKind::Email),
+            "must reject {bad:?}: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
+fn pii_phone_scans_grouped_plus84_optional_trunk_and_landline() {
+    let grouped = detect_pii(&[doc("g.md", "Gọi 0912 345 678 hoặc 0912-345-678")]);
+    assert_eq!(grouped.counts.get(&PiiKind::Phone), Some(&2));
+    assert!(grouped.findings.iter().any(|f| f.text == "0912 345 678"));
+    assert!(grouped.findings.iter().any(|f| f.text == "0912-345-678"));
+
+    let plus = detect_pii(&[doc("p84.md", "Hotline +84 912 345 678")]);
+    assert_single_span(&plus, PiiKind::Phone, "+84 912 345 678");
+
+    let trunk = detect_pii(&[doc("trunk.md", "Máy +84 (0) 912 345 678")]);
+    assert_single_span(&trunk, PiiKind::Phone, "+84 (0) 912 345 678");
+
+    let landline = detect_pii(&[doc("ll.md", "Bàn 024 3825 1234")]);
+    assert_single_span(&landline, PiiKind::Phone, "024 3825 1234");
+
+    let paren = detect_pii(&[doc("par.md", "Gọi (0912) 345-678")]);
+    assert_single_span(&paren, PiiKind::Phone, "(0912) 345-678");
+}
+
+#[test]
+fn pii_phone_rejects_invalid_030_prefix() {
+    let report = detect_pii(&[doc("bad030.md", "Số 0301234567 và 030 123 4567")]);
+    assert!(
+        !report.counts.contains_key(&PiiKind::Phone),
+        "030 must be rejected: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn pii_phone_exact_span_in_markdown_table() {
+    let markdown = "| Liên hệ | 0912345678 |\n|---|---|\n";
+    let report = detect_pii(&[doc("t.md", markdown)]);
+    assert_single_span(&report, PiiKind::Phone, "0912345678");
+    let redacted = redact_pii(markdown, &report.findings);
+    assert!(redacted.contains("| Liên hệ | [REDACTED_Phone] |"));
+    assert!(redacted.contains("|---|---|"));
+}
+
+#[test]
+fn pii_bank_supports_stk_aliases_grouped_digits_and_nearest_label() {
+    for (markdown, exact) in [
+        ("STK: 123456789012", "123456789012"),
+        ("Số TK 1234 5678 9012", "1234 5678 9012"),
+        ("Tài khoản: 1234-5678-901234", "1234-5678-901234"),
+    ] {
+        let report = detect_pii(&[doc("stk.md", markdown)]);
+        assert_single_span(&report, PiiKind::BankAccount, exact);
+    }
+}
+
+#[test]
+fn pii_explicit_phone_label_beats_generic_ngan_hang() {
+    let report = detect_pii(&[doc(
+        "mix.md",
+        "Tại ngân hàng A, SĐT: 0912345678 vẫn là số điện thoại.",
+    )]);
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert!(
+        !report.counts.contains_key(&PiiKind::BankAccount),
+        "SĐT must beat generic ngân hàng: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn pii_generic_ngan_hang_prose_does_not_classify_transaction_counts() {
+    let report = detect_pii(&[doc(
+        "prose.md",
+        "Ngân hàng xử lý 1500000000 giao dịch trong quý.",
+    )]);
+    assert!(
+        !report.counts.contains_key(&PiiKind::BankAccount),
+        "transaction counts must not become STK: {:?}",
+        report.findings
+    );
+    assert!(!report.counts.contains_key(&PiiKind::Phone));
+}
+
+#[test]
+fn pii_phone_maintains_active_prefixes_055_087_and_rejects_plus_without_84() {
+    let wintel = detect_pii(&[doc("055.md", "Gọi 0551234567")]);
+    assert_single_span(&wintel, PiiKind::Phone, "0551234567");
+    let itel = detect_pii(&[doc("087.md", "Gọi 0871234567")]);
+    assert_single_span(&itel, PiiKind::Phone, "0871234567");
+
+    let plus = detect_pii(&[doc("p.md", "Intl +85551234567")]);
+    assert!(
+        !plus.counts.contains_key(&PiiKind::Phone),
+        "+ without 84 must reject: {:?}",
+        plus.findings
+    );
+    let ok = detect_pii(&[doc("ok84.md", "Intl +84551234567")]);
+    assert_single_span(&ok, PiiKind::Phone, "+84551234567");
+}
+
+#[test]
+fn pii_phone_alphanumeric_boundaries_and_consecutive_separated() {
+    let glued = detect_pii(&[doc("glue.md", "id0912345678 và 0912345678x")]);
+    assert!(
+        !glued.counts.contains_key(&PiiKind::Phone),
+        "alphanumeric-adjacent must not match: {:?}",
+        glued.findings
+    );
+    let consecutive = detect_pii(&[doc(
+        "two.md",
+        "Gọi 0912345678 / 0987654321 và 0912 345 678, 0978 654 321",
+    )]);
+    assert_eq!(consecutive.counts.get(&PiiKind::Phone), Some(&4));
+    assert!(consecutive.findings.iter().any(|f| f.text == "0912345678"));
+    assert!(consecutive.findings.iter().any(|f| f.text == "0987654321"));
+}
+
+#[test]
+fn pii_phone_exact_landline_length_rules() {
+    let ok = detect_pii(&[doc("ll.md", "HN 02438251234")]);
+    assert_single_span(&ok, PiiKind::Phone, "02438251234");
+    let short = detect_pii(&[doc("short.md", "HN 0243825123")]);
+    assert!(
+        !short.counts.contains_key(&PiiKind::Phone),
+        "2-digit area requires 8 subscriber digits: {:?}",
+        short.findings
+    );
+    let province = detect_pii(&[doc("dn.md", "Đà Nẵng 02363825123")]);
+    assert_single_span(&province, PiiKind::Phone, "02363825123");
+}
+
+#[test]
+fn pii_label_scope_does_not_cross_newline_pipe_or_sentence() {
+    let newline = detect_pii(&[doc("nl.md", "Tài khoản: 123456789012\nGọi ngay 0912345678")]);
+    assert_eq!(newline.counts.get(&PiiKind::BankAccount), Some(&1));
+    assert_eq!(newline.counts.get(&PiiKind::Phone), Some(&1));
+
+    let sentence = detect_pii(&[doc(
+        "sent.md",
+        "Tài khoản đã đóng. Mã tham chiếu 123456789012. Liên hệ 0912345678",
+    )]);
+    assert!(
+        !sentence.counts.contains_key(&PiiKind::BankAccount),
+        "label must not cross sentence: {:?}",
+        sentence.findings
+    );
+    assert_eq!(sentence.counts.get(&PiiKind::Phone), Some(&1));
+
+    let pipe = detect_pii(&[doc("pipe.md", "Tài khoản | 0912345678 còn lại")]);
+    assert!(
+        !pipe.counts.contains_key(&PiiKind::BankAccount),
+        "label must not cross table pipe: {:?}",
+        pipe.findings
+    );
+    assert_eq!(pipe.counts.get(&PiiKind::Phone), Some(&1));
+}
+
+#[test]
+fn pii_label_scope_cuts_on_vertical_unicode_separators() {
+    for (name, sep) in [
+        ("lf", '\n'),
+        ("cr", '\r'),
+        ("vt", '\u{000B}'),
+        ("ff", '\u{000C}'),
+        ("nel", '\u{0085}'),
+        ("line-sep", '\u{2028}'),
+        ("para-sep", '\u{2029}'),
+    ] {
+        let markdown = format!("Tài khoản: 123456789012{sep}Gọi ngay 0912345678");
+        let report = detect_pii(&[doc(name, &markdown)]);
+        assert_eq!(
+            report.counts.get(&PiiKind::BankAccount),
+            Some(&1),
+            "{name} (U+{:04X}) should keep prior bank span: {:?}",
+            sep as u32,
+            report.findings
+        );
+        assert_eq!(
+            report.counts.get(&PiiKind::Phone),
+            Some(&1),
+            "{name} (U+{:04X}) must cut bank label before phone: {:?}",
+            sep as u32,
+            report.findings
+        );
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == PiiKind::BankAccount && f.text.contains("0912345678")),
+            "{name} must not bank-classify phone across vertical sep: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
+fn pii_table_column_headers_associate_bank_and_phone() {
+    let markdown = "| Tài khoản | SĐT |\n|---|---|\n| 123456789012 | 0912345678 |\n";
+    let report = detect_pii(&[doc("cols.md", markdown)]);
+    let bank = report
+        .findings
+        .iter()
+        .find(|f| f.kind == PiiKind::BankAccount)
+        .expect("bank col");
+    let phone = report
+        .findings
+        .iter()
+        .find(|f| f.kind == PiiKind::Phone)
+        .expect("phone col");
+    assert_eq!(bank.text, "123456789012");
+    assert_eq!(phone.text, "0912345678");
+    let redacted = redact_pii(markdown, &report.findings);
+    assert!(redacted.contains("| [REDACTED_BankAccount] | [REDACTED_Phone] |"));
+}
+
+#[test]
+fn pii_email_apostrophe_dot_atom_and_strict_boundaries() {
+    let ok = detect_pii(&[doc("apos.md", "Mail o'reilly@example.com please")]);
+    assert_single_span(&ok, PiiKind::Email, "o'reilly@example.com");
+
+    for (label, markdown) in [
+        ("unicode-prefix", "xin chàoélan@example.com"),
+        ("unsupported-adjacent", "token§lan@example.com"),
+        ("right-glue", "lan@example.com§x"),
+    ] {
+        let report = detect_pii(&[doc("bad.md", markdown)]);
+        assert!(
+            !report.counts.contains_key(&PiiKind::Email),
+            "{label} must not yield partial email from {markdown:?}: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
+fn pii_phone_failed_plus_run_is_skipped_not_retried() {
+    let report = detect_pii(&[doc(
+        "plus0.md",
+        "Sai +0912345678 và đúng 0912345678 cuối câu.",
+    )]);
+    // `+091…` must not yield a phone by retrying inside the run; bare mobile still hits.
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert_single_span(&report, PiiKind::Phone, "0912345678");
+    assert!(!report.findings.iter().any(|f| f.text.contains('+')));
+}
+
+#[test]
+fn pii_phone_failed_plus_skips_one_group_then_scans_next() {
+    let report = detect_pii(&[doc(
+        "plus-next.md",
+        "Sai +0912345678 0987654321 và thêm 0912 345 678",
+    )]);
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&2));
+    assert!(report.findings.iter().any(|f| f.text == "0987654321"));
+    assert!(report.findings.iter().any(|f| f.text == "0912 345 678"));
+    assert!(!report.findings.iter().any(|f| f.text.starts_with('+')));
+    assert!(!report.findings.iter().any(|f| f.text == "0912345678"));
+}
+
+#[test]
+fn pii_phone_short_invalid_plus_group_does_not_swallow_next_phone() {
+    let report = detect_pii(&[doc("short-plus.md", "Sai +12345678 0987654321 cuối.")]);
+    assert_eq!(report.counts.get(&PiiKind::Phone), Some(&1));
+    assert_single_span(&report, PiiKind::Phone, "0987654321");
+    assert!(!report.findings.iter().any(|f| f.text.contains('+')));
+}
+
+#[test]
+fn pii_phone_unicode_alphanumeric_boundaries() {
+    let report = detect_pii(&[doc("u.md", "mãＡ0912345678 và 0912345678Ｂ")]);
+    assert!(
+        !report.counts.contains_key(&PiiKind::Phone),
+        "Unicode alphanumeric adjacency must block: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn pii_label_comma_and_distance_do_not_classify_transaction_ids() {
+    let ascii = detect_pii(&[doc(
+        "comma.md",
+        "Tài khoản đã xác minh, mã giao dịch 123456789012 trong biên lai.",
+    )]);
+    assert!(
+        !ascii.counts.contains_key(&PiiKind::BankAccount),
+        "comma must cut bank label: {:?}",
+        ascii.findings
+    );
+
+    let ideographic = detect_pii(&[doc(
+        "ucomma.md",
+        "Tài khoản đã xác minh，mã giao dịch 123456789012 trong biên lai.",
+    )]);
+    assert!(
+        !ideographic.counts.contains_key(&PiiKind::BankAccount),
+        "Unicode comma must cut bank label: {:?}",
+        ideographic.findings
+    );
+
+    let prose = detect_pii(&[doc(
+        "distance.md",
+        "Tài khoản khách hàng đã đối soát đầy đủ trước khi ghi nhận mã 123456789012.",
+    )]);
+    assert!(
+        !prose.counts.contains_key(&PiiKind::BankAccount),
+        "long prose after label must not classify: {:?}",
+        prose.findings
+    );
+
+    let ok = detect_pii(&[doc("stk.md", "Tài khoản ngân hàng: 123456789012")]);
+    assert_single_span(&ok, PiiKind::BankAccount, "123456789012");
+}
+
+#[test]
+fn pii_compound_and_strong_bind_labels() {
+    let no_colon = detect_pii(&[doc(
+        "compound.md",
+        "Tài khoản ngân hàng 123456789012 cần đối soát.",
+    )]);
+    assert_single_span(&no_colon, PiiKind::BankAccount, "123456789012");
+
+    let so_tk = detect_pii(&[doc("so-tk-nh.md", "Số tài khoản ngân hàng 1234 5678 9012")]);
+    assert_single_span(&so_tk, PiiKind::BankAccount, "1234 5678 9012");
+
+    let cccd_so = detect_pii(&[doc("cccd-so.md", "CCCD số 001234567890")]);
+    assert_single_span(&cccd_so, PiiKind::NationalId, "001234567890");
+
+    let strong = detect_pii(&[doc(
+        "strong.md",
+        "Tài khoản của khách hàng doanh nghiệp đã đăng ký: 123456789012",
+    )]);
+    assert_single_span(&strong, PiiKind::BankAccount, "123456789012");
+}
+
+#[test]
+fn pii_compound_aliases_cmnd_cccd_stk_variants() {
+    let cmnd = detect_pii(&[doc("cmnd-so.md", "CMND số 123456789")]);
+    assert_single_span(&cmnd, PiiKind::NationalId, "123456789");
+
+    let cccd = detect_pii(&[doc("cccd-full.md", "Căn cước công dân số 001234567890")]);
+    assert_single_span(&cccd, PiiKind::NationalId, "001234567890");
+
+    let can_cuoc_so = detect_pii(&[doc("can-cuoc-so.md", "Căn cước số 001234567890")]);
+    assert_single_span(&can_cuoc_so, PiiKind::NationalId, "001234567890");
+
+    let stk = detect_pii(&[doc("stk-nh.md", "STK ngân hàng 123456789012")]);
+    assert_single_span(&stk, PiiKind::BankAccount, "123456789012");
+
+    let so_tk = detect_pii(&[doc("so-tk.md", "Số TK ngân hàng 1234-5678-9012")]);
+    assert_single_span(&so_tk, PiiKind::BankAccount, "1234-5678-9012");
+}
+
+#[test]
+fn pii_joint_owner_va_still_binds_account() {
+    let report = detect_pii(&[doc(
+        "joint.md",
+        "Tài khoản của Nguyễn A và Trần B: 123456789012",
+    )]);
+    assert_single_span(&report, PiiKind::BankAccount, "123456789012");
+}
+
+#[test]
+fn pii_conjunction_and_competing_keys_block_closed_account_prose() {
+    let closed = detect_pii(&[doc(
+        "closed.md",
+        "Tài khoản đã đóng và mã giao dịch: 123456789012 không còn hiệu lực.",
+    )]);
+    assert!(
+        !closed.counts.contains_key(&PiiKind::BankAccount),
+        "mã giao dịch must break bank link: {:?}",
+        closed.findings
+    );
+
+    let compete = detect_pii(&[doc(
+        "compete.md",
+        "Tài khoản cũ đã hủy, SĐT liên hệ: 0912345678",
+    )]);
+    // Comma already scopes; SĐT column/label wins for the phone — no bank hit.
+    assert!(!compete.counts.contains_key(&PiiKind::BankAccount));
+    assert_eq!(compete.counts.get(&PiiKind::Phone), Some(&1));
+
+    let binder_compete = detect_pii(&[doc(
+        "binder.md",
+        "Tài khoản chuyển khoản qua SĐT: 0912345678",
+    )]);
+    assert!(
+        !binder_compete.counts.contains_key(&PiiKind::BankAccount),
+        "competing SĐT before binder must not bank-classify: {:?}",
+        binder_compete.findings
+    );
+    assert_eq!(binder_compete.counts.get(&PiiKind::Phone), Some(&1));
+}
+
+#[test]
+fn pii_competing_keys_match_across_punctuation_wrappers() {
+    for (name, markdown) in [
+        ("parens", "Tài khoản đã đóng (mã giao dịch): 123456789012"),
+        ("slash", "Tài khoản đã đóng /mã giao dịch: 123456789012"),
+        ("em-dash", "Tài khoản đã đóng —mã giao dịch: 123456789012"),
+        ("en-dash", "Tài khoản đã đóng –mã giao dịch: 123456789012"),
+    ] {
+        let report = detect_pii(&[doc(name, markdown)]);
+        assert!(
+            !report.counts.contains_key(&PiiKind::BankAccount),
+            "{name} competing key must break bank link: {:?}",
+            report.findings
+        );
+    }
+}
+
+#[test]
+fn pii_label_and_competing_keys_normalize_unicode_whitespace() {
+    const NBSP: &str = "\u{00a0}";
+
+    let can_cuoc_nbsp = format!("Căn{NBSP}cước{NBSP}số{NBSP}001234567890");
+    let report = detect_pii(&[doc("can-cuoc-nbsp.md", &can_cuoc_nbsp)]);
+    assert_single_span(&report, PiiKind::NationalId, "001234567890");
+    let hit = report
+        .findings
+        .iter()
+        .find(|f| f.kind == PiiKind::NationalId)
+        .expect("national id");
+    assert_eq!(&can_cuoc_nbsp[hit.start..hit.end], "001234567890");
+
+    let can_cuoc_spaces = detect_pii(&[doc("can-cuoc-spaces.md", "Căn  cước   số 001234567890")]);
+    assert_single_span(&can_cuoc_spaces, PiiKind::NationalId, "001234567890");
+    let space_hit = can_cuoc_spaces
+        .findings
+        .iter()
+        .find(|f| f.kind == PiiKind::NationalId)
+        .expect("national id");
+    assert_eq!(
+        &"Căn  cước   số 001234567890"[space_hit.start..space_hit.end],
+        "001234567890"
+    );
+
+    let compete_nbsp = format!("Tài khoản đã đóng và mã{NBSP}giao{NBSP}dịch: 123456789012");
+    let blocked = detect_pii(&[doc("compete-nbsp.md", &compete_nbsp)]);
+    assert!(
+        !blocked.counts.contains_key(&PiiKind::BankAccount),
+        "NBSP mã giao dịch must break bank link: {:?}",
+        blocked.findings
+    );
+
+    let compete_spaces = detect_pii(&[doc(
+        "compete-spaces.md",
+        "Tài khoản đã đóng và mã  giao   dịch: 123456789012",
+    )]);
+    assert!(
+        !compete_spaces.counts.contains_key(&PiiKind::BankAccount),
+        "repeated spaces in mã giao dịch must break bank link: {:?}",
+        compete_spaces.findings
+    );
+}
+
+#[test]
+fn pii_email_paired_markdown_wrappers_redact_inner_only() {
+    for (markdown, exact, redacted_shape) in [
+        (
+            "Mail **lan@example.com** ngay.",
+            "lan@example.com",
+            "Mail **[REDACTED_Email]** ngay.",
+        ),
+        (
+            "Mail *lan@example.com* ngay.",
+            "lan@example.com",
+            "Mail *[REDACTED_Email]* ngay.",
+        ),
+        (
+            "Mail __lan@example.com__ ngay.",
+            "lan@example.com",
+            "Mail __[REDACTED_Email]__ ngay.",
+        ),
+        (
+            "Mail _lan@example.com_ ngay.",
+            "lan@example.com",
+            "Mail _[REDACTED_Email]_ ngay.",
+        ),
+        (
+            "Mail `lan@example.com` ngay.",
+            "lan@example.com",
+            "Mail `[REDACTED_Email]` ngay.",
+        ),
+    ] {
+        let report = detect_pii(&[doc("wrap.md", markdown)]);
+        assert_single_span(&report, PiiKind::Email, exact);
+        assert_eq!(redact_pii(markdown, &report.findings), redacted_shape);
+    }
+
+    // Legitimate marker chars inside an unwrapped local stay part of the address.
+    let underscored = detect_pii(&[doc("u.md", "Mail user_name@example.com")]);
+    assert_single_span(&underscored, PiiKind::Email, "user_name@example.com");
+    let starred = detect_pii(&[doc("s.md", "Mail user*tag@example.com")]);
+    assert_single_span(&starred, PiiKind::Email, "user*tag@example.com");
+}
+
+#[test]
+fn pii_email_recursive_markdown_wrappers_including_strike_and_nested() {
+    for (markdown, redacted_shape) in [
+        (
+            "Mail ***lan@example.com*** ngay.",
+            "Mail ***[REDACTED_Email]*** ngay.",
+        ),
+        (
+            "Mail ~~lan@example.com~~ ngay.",
+            "Mail ~~[REDACTED_Email]~~ ngay.",
+        ),
+        (
+            "Mail **_lan@example.com_** ngay.",
+            "Mail **_[REDACTED_Email]_** ngay.",
+        ),
+        (
+            "Mail _**lan@example.com**_ ngay.",
+            "Mail _**[REDACTED_Email]**_ ngay.",
+        ),
+        (
+            "Mail ~~**lan@example.com**~~ ngay.",
+            "Mail ~~**[REDACTED_Email]**~~ ngay.",
+        ),
+        (
+            "Mail ***_lan@example.com_*** ngay.",
+            "Mail ***_[REDACTED_Email]_*** ngay.",
+        ),
+    ] {
+        let report = detect_pii(&[doc("nest.md", markdown)]);
+        assert_single_span(&report, PiiKind::Email, "lan@example.com");
+        assert_eq!(
+            redact_pii(markdown, &report.findings),
+            redacted_shape,
+            "input={markdown:?}"
+        );
+    }
+}
+
+#[test]
 fn redaction_ignores_out_of_range_findings() {
     let markdown = "Không đổi";
     let findings = [PiiFinding {
@@ -200,6 +908,92 @@ fn redaction_ignores_out_of_range_findings() {
         confidence: 1.0,
     }];
     assert_eq!(redact_pii(markdown, &findings), markdown);
+}
+
+#[test]
+fn redaction_ignores_stale_finding_text() {
+    let markdown = "Email: lan@example.com còn nguyên";
+    let start = markdown.find("lan@example.com").unwrap();
+    let end = start + "lan@example.com".len();
+    let findings = [PiiFinding {
+        kind: PiiKind::Email,
+        // Offsets still point at the email, but text is stale after an edit.
+        text: "old@example.com".into(),
+        source_rel: "a.md".into(),
+        start,
+        end,
+        confidence: 1.0,
+    }];
+    assert_eq!(redact_pii(markdown, &findings), markdown);
+    assert!(markdown.contains("lan@example.com"));
+}
+
+#[test]
+fn redaction_coalesces_crossing_and_nested_spans_in_public_api() {
+    let markdown = "secret=ABCDEFGHtail and more";
+    let findings = [
+        PiiFinding {
+            kind: PiiKind::Phone,
+            text: "FGHtail".into(),
+            source_rel: "a.md".into(),
+            start: 12,
+            end: 19,
+            confidence: 1.0,
+        },
+        PiiFinding {
+            kind: PiiKind::Email,
+            text: "CDE".into(),
+            source_rel: "a.md".into(),
+            start: 9,
+            end: 12,
+            confidence: 1.0,
+        },
+        PiiFinding {
+            kind: PiiKind::BankAccount,
+            text: "ABCDEFGH".into(),
+            source_rel: "a.md".into(),
+            start: 7,
+            end: 15,
+            confidence: 1.0,
+        },
+    ];
+    let redacted = redact_pii(markdown, &findings);
+    assert!(!redacted.contains("ABCDEFGH"));
+    assert!(
+        !redacted.contains("tail"),
+        "crossing suffix must redact: {redacted}"
+    );
+    assert_eq!(redacted.matches("[REDACTED_").count(), 1);
+}
+
+#[test]
+fn redaction_ignores_non_utf8_boundary_offsets() {
+    let markdown = "Liên hệ: a@b.co và ệ";
+    let email_start = markdown.find("a@b.co").unwrap();
+    let email_end = email_start + "a@b.co".len();
+    let ye = markdown.find('ệ').unwrap();
+    assert!(!markdown.is_char_boundary(ye + 1));
+    let findings = [
+        PiiFinding {
+            kind: PiiKind::Email,
+            text: "a@b.co".into(),
+            source_rel: "a.md".into(),
+            start: email_start,
+            end: email_end,
+            confidence: 1.0,
+        },
+        PiiFinding {
+            kind: PiiKind::Phone,
+            text: "x".into(),
+            source_rel: "a.md".into(),
+            start: ye + 1,
+            end: ye + 2,
+            confidence: 1.0,
+        },
+    ];
+    let redacted = redact_pii(markdown, &findings);
+    assert!(redacted.contains("[REDACTED_Email]"));
+    assert!(redacted.contains('ệ'));
 }
 
 #[test]
@@ -219,6 +1013,88 @@ fn table_update_rejects_invalid_span() {
         rows: vec![],
     };
     assert!(update_markdown_table("short", &table, &[]).is_err());
+}
+
+#[test]
+fn table_update_rejects_start_not_less_than_end() {
+    let markdown = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+    for (start, end) in [(0, 0), (5, 5), (8, 3)] {
+        let table = MarkdownTable {
+            id: "x".into(),
+            source_rel: "x.md".into(),
+            index: 0,
+            start,
+            end,
+            rows: vec![],
+        };
+        assert!(
+            update_markdown_table(markdown, &table, &[]).is_err(),
+            "start={start} end={end}"
+        );
+    }
+}
+
+#[test]
+fn table_update_rejects_stale_non_table_span() {
+    let markdown = "không còn bảng ở đây nữa";
+    let table = MarkdownTable {
+        id: "x".into(),
+        source_rel: "x.md".into(),
+        index: 0,
+        start: 0,
+        end: markdown.len(),
+        rows: vec![vec!["A".into(), "B".into()]],
+    };
+    let err = update_markdown_table(markdown, &table, &[]).unwrap_err();
+    assert!(err.to_string().contains("conflict"), "{err}");
+}
+
+#[test]
+fn table_update_requires_reparsed_id_span_and_original_rows() {
+    let document = doc(
+        "tbl.md",
+        "| A | B |\n|---|---|\n| 1 | 2 |\n\n| X | Y |\n|---|---|\n| 9 | 8 |\n",
+    );
+    let tables = parse_markdown_tables(&document);
+    assert_eq!(tables.len(), 2);
+    let first = tables[0].clone();
+    // Happy path: exact reparsed match.
+    let updated = update_markdown_table(
+        &document.markdown,
+        &first,
+        &[vec!["A".into(), "B".into()], vec!["3".into(), "4".into()]],
+    )
+    .unwrap();
+    assert!(updated.contains("|3|4|"));
+
+    // Stale rows (content edited) → conflict.
+    let mut stale_rows = first.clone();
+    stale_rows.rows[1][0] = "999".into();
+    let err = update_markdown_table(&document.markdown, &stale_rows, &first.rows).unwrap_err();
+    assert!(err.to_string().contains("conflict"), "{err}");
+
+    // Unrelated pipe span / wrong id+offsets → conflict.
+    let mut unrelated = first.clone();
+    unrelated.start = tables[1].start;
+    unrelated.end = tables[1].end;
+    let err = update_markdown_table(&document.markdown, &unrelated, &first.rows).unwrap_err();
+    assert!(err.to_string().contains("conflict"), "{err}");
+}
+
+#[test]
+fn table_update_rejects_non_utf8_boundary_offsets() {
+    let markdown = "trước ệ | A | B |\n|---|---|\n| 1 | 2 |\n sau";
+    let ye = markdown.find('ệ').unwrap();
+    assert!(!markdown.is_char_boundary(ye + 1));
+    let table = MarkdownTable {
+        id: "x".into(),
+        source_rel: "x.md".into(),
+        index: 0,
+        start: ye + 1,
+        end: ye + 4,
+        rows: vec![vec!["A".into(), "B".into()]],
+    };
+    assert!(update_markdown_table(markdown, &table, &[]).is_err());
 }
 
 #[test]

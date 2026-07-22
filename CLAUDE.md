@@ -62,9 +62,11 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
   - `image_ocr.rs` — Tesseract mặc định, Paddle opt-in; **tiền xử lý ảnh**
     (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize); output nghi lỗi/dính
     IN HOA retry PSM 6; scan nhiều cột tách bằng vertical projection + score fallback.
-  - `audio.rs` — `AudioEngine::load()` giữ `WhisperContext` (cache 1 lần); decode mp3/wav/ogg…
-    bằng `symphonia` + resample 16kHz, phiên âm whisper-rs (lang "vi"), lọc
-    `no_speech_probability`. Tự tìm PhoWhisper đã tải về trước model chuẩn.
+  - `audio.rs` — `AudioEngine::load()` lấy `WhisperContext` từ cache **process-wide LRU**
+ (key: canonical path + load knobs; Loading/Ready/Failed + condvar; capacity mặc định 2 /
+ `FILECONV_WHISPER_CACHE_CAPACITY`); decode mp3/wav/ogg… bằng `symphonia` + resample 16kHz
+ qua `rubato` FFT (trims delay), phiên âm whisper-rs (lang "vi"), lọc
+ `no_speech_probability`. Tự tìm PhoWhisper đã tải về trước model chuẩn.
   - `chunk.rs` — chia Markdown thành chunk RAG theo heading (giữ đường dẫn tiêu đề cha).
   - `viet_legacy.rs` — decode **TCVN3, VNI-Windows, VPS**; maps sinh từ VietUnicode.
   - `llm.rs`/`llm_cli.rs` (feature `llm`) — HTTP chat/vision, neural embedding và
@@ -80,7 +82,9 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
 ## Lưu ý khi sửa code
 
 - Pin có chủ đích: `pdf-extract =0.8.2` (0.12 panic), `symphonia 0.5` (0.6 đổi API). Đừng nâng bừa.
-- PDF/whisper resource đắt → giữ pattern cache (thread_local PDFium, OnceLock AudioEngine trong `Converter`).
+- PDF/whisper resource đắt → giữ pattern cache (thread_local PDFium, process-wide Whisper
+  LRU `LoadOnceCache` trong `audio.rs` — không reload model mỗi `Converter`/request; eviction
+  không unbounded).
 - Khi đổi OCR/PDF, **đo lại** bằng `fileconv accuracy`/`speed` trên corpus (tái tạo bằng `bench/*.sh`).
 - Điểm yếu đã biết (xem `bench/REPORT*.md`): IN HOA dính chữ, bảng PDF nhiều cột, whisper ảo giác
   audio không lời, chữ viết tay. Tài liệu khó → tier vision-LLM: MCP tool `ocr_hard` (cần key).

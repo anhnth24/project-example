@@ -83,14 +83,20 @@ fn worksheet_merges(
 }
 
 fn relative_merge(dimensions: Dimensions, origin: (u32, u32)) -> Option<MergeRange> {
-    if dimensions.start.0 < origin.0 || dimensions.start.1 < origin.1 {
+    // Malformed XLSX may emit reversed merges or ends before the used-range
+    // origin; checked_sub avoids u32 underflow, then reject end < start.
+    let start_row = dimensions.start.0.checked_sub(origin.0)?;
+    let start_col = dimensions.start.1.checked_sub(origin.1)?;
+    let end_row = dimensions.end.0.checked_sub(origin.0)?;
+    let end_col = dimensions.end.1.checked_sub(origin.1)?;
+    if end_row < start_row || end_col < start_col {
         return None;
     }
     Some(MergeRange {
-        start_row: (dimensions.start.0 - origin.0) as usize,
-        start_col: (dimensions.start.1 - origin.1) as usize,
-        end_row: (dimensions.end.0 - origin.0) as usize,
-        end_col: (dimensions.end.1 - origin.1) as usize,
+        start_row: start_row as usize,
+        start_col: start_col as usize,
+        end_row: end_row as usize,
+        end_col: end_col as usize,
     })
 }
 
@@ -116,6 +122,100 @@ mod tests {
                 end_row: 3,
                 end_col: 3,
             }
+        );
+    }
+
+    #[test]
+    fn relative_merge_rejects_start_before_origin() {
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (1, 4),
+                    end: (5, 6),
+                },
+                (2, 3),
+            ),
+            None
+        );
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (3, 1),
+                    end: (5, 6),
+                },
+                (2, 3),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn relative_merge_rejects_end_before_origin() {
+        // End row/col before origin would underflow if subtracted unchecked.
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (3, 4),
+                    end: (1, 6),
+                },
+                (2, 3),
+            ),
+            None
+        );
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (3, 4),
+                    end: (5, 1),
+                },
+                (2, 3),
+            ),
+            None
+        );
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (3, 4),
+                    end: (0, 0),
+                },
+                (2, 3),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn relative_merge_rejects_reversed_ranges() {
+        // Both corners after origin, but end < start → invalid relative merge.
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (5, 4),
+                    end: (3, 6),
+                },
+                (2, 3),
+            ),
+            None
+        );
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (3, 6),
+                    end: (5, 4),
+                },
+                (2, 3),
+            ),
+            None
+        );
+        assert_eq!(
+            relative_merge(
+                Dimensions {
+                    start: (5, 6),
+                    end: (3, 4),
+                },
+                (2, 3),
+            ),
+            None
         );
     }
 }

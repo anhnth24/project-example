@@ -4,6 +4,7 @@
 //! không cần API key. Tool:
 //!   - `detect_format(path)`       — xem loại/kích thước/số trang/sheet (không convert).
 //!   - `convert_to_markdown(path)` — convert; hỗ trợ chọn trang (pages), sheet, max_chars.
+//!   - `convert_to_markdown_detailed(path)` — cùng convert + outcome/warnings (JSON).
 //!
 //! Đường dẫn tài nguyên qua env: FILECONV_PDFIUM_LIB, FILECONV_TESSDATA, FILECONV_WHISPER_MODEL.
 
@@ -141,10 +142,57 @@ impl Fileconv {
             if let Ok(m) = std::env::var("FILECONV_WHISPER_MODEL") {
                 opts.whisper_model = Some(PathBuf::from(m));
             }
+            // Per-request Converter is fine: WhisperContext is process-cached in fileconv-core.
             Converter::with_options(opts)
                 .convert_path(&PathBuf::from(&req.path))
                 .map(|r| r.markdown)
                 .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    #[tool(
+        description = "Giống convert_to_markdown nhưng trả JSON có outcome + warnings (partial success). Legacy convert_to_markdown vẫn chỉ trả Markdown thuần."
+    )]
+    async fn convert_to_markdown_detailed(
+        &self,
+        Parameters(req): Parameters<ConvertReq>,
+    ) -> Result<String, String> {
+        tokio::task::spawn_blocking(move || {
+            let mut opts = ConverterOptions {
+                pdf_pages: req.pages,
+                xlsx_sheet: req.sheet,
+                max_chars: req.max_chars,
+                ..ConverterOptions::default()
+            };
+            if let Some(l) = req.ocr_langs {
+                opts.ocr_langs = l;
+            }
+            if let Ok(m) = std::env::var("FILECONV_WHISPER_MODEL") {
+                opts.whisper_model = Some(PathBuf::from(m));
+            }
+            // Per-request Converter is fine: WhisperContext is process-cached in fileconv-core.
+            let report = Converter::with_options(opts)
+                .convert_path_detailed(&PathBuf::from(&req.path))
+                .map_err(|e| {
+                    // Structured `{message, kind}` — kind is a field, not text-only.
+                    serde_json::to_string(&e.to_dto()).unwrap_or_else(|_| {
+                        serde_json::json!({
+                            "message": e.error.to_string(),
+                            "kind": e.kind,
+                        })
+                        .to_string()
+                    })
+                })?;
+            serde_json::to_string(&serde_json::json!({
+                "markdown": report.result.markdown,
+                "title": report.result.title,
+                "format": report.result.format.as_str(),
+                "outcome": report.outcome(),
+                "warnings": report.warnings,
+            }))
+            .map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| e.to_string())?
@@ -296,4 +344,33 @@ async fn main() -> anyhow::Result<()> {
     let service = Fileconv::new().serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Fileconv;
+    use fileconv_core::{ConvertErrorKind, DetailedConvertError};
+
+    #[test]
+    fn convert_to_markdown_detailed_tool_is_registered() {
+        let server = Fileconv::new();
+        assert!(
+            server.tool_router.has_route("convert_to_markdown_detailed"),
+            "detailed convert tool must be registered"
+        );
+        assert!(
+            server.tool_router.has_route("convert_to_markdown"),
+            "legacy convert tool must remain registered"
+        );
+    }
+
+    #[test]
+    fn detailed_hard_failure_serializes_message_and_kind_dto() {
+        let err = DetailedConvertError::dependency_missing("không tìm thấy binary Tesseract");
+        let json = serde_json::to_value(err.to_dto()).expect("dto");
+        assert_eq!(json["kind"], "dependency_missing");
+        assert!(json["message"].as_str().unwrap().contains("Tesseract"));
+        assert!(json.get("error").is_none(), "use message, not error key");
+        assert_eq!(err.kind, ConvertErrorKind::DependencyMissing);
+    }
 }

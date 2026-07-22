@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use fileconv_core::intelligence::CorpusDocument;
+use fileconv_core::intelligence::{CorpusDocument, INTELLIGENCE_ID_SCHEME};
 
 use crate::ask::{
     extractive_answer, grounded_user_prompt, retrieval_context, valid_citation_ids, AnswerMode,
@@ -58,6 +58,7 @@ impl DesktopEmbeddingPlan {
                 model: LOCAL_EMBEDDING_MODE.into(),
                 dimensions: LOCAL_VECTOR_DIMENSIONS,
                 signature,
+                id_scheme: INTELLIGENCE_ID_SCHEME.into(),
             },
             // Schema-v2 canonical plan; legacy `"local_hash_v1"` string signatures rebuild.
             signature_plan: Some(signature_plan),
@@ -122,6 +123,7 @@ impl DesktopEmbeddingPlan {
                 model,
                 dimensions: dimensions.unwrap_or_default(),
                 signature: signature_plan.provisional_signature(),
+                id_scheme: INTELLIGENCE_ID_SCHEME.into(),
             },
             signature_plan: Some(signature_plan),
         })
@@ -142,6 +144,9 @@ impl DesktopEmbeddingPlan {
     }
 
     fn matches(&self, stored: &IndexMetadata) -> bool {
+        if stored.id_scheme.is_empty() || stored.id_scheme != self.metadata.id_scheme {
+            return false;
+        }
         let mut metadata = self.metadata.clone();
         if metadata.dimensions == 0 && stored.dimensions > 0 {
             metadata.dimensions = stored.dimensions;
@@ -168,7 +173,12 @@ pub fn rebuild_index<Embed>(
 where
     Embed: FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
 {
-    match rebuild_once(paths, documents, plan, &mut embed_provider) {
+    let clear = || hnsw::clear(&paths.ann_root);
+    let rebuild =
+        |signature: &str, id_scheme: &str, dimensions: usize, points: &[(String, Vec<f32>)]| {
+            hnsw::rebuild(&paths.ann_root, signature, id_scheme, dimensions, points)
+        };
+    match rebuild_once(paths, documents, plan, &mut embed_provider, clear, rebuild) {
         Ok(result) => Ok(result),
         Err(KnowledgeError::EmbeddingProviderFailure) if plan.is_provider() && fallback_local => {
             let mut result = rebuild_once(
@@ -176,6 +186,10 @@ where
                 documents,
                 &DesktopEmbeddingPlan::local(),
                 &mut embed_provider,
+                || hnsw::clear(&paths.ann_root),
+                |signature, id_scheme, dimensions, points| {
+                    hnsw::rebuild(&paths.ann_root, signature, id_scheme, dimensions, points)
+                },
             )?;
             result.warnings.push(
                 "embedding provider lỗi; đã rebuild toàn bộ scope bằng local hash offline.".into(),
@@ -186,12 +200,19 @@ where
     }
 }
 
-fn rebuild_once(
+fn rebuild_once<Embed, ClearAnn, RebuildAnn>(
     paths: &KnowledgePaths,
     documents: &[CorpusDocument],
     plan: &DesktopEmbeddingPlan,
-    embed_provider: &mut impl FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
-) -> Result<IndexBuildResult> {
+    embed_provider: &mut Embed,
+    mut clear_ann: ClearAnn,
+    mut rebuild_ann: RebuildAnn,
+) -> Result<IndexBuildResult>
+where
+    Embed: FnMut(&[String]) -> Result<Vec<Vec<f32>>>,
+    ClearAnn: FnMut() -> Result<()>,
+    RebuildAnn: FnMut(&str, &str, usize, &[(String, Vec<f32>)]) -> Result<bool>,
+{
     let mut store = SqliteKnowledgeStore::open(&paths.database)?;
     let stored = store.index_documents(
         documents,
@@ -207,26 +228,41 @@ fn rebuild_once(
                     .collect())
             }
         },
-        || hnsw::clear(&paths.ann_root),
+        &mut clear_ann,
     )?;
     let mut warnings = Vec::new();
     if stored.replaced_incompatible_index {
-        warnings
-            .push("Embedding signature thay đổi; đã rebuild knowledge index tương thích.".into());
+        warnings.push(
+            "Index compatibility thay đổi (embedding signature hoặc intelligence ID scheme); đã rebuild SQLite/FTS. HNSW được clear/rebuild riêng (không chung transaction)."
+                .into(),
+        );
     }
+    if let Some(error) = stored.hnsw_clear_error.as_ref() {
+        warnings.push(format!(
+            "HNSW clear lỗi sau SQLite commit ({error}); ANN cũ bị từ chối theo ID scheme, search dùng exact cosine cho đến khi rebuild thành công."
+        ));
+        // Best-effort retry; failure still leaves scheme-gated exact fallback.
+        if let Err(retry_error) = clear_ann() {
+            warnings.push(format!(
+                "HNSW clear retry lỗi ({retry_error}); tiếp tục exact cosine fallback."
+            ));
+        }
+    }
+    let id_scheme = stored.metadata.id_scheme.as_str();
     if stored.indexed > 0
         || !hnsw::is_available(
             &paths.ann_root,
             &stored.metadata.signature,
+            id_scheme,
             stored.metadata.dimensions,
         )
     {
         match store
             .load_vector_points(stored.metadata.dimensions)
             .and_then(|points| {
-                hnsw::rebuild(
-                    &paths.ann_root,
+                rebuild_ann(
                     &stored.metadata.signature,
+                    id_scheme,
                     stored.metadata.dimensions,
                     &points,
                 )
@@ -284,27 +320,27 @@ where
     let lexical_rank = store.lexical_ranks(&fts5_prefix_query(query), &scope, 250)?;
     let chunks = store.load_chunks(&scope, metadata.dimensions)?;
     let mut warnings = Vec::new();
-    let query_vector = if metadata.mode == PROVIDER_EMBEDDING_MODE {
-        if plan.matches(&metadata) {
-            match embed_query(query) {
-                Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
-                Ok(vector) => {
-                    warnings.push(format!(
-                        "Query embedding {}D không khớp index {}D; chỉ dùng FTS.",
-                        vector.len(),
-                        metadata.dimensions
-                    ));
-                    None
-                }
-                Err(_) => {
-                    warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".into());
-                    None
-                }
+    let query_vector = if !plan.matches(&metadata) {
+        warnings.push(
+            "Cấu hình index không khớp (embedding signature hoặc intelligence ID scheme); hãy rebuild. Tạm chỉ dùng FTS."
+                .into(),
+        );
+        None
+    } else if metadata.mode == PROVIDER_EMBEDDING_MODE {
+        match embed_query(query) {
+            Ok(vector) if vector.len() == metadata.dimensions => Some(vector),
+            Ok(vector) => {
+                warnings.push(format!(
+                    "Query embedding {}D không khớp index {}D; chỉ dùng FTS.",
+                    vector.len(),
+                    metadata.dimensions
+                ));
+                None
             }
-        } else {
-            warnings
-                .push("Cấu hình embedding không khớp index; hãy rebuild. Tạm chỉ dùng FTS.".into());
-            None
+            Err(_) => {
+                warnings.push("Embedding provider lỗi; chỉ dùng FTS lexical.".into());
+                None
+            }
         }
     } else {
         Some(local_vector(query).into_values())
@@ -322,7 +358,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-fn rank_hits(
+pub(crate) fn rank_hits(
     ann_root: &Path,
     chunks: Vec<StoredChunk>,
     lexical_rank: HashMap<String, (usize, f32)>,
@@ -338,6 +374,7 @@ fn rank_hits(
             match hnsw::search(
                 ann_root,
                 &metadata.signature,
+                &metadata.id_scheme,
                 metadata.dimensions,
                 query_vector,
                 (chunks.len() * 4).clamp(500, 5_000),
@@ -452,6 +489,7 @@ pub fn index_stats(paths: &KnowledgePaths) -> Result<IndexStats> {
         ann_available: hnsw::is_available(
             &paths.ann_root,
             &metadata.signature,
+            &metadata.id_scheme,
             metadata.dimensions,
         ),
         ann_threshold: 1_000,
@@ -605,7 +643,7 @@ mod tests {
         assert!(result
             .warnings
             .iter()
-            .any(|warning| warning.contains("Embedding signature thay đổi")));
+            .any(|warning| warning.contains("rebuild") && warning.contains("ID scheme")));
         let _ = std::fs::remove_dir_all(paths.ann_root);
     }
 
@@ -618,6 +656,308 @@ mod tests {
         let mut legacy = local.metadata().clone();
         legacy.signature = LOCAL_EMBEDDING_MODE.into();
         assert!(!local.matches(&legacy));
+    }
+
+    #[test]
+    fn missing_or_legacy_id_scheme_forces_rebuild_match_failure() {
+        let local = DesktopEmbeddingPlan::local();
+        assert_eq!(local.metadata().id_scheme, INTELLIGENCE_ID_SCHEME);
+        let mut missing = local.metadata().clone();
+        missing.id_scheme.clear();
+        assert!(!local.matches(&missing));
+        let mut other = local.metadata().clone();
+        other.id_scheme = "sip13-v1".into();
+        assert!(!local.matches(&other));
+        assert!(local.matches(local.metadata()));
+    }
+
+    #[test]
+    fn hnsw_clear_failure_warns_and_leaves_scheme_gated_exact_fallback() {
+        let paths = temp_paths();
+        // Seed a legacy (empty-scheme) ANN partition that must become unusable.
+        let legacy_points = (0..128)
+            .map(|index| {
+                let mut vector = vec![0.0; LOCAL_VECTOR_DIMENSIONS];
+                vector[index % LOCAL_VECTOR_DIMENSIONS] = 1.0;
+                (format!("legacy-chunk-{index}"), vector)
+            })
+            .collect::<Vec<_>>();
+        hnsw::rebuild(
+            &paths.ann_root,
+            LOCAL_EMBEDDING_MODE,
+            "",
+            LOCAL_VECTOR_DIMENSIONS,
+            &legacy_points,
+        )
+        .unwrap();
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            LOCAL_EMBEDDING_MODE,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+
+        let mut store = SqliteKnowledgeStore::open(&paths.database).unwrap();
+        let doc = document();
+        let metadata = DesktopEmbeddingPlan::local().metadata().clone();
+        // Seed SQLite with a legacy empty scheme, then upgrade with failing clear.
+        store
+            .index_documents(
+                &[doc.clone()],
+                {
+                    let mut legacy = metadata.clone();
+                    legacy.id_scheme.clear();
+                    legacy.signature = LOCAL_EMBEDDING_MODE.into();
+                    legacy
+                },
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || Ok(()),
+            )
+            .unwrap();
+        let upgraded = store
+            .index_documents(
+                &[doc],
+                metadata.clone(),
+                None,
+                |inputs| {
+                    Ok(inputs
+                        .iter()
+                        .map(|input| local_vector(input).into_values())
+                        .collect())
+                },
+                || Err(KnowledgeError::AdapterFailure("clear denied".into())),
+            )
+            .unwrap();
+        assert!(upgraded.hnsw_clear_error.is_some());
+        assert_eq!(upgraded.metadata.id_scheme, INTELLIGENCE_ID_SCHEME);
+        // Stale empty-scheme ANN may still be on disk, but must not be usable
+        // under the new SQLite ID scheme (exact cosine self-heals).
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            LOCAL_EMBEDDING_MODE,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+        assert!(!hnsw::is_available(
+            &paths.ann_root,
+            &metadata.signature,
+            INTELLIGENCE_ID_SCHEME,
+            metadata.dimensions
+        ));
+        let _ = std::fs::remove_dir_all(paths.ann_root);
+    }
+
+    #[test]
+    fn clear_then_rebuild_failure_rank_hits_exact_cosine_then_recovers() {
+        let paths = temp_paths();
+        let plan = DesktopEmbeddingPlan::local();
+        // >1000 chunks so rank_hits takes the HNSW branch (then falls back).
+        let documents = (0..1_050)
+            .map(|index| CorpusDocument {
+                source_rel: format!("doc-{index}.md"),
+                md_rel: format!("doc-{index}.md.md"),
+                format: "markdown".into(),
+                markdown: format!("# Mục {index}\n\nNội dung đối soát số {index}."),
+            })
+            .collect::<Vec<_>>();
+        let mut local_embed = |inputs: &[String]| {
+            Ok(inputs
+                .iter()
+                .map(|input| local_vector(input).into_values())
+                .collect())
+        };
+
+        // Legacy SQLite (empty id_scheme) + matching empty-scheme ANN.
+        let mut legacy_meta = plan.metadata().clone();
+        legacy_meta.id_scheme.clear();
+        let mut store = SqliteKnowledgeStore::open(&paths.database).unwrap();
+        store
+            .index_documents(
+                &documents,
+                legacy_meta,
+                plan.signature_plan.as_ref(),
+                &mut local_embed,
+                || Ok(()),
+            )
+            .unwrap();
+        let points = store.load_vector_points(LOCAL_VECTOR_DIMENSIONS).unwrap();
+        assert!(points.len() > 1_000);
+        hnsw::rebuild(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            "",
+            LOCAL_VECTOR_DIMENSIONS,
+            &points,
+        )
+        .unwrap();
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+
+        // Scheme upgrade: clear fails (both attempts) and rebuild fails.
+        let failed = rebuild_once(
+            &paths,
+            &documents,
+            &plan,
+            &mut local_embed,
+            || Err(KnowledgeError::AdapterFailure("clear denied".into())),
+            |_signature, _id_scheme, _dimensions, _points| {
+                Err(KnowledgeError::AdapterFailure("rebuild denied".into()))
+            },
+        )
+        .unwrap();
+        assert!(failed
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("clear lỗi")));
+        assert!(failed
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("clear retry lỗi")));
+        assert!(failed
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("HNSW cache build lỗi")
+                && warning.contains("exact cosine")));
+        assert_eq!(failed.vector_dimensions, LOCAL_VECTOR_DIMENSIONS);
+        // Stale empty-scheme ANN may remain; new-scheme ANN must not.
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+        assert!(!hnsw::is_available(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            INTELLIGENCE_ID_SCHEME,
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+
+        let metadata = SqliteKnowledgeStore::open(&paths.database)
+            .unwrap()
+            .metadata()
+            .unwrap();
+        assert_eq!(metadata.id_scheme, INTELLIGENCE_ID_SCHEME);
+        let store = SqliteKnowledgeStore::open(&paths.database).unwrap();
+        let scope = documents
+            .iter()
+            .map(|document| document.source_rel.clone())
+            .collect::<HashSet<_>>();
+        let chunks = store.load_chunks(&scope, LOCAL_VECTOR_DIMENSIONS).unwrap();
+        assert!(chunks.len() > 1_000);
+        let query = "đối soát";
+        let query_tokens = normalized_tokens(query);
+        let lexical_rank = store
+            .lexical_ranks(&fts5_prefix_query(query), &scope, 250)
+            .unwrap();
+        let query_vector = local_vector(query).into_values();
+        let ranked = rank_hits(
+            &paths.ann_root,
+            chunks,
+            lexical_rank,
+            Some(query_vector.as_slice()),
+            &query_tokens,
+            10,
+            &metadata,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            ranked
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("exact cosine")),
+            "warnings={:?}",
+            ranked.warnings
+        );
+        assert!(!ranked.hits.is_empty());
+        assert!(ranked.hits.iter().all(|hit| hit.vector_score.is_finite()));
+        assert!(ranked
+            .hits
+            .iter()
+            .any(|hit| hit.chunk_id.contains(INTELLIGENCE_ID_SCHEME)));
+        // Must not have read stale empty-scheme ANN chunk ids.
+        assert!(ranked
+            .hits
+            .iter()
+            .all(|hit| !hit.chunk_id.starts_with("legacy-chunk-")));
+
+        // Recovery: wipe leftover ANN (including stale empty-scheme), then rebuild.
+        hnsw::clear(&paths.ann_root).unwrap();
+        assert!(!hnsw::is_available(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+        let recovered = rebuild_once(
+            &paths,
+            &documents,
+            &plan,
+            &mut local_embed,
+            || hnsw::clear(&paths.ann_root),
+            |signature, id_scheme, dimensions, points| {
+                hnsw::rebuild(&paths.ann_root, signature, id_scheme, dimensions, points)
+            },
+        )
+        .unwrap();
+        assert!(
+            recovered
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("HNSW cache build lỗi")),
+            "warnings={:?}",
+            recovered.warnings
+        );
+        assert!(hnsw::is_available(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            INTELLIGENCE_ID_SCHEME,
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+        assert!(!hnsw::is_available(
+            &paths.ann_root,
+            &plan.metadata().signature,
+            "",
+            LOCAL_VECTOR_DIMENSIONS
+        ));
+
+        let store = SqliteKnowledgeStore::open(&paths.database).unwrap();
+        let chunks = store.load_chunks(&scope, LOCAL_VECTOR_DIMENSIONS).unwrap();
+        let lexical_rank = store
+            .lexical_ranks(&fts5_prefix_query(query), &scope, 250)
+            .unwrap();
+        let recovered_rank = rank_hits(
+            &paths.ann_root,
+            chunks,
+            lexical_rank,
+            Some(query_vector.as_slice()),
+            &query_tokens,
+            10,
+            &metadata,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(
+            recovered_rank
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("exact cosine")),
+            "warnings={:?}",
+            recovered_rank.warnings
+        );
+        assert!(!recovered_rank.hits.is_empty());
+        let _ = std::fs::remove_dir_all(paths.ann_root);
     }
 
     #[test]

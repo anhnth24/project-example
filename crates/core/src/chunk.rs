@@ -17,7 +17,101 @@ pub struct Chunk {
 // serde chỉ dùng cho Serialize của Chunk — thêm dep nhẹ qua serde_json đã có.
 use serde::ser::Serialize as _;
 
+/// Chuẩn hoá CRLF (`\r\n`) → LF để so khớp body canonical với span nguồn.
+///
+/// **Không** dùng làm pre-pass trước `str::lines()`: trên input như `a\r\r\nb`,
+/// replace `\r\n`→`\n` thành `a\r\nb` làm `lines()` nuốt standalone `\r`
+/// (Rust `lines` chỉ tách `\n`/`\r\n`, giữ lone `\r` trong nội dung dòng).
+/// **Không** đụng standalone `\r` ngoài cặp CRLF.
+pub fn normalize_newlines(md: &str) -> std::borrow::Cow<'_, str> {
+    if !md.as_bytes().windows(2).any(|window| window == b"\r\n") {
+        return std::borrow::Cow::Borrowed(md);
+    }
+    std::borrow::Cow::Owned(md.replace("\r\n", "\n"))
+}
+
+/// Clamp `offset` xuống char boundary gần nhất bên trái (hoặc 0).
+pub fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
+    let mut offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+/// Định vị `needle` (chunk text chuẩn LF) trong `haystack` gốc kể từ `cursor`.
+///
+/// `\n` trong needle khớp `\n` **hoặc** `\r\n` trong haystack (không khớp lone `\r`).
+/// Luôn chọn **match sớm nhất** theo byte offset — quan trọng khi cùng nội dung
+/// xuất hiện vừa dạng LF vừa dạng CRLF.
+///
+/// Trả về `(start, end)` UTF-8-safe trên haystack, hoặc `None` nếu không thấy.
+pub fn locate_chunk_text(haystack: &str, cursor: usize, needle: &str) -> Option<(usize, usize)> {
+    if needle.is_empty() {
+        return None;
+    }
+    let cursor = clamp_to_char_boundary(haystack, cursor.min(haystack.len()));
+    let hay_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let mut start = cursor;
+    while start < hay_bytes.len() {
+        if let Some(end) = match_lf_needle_at(hay_bytes, start, needle_bytes) {
+            if haystack.is_char_boundary(start) && haystack.is_char_boundary(end) {
+                return Some((start, end));
+            }
+        }
+        start = next_char_boundary(haystack, start + 1);
+    }
+    None
+}
+
+/// Giống [`locate_chunk_text`], nhưng khi không tìm thấy trả `(cursor, cursor)`
+/// đã clamp — caller **giữ chunk** (không drop), core và server dùng chung.
+pub fn locate_chunk_span(haystack: &str, cursor: usize, needle: &str) -> (usize, usize) {
+    locate_chunk_text(haystack, cursor, needle).unwrap_or_else(|| {
+        let cursor = clamp_to_char_boundary(haystack, cursor.min(haystack.len()));
+        (cursor, cursor)
+    })
+}
+
+fn next_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset < text.len() && !text.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
+fn match_lf_needle_at(haystack: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    let mut hi = start;
+    let mut ni = 0usize;
+    while ni < needle.len() {
+        if needle[ni] == b'\n' {
+            // Chỉ CRLF hoặc LF — không coi lone CR là newline-equivalent.
+            if hi + 1 < haystack.len() && haystack[hi] == b'\r' && haystack[hi + 1] == b'\n' {
+                hi += 2;
+            } else if hi < haystack.len() && haystack[hi] == b'\n' {
+                hi += 1;
+            } else {
+                return None;
+            }
+            ni += 1;
+            continue;
+        }
+        if hi >= haystack.len() || haystack[hi] != needle[ni] {
+            return None;
+        }
+        hi += 1;
+        ni += 1;
+    }
+    Some(hi)
+}
+
 /// Chia markdown thành chunks ≤ `max_chars` (xấp xỉ — đo theo ký tự).
+///
+/// Duyệt bằng `str::lines()` trực tiếp trên nguồn (không pre-normalize CRLF):
+/// CRLF vẫn cho body canonical LF khi rejoin `\n`, còn standalone `\r` nằm trong
+/// nội dung dòng và giữ được khi định vị lại span.
 pub fn chunk_markdown(md: &str, max_chars: usize) -> Vec<Chunk> {
     let max_chars = max_chars.max(200); // sàn tối thiểu hợp lý
                                         // 1) Gom thành section theo heading.
@@ -142,5 +236,89 @@ mod tests {
         let md = "# A\n\nbody a\n\n## B\n\nbody b\n\n# C\n\nbody c\n";
         let c = chunk_markdown(md, 1000);
         assert_eq!(c[2].heading, "C"); // không còn dính "A >"
+    }
+
+    #[test]
+    fn normalize_newlines_only_collapses_crlf_not_lone_cr() {
+        assert_eq!(normalize_newlines("a\r\nb"), "a\nb");
+        // Standalone CR phải giữ nguyên (không migration/versioning).
+        assert_eq!(normalize_newlines("a\rb"), "a\rb");
+        assert_eq!(normalize_newlines("a\r\nb\rc"), "a\nb\rc");
+        // Helper vẫn replace cặp CRLF trong `\r\r\n` — vì vậy chunk_markdown
+        // không được gọi normalize trước lines().
+        assert_eq!(normalize_newlines("a\r\r\nb"), "a\r\nb");
+    }
+
+    #[test]
+    fn chunk_markdown_preserves_standalone_cr_before_crlf_with_nonempty_span() {
+        // `a\r\r\nb`: lone CR rồi CRLF. Pre-normalize → `a\r\nb` làm lines() mất `\r`.
+        let md = "a\r\r\nb";
+        assert_eq!(md.lines().collect::<Vec<_>>(), ["a\r", "b"]);
+        let chunks = chunk_markdown(md, 2_000);
+        assert_eq!(chunks.len(), 1);
+        // Body: lone CR giữ trong nội dung; CRLF → LF khi rejoin.
+        assert_eq!(chunks[0].text, "a\r\nb");
+        let (start, end) = locate_chunk_text(md, 0, &chunks[0].text).expect("nonempty span");
+        assert!(end > start, "span must be nonempty");
+        assert_eq!(&md[start..end], "a\r\r\nb");
+        assert_eq!(
+            normalize_newlines(&md[start..end]).as_ref(),
+            chunks[0].text.as_str()
+        );
+        // Nguồn gốc không bị rewrite — standalone CR semantics giữ nguyên.
+        assert!(md.as_bytes().windows(3).any(|w| w == b"\r\r\n"));
+    }
+
+    #[test]
+    fn locate_chunk_text_matches_multiline_crlf_exactly() {
+        let md = "# Tiếng Việt\r\n\r\nHệ thống phải giữ dấu.\r\nDòng hai vẫn khớp.\r\n";
+        let chunks = chunk_markdown(md, 2_000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "Hệ thống phải giữ dấu.\nDòng hai vẫn khớp.");
+        let (start, end) = locate_chunk_text(md, 0, &chunks[0].text).expect("span");
+        assert_eq!(
+            &md[start..end],
+            "Hệ thống phải giữ dấu.\r\nDòng hai vẫn khớp."
+        );
+        assert_eq!(normalize_newlines(&md[start..end]), chunks[0].text);
+    }
+
+    #[test]
+    fn locate_chunk_text_picks_earliest_newline_equivalent_across_mixed_duplicates() {
+        // CRLF occurrence trước, bản LF trùng nội dung sau — phải neo vào CRLF sớm nhất.
+        let md = "# A\r\n\r\nLine one.\r\nLine two.\r\n\r\n# B\n\nLine one.\nLine two.\n";
+        let needle = "Line one.\nLine two.";
+        let (start, end) = locate_chunk_text(md, 0, needle).expect("earliest");
+        assert_eq!(&md[start..end], "Line one.\r\nLine two.");
+        // Duplicate sau cursor phải bắt bản LF.
+        let (start2, end2) = locate_chunk_text(md, end, needle).expect("second");
+        assert_eq!(&md[start2..end2], "Line one.\nLine two.");
+        assert!(start2 > end);
+    }
+
+    #[test]
+    fn locate_chunk_text_does_not_treat_lone_cr_as_newline() {
+        let md = "Line one.\rLine two.";
+        assert!(locate_chunk_text(md, 0, "Line one.\nLine two.").is_none());
+        let (start, end) = locate_chunk_span(md, 0, "Line one.\nLine two.");
+        assert_eq!((start, end), (0, 0));
+    }
+
+    #[test]
+    fn locate_chunk_text_is_utf8_safe_for_vietnamese() {
+        let md = "# Mục\n\nNội dung có chữ ệ và ư.\n";
+        let chunks = chunk_markdown(md, 2_000);
+        let (start, end) = locate_chunk_text(md, 0, &chunks[0].text).expect("span");
+        assert!(md.is_char_boundary(start));
+        assert!(md.is_char_boundary(end));
+        assert_eq!(&md[start..end], chunks[0].text.as_str());
+    }
+
+    #[test]
+    fn clamp_to_char_boundary_backs_up_from_mid_glyph() {
+        let text = "ệ";
+        assert_eq!(text.len(), 3);
+        assert_eq!(clamp_to_char_boundary(text, 1), 0);
+        assert_eq!(clamp_to_char_boundary(text, 3), 3);
     }
 }

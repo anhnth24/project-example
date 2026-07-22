@@ -23,6 +23,20 @@ use walkdir::WalkDir;
 
 mod metrics;
 
+/// Registered top-level CLI commands (keep in sync with `main` match arms).
+fn registered_commands() -> &'static [&'static str] {
+    &[
+        "speed",
+        "accuracy",
+        "audio",
+        "one",
+        "one-detailed",
+        "handoff",
+        "pptx-preview",
+        "info",
+    ]
+}
+
 fn main() -> Result<()> {
     // Panic hook gọn: pdf-extract có thể panic; ta đã catch_unwind nên chỉ cần
     // một dòng ngắn thay vì backtrace dài.
@@ -36,7 +50,7 @@ fn main() -> Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("dùng: fileconv <speed|accuracy|audio|one|handoff|pptx-preview|info> ...");
+        eprintln!("dùng: fileconv <{}> ...", registered_commands().join("|"));
         std::process::exit(2);
     }
     match args[1].as_str() {
@@ -113,6 +127,75 @@ fn main() -> Result<()> {
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
             Ok(())
+        }
+        "one-detailed" => {
+            // Additive structured report (stdout JSON). Legacy `one` stays markdown-only.
+            // Hard failures serialize `{message, kind}` DTOs (kind is a field, not text-only).
+            let f = args.get(2).context("thiếu file")?;
+            let rest = &args[3..];
+            let mut opts = fileconv_core::ConverterOptions::default();
+            if rest.iter().any(|a| a == "--ocr-images") {
+                opts.pdf_ocr_images = true;
+            }
+            if rest.iter().any(|a| a == "--no-pdf-ocr") {
+                opts.pdf_ocr = false;
+            }
+            if let Some(l) = rest
+                .iter()
+                .position(|a| a == "--lang")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.ocr_langs = l.clone();
+            }
+            if let Some(engine) = rest
+                .iter()
+                .position(|argument| argument == "--ocr-engine")
+                .and_then(|index| rest.get(index + 1))
+            {
+                opts.ocr_engine = fileconv_core::image_ocr::OcrEngine::from_name(engine);
+            }
+            if let Some(p) = rest
+                .iter()
+                .position(|a| a == "--pages")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.pdf_pages = Some(p.split(',').filter_map(|x| x.trim().parse().ok()).collect());
+            }
+            if let Some(s) = rest
+                .iter()
+                .position(|a| a == "--sheet")
+                .and_then(|i| rest.get(i + 1))
+            {
+                opts.xlsx_sheet = Some(s.clone());
+            }
+            if let Some(m) = rest
+                .iter()
+                .position(|a| a == "--max-chars")
+                .and_then(|i| rest.get(i + 1))
+                .and_then(|x| x.parse().ok())
+            {
+                opts.max_chars = Some(m);
+            }
+            match Converter::with_options(opts).convert_path_detailed(Path::new(f)) {
+                Ok(report) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "markdown": report.result.markdown,
+                            "title": report.result.title,
+                            "format": report.result.format.as_str(),
+                            "outcome": report.outcome(),
+                            "warnings": report.warnings,
+                        }))?
+                    );
+                    Ok(())
+                }
+                Err(error) => {
+                    let dto = error.to_dto();
+                    println!("{}", serde_json::to_string_pretty(&dto)?);
+                    std::process::exit(1);
+                }
+            }
         }
         "handoff" => {
             let product = args.get(2).context("thiếu tên sản phẩm")?;
@@ -746,5 +829,42 @@ fn count_pages(path: &Path, fmt: FormatKind) -> Option<u32> {
             String::from_utf8_lossy(&out.stdout).trim().parse().ok()
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::registered_commands;
+    use fileconv_core::{ConvertErrorKind, DetailedConvertError};
+
+    #[test]
+    fn one_detailed_command_is_registered() {
+        assert!(
+            registered_commands().contains(&"one-detailed"),
+            "one-detailed must stay registered alongside legacy one"
+        );
+        assert!(registered_commands().contains(&"one"));
+    }
+
+    #[test]
+    fn detailed_hard_failure_dto_has_structured_message_and_kind() {
+        let dto = DetailedConvertError::dependency_missing(
+            "không tìm thấy binary Tesseract (/nonexistent)",
+        )
+        .to_dto();
+        let value = serde_json::to_value(&dto).expect("serialize dto");
+        assert_eq!(value["kind"], "dependency_missing");
+        assert_eq!(dto.kind, ConvertErrorKind::DependencyMissing);
+        assert!(
+            value["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Tesseract"),
+            "message field must carry human text: {value}"
+        );
+        // Kind must be a sibling JSON field — not only embedded inside message text.
+        assert!(value.get("kind").is_some());
+        assert!(value.get("message").is_some());
+        assert_ne!(value["kind"], value["message"]);
     }
 }

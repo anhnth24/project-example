@@ -31,7 +31,7 @@
         "mock-embedding": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
         "minio-init": "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727"
       },
-      "fixtureManifestSha256": "a1ccd95129815af085db95f4dfa9d8f6428050b4201a1418aba20c9e0f08f013",
+      "fixtureManifestSha256": "79a1a3b623a1b888a11625150254c51971732e469b00d714ff05f75f2b238304",
       "hardware": {
         "cpu": {
           "vendor": "GenuineIntel",
@@ -72,7 +72,7 @@
     }
   },
   "fixtures": {
-    "manifestSha256": "a1ccd95129815af085db95f4dfa9d8f6428050b4201a1418aba20c9e0f08f013"
+    "manifestSha256": "79a1a3b623a1b888a11625150254c51971732e469b00d714ff05f75f2b238304"
   },
   "fixtureManifestPath": "tests/fixtures/manifest.json",
   "implementationSha256": "d053e401dbd8829701c932c072944337320177aba98009cbdf9b18565f61b616",

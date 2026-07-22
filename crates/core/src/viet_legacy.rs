@@ -9,6 +9,12 @@
 //! và cross-check với vietunicode.sourceforge.net (á=0xB8, ă=0xA8, đ=0xAE khớp).
 //! Lưu ý: 'ư' là 0xAD (soft-hyphen) — nhiều bảng copy trên web hiển thị sai thành '-'.
 //! VNI/VPS maps được sinh từ bảng VietUnicode bằng `bench/generate_viet_legacy_maps.py`.
+//!
+//! **Hạn chế TCVN3 chữ hoa có dấu:** TCVN 5712-3 / VietUnicode mô tả capital vowels
+//! qua font hoa riêng (TCVN-3-1 thường / TCVN-3-2 hoa), không phải digraph byte chắc chắn
+//! trong luồng không có metadata font/run. Decode ở đây **không** đoán hoa bằng
+//! lookahead base+tone — chỉ map single-byte (base hoa ĂÂÊÔƠƯĐ + chữ thường có dấu).
+//! Cần font/run metadata (hoặc bảng TCVN-3-2 tường minh) mới nâng case đúng.
 
 use crate::viet_legacy_maps::{VNI_MAP, VPS_MAP};
 
@@ -117,7 +123,7 @@ pub fn looks_like_tcvn3(bytes: &[u8]) -> bool {
     high >= 3 && hit * 10 >= high * 7
 }
 
-/// Decode TCVN3 → String Unicode.
+/// Decode TCVN3 → String Unicode (single-byte map; xem hạn chế chữ hoa có dấu ở đầu module).
 pub fn decode_tcvn3(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -341,5 +347,12 @@ mod tests {
         assert_eq!(result.format, crate::FormatKind::Text);
         assert_eq!(result.markdown, LEGACY_SENTENCE);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn does_not_guess_tcvn3_uppercase_via_base_tone_lookahead() {
+        // Không có font metadata: A + 0xB8 phải ra "Aá", không bị ghép thành "Á".
+        assert_eq!(decode_tcvn3(&[0x41, 0xB8]), "Aá");
+        assert_eq!(decode_tcvn3(&[0xA1, 0xA2, 0xA7]), "ĂÂĐ");
     }
 }

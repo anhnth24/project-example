@@ -22,41 +22,13 @@ pub use crate::identity::{
     RUNTIME_VLLM_LOCAL,
 };
 
-const ALLOWED_RUNTIME_PATHS: &[&str] = &[
-    RUNTIME_LOCAL_HASH,
-    RUNTIME_LOCAL_NEURAL,
-    RUNTIME_GLM_CLOUD_INTERIM,
-    RUNTIME_VLLM_LOCAL,
-    RUNTIME_PROVIDER_CLOUD,
-];
-
 /// Map endpoint metadata to a canonical runtime path (ADR 0006).
 ///
-/// Fallback only — desktop presets carry an explicit `runtime_path` on
-/// `EmbeddingConfig` because real vLLM hosts (`127.0.0.1:8000` + `BAAI/bge-m3`)
-/// do not contain the string `"vllm"`. Kept here (not behind core `llm`) so the
-/// knowledge crate stays usable without the HTTP client feature.
-pub fn infer_runtime_path(base_url: Option<&str>, model: &str) -> &'static str {
-    let host = base_url
-        .and_then(|value| url::Url::parse(value).ok())
-        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
-        .unwrap_or_default();
-    let model = model.to_ascii_lowercase();
-    let blob = format!("{host} {model}");
-    if host.contains("bigmodel")
-        || host.contains("z.ai")
-        || host.contains("zhipu")
-        || model.starts_with("embedding-2")
-        || model.starts_with("embedding-3")
-        || blob.contains("glm")
-    {
-        return RUNTIME_GLM_CLOUD_INTERIM;
-    }
-    if host.contains("vllm") || model.contains("vllm") {
-        return RUNTIME_VLLM_LOCAL;
-    }
-    RUNTIME_PROVIDER_CLOUD
-}
+/// Re-export of always-on [`fileconv_core::embedding_runtime::infer_embedding_runtime_path`]
+/// (not behind core `llm`). Fallback only — desktop presets carry an explicit
+/// `runtime_path` because real vLLM hosts (`127.0.0.1:8000` + `BAAI/bge-m3`) do
+/// not contain a `vllm` DNS label.
+pub use fileconv_core::embedding_runtime::infer_embedding_runtime_path as infer_runtime_path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingVector {
@@ -195,7 +167,7 @@ impl EmbeddingPlan {
                 "embedding dimensions must be positive",
             ));
         }
-        if !ALLOWED_RUNTIME_PATHS.contains(&runtime_path.as_str()) {
+        if !fileconv_core::embedding_runtime::is_allowed_embedding_runtime_path(&runtime_path) {
             return Err(KnowledgeError::InvalidInput(
                 "embedding runtime_path is unsupported",
             ));
@@ -624,5 +596,113 @@ mod tests {
         );
         assert_eq!(signature.runtime_path, super::RUNTIME_LOCAL_HASH);
         assert_eq!(signature.dimensions, LOCAL_VECTOR_DIMENSIONS);
+    }
+
+    #[test]
+    fn infer_runtime_path_literal_cases() {
+        let cases: &[(Option<&str>, &str, &str)] = &[
+            (None, "text-embedding-3-small", "provider-cloud"),
+            (
+                Some("http://127.0.0.1:8000"),
+                "BAAI/bge-m3",
+                "provider-cloud",
+            ),
+            (
+                Some("https://open.bigmodel.cn/api/paas/v4"),
+                "embedding-3",
+                "glm-cloud-interim",
+            ),
+            (
+                Some("open.bigmodel.cn/api/paas/v4"),
+                "custom",
+                "glm-cloud-interim",
+            ),
+            (Some("https://api.z.ai/v1"), "embed", "glm-cloud-interim"),
+            (Some("https://modelz.ai/v1"), "embed", "provider-cloud"),
+            (Some("http://vllm.internal:8000/v1"), "bge-m3", "vllm-local"),
+            (
+                Some("http://vllm.internal:8000/v1"),
+                "glm-embedding",
+                "vllm-local",
+            ),
+            (
+                Some("http://vllm.bigmodel.cn/v1"),
+                "bge-m3",
+                "glm-cloud-interim",
+            ),
+            (Some("http://[vllm::1]:8000/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some(r"https://evil.com\@open.bigmodel.cn/v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (
+                Some(r"https://evil\bigmodel.cn@127.0.0.1/v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (None, "embedding-3", "glm-cloud-interim"),
+            (None, "embedding-2", "glm-cloud-interim"),
+            (None, "org/embedding-3", "glm-cloud-interim"),
+            (None, "embedding-3000", "provider-cloud"),
+            (None, "embedding-3rdparty", "provider-cloud"),
+            (None, "text-embedding-3-small", "provider-cloud"),
+            (None, "vllm-served-model", "vllm-local"),
+            (
+                Some("https://open.bigmodel.cn./api/paas/v4"),
+                "custom",
+                "glm-cloud-interim",
+            ),
+            (
+                Some("http://vllm.internal.:8000/v1"),
+                "bge-m3",
+                "vllm-local",
+            ),
+            (
+                Some("http://localhost.:8000/v1"),
+                "embedding-3",
+                "provider-cloud",
+            ),
+            (Some("https://.bigmodel.cn/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("https://open.bigmodel.cn../v1"),
+                "bge-m3",
+                "provider-cloud",
+            ),
+            (Some("http://vllm..internal/v1"), "bge-m3", "provider-cloud"),
+            (Some("ftp://vllm.internal/v1"), "bge-m3", "provider-cloud"),
+            (
+                Some("https://api.openai.com/v1"),
+                "embedding-3",
+                "provider-cloud",
+            ),
+        ];
+        for (base_url, model, expected) in cases {
+            assert_eq!(
+                super::infer_runtime_path(*base_url, model),
+                *expected,
+                "knowledge infer_runtime_path base_url={base_url:?} model={model}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_constants_alias_core_embedding_runtime() {
+        use fileconv_core::embedding_runtime::{
+            EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM, EMBEDDING_RUNTIME_LOCAL_HASH,
+            EMBEDDING_RUNTIME_LOCAL_NEURAL, EMBEDDING_RUNTIME_PROVIDER_CLOUD,
+            EMBEDDING_RUNTIME_VLLM_LOCAL,
+        };
+        assert_eq!(super::RUNTIME_LOCAL_HASH, EMBEDDING_RUNTIME_LOCAL_HASH);
+        assert_eq!(super::RUNTIME_LOCAL_NEURAL, EMBEDDING_RUNTIME_LOCAL_NEURAL);
+        assert_eq!(
+            super::RUNTIME_GLM_CLOUD_INTERIM,
+            EMBEDDING_RUNTIME_GLM_CLOUD_INTERIM
+        );
+        assert_eq!(super::RUNTIME_VLLM_LOCAL, EMBEDDING_RUNTIME_VLLM_LOCAL);
+        assert_eq!(
+            super::RUNTIME_PROVIDER_CLOUD,
+            EMBEDDING_RUNTIME_PROVIDER_CLOUD
+        );
     }
 }

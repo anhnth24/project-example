@@ -15,7 +15,7 @@ pub(crate) fn esc_cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ").trim().to_string()
 }
 
-/// Helper bọc lỗi io/parse.
+/// Legacy catch-all: io/parse failures stay [`ConvertError::Failed`].
 pub(crate) fn fail<E: std::fmt::Display>(e: E) -> ConvertError {
     ConvertError::Failed(e.to_string())
 }

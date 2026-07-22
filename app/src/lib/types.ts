@@ -454,8 +454,15 @@ export interface HandoffValidation {
   traceabilityCoverage: number;
 }
 
+/** Mirrors `fileconv_core::intelligence::HANDOFF_SCHEMA_VERSION`. */
+export const HANDOFF_SCHEMA_VERSION = 2;
+/** Mirrors `fileconv_core::intelligence::INTELLIGENCE_ID_SCHEME`. */
+export const INTELLIGENCE_ID_SCHEME = "sha256-v1";
+
 export interface HandoffPack {
   schemaVersion: number;
+  /** Durable intelligence ID scheme (`sha256-v1`). Required from schema v2. */
+  idScheme: string;
   packId: string;
   productName: string;
   productSlug: string;
