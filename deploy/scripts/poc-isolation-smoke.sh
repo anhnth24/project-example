@@ -50,6 +50,28 @@ forbid_regex() {
   fi
 }
 
+# Every @sha256: pin found in the given files must be exactly 64 lowercase hex
+# chars. A too-short/too-long or mixed-case digest is not a valid sha256 and
+# `docker build`/`docker pull` will reject it outright (F02 regression: a
+# stray 80-hex digest slipped past a prefix-only grep check).
+check_sha256_digest_lengths() {
+  local ok=1
+  local f digest
+  for f in "$@"; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r digest; do
+      [[ -z "$digest" ]] && continue
+      if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+        fail "invalid sha256 digest in $(basename "$f"): '$digest' is ${#digest} hex chars (must be exactly 64 lowercase hex)"
+        ok=0
+      fi
+    done < <(grep -ohE '@sha256:[0-9a-fA-F]+' "$f" | sed -E 's/^@sha256://')
+  done
+  if [[ "$ok" -eq 1 ]]; then
+    pass "all pinned @sha256 digests are exactly 64 lowercase hex chars"
+  fi
+}
+
 echo "== P1B-F02 isolation smoke =="
 
 require_file "$COMPOSE_FILE"
@@ -223,6 +245,8 @@ require_regex "$COMPOSE_FILE" 'postgres:18\.4-bookworm@sha256:' "postgres digest
 require_regex "$COMPOSE_FILE" 'qdrant/qdrant:v1\.18\.2@sha256:' "qdrant digest pinned"
 require_regex "$COMPOSE_FILE" 'pgsty/minio:.*@sha256:' "minio digest pinned"
 require_regex "$COMPOSE_FILE" 'minio/mc:.*@sha256:' "minio/mc digest pinned"
+check_sha256_digest_lengths "$IMAGES_LOCK" "$COMPOSE_FILE" "$DOCKERFILE_SERVER" \
+  "$DOCKERFILE_WORKER" "$ROOT/deploy/poc/Dockerfile.embedding-cpu"
 
 # Embedding profiles (mock default, AITeamVN optional — not GLM)
 require_regex "$COMPOSE_FILE" 'profiles: \["mock"\]' "mock embedding profile"

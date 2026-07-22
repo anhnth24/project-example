@@ -3,7 +3,7 @@
 #   docker build -f deploy/poc/Dockerfile.embedding-cpu -t markhand-embedding-cpu:poc .
 # Base digest pinned in deploy/poc/images.lock.json.
 
-FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde34558376153c5cd80b00ca81da2e659387e76524edc73
+FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
 
 WORKDIR /opt
 
