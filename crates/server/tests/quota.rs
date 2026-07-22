@@ -298,6 +298,50 @@ async fn concurrent_reserve_does_not_over_reserve() {
         active_reserved(&pool, &context, ResourceKind::StorageBytes).await,
         5
     );
+    let deny_audits = with_org_txn(&pool, &context, {
+        let context = context.clone();
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT outcome, metadata, request_id
+                         FROM audit_log
+                         WHERE org_id = $1 AND action = 'quota.deny'
+                         ORDER BY seq",
+                        &[&context.org_id()],
+                    )
+                    .await?;
+                Ok(rows
+                    .into_iter()
+                    .map(|row| {
+                        (
+                            row.get::<_, String>(0),
+                            row.get::<_, serde_json::Value>(1),
+                            row.get::<_, Option<String>>(2),
+                        )
+                    })
+                    .collect::<Vec<_>>())
+            })
+        }
+    })
+    .await
+    .expect("quota deny audit rows");
+    assert_eq!(
+        deny_audits.len(),
+        denied,
+        "each rolled-back quota denial must have one durable audit row"
+    );
+    for (outcome, metadata, request_id) in deny_audits {
+        assert_eq!(outcome, "deny");
+        assert_eq!(metadata["reason"], "quota_exceeded");
+        assert_eq!(metadata["resource_kind"], "storage_bytes");
+        assert!(
+            request_id
+                .as_deref()
+                .is_some_and(|value| Uuid::parse_str(value).is_ok()),
+            "deny audit must carry a bounded UUID request id"
+        );
+    }
 
     ephemeral.drop().await;
 }

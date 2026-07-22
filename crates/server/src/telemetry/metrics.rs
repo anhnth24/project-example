@@ -11,7 +11,7 @@ use opentelemetry::KeyValue;
 use serde::{Deserialize, Serialize};
 
 /// Job transitions deferred until the enclosing org txn commits (or savepoint releases).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DeferredJobTransition {
     job_type: &'static str,
     transition: &'static str,
@@ -21,6 +21,11 @@ struct DeferredJobTransition {
 tokio::task_local! {
     static DEFERRED_JOB_TRANSITIONS: RefCell<Vec<DeferredJobTransition>>;
     static DEFERRED_SAVEPOINT_MARKS: RefCell<Vec<usize>>;
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static CAPTURED_JOB_TRANSITIONS: RefCell<Vec<DeferredJobTransition>>;
 }
 
 const FORBIDDEN_LABEL_KEYS: &[&str] = &[
@@ -427,13 +432,25 @@ pub fn record_api_request(route: &str, method: &str, status: u16, duration: Dura
 }
 
 pub fn record_job_transition(job_type: &str, transition: &str, result: &str) {
+    let sample = DeferredJobTransition {
+        job_type: normalize_job_type(job_type),
+        transition: normalize_transition(transition),
+        result: normalize_result(result),
+    };
+    #[cfg(test)]
+    if CAPTURED_JOB_TRANSITIONS
+        .try_with(|captured| captured.borrow_mut().push(sample))
+        .is_ok()
+    {
+        return;
+    }
     let Some(instr) = instruments() else {
         return;
     };
     let labels = [
-        ("job_type", normalize_job_type(job_type)),
-        ("transition", normalize_transition(transition)),
-        ("result", normalize_result(result)),
+        ("job_type", sample.job_type),
+        ("transition", sample.transition),
+        ("result", sample.result),
     ];
     let Some(kv) = attrs(&labels) else {
         return;
@@ -759,5 +776,162 @@ mod tests {
         assert_eq!(normalize_route("/api/v1/documents/abc"), "other");
         assert_eq!(normalize_format("PDF"), "pdf");
         assert_eq!(normalize_format("weird"), "other");
+    }
+
+    #[tokio::test]
+    async fn deferred_job_metrics_follow_commit_and_savepoint_boundaries() {
+        let captured = CAPTURED_JOB_TRANSITIONS
+            .scope(RefCell::new(Vec::new()), async {
+                let committed: Result<(), ()> = scope_deferred_job_metrics(async {
+                    defer_job_transition("convert", "enqueue", "accepted");
+
+                    deferred_savepoint_push();
+                    defer_job_transition("delete", "finish", "failed");
+                    deferred_savepoint_rollback();
+
+                    deferred_savepoint_push();
+                    defer_job_transition("index", "finish", "succeeded");
+                    deferred_savepoint_release();
+                    Ok(())
+                })
+                .await;
+                assert!(committed.is_ok());
+
+                let rolled_back: Result<(), ()> = scope_deferred_job_metrics(async {
+                    defer_job_transition("reconcile", "finish", "cancelled");
+                    Err(())
+                })
+                .await;
+                assert!(rolled_back.is_err());
+
+                // Claim paths run after commit and therefore record immediately.
+                defer_job_transition("embedding", "claim", "accepted");
+                CAPTURED_JOB_TRANSITIONS.with(|items| items.borrow().clone())
+            })
+            .await;
+
+        assert_eq!(
+            captured,
+            vec![
+                DeferredJobTransition {
+                    job_type: "convert",
+                    transition: "enqueue",
+                    result: "accepted",
+                },
+                DeferredJobTransition {
+                    job_type: "index",
+                    transition: "finish",
+                    result: "succeeded",
+                },
+                DeferredJobTransition {
+                    job_type: "embedding",
+                    transition: "claim",
+                    result: "accepted",
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn result_enums_preserve_embedding_and_qa_failures() {
+        assert_eq!(normalize_result("http_error"), "http_error");
+        assert_eq!(normalize_result("invalid_response"), "invalid_response");
+        assert_eq!(normalize_result("outage"), "outage");
+        assert_eq!(normalize_result("timeout"), "timeout");
+        assert_eq!(normalize_result("truncated"), "truncated");
+        assert_eq!(normalize_result("failed"), "error");
+        assert_eq!(normalize_result("weird"), "other");
+    }
+
+    #[test]
+    fn latency_boundaries_include_approved_slo_cutpoints() {
+        assert!(
+            LATENCY_SECONDS_BOUNDARIES.windows(2).all(|w| w[0] < w[1]),
+            "boundaries must be strictly increasing"
+        );
+        assert!(
+            LATENCY_SECONDS_BOUNDARIES.contains(&0.5),
+            "0.5s boundary required for G0-SLO-QUERY-P95"
+        );
+        assert!(
+            LATENCY_SECONDS_BOUNDARIES.contains(&1.0),
+            "1.0s boundary required for G0-SLO-QUERY-P99"
+        );
+    }
+
+    #[test]
+    fn latency_histogram_buckets_separate_slo_thresholds() {
+        // Local provider (not process OnceLock) proves bucket export assumptions.
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder()
+            .with_resource(Resource::builder_empty().build())
+            .with_reader(reader)
+            .build();
+        let meter = provider.meter("markhand-histogram-test");
+        let histogram = meter
+            .f64_histogram(names::API_REQUEST_DURATION_SECONDS)
+            .with_unit("s")
+            .with_boundaries(LATENCY_SECONDS_BOUNDARIES.to_vec())
+            .build();
+        histogram.record(0.40, &[]);
+        histogram.record(0.60, &[]);
+        histogram.record(1.20, &[]);
+        provider.force_flush().expect("flush histogram");
+
+        let finished = exporter.get_finished_metrics().expect("finished metrics");
+        let mut found = false;
+        for resource_metrics in &finished {
+            for scope_metrics in resource_metrics.scope_metrics() {
+                for metric in scope_metrics.metrics() {
+                    if metric.name() != names::API_REQUEST_DURATION_SECONDS {
+                        continue;
+                    }
+                    let opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(agg) =
+                        metric.data()
+                    else {
+                        continue;
+                    };
+                    let opentelemetry_sdk::metrics::data::MetricData::Histogram(hist) = agg else {
+                        continue;
+                    };
+                    for point in hist.data_points() {
+                        found = true;
+                        let bounds: Vec<f64> = point.bounds().collect();
+                        assert!(
+                            bounds.iter().any(|b| (*b - 0.5).abs() < f64::EPSILON),
+                            "exported bounds missing 0.5: {bounds:?}"
+                        );
+                        assert!(
+                            bounds.iter().any(|b| (*b - 1.0).abs() < f64::EPSILON),
+                            "exported bounds missing 1.0: {bounds:?}"
+                        );
+                        // OTel bucket_counts are per-bucket (not Prometheus-cumulative).
+                        // Samples: 0.40, 0.60, 1.20 → cumulative-to-bound via prefix sums.
+                        let idx_half = bounds
+                            .iter()
+                            .position(|b| (*b - 0.5).abs() < f64::EPSILON)
+                            .expect("0.5 bound");
+                        let idx_one = bounds
+                            .iter()
+                            .position(|b| (*b - 1.0).abs() < f64::EPSILON)
+                            .expect("1.0 bound");
+                        let counts: Vec<u64> = point.bucket_counts().collect();
+                        // bounds.len()+1 buckets (final +Inf). Prefix sum through bound index.
+                        let cum_to = |idx: usize| -> u64 { counts[..=idx].iter().sum() };
+                        assert_eq!(cum_to(idx_half), 1, "observations <=0.5s");
+                        assert_eq!(cum_to(idx_one), 2, "observations <=1.0s");
+                        assert_eq!(point.count(), 3);
+                        assert_eq!(
+                            counts.iter().sum::<u64>(),
+                            3,
+                            "per-bucket counts must cover all samples"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(found, "histogram data point not exported");
+        let _ = provider.shutdown();
     }
 }
