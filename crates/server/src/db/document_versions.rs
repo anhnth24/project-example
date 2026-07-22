@@ -354,6 +354,10 @@ pub async fn list_by_document(
 }
 
 /// Keyset page of immutable versions for one document.
+///
+/// Authorization mirrors `load_authorized_version_for_read`: current (and draft)
+/// rows require `qa.query`; superseded published rows require `qa.history` (and
+/// still `qa.query`). Callers without history must not observe superseded metadata.
 pub async fn list_page_by_document(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -367,18 +371,61 @@ pub async fn list_page_by_document(
     }
     let rows = txn
         .query(
-            "SELECT id, org_id, document_id, version_number, parent_version_id,
-                    publication_state, is_current, content_sha256, original_object_key,
-                    markdown_object_key, source_filename, source_content_type, byte_size,
-                    effective_from, effective_to, change_summary, created_by_user_id, created_at
-             FROM document_versions
-             WHERE org_id = $1
-               AND document_id = $2
+            "SELECT dv.id, dv.org_id, dv.document_id, dv.version_number, dv.parent_version_id,
+                    dv.publication_state, dv.is_current, dv.content_sha256, dv.original_object_key,
+                    dv.markdown_object_key, dv.source_filename, dv.source_content_type, dv.byte_size,
+                    dv.effective_from, dv.effective_to, dv.change_summary, dv.created_by_user_id,
+                    dv.created_at
+             FROM document_versions dv
+             JOIN documents d
+               ON d.org_id = dv.org_id AND d.id = dv.document_id
+             WHERE dv.org_id = $1
+               AND dv.document_id = $2
+               AND d.deleted_at IS NULL
                AND (
                  $3::integer IS NULL
-                 OR (version_number, id) > ($3::integer, $4::uuid)
+                 OR (dv.version_number, dv.id) > ($3::integer, $4::uuid)
                )
-             ORDER BY version_number, id
+               AND EXISTS (
+                 SELECT 1
+                 FROM collections acl_c
+                 JOIN org_memberships acl_m
+                   ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $6
+                 JOIN users acl_u ON acl_u.id = acl_m.user_id
+                 JOIN roles acl_r
+                   ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                 JOIN role_permissions acl_rp
+                   ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                 JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                 WHERE acl_c.org_id = d.org_id
+                   AND acl_c.id = d.collection_id
+                   AND acl_c.deleted_at IS NULL
+                   AND acl_u.disabled_at IS NULL
+                   AND acl_p.code = CASE
+                     WHEN dv.is_current THEN 'qa.query'
+                     WHEN dv.publication_state = 'published' THEN 'qa.history'
+                     ELSE 'qa.query'
+                   END
+                   AND EXISTS (
+                     SELECT 1
+                     FROM role_permissions query_rp
+                     JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                     WHERE query_rp.org_id = acl_r.org_id
+                       AND query_rp.role_id = acl_r.id
+                       AND query_p.code = 'qa.query'
+                   )
+                   AND (
+                     acl_c.visibility = 'org'
+                     OR acl_c.owner_user_id = $6
+                     OR EXISTS (
+                       SELECT 1 FROM collection_user_access cua
+                       WHERE cua.org_id = acl_c.org_id
+                         AND cua.collection_id = acl_c.id
+                         AND cua.user_id = $6
+                     )
+                   )
+               )
+             ORDER BY dv.version_number, dv.id
              LIMIT $5",
             &[
                 &ctx.org_id(),
@@ -386,6 +433,7 @@ pub async fn list_page_by_document(
                 &after_version_number,
                 &after_id,
                 &limit,
+                &ctx.user_id(),
             ],
         )
         .await?;

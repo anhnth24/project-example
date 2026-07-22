@@ -39,6 +39,7 @@ const BUSINESS_TABLES: &[&str] = &[
     "usage_counters",
     "quota_reservations",
     "audit_log",
+    "api_idempotency_keys",
     "download_capabilities",
 ];
 

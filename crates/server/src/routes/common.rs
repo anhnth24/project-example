@@ -243,3 +243,171 @@ pub async fn load_document_authorized(
     }
     Ok(document)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+
+    use super::{map_db, map_resolve, parse_slug, read_idempotency_key, validate_idempotency_key};
+    use crate::api::ApiRejection;
+    use crate::auth::permissions::ResolveError;
+    use crate::db::error::DbError;
+
+    fn assert_rejection(rejection: ApiRejection, expected_status: StatusCode, expected_code: &str) {
+        assert_eq!(rejection.status(), expected_status);
+        assert_eq!(rejection.body().code, expected_code);
+        assert_eq!(rejection.body().request_id, "request-123");
+    }
+
+    #[test]
+    fn authorization_errors_have_stable_public_codes() {
+        for (error, status, code) in [
+            (
+                ResolveError::PermissionDenied,
+                StatusCode::FORBIDDEN,
+                "permission_denied",
+            ),
+            (
+                ResolveError::CollectionDenied,
+                StatusCode::FORBIDDEN,
+                "collection_denied",
+            ),
+            (
+                ResolveError::UserDisabled,
+                StatusCode::FORBIDDEN,
+                "user_disabled",
+            ),
+            (
+                ResolveError::MembershipMissing,
+                StatusCode::FORBIDDEN,
+                "membership_missing",
+            ),
+            (
+                ResolveError::InvalidContext,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+            (
+                ResolveError::Database,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+        ] {
+            assert_rejection(map_resolve(error, "request-123"), status, code);
+        }
+    }
+
+    #[test]
+    fn database_errors_are_sanitized_and_mapped_consistently() {
+        let cases = [
+            (DbError::NotFound, StatusCode::NOT_FOUND, "not_found"),
+            (
+                DbError::StaleState {
+                    expected: "open".into(),
+                    observed: "resolved".into(),
+                },
+                StatusCode::CONFLICT,
+                "conflict_state",
+            ),
+            (
+                DbError::IllegalTransition {
+                    from: "uploaded".into(),
+                    to: "purged".into(),
+                },
+                StatusCode::CONFLICT,
+                "illegal_transition",
+            ),
+            (
+                DbError::Config("invalid_resolution_version".into()),
+                StatusCode::BAD_REQUEST,
+                "validation_failed",
+            ),
+            (
+                DbError::Config("idempotency_key_conflict".into()),
+                StatusCode::CONFLICT,
+                "idempotency_key_conflict",
+            ),
+            (
+                DbError::Config("idempotency_in_progress".into()),
+                StatusCode::CONFLICT,
+                "idempotency_in_progress",
+            ),
+            (
+                DbError::Config("idempotency_finalize_failed".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+            (
+                DbError::Config("version_superseded".into()),
+                StatusCode::CONFLICT,
+                "version_superseded",
+            ),
+            (
+                DbError::Config("invalid_publish".into()),
+                StatusCode::BAD_REQUEST,
+                "validation_failed",
+            ),
+            (
+                DbError::Config("duplicate key violates unique constraint secret_name".into()),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                DbError::Config("postgres://user:password@internal".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+        ];
+
+        for (error, status, code) in cases {
+            let rejection = map_db(error, "request-123");
+            assert_rejection(rejection.clone(), status, code);
+            let rendered = serde_json::to_string(rejection.body()).unwrap();
+            assert!(!rendered.contains("password"), "{rendered}");
+            assert!(!rendered.contains("secret_name"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn idempotency_key_validation_covers_boundaries_and_header_encoding() {
+        for valid in ["a", "A9._-:", &"x".repeat(128)] {
+            assert_eq!(validate_idempotency_key(valid), Ok(()), "{valid}");
+        }
+        for invalid in ["", "contains space", "việt", &"x".repeat(129)] {
+            assert!(validate_idempotency_key(invalid).is_err(), "{invalid}");
+        }
+
+        let mut headers = HeaderMap::new();
+        assert_eq!(read_idempotency_key(&headers, "request-123").unwrap(), None);
+        headers.insert("idempotency-key", HeaderValue::from_static("valid:key-1"));
+        assert_eq!(
+            read_idempotency_key(&headers, "request-123").unwrap(),
+            Some("valid:key-1".into())
+        );
+
+        headers.insert(
+            "idempotency-key",
+            HeaderValue::from_bytes(b"\xff").expect("opaque header value"),
+        );
+        let rejection = read_idempotency_key(&headers, "request-123").unwrap_err();
+        assert_rejection(rejection, StatusCode::BAD_REQUEST, "validation_failed");
+    }
+
+    #[test]
+    fn collection_slug_validation_matches_wire_contract() {
+        for valid in ["a1", "a-b", "9x", &format!("a{}", "x".repeat(62))] {
+            assert_eq!(parse_slug(valid), Ok(valid), "{valid}");
+        }
+        for invalid in [
+            "",
+            "a",
+            "Uppercase",
+            "-leading",
+            "has_underscore",
+            "có-dấu",
+            &format!("a{}", "x".repeat(63)),
+        ] {
+            assert!(parse_slug(invalid).is_err(), "{invalid}");
+        }
+    }
+}
