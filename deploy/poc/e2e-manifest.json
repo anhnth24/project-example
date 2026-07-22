@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "issue": "P1B-O04",
+  "suiteManifest": "crates/server/tests/e2e/manifest.json",
+  "composeFile": "deploy/compose.poc.yml",
+  "liveCommand": "deploy/scripts/poc-e2e-o04.sh",
+  "hermeticCommand": "python3 scripts/check-e2e-o04.py",
+  "confirmPhrase": "i-understand-this-mutates-only-tagged-test-stacks",
+  "requiredEnv": [
+    "MARKHAND_E2E_CONFIRM",
+    "MARKHAND_E2E_STACK_TAG",
+    "MARKHAND_COMPOSE_PROJECT",
+    "MARKHAND_POSTGRES_DB",
+    "MARKHAND_MINIO_BUCKET"
+  ],
+  "pinnedImages": "deploy/poc/images.lock.json",
+  "notes": [
+    "Live suite mutates only stacks tagged test/e2e.",
+    "Static CI runs hermeticCommand only — Docker/models not required.",
+    "High/critical findings block release; claimsLiveVerticalSlice stays false without live pass."
+  ]
+}

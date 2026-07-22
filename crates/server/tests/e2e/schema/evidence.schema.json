@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "markhand-e2e-o04-evidence",
+  "title": "P1B-O04 redacted evidence report",
+  "type": "object",
+  "required": [
+    "version",
+    "issue",
+    "generatedAt",
+    "runId",
+    "mode",
+    "git",
+    "claimsLiveVerticalSlice",
+    "summary",
+    "cases",
+    "blockers",
+    "severity"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "issue": { "type": "string", "const": "P1B-O04" },
+    "generatedAt": { "type": "string" },
+    "runId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "mode": { "type": "string", "enum": ["hermetic", "live"] },
+    "git": {
+      "type": "object",
+      "required": ["branch", "commit"],
+      "properties": {
+        "branch": { "type": "string" },
+        "commit": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "claimsLiveVerticalSlice": { "type": "boolean" },
+    "summary": {
+      "type": "object",
+      "required": ["passed", "failed", "blocked", "skippedOptional", "highCritical"],
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "skippedOptional": { "type": "integer", "minimum": 0 },
+        "highCritical": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "matrix", "status", "httpStatuses", "postconditions"],
+        "properties": {
+          "id": { "type": "string" },
+          "matrix": { "type": "string", "enum": ["format", "security", "fault", "harness"] },
+          "status": {
+            "type": "string",
+            "enum": ["pass", "fail", "blocked", "optional_unavailable"]
+          },
+          "httpStatuses": {
+            "type": "array",
+            "items": { "type": "integer" }
+          },
+          "postconditions": {
+            "type": "object",
+            "additionalProperties": { "type": "boolean" }
+          },
+          "severity": { "type": "string", "enum": ["none", "low", "medium", "high", "critical"] },
+          "blockerCode": {
+            "type": ["string", "null"],
+            "enum": [null, "production_intake_not_wired"]
+          },
+          "opaqueRefs": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "severity": { "type": "string", "enum": ["none", "low", "medium", "high", "critical"] }
+  }
+}

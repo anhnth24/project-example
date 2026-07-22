@@ -1,0 +1,353 @@
+{
+  "version": 1,
+  "issue": "P1B-O04",
+  "apiBasePath": "/api/v1",
+  "composeFile": "deploy/compose.poc.yml",
+  "composeServices": {
+    "api": "api",
+    "postgres": "postgres",
+    "minio": "minio",
+    "qdrant": "qdrant",
+    "workerConvert": "worker-convert",
+    "workerIndex": "worker-index",
+    "workerEmbedding": "worker-embedding",
+    "mockEmbedding": "mock-embedding"
+  },
+  "confirmPhrase": "i-understand-this-mutates-only-tagged-test-stacks",
+  "seed": {
+    "script": "deploy/scripts/seed-poc-e2e.sh",
+    "accounts": [
+      {
+        "role": "admin",
+        "emailEnv": "MARKHAND_E2E_ADMIN_EMAIL",
+        "fixedEmail": "admin@poc.example"
+      },
+      {
+        "role": "editor",
+        "emailEnv": "MARKHAND_E2E_EDITOR_EMAIL",
+        "fixedEmail": "editor-e2e@poc.example"
+      },
+      {
+        "role": "viewer",
+        "emailEnv": "MARKHAND_E2E_VIEWER_EMAIL",
+        "fixedEmail": "viewer-e2e@poc.example"
+      },
+      {
+        "role": "foreign",
+        "emailEnv": "MARKHAND_E2E_FOREIGN_EMAIL",
+        "fixedEmail": "owner@org-b.example"
+      }
+    ]
+  },
+  "formats": [
+    {
+      "id": "fmt-txt",
+      "fixtureId": "e2e-vi-txt",
+      "canonicalFormat": "txt",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_TXT_7F3A",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-html",
+      "fixtureId": "e2e-vi-html",
+      "canonicalFormat": "html",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_HTML_91C2",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-csv",
+      "fixtureId": "e2e-vi-csv",
+      "canonicalFormat": "csv",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_CSV_44B1",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-pdf",
+      "fixtureId": "e2e-vi-pdf",
+      "canonicalFormat": "pdf",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_PDF_2D88",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-docx",
+      "fixtureId": "e2e-vi-docx",
+      "canonicalFormat": "docx",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_DOCX_A01E",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-pptx",
+      "fixtureId": "e2e-vi-pptx",
+      "canonicalFormat": "pptx",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_PPTX_B77C",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-xlsx",
+      "fixtureId": "e2e-vi-xlsx",
+      "canonicalFormat": "xlsx",
+      "requirement": "required",
+      "uniqueToken": "MAHOA_E2E_XLSX_C3D9",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-image-ocr",
+      "fixtureId": "e2e-vi-png",
+      "canonicalFormat": "png",
+      "requirement": "required",
+      "prerequisite": "worker-convert tesseract vie+eng",
+      "uniqueToken": "MAHOA_E2E_OCR_E5F0",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    },
+    {
+      "id": "fmt-audio",
+      "fixtureId": "e2e-vi-wav",
+      "canonicalFormat": "wav",
+      "requirement": "optional_model",
+      "prerequisite": "approved whisper/PhoWhisper runtime (convert currently AudioConversionDisabled)",
+      "uniqueToken": "MAHOA_E2E_AUD_6A12",
+      "steps": [
+        "upload",
+        "require_production_intake_ids",
+        "await_convert",
+        "await_index",
+        "publish_current",
+        "search",
+        "ask",
+        "citation",
+        "preview",
+        "download_authz"
+      ]
+    }
+  ],
+  "security": [
+    {
+      "id": "sec-user-disabled",
+      "class": "authorization",
+      "expect": "no_text_401_or_403"
+    },
+    {
+      "id": "sec-user-suspended",
+      "class": "authorization",
+      "expect": "no_text_401_or_403"
+    },
+    {
+      "id": "sec-membership-removed",
+      "class": "authorization",
+      "expect": "no_text_401_or_403"
+    },
+    {
+      "id": "sec-collection-acl-revoke",
+      "class": "authorization",
+      "expect": "no_text_403_or_empty"
+    },
+    {
+      "id": "sec-tombstone-during-query",
+      "class": "authorization",
+      "expect": "no_text_after_delete"
+    },
+    {
+      "id": "sec-tombstone-during-stream",
+      "class": "authorization",
+      "expect": "stream_closes_no_text"
+    },
+    {
+      "id": "sec-historical-permission-revoke",
+      "class": "authorization",
+      "expect": "history_denied"
+    },
+    {
+      "id": "sec-malformed-ids",
+      "class": "validation",
+      "expect": "stable_4xx"
+    },
+    {
+      "id": "sec-malformed-body",
+      "class": "validation",
+      "expect": "stable_4xx"
+    },
+    {
+      "id": "sec-malformed-cursors",
+      "class": "validation",
+      "expect": "stable_4xx"
+    },
+    {
+      "id": "sec-malformed-last-event-id",
+      "class": "validation",
+      "expect": "stable_4xx"
+    },
+    {
+      "id": "sec-idor-cross-org",
+      "class": "idor",
+      "expect": "404_or_403_no_leak"
+    },
+    {
+      "id": "sec-prompt-injection-untrusted",
+      "class": "prompt",
+      "fixtureId": "e2e-adv-prompt-html",
+      "expect": "untrusted_or_quarantine_no_tool_leak"
+    },
+    {
+      "id": "sec-zip-bomb",
+      "class": "upload_abuse",
+      "fixtureId": "e2e-adv-zip-bomb",
+      "expect": "reject_or_quarantine"
+    },
+    {
+      "id": "sec-path-traversal",
+      "class": "upload_abuse",
+      "fixtureId": "e2e-adv-traversal",
+      "expect": "reject_or_quarantine"
+    },
+    {
+      "id": "sec-extension-spoof",
+      "class": "upload_abuse",
+      "fixtureId": "e2e-adv-spoof-pdf",
+      "expect": "reject"
+    },
+    {
+      "id": "sec-oversize",
+      "class": "upload_abuse",
+      "expect": "reject_413_or_400"
+    },
+    {
+      "id": "sec-malformed-format",
+      "class": "upload_abuse",
+      "fixtureId": "e2e-adv-malformed-docx",
+      "expect": "reject_or_quarantine"
+    }
+  ],
+  "fault": [
+    {
+      "id": "fault-kill-convert-after-claim",
+      "targetService": "worker-convert",
+      "phase": "after_claim",
+      "expect": "lease_reclaim_idempotent_no_duplicate_version"
+    },
+    {
+      "id": "fault-kill-convert-after-checkpoint",
+      "targetService": "worker-convert",
+      "phase": "after_checkpoint",
+      "expect": "resume_or_retry_consistent"
+    },
+    {
+      "id": "fault-kill-index-after-claim",
+      "targetService": "worker-index",
+      "phase": "after_claim",
+      "expect": "lease_reclaim_no_duplicate_chunks"
+    },
+    {
+      "id": "fault-dependency-outage-bounded",
+      "targetService": "qdrant",
+      "phase": "during_search",
+      "expect": "bounded_5xx_or_warning_no_partial_trusted"
+    }
+  ],
+  "evidence": {
+    "schema": "crates/server/tests/e2e/schema/evidence.schema.json",
+    "reportPath": "bench/markhand_web/reports/p1b-o04-vertical-slice.md",
+    "forbid": [
+      "raw_bucket_key",
+      "document_text",
+      "prompt",
+      "password",
+      "token",
+      "signed_url",
+      "tenant_id"
+    ]
+  }
+}

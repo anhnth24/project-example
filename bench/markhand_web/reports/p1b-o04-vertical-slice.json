@@ -1,0 +1,380 @@
+{
+  "blockers": [
+    "Hermetic harness validation only \u2014 not a live vertical-slice pass",
+    "Docker/Compose unavailable \u2014 live suite not executed",
+    "production_intake_not_wired \u2014 current /api/v1/uploads returns objectId only (no documentId/versionId/jobId; no supported follow-up public API)",
+    "claimsLiveVerticalSlice remains false"
+  ],
+  "cases": [
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "harness-manifest",
+      "matrix": "harness",
+      "notes": "hermetic harness validation only \u2014 not a live vertical-slice pass",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "none",
+      "status": "pass"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-txt",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-html",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-csv",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-pdf",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-docx",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-pptx",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-xlsx",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-image-ocr",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": "production_intake_not_wired",
+      "httpStatuses": [],
+      "id": "fmt-audio",
+      "matrix": "format",
+      "notes": "blocked: Docker unavailable; production intake wiring unverified",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "high",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-user-disabled",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-user-suspended",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-membership-removed",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-collection-acl-revoke",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-tombstone-during-query",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-tombstone-during-stream",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-historical-permission-revoke",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-malformed-ids",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-malformed-body",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-malformed-cursors",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-malformed-last-event-id",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-idor-cross-org",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-prompt-injection-untrusted",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-zip-bomb",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-path-traversal",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-extension-spoof",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-oversize",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "sec-malformed-format",
+      "matrix": "security",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "fault-kill-convert-after-claim",
+      "matrix": "fault",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "fault-kill-convert-after-checkpoint",
+      "matrix": "fault",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "fault-kill-index-after-claim",
+      "matrix": "fault",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    },
+    {
+      "blockerCode": null,
+      "httpStatuses": [],
+      "id": "fault-dependency-outage-bounded",
+      "matrix": "fault",
+      "notes": "live stack unavailable in this environment",
+      "opaqueRefs": {},
+      "postconditions": {},
+      "severity": "medium",
+      "status": "blocked"
+    }
+  ],
+  "claimsLiveVerticalSlice": false,
+  "generatedAt": "2026-07-22T08:21:31Z",
+  "git": {
+    "branch": "cursor/implement-p1b-o04-5007",
+    "commit": "8428c69fc7b7c5699506ac190ee0a1fccabfa071"
+  },
+  "issue": "P1B-O04",
+  "mode": "hermetic",
+  "runId": "d07b8ddd-6beb-47d5-86ca-befc739b949d",
+  "severity": "high",
+  "summary": {
+    "blocked": 31,
+    "failed": 0,
+    "highCritical": 9,
+    "passed": 1,
+    "skippedOptional": 0
+  },
+  "version": 1
+}

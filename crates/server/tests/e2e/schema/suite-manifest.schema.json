@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "markhand-e2e-o04-suite-manifest",
+  "title": "P1B-O04 suite manifest",
+  "type": "object",
+  "required": [
+    "version",
+    "issue",
+    "apiBasePath",
+    "composeServices",
+    "confirmPhrase",
+    "formats",
+    "security",
+    "fault",
+    "evidence"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "issue": { "type": "string", "const": "P1B-O04" },
+    "apiBasePath": { "type": "string", "const": "/api/v1" },
+    "composeFile": { "type": "string" },
+    "composeServices": {
+      "type": "object",
+      "required": ["api", "postgres", "minio", "qdrant", "workerConvert", "workerIndex"],
+      "additionalProperties": { "type": "string" }
+    },
+    "confirmPhrase": { "type": "string", "minLength": 16 },
+    "seed": {
+      "type": "object",
+      "required": ["script", "accounts"],
+      "properties": {
+        "script": { "type": "string" },
+        "accounts": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["role", "emailEnv"],
+            "properties": {
+              "role": { "type": "string" },
+              "emailEnv": { "type": "string" },
+              "fixedEmail": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "formats": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "fixtureId", "canonicalFormat", "requirement", "steps"],
+        "properties": {
+          "id": { "type": "string" },
+          "fixtureId": { "type": "string" },
+          "canonicalFormat": { "type": "string" },
+          "requirement": {
+            "type": "string",
+            "enum": ["required", "optional_runtime", "optional_model"]
+          },
+          "prerequisite": { "type": "string" },
+          "uniqueToken": { "type": "string" },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "upload",
+                "require_production_intake_ids",
+                "await_convert",
+                "await_index",
+                "publish_current",
+                "search",
+                "ask",
+                "citation",
+                "preview",
+                "download_authz"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "security": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "class", "expect"],
+        "properties": {
+          "id": { "type": "string" },
+          "class": { "type": "string" },
+          "expect": { "type": "string" },
+          "fixtureId": { "type": "string" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "fault": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "targetService", "phase", "expect"],
+        "properties": {
+          "id": { "type": "string" },
+          "targetService": { "type": "string" },
+          "phase": { "type": "string" },
+          "expect": { "type": "string" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["schema", "reportPath", "forbid"],
+      "properties": {
+        "schema": { "type": "string" },
+        "reportPath": { "type": "string" },
+        "forbid": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

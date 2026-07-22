@@ -65,6 +65,12 @@ discover these deterministic failures.
   assertion), so new fail-fast checks do not invalidate the test's intent.
 - Every Rust edit must pass `cargo fmt --all -- --check` before push. This is the first
   command in the Rust CI quality gate and prevents an otherwise avoidable full rerun.
+- P1B-O04 harness changes: run `make check-e2e-o04` (hermetic; no Docker). Do not claim
+  a live vertical-slice pass without `deploy/scripts/poc-e2e-o04.sh` on a tagged test
+  stack (`MARKHAND_E2E_CONFIRM`, project/db/bucket contain `e2e|test`,
+  `MARKHAND_E2E_STACK_TAG=test`). Live must use public `/api/v1` only; missing upload
+  `documentId`/`versionId`/`jobId` is high/critical `production_intake_not_wired`
+  (no test-only intake bridge).
 
 ## Evidence
 

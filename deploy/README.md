@@ -12,6 +12,33 @@ Prometheus/Grafana/Alertmanager artifacts, OTel Prometheus export, synthetic ale
 fixtures, and operator runbooks live under [`observability/`](observability/).
 Validate with `make check-observability`.
 
+## Vertical-slice / security E2E (P1B-O04)
+
+Hermetic harness + live suite against `/api/v1` and `compose.poc.yml`:
+
+| Artifact | Purpose |
+|---|---|
+| [`../crates/server/tests/e2e/`](../crates/server/tests/e2e/) | Manifest, fixtures, runner, security/fault matrices |
+| [`poc/e2e-manifest.json`](poc/e2e-manifest.json) | POC entry pins + confirm phrase |
+| [`scripts/poc-e2e-o04.sh`](scripts/poc-e2e-o04.sh) | Live runner (fail-closed) |
+| [`scripts/seed-poc-e2e.sh`](scripts/seed-poc-e2e.sh) | Synthetic org/accounts seed |
+
+```bash
+# Static / CI (no Docker):
+make check-e2e-o04
+
+# Live (tagged test stack only — refuses human environments):
+# deploy/.env must set MARKHAND_COMPOSE_PROJECT / DB / bucket containing e2e|test
+# and MARKHAND_E2E_STACK_TAG=test
+MARKHAND_E2E_CONFIRM=i-understand-this-mutates-only-tagged-test-stacks \
+  deploy/scripts/poc-e2e-o04.sh
+```
+
+Live never silently skips missing prerequisites. Evidence must stay redacted;
+`claimsLiveVerticalSlice` stays false until a real tagged-stack pass **with**
+production `documentId`/`versionId`/`jobId` on upload (objectId-only fails
+high/critical `production_intake_not_wired`). No test-only intake bridge.
+
 ## POC stack (P1B-F02)
 
 Pinned compose stack for a secure single-org POC: API + convert/index/embedding

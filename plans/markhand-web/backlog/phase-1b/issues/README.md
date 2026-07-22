@@ -397,13 +397,24 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
+- **Status:** Blocked — hermetic harness/fixtures/gates landed on O02 stack, but live
+  vertical slice cannot pass: (1) Docker unavailable here; (2) production
+  `POST /api/v1/uploads` returns `objectId` only (no `documentId`/`versionId`/`jobId`,
+  no supported follow-up public API). `claimsLiveVerticalSlice=false`. No test-only
+  intake bridge.
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
-- **Files:** `crates/server/tests/e2e/**`, POC manifest, deploy test script.
-- **Depends:** F01–R06 + G0-SEC/G1A.
+- **Files:** `crates/server/tests/e2e/**`, `deploy/poc/e2e-manifest.json`,
+  `deploy/scripts/poc-e2e-o04.sh`, `deploy/scripts/seed-poc-e2e.sh`,
+  `scripts/check-e2e-o04.py`, `bench/markhand_web/reports/p1b-o04-vertical-slice.md`.
+- **Depends:** F01–R06 + G0-SEC/G1A (stacked on O02; not O03).
 - **Acceptance/tests:** All formats pass; unauthorized gets no text; malicious
   rejected/contained; worker kill consistent; evidence redacted.
-- **Security/migration:** High/critical blocks release. **Out:** full 1C matrix.
+  Hermetic: `python3 scripts/check-e2e-o04.py --self-test`. Live (tagged test stack
+  only): `MARKHAND_E2E_CONFIRM=... deploy/scripts/poc-e2e-o04.sh` — fails without
+  prerequisites; fails high/critical on `production_intake_not_wired`.
+- **Security/migration:** High/critical blocks release. **Out:** full 1C matrix;
+  O03 recovery; O05 soak; test-only DB/MinIO intake bridges.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
