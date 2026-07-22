@@ -142,15 +142,30 @@ BEGIN
 END $$;
 
 -- Runtime roles may INSERT/SELECT only; never UPDATE/DELETE/TRUNCATE.
+-- bigserial `seq` needs sequence USAGE/SELECT for nextval during INSERT.
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'markhand_app') THEN
         REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_log FROM markhand_app;
         GRANT SELECT, INSERT ON TABLE audit_log TO markhand_app;
+        IF EXISTS (
+            SELECT 1 FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = 'audit_log_seq_seq' AND c.relkind = 'S'
+        ) THEN
+            GRANT USAGE, SELECT ON SEQUENCE audit_log_seq_seq TO markhand_app;
+        END IF;
     END IF;
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'markhand_test') THEN
         REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_log FROM markhand_test;
         GRANT SELECT, INSERT ON TABLE audit_log TO markhand_test;
+        IF EXISTS (
+            SELECT 1 FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = 'audit_log_seq_seq' AND c.relkind = 'S'
+        ) THEN
+            GRANT USAGE, SELECT ON SEQUENCE audit_log_seq_seq TO markhand_test;
+        END IF;
     END IF;
 END $$;
 

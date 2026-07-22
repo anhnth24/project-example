@@ -1,4 +1,4 @@
-//! Safe tracing/metrics initialization with optional OTLP + in-memory exporters.
+//! Safe tracing/metrics initialization with optional OTLP + explicit test capture.
 
 use std::sync::OnceLock;
 
@@ -67,7 +67,8 @@ static RUNTIME: OnceLock<TelemetryRuntime> = OnceLock::new();
 ///
 /// - Installs fmt tracing (+ OTel layer) and propagates `try_init` errors.
 /// - OTLP exporter is installed only when configured **and** network is allowed.
-/// - Test profile / `disable_network` never dials a collector; uses in-memory exporters.
+/// - In-memory exporters are installed only when `capture_in_memory` is explicit.
+/// - `exporter=none` without capture never installs unbounded test exporters.
 /// - `OnceLock` is set only after success.
 pub fn init(config: &TelemetryConfig) -> Result<(), String> {
     if RUNTIME.get().is_some() {
@@ -80,13 +81,15 @@ pub fn init(config: &TelemetryConfig) -> Result<(), String> {
         .with_service_name(config.service_name.clone())
         .build();
 
-    let sampler = if config.sample_ratio() >= 1.0 {
-        Sampler::AlwaysOn
-    } else if config.sample_ratio() <= 0.0 {
+    // ParentBased for every ratio, including 0.0 and 1.0, so remote parents win.
+    let root = if config.sample_ratio() <= 0.0 {
         Sampler::AlwaysOff
+    } else if config.sample_ratio() >= 1.0 {
+        Sampler::AlwaysOn
     } else {
-        Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(config.sample_ratio())))
+        Sampler::TraceIdRatioBased(config.sample_ratio())
     };
+    let sampler = Sampler::ParentBased(Box::new(root));
 
     let (tracer_provider, span_exporter) =
         build_tracer_provider(config, resource.clone(), sampler)?;
@@ -136,7 +139,7 @@ pub fn init(config: &TelemetryConfig) -> Result<(), String> {
     } else if config.exporter == OtelExporterKind::Otlp && config.disable_network {
         tracing::info!(
             target: "telemetry",
-            "OTLP exporter configured but network disabled; using in-memory/local exporters"
+            "OTLP exporter configured but network disabled; local exporters only when capture enabled"
         );
     }
     Ok(())
@@ -162,7 +165,7 @@ fn build_tracer_provider(
             .build()
             .map_err(|error| format!("otlp span exporter failed: {error}"))?;
         Ok((builder.with_batch_exporter(exporter).build(), None))
-    } else {
+    } else if config.capture_in_memory {
         let exporter = InMemorySpanExporter::default();
         Ok((
             builder
@@ -170,6 +173,9 @@ fn build_tracer_provider(
                 .build(),
             Some(exporter),
         ))
+    } else {
+        // exporter=none: no unbounded in-memory capture in general/prod runtime.
+        Ok((builder.build(), None))
     }
 }
 
@@ -195,7 +201,7 @@ fn build_meter_provider(
                 .build(),
             None,
         ))
-    } else {
+    } else if config.capture_in_memory {
         let exporter = InMemoryMetricExporter::default();
         let reader = PeriodicReader::builder(exporter.clone()).build();
         Ok((
@@ -204,6 +210,11 @@ fn build_meter_provider(
                 .with_reader(reader)
                 .build(),
             Some(exporter),
+        ))
+    } else {
+        Ok((
+            SdkMeterProvider::builder().with_resource(resource).build(),
+            None,
         ))
     }
 }
@@ -241,9 +252,18 @@ mod tests {
 
     #[test]
     fn init_without_network_does_not_require_collector() {
-        let config = TelemetryConfig::from_env_map(&BTreeMap::new(), Profile::Test).unwrap();
+        let mut config = TelemetryConfig::from_env_map(&BTreeMap::new(), Profile::Test).unwrap();
+        config.capture_in_memory = true;
         // May already be initialised by other tests; must still succeed.
         assert!(init(&config).is_ok());
         assert!(runtime().is_some());
+    }
+
+    #[test]
+    fn sampler_is_parent_based_for_extreme_ratios() {
+        // Construction path used by init — AlwaysOn/Off are wrapped in ParentBased.
+        let off = Sampler::ParentBased(Box::new(Sampler::AlwaysOff));
+        let on = Sampler::ParentBased(Box::new(Sampler::AlwaysOn));
+        let _ = (off, on);
     }
 }

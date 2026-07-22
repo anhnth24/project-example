@@ -925,6 +925,11 @@ async fn finalize_indexed(
                     .await?
                     .ok_or(IndexingError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
+                crate::telemetry::defer_job_transition(
+                    completed.job_type.as_str(),
+                    "finish",
+                    "succeeded",
+                );
                 match backfill_completion {
                     BackfillCompletion::Empty => {
                         complete_empty_document_backfill(

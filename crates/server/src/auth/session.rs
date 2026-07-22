@@ -1029,6 +1029,8 @@ pub async fn revoke_all_user_families(
                 revoke_family_in_txn(txn, org_id, family_id).await?;
             }
 
+            let typed_reason = crate::services::audit::AuditReason::parse(&reason)
+                .unwrap_or(crate::services::audit::AuditReason::System);
             write_audit(
                 txn,
                 AuditEvent {
@@ -1039,7 +1041,7 @@ pub async fn revoke_all_user_families(
                     resource_id: Some(&user_id.to_string()),
                     outcome: "success",
                     request_id: &request_id,
-                    metadata: serde_json::json!({ "reason": reason }),
+                    metadata: crate::services::audit::reason_metadata(typed_reason),
                 },
             )
             .await?;

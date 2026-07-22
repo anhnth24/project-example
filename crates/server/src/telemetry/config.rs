@@ -41,6 +41,9 @@ pub struct TelemetryConfig {
     pub metrics_enabled: bool,
     /// When true, never dial a remote collector (tests / hermetic runs).
     pub disable_network: bool,
+    /// Explicit bounded in-memory span/metric capture for tests only.
+    /// Never enabled implicitly for prod/`exporter=none` general runtime.
+    pub capture_in_memory: bool,
 }
 
 impl fmt::Debug for TelemetryConfig {
@@ -56,6 +59,7 @@ impl fmt::Debug for TelemetryConfig {
             .field("sample_ratio_milli", &self.sample_ratio_milli)
             .field("metrics_enabled", &self.metrics_enabled)
             .field("disable_network", &self.disable_network)
+            .field("capture_in_memory", &self.capture_in_memory)
             .finish()
     }
 }
@@ -69,6 +73,7 @@ impl TelemetryConfig {
             sample_ratio_milli: 1000,
             metrics_enabled: true,
             disable_network: true,
+            capture_in_memory: false,
         }
     }
 
@@ -130,6 +135,12 @@ impl TelemetryConfig {
                 .unwrap_or(false),
         };
 
+        let capture_in_memory = env
+            .get("MARKHAND_OTEL_CAPTURE_IN_MEMORY")
+            .map(|raw| parse_bool(raw, "MARKHAND_OTEL_CAPTURE_IN_MEMORY"))
+            .transpose()?
+            .unwrap_or(false);
+
         let config = Self {
             service_name,
             exporter,
@@ -137,12 +148,16 @@ impl TelemetryConfig {
             sample_ratio_milli,
             metrics_enabled,
             disable_network,
+            capture_in_memory,
         };
         config.validate(profile)?;
         Ok(config)
     }
 
     pub fn validate(&self, profile: Profile) -> Result<(), String> {
+        if self.capture_in_memory && profile == Profile::Prod {
+            return Err("prod cannot enable MARKHAND_OTEL_CAPTURE_IN_MEMORY".into());
+        }
         match self.exporter {
             OtelExporterKind::None => {
                 if profile == Profile::Prod && self.otlp_endpoint.is_some() {

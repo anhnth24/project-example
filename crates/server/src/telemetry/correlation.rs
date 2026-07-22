@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Mutex;
 
 use opentelemetry::propagation::{Extractor, Injector, TextMapPropagator};
 use opentelemetry::trace::TraceContextExt;
@@ -36,8 +37,16 @@ pub struct CorrelationContext {
     pub index_signature: Option<String>,
 }
 
+/// Optional worker identity fields (bounded UUID / digest strings only).
+#[derive(Debug, Clone, Default)]
+pub struct WorkerIds {
+    pub org_id: Option<Uuid>,
+    pub actor_id: Option<Uuid>,
+    pub index_signature: Option<String>,
+}
+
 tokio::task_local! {
-    static CURRENT: CorrelationContext;
+    static CURRENT: Mutex<CorrelationContext>;
 }
 
 impl CorrelationContext {
@@ -63,7 +72,10 @@ impl CorrelationContext {
     }
 
     pub fn current() -> Option<Self> {
-        CURRENT.try_with(|ctx| ctx.clone()).ok()
+        CURRENT
+            .try_with(|ctx| ctx.lock().ok().map(|guard| guard.clone()))
+            .ok()
+            .flatten()
     }
 
     pub fn request_uuid(&self) -> Option<Uuid> {
@@ -71,12 +83,29 @@ impl CorrelationContext {
     }
 }
 
+/// Enrich the task-local correlation + current span with authenticated ids.
+///
+/// Only accepts UUID-shaped values; never content/secrets.
+pub fn enrich_actor(org_id: Uuid, actor_id: Uuid) {
+    let org = org_id.to_string();
+    let actor = actor_id.to_string();
+    let _ = CURRENT.try_with(|ctx| {
+        if let Ok(mut guard) = ctx.lock() {
+            guard.org_id = Some(org.clone());
+            guard.actor_id = Some(actor.clone());
+        }
+    });
+    let span = tracing::Span::current();
+    span.record("org_id", tracing::field::display(&org));
+    span.record("actor_id", tracing::field::display(&actor));
+}
+
 /// Run `future` with `ctx` installed as the task-local correlation context.
 pub async fn scope<F, T>(ctx: CorrelationContext, future: F) -> T
 where
     F: Future<Output = T>,
 {
-    CURRENT.scope(ctx, future).await
+    CURRENT.scope(Mutex::new(ctx), future).await
 }
 
 /// Attach current correlation + live OTel `traceparent` onto a job payload.
@@ -95,7 +124,7 @@ pub fn apply_to_job_payload(payload: &mut crate::jobs::JobPayload, ctx: &Correla
 pub fn from_job_payload(
     job_id: Uuid,
     payload: &crate::jobs::JobPayload,
-    org_id: Option<Uuid>,
+    ids: WorkerIds,
 ) -> CorrelationContext {
     let request_id = payload
         .request_id
@@ -109,16 +138,36 @@ pub fn from_job_payload(
         .as_deref()
         .and_then(trace_id_from_traceparent)
         .unwrap_or_default();
+    let index_signature = ids
+        .index_signature
+        .filter(|value| is_safe_index_signature(value));
     CorrelationContext {
         request_id,
         trace_id,
         traceparent,
-        org_id: org_id.map(|id| id.to_string()),
-        actor_id: None,
+        org_id: ids.org_id.map(|id| id.to_string()),
+        actor_id: ids.actor_id.map(|id| id.to_string()),
         job_id: Some(job_id.to_string()),
         document_version_id: payload.version_id.map(|id| id.to_string()),
-        index_signature: None,
+        index_signature,
     }
+}
+
+fn is_safe_index_signature(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 128
+        && trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-' || byte == b'_')
+        && !contains_secret_fragment(trimmed)
+}
+
+fn contains_secret_fragment(value: &str) -> bool {
+    value.contains("mh1.")
+        || value.contains("Bearer ")
+        || value.contains("CANARY_")
+        || value.starts_with("eyJ")
 }
 
 /// Open a worker span with W3C parent/link from the job `traceparent`.
@@ -129,6 +178,10 @@ pub fn worker_span(operation: &'static str, ctx: &CorrelationContext) -> tracing
         request_id = %ctx.request_id,
         trace_id = %ctx.trace_id,
         job_id = ctx.job_id.as_deref().unwrap_or(""),
+        org_id = ctx.org_id.as_deref().unwrap_or(""),
+        actor_id = ctx.actor_id.as_deref().unwrap_or(""),
+        document_version_id = ctx.document_version_id.as_deref().unwrap_or(""),
+        index_signature = ctx.index_signature.as_deref().unwrap_or(""),
         operation = operation,
     );
     if let Some(parent) = ctx
@@ -150,13 +203,13 @@ pub async fn run_worker<F, T>(
     operation: &'static str,
     job_id: Uuid,
     payload: &crate::jobs::JobPayload,
-    org_id: Option<Uuid>,
+    ids: WorkerIds,
     future: F,
 ) -> T
 where
     F: Future<Output = T>,
 {
-    let correlation = from_job_payload(job_id, payload, org_id);
+    let correlation = from_job_payload(job_id, payload, ids);
     let span = worker_span(operation, &correlation);
     scope(correlation, future).instrument(span).await
 }
@@ -288,7 +341,7 @@ mod tests {
             let current = CorrelationContext::current().expect("task local");
             let mut payload = JobPayload::default();
             apply_to_job_payload(&mut payload, &current);
-            let child = from_job_payload(Uuid::new_v4(), &payload, None);
+            let child = from_job_payload(Uuid::new_v4(), &payload, WorkerIds::default());
             let span = worker_span("convert", &child);
             async { (current.request_id, child.request_id, child.trace_id) }
                 .instrument(span)
@@ -309,10 +362,21 @@ mod tests {
         let mut payload = JobPayload::default();
         apply_to_job_payload(&mut payload, &ctx);
         assert!(payload.traceparent.is_some());
-        let restored = from_job_payload(Uuid::new_v4(), &payload, Some(Uuid::new_v4()));
+        let restored = from_job_payload(
+            Uuid::new_v4(),
+            &payload,
+            WorkerIds {
+                org_id: Some(Uuid::new_v4()),
+                actor_id: Some(Uuid::new_v4()),
+                index_signature: Some("a".repeat(64)),
+            },
+        );
         assert_eq!(restored.request_id, ctx.request_id);
         assert_eq!(restored.trace_id, ctx.trace_id);
         assert!(restored.job_id.is_some());
+        assert!(restored.org_id.is_some());
+        assert!(restored.actor_id.is_some());
+        assert!(restored.index_signature.is_some());
     }
 
     #[test]
@@ -325,5 +389,22 @@ mod tests {
             validate_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01")
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn enrich_actor_updates_task_local_safely() {
+        let ctx = CorrelationContext::new(Uuid::new_v4().to_string());
+        let org = Uuid::new_v4();
+        let actor = Uuid::new_v4();
+        scope(ctx, async {
+            enrich_actor(org, actor);
+            let current = CorrelationContext::current().expect("ctx");
+            assert_eq!(current.org_id.as_deref(), Some(org.to_string().as_str()));
+            assert_eq!(
+                current.actor_id.as_deref(),
+                Some(actor.to_string().as_str())
+            );
+        })
+        .await;
     }
 }

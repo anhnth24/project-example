@@ -14,7 +14,7 @@ use fileconv_server::services::audit::{self, actions, resources, AuditAction, Au
 use fileconv_server::telemetry::{
     apply_to_job_payload, contains_canary, force_flush, from_job_payload, init, metrics,
     normalize_http_method, redacted_fields, runtime, sanitize_audit_metadata, scope, worker_span,
-    CorrelationContext, TelemetryConfig, CANARY_FRAGMENTS,
+    CorrelationContext, TelemetryConfig, WorkerIds, CANARY_FRAGMENTS,
 };
 use opentelemetry::trace::{Span as _, Tracer};
 use serde_json::json;
@@ -139,7 +139,7 @@ async fn async_correlation_links_worker_span_to_request() {
         let mut payload = JobPayload::default();
         apply_to_job_payload(&mut payload, &CorrelationContext::current().unwrap());
         let job_id = Uuid::new_v4();
-        let child = from_job_payload(job_id, &payload, None);
+        let child = from_job_payload(job_id, &payload, WorkerIds::default());
         let span = worker_span("convert", &child);
         async {
             (
@@ -224,7 +224,8 @@ fn logging_capture_keeps_production_canaries_absent() {
 
 #[test]
 fn in_memory_otel_exporter_records_parent_child_spans() {
-    let config = TelemetryConfig::from_env_map(&BTreeMap::new(), Profile::Test).unwrap();
+    let mut config = TelemetryConfig::from_env_map(&BTreeMap::new(), Profile::Test).unwrap();
+    config.capture_in_memory = true;
     init(&config).expect("telemetry init");
     let tracer = opentelemetry::global::tracer("markhand-test");
     tracer.in_span("parent_request", |cx| {
@@ -234,7 +235,7 @@ fn in_memory_otel_exporter_records_parent_child_spans() {
     force_flush().expect("flush");
     let exporter = runtime()
         .and_then(|rt| rt.span_exporter())
-        .expect("in-memory span exporter");
+        .expect("explicit in-memory span exporter");
     let spans = exporter.get_finished_spans().expect("finished spans");
     assert!(
         spans.iter().any(|span| span.name == "parent_request"),
@@ -256,6 +257,24 @@ fn in_memory_otel_exporter_records_parent_child_spans() {
             .any(|span| span.parent_span_id == parent_id),
         "worker span must parent to request span: {spans:?}"
     );
+}
+
+#[test]
+fn auth_login_metadata_allowlist_accepts_family_and_refresh_ids() {
+    // Reproduces the live auth 500: login emits family_id/refresh_id which must be allowlisted.
+    assert!(sanitize_audit_metadata(&json!({
+        "family_id": "550e8400-e29b-41d4-a716-446655440000",
+        "refresh_id": "550e8400-e29b-41d4-a716-446655440001"
+    }))
+    .is_ok());
+    assert!(AuditAction::AuthLogin
+        .metadata_keys()
+        .contains(&"family_id"));
+    assert!(AuditAction::AuthLogin
+        .metadata_keys()
+        .contains(&"refresh_id"));
+    assert!(AuditReason::parse("expired").is_ok());
+    assert!(AuditReason::parse("refresh_race").is_ok());
 }
 
 #[tokio::test]
@@ -338,17 +357,23 @@ async fn audit_immutability_rls_and_redaction_live() {
     let immutability = with_org_txn(&pool, &ctx, {
         move |txn| {
             Box::pin(async move {
-                let update = txn
-                    .execute(
-                        "UPDATE audit_log SET outcome = 'error' WHERE id = $1",
-                        &[&audit_id],
-                    )
-                    .await;
-                let delete = txn
-                    .execute("DELETE FROM audit_log WHERE id = $1", &[&audit_id])
-                    .await;
-                let truncate = txn.batch_execute("TRUNCATE audit_log").await;
-                Ok((update.is_err(), delete.is_err(), truncate.is_err()))
+                let mut results = [false; 3];
+                for (index, sql) in [
+                    format!("UPDATE audit_log SET outcome = 'error' WHERE id = '{audit_id}'"),
+                    format!("DELETE FROM audit_log WHERE id = '{audit_id}'"),
+                    "TRUNCATE audit_log".to_string(),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    txn.batch_execute(&format!("SAVEPOINT imm_{index}")).await?;
+                    results[index] = txn.batch_execute(&sql).await.is_err();
+                    txn.batch_execute(&format!("ROLLBACK TO SAVEPOINT imm_{index}"))
+                        .await?;
+                    txn.batch_execute(&format!("RELEASE SAVEPOINT imm_{index}"))
+                        .await?;
+                }
+                Ok((results[0], results[1], results[2]))
             })
         }
     })
@@ -418,79 +443,184 @@ async fn audit_immutability_rls_and_redaction_live() {
     assert!(rejected.is_err());
     assert!(sanitize_audit_metadata(&json!({"prompt": "CANARY_PROMPT_TEXT"})).is_err());
 
-    // Hostile nested metadata / invalid action / bad request+resource IDs.
-    let hostile = with_org_txn(&pool, &ctx, {
-        move |txn| {
-            Box::pin(async move {
-                let nested = txn
-                    .execute(
-                        "INSERT INTO audit_log (
-                            org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
-                         ) VALUES ($1, $2, 'document.upload', 'document', $3, 'success',
-                                   '{\"reason\":\"upload_accepted\",\"nested\":{\"a\":1}}'::jsonb, $4)",
-                        &[
-                            &org_id,
-                            &user_id,
-                            &"550e8400-e29b-41d4-a716-446655440002",
-                            &Uuid::new_v4().to_string(),
-                        ],
-                    )
-                    .await;
-                let bad_action = txn
-                    .execute(
-                        "INSERT INTO audit_log (
-                            org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
-                         ) VALUES ($1, $2, 'not.an.action', 'document', NULL, 'success', '{}'::jsonb, $3)",
-                        &[&org_id, &user_id, &Uuid::new_v4().to_string()],
-                    )
-                    .await;
-                let bad_request = txn
-                    .execute(
-                        "INSERT INTO audit_log (
-                            org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
-                         ) VALUES ($1, $2, 'auth.deny', 'session', NULL, 'deny', '{}'::jsonb, 'not-a-uuid')",
-                        &[&org_id, &user_id],
-                    )
-                    .await;
-                let bad_resource = txn
-                    .execute(
-                        "INSERT INTO audit_log (
-                            org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
-                         ) VALUES ($1, $2, 'document.delete', 'document', 'mh1.secret', 'success', '{}'::jsonb, $3)",
-                        &[&org_id, &user_id, &Uuid::new_v4().to_string()],
-                    )
-                    .await;
-                Ok((
-                    nested.is_err(),
-                    bad_action.is_err(),
-                    bad_request.is_err(),
-                    bad_resource.is_err(),
-                ))
-            })
-        }
-    })
-    .await
-    .unwrap();
-    assert!(hostile.0 && hostile.1 && hostile.2 && hostile.3);
+    // Each expected failure uses a fresh txn/savepoint (aborted txn cannot continue).
+    for sql in [
+        format!(
+            "INSERT INTO audit_log (
+                org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
+             ) VALUES ('{org_id}', '{user_id}', 'document.upload', 'document',
+                       '550e8400-e29b-41d4-a716-446655440002', 'success',
+                       '{{\"reason\":\"upload_accepted\",\"nested\":{{\"a\":1}}}}'::jsonb,
+                       '{}')",
+            Uuid::new_v4()
+        ),
+        format!(
+            "INSERT INTO audit_log (
+                org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
+             ) VALUES ('{org_id}', '{user_id}', 'not.an.action', 'document', NULL, 'success',
+                       '{{}}'::jsonb, '{}')",
+            Uuid::new_v4()
+        ),
+        format!(
+            "INSERT INTO audit_log (
+                org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
+             ) VALUES ('{org_id}', '{user_id}', 'auth.deny', 'session', NULL, 'deny',
+                       '{{}}'::jsonb, 'not-a-uuid')"
+        ),
+        format!(
+            "INSERT INTO audit_log (
+                org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
+             ) VALUES ('{org_id}', '{user_id}', 'document.delete', 'document', 'mh1.secret', 'success',
+                       '{{}}'::jsonb, '{}')",
+            Uuid::new_v4()
+        ),
+    ] {
+        let result = with_org_txn(&pool, &ctx, {
+            let sql = sql.clone();
+            move |txn| {
+                Box::pin(async move {
+                    txn.batch_execute("SAVEPOINT hostile_probe").await?;
+                    let failed = txn.batch_execute(&sql).await.is_err();
+                    txn.batch_execute("ROLLBACK TO SAVEPOINT hostile_probe")
+                        .await?;
+                    txn.batch_execute("RELEASE SAVEPOINT hostile_probe")
+                        .await?;
+                    if !failed {
+                        return Err(fileconv_server::db::error::DbError::Config(
+                            "expected insert failure".into(),
+                        ));
+                    }
+                    Ok(())
+                })
+            }
+        })
+        .await;
+        assert!(
+            result.is_ok(),
+            "hostile insert should fail closed: {result:?} sql={sql}"
+        );
+    }
 
-    // Hostile role: revoke path — separate-txn update/delete/truncate already asserted.
-    let admin = connect_raw(&db.url).await;
-    admin
-        .batch_execute(
-            "DO $$ BEGIN
-               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'markhand_audit_hostile') THEN
-                 CREATE ROLE markhand_audit_hostile LOGIN PASSWORD 'hostile';
-               END IF;
-             END $$;
-             GRANT CONNECT ON DATABASE current_database() TO markhand_audit_hostile;
-             GRANT USAGE ON SCHEMA public TO markhand_audit_hostile;
-             GRANT SELECT, INSERT ON audit_log TO markhand_audit_hostile;
-             REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM markhand_audit_hostile;",
-        )
+    // Runtime-role hostile path: ops execute as markhand_app (append-only least privilege).
+    ensure_markhand_app_role(&db).await;
+    let runtime_url = rewrite_role_url(&db.url, "markhand_app", "markhand_app");
+    let runtime = connect_raw(&runtime_url).await;
+    runtime
+        .batch_execute(&format!(
+            "SELECT set_config('app.org_id', '{org_id}', false);
+             SELECT set_config('app.user_id', '{user_id}', false);"
+        ))
         .await
-        .ok();
+        .expect("set runtime GUC");
+
+    let update = runtime
+        .execute(
+            "UPDATE audit_log SET outcome = 'error' WHERE id = $1",
+            &[&audit_id],
+        )
+        .await;
+    assert!(update.is_err(), "runtime role must not UPDATE audit_log");
+
+    let delete = runtime
+        .execute("DELETE FROM audit_log WHERE id = $1", &[&audit_id])
+        .await;
+    assert!(delete.is_err(), "runtime role must not DELETE audit_log");
+
+    let truncate = runtime.batch_execute("TRUNCATE audit_log").await;
+    assert!(
+        truncate.is_err(),
+        "runtime role must not TRUNCATE audit_log"
+    );
+
+    let cross_tenant = runtime
+        .execute(
+            "INSERT INTO audit_log (
+                org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
+             ) VALUES ($1, $2, 'auth.deny', 'session', NULL, 'deny', '{}'::jsonb, $3)",
+            &[&org_b, &user_b, &Uuid::new_v4().to_string()],
+        )
+        .await;
+    assert!(
+        cross_tenant.is_err(),
+        "runtime role must not write cross-tenant audit rows"
+    );
 
     db.drop().await;
+}
+
+fn rewrite_role_url(base_url: &str, user: &str, password: &str) -> String {
+    let Some((_, rest)) = base_url.split_once("://") else {
+        panic!("database URL missing scheme");
+    };
+    let Some((_, after_at)) = rest.split_once('@') else {
+        panic!("database URL missing credentials");
+    };
+    format!("postgres://{user}:{password}@{after_at}")
+}
+
+async fn ensure_markhand_app_role(db: &EphemeralDb) {
+    // Role creation needs a superuser once per cluster; grants use the DB owner.
+    let super_urls = [
+        std::env::var("MARKHAND_TEST_DATABASE_SUPERUSER_URL").ok(),
+        Some("host=/var/run/postgresql user=postgres dbname=postgres".into()),
+        Some(rewrite_role_url(&db.admin_url, "postgres", "postgres")),
+    ];
+    let mut created = false;
+    let mut last_error = None;
+    for url in super_urls.into_iter().flatten() {
+        match tokio_postgres::connect(&url, tokio_postgres::NoTls).await {
+            Ok((admin, connection)) => {
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                admin
+                    .batch_execute(
+                        "DO $$ BEGIN
+                           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'markhand_app') THEN
+                             CREATE ROLE markhand_app LOGIN PASSWORD 'markhand_app'
+                               NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+                           END IF;
+                         END $$;",
+                    )
+                    .await
+                    .expect("create markhand_app role");
+                created = true;
+                break;
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+    }
+    // Owner of the ephemeral DB (markhand_test) can grant CONNECT + table rights.
+    let owner_admin = connect_raw(&db.admin_url).await;
+    let role_present = owner_admin
+        .query_one(
+            "SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'markhand_app')",
+            &[],
+        )
+        .await
+        .expect("probe markhand_app role")
+        .get::<_, bool>(0);
+    assert!(
+        role_present || created,
+        "markhand_app role missing; create it or set MARKHAND_TEST_DATABASE_SUPERUSER_URL ({last_error:?})"
+    );
+    owner_admin
+        .batch_execute(&format!(
+            "GRANT CONNECT ON DATABASE \"{}\" TO markhand_app;",
+            db.db_name
+        ))
+        .await
+        .expect("grant CONNECT to markhand_app");
+    let owner = connect_raw(&db.url).await;
+    owner
+        .batch_execute(
+            "GRANT USAGE ON SCHEMA public TO markhand_app;
+             GRANT SELECT, INSERT ON audit_log TO markhand_app;
+             GRANT USAGE, SELECT ON SEQUENCE audit_log_seq_seq TO markhand_app;
+             REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM markhand_app;",
+        )
+        .await
+        .expect("grant audit least privilege to markhand_app");
 }
 
 #[tokio::test]

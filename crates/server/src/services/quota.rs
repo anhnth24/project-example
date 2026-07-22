@@ -280,8 +280,12 @@ pub async fn reserve(
     )
     .await;
     match &result {
-        Ok(_) => crate::telemetry::record_quota("reserve", resource_kind.as_str()),
+        Ok(outcome) if outcome.created => {
+            crate::telemetry::record_quota("reserve", resource_kind.as_str())
+        }
+        Ok(_) => {}
         Err(QuotaError::QuotaExceeded(_)) => {
+            persist_quota_deny_audit(db_pool, ctx, resource_kind).await;
             crate::telemetry::record_quota("deny", resource_kind.as_str())
         }
         Err(_) => crate::telemetry::record_quota("error", resource_kind.as_str()),
@@ -338,21 +342,7 @@ async fn reserve_inner(
                     .map_err(map_quota_config_error)?;
                 let remaining = remaining(usage.limit, usage.committed, usage.active_reserved)?;
                 if amount > remaining {
-                    let request_id = crate::services::audit::request_id_from_correlation();
-                    crate::services::audit::write_org_action(
-                        txn,
-                        &ctx,
-                        crate::services::audit::actions::QUOTA_DENY,
-                        crate::services::audit::resources::QUOTA,
-                        None,
-                        "deny",
-                        &request_id,
-                        serde_json::json!({
-                            "reason": "quota_exceeded",
-                            "resource_kind": resource_kind.as_str(),
-                        }),
-                    )
-                    .await?;
+                    // Do not audit inside this txn: returning Err rolls it back.
                     return Err(QuotaError::QuotaExceeded(QuotaDenial {
                         resource_kind,
                         limit: usage.limit,
@@ -609,7 +599,7 @@ pub async fn reserve_upload(
     let ttl_secs = checked_ttl_secs(ttl)?;
     let storage_key = format!("upload.storage.{reservation_key}");
     let document_key = format!("upload.documents.{reservation_key}");
-    pool::with_org_txn_typed(db_pool, ctx, {
+    let result = pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
         let storage_key = storage_key.clone();
         let document_key = document_key.clone();
@@ -646,7 +636,41 @@ pub async fn reserve_upload(
             })
         }
     })
-    .await
+    .await;
+    match &result {
+        Ok(outcome) => {
+            if outcome.document.created {
+                crate::telemetry::record_quota("reserve", ResourceKind::Documents.as_str());
+            }
+            if outcome.storage.created {
+                crate::telemetry::record_quota("reserve", ResourceKind::StorageBytes.as_str());
+            }
+        }
+        Err(QuotaError::QuotaExceeded(denial)) => {
+            persist_quota_deny_audit(db_pool, ctx, denial.resource_kind).await;
+            crate::telemetry::record_quota("deny", denial.resource_kind.as_str());
+        }
+        Err(_) => crate::telemetry::record_quota("error", "unknown"),
+    }
+    result
+}
+
+async fn persist_quota_deny_audit(db_pool: &Pool, ctx: &OrgContext, resource_kind: ResourceKind) {
+    let request_id = crate::services::audit::request_id_from_correlation();
+    let _ = crate::services::audit::write_deny_durable(
+        db_pool,
+        ctx.org_id(),
+        Some(ctx.user_id()),
+        crate::services::audit::AuditAction::QuotaDeny,
+        crate::services::audit::AuditResource::Quota,
+        None,
+        &request_id,
+        serde_json::json!({
+            "reason": "quota_exceeded",
+            "resource_kind": resource_kind.as_str(),
+        }),
+    )
+    .await;
 }
 
 pub async fn finalize_upload(
@@ -885,21 +909,7 @@ async fn reserve_spec_in_txn(
         .map_err(map_quota_config_error)?;
     let available = remaining(usage.limit, usage.committed, usage.active_reserved)?;
     if amount > available {
-        let request_id = crate::services::audit::request_id_from_correlation();
-        crate::services::audit::write_org_action(
-            txn,
-            ctx,
-            crate::services::audit::actions::QUOTA_DENY,
-            crate::services::audit::resources::QUOTA,
-            None,
-            "deny",
-            &request_id,
-            serde_json::json!({
-                "reason": "quota_exceeded",
-                "resource_kind": resource_kind.as_str(),
-            }),
-        )
-        .await?;
+        // Caller must persist deny audit after the enclosing txn rolls back.
         return Err(QuotaError::QuotaExceeded(QuotaDenial {
             resource_kind,
             limit: usage.limit,
