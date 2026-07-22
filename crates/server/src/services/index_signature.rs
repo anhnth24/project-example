@@ -66,7 +66,10 @@ pub fn collection_name_for_digest(digest: &str) -> Result<CollectionName, Storag
 pub fn collection_name_for_signature(
     signature: &IndexSignature<'_>,
 ) -> Result<CollectionName, StorageError> {
-    collection_name_for_digest(&signature.digest())
+    let digest = signature
+        .try_digest()
+        .map_err(|_| StorageError::PreconditionFailed)?;
+    collection_name_for_digest(&digest)
 }
 
 /// Parse and validate `markhand_chunks_<64-hex>` (charset `[a-z0-9_]` only).
@@ -147,5 +150,20 @@ mod tests {
         assert!(parse_collection_name(&format!("markhand_chunks_{}", "A".repeat(64))).is_err());
         assert!(parse_collection_name("markhand_chunks_../etc/passwd").is_err());
         assert!(parse_collection_name(&format!("markhand_chunks_{}?x=1", "a".repeat(64))).is_err());
+    }
+
+    #[test]
+    fn collection_name_rejects_unvalidated_runtime_paths_before_hashing() {
+        for runtime_path in ["", "local-hash\n", "local_hash_v1"] {
+            let signature = IndexSignature {
+                runtime_path,
+                ..sample_signature()
+            };
+            assert_eq!(
+                collection_name_for_signature(&signature),
+                Err(StorageError::PreconditionFailed),
+                "runtime_path {runtime_path:?}"
+            );
+        }
     }
 }
