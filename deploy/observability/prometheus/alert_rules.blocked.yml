@@ -34,7 +34,53 @@ groups:
           description: >
             Deploy stacks do not define a stable GLM/health URL. Use metric-based
             MarkhandGlmProviderErrors (qa_provider failure ratio) instead.
-          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+          threshold_source: O02-OPS-PROBE-FAILURE
           runbook: docs/runbooks/glm-fallback.md
           dashboard: markhand-deps
           coverage: blocked
+
+      - alert: MarkhandReconcileErrors
+        expr: |
+          sum(increase(markhand_reconcile_total{result="error"}[5m])) > 0
+        labels:
+          severity: ticket
+          team: operations
+          class: drift
+          status: blocked
+        annotations:
+          summary: BLOCKED — reconcile result=error is not emitted by product telemetry.
+          description: >
+            record_reconcile() product paths label result as success or drift only.
+            Prefer live MarkhandDriftDetected (markhand_drift_total / drift increase)
+            as the real drift signal. Do not invent fake fixtures or dashboard panels
+            for result="error".
+          threshold_source: O02-OPS-DRIFT-COUNT
+          runbook: docs/runbooks/vector-rebuild.md
+          dashboard: markhand-ops
+          coverage: blocked
+          block_reason: unemitted markhand_reconcile_total{result="error"}
+
+      - alert: MarkhandNamedVolumeDiskLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{mountpoint=~".*postgres.*|.*/data.*"}
+            /
+            clamp_min(node_filesystem_size_bytes{mountpoint=~".*postgres.*|.*/data.*"}, 1)
+          ) < 0.30
+        for: 10m
+        labels:
+          severity: page
+          team: operations
+          class: disk
+          status: blocked
+        annotations:
+          summary: BLOCKED — Docker named-volume free-space attribution unavailable.
+          description: >
+            Host-only node_exporter bind-mount (/host → mountpoint="/") cannot attribute
+            free space to Compose named volumes (pgdata/miniodata). Volume-specific disk
+            alerts remain blocked. Use MarkhandHostRootFilesystemLow for host capacity.
+          threshold_source: WORKLOAD-DISK-HEADROOM-PERCENT
+          runbook: docs/runbooks/disk-exhaustion.md
+          dashboard: markhand-ops
+          coverage: blocked
+          block_reason: named-volume attribution unavailable with host-only node_exporter

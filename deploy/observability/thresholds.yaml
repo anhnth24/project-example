@@ -63,9 +63,9 @@ sources:
     value: 0.05
     unit: ratio
     note: >
-      O02 policy: sustained conversion/embedding/retrieval failure ratio above 5%.
-      Informed by 10x the 0.5% availability error budget, but NOT a formal gate citation
-      for auth/drift.
+      O02 policy: sustained conversion/embedding/retrieval/qa_provider failure ratio
+      above 5%. Informed by 10x the 0.5% availability error budget. NOT a citation for
+      auth deny, dead-letter events, probe failure, or scrape absence.
   O02-OPS-AUTH-DENY-COUNT:
     kind: operational_policy
     value: 50
@@ -77,6 +77,20 @@ sources:
     value: 10
     unit: count_per_10m
     note: "O02 policy: more than 10 drift events in 10m. Not SLA-derived."
+  O02-OPS-DEAD-LETTER-EVENT:
+    kind: operational_policy
+    value: 1
+    unit: event
+    note: >
+      O02 policy: any dead_letter job transition increase > 0 in 5m. Event-based page/ticket.
+      Not an error-ratio citation.
+  O02-OPS-PROBE-FAILURE:
+    kind: operational_policy
+    value: 0
+    unit: boolean_or_absent
+    note: >
+      O02 policy: probe_success==0, up==0, or absent(probe_success{dependency=...}).
+      Boolean/absence semantics — not error-ratio.
   O02-OPS-ALERT-FOR:
     kind: operational_policy
     note: >
@@ -108,6 +122,9 @@ alerts:
     value: 0.30
     source: WORKLOAD-DISK-HEADROOM-PERCENT
     conversion: "30% headroom -> free ratio >= 0.30"
+    series: markhand:disk:host_root_free_ratio
+    scope: host_root_mountpoint_only
+    namedVolumeAttribution: unavailable_blocked
   conversion_error_ratio:
     value: 0.05
     source: O02-OPS-ERROR-OUTBREAK-RATIO
@@ -123,6 +140,12 @@ alerts:
   search_availability_ratio:
     value: 0.995
     source: SLA-AVAILABILITY
+  dead_letter_event:
+    value: 1
+    source: O02-OPS-DEAD-LETTER-EVENT
+  probe_failure:
+    value: 0
+    source: O02-OPS-PROBE-FAILURE
 
 blockedAlerts:
   - name: MarkhandQueryLatencyP99Burn
@@ -130,6 +153,13 @@ blockedAlerts:
     file: deploy/observability/prometheus/alert_rules.blocked.yml
   - name: MarkhandGlmProbeDown
     reason: no configured GLM health endpoint/metric for blackbox probing
+    file: deploy/observability/prometheus/alert_rules.blocked.yml
+  - name: MarkhandReconcileErrors
+    reason: product emits markhand_reconcile_total result=success|drift only; result=error unemitted
+    file: deploy/observability/prometheus/alert_rules.blocked.yml
+  - name: MarkhandNamedVolumeDiskLow
+    reason: named-volume free-space attribution unavailable with host-only node_exporter
+    file: deploy/observability/prometheus/alert_rules.blocked.yml
 
 labelAllowlists:
   queue: [convert, embed, index, reconcile, delete]
@@ -151,6 +181,7 @@ labelAllowlists:
     - cancelled
     - leased
     - accepted
+    - drift
     - other
   job_type: [convert, embed, index, reconcile, delete, other]
   transition: [enqueue, claim, finish, other]
@@ -162,7 +193,7 @@ labelAllowlists:
   resource_kind: [documents, storage_bytes, jobs, tokens, embeddings, unknown, other]
   code: [permission_denied, membership_missing, user_disabled, collection_denied, unauthorized, invalid_credentials, other]
   dependency: [postgres, qdrant, minio, embedding, markhand_ready]
-  mountpoint: ["/", "/var/lib/postgresql", "/data"]
+  mountpoint: ["/"]
   job: [otel-collector, node, blackbox-http, blackbox-tcp]
 
 forbiddenLabelKeys:
@@ -181,6 +212,7 @@ forbiddenLabelKeys:
   - url
   - object_key
 
+# Exact O01 inventory (base names). Histograms also expose _bucket/_count/_sum.
 metrics:
   - markhand_api_request_duration_seconds
   - markhand_api_requests_total
@@ -197,6 +229,21 @@ metrics:
   - markhand_quota_decisions_total
   - markhand_job_transitions_total
   - markhand_auth_decisions_total
+
+# Allowed derived recording-rule metric names (must match recording_rules.yml).
+allowedRecordingMetrics:
+  - markhand:api_search:p95_5m
+  - markhand:api_search:success_ratio_5m
+  - markhand:queue:depth_max
+  - markhand:queue:oldest_age_seconds_max
+  - markhand:job:dead_letter_increase_5m
+  - markhand:conversion:error_ratio_10m
+  - markhand:embedding:failure_ratio_10m
+  - markhand:retrieval:failure_ratio_10m
+  - markhand:qa_provider:failure_ratio_10m
+  - markhand:auth:deny_increase_10m
+  - markhand:drift:increase_10m
+  - markhand:disk:host_root_free_ratio
 
 infraMetrics:
   - node_filesystem_avail_bytes

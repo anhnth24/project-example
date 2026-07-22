@@ -1,30 +1,37 @@
-# Observability overlay for the POC stack.
+# Observability overlay for the POC stack (P1B-O02).
 #
-# Usage (shares POC networks/volumes):
-#   docker compose --env-file deploy/.env \
-#     -f deploy/compose.poc.yml \
-#     -f deploy/observability/compose.observability.yml \
+# REQUIRED invocation (repo-root project directory + REPO_ROOT binds):
+#
+#   REPO_ROOT="$(git rev-parse --show-toplevel)"
+#   docker compose --project-directory "$REPO_ROOT" \
+#     --env-file "$REPO_ROOT/deploy/.env" \
+#     -f "$REPO_ROOT/deploy/compose.poc.yml" \
+#     -f "$REPO_ROOT/deploy/observability/compose.observability.yml" \
 #     up -d
 #
-# Standalone (external network must already exist):
-#   MARKHAND_COMPOSE_PROJECT=markhand-poc docker compose \
-#     -f deploy/observability/compose.observability.yml up -d
+# Or: bash "$REPO_ROOT/deploy/observability/up.sh" up -d
+#
+# Bind sources are ${REPO_ROOT}/deploy/observability/... so they resolve under
+# --project-directory "$REPO_ROOT" regardless of caller CWD.
 #
 # Docker is required at runtime. This VM may not have Docker; validation uses
-# pinned promtool + YAML parsers instead of a live stack.
+# pinned promtool + static path/network matrix checks instead of a live stack.
 name: ${MARKHAND_COMPOSE_PROJECT:-markhand-poc}
 
 services:
+  # --- Observability sidecars ---
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.156.0@sha256:125bdbeb7590cc1952c5b3430ecf14063568980c2c93d5b38676cc0446ed8108
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
-      - ./otel/collector-prometheus.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/otel/collector-prometheus.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:8889:8889"
       - "127.0.0.1:13133:13133"
-    networks: [private]
+    # private: API/index/embedding workers + Prometheus scrape
+    # convert: convert worker only (internal:true — no external egress path)
+    networks: [private, convert]
     restart: unless-stopped
 
   node-exporter:
@@ -34,9 +41,8 @@ services:
       - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run|var/lib/docker/.+)($$|/)
       - --web.listen-address=:9100
     volumes:
+      # Host rootfs only. Named Docker volume attribution (PG/MinIO) is unavailable/blocked.
       - /:/host:ro,rslave
-      - postgres_data:/var/lib/postgresql:ro
-      - minio_data:/data:ro
     networks: [private]
     restart: unless-stopped
     pid: host
@@ -46,7 +52,7 @@ services:
     command:
       - --config.file=/etc/blackbox/blackbox.yml
     volumes:
-      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     networks: [private]
     restart: unless-stopped
 
@@ -58,9 +64,9 @@ services:
       - --web.enable-lifecycle
       - --storage.tsdb.retention.time=7d
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/recording_rules.yml:/etc/prometheus/rules/recording_rules.yml:ro
-      - ./prometheus/alert_rules.yml:/etc/prometheus/rules/alert_rules.yml:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/prometheus/recording_rules.yml:/etc/prometheus/rules/recording_rules.yml:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/prometheus/alert_rules.yml:/etc/prometheus/rules/alert_rules.yml:ro
     ports:
       - "127.0.0.1:9090:9090"
     depends_on: [otel-collector, alertmanager, node-exporter, blackbox-exporter]
@@ -70,7 +76,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
     volumes:
-      - ./alertmanager/alertmanager.example.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/alertmanager/alertmanager.example.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
       - "127.0.0.1:9093:9093"
     networks: [private]
@@ -85,20 +91,60 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_PATHS_PROVISIONING: /etc/grafana/provisioning
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${REPO_ROOT:?REPO_ROOT must be absolute repo root}/deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "127.0.0.1:3000:3000"
     depends_on: [prometheus]
     networks: [private]
     restart: unless-stopped
 
+  # --- Merge OTLP env into telemetry emitters (compose map-merge with POC file) ---
+  # Dev/POC: internal HTTP to in-compose collector is allowed (MARKHAND_PROFILE=dev).
+  # Production contract remains HTTPS (telemetry config fails closed on remote http).
+  api:
+    environment:
+      MARKHAND_OTEL_EXPORTER: otlp
+      MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      MARKHAND_OTEL_METRICS_ENABLED: "true"
+      MARKHAND_OTEL_SERVICE_NAME: markhand-api
+
+  worker-index:
+    environment:
+      MARKHAND_OTEL_EXPORTER: otlp
+      MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      MARKHAND_OTEL_METRICS_ENABLED: "true"
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-index
+
+  worker-embedding:
+    environment:
+      MARKHAND_OTEL_EXPORTER: otlp
+      MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      MARKHAND_OTEL_METRICS_ENABLED: "true"
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-embedding
+
+  worker-convert:
+    environment:
+      MARKHAND_OTEL_EXPORTER: otlp
+      MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      MARKHAND_OTEL_METRICS_ENABLED: "true"
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-convert
+    # Remains on convert-only network (no private/edge). Reaches collector via convert.
+
+  # Stable private-network DNS alias `embedding` for mock and aiteamvn profiles.
+  mock-embedding:
+    networks:
+      private:
+        aliases: [embedding]
+
+  embedding-cpu:
+    networks:
+      private:
+        aliases: [embedding]
+
 networks:
   private:
-    # When used as overlay with compose.poc.yml, this merges with POC `private`.
-    # Standalone: set external:true and name ${MARKHAND_COMPOSE_PROJECT}_private.
     driver: bridge
-
-volumes:
-  postgres_data:
-  minio_data:
+  convert:
+    driver: bridge
+    internal: true

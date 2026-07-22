@@ -21,9 +21,10 @@ groups:
         expr: |
           (
             sum(rate(markhand_api_requests_total{route="search", status_class="2xx"}[5m]))
-            /
-            clamp_min(sum(rate(markhand_api_requests_total{route="search"}[5m])), 1e-9)
+            or vector(0)
           )
+          /
+          clamp_min(sum(rate(markhand_api_requests_total{route="search"}[5m])), 1e-9)
         labels:
           window: 5m
           route: search
@@ -100,19 +101,15 @@ groups:
         labels:
           window: 10m
 
-      - record: markhand:reconcile:error_increase_5m
-        expr: |
-          sum(increase(markhand_reconcile_total{result="error"}[5m]))
-        labels:
-          window: 5m
-
   - name: markhand.recording.disk
     interval: 30s
     rules:
-      - record: markhand:disk:free_ratio
+      # Host root only (node_exporter --path.rootfs=/host → mountpoint="/").
+      # Named-volume attribution is unavailable/blocked.
+      - record: markhand:disk:host_root_free_ratio
         expr: |
           (
-            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"}
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"}
             /
-            clamp_min(node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}, 1)
+            clamp_min(node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs",mountpoint="/"}, 1)
           )

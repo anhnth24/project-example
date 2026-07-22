@@ -3,7 +3,7 @@
 Issue: P1B-O02
 Alerts: `MarkhandQueueOldestAgeHigh`, `MarkhandQueueDepthWarning`, `MarkhandDeadLetterJobs`
 Dashboard: Grafana `markhand-queue`
-Sources: queue age ≤ 120 min (`docs/markhand-web-sla-targets.md`); depth warn 600 derived from `G0-CAP-INGEST-THROUGHPUT`.
+Sources: queue age ≤ 120 min (`docs/markhand-web-sla-targets.md`); depth warn 600 derived from `G0-CAP-INGEST-THROUGHPUT`; dead-letter is event policy `O02-OPS-DEAD-LETTER-EVENT` (not error-ratio).
 
 ## Prerequisites
 

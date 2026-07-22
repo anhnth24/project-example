@@ -4,9 +4,11 @@
 
 poc_compose_init() {
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  export REPO_ROOT="${REPO_ROOT:-$ROOT}"
   COMPOSE_FILE="$ROOT/deploy/compose.poc.yml"
   ENV_FILE="$ROOT/deploy/.env"
   POC_COMPOSE_EFFECTIVE="${POC_COMPOSE_EFFECTIVE:-}"
+  OBS_COMPOSE_FILE="$ROOT/deploy/observability/compose.observability.yml"
 
   if [[ ! -f "$ENV_FILE" ]]; then
     cp "$ROOT/deploy/.env.example" "$ENV_FILE"
@@ -22,6 +24,7 @@ poc_compose_init() {
   export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-0}"
   export COMPOSE_DOCKER_CLI_BUILD="${COMPOSE_DOCKER_CLI_BUILD:-0}"
   export COMPOSE_BAKE="${COMPOSE_BAKE:-false}"
+  export REPO_ROOT
 
   local files=("$COMPOSE_FILE")
   if poc_cgroup_limits_broken; then
@@ -33,11 +36,20 @@ poc_compose_init() {
     files=("$POC_COMPOSE_EFFECTIVE")
   fi
 
-  COMPOSE=(docker compose --env-file "$ENV_FILE")
+  # Always an argv array — never store the full command in a scalar string.
+  # --project-directory keeps relative binds stable; observability overlay needs REPO_ROOT.
+  COMPOSE=(
+    docker compose
+    --project-directory "$ROOT"
+    --env-file "$ENV_FILE"
+  )
   local f
   for f in "${files[@]}"; do
     COMPOSE+=(-f "$f")
   done
+  if [[ "${POC_WITH_OBSERVABILITY:-0}" == "1" ]]; then
+    COMPOSE+=(-f "$OBS_COMPOSE_FILE")
+  fi
 }
 
 poc_cgroup_limits_broken() {

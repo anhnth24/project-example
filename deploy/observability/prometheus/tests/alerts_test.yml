@@ -1,4 +1,5 @@
 # promtool test rules — temporal/equality/non-firing coverage for P1B-O02.
+# Every active alert has at least one firing case plus non-fire and/or temporal resolve.
 # Run via scripts/check-observability-o02.py (pinned promtool 2.55.1).
 rule_files:
   - ../recording_rules.yml
@@ -44,6 +45,75 @@ tests:
         alertname: MarkhandQueryLatencyP95Burn
         exp_alerts: []
 
+  - name: search_p95_non_firing_when_healthy
+    interval: 1m
+    input_series:
+      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="0.25"}'
+        values: "0+10x20"
+      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="0.5"}'
+        values: "0+10x20"
+      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="1.0"}'
+        values: "0+10x20"
+      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="+Inf"}'
+        values: "0+10x20"
+      - series: 'markhand_api_request_duration_seconds_count{route="search",method="POST",status_class="2xx"}'
+        values: "0+10x20"
+      - series: 'markhand_api_request_duration_seconds_sum{route="search",method="POST",status_class="2xx"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandQueryLatencyP95Burn
+        exp_alerts: []
+
+  - name: search_availability_5xx_only_fires_and_resolves
+    interval: 1m
+    input_series:
+      # 5xx-only traffic: no 2xx series → numerator forced to 0 via or vector(0)
+      - series: 'markhand_api_requests_total{route="search",method="POST",status_class="5xx"}'
+        values: "0+20x20 20+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandSearchAvailabilityBurn
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandSearchAvailabilityBurn
+              severity: page
+              team: operations
+              class: slo
+              window: 5m
+              route: search
+            exp_annotations:
+              summary: Search API success ratio below 99.5% availability target.
+              description: "route=search 2xx success ratio over 5m is below 0.995 for 15m (`for` = O02 policy). Recording rule forces missing 2xx series to 0 via `or vector(0)`, so 5xx-only traffic yields numerator 0 and fires. Empty search traffic is gated out. Source: docs/markhand-web-sla-targets.md Service availability (search population only).\n"
+              threshold_source: SLA-AVAILABILITY
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-slo
+      - eval_time: 45m
+        alertname: MarkhandSearchAvailabilityBurn
+        exp_alerts: []
+
+  - name: search_availability_healthy_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_api_requests_total{route="search",method="POST",status_class="2xx"}'
+        values: "0+20x25"
+      - series: 'markhand_api_requests_total{route="search",method="POST",status_class="5xx"}'
+        values: "0+0x25"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MarkhandSearchAvailabilityBurn
+        exp_alerts: []
+
+  - name: search_availability_empty_traffic_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_api_requests_total{route="search",method="POST",status_class="2xx"}'
+        values: "0+0x25"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: MarkhandSearchAvailabilityBurn
+        exp_alerts: []
+
   - name: dead_letter_single_event_fires_and_resolves
     interval: 1m
     input_series:
@@ -62,37 +132,69 @@ tests:
               window: 5m
             exp_annotations:
               summary: At least one job transitioned to dead_letter in the last 5m.
-              description: "Uses increase(...[5m]) so a single event is visible and clears when the window slides past the event. Not rate()+long for.\n"
-              threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+              description: "Uses increase(...[5m]) so a single event is visible and clears when the window slides past the event. Not rate()+long for. Policy: O02-OPS-DEAD-LETTER-EVENT (event-based), not error-ratio.\n"
+              threshold_source: O02-OPS-DEAD-LETTER-EVENT
               runbook: docs/runbooks/stuck-dead-jobs.md
               dashboard: markhand-queue
       - eval_time: 16m
         alertname: MarkhandDeadLetterJobs
         exp_alerts: []
 
-  - name: reconcile_error_single_event_fires_and_resolves
+  - name: queue_oldest_age_fires_and_resolves
     interval: 1m
     input_series:
-      - series: 'markhand_reconcile_total{mode="repair",result="error"}'
-        values: "0 1 1 1 1 1 1 1 1 1 1 1"
+      - series: 'markhand_queue_oldest_age_seconds{queue="convert"}'
+        values: "8000+0x10 100+0x10"
     alert_rule_test:
-      - eval_time: 2m
-        alertname: MarkhandReconcileErrors
+      - eval_time: 10m
+        alertname: MarkhandQueueOldestAgeHigh
         exp_alerts:
           - exp_labels:
-              alertname: MarkhandReconcileErrors
+              alertname: MarkhandQueueOldestAgeHigh
+              severity: page
+              team: operations
+              class: queue
+              queue: convert
+            exp_annotations:
+              summary: Oldest queue age exceeds 120-minute recovery target.
+              description: "Queue oldest age > 7200s. Source: docs/markhand-web-sla-targets.md Queue age. `for` 5m is O02 paging policy.\n"
+              threshold_source: SLA-QUEUE-AGE-MINUTES
+              runbook: docs/runbooks/stuck-dead-jobs.md
+              dashboard: markhand-queue
+      - eval_time: 20m
+        alertname: MarkhandQueueOldestAgeHigh
+        exp_alerts: []
+
+  - name: queue_depth_warning_fires
+    interval: 1m
+    input_series:
+      - series: 'markhand_queue_depth{queue="index"}'
+        values: "700+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandQueueDepthWarning
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandQueueDepthWarning
               severity: ticket
               team: operations
-              class: drift
-              window: 5m
+              class: queue
+              queue: index
             exp_annotations:
-              summary: At least one reconcile error in the last 5m.
-              description: "Uses increase(...[5m]) so a single error fires and resolves when the window slides past it.\n"
-              threshold_source: O02-OPS-DRIFT-COUNT
-              runbook: docs/runbooks/vector-rebuild.md
-              dashboard: markhand-ops
-      - eval_time: 12m
-        alertname: MarkhandReconcileErrors
+              summary: Queue depth exceeds half-hour peak ingest backlog buffer.
+              description: "Depth > 600 derived from G0-CAP peak 1200 docs/hour * 0.5h. Operational derivation, not a separate formal gate.\n"
+              threshold_source: WORKLOAD-PEAK-INGEST-DOCS-PER-HOUR
+              runbook: docs/runbooks/stuck-dead-jobs.md
+              dashboard: markhand-queue
+
+  - name: queue_depth_warning_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_queue_depth{queue="index"}'
+        values: "10+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandQueueDepthWarning
         exp_alerts: []
 
   - name: auth_deny_count_threshold
@@ -117,6 +219,16 @@ tests:
               runbook: docs/runbooks/key-rotation.md
               dashboard: markhand-ops
 
+  - name: auth_deny_below_threshold_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_auth_decisions_total{result="deny",code="unauthorized"}'
+        values: "0+1x12"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandAuthDenySpike
+        exp_alerts: []
+
   - name: embedding_http_error_outbreak
     interval: 1m
     input_series:
@@ -137,6 +249,30 @@ tests:
             exp_annotations:
               summary: Embedding failure ratio exceeds 5% outbreak threshold.
               description: "Failures include result=~error|http_error|invalid_response|other. Threshold source: O02-OPS-ERROR-OUTBREAK-RATIO (operational policy).\n"
+              threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+
+  - name: retrieval_error_outbreak_fires
+    interval: 1m
+    input_series:
+      - series: 'markhand_retrieval_total{leg="hybrid",result="error"}'
+        values: "0+10x20"
+      - series: 'markhand_retrieval_total{leg="hybrid",result="success"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandRetrievalErrorOutbreak
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandRetrievalErrorOutbreak
+              severity: page
+              team: operations
+              class: dependency
+              window: 10m
+            exp_annotations:
+              summary: Retrieval failure ratio exceeds 5% outbreak threshold.
+              description: "result=~error|other over 10m. Operational outbreak policy."
               threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
               runbook: docs/runbooks/dependency-outage.md
               dashboard: markhand-deps
@@ -165,51 +301,67 @@ tests:
               runbook: docs/runbooks/glm-fallback.md
               dashboard: markhand-deps
 
-  - name: search_p95_non_firing_when_healthy
+  - name: conversion_error_outbreak_fires
     interval: 1m
     input_series:
-      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="0.25"}'
+      - series: 'markhand_conversion_total{format="pdf",result="error"}'
         values: "0+10x20"
-      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="0.5"}'
-        values: "0+10x20"
-      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="1.0"}'
-        values: "0+10x20"
-      - series: 'markhand_api_request_duration_seconds_bucket{route="search",method="POST",status_class="2xx",le="+Inf"}'
-        values: "0+10x20"
-      - series: 'markhand_api_request_duration_seconds_count{route="search",method="POST",status_class="2xx"}'
-        values: "0+10x20"
-      - series: 'markhand_api_request_duration_seconds_sum{route="search",method="POST",status_class="2xx"}'
+      - series: 'markhand_conversion_total{format="pdf",result="success"}'
         values: "0+1x20"
     alert_rule_test:
       - eval_time: 20m
-        alertname: MarkhandQueryLatencyP95Burn
-        exp_alerts: []
+        alertname: MarkhandConversionErrorOutbreak
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandConversionErrorOutbreak
+              severity: page
+              team: operations
+              class: parser
+              window: 10m
+            exp_annotations:
+              summary: Conversion/parser failure ratio exceeds 5% outbreak threshold.
+              description: "result=~error|other. Operational outbreak policy."
+              threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+              runbook: docs/runbooks/converter-outbreak.md
+              dashboard: markhand-ops
 
-  - name: disk_low_fires
+  - name: host_root_filesystem_low_fires
     interval: 1m
     input_series:
-      - series: 'node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/var/lib/postgresql"}'
+      - series: 'node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"}'
         values: "20+0x20"
-      - series: 'node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/var/lib/postgresql"}'
+      - series: 'node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"}'
         values: "100+0x20"
     alert_rule_test:
       - eval_time: 15m
-        alertname: MarkhandDiskLow
+        alertname: MarkhandHostRootFilesystemLow
         exp_alerts:
           - exp_labels:
-              alertname: MarkhandDiskLow
+              alertname: MarkhandHostRootFilesystemLow
               severity: page
               team: operations
               class: disk
               device: /dev/sda1
               fstype: ext4
-              mountpoint: /var/lib/postgresql
+              mountpoint: "/"
             exp_annotations:
-              summary: Free disk ratio below 30% headroom target.
-              description: "Filesystem free ratio < 0.30. Source: workload-profile.yaml hardware.headroomPercent.disk=30.\n"
+              summary: Host root filesystem free space below 30% headroom target.
+              description: "node_exporter host bind-mount reports free ratio on mountpoint=\"/\" under 0.30. This is host capacity only. Docker named-volume attribution (PG/MinIO pgdata/miniodata) is unavailable/blocked — see alert_rules.blocked.yml MarkhandNamedVolumeDiskLow. Source: workload-profile.yaml hardware.headroomPercent.disk=30.\n"
               threshold_source: WORKLOAD-DISK-HEADROOM-PERCENT
               runbook: docs/runbooks/disk-exhaustion.md
               dashboard: markhand-ops
+
+  - name: host_root_filesystem_healthy_non_firing
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: "80+0x20"
+      - series: 'node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"}'
+        values: "100+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandHostRootFilesystemLow
+        exp_alerts: []
 
   - name: dependency_probe_down
     interval: 1m
@@ -229,10 +381,20 @@ tests:
               job: blackbox-http
             exp_annotations:
               summary: Dependency blackbox probe is failing.
-              description: "probe_success==0 for a bounded dependency label (HTTP or TCP module). GLM blackbox probe is intentionally absent (no configured endpoint).\n"
-              threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+              description: "probe_success==0 for a bounded dependency label (HTTP or TCP module). GLM blackbox probe is intentionally absent (no configured endpoint). Policy: O02-OPS-PROBE-FAILURE (boolean probe), not error-ratio.\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
               runbook: docs/runbooks/dependency-outage.md
               dashboard: markhand-deps
+
+  - name: dependency_probe_up_non_firing
+    interval: 1m
+    input_series:
+      - series: 'probe_success{dependency="qdrant",job="blackbox-http"}'
+        values: "1+0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MarkhandDependencyProbeDown
+        exp_alerts: []
 
   - name: scrape_target_down
     interval: 1m
@@ -251,7 +413,134 @@ tests:
               job: node
             exp_annotations:
               summary: Prometheus scrape target is down.
-              description: "up==0 for an observability scrape job. `for` 2m is O02 policy."
-              threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+              description: "up==0 for an observability scrape job. `for` 2m is O02 policy. Policy: O02-OPS-PROBE-FAILURE (target absence/unreachable).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
               runbook: docs/runbooks/dependency-outage.md
               dashboard: markhand-deps
+
+  - name: dependency_probe_absent_fires
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandDependencyProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandDependencyProbeAbsent
+              severity: page
+              team: operations
+              class: dependency
+            exp_annotations:
+              summary: Expected dependency probe series is absent.
+              description: "Blackbox probe metrics missing for a required dependency label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+
+  - name: drift_detected_fires
+    interval: 1m
+    input_series:
+      - series: 'markhand_drift_total{kind="object",state="missing"}'
+        values: "0+5x15"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandDriftDetected
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandDriftDetected
+              severity: ticket
+              team: operations
+              class: drift
+              window: 10m
+            exp_annotations:
+              summary: Drift event count exceeds O02 operational policy.
+              description: ">10 drift events in 10m. Source: O02-OPS-DRIFT-COUNT (not SLA-derived). Real drift signal from markhand_drift_total. Reconcile result=\"error\" is blocked (product emits success|drift on markhand_reconcile_total).\n"
+              threshold_source: O02-OPS-DRIFT-COUNT
+              runbook: docs/runbooks/vector-rebuild.md
+              dashboard: markhand-ops
+
+  - name: drift_detected_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_drift_total{kind="object",state="missing"}'
+        values: "0+0x15"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandDriftDetected
+        exp_alerts: []
+
+  - name: embedding_healthy_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_embedding_total{result="success"}'
+        values: "0+20x20"
+      - series: 'markhand_embedding_total{result="http_error"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandEmbeddingErrorOutbreak
+        exp_alerts: []
+
+  - name: retrieval_healthy_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_retrieval_total{leg="hybrid",result="success"}'
+        values: "0+20x20"
+      - series: 'markhand_retrieval_total{leg="hybrid",result="error"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandRetrievalErrorOutbreak
+        exp_alerts: []
+
+  - name: qa_provider_healthy_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_retrieval_total{leg="qa_provider",result="success"}'
+        values: "0+20x20"
+      - series: 'markhand_retrieval_total{leg="qa_provider",result="outage"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandGlmProviderErrors
+        exp_alerts: []
+
+  - name: conversion_healthy_non_firing
+    interval: 1m
+    input_series:
+      - series: 'markhand_conversion_total{format="pdf",result="success"}'
+        values: "0+20x20"
+      - series: 'markhand_conversion_total{format="pdf",result="error"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandConversionErrorOutbreak
+        exp_alerts: []
+
+  - name: scrape_target_up_non_firing
+    interval: 1m
+    input_series:
+      - series: 'up{job="node"}'
+        values: "1+0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MarkhandScrapeTargetDown
+        exp_alerts: []
+
+  - name: dependency_probe_present_non_firing
+    interval: 1m
+    input_series:
+      - series: 'probe_success{dependency="postgres",job="blackbox-tcp"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="qdrant",job="blackbox-http"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="minio",job="blackbox-http"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="embedding",job="blackbox-http"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="markhand_ready",job="blackbox-http"}'
+        values: "1+0x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandDependencyProbeAbsent
+        exp_alerts: []

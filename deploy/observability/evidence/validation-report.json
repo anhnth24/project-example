@@ -1,25 +1,48 @@
 {
-  "version": 2,
-  "issue": "P1B-O02",
-  "ok": true,
-  "alertCount": 16,
-  "blockedAlertCount": 2,
-  "dashboardCount": 4,
-  "runbookCount": 7,
-  "promtool": "/workspace/.tools/promtool",
-  "promtoolCheckOk": true,
-  "promtoolTestOk": true,
-  "dockerAvailable": false,
-  "claims_real_outage": false,
-  "errors": [],
-  "notes": [
-    "Docker not available in this environment; compose deployability validated via YAML/image pins/endpoints only."
+  "activeAlerts": [
+    "MarkhandAuthDenySpike",
+    "MarkhandConversionErrorOutbreak",
+    "MarkhandDeadLetterJobs",
+    "MarkhandDependencyProbeAbsent",
+    "MarkhandDependencyProbeDown",
+    "MarkhandDriftDetected",
+    "MarkhandEmbeddingErrorOutbreak",
+    "MarkhandGlmProviderErrors",
+    "MarkhandHostRootFilesystemLow",
+    "MarkhandQueryLatencyP95Burn",
+    "MarkhandQueueDepthWarning",
+    "MarkhandQueueOldestAgeHigh",
+    "MarkhandRetrievalErrorOutbreak",
+    "MarkhandScrapeTargetDown",
+    "MarkhandSearchAvailabilityBurn"
   ],
+  "alertCount": 15,
+  "blockedAlertCount": 4,
+  "blockedAlerts": [
+    "MarkhandGlmProbeDown",
+    "MarkhandNamedVolumeDiskLow",
+    "MarkhandQueryLatencyP99Burn",
+    "MarkhandReconcileErrors"
+  ],
+  "claims_real_outage": false,
   "commands": [
     "bash scripts/fetch-promtool.sh",
     "python3 scripts/check-observability-o02.py",
     "python3 scripts/check-observability-o02.py --self-test",
     ".tools/promtool check rules deploy/observability/prometheus/recording_rules.yml deploy/observability/prometheus/alert_rules.yml",
     ".tools/promtool test rules deploy/observability/prometheus/tests/alerts_test.yml"
-  ]
+  ],
+  "dashboardCount": 4,
+  "dockerAvailable": false,
+  "errors": [],
+  "issue": "P1B-O02",
+  "notes": [
+    "Docker not available in this environment; compose deployability validated via YAML/image pins/REPO_ROOT bind path checks/network matrix only."
+  ],
+  "ok": true,
+  "promtool": ".tools/promtool",
+  "promtoolCheckOk": true,
+  "promtoolTestOk": true,
+  "runbookCount": 7,
+  "version": 3
 }

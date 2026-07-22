@@ -1,6 +1,5 @@
 # Prometheus scrape config for Markhand Web O02.
-# Designed as a compose overlay on deploy/compose.poc.yml (shared `private` network).
-# Service names match compose.poc.yml: api, postgres, qdrant, minio, mock-embedding.
+# Service names match compose.poc.yml + overlay aliases.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -49,10 +48,9 @@ scrape_configs:
           - http://minio:9000/minio/health/live
         labels:
           dependency: minio
-      # Default mock profile service name from compose.poc.yml.
-      # For aiteamvn profile, override via file_sd / extra scrape (embedding-cpu:8080/health).
+      # Stable alias from overlay (mock-embedding and embedding-cpu both advertise `embedding`).
       - targets:
-          - http://mock-embedding:8080/health
+          - http://embedding:8080/health
         labels:
           dependency: embedding
     relabel_configs:

@@ -1,94 +1,144 @@
 {
-  "version": 2,
+  "version": 3,
   "issue": "P1B-O02",
   "kind": "tabletop",
   "claims_real_outage": false,
-  "validation": "promtool test rules (see deploy/observability/prometheus/tests/)",
+  "validation": "promtool test rules (see deploy/observability/prometheus/tests/alerts_test.yml)",
+  "required_stages_ordered": [
+    "detection",
+    "contain",
+    "recover",
+    "verify",
+    "rollback"
+  ],
   "scenarios": [
     {
       "id": "tt-queue-stuck",
       "alert": "MarkhandQueueOldestAgeHigh",
       "runbook": "docs/runbooks/stuck-dead-jobs.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop"
+      "outcome": "pass_tabletop",
+      "promtool_case": "queue_oldest_age_fires_and_resolves"
+    },
+    {
+      "id": "tt-dead-letter",
+      "alert": "MarkhandDeadLetterJobs",
+      "runbook": "docs/runbooks/stuck-dead-jobs.md",
+      "stages_ordered": [
+        "detection",
+        "contain",
+        "recover",
+        "verify",
+        "rollback"
+      ],
+      "outcome": "pass_tabletop",
+      "promtool_case": "dead_letter_single_event_fires_and_resolves"
     },
     {
       "id": "tt-converter-outbreak",
       "alert": "MarkhandConversionErrorOutbreak",
       "runbook": "docs/runbooks/converter-outbreak.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop"
+      "outcome": "pass_tabletop",
+      "promtool_case": "conversion_error_outbreak_fires"
     },
     {
       "id": "tt-dependency",
       "alert": "MarkhandDependencyProbeDown",
       "runbook": "docs/runbooks/dependency-outage.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop"
+      "outcome": "pass_tabletop",
+      "promtool_case": "dependency_probe_down"
     },
     {
-      "id": "tt-disk",
-      "alert": "MarkhandDiskLow",
+      "id": "tt-disk-host-root",
+      "alert": "MarkhandHostRootFilesystemLow",
       "runbook": "docs/runbooks/disk-exhaustion.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop"
+      "outcome": "pass_tabletop",
+      "promtool_case": "host_root_filesystem_low_fires",
+      "note": "host mountpoint=/ only; named-volume attribution blocked"
     },
     {
       "id": "tt-glm",
       "alert": "MarkhandGlmProviderErrors",
       "runbook": "docs/runbooks/glm-fallback.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop",
+      "outcome": "pass_tabletop",
+      "promtool_case": "qa_provider_outage_outbreak",
       "note": "metric-based only; GLM probe blocked"
     },
     {
       "id": "tt-rebuild",
       "alert": "MarkhandDriftDetected",
       "runbook": "docs/runbooks/vector-rebuild.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop"
+      "outcome": "pass_tabletop",
+      "promtool_case": "drift_detected_fires"
     },
     {
       "id": "tt-key-rotation",
       "alert": "MarkhandAuthDenySpike",
       "runbook": "docs/runbooks/key-rotation.md",
-      "steps_exercised": [
+      "stages_ordered": [
         "detection",
         "contain",
         "recover",
-        "verify"
+        "verify",
+        "rollback"
       ],
-      "result": "pass_tabletop"
+      "outcome": "pass_tabletop",
+      "promtool_case": "auth_deny_count_threshold"
+    },
+    {
+      "id": "tt-search-availability",
+      "alert": "MarkhandSearchAvailabilityBurn",
+      "runbook": "docs/runbooks/dependency-outage.md",
+      "stages_ordered": [
+        "detection",
+        "contain",
+        "recover",
+        "verify",
+        "rollback"
+      ],
+      "outcome": "pass_tabletop",
+      "promtool_case": "search_availability_5xx_only_fires_and_resolves"
     }
   ]
 }

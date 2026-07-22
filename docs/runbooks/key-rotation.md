@@ -14,10 +14,15 @@ Threshold: **O02-OPS-AUTH-DENY-COUNT** (>50 deny decisions in 10m) — operation
 ## Detection
 
 ```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export REPO_ROOT
+# shellcheck source=deploy/scripts/poc-compose.sh
+source "$REPO_ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
+
 curl -fsG http://127.0.0.1:9090/api/v1/query \
   --data-urlencode 'query=markhand:auth:deny_increase_10m'
-"${COMPOSE[@]:-docker compose -f deploy/compose.poc.yml}" logs --tail=200 api | \
-  grep -E 'auth|deny' || true
+"${COMPOSE[@]}" logs --tail=200 api | grep -E 'auth|deny' || true
 # IDs/codes only — no tokens/passwords
 ```
 
@@ -27,7 +32,6 @@ curl -fsG http://127.0.0.1:9090/api/v1/query \
 2. Restart API to pick up new signing/session material:
 
 ```bash
-source deploy/scripts/poc-compose.sh && poc_compose_init
 # Update sealed values in deploy/.env (local) or secret store (prod) — do not echo secrets
 "${COMPOSE[@]}" up -d --no-deps api
 ```

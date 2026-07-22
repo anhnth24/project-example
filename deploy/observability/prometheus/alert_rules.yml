@@ -22,7 +22,10 @@ groups:
           dashboard: markhand-slo
 
       - alert: MarkhandSearchAvailabilityBurn
-        expr: markhand:api_search:success_ratio_5m < 0.995
+        expr: |
+          markhand:api_search:success_ratio_5m < 0.995
+          and on()
+          (sum(rate(markhand_api_requests_total{route="search"}[5m])) > 0)
         for: 15m
         labels:
           severity: page
@@ -32,6 +35,8 @@ groups:
           summary: Search API success ratio below 99.5% availability target.
           description: >
             route=search 2xx success ratio over 5m is below 0.995 for 15m (`for` = O02 policy).
+            Recording rule forces missing 2xx series to 0 via `or vector(0)`, so 5xx-only
+            traffic yields numerator 0 and fires. Empty search traffic is gated out.
             Source: docs/markhand-web-sla-targets.md Service availability (search population only).
           threshold_source: SLA-AVAILABILITY
           runbook: docs/runbooks/dependency-outage.md
@@ -83,24 +88,27 @@ groups:
           description: >
             Uses increase(...[5m]) so a single event is visible and clears when the
             window slides past the event. Not rate()+long for.
-          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+            Policy: O02-OPS-DEAD-LETTER-EVENT (event-based), not error-ratio.
+          threshold_source: O02-OPS-DEAD-LETTER-EVENT
           runbook: docs/runbooks/stuck-dead-jobs.md
           dashboard: markhand-queue
 
   - name: markhand.alerts.disk
     rules:
-      - alert: MarkhandDiskLow
-        expr: |
-          markhand:disk:free_ratio{mountpoint=~"/|/var/lib/postgresql|/data"} < 0.30
+      - alert: MarkhandHostRootFilesystemLow
+        expr: markhand:disk:host_root_free_ratio < 0.30
         for: 10m
         labels:
           severity: page
           team: operations
           class: disk
         annotations:
-          summary: Free disk ratio below 30% headroom target.
+          summary: Host root filesystem free space below 30% headroom target.
           description: >
-            Filesystem free ratio < 0.30.
+            node_exporter host bind-mount reports free ratio on mountpoint="/" under 0.30.
+            This is host capacity only. Docker named-volume attribution (PG/MinIO
+            pgdata/miniodata) is unavailable/blocked — see alert_rules.blocked.yml
+            MarkhandNamedVolumeDiskLow.
             Source: workload-profile.yaml hardware.headroomPercent.disk=30.
           threshold_source: WORKLOAD-DISK-HEADROOM-PERCENT
           runbook: docs/runbooks/disk-exhaustion.md
@@ -121,7 +129,8 @@ groups:
           description: >
             probe_success==0 for a bounded dependency label (HTTP or TCP module).
             GLM blackbox probe is intentionally absent (no configured endpoint).
-          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+            Policy: O02-OPS-PROBE-FAILURE (boolean probe), not error-ratio.
+          threshold_source: O02-OPS-PROBE-FAILURE
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-deps
 
@@ -134,18 +143,22 @@ groups:
           class: dependency
         annotations:
           summary: Prometheus scrape target is down.
-          description: up==0 for an observability scrape job. `for` 2m is O02 policy.
-          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+          description: >
+            up==0 for an observability scrape job. `for` 2m is O02 policy.
+            Policy: O02-OPS-PROBE-FAILURE (target absence/unreachable).
+          threshold_source: O02-OPS-PROBE-FAILURE
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-deps
 
       - alert: MarkhandDependencyProbeAbsent
         expr: |
-          absent(probe_success{dependency="postgres"})
-          or absent(probe_success{dependency="qdrant"})
-          or absent(probe_success{dependency="minio"})
-          or absent(probe_success{dependency="embedding"})
-          or absent(probe_success{dependency="markhand_ready"})
+          count(
+            absent(probe_success{dependency="postgres"})
+            or absent(probe_success{dependency="qdrant"})
+            or absent(probe_success{dependency="minio"})
+            or absent(probe_success{dependency="embedding"})
+            or absent(probe_success{dependency="markhand_ready"})
+          ) > 0
         for: 5m
         labels:
           severity: page
@@ -156,7 +169,8 @@ groups:
           description: >
             Blackbox probe metrics missing for a required dependency label.
             Indicates mis-scraped exporter, not necessarily dependency outage.
-          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+            Policy: O02-OPS-PROBE-FAILURE (metric absence).
+          threshold_source: O02-OPS-PROBE-FAILURE
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-deps
 
@@ -235,21 +249,8 @@ groups:
           summary: Drift event count exceeds O02 operational policy.
           description: >
             >10 drift events in 10m. Source: O02-OPS-DRIFT-COUNT (not SLA-derived).
-          threshold_source: O02-OPS-DRIFT-COUNT
-          runbook: docs/runbooks/vector-rebuild.md
-          dashboard: markhand-ops
-
-      - alert: MarkhandReconcileErrors
-        expr: markhand:reconcile:error_increase_5m > 0
-        labels:
-          severity: ticket
-          team: operations
-          class: drift
-        annotations:
-          summary: At least one reconcile error in the last 5m.
-          description: >
-            Uses increase(...[5m]) so a single error fires and resolves when the
-            window slides past it.
+            Real drift signal from markhand_drift_total. Reconcile result="error" is
+            blocked (product emits success|drift on markhand_reconcile_total).
           threshold_source: O02-OPS-DRIFT-COUNT
           runbook: docs/runbooks/vector-rebuild.md
           dashboard: markhand-ops
