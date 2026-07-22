@@ -129,16 +129,47 @@ def validate_sql_semantics(rows: list[tuple[int, str, str, Path]]) -> list[str]:
     return errors
 
 
+def _git_ref_exists(reference: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{reference}^{{commit}}"],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+
+def _github_event_base_sha() -> str | None:
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "").strip()
+    if not event_path:
+        return None
+    try:
+        event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+        value = event.get("pull_request", {}).get("base", {}).get("sha")
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return None
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def resolve_base_ref(explicit: str | None) -> str | None:
     if explicit:
         return explicit
-    for key in ("MARKHAND_MIGRATION_BASE_REF", "GITHUB_BASE_REF", "GITHUB_BASE_SHA"):
+    for key in ("MARKHAND_MIGRATION_BASE_REF", "GITHUB_BASE_SHA"):
         value = os.environ.get(key, "").strip()
         if value:
-            # GITHUB_BASE_REF is often "master" without origin/ — normalize.
-            if key == "GITHUB_BASE_REF" and "/" not in value:
-                return f"origin/{value}"
             return value
+    if event_sha := _github_event_base_sha():
+        return event_sha
+    # actions/checkout may fetch the base commit without creating its remote-tracking
+    # branch. Only use GITHUB_BASE_REF when the corresponding ref is resolvable.
+    base_name = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if base_name:
+        for candidate in (f"origin/{base_name}", base_name):
+            if _git_ref_exists(candidate):
+                return candidate
     # Safe local/CI default: merge-base with origin/master or master.
     for candidate in ("origin/master", "master", "origin/main", "main"):
         try:
