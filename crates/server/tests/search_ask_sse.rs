@@ -750,7 +750,22 @@ async fn search_ask_closed_snapshot_restart_expiry_revoke() {
     .expect("open count");
     assert_eq!(open_count, 0);
 
-    // Strict Last-Event-ID: after 1 has no seq<=1; missing header replays all.
+    // Missing Last-Event-ID and explicit zero both replay the complete snapshot.
+    for last_event_id in [None, Some("0")] {
+        let (status, _h, replay_body) = sse_request(
+            fx.app.clone(),
+            "GET",
+            &format!("/api/v1/events/{stream_id}"),
+            None,
+            Some(&fx.access),
+            last_event_id,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{replay_body}");
+        assert_eq!(parse_sse_envelopes(&replay_body), envelopes);
+    }
+
+    // Strict Last-Event-ID: after 1 has no seq<=1.
     let (status, _h, resume_body) = sse_request(
         fx.app.clone(),
         "GET",
