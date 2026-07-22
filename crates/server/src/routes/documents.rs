@@ -229,7 +229,7 @@ struct RedeemDownloadBody {
 async fn resolve_citations(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedOrg,
-    Json(body): Json<ResolveCitationsBody>,
+    AppJson(body): AppJson<ResolveCitationsBody>,
 ) -> Result<Json<ResolveCitationsResponse>, DocumentRouteError> {
     let request_id = auth.request_id.clone();
     if body.citations.is_empty() || body.citations.len() > 40 {
@@ -304,7 +304,7 @@ async fn mint_download_capability(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedOrg,
     AppPath((document_id, version_id)): AppPath<(Uuid, Uuid)>,
-    Json(body): Json<MintDownloadBody>,
+    AppJson(body): AppJson<MintDownloadBody>,
 ) -> Result<Json<MintDownloadResponse>, DocumentRouteError> {
     let request_id = auth.request_id.clone();
     let purpose = DownloadPurpose::parse(&body.purpose).map_err(|_| {
@@ -350,7 +350,7 @@ async fn mint_download_capability(
 async fn redeem_download_capability(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedOrg,
-    Json(body): Json<RedeemDownloadBody>,
+    AppJson(body): AppJson<RedeemDownloadBody>,
 ) -> Result<Response, DocumentRouteError> {
     let request_id = auth.request_id.clone();
     if body.token.0.is_empty() || body.token.0.len() > 512 {

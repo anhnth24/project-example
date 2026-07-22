@@ -8,12 +8,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::api::ApiError;
+use crate::api::{ApiError, ApiRejection, AppJson};
 use crate::auth::middleware::{session_error_response, AuthenticatedOrg};
 use crate::auth::provider::{AuthProvider, AuthRequestMeta};
 use crate::http::AppState;
+use crate::middleware::ResolvedRequestId;
 
 const MAX_EMAIL_LEN: usize = 320;
 const MAX_PASSWORD_LEN: usize = 1024;
@@ -107,13 +107,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/auth/me", get(me))
 }
 
-/// Server-minted request id for API responses and audit rows.
-///
-/// Never persists caller-controlled `x-request-id` (could contain a refresh token).
-fn server_request_id() -> String {
-    Uuid::new_v4().to_string()
-}
-
 fn validation_error(request_id: &str, message: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
@@ -127,8 +120,15 @@ fn validation_error(request_id: &str, message: &str) -> Response {
         .into_response()
 }
 
-async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> Response {
-    let request_id = server_request_id();
+async fn login(
+    State(state): State<Arc<AppState>>,
+    ResolvedRequestId(request_id): ResolvedRequestId,
+    AppJson(body): AppJson<LoginRequest>,
+) -> Result<Response, ApiRejection> {
+    Ok(login_inner(state, request_id, body).await)
+}
+
+async fn login_inner(state: Arc<AppState>, request_id: String, body: LoginRequest) -> Response {
     if body.email.len() > MAX_EMAIL_LEN || body.password.len() > MAX_PASSWORD_LEN {
         return validation_error(&request_id, "Email or password exceeds allowed length");
     }
@@ -164,8 +164,15 @@ async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest
     }
 }
 
-async fn refresh(State(state): State<Arc<AppState>>, Json(body): Json<RefreshRequest>) -> Response {
-    let request_id = server_request_id();
+async fn refresh(
+    State(state): State<Arc<AppState>>,
+    ResolvedRequestId(request_id): ResolvedRequestId,
+    AppJson(body): AppJson<RefreshRequest>,
+) -> Result<Response, ApiRejection> {
+    Ok(refresh_inner(state, request_id, body).await)
+}
+
+async fn refresh_inner(state: Arc<AppState>, request_id: String, body: RefreshRequest) -> Response {
     if body.refresh_token.is_empty() || body.refresh_token.len() > MAX_REFRESH_LEN {
         return validation_error(&request_id, "refreshToken is required");
     }
@@ -195,8 +202,15 @@ async fn refresh(State(state): State<Arc<AppState>>, Json(body): Json<RefreshReq
     }
 }
 
-async fn logout(State(state): State<Arc<AppState>>, Json(body): Json<LogoutRequest>) -> Response {
-    let request_id = server_request_id();
+async fn logout(
+    State(state): State<Arc<AppState>>,
+    ResolvedRequestId(request_id): ResolvedRequestId,
+    AppJson(body): AppJson<LogoutRequest>,
+) -> Result<Response, ApiRejection> {
+    Ok(logout_inner(state, request_id, body).await)
+}
+
+async fn logout_inner(state: Arc<AppState>, request_id: String, body: LogoutRequest) -> Response {
     if body.refresh_token.is_empty() || body.refresh_token.len() > MAX_REFRESH_LEN {
         return validation_error(&request_id, "refreshToken is required");
     }

@@ -1,6 +1,6 @@
 //! Versioned SSE wire helpers and closed-snapshot delivery (P1B-R05).
 //!
-//! Envelope shape matches `openapi/fixtures/sse.json` / [`SseEnvelope`].
+//! Envelope shape matches `openapi/fixtures/sse.event-stream` / [`SseEnvelope`].
 //! Application events are sequenced and resumable; heartbeats are transport-only
 //! comments and are never persisted or sequenced.
 //!

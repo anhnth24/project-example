@@ -9,6 +9,8 @@ use serde::Deserialize;
 
 use crate::services::upload::{LimitsConfig, UploadConfig};
 
+pub use crate::config_edge::{parse_trusted_proxies, CorsConfig, RateLimitConfig, TrustedProxies};
+
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 200 * 1024 * 1024;
 const DEFAULT_JOB_LEASE_SECONDS: u64 = 60;
 const DEFAULT_MINIO_OPERATION_TIMEOUT_SECS: u64 = 30;
@@ -90,6 +92,9 @@ pub struct ServerConfig {
     upload: UploadConfig,
     quota_sweep: QuotaSweepConfig,
     index_signature: Option<String>,
+    cors: CorsConfig,
+    rate_limit: RateLimitConfig,
+    trusted_proxies: TrustedProxies,
 }
 
 impl fmt::Debug for ServerConfig {
@@ -135,6 +140,9 @@ impl fmt::Debug for ServerConfig {
             .field("upload", &self.upload)
             .field("quota_sweep", &self.quota_sweep)
             .field("index_signature", &self.index_signature)
+            .field("cors", &self.cors)
+            .field("rate_limit", &self.rate_limit)
+            .field("trusted_proxies", &self.trusted_proxies)
             .finish()
     }
 }
@@ -357,6 +365,7 @@ pub struct QuotaSweepConfig {
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)] // Fields are read via optional_value closures / numeric_value.
 struct ConfigFile {
     profile: Option<String>,
     bind_addr: Option<String>,
@@ -395,6 +404,26 @@ struct ConfigFile {
     quota_sweep_interval_secs: Option<u64>,
     quota_sweep_batch_size: Option<u64>,
     index_signature: Option<String>,
+    cors_origins: Option<String>,
+    cors_methods: Option<String>,
+    cors_headers: Option<String>,
+    cors_expose_headers: Option<String>,
+    cors_allow_credentials: Option<bool>,
+    rate_limit_enabled: Option<bool>,
+    rate_limit_window_secs: Option<u64>,
+    rate_limit_max_keys: Option<u64>,
+    rate_limit_exempt_health: Option<bool>,
+    rate_limit_default_ip: Option<u64>,
+    rate_limit_default_user: Option<u64>,
+    rate_limit_auth_ip: Option<u64>,
+    rate_limit_upload_ip: Option<u64>,
+    rate_limit_upload_user: Option<u64>,
+    rate_limit_search_ip: Option<u64>,
+    rate_limit_search_user: Option<u64>,
+    rate_limit_stream_ip: Option<u64>,
+    rate_limit_stream_user: Option<u64>,
+    rate_limit_health: Option<u64>,
+    trusted_proxy_cidrs: Option<String>,
 }
 
 impl ServerConfig {
@@ -682,6 +711,142 @@ impl ServerConfig {
             value.index_signature.as_ref()
         });
 
+        let mut cors = CorsConfig::production_defaults();
+        if let Some(raw) = optional_value(file, env, "MARKHAND_CORS_ORIGINS", |value| {
+            value.cors_origins.as_ref()
+        }) {
+            cors.allowed_origins = crate::config_edge::parse_csv_list(&raw)?;
+        }
+        if let Some(raw) = optional_value(file, env, "MARKHAND_CORS_METHODS", |value| {
+            value.cors_methods.as_ref()
+        }) {
+            cors.allowed_methods = crate::config_edge::parse_csv_list(&raw)?;
+        }
+        if let Some(raw) = optional_value(file, env, "MARKHAND_CORS_HEADERS", |value| {
+            value.cors_headers.as_ref()
+        }) {
+            cors.allowed_headers = crate::config_edge::parse_csv_list(&raw)?;
+        }
+        if let Some(raw) = optional_value(file, env, "MARKHAND_CORS_EXPOSE_HEADERS", |value| {
+            value.cors_expose_headers.as_ref()
+        }) {
+            cors.expose_headers = crate::config_edge::parse_csv_list(&raw)?;
+        }
+        cors.allow_credentials = bool_value(
+            file,
+            env,
+            "MARKHAND_CORS_ALLOW_CREDENTIALS",
+            |value| value.cors_allow_credentials,
+            false,
+        )?;
+
+        let mut rate_limit = RateLimitConfig::production_defaults();
+        rate_limit.enabled = bool_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_ENABLED",
+            |value| value.rate_limit_enabled,
+            true,
+        )?;
+        rate_limit.window_secs = numeric_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_WINDOW_SECS",
+            |value| value.rate_limit_window_secs,
+            rate_limit.window_secs,
+        )?;
+        rate_limit.max_keys = usize_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_MAX_KEYS",
+            |value| value.rate_limit_max_keys,
+            rate_limit.max_keys,
+        )?;
+        rate_limit.exempt_health = bool_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_EXEMPT_HEALTH",
+            |value| value.rate_limit_exempt_health,
+            true,
+        )?;
+        rate_limit.default_ip_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_DEFAULT_IP",
+            |value| value.rate_limit_default_ip,
+            rate_limit.default_ip_limit,
+        )?;
+        rate_limit.default_user_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_DEFAULT_USER",
+            |value| value.rate_limit_default_user,
+            rate_limit.default_user_limit,
+        )?;
+        rate_limit.auth_ip_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_AUTH_IP",
+            |value| value.rate_limit_auth_ip,
+            rate_limit.auth_ip_limit,
+        )?;
+        rate_limit.upload_ip_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_UPLOAD_IP",
+            |value| value.rate_limit_upload_ip,
+            rate_limit.upload_ip_limit,
+        )?;
+        rate_limit.upload_user_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_UPLOAD_USER",
+            |value| value.rate_limit_upload_user,
+            rate_limit.upload_user_limit,
+        )?;
+        rate_limit.search_ip_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_SEARCH_IP",
+            |value| value.rate_limit_search_ip,
+            rate_limit.search_ip_limit,
+        )?;
+        rate_limit.search_user_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_SEARCH_USER",
+            |value| value.rate_limit_search_user,
+            rate_limit.search_user_limit,
+        )?;
+        rate_limit.stream_ip_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_STREAM_IP",
+            |value| value.rate_limit_stream_ip,
+            rate_limit.stream_ip_limit,
+        )?;
+        rate_limit.stream_user_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_STREAM_USER",
+            |value| value.rate_limit_stream_user,
+            rate_limit.stream_user_limit,
+        )?;
+        rate_limit.health_limit = u32_value(
+            file,
+            env,
+            "MARKHAND_RATE_LIMIT_HEALTH",
+            |value| value.rate_limit_health,
+            rate_limit.health_limit,
+        )?;
+
+        let trusted_proxies = optional_value(file, env, "MARKHAND_TRUSTED_PROXY_CIDRS", |value| {
+            value.trusted_proxy_cidrs.as_ref()
+        })
+        .map(|raw| crate::config_edge::parse_trusted_proxies(&raw))
+        .transpose()?
+        .unwrap_or_default();
+
         let config = Self {
             role,
             profile,
@@ -701,6 +866,9 @@ impl ServerConfig {
             upload,
             quota_sweep,
             index_signature,
+            cors,
+            rate_limit,
+            trusted_proxies,
         };
         config.validate()?;
         Ok(config)
@@ -735,6 +903,18 @@ impl ServerConfig {
 
     pub fn index_signature(&self) -> Option<&str> {
         self.index_signature.as_deref()
+    }
+
+    pub fn cors(&self) -> &CorsConfig {
+        &self.cors
+    }
+
+    pub fn rate_limit(&self) -> &RateLimitConfig {
+        &self.rate_limit
+    }
+
+    pub fn trusted_proxies(&self) -> &TrustedProxies {
+        &self.trusted_proxies
     }
 
     pub(crate) fn is_api_role(&self) -> bool {
@@ -786,6 +966,14 @@ impl ServerConfig {
                 batch_size: DEFAULT_QUOTA_SWEEP_BATCH_SIZE,
             },
             index_signature: None,
+            cors: CorsConfig::production_defaults(),
+            rate_limit: {
+                let mut rate = RateLimitConfig::production_defaults();
+                // Hermetic tests need high ceilings unless a case opts in.
+                rate.enabled = false;
+                rate
+            },
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 
@@ -840,6 +1028,8 @@ impl ServerConfig {
         self.validate_limits()?;
         self.upload.validate()?;
         self.validate_index_signature(false)?;
+        self.cors.validate(self.profile)?;
+        self.rate_limit.validate_for_profile(self.profile)?;
         if self.role == RuntimeRole::Api {
             self.validate_auth()?;
         }
@@ -1227,6 +1417,7 @@ mod tests {
             quota_sweep_interval_secs: None,
             quota_sweep_batch_size: None,
             index_signature: None,
+            ..ConfigFile::default()
         };
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "dev".into()),

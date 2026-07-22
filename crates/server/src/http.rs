@@ -1,39 +1,39 @@
-//! HTTP liveness, readiness, and API routes backed by real POC dependencies.
+//! HTTP application wiring: middleware, health, and `/api/v1` routes.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::Request;
 use axum::http::StatusCode;
+use axum::middleware::{from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use axum::{Json, Router};
 use deadpool_postgres::Pool;
-use serde::Serialize;
-use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::api::ApiError;
 use crate::auth::jwt::JwtKeys;
 use crate::auth::provider::PasswordAuthProvider;
-use crate::config::QuotaSweepConfig;
-use crate::database;
+use crate::config::{QuotaSweepConfig, TrustedProxies};
 use crate::db::pool::create_pool;
+use crate::middleware::{
+    rate_limit_middleware, request_id_middleware, InMemoryRateLimiter, RequestId,
+};
 use crate::routes;
 use crate::services::download::DownloadFetchBudget;
-use crate::services::embedding::ApprovedEmbeddingRuntime;
+use crate::services::embedding::{ApprovedEmbeddingRuntime, EmbeddingError};
+use crate::services::health::{
+    dependency_timeout, FakeHealthProbes, HealthProbeBackend, ProbeReason, ReadinessCache,
+    ReconciliationGate, StartupState,
+};
 use crate::services::qa::provider::{ConfiguredProvider, ProviderError, QaProviderConfig};
 use crate::services::quota;
 use crate::state::RuntimeState;
 use crate::storage::qdrant::QdrantClient;
 
-const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
-const READINESS_CACHE_TTL: Duration = Duration::from_secs(1);
-
 pub struct AppState {
     runtime: RuntimeState,
     http_client: reqwest::Client,
-    readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
     pool: Pool,
     auth_provider: Option<PasswordAuthProvider>,
     /// Object store adapter (optional when credentials are absent in tests).
@@ -44,13 +44,18 @@ pub struct AppState {
     qdrant: Option<QdrantClient>,
     /// Optional approved embedding runtime for hybrid retrieval.
     embedder: Option<ApprovedEmbeddingRuntime>,
+    /// Preserved embedding init/signature error for readiness reporting.
+    embedding_init_error: Option<ProbeReason>,
     /// Optional grounded-QA provider (absent → deterministic extractive).
     qa_provider: Option<ConfiguredProvider>,
-}
-
-struct CachedReadiness {
-    checked_at: tokio::time::Instant,
-    result: Result<(), ()>,
+    rate_limiter: Arc<InMemoryRateLimiter>,
+    trusted_proxies: TrustedProxies,
+    startup: Arc<StartupState>,
+    /// Defaults blocked until durable startup reconciliation marks ready.
+    reconciliation: Arc<ReconciliationGate>,
+    probes: HealthProbeBackend,
+    /// Short-lived readiness probe cache (ready path only).
+    readiness_cache: ReadinessCache,
 }
 
 impl AppState {
@@ -59,7 +64,7 @@ impl AppState {
             return Err("HTTP application requires API runtime configuration".into());
         }
         let http_client = reqwest::Client::builder()
-            .timeout(DEPENDENCY_TIMEOUT)
+            .timeout(dependency_timeout())
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
         let pool = create_pool(runtime.endpoints().database_url.expose())
@@ -81,11 +86,10 @@ impl AppState {
             Err(_) => None,
         };
         let qdrant = Some(build_qdrant(&runtime)?);
-        let embedder = ApprovedEmbeddingRuntime::from_env(
+        let (embedder, embedding_init_error) = load_embedder(
             runtime.config().index_signature(),
             runtime.config().profile(),
-        )
-        .ok();
+        );
         let qa_provider = match QaProviderConfig::from_env(runtime.config().profile()) {
             Ok(config) => Some(
                 ConfiguredProvider::new(config)
@@ -95,18 +99,34 @@ impl AppState {
             Err(error) => return Err(format!("cannot configure QA provider: {}", error.code())),
         };
         start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
-        Ok(Self {
+        let rate_limiter = Arc::new(InMemoryRateLimiter::new(
+            runtime.config().rate_limit().clone(),
+        ));
+        let trusted_proxies = runtime.config().trusted_proxies().clone();
+        let startup = Arc::new(StartupState::new());
+        // Fail closed until durable startup reconciliation completes.
+        let reconciliation = Arc::new(ReconciliationGate::new_blocked());
+        let state = Self {
             runtime,
             http_client,
-            readiness: tokio::sync::Mutex::new(None),
             pool,
             auth_provider,
             object_store,
             download_budget: DownloadFetchBudget::default_production(),
             qdrant,
             embedder,
+            embedding_init_error,
             qa_provider,
-        })
+            rate_limiter,
+            trusted_proxies,
+            startup,
+            reconciliation,
+            probes: HealthProbeBackend::default(),
+            readiness_cache: ReadinessCache::new(),
+        };
+        // One-way startup completion after successful construction.
+        state.startup.mark_completed(false);
+        Ok(state)
     }
 
     /// Builds state for tests with an explicit pool and optional auth provider.
@@ -129,21 +149,37 @@ impl AppState {
             return Err("HTTP application requires API runtime configuration".into());
         }
         let http_client = reqwest::Client::builder()
-            .timeout(DEPENDENCY_TIMEOUT)
+            .timeout(dependency_timeout())
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
         let qdrant = build_qdrant(&runtime).ok();
+        let rate_limiter = Arc::new(InMemoryRateLimiter::new(
+            runtime.config().rate_limit().clone(),
+        ));
+        let trusted_proxies = runtime.config().trusted_proxies().clone();
+        let startup = Arc::new(StartupState::new());
+        startup.mark_completed(false);
+        let probes = FakeHealthProbes::all_ok();
+        // Hermetic tests still default the in-memory gate from the fake probe set.
+        let reconciliation = Arc::new(ReconciliationGate::new_blocked());
+        reconciliation.set_ready(probes.reconciliation);
         Ok(Self {
             runtime,
             http_client,
-            readiness: tokio::sync::Mutex::new(None),
             pool,
             auth_provider,
             object_store,
             download_budget: DownloadFetchBudget::for_tests(),
             qdrant,
             embedder: None,
+            embedding_init_error: None,
             qa_provider: None,
+            rate_limiter,
+            trusted_proxies,
+            startup,
+            reconciliation,
+            probes: HealthProbeBackend::Fake(probes),
+            readiness_cache: ReadinessCache::new(),
         })
     }
 
@@ -180,8 +216,32 @@ impl AppState {
         self.embedder.as_ref()
     }
 
+    pub fn embedding_init_error(&self) -> Option<ProbeReason> {
+        self.embedding_init_error
+    }
+
     pub fn qa_provider(&self) -> Option<&ConfiguredProvider> {
         self.qa_provider.as_ref()
+    }
+
+    pub fn rate_limiter(&self) -> &Arc<InMemoryRateLimiter> {
+        &self.rate_limiter
+    }
+
+    pub fn trusted_proxies(&self) -> &TrustedProxies {
+        &self.trusted_proxies
+    }
+
+    pub fn startup_state(&self) -> &StartupState {
+        &self.startup
+    }
+
+    pub fn reconciliation_gate(&self) -> &ReconciliationGate {
+        &self.reconciliation
+    }
+
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http_client
     }
 
     /// Test helper: attach retrieval/QA dependencies without rebuilding auth/pool.
@@ -193,8 +253,75 @@ impl AppState {
     ) -> Self {
         self.qdrant = qdrant;
         self.embedder = embedder;
+        self.embedding_init_error = None;
         self.qa_provider = qa_provider;
         self
+    }
+
+    /// Test helper: preserve a signature/init failure for readiness checks.
+    pub fn with_embedding_init_error(mut self, reason: ProbeReason) -> Self {
+        self.embedder = None;
+        self.embedding_init_error = Some(reason);
+        self
+    }
+
+    /// Test helper: replace readiness probes with controllable fakes.
+    pub fn with_fake_probes(mut self, probes: FakeHealthProbes) -> Self {
+        self.reconciliation.set_ready(probes.reconciliation);
+        self.probes = HealthProbeBackend::Fake(probes);
+        self
+    }
+
+    /// Test helper: override trusted proxy CIDRs after construction.
+    pub fn with_trusted_proxies(mut self, proxies: TrustedProxies) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
+    /// Test helper: replace the in-memory rate limiter config/state.
+    pub fn with_rate_limiter(mut self, limiter: InMemoryRateLimiter) -> Self {
+        self.rate_limiter = Arc::new(limiter);
+        self
+    }
+
+    /// Explicit startup bootstrap: open a readiness generation, then certify if idle.
+    pub async fn bootstrap_startup_reconciliation(&self) -> Result<bool, String> {
+        let ready = crate::services::reconciliation::bootstrap_startup_reconciliation(self.pool())
+            .await
+            .map_err(|error| error.to_string())?;
+        // Refresh cached view; durable marker remains the authority.
+        self.reconciliation.set_ready(ready);
+        Ok(ready)
+    }
+
+    /// Refresh the in-memory view from the durable marker (never a permanent latch).
+    pub async fn refresh_reconciliation_gate(&self) -> Result<bool, ProbeReason> {
+        crate::services::health::refresh_reconciliation_gate(self.pool(), &self.reconciliation)
+            .await
+    }
+
+    pub async fn check_readiness(&self) -> Result<(), ProbeReason> {
+        crate::services::health::check_readiness(
+            self,
+            &self.readiness_cache,
+            &self.probes,
+            &self.reconciliation,
+        )
+        .await
+    }
+}
+
+fn load_embedder(
+    approved_signature: Option<&str>,
+    profile: crate::config::Profile,
+) -> (Option<ApprovedEmbeddingRuntime>, Option<ProbeReason>) {
+    match ApprovedEmbeddingRuntime::from_env(approved_signature, profile) {
+        Ok(runtime) => (Some(runtime), None),
+        Err(EmbeddingError::SignatureMismatch) => (None, Some(ProbeReason::Signature)),
+        Err(_) if approved_signature.is_some() || profile == crate::config::Profile::Prod => {
+            (None, Some(ProbeReason::Embedding))
+        }
+        Err(_) => (None, None),
     }
 }
 
@@ -215,10 +342,6 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            // Admission itself is time-correct (it filters `expires_at` against a
-            // lock-scoped `clock_timestamp()` in SQL). This bounded sweep is hygiene
-            // so expired reservations become terminal and operational gauges stop
-            // showing stale reserved rows.
             match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
                 Ok(expired) if expired > 0 => {
                     tracing::info!(target: "quota", expired, "quota expiry sweep marked reservations");
@@ -232,18 +355,15 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
     });
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Health {
-    status: &'static str,
-    request_id: String,
-}
-
 pub fn router(state: AppState) -> Router {
     let max_upload_bytes = state.runtime.config().upload().limits.max_upload_bytes as usize;
-    Router::new()
-        .route("/api/v1/health/live", get(liveness))
-        .route("/api/v1/health/ready", get(readiness))
+    let cors = state.runtime.config().cors().clone();
+    let state = Arc::new(state);
+
+    // Innermost → outermost for request flow is reverse of layer order.
+    // Desired request order: request ID → error envelope → CORS → rate → auth(extractor).
+    let api = Router::new()
+        .merge(routes::health::router())
         .merge(routes::auth::router())
         .merge(routes::uploads::router(max_upload_bytes))
         .merge(routes::collections::router())
@@ -254,124 +374,52 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::events::router())
         .fallback(api_not_found)
         .method_not_allowed_fallback(api_method_not_allowed)
-        .with_state(Arc::new(state))
+        .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(from_fn(move |request, next| {
+            let cors = cors.clone();
+            async move { crate::middleware::cors_layer(cors, request, next).await }
+        }))
+        .layer(from_fn(error_envelope_middleware))
+        .layer(from_fn(request_id_middleware))
+        .with_state(state);
+
+    api
 }
 
-async fn api_not_found() -> Response {
+async fn error_envelope_middleware(request: Request, next: axum::middleware::Next) -> Response {
+    // Ensures request-id is available to fallbacks via extensions; body mapping stays
+    // in typed rejections. This layer intentionally does not swallow successes.
+    next.run(request).await
+}
+
+async fn api_not_found(request: Request) -> Response {
+    let request_id = request
+        .extensions()
+        .get::<RequestId>()
+        .map(|id| id.0.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     (
         StatusCode::NOT_FOUND,
-        Json(ApiError::new(
-            "not_found",
-            "Resource not found",
-            Uuid::new_v4().to_string(),
-        )),
+        Json(ApiError::new("not_found", "Resource not found", request_id)),
     )
         .into_response()
 }
 
-async fn api_method_not_allowed() -> Response {
+async fn api_method_not_allowed(request: Request) -> Response {
+    let request_id = request
+        .extensions()
+        .get::<RequestId>()
+        .map(|id| id.0.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     (
         StatusCode::METHOD_NOT_ALLOWED,
         Json(ApiError::new(
             "method_not_allowed",
             "Method not allowed",
-            Uuid::new_v4().to_string(),
+            request_id,
         )),
     )
         .into_response()
-}
-
-async fn liveness() -> Json<Health> {
-    Json(healthy())
-}
-
-async fn readiness(State(state): State<Arc<AppState>>) -> Result<Json<Health>, ReadinessError> {
-    check_dependencies(state).await?;
-    Ok(Json(healthy()))
-}
-
-async fn check_dependencies(state: Arc<AppState>) -> Result<(), ReadinessError> {
-    let mut cached = state.readiness.lock().await;
-    if let Some(previous) = cached.as_ref() {
-        if previous.checked_at.elapsed() < READINESS_CACHE_TTL {
-            return previous
-                .result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|_| ReadinessError);
-        }
-    }
-
-    let result = check_dependencies_uncached(&state).await;
-    if let Err(reason) = result.as_ref() {
-        // Operator-facing detail only; the HTTP body stays a generic 503 so we never
-        // disclose which dependency failed to unauthenticated callers.
-        tracing::warn!(target: "readiness", reason = %reason, "dependency readiness check failed");
-    }
-    *cached = Some(CachedReadiness {
-        checked_at: tokio::time::Instant::now(),
-        result: result.as_ref().map(|_| ()).map_err(|_| ()),
-    });
-    result.map_err(|_| ReadinessError)
-}
-
-async fn check_dependencies_uncached(state: &AppState) -> Result<(), String> {
-    let database = timeout(
-        DEPENDENCY_TIMEOUT,
-        database::check_connection(state.runtime.endpoints().database_url.expose()),
-    );
-    let qdrant = state
-        .http_client
-        .get(format!("{}/healthz", state.runtime.endpoints().qdrant_url))
-        .send();
-    let minio = state
-        .http_client
-        .get(format!(
-            "{}/minio/health/live",
-            state.runtime.endpoints().minio_url
-        ))
-        .send();
-
-    let (database, qdrant, minio) = tokio::join!(database, qdrant, minio);
-    database.map_err(|_| "PostgreSQL readiness timed out".to_string())??;
-    ensure_success(qdrant, "Qdrant").await?;
-    ensure_success(minio, "MinIO").await
-}
-
-async fn ensure_success(
-    response: Result<reqwest::Response, reqwest::Error>,
-    dependency: &str,
-) -> Result<(), String> {
-    let response = response.map_err(|_| format!("{dependency} readiness request failed"))?;
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("{dependency} returned {}", response.status()))
-    }
-}
-
-fn healthy() -> Health {
-    Health {
-        status: "ok",
-        request_id: Uuid::new_v4().to_string(),
-    }
-}
-
-struct ReadinessError;
-
-impl IntoResponse for ReadinessError {
-    fn into_response(self) -> Response {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                code: "dependency_unavailable".into(),
-                message: "A required service is unavailable".into(),
-                request_id: Uuid::new_v4().to_string(),
-                details: None,
-            }),
-        )
-            .into_response()
-    }
 }
 
 #[cfg(test)]
@@ -393,7 +441,6 @@ mod tests {
                 minio_url: "http://127.0.0.1:1".into(),
             }))
             .unwrap();
-        // Pool construction is lazy; a dummy URL is enough for hermetic route tests.
         let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
             .expect("pool");
         router(AppState::from_parts(runtime, pool, None).unwrap())
@@ -405,7 +452,7 @@ mod tests {
         let response = app
             .oneshot(
                 axum::http::Request::builder()
-                    .uri("/api/v1/health/live")
+                    .uri("/live")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -416,6 +463,20 @@ mod tests {
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(health["status"], "ok");
         assert!(health["requestId"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn compat_health_live_still_works() {
+        let response = test_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/health/live")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]
@@ -442,7 +503,7 @@ mod tests {
             .oneshot(
                 axum::http::Request::builder()
                     .method("POST")
-                    .uri("/api/v1/health/live")
+                    .uri("/live")
                     .body(Body::empty())
                     .unwrap(),
             )

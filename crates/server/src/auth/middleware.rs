@@ -62,9 +62,13 @@ impl IntoResponse for AuthRejection {
     }
 }
 
-fn request_id_from(_parts: &Parts) -> String {
-    // Server-minted only — never persist caller-controlled correlation headers.
-    Uuid::new_v4().to_string()
+fn request_id_from(parts: &Parts) -> String {
+    // Prefer middleware-validated/generated request id; never invent from raw headers here.
+    parts
+        .extensions
+        .get::<crate::middleware::RequestId>()
+        .map(|id| id.0.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
 fn bearer_token(parts: &Parts) -> Result<&str, ()> {

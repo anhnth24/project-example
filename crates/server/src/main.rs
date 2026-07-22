@@ -32,7 +32,14 @@ async fn main() {
                 exit_with_error(error);
             }
             let app = match fileconv_server::http::AppState::new(state.clone()) {
-                Ok(state) => fileconv_server::http::router(state),
+                Ok(app_state) => {
+                    if let Err(error) = app_state.bootstrap_startup_reconciliation().await {
+                        exit_with_error(format!(
+                            "cannot bootstrap startup reconciliation readiness: {error}"
+                        ));
+                    }
+                    fileconv_server::http::router(app_state)
+                }
                 Err(error) => exit_with_error(error),
             };
             let listener = match tokio::net::TcpListener::bind(state.config().bind_addr()).await {
@@ -43,9 +50,13 @@ async fn main() {
                 "fileconv-server listening on http://{}",
                 state.config().bind_addr()
             );
-            if let Err(error) = axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await
+            // ConnectInfo enables trusted-proxy-aware client IP for rate limits.
+            if let Err(error) = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await
             {
                 exit_with_error(format!("server failed: {error}"));
             }
