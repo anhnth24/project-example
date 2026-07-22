@@ -368,6 +368,38 @@ async fn resolve(pool: &Pool, org: Uuid, user: Uuid) -> OrgContext {
         .expect("resolve org context")
 }
 
+async fn grant_permission(pool: &Pool, org: Uuid, role: &str, code: &str) {
+    let provisional = OrgContext::try_new(org, Uuid::new_v4(), [] as [&str; 0], []).unwrap();
+    let role = role.to_string();
+    let code = code.to_string();
+    with_org_txn(pool, &provisional, {
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO permissions (id, code, description)
+                     VALUES ($1, $2, $2)
+                     ON CONFLICT (code) DO NOTHING",
+                    &[&Uuid::new_v4(), &code],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, r.id, p.id
+                     FROM roles r
+                     CROSS JOIN permissions p
+                     WHERE r.org_id = $1 AND r.code = $2 AND p.code = $3
+                     ON CONFLICT DO NOTHING",
+                    &[&org, &role, &code],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("grant permission");
+}
+
 async fn seed_member(
     pool: &Pool,
     org: Uuid,
@@ -1040,6 +1072,101 @@ async fn rest_collections_documents_jobs_contract() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_stable_error(&body, "version_superseded");
+
+    // List/get/diff of superseded published versions require qa.history.
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions", fx.document),
+        None,
+        Some(&fx.viewer_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let viewer_ids: Vec<String> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(viewer_ids, vec![draft_version.to_string()]);
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions/{}", fx.document, fx.version),
+        None,
+        Some(&fx.viewer_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_stable_error(&body, "permission_denied");
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/diff/{}",
+            fx.document, fx.version, draft_version
+        ),
+        None,
+        Some(&fx.viewer_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_stable_error(&body, "permission_denied");
+
+    grant_permission(&fx.pool, fx.org, "owner", "qa.history").await;
+    let history_access = refresh_owner_access(&fx).await;
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions/{}", fx.document, fx.version),
+        None,
+        Some(&history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], fx.version.to_string());
+    assert_eq!(body["isCurrent"], false);
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/diff/{}",
+            fx.document, fx.version, draft_version
+        ),
+        None,
+        Some(&history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["currentFlagChanged"], true);
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions", fx.document),
+        None,
+        Some(&history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let history_ids: Vec<String> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(history_ids.contains(&fx.version.to_string()));
+    assert!(history_ids.contains(&draft_version.to_string()));
 
     // Identical Idempotency-Key replay; mismatched document reuse conflicts.
     let (status, first) = json_request(
