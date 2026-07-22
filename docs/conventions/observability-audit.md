@@ -53,9 +53,12 @@ logs/spans/audit metadata.
 ## OpenTelemetry (optional)
 
 Configured via `MARKHAND_OTEL_*` (see `docs/conventions/config-secrets.md`). Default
-exporter is `none` (local tracing + in-process metrics). `otlp` requires an endpoint;
-production misconfig fails closed. Test profile never dials a collector. Dev collector:
-`deploy/dev/otel-collector.yaml` (OTLP gRPC `:4317`). No Grafana dashboards in O01.
+exporter is `none` (local tracing + in-process metrics; no unbounded in-memory test
+exporters unless `MARKHAND_OTEL_CAPTURE_IN_MEMORY=true`). `otlp` requires an endpoint
+and enables secure TLS transport for HTTPS collectors; production misconfig fails
+closed. Sampler is ParentBased for every ratio including 0 and 1. Test profile never
+dials a collector. Dev collector: `deploy/dev/otel-collector.yaml` (OTLP gRPC `:4317`).
+No Grafana dashboards in O01.
 
 ## Audit envelope
 

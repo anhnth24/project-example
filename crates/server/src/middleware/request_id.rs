@@ -126,6 +126,8 @@ pub async fn request_id_middleware(mut request: Request, next: Next) -> Response
         request_id = %correlation.request_id,
         route = %route,
         method = %method_label,
+        org_id = tracing::field::Empty,
+        actor_id = tracing::field::Empty,
     );
     let _ = span.set_parent(parent_cx);
     if let Some(traceparent) = inject_traceparent_from_span(&span) {

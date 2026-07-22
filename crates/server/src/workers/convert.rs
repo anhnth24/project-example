@@ -231,7 +231,11 @@ impl ConvertWorker {
             "convert",
             job_id,
             &payload,
-            Some(ctx.org_id()),
+            crate::telemetry::WorkerIds {
+                org_id: Some(ctx.org_id()),
+                actor_id: Some(ctx.user_id()),
+                index_signature: None,
+            },
             self.process_claimed_job_inner(ctx, job, &payload),
         )
         .await;
@@ -552,7 +556,11 @@ impl ConvertWorker {
             "reconcile",
             job_id,
             &payload,
-            Some(ctx.org_id()),
+            crate::telemetry::WorkerIds {
+                org_id: Some(ctx.org_id()),
+                actor_id: Some(ctx.user_id()),
+                index_signature: None,
+            },
             self.process_reconciliation_job_inner(ctx, job, payload.clone()),
         )
         .await

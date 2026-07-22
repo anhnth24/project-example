@@ -1,5 +1,6 @@
 //! Allowlisted OpenTelemetry metrics (no private-only registry).
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -8,6 +9,19 @@ use std::time::Duration;
 use opentelemetry::metrics::{Counter, Histogram, Meter, ObservableGauge};
 use opentelemetry::KeyValue;
 use serde::{Deserialize, Serialize};
+
+/// Job transitions deferred until the enclosing org txn commits (or savepoint releases).
+#[derive(Debug, Clone, Copy)]
+struct DeferredJobTransition {
+    job_type: &'static str,
+    transition: &'static str,
+    result: &'static str,
+}
+
+tokio::task_local! {
+    static DEFERRED_JOB_TRANSITIONS: RefCell<Vec<DeferredJobTransition>>;
+    static DEFERRED_SAVEPOINT_MARKS: RefCell<Vec<usize>>;
+}
 
 const FORBIDDEN_LABEL_KEYS: &[&str] = &[
     "actor_id",
@@ -263,11 +277,12 @@ fn normalize_format(format: &str) -> &'static str {
 
 fn normalize_result(result: &str) -> &'static str {
     match result {
-        "success" | "ok" | "completed" => "success",
+        "success" | "ok" | "completed" | "succeeded" => "success",
         "failed" | "fail" | "error" => "error",
         "deny" | "denied" => "deny",
         "retry" => "retry",
         "dead_letter" => "dead_letter",
+        "cancelled" | "canceled" => "cancelled",
         "leased" => "leased",
         "accepted" => "accepted",
         "other" => "other",
@@ -424,6 +439,93 @@ pub fn record_job_transition(job_type: &str, transition: &str, result: &str) {
         return;
     };
     instr.job_transitions.add(1, &kv);
+}
+
+/// Defer a job transition until [`flush_deferred_job_transitions`] (txn commit).
+///
+/// Outside a deferred scope this records immediately (claim paths after commit).
+pub fn defer_job_transition(job_type: &str, transition: &str, result: &str) {
+    let job_type = normalize_job_type(job_type);
+    let transition = normalize_transition(transition);
+    let result = normalize_result(result);
+    let deferred = DeferredJobTransition {
+        job_type,
+        transition,
+        result,
+    };
+    let queued = DEFERRED_JOB_TRANSITIONS
+        .try_with(|cell| {
+            cell.borrow_mut().push(deferred);
+            true
+        })
+        .unwrap_or(false);
+    if !queued {
+        record_job_transition(job_type, transition, result);
+    }
+}
+
+/// Run `future` with a deferred job-metric buffer flushed only on `Ok`.
+pub async fn scope_deferred_job_metrics<F, T, E>(future: F) -> Result<T, E>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    DEFERRED_JOB_TRANSITIONS
+        .scope(RefCell::new(Vec::new()), async {
+            DEFERRED_SAVEPOINT_MARKS
+                .scope(RefCell::new(Vec::new()), async {
+                    match future.await {
+                        Ok(value) => {
+                            flush_deferred_job_transitions();
+                            Ok(value)
+                        }
+                        Err(error) => {
+                            discard_deferred_job_transitions();
+                            Err(error)
+                        }
+                    }
+                })
+                .await
+        })
+        .await
+}
+
+pub fn deferred_savepoint_push() {
+    let _ = DEFERRED_SAVEPOINT_MARKS.try_with(|marks| {
+        let len = DEFERRED_JOB_TRANSITIONS
+            .try_with(|cell| cell.borrow().len())
+            .unwrap_or(0);
+        marks.borrow_mut().push(len);
+    });
+}
+
+pub fn deferred_savepoint_release() {
+    let _ = DEFERRED_SAVEPOINT_MARKS.try_with(|marks| {
+        marks.borrow_mut().pop();
+    });
+}
+
+pub fn deferred_savepoint_rollback() {
+    let _ = DEFERRED_SAVEPOINT_MARKS.try_with(|marks| {
+        if let Some(mark) = marks.borrow_mut().pop() {
+            let _ = DEFERRED_JOB_TRANSITIONS.try_with(|cell| {
+                cell.borrow_mut().truncate(mark);
+            });
+        }
+    });
+}
+
+fn flush_deferred_job_transitions() {
+    let pending = DEFERRED_JOB_TRANSITIONS
+        .try_with(|cell| std::mem::take(&mut *cell.borrow_mut()))
+        .unwrap_or_default();
+    for item in pending {
+        record_job_transition(item.job_type, item.transition, item.result);
+    }
+}
+
+fn discard_deferred_job_transitions() {
+    let _ = DEFERRED_JOB_TRANSITIONS.try_with(|cell| cell.borrow_mut().clear());
+    let _ = DEFERRED_SAVEPOINT_MARKS.try_with(|marks| marks.borrow_mut().clear());
 }
 
 pub fn record_conversion(format: &str, result: &str, duration: Duration) {

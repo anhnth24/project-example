@@ -167,6 +167,7 @@ impl FromRequestParts<Arc<crate::http::AppState>> for AuthenticatedOrg {
             }
         };
 
+        crate::telemetry::enrich_actor(context.org_id(), context.user_id());
         let auth = Self {
             context,
             claims,

@@ -8,16 +8,16 @@ pub mod redact;
 
 pub use config::{OtelExporterKind, TelemetryConfig};
 pub use correlation::{
-    apply_to_job_payload, extract_context_from_headers, from_job_payload,
+    apply_to_job_payload, enrich_actor, extract_context_from_headers, from_job_payload,
     inject_current_traceparent, inject_traceparent_from_span, run_worker, scope,
-    validate_traceparent, worker_span, CorrelationContext,
+    validate_traceparent, worker_span, CorrelationContext, WorkerIds,
 };
 pub use init::{force_flush, init, init_from_env, runtime, shutdown};
 pub use metrics::{
-    normalize_http_method, normalize_route, observe_duration, record_api_request,
-    record_auth_decision, record_conversion, record_drift, record_embedding, record_job_transition,
-    record_queue_depth, record_quota, record_reconcile, record_retrieval, status_class,
-    validate_metric, Timer,
+    defer_job_transition, normalize_http_method, normalize_route, observe_duration,
+    record_api_request, record_auth_decision, record_conversion, record_drift, record_embedding,
+    record_job_transition, record_queue_depth, record_quota, record_reconcile, record_retrieval,
+    status_class, validate_metric, Timer,
 };
 pub use redact::{
     contains_canary, redacted_fields, sanitize_audit_metadata, AUDIT_METADATA_ALLOWLIST,

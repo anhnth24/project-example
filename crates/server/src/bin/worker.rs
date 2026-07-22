@@ -60,7 +60,9 @@ async fn main() {
         }
         Ok(config) => match fileconv_server::state::RuntimeState::from_config(config) {
             Ok(state) => {
-                if let Err(error) = run_worker(state).await {
+                let result = run_worker(state).await;
+                flush_telemetry_on_exit();
+                if let Err(error) = result {
                     exit_with_error(error);
                 }
             }
@@ -70,6 +72,37 @@ async fn main() {
             exit_with_error(format!("invalid worker configuration: {error}"));
         }
     }
+}
+
+fn flush_telemetry_on_exit() {
+    if let Err(error) = fileconv_server::telemetry::shutdown() {
+        eprintln!("fileconv-worker: telemetry shutdown: {error}");
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    {
+        let terminate = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(error) => {
+                    eprintln!("fileconv-worker: cannot register SIGTERM handler: {error}");
+                }
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = terminate => {}
+        }
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await;
 }
 
 async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), String> {
@@ -173,7 +206,7 @@ async fn run_convert_worker(
         .map_err(|error| format!("converter worker initialization failed: {error}"))?;
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = shutdown_signal() => {
                 println!("fileconv-worker: shutdown requested");
                 break;
             }
@@ -240,7 +273,7 @@ async fn run_index_worker(
     );
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = shutdown_signal() => {
                 println!("fileconv-worker: shutdown requested");
                 break;
             }
@@ -305,7 +338,7 @@ async fn run_delete_worker(
     );
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = shutdown_signal() => {
                 println!("fileconv-worker: shutdown requested");
                 break;
             }
@@ -373,7 +406,7 @@ async fn run_reconcile_worker(
     );
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = shutdown_signal() => {
                 println!("fileconv-worker: shutdown requested");
                 break;
             }
@@ -430,7 +463,7 @@ async fn run_embedding_worker(
         .map_err(|error| format!("embedding worker initialization failed: {error}"))?;
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = shutdown_signal() => {
                 println!("fileconv-worker: shutdown requested");
                 break;
             }

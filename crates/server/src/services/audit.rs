@@ -83,9 +83,11 @@ impl AuditAction {
     /// Exact scalar metadata keys permitted for this action.
     pub fn metadata_keys(self) -> &'static [&'static str] {
         match self {
-            Self::AuthLogin | Self::AuthDeny | Self::AuthLogout | Self::AuthRevokeAll => {
-                &["reason", "error_class"]
+            // Login/logout emit opaque family/refresh ids; deny stays reason/error only.
+            Self::AuthLogin | Self::AuthLogout => {
+                &["reason", "error_class", "family_id", "refresh_id"]
             }
+            Self::AuthDeny | Self::AuthRevokeAll => &["reason", "error_class"],
             Self::AuthRefresh | Self::AuthRefreshReuse => &[
                 "reason",
                 "family_id",
@@ -109,6 +111,7 @@ impl AuditAction {
                 "object_count",
                 "deleted_chunks",
                 "cancelled_writer_jobs",
+                "job_id",
             ],
             Self::JobEnqueue => &["job_id", "job_type"],
             Self::QuotaDeny => &["reason", "resource_kind", "error_class"],
@@ -196,6 +199,10 @@ pub enum AuditReason {
     InvalidCredentials,
     RefreshReuse,
     RefreshExpired,
+    /// Refresh token past `expires_at` (auth.refresh deny).
+    Expired,
+    /// Lost rotation race under family lock (auth.refresh.reuse deny).
+    RefreshRace,
     UserRequested,
     UploadAccepted,
     QuotaExceeded,
@@ -214,6 +221,8 @@ impl AuditReason {
             Self::InvalidCredentials => "invalid_credentials",
             Self::RefreshReuse => "refresh_reuse",
             Self::RefreshExpired => "refresh_expired",
+            Self::Expired => "expired",
+            Self::RefreshRace => "refresh_race",
             Self::UserRequested => "user_requested",
             Self::UploadAccepted => "upload_accepted",
             Self::QuotaExceeded => "quota_exceeded",
@@ -232,6 +241,8 @@ impl AuditReason {
             "invalid_credentials" => Ok(Self::InvalidCredentials),
             "refresh_reuse" => Ok(Self::RefreshReuse),
             "refresh_expired" => Ok(Self::RefreshExpired),
+            "expired" => Ok(Self::Expired),
+            "refresh_race" => Ok(Self::RefreshRace),
             "user_requested" => Ok(Self::UserRequested),
             "upload_accepted" => Ok(Self::UploadAccepted),
             "quota_exceeded" => Ok(Self::QuotaExceeded),
@@ -512,5 +523,46 @@ mod tests {
             &json!({"reason": "quota_exceeded", "resource_kind": "documents"}),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn auth_and_purge_allowlists_match_emitted_ids_and_reasons() {
+        assert!(sanitize_for_action(
+            AuditAction::AuthLogin,
+            &json!({
+                "family_id": "550e8400-e29b-41d4-a716-446655440000",
+                "refresh_id": "550e8400-e29b-41d4-a716-446655440001"
+            }),
+        )
+        .is_ok());
+        assert!(sanitize_for_action(
+            AuditAction::AuthLogout,
+            &json!({ "family_id": "550e8400-e29b-41d4-a716-446655440000" }),
+        )
+        .is_ok());
+        assert!(
+            sanitize_for_action(AuditAction::AuthRefresh, &json!({ "reason": "expired" }),).is_ok()
+        );
+        assert!(sanitize_for_action(
+            AuditAction::AuthRefreshReuse,
+            &json!({ "reason": "refresh_race" }),
+        )
+        .is_ok());
+        assert!(sanitize_for_action(
+            AuditAction::DocumentPurge,
+            &json!({
+                "document_id": "550e8400-e29b-41d4-a716-446655440000",
+                "job_id": "550e8400-e29b-41d4-a716-446655440002",
+                "deleted_chunks": 3
+            }),
+        )
+        .is_ok());
+        // Secrets / unknown keys stay rejected.
+        assert!(sanitize_for_action(AuditAction::AuthLogin, &json!({ "password": "x" }),).is_err());
+        assert!(sanitize_for_action(
+            AuditAction::AuthDeny,
+            &json!({ "family_id": "550e8400-e29b-41d4-a716-446655440000" }),
+        )
+        .is_err());
     }
 }

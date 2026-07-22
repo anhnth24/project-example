@@ -523,6 +523,11 @@ async fn finalize_purged(
                     .await?
                     .ok_or(DeletionError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
+                crate::telemetry::defer_job_transition(
+                    completed.job_type.as_str(),
+                    "finish",
+                    "succeeded",
+                );
                 let resource_id = document_id.to_string();
                 let request_id = crate::services::audit::request_id_from_correlation();
                 write_audit(

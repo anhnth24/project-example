@@ -47,47 +47,54 @@ pub async fn with_org_txn<T, F>(pool: &Pool, ctx: &OrgContext, f: F) -> Result<T
 where
     F: for<'c> FnOnce(&'c Transaction<'c>) -> OrgTxnFuture<'c, T>,
 {
-    let mut client = pool.get().await?;
-    let txn = client.transaction().await?;
-    apply_org_context(&txn, ctx).await?;
-    match f(&txn).await {
-        Ok(value) => {
-            txn.commit().await?;
-            Ok(value)
+    crate::telemetry::metrics::scope_deferred_job_metrics(async {
+        let mut client = pool.get().await?;
+        let txn = client.transaction().await?;
+        apply_org_context(&txn, ctx).await?;
+        match f(&txn).await {
+            Ok(value) => {
+                txn.commit().await?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = txn.rollback().await;
+                Err(error)
+            }
         }
-        Err(error) => {
-            let _ = txn.rollback().await;
-            Err(error)
-        }
-    }
+    })
+    .await
 }
 
 /// Runs `f` inside an org transaction while preserving service-specific errors.
 ///
 /// This has the same RLS/session semantics as [`with_org_txn`]; it exists for
 /// service layers that need typed, non-database errors to trigger rollback.
+/// Deferred job metrics flush only after a successful commit.
 pub async fn with_org_txn_typed<T, F, E>(pool: &Pool, ctx: &OrgContext, f: F) -> Result<T, E>
 where
     F: for<'c> FnOnce(&'c Transaction<'c>) -> OrgTxnTypedFuture<'c, T, E>,
     E: From<DbError>,
 {
-    let mut client = pool.get().await.map_err(DbError::from).map_err(E::from)?;
-    let txn = client
-        .transaction()
-        .await
-        .map_err(DbError::from)
-        .map_err(E::from)?;
-    apply_org_context(&txn, ctx).await.map_err(E::from)?;
-    match f(&txn).await {
-        Ok(value) => {
-            txn.commit().await.map_err(DbError::from).map_err(E::from)?;
-            Ok(value)
+    crate::telemetry::metrics::scope_deferred_job_metrics(async {
+        let mut client = pool.get().await.map_err(DbError::from).map_err(E::from)?;
+        let txn = client
+            .transaction()
+            .await
+            .map_err(DbError::from)
+            .map_err(E::from)?;
+        apply_org_context(&txn, ctx).await.map_err(E::from)?;
+        match f(&txn).await {
+            Ok(value) => {
+                txn.commit().await.map_err(DbError::from).map_err(E::from)?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = txn.rollback().await;
+                Err(error)
+            }
         }
-        Err(error) => {
-            let _ = txn.rollback().await;
-            Err(error)
-        }
-    }
+    })
+    .await
 }
 
 /// Applies tenant claims as transaction-local GUCs (never session-level).

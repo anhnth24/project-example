@@ -434,8 +434,10 @@ pub(crate) async fn enqueue_within_txn(
         },
     )
     .await?;
-    // Record only after successful insert/commit path inside the txn.
-    crate::telemetry::record_job_transition(input.job_type.as_str(), "enqueue", "accepted");
+    // Count only newly created jobs; flushed after the enclosing txn commits.
+    if created {
+        crate::telemetry::defer_job_transition(input.job_type.as_str(), "enqueue", "accepted");
+    }
     Ok(EnqueueOutcome { job, created })
 }
 
@@ -646,8 +648,19 @@ pub async fn reclaim_expired(
                     let outbox_key = transition_key(job, event_type);
                     write_job_event(txn, &ctx, job, event_type, &outbox_key).await?;
                     if job.status == JobStatus::DeadLetter {
+                        crate::telemetry::defer_job_transition(
+                            job.job_type.as_str(),
+                            "finish",
+                            "dead_letter",
+                        );
                         crate::services::indexing::handle_terminal_index_job(txn, &ctx, job)
                             .await?;
+                    } else if job.status == JobStatus::Pending {
+                        crate::telemetry::defer_job_transition(
+                            job.job_type.as_str(),
+                            "finish",
+                            "retry",
+                        );
                     }
                 }
                 Ok(jobs)
@@ -692,7 +705,7 @@ pub(crate) async fn complete_within_txn(
         .ok_or(JobError::LeaseLost)?;
     let outbox_key = transition_key(&job, "job.succeeded");
     write_job_event(txn, ctx, &job, "job.succeeded", &outbox_key).await?;
-    crate::telemetry::record_job_transition(job.job_type.as_str(), "finish", "succeeded");
+    crate::telemetry::defer_job_transition(job.job_type.as_str(), "finish", "succeeded");
     Ok(job)
 }
 
@@ -730,6 +743,11 @@ pub async fn complete_with_markdown_artifact(
                 .await?;
                 let outbox_key = transition_key(&job, "job.succeeded");
                 write_job_event(txn, &ctx, &job, "job.succeeded", &outbox_key).await?;
+                crate::telemetry::defer_job_transition(
+                    job.job_type.as_str(),
+                    "finish",
+                    "succeeded",
+                );
                 Ok(CompleteConvertOutcome { job, artifact })
             })
         }
@@ -801,11 +819,11 @@ pub(crate) async fn fail_within_txn(
     .ok_or(JobError::LeaseLost)?;
     let event_type = match job.status {
         JobStatus::Pending => {
-            crate::telemetry::record_job_transition(job.job_type.as_str(), "finish", "retry");
+            crate::telemetry::defer_job_transition(job.job_type.as_str(), "finish", "retry");
             "job.retry_scheduled"
         }
         JobStatus::DeadLetter => {
-            crate::telemetry::record_job_transition(job.job_type.as_str(), "finish", "dead_letter");
+            crate::telemetry::defer_job_transition(job.job_type.as_str(), "finish", "dead_letter");
             "job.dead_lettered"
         }
         _ => {
@@ -844,11 +862,21 @@ pub async fn cancel(
                         let children = repo::cancel_embedding_children(txn, &ctx, job.id).await?;
                         let outbox_key = transition_key(&job, "job.cancelled");
                         write_job_event(txn, &ctx, &job, "job.cancelled", &outbox_key).await?;
+                        crate::telemetry::defer_job_transition(
+                            job.job_type.as_str(),
+                            "finish",
+                            "cancelled",
+                        );
                         crate::services::indexing::handle_terminal_index_job(txn, &ctx, &job)
                             .await?;
                         for child in &children {
                             let outbox_key = transition_key(child, "job.cancelled");
                             write_job_event(txn, &ctx, child, "job.cancelled", &outbox_key).await?;
+                            crate::telemetry::defer_job_transition(
+                                child.job_type.as_str(),
+                                "finish",
+                                "cancelled",
+                            );
                             crate::services::indexing::handle_terminal_index_job(txn, &ctx, child)
                                 .await?;
                         }
@@ -932,6 +960,7 @@ where
                     // failed event is rolled back and left unpublished for the next relay
                     // pass; healthy events in the same batch still commit.
                     let savepoint = format!("outbox_relay_{index}");
+                    crate::telemetry::metrics::deferred_savepoint_push();
                     txn.batch_execute(&format!("SAVEPOINT {savepoint}"))
                         .await
                         .map_err(DbError::from)?;
@@ -940,6 +969,7 @@ where
                             txn.batch_execute(&format!("RELEASE SAVEPOINT {savepoint}"))
                                 .await
                                 .map_err(DbError::from)?;
+                            crate::telemetry::metrics::deferred_savepoint_release();
                             publications.push(publication);
                         }
                         Err(error) => {
@@ -949,6 +979,7 @@ where
                             txn.batch_execute(&format!("RELEASE SAVEPOINT {savepoint}"))
                                 .await
                                 .map_err(DbError::from)?;
+                            crate::telemetry::metrics::deferred_savepoint_rollback();
                             tracing::warn!(
                                 target: "outbox",
                                 outbox_id = %outbox.id,
