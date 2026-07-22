@@ -24,7 +24,7 @@ use fileconv_server::jobs::{
 };
 use fileconv_server::services::reconciliation::{
     bootstrap_startup_reconciliation, certify_after_reconcile_success, enqueue_reconcile,
-    is_startup_reconciliation_ready, try_certify_startup_reconciliation,
+    is_startup_reconciliation_ready, try_certify_startup_reconciliation, ReconcileReport,
 };
 use serde_json::json;
 use tokio::sync::Barrier;
@@ -646,9 +646,11 @@ async fn reconcile_readiness_fence_covers_enqueue_races_replays_and_bypasses() {
     )
     .await
     .expect("complete reconcile job");
-    assert!(certify_after_reconcile_success(&pool)
-        .await
-        .expect("certify completed generation"));
+    assert!(
+        certify_after_reconcile_success(&pool, &ReconcileReport::default())
+            .await
+            .expect("certify completed generation")
+    );
 
     let replay = enqueue_reconcile(&pool, &context, document_id, "atomic-readiness")
         .await
