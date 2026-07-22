@@ -281,13 +281,34 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
+- **Status:** Blocked — implementation ready; dependencies R01/R03/R04 Review/Blocked
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
-- **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`.
+- **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`, `db/sse_streams.rs`,
+  `migrations/0021_expand_sse_stream_events.sql`, `tests/search_ask_sse.rs`.
 - **Depends:** F05/I03/R01/R03/R04.
 - **Acceptance/tests:** No lost acknowledged/duplicate sequence; bounded slow client;
   reconnect/order/expiry/revoke/worker restart.
-- **Security/migration:** Scoped per user/org/job, no cache. **Out:** WebSocket.
+- **Evidence (implementation ready):**
+  - `POST /api/v1/search` maps bounded query/collections/version mode/limit(≤100) to R01
+    `hybrid_search` with fresh `OrgContext`; stable R04 `ApiError` envelopes; response
+    is authorized hits + citation locators only (no raw body/internals).
+  - `POST /api/v1/ask` returns R03 grounded QA over fresh retrieval (ask limit ≤32
+    pre-retrieval); provider/runtime from `AppState` (absent → extractive fallback).
+  - Closed-snapshot SSE: after complete R03 answer, auth probe, then one atomic txn
+    writes contiguous metadata+token+terminal events and marks closed (terminal slot
+    reserved; no durable open rows). `POST /api/v1/ask/stream` and
+    `GET /api/v1/events/{requestId}` only deliver durable closed snapshots with
+    per-event fresh auth/collection/history probe; body cancel/backpressure ends the
+    HTTP connection only (DB snapshot remains reconnectable). Not true provider
+    token streaming; does not claim transport-byte recall.
+  - Persisted auth scope: version mode / `requires_history`, exact collection IDs,
+    cited doc/version IDs; reconnect + initial delivery revalidate before payload.
+  - Expired GET → 410 `stream_expired` + bounded cascade cleanup; IDOR → 404;
+    refresh-family liveness requires `expires_at > clock_timestamp()`; invalid
+    Last-Event-ID (incl. bad UTF-8) → 400; missing header replays from start.
+- **Security/migration:** Scoped per user/org/request, no cache; additive `0021`.
+  **Out:** WebSocket / R06 OpenAPI/rate-limit/readiness / O01 telemetry.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 

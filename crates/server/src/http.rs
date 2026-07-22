@@ -21,8 +21,11 @@ use crate::database;
 use crate::db::pool::create_pool;
 use crate::routes;
 use crate::services::download::DownloadFetchBudget;
+use crate::services::embedding::ApprovedEmbeddingRuntime;
+use crate::services::qa::provider::{ConfiguredProvider, ProviderError, QaProviderConfig};
 use crate::services::quota;
 use crate::state::RuntimeState;
+use crate::storage::qdrant::QdrantClient;
 
 const DEPENDENCY_TIMEOUT: Duration = Duration::from_secs(3);
 const READINESS_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -37,6 +40,12 @@ pub struct AppState {
     object_store: Option<crate::storage::MinioClient>,
     /// Process-wide concurrent download byte budget / concurrency limiter.
     download_budget: Arc<DownloadFetchBudget>,
+    /// Vector search client (FTS-only still works when the backend is down).
+    qdrant: Option<QdrantClient>,
+    /// Optional approved embedding runtime for hybrid retrieval.
+    embedder: Option<ApprovedEmbeddingRuntime>,
+    /// Optional grounded-QA provider (absent → deterministic extractive).
+    qa_provider: Option<ConfiguredProvider>,
 }
 
 struct CachedReadiness {
@@ -71,6 +80,20 @@ impl AppState {
             ),
             Err(_) => None,
         };
+        let qdrant = Some(build_qdrant(&runtime)?);
+        let embedder = ApprovedEmbeddingRuntime::from_env(
+            runtime.config().index_signature(),
+            runtime.config().profile(),
+        )
+        .ok();
+        let qa_provider = match QaProviderConfig::from_env(runtime.config().profile()) {
+            Ok(config) => Some(
+                ConfiguredProvider::new(config)
+                    .map_err(|error| format!("cannot configure QA provider: {}", error.code()))?,
+            ),
+            Err(ProviderError::Unavailable) => None,
+            Err(error) => return Err(format!("cannot configure QA provider: {}", error.code())),
+        };
         start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
         Ok(Self {
             runtime,
@@ -80,6 +103,9 @@ impl AppState {
             auth_provider,
             object_store,
             download_budget: DownloadFetchBudget::default_production(),
+            qdrant,
+            embedder,
+            qa_provider,
         })
     }
 
@@ -106,6 +132,7 @@ impl AppState {
             .timeout(DEPENDENCY_TIMEOUT)
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        let qdrant = build_qdrant(&runtime).ok();
         Ok(Self {
             runtime,
             http_client,
@@ -114,6 +141,9 @@ impl AppState {
             auth_provider,
             object_store,
             download_budget: DownloadFetchBudget::for_tests(),
+            qdrant,
+            embedder: None,
+            qa_provider: None,
         })
     }
 
@@ -136,6 +166,42 @@ impl AppState {
     pub fn download_budget(&self) -> &Arc<DownloadFetchBudget> {
         &self.download_budget
     }
+
+    pub fn qdrant(&self) -> Option<&QdrantClient> {
+        self.qdrant.as_ref()
+    }
+
+    pub fn embedder(&self) -> Option<&ApprovedEmbeddingRuntime> {
+        self.embedder.as_ref()
+    }
+
+    pub fn qa_provider(&self) -> Option<&ConfiguredProvider> {
+        self.qa_provider.as_ref()
+    }
+
+    /// Test helper: attach retrieval/QA dependencies without rebuilding auth/pool.
+    pub fn with_retrieval_deps(
+        mut self,
+        qdrant: Option<QdrantClient>,
+        embedder: Option<ApprovedEmbeddingRuntime>,
+        qa_provider: Option<ConfiguredProvider>,
+    ) -> Self {
+        self.qdrant = qdrant;
+        self.embedder = embedder;
+        self.qa_provider = qa_provider;
+        self
+    }
+}
+
+fn build_qdrant(runtime: &RuntimeState) -> Result<QdrantClient, String> {
+    let url = runtime.endpoints().qdrant_url.clone();
+    let api_key = runtime
+        .config()
+        .storage_config()
+        .ok()
+        .and_then(|cfg| cfg.qdrant_api_key().cloned());
+    QdrantClient::with_api_key(url, api_key)
+        .map_err(|error| format!("cannot configure qdrant: {error}"))
 }
 
 fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
@@ -178,6 +244,9 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::collections::router())
         .merge(routes::documents::router())
         .merge(routes::jobs::router())
+        .merge(routes::search::router())
+        .merge(routes::ask::router())
+        .merge(routes::events::router())
         .fallback(api_not_found)
         .method_not_allowed_fallback(api_method_not_allowed)
         .with_state(Arc::new(state))

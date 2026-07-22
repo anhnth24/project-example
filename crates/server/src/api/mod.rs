@@ -3,6 +3,7 @@
 mod error;
 mod extract;
 mod pagination;
+pub mod sse;
 mod types;
 
 pub use error::{ApiError, ApiRejection};
