@@ -23,7 +23,7 @@ use crate::db::document_versions::ConversionSourceVersion;
 use crate::db::error::DbError;
 use crate::db::jobs as jobs_repo;
 use crate::db::models::{Job, JobStatus, JobType, ResourceKind};
-use crate::db::pool::with_org_txn;
+use crate::db::pool::{with_org_txn, with_org_txn_typed};
 use crate::jobs::{self, EnqueueJob, JobError, JobPayload};
 use crate::services::artifacts::{self, MarkdownStageInput, StagedMarkdown};
 use crate::services::conversion::{
@@ -32,6 +32,7 @@ use crate::services::conversion::{
 };
 use crate::services::promotion::{self, PromoteConversionInput, PromotionError, PromotionFault};
 use crate::services::quota::{self, QuotaError, DEFAULT_RESERVATION_TTL};
+use crate::services::reconciliation::STARTUP_RECONCILIATION_KEY;
 use crate::storage::keys::parse_key_for_org;
 use crate::storage::minio::MinioClient;
 use crate::storage::{ObjectNamespace, StorageError};
@@ -223,6 +224,39 @@ impl ConvertWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let payload = crate::jobs::decode_job_payload(job.payload_version, job.payload.clone())
+            .unwrap_or_else(|_| crate::jobs::JobPayload::default());
+        let convert_started = std::time::Instant::now();
+        let job_id = job.id;
+        let outcome = crate::telemetry::run_worker(
+            "convert",
+            job_id,
+            &payload,
+            crate::telemetry::WorkerIds {
+                org_id: Some(ctx.org_id()),
+                actor_id: Some(ctx.user_id()),
+                index_signature: None,
+            },
+            self.process_claimed_job_inner(ctx, job, &payload),
+        )
+        .await;
+        let (format, result) = match &outcome {
+            Ok(ConvertWorkerRun::Completed { format, .. }) => (format.as_str(), "success"),
+            Ok(ConvertWorkerRun::Reconciled { .. }) => ("document", "success"),
+            Ok(ConvertWorkerRun::Failed { .. }) => ("document", "failed"),
+            Ok(_) => ("document", "other"),
+            Err(_) => ("document", "error"),
+        };
+        crate::telemetry::record_conversion(format, result, convert_started.elapsed());
+        outcome
+    }
+
+    async fn process_claimed_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+        _payload: &crate::jobs::JobPayload,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()
@@ -241,6 +275,7 @@ impl ConvertWorker {
                 source,
                 identity,
                 checkpoint,
+                format,
             }) => {
                 let byte_size = match i64::try_from(markdown_len) {
                     Ok(byte_size) => byte_size,
@@ -483,6 +518,7 @@ impl ConvertWorker {
                 Ok(ConvertWorkerRun::Completed {
                     job_id: completed.job.id,
                     markdown_bytes: markdown_len as usize,
+                    format,
                 })
             }
             Err(ConvertWorkerError::LeaseLost) => {
@@ -515,11 +551,32 @@ impl ConvertWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+        let job_id = job.id;
+        crate::telemetry::run_worker(
+            "reconcile",
+            job_id,
+            &payload,
+            crate::telemetry::WorkerIds {
+                org_id: Some(ctx.org_id()),
+                actor_id: Some(ctx.user_id()),
+                index_signature: None,
+            },
+            self.process_reconciliation_job_inner(ctx, job, payload.clone()),
+        )
+        .await
+    }
+
+    async fn process_reconciliation_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+        payload: JobPayload,
+    ) -> Result<ConvertWorkerRun, ConvertWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()
             .ok_or(ConvertWorkerError::MissingLease)?;
-        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
         let parent_job_id = payload
             .cleanup_target_job_id
             .ok_or(ConvertWorkerError::InvalidReconciliationPayload)?;
@@ -656,6 +713,7 @@ impl ConvertWorker {
         let version_id = parent_job
             .version_id
             .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
+        let detail = format!("reconcile enqueued:convert.cleanup:{}", parent_job.id);
         let mut input = EnqueueJob::new(
             JobType::Reconcile,
             JobPayload {
@@ -666,11 +724,42 @@ impl ConvertWorker {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent_job.id),
+                request_id: None,
+                traceparent: None,
             },
             format!("convert.cleanup:{}", parent_job.id),
         );
         input.max_attempts = RECONCILIATION_MAX_ATTEMPTS;
-        jobs::enqueue(&self.db_pool, ctx, input).await?;
+        // Same atomic open+enqueue fence as enqueue_reconcile, while preserving
+        // cleanup payload fields (cleanup_target_job_id / version_id) that the
+        // plain helper does not set.
+        with_org_txn_typed(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    txn.query_one(
+                        "SELECT markhand_runtime_readiness_open($1, $2)",
+                        &[&STARTUP_RECONCILIATION_KEY, &detail],
+                    )
+                    .await
+                    .map_err(DbError::from)?;
+                    let outcome = jobs::enqueue_within_txn(txn, &ctx, input).await?;
+                    if !outcome.created {
+                        txn.query_one(
+                            "SELECT markhand_runtime_readiness_try_ready($1, $2)",
+                            &[
+                                &STARTUP_RECONCILIATION_KEY,
+                                &"idempotent reconcile enqueue re-evaluated",
+                            ],
+                        )
+                        .await
+                        .map_err(DbError::from)?;
+                    }
+                    Ok::<_, JobError>(())
+                })
+            }
+        })
+        .await?;
         Ok(())
     }
 
@@ -751,12 +840,13 @@ impl ConvertWorker {
         let format = metadata
             .get("canonical-format")
             .or_else(|| metadata.get("x-amz-meta-canonical-format"))
-            .ok_or(ConvertWorkerError::MissingCanonicalFormat)?;
-        if is_audio_format(format) {
+            .ok_or(ConvertWorkerError::MissingCanonicalFormat)?
+            .clone();
+        if is_audio_format(&format) {
             return Err(ConvertWorkerError::AudioConversionDisabled);
         }
         let canonical_extension =
-            canonical_extension(format).ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
+            canonical_extension(&format).ok_or(ConvertWorkerError::UnsupportedCanonicalFormat)?;
         let input = self
             .heartbeat_while(
                 ctx,
@@ -829,6 +919,7 @@ impl ConvertWorker {
             source,
             identity,
             checkpoint: saved.checkpoint,
+            format,
         })
     }
 
@@ -1301,6 +1392,7 @@ pub enum ConvertWorkerRun {
     Completed {
         job_id: Uuid,
         markdown_bytes: usize,
+        format: String,
     },
     Failed {
         job_id: Uuid,
@@ -1326,6 +1418,7 @@ struct ConversionOutput {
     source: ConversionSourceVersion,
     identity: ConversionIdentity,
     checkpoint: Option<serde_json::Value>,
+    format: String,
 }
 
 #[derive(Debug, Error)]

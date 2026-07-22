@@ -255,6 +255,24 @@ pub async fn enqueue_document_reindex_within_txn(
         ),
     )
     .await?;
+    let request_id = crate::services::audit::request_id_from_correlation();
+    let resource_id = document_id.to_string();
+    crate::services::audit::write_org_action(
+        txn,
+        ctx,
+        crate::services::audit::actions::DOCUMENT_REINDEX,
+        crate::services::audit::resources::DOCUMENT,
+        Some(&resource_id),
+        "success",
+        &request_id,
+        serde_json::json!({
+            "document_id": document_id,
+            "version_id": version.id,
+            "job_id": outcome.job.id,
+            "job_type": "index",
+        }),
+    )
+    .await?;
     Ok(ReindexOutcome {
         document_id,
         version_id: version.id,
@@ -277,6 +295,22 @@ pub async fn publish_document_version(
                 let _document =
                     document_versions::publish_current_version(txn, &ctx, document_id, version_id)
                         .await?;
+                let request_id = crate::services::audit::request_id_from_correlation();
+                let resource_id = document_id.to_string();
+                crate::services::audit::write_org_action(
+                    txn,
+                    &ctx,
+                    crate::services::audit::actions::DOCUMENT_PUBLISH,
+                    crate::services::audit::resources::DOCUMENT,
+                    Some(&resource_id),
+                    "success",
+                    &request_id,
+                    serde_json::json!({
+                        "document_id": document_id,
+                        "version_id": version_id,
+                    }),
+                )
+                .await?;
                 enqueue_document_reindex_within_txn(txn, &ctx, document_id).await
             })
         }
@@ -891,6 +925,11 @@ async fn finalize_indexed(
                     .await?
                     .ok_or(IndexingError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
+                crate::telemetry::defer_job_transition(
+                    completed.job_type.as_str(),
+                    "finish",
+                    "succeeded",
+                );
                 match backfill_completion {
                     BackfillCompletion::Empty => {
                         complete_empty_document_backfill(

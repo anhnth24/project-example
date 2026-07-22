@@ -269,6 +269,24 @@ pub async fn hybrid_search(
     ctx: &OrgContext,
     request: RetrievalRequest,
 ) -> Result<RetrievalResponse, RetrievalError> {
+    let started = std::time::Instant::now();
+    let result = hybrid_search_inner(pool, qdrant, embedder, ctx, request).await;
+    let outcome = match &result {
+        Ok(_) => "success",
+        Err(RetrievalError::PermissionDenied) => "deny",
+        Err(_) => "error",
+    };
+    crate::telemetry::record_retrieval("hybrid", outcome, started.elapsed());
+    result
+}
+
+async fn hybrid_search_inner(
+    pool: &Pool,
+    qdrant: &QdrantClient,
+    embedder: Option<&ApprovedEmbeddingRuntime>,
+    ctx: &OrgContext,
+    request: RetrievalRequest,
+) -> Result<RetrievalResponse, RetrievalError> {
     require_mode_permissions(ctx, &request.mode)?;
     validate_request(&request)?;
     let scope = resolve_scope(ctx, request.collection_ids.as_ref())?;

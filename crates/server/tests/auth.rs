@@ -738,7 +738,7 @@ async fn disabled_user_and_removed_membership_deny_org_context() {
     let Some(base_url) = test_database_url() else {
         return;
     };
-    let (ephemeral, pool, provider, _) = boot(&base_url).await;
+    let (ephemeral, pool, provider, state) = boot(&base_url).await;
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
     let email = format!("disabled-{}@example.com", user.simple());
@@ -754,6 +754,18 @@ async fn disabled_user_and_removed_membership_deny_org_context() {
         .unwrap();
     let access = session.tokens.access_token.expose().to_string();
     let refresh = session.tokens.refresh_token.expose().to_string();
+    let app = router(
+        AppState::from_parts(
+            state.runtime().clone(),
+            pool.clone(),
+            Some(PasswordAuthProvider::new(
+                pool.clone(),
+                test_auth_config(),
+                JwtKeys::from_auth(&test_auth_config()).unwrap(),
+            )),
+        )
+        .unwrap(),
+    );
 
     // Disable user.
     let client = pool.get().await.unwrap();
@@ -784,6 +796,14 @@ async fn disabled_user_and_removed_membership_deny_org_context() {
             .unwrap_err(),
         fileconv_server::auth::permissions::ResolveError::UserDisabled
     );
+    let (status, disabled_body) =
+        json_request(app.clone(), "GET", "/api/v1/auth/me", None, Some(&access)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{disabled_body}");
+    assert_eq!(disabled_body["code"], "user_disabled");
+    let disabled_request_id = disabled_body["requestId"]
+        .as_str()
+        .expect("disabled request id")
+        .to_string();
 
     // Re-enable, remove membership, access token still cryptographically valid but OrgContext fails.
     let client = pool.get().await.unwrap();
@@ -825,6 +845,58 @@ async fn disabled_user_and_removed_membership_deny_org_context() {
             .unwrap_err(),
         fileconv_server::auth::permissions::ResolveError::MembershipMissing
     );
+    let (status, membership_body) =
+        json_request(app, "GET", "/api/v1/auth/me", None, Some(&access)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{membership_body}");
+    assert_eq!(membership_body["code"], "membership_missing");
+    let membership_request_id = membership_body["requestId"]
+        .as_str()
+        .expect("membership request id")
+        .to_string();
+
+    let audit_denials = with_org_txn(&pool, &ctx, move |txn| {
+        Box::pin(async move {
+            let rows = txn
+                .query(
+                    "SELECT actor_user_id, outcome, metadata, request_id
+                     FROM audit_log
+                     WHERE org_id = $1 AND action = 'auth.deny'
+                       AND request_id = ANY($2)
+                     ORDER BY seq",
+                    &[&org, &vec![disabled_request_id, membership_request_id]],
+                )
+                .await?;
+            Ok(rows
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.get::<_, Option<Uuid>>(0),
+                        row.get::<_, String>(1),
+                        row.get::<_, Value>(2),
+                        row.get::<_, Option<String>>(3),
+                    )
+                })
+                .collect::<Vec<_>>())
+        })
+    })
+    .await
+    .expect("auth deny audit rows");
+    assert_eq!(
+        audit_denials.len(),
+        2,
+        "each current-state middleware denial must be durable"
+    );
+    let reasons = audit_denials
+        .iter()
+        .map(|(_, _, metadata, _)| metadata["reason"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert!(reasons.contains(&"user_disabled"));
+    assert!(reasons.contains(&"membership_missing"));
+    for (actor, outcome, _, request_id) in audit_denials {
+        assert_eq!(actor, Some(user));
+        assert_eq!(outcome, "deny");
+        assert!(request_id.is_some());
+    }
 
     ephemeral.drop().await;
 }

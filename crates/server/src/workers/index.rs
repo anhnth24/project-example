@@ -152,6 +152,28 @@ impl IndexWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<IndexWorkerRun, IndexWorkerError> {
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())
+            .unwrap_or_else(|_| jobs::JobPayload::default());
+        let job_id = job.id;
+        crate::telemetry::run_worker(
+            "index",
+            job_id,
+            &payload,
+            crate::telemetry::WorkerIds {
+                org_id: Some(ctx.org_id()),
+                actor_id: Some(ctx.user_id()),
+                index_signature: self.approved_signature.clone(),
+            },
+            self.process_claimed_job_inner(ctx, job),
+        )
+        .await
+    }
+
+    async fn process_claimed_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+    ) -> Result<IndexWorkerRun, IndexWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()

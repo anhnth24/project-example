@@ -114,6 +114,32 @@ impl EmbeddingWorker {
         ctx: &OrgContext,
         job: Job,
     ) -> Result<EmbeddingWorkerRun, EmbeddingWorkerError> {
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())
+            .unwrap_or_else(|_| jobs::JobPayload::default());
+        let job_id = job.id;
+        // Derive the approved digest once (sync) before opening the worker span so
+        // correlation/span fields carry the real identity — never re-validated later.
+        let identity = resolve_embedding_identity(&self.runtime)?;
+        crate::telemetry::run_worker(
+            "embed",
+            job_id,
+            &payload,
+            crate::telemetry::WorkerIds {
+                org_id: Some(ctx.org_id()),
+                actor_id: Some(ctx.user_id()),
+                index_signature: Some(identity.digest.clone()),
+            },
+            self.process_claimed_job_inner(ctx, job, identity),
+        )
+        .await
+    }
+
+    async fn process_claimed_job_inner(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+        identity: EmbeddingIdentity,
+    ) -> Result<EmbeddingWorkerRun, EmbeddingWorkerError> {
         let lease_token = job
             .lease_owner
             .as_deref()
@@ -121,7 +147,7 @@ impl EmbeddingWorker {
             .to_string();
         let deadline = TokioInstant::now() + self.config.max_job_duration;
         let result = self
-            .process(ctx, &job, &lease_token, job.attempts, deadline)
+            .process(ctx, &job, &lease_token, job.attempts, deadline, identity)
             .await;
         match result {
             Ok(()) => Ok(EmbeddingWorkerRun::Completed { job_id: job.id }),
@@ -150,25 +176,20 @@ impl EmbeddingWorker {
         lease_token: &str,
         attempts: i32,
         deadline: TokioInstant,
+        identity: EmbeddingIdentity,
     ) -> Result<(), EmbeddingWorkerError> {
         let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
         let batch_id = payload
             .batch_id
             .ok_or(EmbeddingWorkerError::InvalidPayload)?;
         let source = self.load_batch_source(ctx, job.id, batch_id).await?;
-        let expected_dimensions = self
-            .runtime
-            .plan()
-            .expected_dimensions()
-            .ok_or(EmbeddingWorkerError::EmbeddingDimensionsUnknown)?;
-        let signature = self.runtime.plan().index_signature(expected_dimensions)?;
         // Check every immutable target-generation property before sending chunk
         // text to a provider. A stale, cross-collection, or retired batch must
         // not create vectors or a phantom collection.
         indexing::validate_target_generation(
             &source.metadata,
             source.collection_id,
-            &signature.digest(),
+            &identity.digest,
         )?;
         let inputs = source
             .chunks
@@ -204,10 +225,10 @@ impl EmbeddingWorker {
             .first()
             .map(Vec::len)
             .ok_or(EmbeddingWorkerError::ChunkRangeMismatch)?;
-        if dimensions != expected_dimensions
+        if dimensions != identity.dimensions
             || vectors
                 .iter()
-                .any(|vector| vector.len() != expected_dimensions)
+                .any(|vector| vector.len() != identity.dimensions)
         {
             return Err(EmbeddingWorkerError::SignatureMismatch);
         }
@@ -218,7 +239,11 @@ impl EmbeddingWorker {
                 lease_token,
                 attempts,
                 deadline,
-                self.qdrant.ensure_collection_for_signature(&signature),
+                self.qdrant.ensure_collection_for_digest(
+                    &identity.digest,
+                    identity.dimensions,
+                    identity.normalized,
+                ),
             )
             .await?;
         let scope = VectorScope::new(ctx.org_id(), [source.collection_id]);
@@ -716,6 +741,34 @@ struct EmbeddingBatchSource {
     chunks: Vec<crate::db::models::Chunk>,
 }
 
+/// Approved embedding identity derived once before the worker span opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EmbeddingIdentity {
+    dimensions: usize,
+    digest: String,
+    normalized: bool,
+}
+
+fn resolve_embedding_identity(
+    runtime: &ApprovedEmbeddingRuntime,
+) -> Result<EmbeddingIdentity, EmbeddingWorkerError> {
+    resolve_embedding_identity_from_plan(runtime.plan())
+}
+
+fn resolve_embedding_identity_from_plan(
+    plan: &fileconv_knowledge::embedding::EmbeddingPlan,
+) -> Result<EmbeddingIdentity, EmbeddingWorkerError> {
+    let dimensions = plan
+        .expected_dimensions()
+        .ok_or(EmbeddingWorkerError::EmbeddingDimensionsUnknown)?;
+    let signature = plan.index_signature(dimensions)?;
+    Ok(EmbeddingIdentity {
+        dimensions,
+        digest: signature.digest(),
+        normalized: signature.normalized,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PointLifecycle {
     is_current: bool,
@@ -820,7 +873,17 @@ impl EmbeddingWorkerError {
 
 #[cfg(test)]
 mod tests {
-    use super::point_lifecycle;
+    use super::{point_lifecycle, resolve_embedding_identity_from_plan, EmbeddingIdentity};
+    use crate::jobs::JobPayload;
+    use crate::telemetry::{run_worker, CorrelationContext, WorkerIds};
+    use fileconv_knowledge::embedding::EmbeddingPlan;
+    use std::sync::{Arc, Mutex};
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::Layer;
     use uuid::Uuid;
 
     #[test]
@@ -834,5 +897,112 @@ mod tests {
         let lifecycle = point_lifecycle(Some(current), current, true);
         assert!(lifecycle.is_current);
         assert!(lifecycle.is_effective);
+    }
+
+    struct IndexSignatureVisitor {
+        value: Option<String>,
+    }
+
+    impl Visit for IndexSignatureVisitor {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "index_signature" {
+                self.value = Some(format!("{value:?}"));
+            }
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            if field.name() == "index_signature" {
+                self.value = Some(value.to_string());
+            }
+        }
+    }
+
+    struct IndexSignatureCapture {
+        seen: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl<S> Layer<S> for IndexSignatureCapture
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+            let mut visitor = IndexSignatureVisitor { value: None };
+            attrs.record(&mut visitor);
+            if let Some(value) = visitor.value {
+                if let Ok(mut guard) = self.seen.lock() {
+                    guard.push(value);
+                }
+            }
+        }
+
+        fn on_record(&self, _span: &Id, values: &Record<'_>, _ctx: Context<'_, S>) {
+            let mut visitor = IndexSignatureVisitor { value: None };
+            values.record(&mut visitor);
+            if let Some(value) = visitor.value {
+                if let Ok(mut guard) = self.seen.lock() {
+                    guard.push(value);
+                }
+            }
+        }
+
+        fn on_event(&self, _event: &Event<'_>, _ctx: Context<'_, S>) {}
+    }
+
+    #[tokio::test]
+    async fn embed_worker_span_carries_resolved_index_signature_digest() {
+        // Same sync resolve path process_claimed_job uses before run_worker.
+        let plan = EmbeddingPlan::local_hash_v1();
+        let identity = resolve_embedding_identity_from_plan(&plan).expect("resolve identity");
+        let EmbeddingIdentity {
+            dimensions,
+            digest: expected_digest,
+            normalized,
+        } = identity.clone();
+        assert!(dimensions > 0);
+        assert!(normalized);
+        assert_eq!(expected_digest.len(), 64);
+        assert!(expected_digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let org_id = Uuid::new_v4();
+        let actor_id = Uuid::new_v4();
+        let job_id = Uuid::new_v4();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(IndexSignatureCapture {
+            seen: Arc::clone(&seen),
+        });
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // Mirrors process_claimed_job: resolve identity → WorkerIds → run_worker(.instrument).
+        let observed = run_worker(
+            "embed",
+            job_id,
+            &JobPayload::default(),
+            WorkerIds {
+                org_id: Some(org_id),
+                actor_id: Some(actor_id),
+                index_signature: Some(identity.digest),
+            },
+            async {
+                CorrelationContext::current()
+                    .expect("task-local correlation")
+                    .index_signature
+            },
+        )
+        .await;
+
+        assert_eq!(observed.as_deref(), Some(expected_digest.as_str()));
+        let captured = seen.lock().expect("capture lock").clone();
+        assert!(
+            captured.iter().any(|value| {
+                value == &expected_digest || value.trim_matches('"') == expected_digest
+            }),
+            "worker span must record the resolved digest, got {captured:?}"
+        );
+        assert!(
+            !captured
+                .iter()
+                .any(|value| value.contains("mh1.") || value.contains("Bearer ")),
+            "span must not carry secrets"
+        );
     }
 }

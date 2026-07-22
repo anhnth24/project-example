@@ -311,7 +311,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
-- **Status:** Blocked — implementation ready in PR #260; R04 is Done, R05 remains Review.
+- **Status:** Done — merged via PR #260 into the R05 stack. Delivery of the complete
+  stack to the mainline remains dependent on PR #259.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
@@ -336,13 +337,32 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
+- **Status:** Review — implementation ready in PR #264; final bounded reviewer
+  verification reports zero findings. F01/F05/I03 and R06 are Done.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`, OTel config.
 - **Depends:** F01/F05/I03 + G0-SLO.
 - **Acceptance/tests:** Correlation qua async; action/deny coverage; canary secret/
   content absent; trace/cardinality/redaction/audit tests.
-- **Security/migration:** Allowlist log fields. **Out:** SIEM.
+- **Evidence (implementation ready):**
+  - Central `telemetry::{config,correlation,metrics,redact,init}`: tracing init +
+    optional OTLP (config-gated; test profile never dials network; prod misconfig fails).
+  - Correlation: `X-Request-Id` middleware scopes task-local context; job payload
+    `request_id`/`traceparent` (v5 W3C); request/worker spans use real OTel context
+    with parent/link + `.instrument(span)` (no `.enter()` across await).
+  - Real OTel metrics (honour `metrics_enabled`): OTLP optional + in-memory reader;
+    observable queue gauges; exact per-metric label enums (HTTP method→OTHER,
+    templated routes); canary custom methods never labeled/logged raw.
+  - Append-only audit: typed action/resource/outcome/reason; migration `0023`
+    UPDATE/DELETE/TRUNCATE protection + revoke runtime grants; metadata scalar
+    allowlist per action; mutation audit fail-closed same txn; deny durability
+    with fallback (never silent ignore); auth/quota deny callsites.
+  - Tests: `telemetry_audit` (async correlation, cardinality, log canary, live PG
+    immutability/RLS/redaction/enqueue correlation); unit redaction/config tests.
+  - Docs: `docs/conventions/{observability-audit,config-secrets}.md` +
+    `deploy/dev/otel-collector.yaml` / `.env.example` OTel keys. No Grafana/O02.
+- **Security/migration:** Allowlist log fields; additive `0023`. **Out:** SIEM / O02–O05.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 

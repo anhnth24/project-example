@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::services::upload::{LimitsConfig, UploadConfig};
+use crate::telemetry::TelemetryConfig;
 
 pub use crate::config_edge::{parse_trusted_proxies, CorsConfig, RateLimitConfig, TrustedProxies};
 
@@ -42,7 +43,7 @@ enum RuntimeRole {
 }
 
 impl Profile {
-    fn parse(value: &str) -> Result<Self, String> {
+    pub fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "dev" => Ok(Self::Dev),
             "test" => Ok(Self::Test),
@@ -95,6 +96,7 @@ pub struct ServerConfig {
     cors: CorsConfig,
     rate_limit: RateLimitConfig,
     trusted_proxies: TrustedProxies,
+    telemetry: TelemetryConfig,
 }
 
 impl fmt::Debug for ServerConfig {
@@ -143,6 +145,7 @@ impl fmt::Debug for ServerConfig {
             .field("cors", &self.cors)
             .field("rate_limit", &self.rate_limit)
             .field("trusted_proxies", &self.trusted_proxies)
+            .field("telemetry", &self.telemetry)
             .finish()
     }
 }
@@ -847,6 +850,8 @@ impl ServerConfig {
         .transpose()?
         .unwrap_or_default();
 
+        let telemetry = TelemetryConfig::from_env_map(env, profile)?;
+
         let config = Self {
             role,
             profile,
@@ -869,6 +874,7 @@ impl ServerConfig {
             cors,
             rate_limit,
             trusted_proxies,
+            telemetry,
         };
         config.validate()?;
         Ok(config)
@@ -915,6 +921,10 @@ impl ServerConfig {
 
     pub fn trusted_proxies(&self) -> &TrustedProxies {
         &self.trusted_proxies
+    }
+
+    pub fn telemetry(&self) -> &TelemetryConfig {
+        &self.telemetry
     }
 
     pub(crate) fn is_api_role(&self) -> bool {
@@ -974,6 +984,7 @@ impl ServerConfig {
                 rate
             },
             trusted_proxies: TrustedProxies::default(),
+            telemetry: TelemetryConfig::disabled(),
         }
     }
 
@@ -1030,6 +1041,7 @@ impl ServerConfig {
         self.validate_index_signature(false)?;
         self.cors.validate(self.profile)?;
         self.rate_limit.validate_for_profile(self.profile)?;
+        self.telemetry.validate(self.profile)?;
         if self.role == RuntimeRole::Api {
             self.validate_auth()?;
         }

@@ -232,6 +232,11 @@ pub async fn promote_conversion(
                 .await?
                 .ok_or(PromotionError::LeaseLost)?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
+                crate::telemetry::defer_job_transition(
+                    completed.job_type.as_str(),
+                    "finish",
+                    "succeeded",
+                );
 
                 // The version/document relation is the ACL inheritance boundary: new
                 // versions stay on the same document and collection.

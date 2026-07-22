@@ -589,24 +589,44 @@ impl QaChatProvider for ConfiguredProvider {
     ) -> Pin<Box<dyn Future<Output = Result<ProviderGroundedPayload, ProviderError>> + Send + 'a>>
     {
         Box::pin(async move {
-            let body = serialize_chat_request(&self.config.model, request)?;
-            let mut builder = self
-                .client
-                .post(self.config.chat_url())
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
-            if let ProviderAuth::Bearer(key) = &self.config.auth {
-                builder = builder.bearer_auth(key.expose());
+            let started = std::time::Instant::now();
+            let result = async {
+                let body = serialize_chat_request(&self.config.model, request)?;
+                let mut builder = self
+                    .client
+                    .post(self.config.chat_url())
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(body);
+                if let ProviderAuth::Bearer(key) = &self.config.auth {
+                    builder = builder.bearer_auth(key.expose());
+                }
+                let response = builder.send().await.map_err(|_| ProviderError::Outage)?;
+                if response.status().is_redirection() {
+                    return Err(ProviderError::UrlPolicy);
+                }
+                if !response.status().is_success() {
+                    return Err(ProviderError::Outage);
+                }
+                let bytes = read_response_capped(response, MAX_RESPONSE_BYTES).await?;
+                parse_grounded_payload(&bytes)
             }
-            let response = builder.send().await.map_err(|_| ProviderError::Outage)?;
-            if response.status().is_redirection() {
-                return Err(ProviderError::UrlPolicy);
-            }
-            if !response.status().is_success() {
-                return Err(ProviderError::Outage);
-            }
-            let bytes = read_response_capped(response, MAX_RESPONSE_BYTES).await?;
-            parse_grounded_payload(&bytes)
+            .await;
+            let outcome = match &result {
+                Ok(_) => "success",
+                Err(ProviderError::Outage) => "outage",
+                Err(ProviderError::Timeout) => "timeout",
+                Err(ProviderError::Truncated) => "truncated",
+                Err(_) => "error",
+            };
+            crate::telemetry::record_retrieval("qa_provider", outcome, started.elapsed());
+            // Error classes only — never log prompt/answer bodies.
+            tracing::info!(
+                target: "qa_provider",
+                result = outcome,
+                duration_ms = started.elapsed().as_millis() as u64,
+                "qa provider complete"
+            );
+            result
         })
     }
 }
