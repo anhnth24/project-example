@@ -311,7 +311,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
-- **Status:** Blocked — implementation ready; dependencies R04/R05 Review/Blocked
+- **Status:** Blocked — implementation ready in PR #260; R04 is Done, R05 remains Review.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
