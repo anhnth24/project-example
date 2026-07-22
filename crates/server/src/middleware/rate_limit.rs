@@ -344,13 +344,31 @@ pub async fn rate_limit_middleware(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|info| info.0);
-    let client_ip = match resolve_client_ip(peer, request.headers(), state.trusted_proxies()) {
-        Ok(ip) => ip,
-        Err(ClientIpError::SpoofedOrMissingForwarded) => return bad_proxy(&request_id),
-    };
-
     let now = Instant::now();
     let (ip_limit_n, ip_scope) = ip_limit(limiter.config(), class);
+    let client_ip = match resolve_client_ip(peer, request.headers(), state.trusted_proxies()) {
+        Ok(ip) => ip,
+        Err(ClientIpError::SpoofedOrMissingForwarded) => {
+            // Invalid forwarded metadata still consumes a budget keyed to the
+            // trusted peer, otherwise malformed requests bypass every counter.
+            let peer_ip = peer
+                .map(|address| address.ip())
+                .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            match outcome_or_reject(
+                limiter.check_keyed(
+                    LimitKey::Ip { class, ip: peer_ip },
+                    ip_limit_n,
+                    ip_scope,
+                    now,
+                ),
+                &request_id,
+            ) {
+                Ok(_) => return bad_proxy(&request_id),
+                Err(response) => return *response,
+            }
+        }
+    };
+
     let ip_decision = match outcome_or_reject(
         limiter.check_keyed(
             LimitKey::Ip {

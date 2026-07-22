@@ -17,7 +17,7 @@ CREATE TABLE runtime_readiness (
 INSERT INTO runtime_readiness (key, ready, generation, certified_generation, detail)
 VALUES ('startup_reconciliation', false, 0, 0, 'awaiting startup bootstrap');
 
--- Cross-tenant pending/leased reconcile count (bypasses RLS via SECURITY DEFINER).
+-- Cross-tenant active reconcile count (bypasses RLS via SECURITY DEFINER).
 CREATE OR REPLACE FUNCTION markhand_pending_reconcile_jobs()
 RETURNS bigint
 LANGUAGE sql
@@ -28,7 +28,7 @@ AS $$
     SELECT count(*)::bigint
     FROM jobs
     WHERE job_type = 'reconcile'
-      AND status IN ('queued', 'leased');
+      AND status IN ('pending', 'leased', 'running');
 $$;
 
 -- Atomically close readiness and advance the generation (enqueue / bootstrap).

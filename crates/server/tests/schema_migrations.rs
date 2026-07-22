@@ -145,6 +145,20 @@ fn sha64(ch: char) -> String {
     std::iter::repeat_n(ch, 64).collect()
 }
 
+#[test]
+fn runtime_readiness_migration_counts_every_active_job_status() {
+    let source = embedded_migrations()
+        .iter()
+        .find(|(name, _)| *name == "0022_expand_runtime_readiness.sql")
+        .expect("migration 0022 must be embedded")
+        .1;
+    assert!(source.contains("status IN ('pending', 'leased', 'running')"));
+    assert!(
+        !source.contains("'queued'"),
+        "queued is not a valid jobs.status value"
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_draft_version<C: GenericClient>(
     client: &C,
@@ -315,6 +329,86 @@ async fn schema_migrations_fresh_apply_idempotent_and_exact_columns() {
             "column drift on {table}: actual={actual:?} expected={expected:?}"
         );
     }
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn runtime_readiness_blocks_until_all_reconcile_jobs_are_terminal() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&base_url).await;
+    apply_migrations(&ephemeral.url).await.expect("fresh apply");
+    let client = connect(&ephemeral.url).await;
+    let org = Uuid::parse_str(POC_ORG).unwrap();
+    client
+        .batch_execute(&format!("SET app.org_id = '{org}'"))
+        .await
+        .expect("set tenant context");
+
+    let generation: i64 = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_open($1, $2)",
+            &[&"startup_reconciliation", &"test generation"],
+        )
+        .await
+        .expect("open readiness generation")
+        .get(0);
+    assert!(generation >= 1);
+
+    let job_id = Uuid::new_v4();
+    client
+        .execute(
+            "INSERT INTO jobs (id, org_id, job_type, status, idempotency_key)
+             VALUES ($1, $2, 'reconcile', 'pending', $3)",
+            &[&job_id, &org, &format!("readiness-{job_id}")],
+        )
+        .await
+        .expect("insert pending reconcile job");
+
+    for status in ["pending", "leased", "running"] {
+        client
+            .execute(
+                "UPDATE jobs SET status = $1, updated_at = clock_timestamp() WHERE id = $2",
+                &[&status, &job_id],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("set reconcile status {status}: {error}"));
+        let pending: i64 = client
+            .query_one("SELECT markhand_pending_reconcile_jobs()", &[])
+            .await
+            .expect("count active reconcile jobs")
+            .get(0);
+        assert_eq!(pending, 1, "{status} reconcile job must block readiness");
+        let ready: bool = client
+            .query_one(
+                "SELECT markhand_runtime_readiness_try_ready($1, $2)",
+                &[&"startup_reconciliation", &format!("{status} job exists")],
+            )
+            .await
+            .expect("attempt readiness certification")
+            .get(0);
+        assert!(!ready, "{status} reconcile job must fail closed");
+    }
+
+    client
+        .execute(
+            "UPDATE jobs SET status = 'succeeded', updated_at = clock_timestamp() WHERE id = $1",
+            &[&job_id],
+        )
+        .await
+        .expect("complete reconcile job");
+    let ready: bool = client
+        .query_one(
+            "SELECT markhand_runtime_readiness_try_ready($1, $2)",
+            &[&"startup_reconciliation", &"all reconcile jobs terminal"],
+        )
+        .await
+        .expect("certify idle generation")
+        .get(0);
+    assert!(ready);
 
     ephemeral.drop().await;
 }

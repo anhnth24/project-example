@@ -135,6 +135,24 @@ async fn request_id_validates_generates_and_echoes() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers.get("x-request-id").unwrap(), given);
     assert_eq!(body["requestId"], given);
+
+    let (status, body, headers) = call(
+        app,
+        Request::builder()
+            .uri("/live")
+            .header("x-request-id", "not-a-uuid")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let generated = headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("generated request id");
+    assert_ne!(generated, "not-a-uuid");
+    assert!(Uuid::parse_str(generated).is_ok());
+    assert_eq!(body["requestId"], generated);
 }
 
 #[test]
@@ -209,6 +227,48 @@ async fn cors_true_preflight_only_for_known_route_and_origin() {
     .await;
     assert_ne!(status, StatusCode::NO_CONTENT);
     assert_ne!(body["code"], "cors_origin_denied");
+}
+
+#[tokio::test]
+async fn cors_preflights_consume_the_auth_ip_budget() {
+    let mut rate = RateLimitConfig::production_defaults();
+    rate.enabled = true;
+    rate.auth_ip_limit = 2;
+    rate.window_secs = 60;
+    let app = router(test_state().with_rate_limiter(InMemoryRateLimiter::new(rate)));
+
+    for _ in 0..2 {
+        let (status, body, headers) = call(
+            app.clone(),
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/auth/me")
+                .header("Origin", "https://evil.example")
+                .header("Access-Control-Request-Method", "GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["code"], "cors_origin_denied");
+        assert!(headers.get("x-ratelimit-remaining").is_none());
+    }
+
+    let (status, body, headers) = call(
+        app,
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/api/v1/auth/me")
+            .header("Origin", "https://evil.example")
+            .header("Access-Control-Request-Method", "GET")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["code"], "rate_limited");
+    assert_eq!(body["details"]["scope"], "auth");
+    assert!(headers.get("retry-after").is_some());
 }
 
 #[tokio::test]
@@ -432,6 +492,46 @@ async fn trusted_proxy_exact_spoof_and_right_to_left_xff() {
         .contains("/0"));
 }
 
+#[tokio::test]
+async fn invalid_forwarded_for_from_a_trusted_peer_is_rate_limited() {
+    let proxies = TrustedProxies::from_cidrs(vec![IpNet::from_str("10.0.0.0/8").unwrap()]);
+    let mut rate = RateLimitConfig::production_defaults();
+    rate.enabled = true;
+    rate.exempt_health = false;
+    rate.health_limit = 2;
+    rate.window_secs = 60;
+    let app = router(
+        test_state()
+            .with_trusted_proxies(proxies)
+            .with_rate_limiter(InMemoryRateLimiter::new(rate)),
+    );
+
+    let request = || {
+        let mut request = Request::builder()
+            .uri("/ready")
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                [10, 0, 0, 2],
+                443,
+            ))));
+        request
+    };
+
+    for _ in 0..2 {
+        let (status, body, _) = call(app.clone(), request()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["code"], "invalid_forwarded_for");
+    }
+    let (status, body, headers) = call(app, request()).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["code"], "rate_limited");
+    assert_eq!(body["details"]["scope"], "health");
+    assert!(headers.get("retry-after").is_some());
+}
+
 #[test]
 fn prod_rejects_disabled_limiter() {
     let mut cfg = RateLimitConfig::production_defaults();
@@ -486,6 +586,61 @@ async fn readiness_signature_mismatch_and_reconcile_blocked() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
+}
+
+#[tokio::test]
+async fn readiness_reports_embedding_initialization_failure() {
+    let state = test_state()
+        .with_fake_probes(FakeHealthProbes::all_ok())
+        .with_embedding_init_error(ProbeReason::Embedding);
+    let (status, body, _) = call(
+        router(state),
+        Request::builder()
+            .uri("/ready")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "dependency_unavailable");
+    assert!(!body.to_string().to_ascii_lowercase().contains("embedding"));
+}
+
+#[tokio::test]
+async fn reconciliation_fence_changes_are_not_hidden_by_readiness_cache() {
+    let probes = FakeHealthProbes::all_ok();
+    let runs = probes.runs.clone();
+    let state = test_state().with_fake_probes(probes);
+    let gate = std::sync::Arc::clone(state.reconciliation_gate());
+    let app = router(state);
+
+    let (first, _, _) = call(
+        app.clone(),
+        Request::builder()
+            .uri("/ready")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(first, StatusCode::OK);
+    assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    gate.set_ready(false);
+    let (second, body, _) = call(
+        app,
+        Request::builder()
+            .uri("/ready")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(second, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["code"], "dependency_unavailable");
+    assert_eq!(
+        runs.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "dynamic fence should fail before cached dependency probes"
+    );
 }
 
 #[tokio::test]
@@ -634,4 +789,36 @@ async fn startup_completed_and_head_live_supported() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn startup_exposes_starting_and_degraded_contract_states() {
+    let starting = AppState::new(test_runtime()).expect("starting app state");
+    let (status, body, _) = call(
+        router(starting),
+        Request::builder()
+            .uri("/startup")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["status"], "starting");
+    assert_eq!(body["completed"], false);
+    assert_eq!(body["degraded"], false);
+
+    let degraded = AppState::new(test_runtime()).expect("degraded app state");
+    degraded.startup_state().mark_completed(true);
+    let (status, body, _) = call(
+        router(degraded),
+        Request::builder()
+            .uri("/startup")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "degraded");
+    assert_eq!(body["completed"], true);
+    assert_eq!(body["degraded"], true);
 }
