@@ -30,6 +30,7 @@ import unittest
 import zlib
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 E2E = ROOT / "crates" / "server" / "tests" / "e2e"
@@ -54,6 +55,7 @@ from harness.evidence import (  # noqa: E402
     HERMETIC_GENERATED_AT,
     HERMETIC_GIT,
     HERMETIC_RUN_ID,
+    SEVERITY_RANK,
     CaseResult,
 )
 from harness.intake import ProductionIntakeNotWired, extract_production_intake  # noqa: E402
@@ -414,6 +416,96 @@ def validate_against_schemas(suite: dict[str, Any], evidence: dict[str, Any]) ->
     evidence_errors = _validate_schema(evidence, evidence_schema)
     if evidence_errors:
         raise HarnessError("evidence schema invalid: " + "; ".join(evidence_errors[:8]))
+    validate_evidence_semantics(suite, evidence)
+
+
+def validate_evidence_semantics(suite: dict[str, Any], evidence: dict[str, Any]) -> None:
+    """Enforce release invariants that JSON Schema cannot express."""
+    expected: dict[tuple[str, str], None] = {("harness", "harness-manifest"): None}
+    for matrix, key in (
+        ("format", "formats"),
+        ("security", "security"),
+        ("adversarial", "adversarial"),
+        ("fault", "fault"),
+    ):
+        for case in suite.get(key) or []:
+            expected[(matrix, case["id"])] = None
+
+    actual: list[tuple[str, str]] = [
+        (str(case.get("matrix")), str(case.get("id"))) for case in evidence["cases"]
+    ]
+    duplicates = sorted({item for item in actual if actual.count(item) > 1})
+    missing = sorted(set(expected) - set(actual))
+    extra = sorted(set(actual) - set(expected))
+    if duplicates or missing or extra:
+        raise HarnessError(
+            "evidence case inventory mismatch: "
+            f"duplicates={duplicates}, missing={missing}, extra={extra}"
+        )
+
+    cases = evidence["cases"]
+    expected_summary = {
+        "passed": sum(case["status"] == "pass" for case in cases),
+        "failed": sum(case["status"] == "fail" for case in cases),
+        "blocked": sum(case["status"] == "blocked" for case in cases),
+        "skippedOptional": sum(
+            case["status"] == "optional_unavailable" for case in cases
+        ),
+        "highCritical": sum(
+            SEVERITY_RANK.get(case.get("severity", "none"), 0)
+            >= SEVERITY_RANK["high"]
+            for case in cases
+        ),
+    }
+    if evidence["summary"] != expected_summary:
+        raise HarnessError(
+            "evidence summary does not match cases: "
+            f"got={evidence['summary']}, want={expected_summary}"
+        )
+
+    expected_severity = max(
+        (case.get("severity", "none") for case in cases),
+        key=lambda value: SEVERITY_RANK.get(value, -1),
+        default="none",
+    )
+    if evidence["severity"] != expected_severity:
+        raise HarnessError(
+            "evidence severity does not match cases: "
+            f"got={evidence['severity']!r}, want={expected_severity!r}"
+        )
+
+    results = [
+        CaseResult(
+            id=case["id"],
+            matrix=case["matrix"],
+            status=case["status"],
+            severity=case.get("severity", "none"),
+        )
+        for case in cases
+    ]
+    claims_ok, claim_errors = evaluate_claims_live_vertical_slice(suite, results)
+    if evidence["claimsLiveVerticalSlice"] and not claims_ok:
+        raise HarnessError(
+            "claimsLiveVerticalSlice=true without exact passing coverage: "
+            + "; ".join(claim_errors[:8])
+        )
+
+    if evidence["mode"] == "hermetic":
+        if evidence["claimsLiveVerticalSlice"]:
+            raise HarnessError("hermetic evidence cannot claim a live vertical slice")
+        if evidence["generatedAt"] != HERMETIC_GENERATED_AT:
+            raise HarnessError("hermetic generatedAt sentinel mismatch")
+        if evidence["runId"] != HERMETIC_RUN_ID:
+            raise HarnessError("hermetic runId sentinel mismatch")
+        if evidence["git"] != HERMETIC_GIT:
+            raise HarnessError("hermetic git sentinel mismatch")
+        for case in cases:
+            expected_status = "pass" if case["id"] == "harness-manifest" else "blocked"
+            if case["status"] != expected_status:
+                raise HarnessError(
+                    f"hermetic case {case['id']} status={case['status']} "
+                    f"(want {expected_status})"
+                )
 
 
 
@@ -530,6 +622,13 @@ def validate_scripts() -> None:
             raise HarnessError("seed script must not default postgres db to markhand")
     if re.search(r'MARKHAND_POSTGRES_DB:-\s*markhand\}', seed_text):
         raise HarnessError("seed script defaults MARKHAND_POSTGRES_DB to markhand")
+    for script, text in ((LIVE_SH, live_text), (SEED_SH, seed_text)):
+        init_at = text.find("\npoc_compose_init\n")
+        post_init_gate_at = text.find("\nrequire_e2e_isolation\n", init_at + 1)
+        if init_at < 0 or post_init_gate_at < init_at:
+            raise HarnessError(
+                f"{script.name}: effective stack must be revalidated after poc_compose_init"
+            )
 
 
 def validate_poc_manifest() -> None:
@@ -548,7 +647,7 @@ def validate_schemas() -> None:
             raise HarnessError(f"{path.name}: expected object schema")
 
 
-def inspect_committed_evidence_before_regen() -> None:
+def inspect_committed_evidence_before_regen(suite: dict[str, Any]) -> None:
     """Reject any committed runtime/random/non-hermetic evidence, not just live=true."""
     if not REPORT_JSON.is_file():
         return
@@ -576,6 +675,7 @@ def inspect_committed_evidence_before_regen() -> None:
         raise HarnessError(
             f"committed evidence git identity must be hermetic sentinel (got {data.get('git')!r})"
         )
+    validate_against_schemas(suite, data)
     # Reject runtime-looking timestamps / branch names if present in markdown too.
     if REPORT_MD.is_file():
         md = REPORT_MD.read_text(encoding="utf-8")
@@ -611,6 +711,19 @@ class O04SelfTests(unittest.TestCase):
             }
         )
         self.assertTrue(result.ok, result.errors)
+
+    def test_confirm_rejects_test_substrings_without_name_segments(self) -> None:
+        result = validate_live_gates(
+            environ={
+                "MARKHAND_E2E_CONFIRM": DEFAULT_CONFIRM,
+                "MARKHAND_COMPOSE_PROJECT": "contest",
+                "MARKHAND_POSTGRES_DB": "attestation",
+                "MARKHAND_MINIO_BUCKET": "latest-documents",
+                "MARKHAND_E2E_STACK_TAG": "test",
+            }
+        )
+        self.assertFalse(result.ok)
+        self.assertEqual(len(result.errors), 3)
 
     def test_confirm_wrong_phrase(self) -> None:
         result = validate_live_gates(
@@ -694,6 +807,17 @@ class O04SelfTests(unittest.TestCase):
         self.assertIn("MARKHAND_E2E_CONFIRM", text)
         self.assertRegex(text, r'die .*MARKHAND_E2E_CONFIRM|die "set MARKHAND_E2E_CONFIRM')
 
+    def test_scripts_revalidate_effective_stack_after_compose_init(self) -> None:
+        for script in (LIVE_SH, SEED_SH):
+            with self.subTest(script=script.name):
+                lines = [
+                    line.strip()
+                    for line in script.read_text(encoding="utf-8").splitlines()
+                ]
+                init_at = lines.index("poc_compose_init")
+                post_init_gate_at = lines.index("require_e2e_isolation", init_at + 1)
+                self.assertGreater(post_init_gate_at, init_at)
+
     def test_claims_requires_exact_required_passes(self) -> None:
         suite = load_suite_manifest()
         # Missing required case → false
@@ -728,6 +852,28 @@ class O04SelfTests(unittest.TestCase):
         self.assertFalse(ok3)
         self.assertTrue(any("blocked" in e for e in err3))
 
+        all_required_pass = [
+            CaseResult(id=f["id"], matrix="format", status="pass") for f in required
+        ]
+        all_required_pass.extend(
+            CaseResult(id=s["id"], matrix="security", status="pass")
+            for s in suite["security"]
+        )
+        all_required_pass.extend(
+            CaseResult(id=a["id"], matrix="adversarial", status="pass")
+            for a in suite["adversarial"]
+        )
+        all_required_pass.extend(
+            CaseResult(id=f["id"], matrix="fault", status="pass")
+            for f in suite["fault"]
+        )
+        all_required_pass.append(
+            CaseResult(id="shadow-failure", matrix="security", status="fail")
+        )
+        ok4, err4 = evaluate_claims_live_vertical_slice(suite, all_required_pass)
+        self.assertFalse(ok4)
+        self.assertIn("unexpected case: shadow-failure", err4)
+
     def test_mutation_bridge_scan_clean(self) -> None:
         validate_no_bridge_mutations()
 
@@ -743,6 +889,56 @@ class O04SelfTests(unittest.TestCase):
             self.assertTrue(disposition in ("rejected", "quarantined"))
         self.assertFalse("accepted" in ("rejected", "quarantined"))
 
+    def test_required_format_rejects_quarantined_upload(self) -> None:
+        from harness.api_client import HttpResult
+        from harness.runner import run_format_case_live
+
+        client = mock.Mock()
+        client.upload.return_value = HttpResult(
+            status=201,
+            headers={},
+            body=json.dumps({"disposition": "quarantined"}).encode(),
+        )
+        case = next(
+            item for item in load_suite_manifest()["formats"] if item["id"] == "fmt-txt"
+        )
+        result = run_format_case_live(
+            case,
+            client=client,
+            collection_id="55555555-5555-4555-8555-555555555555",
+            env={},
+        )
+        self.assertEqual(result.status, "fail")
+        self.assertFalse(result.postconditions["upload_accepted"])
+
+    def test_format_intake_regression_returns_blocked_evidence(self) -> None:
+        from harness.api_client import HttpResult
+        from harness.runner import run_format_case_live
+
+        client = mock.Mock()
+        client.upload.return_value = HttpResult(
+            status=201,
+            headers={},
+            body=json.dumps(
+                {
+                    "disposition": "accepted",
+                    "objectId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+                }
+            ).encode(),
+        )
+        case = next(
+            item for item in load_suite_manifest()["formats"] if item["id"] == "fmt-txt"
+        )
+        result = run_format_case_live(
+            case,
+            client=client,
+            collection_id="55555555-5555-4555-8555-555555555555",
+            env={},
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.blocker_code, "production_intake_not_wired")
+        self.assertTrue(result.postconditions["upload_accepted"])
+
     def test_seed_sql_rejects_document_inserts(self) -> None:
         seed = (E2E / "sql" / "seed_e2e_accounts.sql").read_text(encoding="utf-8")
         self.assertNotRegex(seed, r"(?i)INSERT\s+INTO\s+documents\b")
@@ -751,35 +947,29 @@ class O04SelfTests(unittest.TestCase):
 
     def test_schemas_validate_suite_and_evidence(self) -> None:
         suite = load_suite_manifest()
-        # Use current hermetic shape (or a minimal blocked report).
-        evidence = {
-            "version": 1,
-            "issue": "P1B-O04",
-            "generatedAt": HERMETIC_GENERATED_AT,
-            "runId": HERMETIC_RUN_ID,
-            "mode": "hermetic",
-            "git": dict(HERMETIC_GIT),
-            "claimsLiveVerticalSlice": False,
-            "summary": {
-                "passed": 0,
-                "failed": 0,
-                "blocked": 1,
-                "skippedOptional": 0,
-                "highCritical": 1,
-            },
-            "cases": [
-                {
-                    "id": "fmt-txt",
-                    "matrix": "format",
-                    "status": "blocked",
-                    "httpStatuses": [],
-                    "postconditions": {},
-                }
-            ],
-            "blockers": ["production_intake_not_wired"],
-            "severity": "high",
-        }
+        evidence = load_json(REPORT_JSON)
         validate_against_schemas(suite, evidence)
+
+    def test_evidence_semantics_rejects_inventory_summary_and_status_mutations(self) -> None:
+        suite = load_suite_manifest()
+
+        missing = load_json(REPORT_JSON)
+        missing["cases"].pop()
+        with self.assertRaisesRegex(HarnessError, "inventory mismatch"):
+            validate_evidence_semantics(suite, missing)
+
+        bad_summary = load_json(REPORT_JSON)
+        bad_summary["summary"]["passed"] += 1
+        with self.assertRaisesRegex(HarnessError, "summary does not match"):
+            validate_evidence_semantics(suite, bad_summary)
+
+        false_hermetic_pass = load_json(REPORT_JSON)
+        case = next(item for item in false_hermetic_pass["cases"] if item["id"] == "fmt-txt")
+        case["status"] = "pass"
+        false_hermetic_pass["summary"]["passed"] += 1
+        false_hermetic_pass["summary"]["blocked"] -= 1
+        with self.assertRaisesRegex(HarnessError, "hermetic case fmt-txt"):
+            validate_evidence_semantics(suite, false_hermetic_pass)
 
     def test_redaction_preserves_case_ids_rejects_passwords_uuids(self) -> None:
         dirty = (
@@ -836,6 +1026,40 @@ class O04SelfTests(unittest.TestCase):
             cleanup_src,
             r"f[\"'].*WHERE email = '\{email\}'",
         )
+
+    def test_collection_acl_rows_are_snapshotted_and_restored(self) -> None:
+        from harness.cleanup import CleanupStack, set_collection_visibility
+
+        snapshot = (
+            '[{"org_id":"11111111-1111-4111-8111-111111111111",'
+            '"collection_id":"22222222-2222-4222-8222-222222222222",'
+            '"user_id":"33333333-3333-4333-8333-333333333333",'
+            '"access_level":"read","created_at":"2026-01-01T00:00:00Z"}]'
+        )
+        stack = CleanupStack()
+        with (
+            mock.patch("harness.cleanup.sql_query_scalar", return_value=snapshot) as query,
+            mock.patch("harness.cleanup.sql_exec") as execute,
+        ):
+            set_collection_visibility(
+                ["docker", "compose"],
+                postgres_user="markhand_e2e",
+                postgres_db="markhand_e2e",
+                org_id="11111111-1111-4111-8111-111111111111",
+                collection_id="22222222-2222-4222-8222-222222222222",
+                visibility="private",
+                previous="org",
+                stack=stack,
+            )
+            query.assert_called_once()
+            self.assertEqual(execute.call_count, 1)
+            self.assertIn("DELETE FROM collection_user_access", execute.call_args.kwargs["sql"])
+
+            stack.run_all()
+            self.assertEqual(execute.call_count, 2)
+            restore = execute.call_args.kwargs
+            self.assertIn("INSERT INTO collection_user_access", restore["sql"])
+            self.assertEqual(restore["variables"]["acl_snapshot"], snapshot)
 
 
 def run_self_tests() -> None:
@@ -904,7 +1128,7 @@ def main() -> int:
         validate_fixtures()
         validate_scripts()
         validate_poc_manifest()
-        inspect_committed_evidence_before_regen()
+        inspect_committed_evidence_before_regen(suite)
         if REPORT_JSON.is_file():
             validate_against_schemas(suite, load_json(REPORT_JSON))
         if args.self_test:

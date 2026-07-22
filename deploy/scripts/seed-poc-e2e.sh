@@ -9,6 +9,30 @@ CONFIRM_PHRASE="i-understand-this-mutates-only-tagged-test-stacks"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 
+is_test_stack_name() {
+  [[ "$1" =~ (^|[-_])([Ee]2[Ee]|[Tt][Ee][Ss][Tt])([-_]|$) ]]
+}
+
+require_e2e_isolation() {
+  local project="${MARKHAND_COMPOSE_PROJECT:-}"
+  local db="${MARKHAND_POSTGRES_DB:-}"
+  local bucket="${MARKHAND_MINIO_BUCKET:-}"
+  local tag="${MARKHAND_E2E_STACK_TAG:-}"
+
+  is_test_stack_name "$project" \
+    || die "MARKHAND_COMPOSE_PROJECT must contain an e2e/test segment (got '$project')"
+  is_test_stack_name "$db" \
+    || die "MARKHAND_POSTGRES_DB must contain an e2e/test segment (got '$db')"
+  is_test_stack_name "$bucket" \
+    || die "MARKHAND_MINIO_BUCKET must contain an e2e/test segment (got '$bucket')"
+  [[ "$tag" == "test" ]] || die "MARKHAND_E2E_STACK_TAG must be 'test'"
+  [[ "$project" != "markhand" && "$project" != "markhand-poc" ]] \
+    || die "refusing untagged/human compose project '$project'"
+  [[ "$db" != "markhand" ]] || die "refusing human postgres db 'markhand'"
+  [[ "$bucket" != "markhand-documents" ]] \
+    || die "refusing human minio bucket 'markhand-documents'"
+}
+
 [[ "${MARKHAND_E2E_CONFIRM:-}" == "$CONFIRM_PHRASE" ]] \
   || die "seed-poc-e2e.sh requires MARKHAND_E2E_CONFIRM=$CONFIRM_PHRASE"
 
@@ -19,28 +43,17 @@ export MARKHAND_MINIO_BUCKET="${MARKHAND_MINIO_BUCKET:-markhand-e2e-documents}"
 export MARKHAND_E2E_STACK_TAG="${MARKHAND_E2E_STACK_TAG:-test}"
 export MARKHAND_POSTGRES_USER="${MARKHAND_POSTGRES_USER:-markhand_e2e}"
 
-project="${MARKHAND_COMPOSE_PROJECT}"
-db="${MARKHAND_POSTGRES_DB}"
-bucket="${MARKHAND_MINIO_BUCKET}"
-tag="${MARKHAND_E2E_STACK_TAG}"
-
-[[ "$project" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-  || die "MARKHAND_COMPOSE_PROJECT must contain e2e/test (got '$project')"
-[[ "$db" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-  || die "MARKHAND_POSTGRES_DB must contain e2e/test (got '$db')"
-[[ "$bucket" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-  || die "MARKHAND_MINIO_BUCKET must contain e2e/test (got '$bucket')"
-[[ "$tag" == "test" ]] || die "MARKHAND_E2E_STACK_TAG must be 'test'"
-
-# Explicitly refuse untagged human defaults even if somehow injected.
-[[ "$project" != "markhand" && "$project" != "markhand-poc" ]] \
-  || die "refusing untagged/human compose project '$project'"
-[[ "$db" != "markhand" ]] || die "refusing human postgres db 'markhand'"
-[[ "$bucket" != "markhand-documents" ]] || die "refusing human minio bucket 'markhand-documents'"
+require_e2e_isolation
 
 # shellcheck source=poc-compose.sh
 source "$ROOT/deploy/scripts/poc-compose.sh"
 poc_compose_init
+# Initialization sources deploy/.env and can replace the validated shell values.
+# Gate the effective compose configuration before the first psql mutation.
+require_e2e_isolation
+
+project="${MARKHAND_COMPOSE_PROJECT}"
+db="${MARKHAND_POSTGRES_DB}"
 
 SQL="$ROOT/crates/server/tests/e2e/sql/seed_e2e_accounts.sql"
 PASSWORD="${MARKHAND_E2E_PASSWORD:-${MARKHAND_DEV_PASSWORD:-markhand-e2e}}"

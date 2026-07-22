@@ -38,13 +38,32 @@ def evaluate_claims_live_vertical_slice(
     required = required_case_ids(suite)
     required_ids = {cid for _, cid in required}
     required_matrix = {cid: matrix for matrix, cid in required}
+    allowed_matrix = {"harness-manifest": "harness"}
+    for matrix, key in (
+        ("format", "formats"),
+        ("security", "security"),
+        ("adversarial", "adversarial"),
+        ("fault", "fault"),
+    ):
+        for item in suite.get(key) or []:
+            allowed_matrix[item["id"]] = matrix
 
     seen: dict[str, CaseResult] = {}
+    seen_all: set[str] = set()
     errors: list[str] = []
     for case in cases:
+        if case.id not in allowed_matrix:
+            errors.append(f"unexpected case: {case.id}")
+            continue
+        if case.id in seen_all:
+            errors.append(f"duplicate case: {case.id}")
+        seen_all.add(case.id)
+        if case.matrix != allowed_matrix[case.id]:
+            errors.append(
+                f"{case.id}: matrix mismatch "
+                f"(got {case.matrix}, want {allowed_matrix[case.id]})"
+            )
         if case.id in required_ids:
-            if case.id in seen:
-                errors.append(f"duplicate required case: {case.id}")
             seen[case.id] = case
 
     for cid in sorted(required_ids):
@@ -53,10 +72,10 @@ def evaluate_claims_live_vertical_slice(
             continue
         case = seen[cid]
         expect_matrix = required_matrix[cid]
-        if case.matrix != expect_matrix:
-            errors.append(
-                f"{cid}: matrix mismatch (got {case.matrix}, want {expect_matrix})"
-            )
+        if case.matrix != expect_matrix and not any(
+            error.startswith(f"{cid}: matrix mismatch") for error in errors
+        ):
+            errors.append(f"{cid}: matrix mismatch (got {case.matrix}, want {expect_matrix})")
         if case.status != "pass":
             errors.append(f"{cid}: required case status={case.status} (want pass)")
 
