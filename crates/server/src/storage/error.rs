@@ -31,6 +31,8 @@ pub enum StorageError {
     Transport,
     #[error("storage backend rejected the request")]
     Backend,
+    #[error("object exceeds authorized size bound")]
+    ObjectTooLarge,
 }
 
 impl StorageError {
@@ -48,6 +50,7 @@ impl StorageError {
             Self::CollectionMismatch => "storage_collection_mismatch",
             Self::Transport => "storage_transport",
             Self::Backend => "storage_backend",
+            Self::ObjectTooLarge => "storage_object_too_large",
         }
     }
 }

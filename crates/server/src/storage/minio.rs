@@ -566,6 +566,78 @@ impl MinioClient {
         Ok(metadata_map(&head))
     }
 
+    /// HEAD with authoritative length/hash/type for bounded reads.
+    pub async fn head_object_meta(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+    ) -> Result<crate::storage::blob::ObjectHead, StorageError> {
+        authorize_key_for_org(key, org_id)?;
+        let (head, _) = self.head_for_org(org_id, key).await?;
+        let meta = metadata_map(&head);
+        let content_length = head
+            .content_length
+            .and_then(|len| u64::try_from(len).ok())
+            .or_else(|| {
+                meta.get("content-length-bytes")
+                    .and_then(|value| value.parse().ok())
+            })
+            .ok_or(StorageError::Backend)?;
+        Ok(crate::storage::blob::ObjectHead {
+            content_length,
+            content_sha256: meta.get("content-sha256").cloned(),
+            content_type: meta
+                .get("content-type")
+                .cloned()
+                .or_else(|| head.content_type.clone()),
+        })
+    }
+
+    /// Stream-get an object after HEAD, enforcing `max_bytes` and PG expectations
+    /// before/while allocating. Uses an incremental SHA-256 over the stream.
+    pub async fn get_object_bounded(
+        &self,
+        org_id: Uuid,
+        key: &ObjectKey,
+        max_bytes: u64,
+        expected: &crate::storage::blob::ObjectExpectation<'_>,
+    ) -> Result<crate::storage::blob::FetchedObject, StorageError> {
+        use crate::storage::blob::{validate_head_against_expectation, BoundedAccumulator};
+        let head = self.head_object_meta(org_id, key).await?;
+        validate_head_against_expectation(&head, max_bytes, expected)?;
+        let path = key.as_str();
+        let url = self
+            .with_s3_timeout(self.bucket.presign_get(path, 300, None), |_| {
+                StorageError::Transport
+            })
+            .await?;
+        let response = timeout(self.operation_timeout, self.http_client.get(url).send())
+            .await
+            .map_err(|_| StorageError::Transport)?
+            .map_err(|_| StorageError::Transport)?;
+        if !response.status().is_success() {
+            return Err(StorageError::Backend);
+        }
+        // Prefer response Content-Type; fall back to HEAD. `finish` enforces
+        // canonical MIME equivalence when the caller supplied an expectation.
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .or(head.content_type);
+        let mut acc = BoundedAccumulator::begin(max_bytes, expected.content_length)?;
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream
+            .try_next()
+            .await
+            .map_err(|_| StorageError::Transport)?
+        {
+            acc.push(&chunk)?;
+        }
+        acc.finish(expected, content_type)
+    }
+
     async fn verify_stored_org(&self, org_id: Uuid, key: &ObjectKey) -> Result<(), StorageError> {
         let _ = self.head_for_org(org_id, key).await?;
         Ok(())

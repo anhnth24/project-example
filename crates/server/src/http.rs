@@ -20,6 +20,7 @@ use crate::config::QuotaSweepConfig;
 use crate::database;
 use crate::db::pool::create_pool;
 use crate::routes;
+use crate::services::download::DownloadFetchBudget;
 use crate::services::quota;
 use crate::state::RuntimeState;
 
@@ -34,6 +35,8 @@ pub struct AppState {
     auth_provider: Option<PasswordAuthProvider>,
     /// Object store adapter (optional when credentials are absent in tests).
     object_store: Option<crate::storage::MinioClient>,
+    /// Process-wide concurrent download byte budget / concurrency limiter.
+    download_budget: Arc<DownloadFetchBudget>,
 }
 
 struct CachedReadiness {
@@ -76,6 +79,7 @@ impl AppState {
             pool,
             auth_provider,
             object_store,
+            download_budget: DownloadFetchBudget::default_production(),
         })
     }
 
@@ -109,6 +113,7 @@ impl AppState {
             pool,
             auth_provider,
             object_store,
+            download_budget: DownloadFetchBudget::for_tests(),
         })
     }
 
@@ -126,6 +131,10 @@ impl AppState {
 
     pub fn object_store(&self) -> Option<&crate::storage::MinioClient> {
         self.object_store.as_ref()
+    }
+
+    pub fn download_budget(&self) -> &Arc<DownloadFetchBudget> {
+        &self.download_budget
     }
 }
 
@@ -166,6 +175,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
         .merge(routes::uploads::router(max_upload_bytes))
+        .merge(routes::documents::router())
         .with_state(Arc::new(state))
 }
 
