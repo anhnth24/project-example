@@ -821,10 +821,10 @@ mod tests {
                 DeferredJobTransition {
                     job_type: "index",
                     transition: "finish",
-                    result: "succeeded",
+                    result: "success",
                 },
                 DeferredJobTransition {
-                    job_type: "embedding",
+                    job_type: "embed",
                     transition: "claim",
                     result: "accepted",
                 },
