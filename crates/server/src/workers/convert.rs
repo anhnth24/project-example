@@ -23,7 +23,7 @@ use crate::db::document_versions::ConversionSourceVersion;
 use crate::db::error::DbError;
 use crate::db::jobs as jobs_repo;
 use crate::db::models::{Job, JobStatus, JobType, ResourceKind};
-use crate::db::pool::with_org_txn;
+use crate::db::pool::{with_org_txn, with_org_txn_typed};
 use crate::jobs::{self, EnqueueJob, JobError, JobPayload};
 use crate::services::artifacts::{self, MarkdownStageInput, StagedMarkdown};
 use crate::services::conversion::{
@@ -32,6 +32,7 @@ use crate::services::conversion::{
 };
 use crate::services::promotion::{self, PromoteConversionInput, PromotionError, PromotionFault};
 use crate::services::quota::{self, QuotaError, DEFAULT_RESERVATION_TTL};
+use crate::services::reconciliation::STARTUP_RECONCILIATION_KEY;
 use crate::storage::keys::parse_key_for_org;
 use crate::storage::minio::MinioClient;
 use crate::storage::{ObjectNamespace, StorageError};
@@ -712,6 +713,7 @@ impl ConvertWorker {
         let version_id = parent_job
             .version_id
             .ok_or(ConvertWorkerError::InvalidConvertPayload)?;
+        let detail = format!("reconcile enqueued:convert.cleanup:{}", parent_job.id);
         let mut input = EnqueueJob::new(
             JobType::Reconcile,
             JobPayload {
@@ -728,7 +730,36 @@ impl ConvertWorker {
             format!("convert.cleanup:{}", parent_job.id),
         );
         input.max_attempts = RECONCILIATION_MAX_ATTEMPTS;
-        jobs::enqueue(&self.db_pool, ctx, input).await?;
+        // Same atomic open+enqueue fence as enqueue_reconcile, while preserving
+        // cleanup payload fields (cleanup_target_job_id / version_id) that the
+        // plain helper does not set.
+        with_org_txn_typed(&self.db_pool, ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    txn.query_one(
+                        "SELECT markhand_runtime_readiness_open($1, $2)",
+                        &[&STARTUP_RECONCILIATION_KEY, &detail],
+                    )
+                    .await
+                    .map_err(DbError::from)?;
+                    let outcome = jobs::enqueue_within_txn(txn, &ctx, input).await?;
+                    if !outcome.created {
+                        txn.query_one(
+                            "SELECT markhand_runtime_readiness_try_ready($1, $2)",
+                            &[
+                                &STARTUP_RECONCILIATION_KEY,
+                                &"idempotent reconcile enqueue re-evaluated",
+                            ],
+                        )
+                        .await
+                        .map_err(DbError::from)?;
+                    }
+                    Ok::<_, JobError>(())
+                })
+            }
+        })
+        .await?;
         Ok(())
     }
 

@@ -746,7 +746,7 @@ def main() -> None:
                     "name": "Idempotency-Key",
                     "in": "header",
                     "required": False,
-                    "schema": {"type": "string", "maxLength": 256},
+                    "schema": {"type": "string", "maxLength": 128},
                 },
             },
             "responses": {
@@ -1104,10 +1104,23 @@ def main() -> None:
                 },
                 "PreviewResponse": {
                     "type": "object",
-                    "required": ["documentId", "versionId", "markdown", "requestId"],
+                    "required": [
+                        "documentId",
+                        "versionId",
+                        "versionNumber",
+                        "contentSha256",
+                        "markdownSha256",
+                        "isCurrent",
+                        "markdown",
+                        "requestId",
+                    ],
                     "properties": {
                         "documentId": {"type": "string", "format": "uuid"},
                         "versionId": {"type": "string", "format": "uuid"},
+                        "versionNumber": {"type": "integer"},
+                        "contentSha256": {"type": "string"},
+                        "markdownSha256": {"type": "string"},
+                        "isCurrent": {"type": "boolean"},
                         "markdown": {"type": "string"},
                         "requestId": {"type": "string", "format": "uuid"},
                     },
@@ -1136,7 +1149,7 @@ def main() -> None:
                     ],
                     "properties": {
                         "capabilityId": {"type": "string", "format": "uuid"},
-                        "token": {"type": "string", "writeOnly": True},
+                        "token": {"type": "string"},
                         "purpose": {"type": "string"},
                         "documentId": {"type": "string", "format": "uuid"},
                         "versionId": {"type": "string", "format": "uuid"},

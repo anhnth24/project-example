@@ -1558,7 +1558,7 @@ components:
       required: false
       schema:
         type: string
-        maxLength: 256
+        maxLength: 128
   responses:
     ApiError:
       description: Canonical API error
@@ -2077,6 +2077,10 @@ components:
       required:
       - documentId
       - versionId
+      - versionNumber
+      - contentSha256
+      - markdownSha256
+      - isCurrent
       - markdown
       - requestId
       properties:
@@ -2086,6 +2090,14 @@ components:
         versionId:
           type: string
           format: uuid
+        versionNumber:
+          type: integer
+        contentSha256:
+          type: string
+        markdownSha256:
+          type: string
+        isCurrent:
+          type: boolean
         markdown:
           type: string
         requestId:
@@ -2120,7 +2132,6 @@ components:
           format: uuid
         token:
           type: string
-          writeOnly: true
         purpose:
           type: string
         documentId:

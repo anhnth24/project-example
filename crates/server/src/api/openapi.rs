@@ -273,6 +273,21 @@ mod tests {
         assert!(OPENAPI_YAML.contains("VersionMode"));
         // Token response tokens are not writeOnly.
         assert!(OPENAPI_YAML.contains("TokenResponse"));
+        // Minted download capability tokens are response fields, not writeOnly.
+        let capability = OPENAPI_YAML
+            .split("DownloadCapabilityResponse:")
+            .nth(1)
+            .and_then(|rest| rest.split("DownloadRedeemRequest:").next())
+            .expect("DownloadCapabilityResponse schema");
+        assert!(
+            !capability.contains("writeOnly"),
+            "DownloadCapabilityResponse.token must not be writeOnly"
+        );
+        assert!(OPENAPI_YAML.contains("maxLength: 128"));
+        assert!(OPENAPI_YAML.contains("versionNumber:"));
+        assert!(OPENAPI_YAML.contains("contentSha256:"));
+        assert!(OPENAPI_YAML.contains("markdownSha256:"));
+        assert!(OPENAPI_YAML.contains("isCurrent:"));
     }
 
     #[test]

@@ -22,7 +22,7 @@
     "0019_expand_download_capability_clock.sql": "d47a68427198c7f9df4f0e4a738e23776df854c4f86ea082c2ad34601a190313",
     "0020_expand_api_idempotency.sql": "d53052b11fc3eb3453a93ec6ebf0dcec6b4e9509ab6901f7a6884529911e0101",
     "0021_expand_sse_stream_events.sql": "f77ce547796d2f79e35a6b83897d8806f195d1cfe8d5e94cb213b46b8126c4e2",
-    "0022_expand_runtime_readiness.sql": "bec4e0ee2d3584823b508d7807e7d2cce85860f3a4955ff430102c5a22d3e490",
+    "0022_expand_runtime_readiness.sql": "c8ba5e04187fb2f7fe57689c73e99749bd5cf7a7ca25b1c26d5688825fb93105",
     "0023_expand_audit_append_only.sql": "f7e051bf3d8b6f8ba82d0c3e0a8aaa08d7fa727ff1033ca93ef91c38a7021754"
   }
 }
