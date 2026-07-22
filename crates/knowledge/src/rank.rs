@@ -75,13 +75,17 @@ pub fn hybrid_rerank_score(
         + heading_token_hits(query_tokens, heading) * HEADING_HIT_WEIGHT
 }
 
-/// Preserve the frozen desktop ordering: score descending, with NaN and ties equal.
+/// Preserve the frozen desktop ordering: score descending, then `chunk_id` ascending
+/// as a deterministic tie-break (also covers NaN, which `partial_cmp` treats as equal
+/// to everything). The tie-break only ever fires when the primary comparison is
+/// `Equal`/`None`, so distinct scores keep their original relative order.
 pub fn sort_hybrid_hits(hits: &mut [HybridSearchHit]) {
     hits.sort_by(|left, right| {
         right
             .rerank_score
             .partial_cmp(&left.rerank_score)
             .unwrap_or(Ordering::Equal)
+            .then_with(|| left.chunk_id.cmp(&right.chunk_id))
     });
 }
 
@@ -160,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_hit_sort_preserves_frozen_tie_and_nan_order() {
+    fn hybrid_hit_sort_breaks_ties_by_chunk_id() {
         let mut hits = vec![
             hit("low", 0.5),
             hit("tie-b", 1.0),
@@ -168,11 +172,48 @@ mod tests {
             hit("nan", f32::NAN),
         ];
         sort_hybrid_hits(&mut hits);
+        let order: Vec<_> = hits
+            .iter()
+            .map(|candidate| candidate.chunk_id.as_str())
+            .collect();
+        // Equal (and NaN) scores are broken deterministically by ascending chunk_id
+        // instead of depending on input/insertion order.
+        assert_eq!(order, ["tie-a", "tie-b", "low", "nan"]);
+    }
+
+    #[test]
+    fn hybrid_hit_sort_is_independent_of_insertion_order() {
+        let scored = [
+            ("z-tie", 2.0f32),
+            ("a-tie", 2.0f32),
+            ("m-tie", 2.0f32),
+            ("solo-high", 3.0f32),
+            ("solo-low", 1.0f32),
+        ];
+        let base: Vec<HybridSearchHit> = scored.iter().map(|(id, score)| hit(id, *score)).collect();
+
+        // Same candidates, several different insertion/collection orders (as if they
+        // came out of randomized HashSet iteration upstream).
+        let orderings: [&[usize]; 3] = [&[0, 1, 2, 3, 4], &[4, 3, 2, 1, 0], &[2, 0, 4, 1, 3]];
+
+        let mut first_result: Option<Vec<String>> = None;
+        for order in orderings {
+            let mut hits: Vec<HybridSearchHit> =
+                order.iter().map(|&index| base[index].clone()).collect();
+            sort_hybrid_hits(&mut hits);
+            // Also verify determinism exactly at a truncation/limit boundary, where a
+            // non-deterministic tie-break would visibly change which hit survives.
+            hits.truncate(3);
+            let ids: Vec<String> = hits.iter().map(|hit| hit.chunk_id.clone()).collect();
+            match &first_result {
+                None => first_result = Some(ids),
+                Some(expected) => assert_eq!(&ids, expected),
+            }
+        }
         assert_eq!(
-            hits.iter()
-                .map(|candidate| candidate.chunk_id.as_str())
-                .collect::<Vec<_>>(),
-            ["tie-b", "tie-a", "low", "nan"]
+            first_result.unwrap(),
+            vec!["solo-high", "a-tie", "m-tie"],
+            "truncation boundary must keep the lexicographically-smallest tied ids"
         );
     }
 }
