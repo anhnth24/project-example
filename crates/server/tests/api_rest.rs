@@ -1196,6 +1196,33 @@ async fn rest_collections_documents_jobs_contract() {
         "owner fixture lacks qa.history so superseded rows stay hidden"
     );
 
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions/{}", fx.document, fx.version),
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_stable_error(&body, "not_found");
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/diff/{}",
+            fx.document, fx.version, draft_version
+        ),
+        None,
+        Some(&access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_stable_error(&body, "not_found");
+
     grant_permission(&fx.pool, fx.org, "owner", "qa.history").await;
     let history_access = refresh_owner_access(&fx).await;
     let (status, body) = json_request(
@@ -1216,6 +1243,35 @@ async fn rest_collections_documents_jobs_contract() {
         .collect();
     assert!(history_ids.contains(&fx.version.to_string()));
     assert!(history_ids.contains(&draft_version.to_string()));
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!("/api/v1/documents/{}/versions/{}", fx.document, fx.version),
+        None,
+        Some(&history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], fx.version.to_string());
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/diff/{}",
+            fx.document, fx.version, draft_version
+        ),
+        None,
+        Some(&history_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["leftVersionId"], fx.version.to_string());
+    assert_eq!(body["rightVersionId"], draft_version.to_string());
+    assert_eq!(body["contentSha256Changed"], true);
 
     // Identical Idempotency-Key replay; mismatched document reuse conflicts.
     let (status, first) = json_request(
@@ -1475,6 +1531,21 @@ async fn rest_collections_documents_jobs_contract() {
     .expect("seed private collection");
     let owner_ctx = resolve(&fx.pool, fx.org, fx.user).await;
     let conflict = seed_conflict_bundle(&fx.pool, &owner_ctx, fx.collection, private_id).await;
+
+    let (status, body) = json_request(
+        fx.app.clone(),
+        "GET",
+        "/api/v1/conflicts?status=open&limit=10",
+        None,
+        Some(&fx.viewer_access),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["items"].as_array().unwrap().is_empty(),
+        "viewer must not enumerate a conflict with a private claim side: {body}"
+    );
 
     let (status, body) = json_request(
         fx.app.clone(),
