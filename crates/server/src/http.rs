@@ -28,9 +28,6 @@ use crate::services::health::{
 };
 use crate::services::qa::provider::{ConfiguredProvider, ProviderError, QaProviderConfig};
 use crate::services::quota;
-use crate::services::retrieval::{
-    hybrid_search, RetrievalError, RetrievalRequest, RetrievalResponse,
-};
 use crate::state::RuntimeState;
 use crate::storage::qdrant::QdrantClient;
 
