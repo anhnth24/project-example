@@ -386,24 +386,22 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
-- **Status:** In Progress — control plane + hermetic/static evidence on branch
-  `cursor/implement-p1b-o03-5007` (stacked on O02). Live Profile-B RPO/RTO restore
-  drill still pending (Docker/services unavailable in this environment).
+- **Status:** Blocked — draft PR #271 is not implementation-ready after two bounded
+  review rounds. PG18 recovery, real reversible cutover/rollback, strict fencing,
+  and campaign-complete readiness still have P0 blockers; live Profile-B RPO/RTO
+  evidence is also unavailable.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, restore/migration runbooks, restore guard.
 - **Depends:** F02/F03/F06/I07 + G0-ARCH/G0-SLO.
 - **Acceptance/tests:** Clean restore đạt RPO/RTO; missing/orphan detect; readiness
   false until reconcile; PG rebuild; corrupt manifest/upgrade tests.
-- **Evidence (in progress):**
-  - Final-round remediation: PG18 WAL-Ranges + shadow recovery verify, campaign
-    identity/atomic checkpoints/cutover receipts, MinIO encrypted opaque bodies,
-    Qdrant v1.18.2 schema parse + alias cutover, streaming EtM crypto, sealed
-    readiness campaigns, fence opt-in + restart, TLS/credential non-argv,
-    migration base-ref + SQL lexer, JSON NaN reject + appVersion range.
-  - Contract suite (stateful fake CLIs) + `make check-backup`; report
-    `bench/markhand_web/reports/p1b-o03-backup-restore.md`.
-  - Non-claim: no live restore / Profile-B RPO/RTO pass in this environment.
+- **Evidence (blocked):**
+  - Hermetic validators pass but do not match real PG18 backup layout/recovery and do
+    not prove an actual store cutover/rollback; they cannot satisfy acceptance.
+  - Remaining review blockers include false readiness convergence and a strict fence
+    that ends before capture. Draft artifacts must not be used for live recovery.
+  - No live restore or Profile-B RPO/RTO pass is claimed.
 - **Security/migration:** Encrypted narrow credentials; expand/cutover/contract.
   **Out:** multi-region DR.
 
