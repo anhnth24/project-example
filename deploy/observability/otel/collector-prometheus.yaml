@@ -1,0 +1,79 @@
+# OTel Collector config: receive OTLP from Markhand, export Prometheus for scrape.
+# Extends the O01 debug-only deploy/dev/otel-collector.yaml for O02 dashboards.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+  # Drop any accidental high-cardinality attributes before Prometheus export.
+  attributes/drop_forbidden:
+    actions:
+      - key: org_id
+        action: delete
+      - key: user_id
+        action: delete
+      - key: actor_id
+        action: delete
+      - key: document_id
+        action: delete
+      - key: version_id
+        action: delete
+      - key: job_id
+        action: delete
+      - key: request_id
+        action: delete
+      - key: trace_id
+        action: delete
+      - key: email
+        action: delete
+      - key: filename
+        action: delete
+      - key: path
+        action: delete
+      - key: query
+        action: delete
+      - key: url
+        action: delete
+      - key: object_key
+        action: delete
+  filter/keep_markhand_metrics:
+    metrics:
+      include:
+        match_type: regexp
+        metric_names:
+          - "^markhand_.*"
+
+exporters:
+  debug:
+    verbosity: basic
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: ""
+    const_labels:
+      system: markhand
+    resource_to_telemetry_conversion:
+      enabled: false
+    enable_open_metrics: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch, attributes/drop_forbidden]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [filter/keep_markhand_metrics, attributes/drop_forbidden, batch]
+      exporters: [prometheus, debug]

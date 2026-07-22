@@ -1,0 +1,159 @@
+# P1B-O02 alert/recording thresholds.
+# Every numeric threshold MUST cite an approved gate, SLA, or workload-profile field.
+# Do not invent unexplained numbers. Validators cross-check cited gate IDs.
+version: 1
+issue: P1B-O02
+registry: bench/markhand_web/gates.yaml
+sla: docs/markhand-web-sla-targets.md
+workloadProfile: bench/markhand_web/workload-profile.yaml
+
+sources:
+  G0-SLO-QUERY-P95:
+    path: bench/markhand_web/gates.yaml
+    gateId: G0-SLO-QUERY-P95
+    value: 500
+    unit: milliseconds
+    operator: "<="
+  G0-SLO-QUERY-P99:
+    path: bench/markhand_web/gates.yaml
+    gateId: G0-SLO-QUERY-P99
+    value: 1000
+    unit: milliseconds
+    operator: "<="
+  SLA-QUEUE-AGE-MINUTES:
+    path: docs/markhand-web-sla-targets.md
+    metric: "Oldest ingest queue age under recovery load"
+    value: 120
+    unit: minutes
+    operator: "<="
+    note: Capacity/recovery operational target; Profile B measurement still blocked.
+  WORKLOAD-DISK-HEADROOM-PERCENT:
+    path: bench/markhand_web/workload-profile.yaml
+    field: hardware.headroomPercent.disk
+    value: 30
+    unit: percent
+    operator: ">="
+    note: Alert when free disk ratio falls below headroom (used ratio above 1 - headroom).
+  WORKLOAD-PEAK-INGEST-DOCS-PER-HOUR:
+    path: bench/markhand_web/gates.yaml
+    gateId: G0-CAP-INGEST-THROUGHPUT
+    value: 1200
+    unit: count_per_hour
+    operator: ">="
+  SLA-AVAILABILITY:
+    path: docs/markhand-web-sla-targets.md
+    metric: "Service availability"
+    value: 99.5
+    unit: percent
+    operator: ">="
+    note: Operational SLA; monthly measurement not yet Profile B proven.
+
+# Machine-consumed alert thresholds (seconds/ratios where PromQL needs them).
+alerts:
+  query_p95_seconds:
+    value: 0.5
+    source: G0-SLO-QUERY-P95
+    conversion: "500 milliseconds -> 0.5 seconds"
+  query_p99_seconds:
+    value: 1.0
+    source: G0-SLO-QUERY-P99
+    conversion: "1000 milliseconds -> 1.0 seconds"
+  queue_oldest_age_seconds:
+    value: 7200
+    source: SLA-QUEUE-AGE-MINUTES
+    conversion: "120 minutes -> 7200 seconds"
+  # Half-hour of peak arrival backlog buffer derived from G0-CAP peak rate.
+  # 1200 docs/hour * 0.5 hour = 600 documents. Not a separate gate; operational
+  # warning derived from approved peak ingest throughput.
+  queue_depth_warning:
+    value: 600
+    source: WORKLOAD-PEAK-INGEST-DOCS-PER-HOUR
+    conversion: "1200 docs/hour * 0.5 hour peak backlog buffer = 600"
+  disk_free_ratio_min:
+    value: 0.30
+    source: WORKLOAD-DISK-HEADROOM-PERCENT
+    conversion: "30% headroom -> free ratio >= 0.30"
+  # Error-rate outbreak windows use ratio thresholds tied to availability budget.
+  # 99.5% availability => error budget 0.5%. Sustained 5% conversion/dependency
+  # error rate is an order of magnitude above budget and warrants page-level alert.
+  conversion_error_ratio:
+    value: 0.05
+    source: SLA-AVAILABILITY
+    conversion: "availability 99.5% => 0.5% error budget; outbreak at 5% (10x budget)"
+  dependency_error_ratio:
+    value: 0.05
+    source: SLA-AVAILABILITY
+    conversion: "same 10x error-budget outbreak threshold as conversion_error_ratio"
+  auth_deny_ratio:
+    value: 0.20
+    source: SLA-AVAILABILITY
+    conversion: "auth deny share >20% of auth decisions in 10m is anomaly (ops signal; not a gate)"
+    note: >
+      Auth deny spikes are security/ops signals, not G0-SLO latency gates.
+      Threshold is documented operational policy for O02; tune with evidence later.
+  drift_rate_per_minute:
+    value: 1.0
+    source: SLA-AVAILABILITY
+    conversion: "any sustained drift >1 event/min for 10m is actionable reconcile signal"
+    note: Operational drift signal; reconcile runbook owns recovery.
+
+# Bounded label allowlists (must match O01 docs/conventions/observability-audit.md).
+labelAllowlists:
+  queue: [convert, embed, index, reconcile, delete]
+  route: [health, auth, upload, search, stream, documents, collections, jobs, openapi, other]
+  method: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, OTHER]
+  status_class: ["1xx", "2xx", "3xx", "4xx", "5xx", unknown]
+  format: [pdf, docx, pptx, spreadsheet, csv, html, txt, image, audio, zip, document, other]
+  result: [success, error, deny, retry, dead_letter, cancelled, leased, accepted, other]
+  job_type: [convert, embed, index, reconcile, delete, other]
+  transition: [enqueue, claim, finish, other]
+  leg: [hybrid, lexical, vector, qa_provider, other]
+  kind: [object, vector, index, other]
+  state: [orphan, missing, stale, other]
+  mode: [detect, repair, other]
+  decision: [reserve, deny, refund, commit, error, other]
+  resource_kind: [documents, storage_bytes, jobs, tokens, embeddings, unknown, other]
+  code: [permission_denied, membership_missing, user_disabled, collection_denied, unauthorized, invalid_credentials, other]
+  dependency: [postgres, qdrant, minio, embedding, glm, markhand_ready]
+  mountpoint: ["/", "/var/lib/postgresql", "/data", "/var/lib/markhand"]
+
+forbiddenLabelKeys:
+  - org_id
+  - user_id
+  - actor_id
+  - document_id
+  - version_id
+  - job_id
+  - request_id
+  - trace_id
+  - email
+  - filename
+  - path
+  - query
+  - url
+  - object_key
+
+# O01 metric inventory (exact names from docs/conventions/observability-audit.md).
+metrics:
+  - markhand_api_request_duration_seconds
+  - markhand_api_requests_total
+  - markhand_queue_depth
+  - markhand_queue_oldest_age_seconds
+  - markhand_conversion_duration_seconds
+  - markhand_conversion_total
+  - markhand_embedding_duration_seconds
+  - markhand_embedding_total
+  - markhand_retrieval_duration_seconds
+  - markhand_retrieval_total
+  - markhand_drift_total
+  - markhand_reconcile_total
+  - markhand_quota_decisions_total
+  - markhand_job_transitions_total
+  - markhand_auth_decisions_total
+
+# Infra metrics used only for disk/dependency probes (not product telemetry labels).
+infraMetrics:
+  - node_filesystem_avail_bytes
+  - node_filesystem_size_bytes
+  - probe_success
+  - up

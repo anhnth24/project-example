@@ -48,7 +48,8 @@ logs/spans/audit metadata.
   - `markhand_job_transitions_total` (`job_type`, `transition`, `result`)
   - `markhand_auth_decisions_total` (`result`, `code`)
 - Backup metrics are emitted only when backup code paths exist (none in O01).
-- Histogram buckets and SLO thresholds belong to Phase 0 evidence / O02 dashboards.
+- Histogram buckets and SLO thresholds belong to Phase 0 evidence / O02 dashboards
+  (`deploy/observability/thresholds.yaml` cites `bench/markhand_web/gates.yaml`).
 
 ## OpenTelemetry (optional)
 
@@ -58,7 +59,8 @@ exporters unless `MARKHAND_OTEL_CAPTURE_IN_MEMORY=true`). `otlp` requires an end
 and enables secure TLS transport for HTTPS collectors; production misconfig fails
 closed. Sampler is ParentBased for every ratio including 0 and 1. Test profile never
 dials a collector. Dev collector: `deploy/dev/otel-collector.yaml` (OTLP gRPC `:4317`).
-No Grafana dashboards in O01.
+O02 Prometheus export + scrape/dashboards/alerts: `deploy/observability/`
+(collector `otel/collector-prometheus.yaml`, rules, Grafana provisioning).
 
 ## Audit envelope
 

@@ -6,6 +6,12 @@ See [`dev/README.md`](dev/README.md) and
 [`docs/runbooks/local-development.md`](../docs/runbooks/local-development.md).
 The `deploy/dev` workflow is unchanged by the POC stack.
 
+## Observability (P1B-O02)
+
+Prometheus/Grafana/Alertmanager artifacts, OTel Prometheus export, synthetic alert
+fixtures, and operator runbooks live under [`observability/`](observability/).
+Validate with `make check-observability`.
+
 ## POC stack (P1B-F02)
 
 Pinned compose stack for a secure single-org POC: API + convert/index/embedding

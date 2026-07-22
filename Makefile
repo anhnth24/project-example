@@ -1,7 +1,8 @@
 SHELL := /bin/bash
 
 .PHONY: install check-toolchain check-static check-ci check-boundaries check-migrations \
-	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
+	check-fixtures check-markhand-gates check-roadmap check-dependencies check-observability \
+	check-rust check-rust-tests \
 	check-rust-tests-scoped check-knowledge-features check-knowledge-extraction check-knowledge-extraction-rust \
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
 	check-spike spike-up spike-health spike-down spike-reset spike-lifecycle \
@@ -55,7 +56,12 @@ check-dependencies:
 	python3 scripts/check-dependency-policy.py
 	python3 scripts/check-dependency-policy.py --self-test
 
-check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-spike check-desktop-baseline
+check-observability:
+	python3 scripts/check-observability-o02.py
+	python3 scripts/check-observability-o02.py --self-test \
+		--json-report deploy/observability/evidence/validation-report.json
+
+check-static: check-ci check-boundaries check-migrations check-fixtures check-markhand-gates check-roadmap check-dependencies check-observability check-spike check-desktop-baseline
 
 check-rust:
 	bash scripts/check-rust-quality.sh

@@ -1,0 +1,369 @@
+{
+  "uid": "markhand-ops",
+  "title": "Markhand Operations",
+  "tags": [
+    "markhand",
+    "ops",
+    "p1b-o02"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "mountpoint",
+        "label": "Mountpoint",
+        "type": "custom",
+        "query": "/,/var/lib/postgresql,/data,/var/lib/markhand",
+        "current": {
+          "selected": true,
+          "text": "/",
+          "value": "/"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "/",
+            "value": "/"
+          },
+          {
+            "selected": false,
+            "text": "/var/lib/postgresql",
+            "value": "/var/lib/postgresql"
+          },
+          {
+            "selected": false,
+            "text": "/data",
+            "value": "/data"
+          },
+          {
+            "selected": false,
+            "text": "/var/lib/markhand",
+            "value": "/var/lib/markhand"
+          }
+        ],
+        "multi": true,
+        "includeAll": true,
+        "hide": 0
+      },
+      {
+        "name": "format",
+        "label": "Conversion format",
+        "type": "custom",
+        "query": "pdf,docx,pptx,spreadsheet,csv,html,txt,image,audio,zip,document,other",
+        "current": {
+          "selected": true,
+          "text": "pdf",
+          "value": "pdf"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "pdf",
+            "value": "pdf"
+          },
+          {
+            "selected": false,
+            "text": "docx",
+            "value": "docx"
+          },
+          {
+            "selected": false,
+            "text": "pptx",
+            "value": "pptx"
+          },
+          {
+            "selected": false,
+            "text": "spreadsheet",
+            "value": "spreadsheet"
+          },
+          {
+            "selected": false,
+            "text": "csv",
+            "value": "csv"
+          },
+          {
+            "selected": false,
+            "text": "html",
+            "value": "html"
+          },
+          {
+            "selected": false,
+            "text": "txt",
+            "value": "txt"
+          },
+          {
+            "selected": false,
+            "text": "image",
+            "value": "image"
+          },
+          {
+            "selected": false,
+            "text": "audio",
+            "value": "audio"
+          },
+          {
+            "selected": false,
+            "text": "zip",
+            "value": "zip"
+          },
+          {
+            "selected": false,
+            "text": "document",
+            "value": "document"
+          },
+          {
+            "selected": false,
+            "text": "other",
+            "value": "other"
+          }
+        ],
+        "multi": true,
+        "includeAll": true,
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Disk free ratio",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:disk:free_ratio{mountpoint=~\"$mountpoint\"}",
+          "legendFormat": "{{mountpoint}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Conversion error ratio",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:conversion:error_ratio_10m",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Conversion rate by format/result",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (format, result) (rate(markhand_conversion_total{format=~\"$format\"}[5m]))",
+          "legendFormat": "{{format}}/{{result}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Drift / reconcile",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:drift:rate_1m",
+          "legendFormat": "drift/min",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "markhand:reconcile:error_rate_10m",
+          "legendFormat": "reconcile errors",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Auth deny ratio",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:auth:deny_ratio_10m",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Quota decisions",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (decision, resource_kind) (rate(markhand_quota_decisions_total[5m]))",
+          "legendFormat": "{{decision}}/{{resource_kind}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": ""
+}

@@ -1,0 +1,29 @@
+{
+  "alert": "MarkhandQueueOldestAgeHigh",
+  "kind": "synthetic",
+  "claims_real_outage": false,
+  "threshold_source": "SLA-QUEUE-AGE-MINUTES",
+  "compare": {
+    "series": "markhand:queue:oldest_age_seconds_max",
+    "op": ">",
+    "threshold": 7200
+  },
+  "samples": [
+    {
+      "labels": {
+        "queue": "convert"
+      },
+      "value": 8000,
+      "expect": "firing"
+    },
+    {
+      "labels": {
+        "queue": "convert"
+      },
+      "value": 100,
+      "expect": "resolved"
+    }
+  ],
+  "version": 1,
+  "issue": "P1B-O02"
+}

@@ -1,0 +1,85 @@
+# Example Prometheus scrape config for Markhand Web O02.
+# No secrets. Bind scrape endpoints via environment-specific overlays.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    system: markhand
+    env: example
+
+rule_files:
+  - /etc/prometheus/rules/recording_rules.yml
+  - /etc/prometheus/rules/alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  # OTel Collector Prometheus exporter (OTLP metrics from markhand server/worker).
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+        labels:
+          component: otel-collector
+
+  # Optional direct scrape if a Prometheus exporter sidecar is attached.
+  - job_name: markhand-metrics
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["markhand-server:9464"]
+        labels:
+          component: server
+      - targets: ["markhand-worker:9464"]
+        labels:
+          component: worker
+
+  # Node filesystem metrics for disk headroom alerts (bounded mountpoints only).
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          component: node
+
+  # Blackbox HTTP probes for dependency health (bounded dependency label).
+  - job_name: blackbox-deps
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://markhand-server:8080/ready
+        labels:
+          dependency: markhand_ready
+      - targets:
+          - http://postgres:5432
+        labels:
+          dependency: postgres
+      - targets:
+          - http://qdrant:6333/readyz
+        labels:
+          dependency: qdrant
+      - targets:
+          - http://minio:9000/minio/health/ready
+        labels:
+          dependency: minio
+      - targets:
+          - http://embedding:8080/health
+        labels:
+          dependency: embedding
+      - targets:
+          - https://glm.example.invalid/health
+        labels:
+          dependency: glm
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      # Drop high-cardinality instance URL from long-term labels used in alerts.
+      - action: labeldrop
+        regex: instance

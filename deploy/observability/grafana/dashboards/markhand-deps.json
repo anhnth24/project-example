@@ -1,0 +1,272 @@
+{
+  "uid": "markhand-deps",
+  "title": "Markhand Dependencies",
+  "tags": [
+    "markhand",
+    "dependency",
+    "p1b-o02"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "dependency",
+        "label": "Dependency",
+        "type": "custom",
+        "query": "postgres,qdrant,minio,embedding,glm,markhand_ready",
+        "current": {
+          "selected": true,
+          "text": "postgres",
+          "value": "postgres"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "postgres",
+            "value": "postgres"
+          },
+          {
+            "selected": false,
+            "text": "qdrant",
+            "value": "qdrant"
+          },
+          {
+            "selected": false,
+            "text": "minio",
+            "value": "minio"
+          },
+          {
+            "selected": false,
+            "text": "embedding",
+            "value": "embedding"
+          },
+          {
+            "selected": false,
+            "text": "glm",
+            "value": "glm"
+          },
+          {
+            "selected": false,
+            "text": "markhand_ready",
+            "value": "markhand_ready"
+          }
+        ],
+        "multi": true,
+        "includeAll": true,
+        "hide": 0
+      },
+      {
+        "name": "leg",
+        "label": "Retrieval leg",
+        "type": "custom",
+        "query": "hybrid,lexical,vector,qa_provider,other",
+        "current": {
+          "selected": true,
+          "text": "hybrid",
+          "value": "hybrid"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "hybrid",
+            "value": "hybrid"
+          },
+          {
+            "selected": false,
+            "text": "lexical",
+            "value": "lexical"
+          },
+          {
+            "selected": false,
+            "text": "vector",
+            "value": "vector"
+          },
+          {
+            "selected": false,
+            "text": "qa_provider",
+            "value": "qa_provider"
+          },
+          {
+            "selected": false,
+            "text": "other",
+            "value": "other"
+          }
+        ],
+        "multi": true,
+        "includeAll": true,
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Dependency probe success",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "probe_success{dependency=~\"$dependency\"}",
+          "legendFormat": "{{dependency}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Embedding / retrieval error ratios",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:embedding:error_ratio_10m",
+          "legendFormat": "embedding",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "markhand:retrieval:error_ratio_10m",
+          "legendFormat": "retrieval",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Retrieval rate by leg/result",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (leg, result) (rate(markhand_retrieval_total{leg=~\"$leg\"}[5m]))",
+          "legendFormat": "{{leg}}/{{result}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Embedding duration",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(markhand_embedding_duration_seconds_sum[5m]) / clamp_min(rate(markhand_embedding_duration_seconds_count[5m]), 1e-9)",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": ""
+}

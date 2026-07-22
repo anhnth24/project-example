@@ -1,0 +1,64 @@
+# Alertmanager example routing for P1B-O02.
+# PLACEHOLDER receivers only — no real webhook URLs, tokens, or emails.
+# Operators must replace placeholders via sealed secrets / external config.
+global:
+  resolve_timeout: 5m
+  # smtp_smarthost: "smtp.example.invalid:587"
+  # smtp_from: "alertmanager@example.invalid"
+
+route:
+  receiver: default-log
+  group_by: [alertname, class, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity="page"
+      receiver: pager-placeholder
+      continue: true
+    - matchers:
+        - class="auth"
+      receiver: security-placeholder
+      continue: true
+    - matchers:
+        - severity="ticket"
+      receiver: ticket-placeholder
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="MarkhandDependencyProbeDown"
+    target_matchers:
+      - class=~"slo|queue|parser"
+    equal: [team]
+
+receivers:
+  - name: default-log
+    # Local/dev: write to stdout via alertmanager log; no external secret.
+  - name: pager-placeholder
+    webhook_configs:
+      - url: https://alerts.example.invalid/pagerduty-placeholder
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: "REPLACE_WITH_SEALED_SECRET"
+  - name: ticket-placeholder
+    webhook_configs:
+      - url: https://alerts.example.invalid/ticket-placeholder
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: "REPLACE_WITH_SEALED_SECRET"
+  - name: security-placeholder
+    webhook_configs:
+      - url: https://alerts.example.invalid/security-placeholder
+        send_resolved: true
+        http_config:
+          authorization:
+            type: Bearer
+            credentials: "REPLACE_WITH_SEALED_SECRET"
+
+# Do not commit real SMTP passwords, Slack tokens, PagerDuty keys, or tenant emails.
+templates: []

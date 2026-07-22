@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "issue": "P1B-O02",
+  "kind": "tabletop",
+  "claims_real_outage": false,
+  "scenarios": [
+    {
+      "id": "tt-queue-stuck",
+      "alert": "MarkhandQueueOldestAgeHigh",
+      "runbook": "docs/runbooks/stuck-dead-jobs.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    },
+    {
+      "id": "tt-converter-outbreak",
+      "alert": "MarkhandConversionErrorOutbreak",
+      "runbook": "docs/runbooks/converter-outbreak.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    },
+    {
+      "id": "tt-dependency",
+      "alert": "MarkhandDependencyProbeDown",
+      "runbook": "docs/runbooks/dependency-outage.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    },
+    {
+      "id": "tt-disk",
+      "alert": "MarkhandDiskLow",
+      "runbook": "docs/runbooks/disk-exhaustion.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    },
+    {
+      "id": "tt-glm",
+      "alert": "MarkhandGlmProviderErrors",
+      "runbook": "docs/runbooks/glm-fallback.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    },
+    {
+      "id": "tt-rebuild",
+      "alert": "MarkhandDriftDetected",
+      "runbook": "docs/runbooks/vector-rebuild.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    },
+    {
+      "id": "tt-key-rotation",
+      "alert": "MarkhandAuthDenySpike",
+      "runbook": "docs/runbooks/key-rotation.md",
+      "steps_exercised": [
+        "detection",
+        "contain",
+        "recover",
+        "verify"
+      ],
+      "result": "pass_tabletop",
+      "note": "Walkthrough against synthetic fixture values only."
+    }
+  ]
+}

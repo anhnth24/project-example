@@ -1,0 +1,29 @@
+{
+  "alert": "MarkhandDiskLow",
+  "kind": "synthetic",
+  "claims_real_outage": false,
+  "threshold_source": "WORKLOAD-DISK-HEADROOM-PERCENT",
+  "compare": {
+    "series": "markhand:disk:free_ratio",
+    "op": "<",
+    "threshold": 0.3
+  },
+  "samples": [
+    {
+      "labels": {
+        "mountpoint": "/var/lib/markhand"
+      },
+      "value": 0.18,
+      "expect": "firing"
+    },
+    {
+      "labels": {
+        "mountpoint": "/var/lib/markhand"
+      },
+      "value": 0.45,
+      "expect": "resolved"
+    }
+  ],
+  "version": 1,
+  "issue": "P1B-O02"
+}

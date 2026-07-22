@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "issue": "P1B-O02",
+  "ok": true,
+  "alertCount": 15,
+  "dashboardCount": 4,
+  "fixtureCount": 15,
+  "runbookCount": 7,
+  "errors": [],
+  "claims_real_outage": false,
+  "commands": [
+    "python3 scripts/check-observability-o02.py",
+    "python3 scripts/check-observability-o02.py --self-test"
+  ]
+}

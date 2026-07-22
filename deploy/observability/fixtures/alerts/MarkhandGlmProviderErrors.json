@@ -1,0 +1,29 @@
+{
+  "alert": "MarkhandGlmProviderErrors",
+  "kind": "synthetic",
+  "claims_real_outage": false,
+  "threshold_source": "SLA-AVAILABILITY",
+  "compare": {
+    "series": "markhand:glm:error_ratio_10m",
+    "op": ">",
+    "threshold": 0.05
+  },
+  "samples": [
+    {
+      "labels": {
+        "leg": "qa_provider"
+      },
+      "value": 0.2,
+      "expect": "firing"
+    },
+    {
+      "labels": {
+        "leg": "qa_provider"
+      },
+      "value": 0.01,
+      "expect": "resolved"
+    }
+  ],
+  "version": 1,
+  "issue": "P1B-O02"
+}

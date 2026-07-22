@@ -1,0 +1,337 @@
+{
+  "uid": "markhand-slo",
+  "title": "Markhand SLO",
+  "tags": [
+    "markhand",
+    "slo",
+    "p1b-o02"
+  ],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "leg",
+        "label": "Retrieval leg",
+        "type": "custom",
+        "query": "hybrid,lexical,vector,qa_provider,other",
+        "current": {
+          "selected": true,
+          "text": "hybrid",
+          "value": "hybrid"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "hybrid",
+            "value": "hybrid"
+          },
+          {
+            "selected": false,
+            "text": "lexical",
+            "value": "lexical"
+          },
+          {
+            "selected": false,
+            "text": "vector",
+            "value": "vector"
+          },
+          {
+            "selected": false,
+            "text": "qa_provider",
+            "value": "qa_provider"
+          },
+          {
+            "selected": false,
+            "text": "other",
+            "value": "other"
+          }
+        ],
+        "multi": true,
+        "includeAll": true,
+        "hide": 0
+      },
+      {
+        "name": "route",
+        "label": "API route",
+        "type": "custom",
+        "query": "health,auth,upload,search,stream,documents,collections,jobs,openapi,other",
+        "current": {
+          "selected": true,
+          "text": "health",
+          "value": "health"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "health",
+            "value": "health"
+          },
+          {
+            "selected": false,
+            "text": "auth",
+            "value": "auth"
+          },
+          {
+            "selected": false,
+            "text": "upload",
+            "value": "upload"
+          },
+          {
+            "selected": false,
+            "text": "search",
+            "value": "search"
+          },
+          {
+            "selected": false,
+            "text": "stream",
+            "value": "stream"
+          },
+          {
+            "selected": false,
+            "text": "documents",
+            "value": "documents"
+          },
+          {
+            "selected": false,
+            "text": "collections",
+            "value": "collections"
+          },
+          {
+            "selected": false,
+            "text": "jobs",
+            "value": "jobs"
+          },
+          {
+            "selected": false,
+            "text": "openapi",
+            "value": "openapi"
+          },
+          {
+            "selected": false,
+            "text": "other",
+            "value": "other"
+          }
+        ],
+        "multi": false,
+        "includeAll": false,
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Retrieval P95 / P99 (5m)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:retrieval:p95_5m{leg=~\"$leg\"}",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "markhand:retrieval:p99_5m{leg=~\"$leg\"}",
+          "legendFormat": "p99",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "API search latency recording",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:api_search:p95_5m",
+          "legendFormat": "p95",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "markhand:api_search:p99_5m",
+          "legendFormat": "p99",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Availability success ratio (5m)",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "markhand:availability:success_ratio_5m",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "API request rate by status_class",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status_class) (rate(markhand_api_requests_total{route=\"$route\"}[5m]))",
+          "legendFormat": "{{status_class}}",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "SLO thresholds (reference)",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "markhand-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vector(0.5)",
+          "legendFormat": "__auto",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "fiscalYearStartMonth": 0,
+  "liveNow": false,
+  "weekStart": ""
+}

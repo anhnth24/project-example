@@ -55,7 +55,8 @@ collector.
 
 Production fails closed on misconfig (otlp without endpoint, http remote endpoint,
 or `DISABLE_NETWORK=true` with otlp). Dev collector: `deploy/dev/otel-collector.yaml`.
-Dashboards/alerts are O02 — not configured here.
+Dashboards/alerts/runbooks: `deploy/observability/` (P1B-O02); Alertmanager example
+uses sealed-secret placeholders only — never commit real webhook tokens.
 
 Run a config-only check:
 
