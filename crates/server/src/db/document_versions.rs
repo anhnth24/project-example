@@ -102,6 +102,76 @@ pub async fn find_by_id(
     row.map(|row| map_version(&row)).transpose()
 }
 
+/// Loads one version only when the caller's fresh ACL permits its metadata.
+///
+/// This matches `list_page_by_document`: current and draft rows require
+/// `qa.query`; superseded published rows require both `qa.query` and
+/// `qa.history`.
+pub async fn find_authorized_for_read(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<Option<DocumentVersion>, DbError> {
+    let row = txn
+        .query_opt(
+            "SELECT dv.id, dv.org_id, dv.document_id, dv.version_number, dv.parent_version_id,
+                    dv.publication_state, dv.is_current, dv.content_sha256,
+                    dv.original_object_key, dv.markdown_object_key, dv.source_filename,
+                    dv.source_content_type, dv.byte_size, dv.effective_from, dv.effective_to,
+                    dv.change_summary, dv.created_by_user_id, dv.created_at
+             FROM document_versions dv
+             JOIN documents d
+               ON d.org_id = dv.org_id AND d.id = dv.document_id
+             WHERE dv.org_id = $1
+               AND dv.document_id = $2
+               AND dv.id = $3
+               AND d.deleted_at IS NULL
+               AND EXISTS (
+                 SELECT 1
+                 FROM collections acl_c
+                 JOIN org_memberships acl_m
+                   ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
+                 JOIN users acl_u ON acl_u.id = acl_m.user_id
+                 JOIN roles acl_r
+                   ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+                 JOIN role_permissions acl_rp
+                   ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+                 JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+                 WHERE acl_c.org_id = d.org_id
+                   AND acl_c.id = d.collection_id
+                   AND acl_c.deleted_at IS NULL
+                   AND acl_u.disabled_at IS NULL
+                   AND acl_p.code = CASE
+                     WHEN dv.is_current THEN 'qa.query'
+                     WHEN dv.publication_state = 'published' THEN 'qa.history'
+                     ELSE 'qa.query'
+                   END
+                   AND EXISTS (
+                     SELECT 1
+                     FROM role_permissions query_rp
+                     JOIN permissions query_p ON query_p.id = query_rp.permission_id
+                     WHERE query_rp.org_id = acl_r.org_id
+                       AND query_rp.role_id = acl_r.id
+                       AND query_p.code = 'qa.query'
+                   )
+                   AND (
+                     acl_c.visibility = 'org'
+                     OR acl_c.owner_user_id = $4
+                     OR EXISTS (
+                       SELECT 1 FROM collection_user_access cua
+                       WHERE cua.org_id = acl_c.org_id
+                         AND cua.collection_id = acl_c.id
+                         AND cua.user_id = $4
+                     )
+                   )
+               )",
+            &[&ctx.org_id(), &document_id, &version_id, &ctx.user_id()],
+        )
+        .await?;
+    row.map(|row| map_version(&row)).transpose()
+}
+
 pub async fn insert_published_version_if_absent(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

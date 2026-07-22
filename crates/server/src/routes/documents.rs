@@ -726,7 +726,8 @@ async fn get_version(
         let ctx = auth.context.clone();
         move |txn| {
             Box::pin(async move {
-                document_versions::find_by_id(txn, &ctx, document_id, version_id).await
+                document_versions::find_authorized_for_read(txn, &ctx, document_id, version_id)
+                    .await
             })
         }
     })
@@ -747,10 +748,20 @@ async fn diff_versions(
         let ctx = auth.context.clone();
         move |txn| {
             Box::pin(async move {
-                let left =
-                    document_versions::find_by_id(txn, &ctx, document_id, left_version_id).await?;
-                let right =
-                    document_versions::find_by_id(txn, &ctx, document_id, right_version_id).await?;
+                let left = document_versions::find_authorized_for_read(
+                    txn,
+                    &ctx,
+                    document_id,
+                    left_version_id,
+                )
+                .await?;
+                let right = document_versions::find_authorized_for_read(
+                    txn,
+                    &ctx,
+                    document_id,
+                    right_version_id,
+                )
+                .await?;
                 Ok::<_, crate::db::error::DbError>((left, right))
             })
         }
