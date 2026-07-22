@@ -26,6 +26,7 @@ pub use crate::db::sse_streams::{
     DEFAULT_MAX_EVENTS,
 };
 pub use auth::{make_auth_probe, probe_cited_pins};
+#[cfg(test)]
 pub(crate) use plan::json_payload_bytes;
 pub use plan::{citation_to_json, metadata_data, plan_closed_events, SnapshotPlanBounds};
 

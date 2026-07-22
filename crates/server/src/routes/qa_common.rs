@@ -34,7 +34,7 @@ pub const MAX_SEARCH_LIMIT: usize = 100;
 pub const MAX_ASK_LIMIT: usize = 32;
 
 pub use crate::services::sse_stream::{
-    build_auth_scope, default_snapshot_plan_bounds, plan_closed_events, SnapshotPlanBounds,
+    build_auth_scope, default_snapshot_plan_bounds, plan_closed_events,
 };
 
 #[derive(Debug, Deserialize)]
@@ -351,7 +351,7 @@ mod tests {
     use crate::services::qa::grounding::VersionContext;
     use crate::services::qa::stream::{DEFAULT_MAX_STREAM_BYTES, DEFAULT_MAX_STREAM_TOKENS};
     use crate::services::qa::{AnswerMode, QaAuditMetadata};
-    use crate::services::sse_stream::json_payload_bytes;
+    use crate::services::sse_stream::{json_payload_bytes, SnapshotPlanBounds};
 
     fn mode_body(mode_type: &str) -> VersionModeBody {
         VersionModeBody {
