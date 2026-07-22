@@ -20,6 +20,7 @@ EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 VISIBILITY_RE = re.compile(r"^(org|private|public)$")
 SERVICE_RE = re.compile(r"^[a-z][a-z0-9\-]{0,63}$")
+TESTISH_RE = re.compile(r"(?:^|[-_])(?:e2e|test)(?:[-_]|$)", re.I)
 
 
 class CleanupFailed(RuntimeError):
@@ -113,8 +114,8 @@ def verify_cleanup_isolation(
         ("MARKHAND_POSTGRES_DB", postgres_db),
         ("MARKHAND_MINIO_BUCKET", minio_bucket),
     ):
-        if not value or not re.search(r"(e2e|test)", value, re.I):
-            errors.append(f"{label} must contain e2e/test (got {value!r})")
+        if not value or not TESTISH_RE.search(value):
+            errors.append(f"{label} must contain an e2e/test name segment (got {value!r})")
     if compose_project in {"markhand", "markhand-poc"}:
         errors.append(f"refusing human compose project {compose_project!r}")
     if postgres_db == "markhand":
@@ -160,6 +161,45 @@ def sql_exec(
         return run_compose(compose, args, check=True)
     except ComposeCommandFailed as exc:
         raise CleanupFailed(str(exc)) from exc
+
+
+def sql_query_scalar(
+    compose: Sequence[str],
+    *,
+    postgres_user: str,
+    postgres_db: str,
+    sql: str,
+    variables: dict[str, str] | None = None,
+) -> str:
+    """Execute a query that must return exactly one non-empty scalar row."""
+    args: list[str] = [
+        "exec",
+        "-T",
+        "postgres",
+        "psql",
+        "-U",
+        postgres_user,
+        "-d",
+        postgres_db,
+        "--set",
+        "ON_ERROR_STOP=1",
+        "-tA",
+    ]
+    for key, value in (variables or {}).items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ValueError(f"invalid psql variable name: {key!r}")
+        if any(ch in value for ch in ("\n", "\r", "\x00")):
+            raise ValueError(f"invalid psql variable value for {key}")
+        args.extend(["-v", f"{key}={value}"])
+    args.extend(["-c", sql])
+    try:
+        output = run_compose(compose, args, check=True)
+    except ComposeCommandFailed as exc:
+        raise CleanupFailed(str(exc)) from exc
+    rows = [line for line in output.splitlines() if line.strip()]
+    if len(rows) != 1:
+        raise CleanupFailed(f"expected one scalar row, got {len(rows)}")
+    return rows[0]
 
 
 def disable_user(
@@ -246,6 +286,64 @@ def set_collection_visibility(
     collection_id = require_uuid("collection_id", collection_id)
     visibility = require_visibility("visibility", visibility)
     previous = require_visibility("previous", previous)
+    acl_snapshot = sql_query_scalar(
+        compose,
+        postgres_user=postgres_user,
+        postgres_db=postgres_db,
+        sql=(
+            "WITH configured AS MATERIALIZED ("
+            "SELECT set_config('app.org_id', :'org_id', true)"
+            ") "
+            "SELECT COALESCE("
+            "jsonb_agg(jsonb_build_object("
+            "'org_id', acl.org_id, "
+            "'collection_id', acl.collection_id, "
+            "'user_id', acl.user_id, "
+            "'access_level', acl.access_level, "
+            "'created_at', acl.created_at"
+            ")) FILTER (WHERE acl.id IS NOT NULL), "
+            "'[]'::jsonb"
+            ")::text "
+            "FROM configured "
+            "LEFT JOIN collection_user_access acl "
+            "ON acl.collection_id = :'collection_id'::uuid;"
+        ),
+        variables={
+            "org_id": org_id,
+            "collection_id": collection_id,
+        },
+    )
+
+    def restore() -> None:
+        sql_exec(
+            compose,
+            postgres_user=postgres_user,
+            postgres_db=postgres_db,
+            sql=(
+                "SELECT set_config('app.org_id', :'org_id', true); "
+                "UPDATE collections SET visibility = :'previous' "
+                "WHERE id = :'collection_id'::uuid; "
+                "INSERT INTO collection_user_access "
+                "(org_id, collection_id, user_id, access_level, created_at) "
+                "SELECT saved.org_id, saved.collection_id, saved.user_id, "
+                "saved.access_level, saved.created_at "
+                "FROM jsonb_to_recordset(:'acl_snapshot'::jsonb) AS saved("
+                "org_id uuid, collection_id uuid, user_id uuid, "
+                "access_level text, created_at timestamptz"
+                ") "
+                "ON CONFLICT (collection_id, user_id) DO UPDATE "
+                "SET access_level = EXCLUDED.access_level, "
+                "created_at = EXCLUDED.created_at;"
+            ),
+            variables={
+                "org_id": org_id,
+                "collection_id": collection_id,
+                "previous": previous,
+                "acl_snapshot": acl_snapshot,
+            },
+        )
+
+    stack.push(restore)
     sql_exec(
         compose,
         postgres_user=postgres_user,
@@ -262,25 +360,6 @@ def set_collection_visibility(
             "visibility": visibility,
         },
     )
-
-    def restore() -> None:
-        sql_exec(
-            compose,
-            postgres_user=postgres_user,
-            postgres_db=postgres_db,
-            sql=(
-                "SELECT set_config('app.org_id', :'org_id', true); "
-                "UPDATE collections SET visibility = :'previous' "
-                "WHERE id = :'collection_id'::uuid;"
-            ),
-            variables={
-                "org_id": org_id,
-                "collection_id": collection_id,
-                "previous": previous,
-            },
-        )
-
-    stack.push(restore)
 
 
 def stop_service(

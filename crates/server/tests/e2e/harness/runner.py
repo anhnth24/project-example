@@ -353,7 +353,7 @@ def run_format_case_live(
         )
 
     disposition = body.get("disposition")
-    posts["upload_accepted"] = disposition in ("accepted", "quarantined")
+    posts["upload_accepted"] = disposition == "accepted"
     if not posts["upload_accepted"]:
         return CaseResult(
             id=case["id"],
@@ -368,7 +368,16 @@ def run_format_case_live(
     try:
         document_id, version_id, job_id = extract_production_intake(body)
     except ProductionIntakeNotWired as exc:
-        raise ProductionIntakeNotWired(str(exc)) from exc
+        return CaseResult(
+            id=case["id"],
+            matrix="format",
+            status="blocked",
+            http_statuses=http_statuses,
+            postconditions=posts,
+            severity="high",
+            blocker_code=exc.code,
+            notes=str(exc),
+        )
 
     opaque.update(
         {

@@ -11,6 +11,29 @@ CONFIRM_PHRASE="i-understand-this-mutates-only-tagged-test-stacks"
 
 die() { echo "FATAL: $*" >&2; exit 1; }
 
+is_test_stack_name() {
+  [[ "$1" =~ (^|[-_])([Ee]2[Ee]|[Tt][Ee][Ss][Tt])([-_]|$) ]]
+}
+
+require_e2e_isolation() {
+  local project="${MARKHAND_COMPOSE_PROJECT:-}"
+  local db="${MARKHAND_POSTGRES_DB:-}"
+  local bucket="${MARKHAND_MINIO_BUCKET:-}"
+  local tag="${MARKHAND_E2E_STACK_TAG:-}"
+
+  is_test_stack_name "$project" \
+    || die "MARKHAND_COMPOSE_PROJECT must contain an e2e/test segment (got '$project'); refusing untagged stack"
+  is_test_stack_name "$db" \
+    || die "MARKHAND_POSTGRES_DB must contain an e2e/test segment (got '$db'); refusing untagged stack"
+  is_test_stack_name "$bucket" \
+    || die "MARKHAND_MINIO_BUCKET must contain an e2e/test segment (got '$bucket'); refusing untagged stack"
+  [[ "$tag" == "test" ]] || die "MARKHAND_E2E_STACK_TAG must be 'test'"
+  [[ "$project" != "markhand" && "$project" != "markhand-poc" ]] \
+    || die "refusing untagged/human compose project '$project'"
+  [[ "$db" != "markhand" ]] || die "refusing human postgres db 'markhand'"
+  [[ "$bucket" != "markhand-documents" ]] || die "refusing human minio bucket"
+}
+
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
 }
@@ -36,23 +59,7 @@ if [[ -f "$ROOT/deploy/.env" ]]; then
   set +a
 fi
 
-# Re-assert E2E defaults if .env wiped tags (human stack must never be reused).
-project="${MARKHAND_COMPOSE_PROJECT:-}"
-db="${MARKHAND_POSTGRES_DB:-}"
-bucket="${MARKHAND_MINIO_BUCKET:-}"
-tag="${MARKHAND_E2E_STACK_TAG:-}"
-
-[[ "$project" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-  || die "MARKHAND_COMPOSE_PROJECT must contain e2e/test (got '$project'); refusing untagged stack"
-[[ "$db" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-  || die "MARKHAND_POSTGRES_DB must contain e2e/test (got '$db'); refusing untagged stack"
-[[ "$bucket" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-  || die "MARKHAND_MINIO_BUCKET must contain e2e/test (got '$bucket'); refusing untagged stack"
-[[ "$tag" == "test" ]] || die "MARKHAND_E2E_STACK_TAG must be 'test'"
-[[ "$project" != "markhand" && "$project" != "markhand-poc" ]] \
-  || die "refusing untagged/human compose project '$project'"
-[[ "$db" != "markhand" ]] || die "refusing human postgres db 'markhand'"
-[[ "$bucket" != "markhand-documents" ]] || die "refusing human minio bucket"
+require_e2e_isolation
 
 require_cmd docker
 require_cmd python3
@@ -60,14 +67,17 @@ require_cmd cargo
 docker info >/dev/null 2>&1 || die "Docker engine not available"
 
 poc_compose_init
+# poc_compose_init sources deploy/.env (and may create it from human defaults).
+# Revalidate the effective values before any Docker command can mutate a stack.
+require_e2e_isolation
 
 CLEANUP_FAILED=0
 cleanup_live() {
   local rc=$?
   # Verify tagged isolation BEFORE any cleanup mutation.
-  if ! [[ "${MARKHAND_COMPOSE_PROJECT:-}" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-    || ! [[ "${MARKHAND_POSTGRES_DB:-}" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
-    || ! [[ "${MARKHAND_MINIO_BUCKET:-}" =~ [Ee]2[Ee]|[Tt][Ee][Ss][Tt] ]] \
+  if ! is_test_stack_name "${MARKHAND_COMPOSE_PROJECT:-}" \
+    || ! is_test_stack_name "${MARKHAND_POSTGRES_DB:-}" \
+    || ! is_test_stack_name "${MARKHAND_MINIO_BUCKET:-}" \
     || [[ "${MARKHAND_E2E_STACK_TAG:-}" != "test" ]]; then
     echo "FATAL: cleanup high/critical — refusing restore on untagged stack" >&2
     exit 1
