@@ -323,6 +323,8 @@ def set_collection_visibility(
                 "SELECT set_config('app.org_id', :'org_id', true); "
                 "UPDATE collections SET visibility = :'previous' "
                 "WHERE id = :'collection_id'::uuid; "
+                "DELETE FROM collection_user_access "
+                "WHERE collection_id = :'collection_id'::uuid; "
                 "INSERT INTO collection_user_access "
                 "(org_id, collection_id, user_id, access_level, created_at) "
                 "SELECT saved.org_id, saved.collection_id, saved.user_id, "
