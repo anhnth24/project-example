@@ -16,13 +16,19 @@ Dashboard: `markhand-deps`, `markhand-slo`
   - TCP `postgres:5432`
   - HTTP `qdrant:6333/healthz`
   - HTTP `minio:9000/minio/health/live`
-  - HTTP `mock-embedding:8080/health` (aiteamvn: `embedding-cpu`)
+  - HTTP `embedding:8080/health` (stable observability network alias)
   - HTTP `api:8787/api/v1/health/ready`
 
 ## Detection
 
 ```bash
-source deploy/scripts/poc-compose.sh && poc_compose_init
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export REPO_ROOT
+export POC_WITH_OBSERVABILITY=1
+# shellcheck source=deploy/scripts/poc-compose.sh
+source "$REPO_ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
+
 deploy/scripts/poc-health.sh
 # expected lines: healthy: postgres / qdrant / minio / mock-embedding|embedding-cpu / api-live / api-ready
 

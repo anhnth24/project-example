@@ -152,13 +152,11 @@ groups:
 
       - alert: MarkhandDependencyProbeAbsent
         expr: |
-          count(
-            absent(probe_success{dependency="postgres"})
-            or absent(probe_success{dependency="qdrant"})
-            or absent(probe_success{dependency="minio"})
-            or absent(probe_success{dependency="embedding"})
-            or absent(probe_success{dependency="markhand_ready"})
-          ) > 0
+          absent(probe_success{dependency="postgres"})
+          or absent(probe_success{dependency="qdrant"})
+          or absent(probe_success{dependency="minio"})
+          or absent(probe_success{dependency="embedding"})
+          or absent(probe_success{dependency="markhand_ready"})
         for: 5m
         labels:
           severity: page
@@ -167,7 +165,7 @@ groups:
         annotations:
           summary: Expected dependency probe series is absent.
           description: >
-            Blackbox probe metrics missing for a required dependency label.
+            Blackbox probe metrics missing for the dependency named by the alert label.
             Indicates mis-scraped exporter, not necessarily dependency outage.
             Policy: O02-OPS-PROBE-FAILURE (metric absence).
           threshold_source: O02-OPS-PROBE-FAILURE

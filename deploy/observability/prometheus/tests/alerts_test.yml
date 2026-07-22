@@ -65,12 +65,15 @@ tests:
         alertname: MarkhandQueryLatencyP95Burn
         exp_alerts: []
 
-  - name: search_availability_5xx_only_fires_and_resolves
+  - name: search_availability_5xx_only_fires_and_resolves_on_2xx_recovery
     interval: 1m
     input_series:
       # 5xx-only traffic: no 2xx series → numerator forced to 0 via or vector(0)
       - series: 'markhand_api_requests_total{route="search",method="POST",status_class="5xx"}'
-        values: "0+20x20 20+0x20"
+        values: "0+20x20 400+0x25"
+      # Recovery must be demonstrated by successful traffic, not only a quiet window.
+      - series: 'markhand_api_requests_total{route="search",method="POST",status_class="2xx"}'
+        values: "0+0x20 0+400x25"
     alert_rule_test:
       - eval_time: 20m
         alertname: MarkhandSearchAvailabilityBurn
@@ -301,6 +304,33 @@ tests:
               runbook: docs/runbooks/glm-fallback.md
               dashboard: markhand-deps
 
+  - name: qa_provider_error_does_not_page_as_retrieval_outbreak
+    interval: 1m
+    input_series:
+      - series: 'markhand_retrieval_total{leg="qa_provider",result="error"}'
+        values: "0+10x20"
+      - series: 'markhand_retrieval_total{leg="qa_provider",result="success"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MarkhandGlmProviderErrors
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandGlmProviderErrors
+              severity: ticket
+              team: operations
+              class: dependency
+              window: 10m
+            exp_annotations:
+              summary: GLM/qa_provider failure ratio exceeds outbreak threshold.
+              description: "Metric-based only (result=~error|outage|timeout|truncated|other). No GLM blackbox probe — endpoint not configured in deploy stack.\n"
+              threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+              runbook: docs/runbooks/glm-fallback.md
+              dashboard: markhand-deps
+      - eval_time: 20m
+        alertname: MarkhandRetrievalErrorOutbreak
+        exp_alerts: []
+
   - name: conversion_error_outbreak_fires
     interval: 1m
     input_series:
@@ -418,9 +448,17 @@ tests:
               runbook: docs/runbooks/dependency-outage.md
               dashboard: markhand-deps
 
-  - name: dependency_probe_absent_fires
+  - name: dependency_probe_partial_absence_identifies_dependency
     interval: 1m
-    input_series: []
+    input_series:
+      - series: 'probe_success{dependency="postgres",job="blackbox-tcp"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="qdrant",job="blackbox-http"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="minio",job="blackbox-http"}'
+        values: "1+0x10"
+      - series: 'probe_success{dependency="embedding",job="blackbox-http"}'
+        values: "1+0x10"
     alert_rule_test:
       - eval_time: 10m
         alertname: MarkhandDependencyProbeAbsent
@@ -430,9 +468,10 @@ tests:
               severity: page
               team: operations
               class: dependency
+              dependency: markhand_ready
             exp_annotations:
               summary: Expected dependency probe series is absent.
-              description: "Blackbox probe metrics missing for a required dependency label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              description: "Blackbox probe metrics missing for the dependency named by the alert label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
               threshold_source: O02-OPS-PROBE-FAILURE
               runbook: docs/runbooks/dependency-outage.md
               dashboard: markhand-deps

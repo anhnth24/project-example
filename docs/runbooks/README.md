@@ -19,11 +19,12 @@ with an explicit **rollback** section.
 | [Stuck / dead-letter jobs](stuck-dead-jobs.md) | `MarkhandQueueOldestAgeHigh`, `MarkhandQueueDepthWarning`, `MarkhandDeadLetterJobs` |
 | [Converter outbreak](converter-outbreak.md) | `MarkhandConversionErrorOutbreak` |
 | [Dependency outage](dependency-outage.md) | `MarkhandDependencyProbeDown`, embedding/retrieval/SLO burns |
-| [Vector rebuild / drift](vector-rebuild.md) | `MarkhandDriftDetected`, `MarkhandReconcileErrors` |
-| [Disk exhaustion](disk-exhaustion.md) | `MarkhandDiskLow` |
+| [Vector rebuild / drift](vector-rebuild.md) | `MarkhandDriftDetected` |
+| [Disk exhaustion](disk-exhaustion.md) | `MarkhandHostRootFilesystemLow` |
 | [GLM fallback](glm-fallback.md) | `MarkhandGlmProviderErrors` (metric-only; GLM probe blocked) |
 | [Key rotation](key-rotation.md) | `MarkhandAuthDenySpike` (count policy, not SLA ratio) |
 
-Blocked (not loaded): filtered-query P99 SLO alert; GLM blackbox probe.
+Blocked (not loaded): `MarkhandQueryLatencyP99Burn`, `MarkhandGlmProbeDown`,
+`MarkhandReconcileErrors`, and `MarkhandNamedVolumeDiskLow`.
 Artifacts/validation: `deploy/observability/` + `make check-observability` (pinned promtool).
 Backup/restore runbooks are **P1B-O03** (out of O02 scope).

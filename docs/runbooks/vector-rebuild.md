@@ -1,7 +1,7 @@
 # Runbook: Vector index rebuild / drift repair
 
 Issue: P1B-O02
-Alerts: `MarkhandDriftDetected`, `MarkhandReconcileErrors`
+Alert: `MarkhandDriftDetected`
 Dashboard: `markhand-ops`
 Related: ADR 0006/0011. Full backup/restore ordering is **P1B-O03** (out of scope).
 
@@ -14,14 +14,18 @@ Related: ADR 0006/0011. Full backup/restore ordering is **P1B-O03** (out of scop
 ## Detection
 
 ```bash
-source deploy/scripts/poc-compose.sh && poc_compose_init
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export REPO_ROOT
+export POC_WITH_OBSERVABILITY=1
+# shellcheck source=deploy/scripts/poc-compose.sh
+source "$REPO_ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
+
 curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"
 # If reconcile fence not ready, ready fails closed — inspect API logs (IDs only)
 "${COMPOSE[@]}" logs --tail=200 api worker-index worker-embedding
 curl -fsG http://127.0.0.1:9090/api/v1/query \
   --data-urlencode 'query=markhand:drift:increase_10m'
-curl -fsG http://127.0.0.1:9090/api/v1/query \
-  --data-urlencode 'query=markhand:reconcile:error_increase_5m'
 ```
 
 ## Contain
@@ -53,14 +57,14 @@ deploy/scripts/poc-health.sh
 ## Verify
 
 1. `/api/v1/health/ready` 200.
-2. Drift/reconcile increases return to 0.
+2. `markhand:drift:increase_10m` returns to 0.
 3. Search smoke (synthetic/fixtures only).
 
 ## Rollback
 
-- Stop index/embedding workers if reconcile errors return.
+- Stop index/embedding workers if drift returns or readiness fails.
 - Keep previous index generation if dual-generation was configured (otherwise escalate).
 
 ## Synthetic evidence
 
-Promtool `reconcile_error_single_event_fires_and_resolves`. No live rebuild claimed.
+Promtool `drift_detected_fires`. No live rebuild claimed.
