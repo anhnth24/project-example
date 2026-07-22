@@ -85,6 +85,121 @@ jobs:
       - name: Rust fmt, clippy, and tests
         run: bash scripts/run-rust-ci-fast.sh
 
+  rust-integration:
+    needs: changes-and-static
+    # DB-backed acceptance tests in crates/server/tests/*.rs are `#[ignore]`
+    # gated on MARKHAND_TEST_DATABASE_URL / MARKHAND_TEST_MINIO_* /
+    # MARKHAND_TEST_QDRANT_URL. The fast `rust` job never sets those vars or
+    # passes `--include-ignored`, so this job is the only place they actually
+    # run. Gate matches what already makes the fast job exercise
+    # fileconv-server (full/workspace/smoke rust_crates or a scope containing
+    # "server"), plus knowledge changes (future-proofing: no ignored DB tests
+    # live under crates/knowledge today, but the pattern is the same), plus
+    # every master push so regressions can't merge silently.
+    if: >-
+      needs.changes-and-static.outputs.rust == 'true' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+        needs.changes-and-static.outputs.rust_crates == 'full' ||
+        needs.changes-and-static.outputs.rust_crates == 'workspace' ||
+        needs.changes-and-static.outputs.rust_crates == 'smoke' ||
+        contains(needs.changes-and-static.outputs.rust_crates, 'server') ||
+        needs.changes-and-static.outputs.knowledge == 'true'
+      )
+    runs-on: ubuntu-22.04
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      # Same dev-only credentials as deploy/dev/compose.yml defaults /
+      # deploy/dev/.env.example — MARKHAND_TEST_DATABASE_URL intentionally
+      # uses the Postgres bootstrap superuser (not markhand_app, which
+      # bootstrap-server-role.sh creates NOCREATEDB) because the tests
+      # themselves CREATE/DROP an ephemeral database per test via
+      # EphemeralDb::create() + apply_migrations().
+      MARKHAND_TEST_DATABASE_URL: postgresql://markhand:markhand_dev_only@127.0.0.1:54329/markhand
+      MARKHAND_TEST_MINIO_ENDPOINT: http://127.0.0.1:9000
+      MARKHAND_TEST_MINIO_ACCESS_KEY: markhand
+      MARKHAND_TEST_MINIO_SECRET_KEY: markhand_dev_only
+      MARKHAND_TEST_MINIO_REGION: us-east-1
+      MARKHAND_TEST_QDRANT_URL: http://127.0.0.1:6333
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install base build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: 1.88.0
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Start Postgres, Qdrant, MinIO (deploy/dev/compose.yml)
+        # Only the three services the integration tests actually need — not
+        # the full dev stack (otel/embedding are irrelevant here and would
+        # only slow the job down; index_worker.rs uses an in-process mock
+        # embedding TCP server instead).
+        run: docker compose -f deploy/dev/compose.yml up -d postgres qdrant minio
+      - name: Wait for Postgres/Qdrant/MinIO to be ready
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose -f deploy/dev/compose.yml)
+
+          postgres_ready=false
+          for _ in $(seq 1 60); do
+            id="$("${COMPOSE[@]}" ps -q postgres)"
+            if [[ -n "$id" ]] && [[ "$(docker inspect --format '{{.State.Health.Status}}' "$id")" == "healthy" ]]; then
+              echo "healthy: postgres"
+              postgres_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$postgres_ready" != "true" ]]; then
+            echo "unhealthy: postgres" >&2
+            "${COMPOSE[@]}" logs postgres >&2 || true
+            exit 1
+          fi
+
+          qdrant_ready=false
+          for _ in $(seq 1 90); do
+            if curl --fail --silent --show-error http://127.0.0.1:6333/healthz >/dev/null; then
+              echo "healthy: qdrant"
+              qdrant_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$qdrant_ready" != "true" ]]; then
+            echo "unhealthy: qdrant" >&2
+            "${COMPOSE[@]}" logs qdrant >&2 || true
+            exit 1
+          fi
+
+          minio_ready=false
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              echo "healthy: minio"
+              minio_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$minio_ready" != "true" ]]; then
+            echo "unhealthy: minio" >&2
+            "${COMPOSE[@]}" logs minio >&2 || true
+            exit 1
+          fi
+      - name: Rust DB-backed integration tests (fileconv-server, --include-ignored)
+        run: cargo test -p fileconv-server -- --include-ignored
+      - name: Dump service logs on failure
+        if: failure()
+        run: docker compose -f deploy/dev/compose.yml logs --tail=200
+      - name: Tear down dev services
+        if: always()
+        run: docker compose -f deploy/dev/compose.yml down -v
+
   toolchain:
     needs: changes-and-static
     if: needs.changes-and-static.outputs.toolchain == 'true'
