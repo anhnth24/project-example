@@ -1,5 +1,6 @@
 //! Database models, pool, and tenant-scoped repositories.
 
+pub mod audit;
 pub mod chunks;
 pub mod claims;
 pub mod collections;

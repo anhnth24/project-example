@@ -143,6 +143,24 @@ impl MinioClient {
         &self.bucket_name
     }
 
+    /// Credentialed readiness probe: list one page of the configured bucket.
+    pub async fn bucket_probe(&self) -> Result<(), StorageError> {
+        let (_page, status) = self
+            .with_s3_timeout(
+                self.bucket
+                    .list_page(String::new(), None, None, None, Some(1)),
+                |_| StorageError::Transport,
+            )
+            .await?;
+        if (200..300).contains(&status) {
+            Ok(())
+        } else if status == 401 || status == 403 {
+            Err(StorageError::ConfigMissingCredentials)
+        } else {
+            Err(StorageError::Backend)
+        }
+    }
+
     /// Create the configured bucket if missing (test / bootstrap helper).
     pub async fn ensure_bucket(&self) -> Result<(), StorageError> {
         let region = self.bucket.region.clone();

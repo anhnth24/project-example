@@ -39,6 +39,7 @@ const BUSINESS_TABLES: &[&str] = &[
     "usage_counters",
     "quota_reservations",
     "audit_log",
+    "download_capability_redemptions",
 ];
 
 const GLOBAL_TABLES: &[&str] = &["orgs", "users", "permissions"];

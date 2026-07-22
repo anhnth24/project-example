@@ -191,8 +191,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
-- **Status:** Review — PR #252 merged; post-merge authorization hardening and live
-  PostgreSQL acceptance evidence are in PR #254. Mark Done after that PR merges.
+- **Status:** done — PR #252 + authorization hardening PR #254 merged; hermetic
+  unit acceptance in `services/retrieval` and gated PG tests in `tests/retrieval.rs`.
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
@@ -205,10 +205,18 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
+- **Status:** In progress — promotion stores source SHA on `document_versions` and
+  Markdown SHA on `derived_artifacts`; preview hashes full artifact before truncate;
+  original download hashes bytes and verifies source; CRLF-aware normalized→source
+  span mapping; migration `0020` backfills mis-stored hashes. Hermetic tests cover
+  source≠markdown, >2MiB digest independence, CRLF UTF-8 mapping, mid-codepoint
+  reject. Gap: live PDF/PPTX/XLSX convert→anchor matrix + live download tamper
+  evidence not captured here.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
-- **Files:** `services/{citation,preview,download}.rs`, document routes.
+- **Files:** `services/{access,citation,preview,download}.rs`, `routes/documents.rs`,
+  `migrations/0018_expand_download_capability_redemptions.sql`.
 - **Depends:** F05/F06/R01.
 - **Acceptance/tests:** Quote/hash/version/anchor valid; historical permission + fresh
   ACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,
@@ -217,11 +225,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
+- **Status:** Review — grounding fail-closed for qualitative factual claims
+  (negation/contradiction/date/unit/misplaced citation → extractive); ask path
+  stays extractive-only while structured entailment is unavailable. Gap: BA/design
+  conflict golden matrix + delete-during-stream live evidence not yet recorded.
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
   deterministic extractive fallback.
-- **Files:** `services/qa/{prompt,provider,grounding,stream}.rs`.
+- **Files:** `services/qa/{mod,prompt,provider,grounding,stream}.rs`, `routes/ask.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
 - **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
   compare cite old+new và đúng delta; injection không tool/scope change; provider
@@ -232,6 +244,11 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
+- **Status:** Review — collection CRUD (incl. patch/delete), document/version/preview/
+  download/reindex, conflict list/detail/triage via shared dual-leg resolver
+  (deleted/tombstoned/unpublished excluded), version diff identity payload, job
+  status via document-collection authz; documentless jobs require `jobs.system`
+  (IDOR → 404). Gap: full HTTP contract suite against live DB still gated.
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -243,6 +260,12 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
+- **Status:** In progress — job SSE revalidates JWT `exp`, session-family revoke,
+  user suspend/membership, and job/document auth from PG every poll; ask stream uses
+  the same principal guard each bounded batch (exp/session/membership + fresh
+  cited-document auth) with send-timeout + stable close reasons. Ask tokenization
+  remains POC snapshot (not provider token streaming). Gap: live PG
+  expiry/logout/membership-removal/delete-barrier + reconnect/order soak not run.
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`.
@@ -253,9 +276,17 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
+- **Status:** In progress — SECURITY DEFINER readiness aggregates
+  (`markhand_index_generation_consistent` / fence/reconcile) under FORCE RLS;
+  baseline `/api/v1` IP middleware (health exempt); hard-cap rejects unseen keys
+  without insert; OpenAPI requestBody/response/multipart/SSE expanded + client
+  regenerated. Gap: live two-org app-role readiness DB proof
+  (`tests/readiness_force_rls.rs` ignored); trusted-proxy soak; full route schema
+  parity still deepening.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
-- **Files:** `api/openapi.rs`, OpenAPI YAML, middleware, `routes/health.rs`.
+- **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,
+  `services/readiness.rs`.
 - **Depends:** R04/R05/F05 + G0-SLO.
 - **Acceptance/tests:** Every route represented; readiness detects required deps/
   signature/reconciliation; 429 metadata; snapshots/rate/trusted-proxy/outage tests.
@@ -265,9 +296,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
+- **Status:** In progress — typed `AuditOutcome` success|deny|error; `record_in_txn`
+  for same-transaction mutation audit; middleware request IDs only (no UUID mint in
+  `From<DbError>` / bare IntoResponse). Gap: live DB deny=403/audit-deny + injected
+  audit-failure rollback suite not executed here; async API→worker→GLM canary still
+  pending.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
-- **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`, OTel config.
+- **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`,
+  `deploy/dev/otel-collector.yaml`.
 - **Depends:** F01/F05/I03 + G0-SLO.
 - **Acceptance/tests:** Correlation qua async; action/deny coverage; canary secret/
   content absent; trace/cardinality/redaction/audit tests.
@@ -275,9 +312,13 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
+- **Status:** In progress — Prometheus rules + Phase 1B runbooks
+  (detect→contain→recover→verify) landed. Live alert-trigger tabletop evidence still
+  required under `bench/markhand_web/reports/phase-1b-gate/` before Done; validate
+  with `promtool check rules` when available.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
-- **Files:** `deploy/observability/**`, `docs/runbooks/**`.
+- **Files:** `deploy/observability/**`, `docs/runbooks/phase-1b/**`.
 - **Depends:** F02/F06/I03/O01 + G0-SLO.
 - **Acceptance/tests:** Trigger từng alert; runbook detection→contain→recover→verify;
   rule validation/fault/tabletop evidence.
@@ -285,9 +326,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
+- **Status:** In progress — blue/green only: backup mandatorily sets `ops_fences`,
+  bundles versioned object bytes + Qdrant snapshot bytes; restore targets isolated
+  green namespaces, verifies target bytes, requires durable `reconcile.complete`,
+  refuses cutover without `MARKHAND_RESTORE_CUTOVER=1`, and fails zero-row fence
+  clear. No env fake attestation shortcuts. Hermetic corrupt/missing/orphan/
+  refuse-destructive guards. Gap: production-complete green restore + reconcile +
+  atomic cutover drill not executed in this environment — scripts refuse promote.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
-- **Files:** `deploy/backup/**`, restore/migration runbooks, restore guard.
+- **Files:** `deploy/backup/**`, `docs/runbooks/phase-1b/backup-restore.md`.
 - **Depends:** F02/F03/F06/I07 + G0-ARCH/G0-SLO.
 - **Acceptance/tests:** Clean restore đạt RPO/RTO; missing/orphan detect; readiness
   false until reconcile; PG rebuild; corrupt manifest/upgrade tests.
@@ -296,9 +344,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
+- **Status:** In progress — hermetic contracts + e2e gate that defaults to
+  `not_run` / `#[ignore]` live suite (no fake green). Full per-format
+  upload→citation against Compose POC still requires `--ignored` + `MARKHAND_E2E=1`
+  evidence under `bench/markhand_web/reports/phase-1b-gate/`.
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
-- **Files:** `crates/server/tests/e2e/**`, POC manifest, deploy test script.
+- **Files:** `crates/server/tests/phase1b_api_contracts.rs`,
+  `crates/server/tests/e2e_release_suite.rs`,
+  `bench/markhand_web/reports/phase-1b-gate/*`.
 - **Depends:** F01–R06 + G0-SEC/G1A.
 - **Acceptance/tests:** All formats pass; unauthorized gets no text; malicious
   rejected/contained; worker kill consistent; evidence redacted.
@@ -306,6 +360,9 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
+- **Status:** In progress — soak harness never emits `pass` unless every numeric
+  gate is explicitly `pass`; default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`.
+  Numeric soak/restore qualification not claimed.
 - **Plan:** Ingest/query/delete/reconcile mixed load + failures; monitor leaks/queue;
   restore; aggregate gate report.
 - **Files:** `bench/markhand_web/{soak,workloads,reports/phase-1b-gate}*`.

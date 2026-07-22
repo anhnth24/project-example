@@ -8,6 +8,7 @@ pub mod db;
 pub mod error;
 pub mod http;
 pub mod jobs;
+pub mod middleware;
 pub mod routes;
 pub mod services;
 pub mod state;

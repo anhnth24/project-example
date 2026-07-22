@@ -1,0 +1,21 @@
+name: phase1b-mixed
+durationSeconds: 1800
+actors:
+  ingest:
+    rps: 0.5
+    formats: [pdf, docx, pptx, xlsx, csv, html, txt, png]
+  query:
+    rps: 2.0
+    modes: [current, as_of, compare]
+  delete:
+    rps: 0.05
+  reconcile:
+    intervalSeconds: 300
+failureInjection:
+  killWorkerEverySeconds: 600
+  dependencyBlipSeconds: 15
+bounds:
+  maxRssGrowthMb: 256
+  maxTempGrowthMb: 512
+  maxQueueDepth: 100
+  maxDbConnections: 40

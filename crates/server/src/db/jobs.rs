@@ -172,6 +172,52 @@ pub async fn insert_job_with_outbox(
     Ok((existing, false))
 }
 
+/// Tenant-scoped job lookup for API status (no lease mutation).
+pub async fn get_by_id(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<Job, DbError> {
+    let row = txn
+        .query_opt(
+            &format!(
+                "SELECT {JOB_COLUMNS}
+                 FROM jobs
+                 WHERE org_id = $1 AND id = $2"
+            ),
+            &[&ctx.org_id(), &job_id],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    map_job(&row)
+}
+
+/// Lists event_log rows after a sequence for SSE replay (bounded).
+pub async fn list_events_after(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    after_sequence: i64,
+    job_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<EventLogEntry>, DbError> {
+    let limit = limit.clamp(1, 500);
+    let rows = txn
+        .query(
+            &format!(
+                "SELECT {EVENT_COLUMNS}
+                 FROM event_log
+                 WHERE org_id = $1
+                   AND sequence_no > $2
+                   AND ($3::uuid IS NULL OR job_id = $3)
+                 ORDER BY sequence_no ASC
+                 LIMIT $4"
+            ),
+            &[&ctx.org_id(), &after_sequence, &job_id, &limit],
+        )
+        .await?;
+    rows.iter().map(map_event_log_entry).collect()
+}
+
 pub async fn find_by_idempotency_key(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

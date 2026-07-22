@@ -35,6 +35,7 @@ pub struct HydratedChunkRow {
     pub version_id: Uuid,
     pub version_number: i32,
     pub content_sha256: String,
+    pub canonical_markdown_sha256: String,
     pub heading_path: Vec<String>,
     pub body: String,
     pub page: Option<i32>,
@@ -301,6 +302,7 @@ pub async fn hydrate_chunks_by_identity(
             txn.query(
                 "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
+                        coalesce(md.content_sha256, '') AS canonical_markdown_sha256,
                         c.heading_path, c.body, c.page, c.slide, c.sheet,
                         c.span_start, c.span_end, d.state, d.deleted_at,
                         dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
@@ -314,6 +316,10 @@ pub async fn hydrate_chunks_by_identity(
                   AND dv.id = c.version_id
                  JOIN index_metadata im
                    ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+                 LEFT JOIN derived_artifacts md
+                   ON md.org_id = c.org_id
+                  AND md.version_id = c.version_id
+                  AND md.artifact_kind = 'markdown'
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
@@ -376,6 +382,7 @@ pub async fn hydrate_chunks_by_identity(
             txn.query(
                 "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
+                        coalesce(md.content_sha256, '') AS canonical_markdown_sha256,
                         c.heading_path, c.body, c.page, c.slide, c.sheet,
                         c.span_start, c.span_end, d.state, d.deleted_at,
                         dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
@@ -389,6 +396,10 @@ pub async fn hydrate_chunks_by_identity(
                   AND dv.id = c.version_id
                  JOIN index_metadata im
                    ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+                 LEFT JOIN derived_artifacts md
+                   ON md.org_id = c.org_id
+                  AND md.version_id = c.version_id
+                  AND md.artifact_kind = 'markdown'
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
@@ -781,6 +792,7 @@ fn map_hydrated_chunk(row: &Row) -> Result<HydratedChunkRow, DbError> {
         version_id: row.get("version_id"),
         version_number: row.get("version_number"),
         content_sha256: row.get("content_sha256"),
+        canonical_markdown_sha256: row.get("canonical_markdown_sha256"),
         heading_path: row.get("heading_path"),
         body: row.get("body"),
         page: row.get("page"),

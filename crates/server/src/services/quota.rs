@@ -189,7 +189,8 @@ impl From<DbError> for QuotaError {
 
 impl IntoResponse for QuotaError {
     fn into_response(self) -> Response {
-        self.into_response_with_request_id(&Uuid::new_v4().to_string())
+        // Callers must pass the middleware request id; never mint a fresh UUID here.
+        self.into_response_with_request_id("missing-middleware-request-id")
     }
 }
 

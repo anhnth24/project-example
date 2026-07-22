@@ -124,6 +124,8 @@ pub async fn promote_conversion(
                         (version, false)
                     }
                     None => {
+                        // document_versions.content_sha256 is the *source* object hash.
+                        // Canonical Markdown SHA lives only on derived_artifacts.
                         let inserted = document_versions::insert_published_version_if_absent(
                             txn,
                             &ctx,
@@ -131,12 +133,15 @@ pub async fn promote_conversion(
                                 id: promoted_version_id,
                                 document_id: input.source.document_id,
                                 parent_version_id: input.source.source_version_id,
-                                content_sha256: &input.markdown_sha256,
+                                content_sha256: &input.source.content_sha256,
                                 original_object_key: &input.source.original_object_key,
                                 markdown_object_key: &input.staged_object_key,
                                 source_filename: input.source.source_filename.as_deref(),
-                                source_content_type: Some("text/markdown; charset=utf-8"),
-                                byte_size: input.markdown_byte_size,
+                                source_content_type: input.source.source_content_type.as_deref(),
+                                byte_size: input
+                                    .source
+                                    .byte_size
+                                    .unwrap_or(input.markdown_byte_size),
                                 change_summary: "Converted upload to Markdown",
                             },
                         )
@@ -311,7 +316,7 @@ fn ensure_existing_version_matches(
 ) -> Result<(), PromotionError> {
     if version.document_id != input.source.document_id
         || version.parent_version_id != Some(input.source.source_version_id)
-        || version.content_sha256 != input.markdown_sha256
+        || version.content_sha256 != input.source.content_sha256
         || version.markdown_object_key.is_none()
     {
         return Err(PromotionError::IdempotencyConflict);

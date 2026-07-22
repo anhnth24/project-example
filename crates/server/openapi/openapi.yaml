@@ -2,13 +2,16 @@ openapi: 3.1.0
 info:
   title: Markhand Web API
   version: 0.1.0
-  description: Phase 1B POC API contract.
+  description: Phase 1B POC API contract for auth, ingest, retrieval, Q&A, and jobs.
 servers:
   - url: /api/v1
+security:
+  - bearerAuth: []
 paths:
   /health/live:
     get:
       operationId: healthLive
+      security: []
       responses:
         "200":
           description: Process health; does not contact dependencies.
@@ -19,19 +22,470 @@ paths:
   /health/ready:
     get:
       operationId: healthReady
+      security: []
       responses:
         "200":
-          description: PostgreSQL, Qdrant and MinIO are reachable.
+          description: Fail-closed dependency readiness (DB/vector/object/signature/reconcile).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
         "503":
           $ref: "#/components/responses/ApiError"
+  /auth/login:
+    post:
+      operationId: authLogin
+      security: []
+      responses:
+        "200":
+          description: Access + refresh token pair.
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /auth/refresh:
+    post:
+      operationId: authRefresh
+      security: []
+      responses:
+        "200":
+          description: Rotated token pair.
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /auth/logout:
+    post:
+      operationId: authLogout
+      security: []
+      responses:
+        "204":
+          description: Session revoked.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /auth/me:
+    get:
+      operationId: authMe
+      responses:
+        "200":
+          description: Current OrgContext snapshot.
+        "401":
+          $ref: "#/components/responses/ApiError"
+  /uploads:
+    post:
+      operationId: createUpload
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                collectionId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Quarantine upload accepted or rejected with disposition.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "413":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /collections:
+    get:
+      operationId: listCollections
+      responses:
+        "200":
+          description: Collections visible to the caller.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectionPage"
+    post:
+      operationId: createCollection
+      responses:
+        "201":
+          description: Collection created.
+        "403":
+          $ref: "#/components/responses/ApiError"
+  /collections/{collectionId}:
+    parameters:
+      - $ref: "#/components/parameters/collectionId"
+    get:
+      operationId: getCollection
+      responses:
+        "200":
+          description: Collection detail.
+        "404":
+          $ref: "#/components/responses/ApiError"
+    patch:
+      operationId: updateCollection
+      responses:
+        "200":
+          description: Collection metadata updated.
+        "404":
+          $ref: "#/components/responses/ApiError"
+    delete:
+      operationId: deleteCollection
+      responses:
+        "204":
+          description: Collection soft-deleted.
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /collections/{collectionId}/documents:
+    get:
+      operationId: listDocuments
+      parameters:
+        - $ref: "#/components/parameters/collectionId"
+      responses:
+        "200":
+          description: Paginated documents.
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}:
+    get:
+      operationId: getDocument
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+      responses:
+        "200":
+          description: Document detail (published-visible).
+        "404":
+          $ref: "#/components/responses/ApiError"
+    delete:
+      operationId: deleteDocument
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+      responses:
+        "204":
+          description: Tombstone delete requested.
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/preview:
+    get:
+      operationId: previewDocument
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+        - name: versionId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Trusted Markdown preview (published-only; history for non-current).
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions:
+    get:
+      operationId: listDocumentVersions
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+      responses:
+        "200":
+          description: Published versions (non-current requires qa.history).
+  /documents/{documentId}/versions/{versionId}:
+    get:
+      operationId: getDocumentVersion
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+        - $ref: "#/components/parameters/versionId"
+      responses:
+        "200":
+          description: Published version detail.
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions/{versionId}/diff:
+    get:
+      operationId: diffDocumentVersions
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+        - $ref: "#/components/parameters/versionId"
+        - name: against
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Version identity diff (compare retrieval for content deltas).
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/versions/{versionId}/publish:
+    post:
+      operationId: publishDocumentVersion
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+        - $ref: "#/components/parameters/versionId"
+      responses:
+        "204":
+          description: Version published / current pointer updated.
+  /documents/{documentId}/versions/{versionId}/download-capability:
+    post:
+      operationId: issueDownloadCapability
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+        - $ref: "#/components/parameters/versionId"
+      responses:
+        "200":
+          description: Short-lived single-use download capability.
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /downloads/{capability}:
+    get:
+      operationId: redeemDownload
+      parameters:
+        - name: capability
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Object bytes streamed after fresh ACL + single-use redeem.
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /documents/{documentId}/reindex:
+    post:
+      operationId: reindexDocument
+      parameters:
+        - $ref: "#/components/parameters/documentId"
+      responses:
+        "200":
+          description: Idempotent index job enqueue.
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /citations/resolve:
+    post:
+      operationId: resolveCitation
+      responses:
+        "200":
+          description: Freshly authorized citation pin with exact UTF-8 span.
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /conflicts:
+    get:
+      operationId: listConflicts
+      responses:
+        "200":
+          description: Open conflicts where both claim collections are authorized.
+  /conflicts/{conflictId}:
+    get:
+      operationId: getConflict
+      parameters:
+        - name: conflictId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Conflict detail (dual-collection authorized).
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /conflicts/{conflictId}/triage:
+    post:
+      operationId: triageConflict
+      parameters:
+        - name: conflictId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [resolved, accepted_exception, false_positive]
+                resolutionNote:
+                  type: string
+      responses:
+        "200":
+          description: Conflict triage applied.
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /jobs/{jobId}:
+    get:
+      operationId: getJob
+      parameters:
+        - $ref: "#/components/parameters/jobId"
+      responses:
+        "200":
+          description: Job status (document collection authorized).
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /jobs/{jobId}/events:
+    get:
+      operationId: jobEvents
+      parameters:
+        - $ref: "#/components/parameters/jobId"
+        - name: lastEventId
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Resumable SSE job events with live-tail + durable sequence.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SseEnvelope"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /search:
+    post:
+      operationId: search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Tenant-scoped hybrid search hits + citations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /ask:
+    post:
+      operationId: ask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "200":
+          description: Grounded answer with claim-level citation validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /ask/stream:
+    post:
+      operationId: askStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskRequest"
+      responses:
+        "200":
+          description: Sequenced SSE answer stream with per-batch principal revalidation.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SseEnvelope"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /openapi.yaml:
+    get:
+      operationId: openapiYaml
+      security: []
+      responses:
+        "200":
+          description: Embedded OpenAPI document.
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    collectionId:
+      name: collectionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    documentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    versionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    jobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
   responses:
     ApiError:
       description: Canonical API error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    RateLimited:
+      description: Rate limited
+      headers:
+        Retry-After:
+          schema:
+            type: integer
       content:
         application/json:
           schema:
@@ -67,3 +521,263 @@ components:
           type: [string, "null"]
         hasMore:
           type: boolean
+    Collection:
+      type: object
+      required: [id, name, slug, visibility, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: [string, "null"]
+        visibility:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    CollectionPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Collection"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    CitationPin:
+      type: object
+      required:
+        - citeId
+        - sourceContentSha256
+        - canonicalMarkdownSha256
+        - quoteSha256
+        - chunkIdentitySha256
+        - quote
+        - sourceSpanStart
+        - sourceSpanEnd
+        - quoteLocalStart
+        - quoteLocalEnd
+      properties:
+        citeId:
+          type: string
+        sourceContentSha256:
+          type: string
+          description: Original uploaded/source object SHA-256
+        canonicalMarkdownSha256:
+          type: string
+          description: Trusted canonical Markdown artifact SHA-256
+        quoteSha256:
+          type: string
+          description: SHA-256 of exact UTF-8 quote bytes
+        chunkIdentitySha256:
+          type: string
+        quote:
+          type: string
+        sourceSpanStart:
+          type: integer
+          description: Absolute UTF-8 byte offset into canonical Markdown
+        sourceSpanEnd:
+          type: integer
+        quoteLocalStart:
+          type: integer
+          description: UTF-8 byte offset into immutable chunk body
+        quoteLocalEnd:
+          type: integer
+        page:
+          type: integer
+        slide:
+          type: integer
+        sheet:
+          type: string
+        isCurrent:
+          type: boolean
+        anchor:
+          type: string
+    ResolveCitationRequest:
+      type: object
+      required:
+        - logicalDocumentId
+        - versionId
+        - sourceContentSha256
+        - canonicalMarkdownSha256
+        - chunkId
+        - sourceSpanStart
+        - sourceSpanEnd
+        - quoteLocalStart
+        - quoteLocalEnd
+        - quote
+      properties:
+        logicalDocumentId:
+          type: string
+          format: uuid
+        versionId:
+          type: string
+          format: uuid
+        sourceContentSha256:
+          type: string
+        canonicalMarkdownSha256:
+          type: string
+        chunkId:
+          type: string
+          format: uuid
+        sourceSpanStart:
+          type: integer
+        sourceSpanEnd:
+          type: integer
+        quoteLocalStart:
+          type: integer
+        quoteLocalEnd:
+          type: integer
+        quote:
+          type: string
+        requireCurrent:
+          type: boolean
+          default: false
+    ExtractorError:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          enum:
+            - extractor_unsupported_format
+            - extractor_timeout
+            - extractor_sandbox_killed
+            - extractor_corrupt_input
+        message:
+          type: string
+        requestId:
+          type: string
+    SseEnvelope:
+      type: object
+      required: [version, sequence, event, requestId, data]
+      properties:
+        version:
+          type: integer
+        sequence:
+          type: integer
+          format: int64
+        event:
+          type: string
+        requestId:
+          type: string
+        data: {}
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        collectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        mode:
+          type: string
+          enum: [current, as_of, compare, history]
+        asOf:
+          type: string
+          format: date-time
+        documentId:
+          type: string
+          format: uuid
+        versionA:
+          type: string
+          format: uuid
+        versionB:
+          type: string
+          format: uuid
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        conflictIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    SearchResponse:
+      type: object
+      required: [hits, citations, requestId]
+      properties:
+        hits:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationPin"
+        requestId:
+          type: string
+          format: uuid
+        warnings:
+          type: array
+          items:
+            type: string
+    AskRequest:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+        collectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        mode:
+          type: string
+          enum: [current, as_of, compare, history]
+        asOf:
+          type: string
+          format: date-time
+        documentId:
+          type: string
+          format: uuid
+        versionA:
+          type: string
+          format: uuid
+        versionB:
+          type: string
+          format: uuid
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 20
+        conflictIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    AskResponse:
+      type: object
+      required: [answer, mode, citations, requestId]
+      properties:
+        answer:
+          type: string
+        mode:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationPin"
+        warnings:
+          type: array
+          items:
+            type: string
+        versionContext:
+          type: object
+          additionalProperties: true
+        embeddingMode:
+          type: string
+        requestId:
+          type: string
+          format: uuid

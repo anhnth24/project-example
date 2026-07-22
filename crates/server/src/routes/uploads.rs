@@ -55,10 +55,27 @@ struct UploadResponse {
 async fn create_upload(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedOrg,
+    client_ip: Option<axum::Extension<crate::middleware::ClientIp>>,
     headers: HeaderMap,
     multipart: Multipart,
 ) -> Result<Response, UploadRouteError> {
     let request_id = auth.request_id.clone();
+    let ip = client_ip
+        .map(|ext| ext.0 .0.clone())
+        .unwrap_or_else(|| "unknown".into());
+    if let Err(rejected) = crate::routes::rate_limit_guard::check_user(
+        &state,
+        &auth.context.org_id().to_string(),
+        &auth.context.user_id().to_string(),
+        &request_id,
+    ) {
+        return Err(UploadRouteError::RateLimited(rejected));
+    }
+    if let Err(rejected) =
+        crate::routes::rate_limit_guard::check_route(&state, "upload", &ip, &request_id)
+    {
+        return Err(UploadRouteError::RateLimited(rejected));
+    }
     require_permission(&auth.context, "doc.upload")
         .map_err(|_| UploadRouteError::Upload(UploadError::PermissionDenied, request_id.clone()))?;
 
@@ -267,6 +284,7 @@ enum UploadRouteError {
     Upload(UploadError, String),
     Quota(QuotaError, String),
     Validation(String, String),
+    RateLimited(crate::routes::rate_limit_guard::RateLimitRejected),
 }
 
 impl IntoResponse for UploadRouteError {
@@ -284,6 +302,7 @@ impl IntoResponse for UploadRouteError {
                 }),
             )
                 .into_response(),
+            Self::RateLimited(rejected) => rejected.into_response(),
         }
     }
 }

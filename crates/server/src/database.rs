@@ -74,6 +74,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0017_expand_qa_history_permission.sql",
         include_str!("../migrations/0017_expand_qa_history_permission.sql"),
     ),
+    (
+        "0018_expand_download_capability_redemptions.sql",
+        include_str!("../migrations/0018_expand_download_capability_redemptions.sql"),
+    ),
+    (
+        "0019_expand_ops_fences_jobs_system.sql",
+        include_str!("../migrations/0019_expand_ops_fences_jobs_system.sql"),
+    ),
+    (
+        "0020_expand_hash_semantics_readiness_ops.sql",
+        include_str!("../migrations/0020_expand_hash_semantics_readiness_ops.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
