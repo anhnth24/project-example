@@ -1,0 +1,40 @@
+# BLOCKED alerts — intentionally NOT listed in prometheus.yml rule_files.
+# Kept for documentation / inventory; loading them would claim false coverage.
+groups:
+  - name: markhand.alerts.blocked
+    rules:
+      - alert: MarkhandQueryLatencyP99Burn
+        expr: vector(0) > 1
+        labels:
+          severity: page
+          team: operations
+          class: slo
+          status: blocked
+        annotations:
+          summary: BLOCKED — filtered-query P99 series is not emitted by O01.
+          description: >
+            Formal gate G0-SLO-QUERY-P99 targets filtered-query P99 <=1000ms.
+            O01 emits markhand_api_request_duration_seconds{route="search"} and
+            retrieval-leg histograms, not a filtered-query end-to-end series.
+            Do not enable until a filtered-query latency metric exists.
+          threshold_source: G0-SLO-QUERY-P99
+          runbook: docs/runbooks/dependency-outage.md
+          dashboard: markhand-slo
+          coverage: blocked
+
+      - alert: MarkhandGlmProbeDown
+        expr: vector(0) > 1
+        labels:
+          severity: ticket
+          team: operations
+          class: dependency
+          status: blocked
+        annotations:
+          summary: BLOCKED — no configured GLM health endpoint for blackbox probing.
+          description: >
+            Deploy stacks do not define a stable GLM/health URL. Use metric-based
+            MarkhandGlmProviderErrors (qa_provider failure ratio) instead.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+          runbook: docs/runbooks/glm-fallback.md
+          dashboard: markhand-deps
+          coverage: blocked

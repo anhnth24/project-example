@@ -59,6 +59,15 @@ pub mod names {
     pub const AUTH_DECISIONS_TOTAL: &str = "markhand_auth_decisions_total";
 }
 
+/// Explicit second-based histogram boundaries for latency instruments.
+///
+/// Default OTel boundaries (`0, 5, 10, …`) cannot resolve the approved G0-SLO
+/// query targets (P95 ≤ 0.5s / P99 ≤ 1.0s). Boundaries include both cut-points
+/// so Prometheus `histogram_quantile` can evaluate those thresholds.
+pub const LATENCY_SECONDS_BOUNDARIES: &[f64] = &[
+    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.35, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0,
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetricSample {
     pub name: String,
@@ -133,22 +142,31 @@ pub fn install(meter: &Meter, metrics_enabled: bool) -> Result<(), String> {
         })
         .build();
 
+    let latency_boundaries = LATENCY_SECONDS_BOUNDARIES.to_vec();
     let instruments = Instruments {
         api_requests: meter.u64_counter(names::API_REQUESTS_TOTAL).build(),
         api_duration: meter
             .f64_histogram(names::API_REQUEST_DURATION_SECONDS)
+            .with_unit("s")
+            .with_boundaries(latency_boundaries.clone())
             .build(),
         conversion_total: meter.u64_counter(names::CONVERSION_TOTAL).build(),
         conversion_duration: meter
             .f64_histogram(names::CONVERSION_DURATION_SECONDS)
+            .with_unit("s")
+            .with_boundaries(latency_boundaries.clone())
             .build(),
         embedding_total: meter.u64_counter(names::EMBEDDING_TOTAL).build(),
         embedding_duration: meter
             .f64_histogram(names::EMBEDDING_DURATION_SECONDS)
+            .with_unit("s")
+            .with_boundaries(latency_boundaries.clone())
             .build(),
         retrieval_total: meter.u64_counter(names::RETRIEVAL_TOTAL).build(),
         retrieval_duration: meter
             .f64_histogram(names::RETRIEVAL_DURATION_SECONDS)
+            .with_unit("s")
+            .with_boundaries(latency_boundaries)
             .build(),
         drift_total: meter.u64_counter(names::DRIFT_TOTAL).build(),
         reconcile_total: meter.u64_counter(names::RECONCILE_TOTAL).build(),
@@ -279,6 +297,13 @@ fn normalize_result(result: &str) -> &'static str {
     match result {
         "success" | "ok" | "completed" | "succeeded" => "success",
         "failed" | "fail" | "error" => "error",
+        // Embedding provider outcomes (keep distinct from opaque `other`).
+        "http_error" => "http_error",
+        "invalid_response" => "invalid_response",
+        // QA/GLM provider outcomes (keep distinct for outage alerting).
+        "outage" => "outage",
+        "timeout" => "timeout",
+        "truncated" => "truncated",
         "deny" | "denied" => "deny",
         "retry" => "retry",
         "dead_letter" => "dead_letter",
@@ -740,6 +765,9 @@ pub fn reset_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentelemetry::metrics::MeterProvider as _;
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    use opentelemetry_sdk::Resource;
 
     #[test]
     fn rejects_high_cardinality_labels() {
@@ -759,5 +787,108 @@ mod tests {
         assert_eq!(normalize_route("/api/v1/documents/abc"), "other");
         assert_eq!(normalize_format("PDF"), "pdf");
         assert_eq!(normalize_format("weird"), "other");
+    }
+
+    #[test]
+    fn result_enums_preserve_embedding_and_qa_failures() {
+        assert_eq!(normalize_result("http_error"), "http_error");
+        assert_eq!(normalize_result("invalid_response"), "invalid_response");
+        assert_eq!(normalize_result("outage"), "outage");
+        assert_eq!(normalize_result("timeout"), "timeout");
+        assert_eq!(normalize_result("truncated"), "truncated");
+        assert_eq!(normalize_result("failed"), "error");
+        assert_eq!(normalize_result("weird"), "other");
+    }
+
+    #[test]
+    fn latency_boundaries_include_approved_slo_cutpoints() {
+        assert!(
+            LATENCY_SECONDS_BOUNDARIES.windows(2).all(|w| w[0] < w[1]),
+            "boundaries must be strictly increasing"
+        );
+        assert!(
+            LATENCY_SECONDS_BOUNDARIES.contains(&0.5),
+            "0.5s boundary required for G0-SLO-QUERY-P95"
+        );
+        assert!(
+            LATENCY_SECONDS_BOUNDARIES.contains(&1.0),
+            "1.0s boundary required for G0-SLO-QUERY-P99"
+        );
+    }
+
+    #[test]
+    fn latency_histogram_buckets_separate_slo_thresholds() {
+        // Local provider (not process OnceLock) proves bucket export assumptions.
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder()
+            .with_resource(Resource::builder_empty().build())
+            .with_reader(reader)
+            .build();
+        let meter = provider.meter("markhand-histogram-test");
+        let histogram = meter
+            .f64_histogram(names::API_REQUEST_DURATION_SECONDS)
+            .with_unit("s")
+            .with_boundaries(LATENCY_SECONDS_BOUNDARIES.to_vec())
+            .build();
+        histogram.record(0.40, &[]);
+        histogram.record(0.60, &[]);
+        histogram.record(1.20, &[]);
+        provider.force_flush().expect("flush histogram");
+
+        let finished = exporter.get_finished_metrics().expect("finished metrics");
+        let mut found = false;
+        for resource_metrics in &finished {
+            for scope_metrics in resource_metrics.scope_metrics() {
+                for metric in scope_metrics.metrics() {
+                    if metric.name() != names::API_REQUEST_DURATION_SECONDS {
+                        continue;
+                    }
+                    let opentelemetry_sdk::metrics::data::AggregatedMetrics::F64(agg) =
+                        metric.data()
+                    else {
+                        continue;
+                    };
+                    let opentelemetry_sdk::metrics::data::MetricData::Histogram(hist) = agg else {
+                        continue;
+                    };
+                    for point in hist.data_points() {
+                        found = true;
+                        let bounds: Vec<f64> = point.bounds().collect();
+                        assert!(
+                            bounds.iter().any(|b| (*b - 0.5).abs() < f64::EPSILON),
+                            "exported bounds missing 0.5: {bounds:?}"
+                        );
+                        assert!(
+                            bounds.iter().any(|b| (*b - 1.0).abs() < f64::EPSILON),
+                            "exported bounds missing 1.0: {bounds:?}"
+                        );
+                        // OTel bucket_counts are per-bucket (not Prometheus-cumulative).
+                        // Samples: 0.40, 0.60, 1.20 → cumulative-to-bound via prefix sums.
+                        let idx_half = bounds
+                            .iter()
+                            .position(|b| (*b - 0.5).abs() < f64::EPSILON)
+                            .expect("0.5 bound");
+                        let idx_one = bounds
+                            .iter()
+                            .position(|b| (*b - 1.0).abs() < f64::EPSILON)
+                            .expect("1.0 bound");
+                        let counts: Vec<u64> = point.bucket_counts().collect();
+                        // bounds.len()+1 buckets (final +Inf). Prefix sum through bound index.
+                        let cum_to = |idx: usize| -> u64 { counts[..=idx].iter().sum() };
+                        assert_eq!(cum_to(idx_half), 1, "observations <=0.5s");
+                        assert_eq!(cum_to(idx_one), 2, "observations <=1.0s");
+                        assert_eq!(point.count(), 3);
+                        assert_eq!(
+                            counts.iter().sum::<u64>(),
+                            3,
+                            "per-bucket counts must cover all samples"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(found, "histogram data point not exported");
+        let _ = provider.shutdown();
     }
 }

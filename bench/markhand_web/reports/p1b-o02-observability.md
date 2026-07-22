@@ -1,65 +1,52 @@
-# P1B-O02 evidence — dashboards, alerts, runbooks
+# P1B-O02 evidence — dashboards, alerts, runbooks (round-1 fixes)
 
-Status: **In Progress** (implementation on `cursor/implement-p1b-o02-5007`; not Review/Done).  
-Kind: static rule validation + synthetic fault fixtures + tabletop walkthrough.  
+Status: **In Progress** (branch `cursor/implement-p1b-o02-5007`; not Review/Done).
 `claims_real_outage`: **false**
 
 ## Commands and exact results
 
 ```bash
-$ python3 scripts/check-observability-o02.py
-P1B-O02 observability validation OK (15 alerts, 4 dashboards, 15 fixtures, 7 runbooks); synthetic only — no live outage claimed
+$ bash scripts/fetch-promtool.sh
+# → .tools/promtool (Prometheus 2.55.1, sha256 verified)
 
-$ python3 scripts/check-observability-o02.py --self-test \
-    --json-report deploy/observability/evidence/validation-report.json
-test_alert_inventory_size ... ok
-test_each_fixture_has_firing_and_resolved ... ok
-test_gates_registry_approved ... ok
-test_no_validation_errors ... ok
-Ran 4 tests in ~0.03s
-OK
+$ .tools/promtool check rules \
+    deploy/observability/prometheus/recording_rules.yml \
+    deploy/observability/prometheus/alert_rules.yml
+Checking deploy/observability/prometheus/recording_rules.yml
+  SUCCESS: 13 rules found
+Checking deploy/observability/prometheus/alert_rules.yml
+  SUCCESS: 16 rules found
+
+$ .tools/promtool test rules deploy/observability/prometheus/tests/alerts_test.yml
+  SUCCESS
+
+$ python3 scripts/check-observability-o02.py --self-test
+P1B-O02 observability validation OK (16 active alerts, 2 blocked, 4 dashboards, promtool check/test OK)
+Ran 5 tests … OK
+
+$ cargo test -p fileconv-server metrics::tests --lib
+test result: ok. 5 passed; 0 failed …
 ```
 
-Machine report: `deploy/observability/evidence/validation-report.json`:
+Machine report regenerated at `deploy/observability/evidence/validation-report.json`.
 
-```json
-{
-  "version": 1,
-  "issue": "P1B-O02",
-  "ok": true,
-  "alertCount": 15,
-  "dashboardCount": 4,
-  "fixtureCount": 15,
-  "runbookCount": 7,
-  "errors": [],
-  "claims_real_outage": false
-}
-```
+## Round-1 fixes
 
-## Threshold citations
+1. Explicit second histogram boundaries (`0.5`/`1.0`) in O01 + bucket export tests
+2. Digest-pinned node-exporter + blackbox; HTTP vs TCP modules; real POC service names
+3. Broad Alertmanager inhibition removed
+4. Result enums: `http_error`/`invalid_response`/`outage`/`timeout`/`truncated`
+5. Auth deny = count policy (O02-OPS-AUTH-DENY-COUNT), not SLA ratio
+6. SLO/availability on `route=search` only; P99 filtered-query + GLM probe **blocked**
+7. Dead-letter/reconcile use `increase()` without long `for` (promtool proves fire/resolve)
+8. Validator invokes pinned promtool + mutation self-tests; evidence auto-regenerated
+9. Runbooks cite `compose.poc.yml` / `poc-health.sh` / worker kinds; escalate where no admin CLI
 
-| Threshold | Value | Source |
-|---|---:|---|
-| Query P95 | 500 ms | `bench/markhand_web/gates.yaml` `#G0-SLO-QUERY-P95` |
-| Query P99 | 1000 ms | `bench/markhand_web/gates.yaml` `#G0-SLO-QUERY-P99` |
-| Queue age | 120 min | `docs/markhand-web-sla-targets.md` |
-| Queue depth warning | 600 | Derived from `#G0-CAP-INGEST-THROUGHPUT` 1200 docs/h × 0.5 h |
-| Disk free ratio | ≥ 0.30 | `bench/markhand_web/workload-profile.yaml` `hardware.headroomPercent.disk` |
-| Availability | ≥ 99.5% | `docs/markhand-web-sla-targets.md` |
+## Non-claims / blockers
 
-## Deliverables
-
-- Prometheus recording + alert rules against O01 metric/label schema
-- Grafana provisioning + dashboards with bounded custom variables only
-- OTel collector Prometheus export config
-- Alertmanager example routing (placeholder secrets only)
-- 15 synthetic alert fixtures (each firing + resolved)
-- 7 runbooks with detection → contain → recover → verify (+ rollback)
-- Tabletop evidence JSON (not a live game day)
-
-## Explicit non-claims
-
-- No live dependency outage, disk fill, or credential leak was exercised.
-- No Profile B `targetMatch=true` SLO measurement claimed.
-- Backup-failure alerts deferred to P1B-O03 (no backup metrics in O01).
-- No Rust product telemetry changes in this issue.
+- Docker unavailable in this VM — compose not live-booted; pins/endpoints validated statically
+- Profile B SLO evidence still null / `targetMatch=false`
+- Filtered-query P99 series not emitted — alert blocked
+- GLM blackbox probe blocked (no configured endpoint)
+- No supported admin requeue/reconcile CLI — contain/escalate gap documented
+- Backup alerts remain O03

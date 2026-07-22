@@ -1,52 +1,66 @@
 # Runbook: Vector index rebuild / drift repair
 
-Issue: P1B-O02  
-Alerts: `MarkhandDriftDetected`, `MarkhandReconcileErrors`  
-Dashboard: Grafana `markhand-ops`  
-Related ADRs: index signature / model migration (0006/0011).  
-Backup/restore ordering is owned by **P1B-O03** — this runbook covers rebuild/reconcile only.
+Issue: P1B-O02
+Alerts: `MarkhandDriftDetected`, `MarkhandReconcileErrors`
+Dashboard: `markhand-ops`
+Related: ADR 0006/0011. Full backup/restore ordering is **P1B-O03** (out of scope).
 
 ## Prerequisites
 
-- Confirm active `index_signature` (model/chunk/dimension/normalize) before rebuild.
-- Rebuild is idempotent from PostgreSQL chunks; do not treat Qdrant as SoR.
-- No document text in logs/evidence.
+- Confirm active `MARKHAND_INDEX_SIGNATURE` in `deploy/.env` / API env.
+- Workers: `worker-index`, `worker-embedding` (`MARKHAND_WORKER_KIND=index|embedding`).
+- **Gap:** there is **no supported operator CLI** for `reconcile --mode=detect|repair` in this repository yet. Runtime reconcile is performed by server/worker code paths / startup fence — do not invent shell commands.
 
 ## Detection
 
-1. Confirm `markhand:drift:rate_1m > 1` and/or `markhand:reconcile:error_rate_10m > 0`.
-2. Inspect bounded drift labels `kind` (`object|vector|index`) and `state`
-   (`orphan|missing|stale`) via metrics only.
-3. Check whether a signature change or partial outage preceded the drift.
+```bash
+source deploy/scripts/poc-compose.sh && poc_compose_init
+curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"
+# If reconcile fence not ready, ready fails closed — inspect API logs (IDs only)
+"${COMPOSE[@]}" logs --tail=200 api worker-index worker-embedding
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=markhand:drift:increase_10m'
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=markhand:reconcile:error_increase_5m'
+```
 
 ## Contain
 
-1. Keep readiness fail-closed if reconcile fence requires it.
-2. Pause embed/index workers if they amplify inconsistent writes.
-3. Freeze signature/config changes until repair completes.
+```bash
+"${COMPOSE[@]}" stop worker-embedding worker-index
+# Freeze signature/config changes (do not edit MARKHAND_INDEX_SIGNATURE mid-incident)
+```
 
 ## Recover
 
-1. Run detect-mode reconcile first (`mode=detect`) and review counts (IDs only).
-2. If safe, run repair-mode reconcile (`mode=repair`) in bounded batches.
-3. For signature cutover: enqueue idempotent embedding backfill; wait for active
-   generation to become consistent (ADR 0011).
-4. Do not delete PostgreSQL chunks to “fix” Qdrant.
+1. Restore Qdrant/Postgres health ([dependency-outage](dependency-outage.md)).
+2. Restart API so startup reconciliation can re-run:
+
+```bash
+"${COMPOSE[@]}" restart api
+deploy/scripts/poc-health.sh
+```
+
+3. Resume index/embedding workers gradually:
+
+```bash
+"${COMPOSE[@]}" start worker-index
+"${COMPOSE[@]}" start worker-embedding
+```
+
+4. Signature cutover / full rebuild: follow ADR 0011 process; **escalate** for a planned backfill — no ad-hoc SQL deletes of chunks/vectors.
 
 ## Verify
 
-1. Drift rate returns to ~0; reconcile errors stop.
-2. `/ready` 200 with reconcile gate satisfied.
-3. Retrieval smoke on synthetic/fixtures corpus (no customer content).
-4. Dashboard panels for drift/reconcile stay quiet for ≥15 minutes.
+1. `/api/v1/health/ready` 200.
+2. Drift/reconcile increases return to 0.
+3. Search smoke (synthetic/fixtures only).
 
 ## Rollback
 
-- Stop repair mode if error rate rises; return to detect-only.
-- Keep previous index generation readable if dual-generation is configured.
-- Re-pause embed workers and escalate if signature mismatch persists.
+- Stop index/embedding workers if reconcile errors return.
+- Keep previous index generation if dual-generation was configured (otherwise escalate).
 
 ## Synthetic evidence
 
-Fixtures: `MarkhandDriftDetected.json`, `MarkhandReconcileErrors.json`  
-Tabletop: `tt-rebuild` — synthetic drift signal only.
+Promtool `reconcile_error_single_event_fires_and_resolves`. No live rebuild claimed.

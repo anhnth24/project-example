@@ -1,8 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "issue": "P1B-O02",
   "kind": "tabletop",
   "claims_real_outage": false,
+  "validation": "promtool test rules (see deploy/observability/prometheus/tests/)",
   "scenarios": [
     {
       "id": "tt-queue-stuck",
@@ -14,8 +15,7 @@
         "recover",
         "verify"
       ],
-      "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "result": "pass_tabletop"
     },
     {
       "id": "tt-converter-outbreak",
@@ -27,8 +27,7 @@
         "recover",
         "verify"
       ],
-      "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "result": "pass_tabletop"
     },
     {
       "id": "tt-dependency",
@@ -40,8 +39,7 @@
         "recover",
         "verify"
       ],
-      "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "result": "pass_tabletop"
     },
     {
       "id": "tt-disk",
@@ -53,8 +51,7 @@
         "recover",
         "verify"
       ],
-      "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "result": "pass_tabletop"
     },
     {
       "id": "tt-glm",
@@ -67,7 +64,7 @@
         "verify"
       ],
       "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "note": "metric-based only; GLM probe blocked"
     },
     {
       "id": "tt-rebuild",
@@ -79,8 +76,7 @@
         "recover",
         "verify"
       ],
-      "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "result": "pass_tabletop"
     },
     {
       "id": "tt-key-rotation",
@@ -92,8 +88,7 @@
         "recover",
         "verify"
       ],
-      "result": "pass_tabletop",
-      "note": "Walkthrough against synthetic fixture values only."
+      "result": "pass_tabletop"
     }
   ]
 }

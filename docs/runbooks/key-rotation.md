@@ -1,55 +1,69 @@
 # Runbook: Credential leak / key rotation
 
-Issue: P1B-O02  
-Alert: `MarkhandAuthDenySpike` (and manual security trigger)  
-Dashboard: Grafana `markhand-ops`  
-Threshold: auth deny ratio > 20% for 10m (operational security signal documented in
-`deploy/observability/thresholds.yaml`; not a G0 latency gate).
+Issue: P1B-O02
+Alert: `MarkhandAuthDenySpike`
+Dashboard: `markhand-ops`
+Threshold: **O02-OPS-AUTH-DENY-COUNT** (>50 deny decisions in 10m) — operational policy, **not** SLA-derived.
 
 ## Prerequisites
 
-- Security on-call + ability to revoke sessions/API keys.
-- Secret manager access. **Never** paste secrets, tokens, or signed URLs into
-  tickets, chat, metrics, or git.
+- Access to secret manager / `deploy/.env` on the operator host (never commit secrets)
+- Relevant keys: `MARKHAND_AUTH_SIGNING_KEY`, MinIO keys, embedding API key, GLM provider key
+- Audit log is append-only — do not attempt UPDATE/DELETE
 
 ## Detection
 
-1. Confirm `markhand:auth:deny_ratio_10m > 0.20` or credible leak report.
-2. Check `markhand_auth_decisions_total` by bounded `code`
-   (`unauthorized|invalid_credentials|permission_denied|...`).
-3. Inventory which credential classes might be exposed (session, provider, object
-   storage, DB) using secret-manager metadata only.
+```bash
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=markhand:auth:deny_increase_10m'
+"${COMPOSE[@]:-docker compose -f deploy/compose.poc.yml}" logs --tail=200 api | \
+  grep -E 'auth|deny' || true
+# IDs/codes only — no tokens/passwords
+```
 
 ## Contain
 
-1. Revoke/rotate the suspected credential immediately.
-2. Invalidate sessions / disable affected service accounts.
-3. Temporarily tighten admission (rate limits) if credential stuffing is active.
-4. Preserve audit rows (append-only); do not attempt UPDATE/DELETE on `audit_log`.
+1. Revoke/rotate the suspected credential in the secret manager immediately.
+2. Restart API to pick up new signing/session material:
+
+```bash
+source deploy/scripts/poc-compose.sh && poc_compose_init
+# Update sealed values in deploy/.env (local) or secret store (prod) — do not echo secrets
+"${COMPOSE[@]}" up -d --no-deps api
+```
+
+3. Tighten admission / rate limits if credential stuffing is active (R06 middleware already enforces limits).
 
 ## Recover
 
-1. Issue replacement secrets via secret manager; update runtime config/reload.
-2. Verify new credentials with `--check-config` / health probes (no secret echo).
+1. Config check (no secret echo):
+
+```bash
+# From a workstation with env loaded — never pipe secrets to logs
+cargo run -p fileconv-server -- --check-config
+```
+
+2. Health:
+
+```bash
+deploy/scripts/poc-health.sh
+curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"
+```
+
 3. Re-enable disabled accounts only after ownership is confirmed.
-4. If object-storage signed URL scheme leaked, rotate signing key and invalidate
-   outstanding URLs per storage policy.
+4. If object-storage signing leaked: rotate MinIO app keys via `deploy/poc/minio-init.sh` flow and recreate `minio-init` — coordinate carefully; escalate if unsure.
 
 ## Verify
 
-1. Auth deny ratio returns to baseline (< 0.20 and not spiking).
-2. Legitimate smoke login/search succeeds; unauthorized still denied.
-3. Canary secret strings absent from logs/metrics/audit metadata.
-4. Record incident timeline without secret material.
+1. `markhand:auth:deny_increase_10m` back under 50.
+2. Legitimate login/search smoke succeeds; unauthorized still denied.
+3. Canary secrets absent from logs/metrics/audit metadata.
 
 ## Rollback
 
-- If rotation breaks a dependency, roll forward to a second new secret rather than
-  re-using the leaked one.
+- Roll **forward** to a second new secret rather than reusing a leaked one.
 - Keep the leaked credential revoked permanently.
-- Re-disable Q&A/provider integration if provider key rotation is incomplete.
 
 ## Synthetic evidence
 
-Fixture: `MarkhandAuthDenySpike.json`  
-Tabletop: `tt-key-rotation` — synthetic deny-ratio evaluation only; no live leak.
+Promtool `auth_deny_count_threshold`. No live leak claimed.

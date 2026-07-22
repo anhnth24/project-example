@@ -1,15 +1,25 @@
 {
-  "version": 1,
+  "version": 2,
   "issue": "P1B-O02",
   "ok": true,
-  "alertCount": 15,
+  "alertCount": 16,
+  "blockedAlertCount": 2,
   "dashboardCount": 4,
-  "fixtureCount": 15,
   "runbookCount": 7,
-  "errors": [],
+  "promtool": "/workspace/.tools/promtool",
+  "promtoolCheckOk": true,
+  "promtoolTestOk": true,
+  "dockerAvailable": false,
   "claims_real_outage": false,
+  "errors": [],
+  "notes": [
+    "Docker not available in this environment; compose deployability validated via YAML/image pins/endpoints only."
+  ],
   "commands": [
+    "bash scripts/fetch-promtool.sh",
     "python3 scripts/check-observability-o02.py",
-    "python3 scripts/check-observability-o02.py --self-test"
+    "python3 scripts/check-observability-o02.py --self-test",
+    ".tools/promtool check rules deploy/observability/prometheus/recording_rules.yml deploy/observability/prometheus/alert_rules.yml",
+    ".tools/promtool test rules deploy/observability/prometheus/tests/alerts_test.yml"
   ]
 }

@@ -8,7 +8,7 @@
   ],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -20,7 +20,7 @@
         "name": "dependency",
         "label": "Dependency",
         "type": "custom",
-        "query": "postgres,qdrant,minio,embedding,glm,markhand_ready",
+        "query": "postgres,qdrant,minio,embedding,markhand_ready",
         "current": {
           "selected": true,
           "text": "postgres",
@@ -49,54 +49,8 @@
           },
           {
             "selected": false,
-            "text": "glm",
-            "value": "glm"
-          },
-          {
-            "selected": false,
             "text": "markhand_ready",
             "value": "markhand_ready"
-          }
-        ],
-        "multi": true,
-        "includeAll": true,
-        "hide": 0
-      },
-      {
-        "name": "leg",
-        "label": "Retrieval leg",
-        "type": "custom",
-        "query": "hybrid,lexical,vector,qa_provider,other",
-        "current": {
-          "selected": true,
-          "text": "hybrid",
-          "value": "hybrid"
-        },
-        "options": [
-          {
-            "selected": true,
-            "text": "hybrid",
-            "value": "hybrid"
-          },
-          {
-            "selected": false,
-            "text": "lexical",
-            "value": "lexical"
-          },
-          {
-            "selected": false,
-            "text": "vector",
-            "value": "vector"
-          },
-          {
-            "selected": false,
-            "text": "qa_provider",
-            "value": "qa_provider"
-          },
-          {
-            "selected": false,
-            "text": "other",
-            "value": "other"
           }
         ],
         "multi": true,
@@ -108,13 +62,28 @@
   "panels": [
     {
       "id": 1,
+      "type": "text",
+      "title": "Coverage notes",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Probes: postgres (tcp_connect), qdrant/minio/embedding/api ready (http_2xx). **GLM blackbox probe blocked** (no configured endpoint) \u2014 use `MarkhandGlmProviderErrors` metrics only."
+      }
+    },
+    {
+      "id": 2,
       "type": "timeseries",
       "title": "Dependency probe success",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 0
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -143,14 +112,14 @@
       }
     },
     {
-      "id": 2,
+      "id": 3,
       "type": "timeseries",
-      "title": "Embedding / retrieval error ratios",
+      "title": "Scrape up",
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 4
       },
       "datasource": {
         "type": "prometheus",
@@ -159,53 +128,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "markhand:embedding:error_ratio_10m",
-          "legendFormat": "embedding",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "markhand-prometheus"
-          }
-        },
-        {
-          "refId": "B",
-          "expr": "markhand:retrieval:error_ratio_10m",
-          "legendFormat": "retrieval",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "markhand-prometheus"
-          }
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        }
-      }
-    },
-    {
-      "id": 3,
-      "type": "timeseries",
-      "title": "Retrieval rate by leg/result",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "markhand-prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (leg, result) (rate(markhand_retrieval_total{leg=~\"$leg\"}[5m]))",
-          "legendFormat": "{{leg}}/{{result}}",
+          "expr": "up{job=~\"otel-collector|node|blackbox-http|blackbox-tcp\"}",
+          "legendFormat": "{{job}}",
           "datasource": {
             "type": "prometheus",
             "uid": "markhand-prometheus"
@@ -226,12 +150,12 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Embedding duration",
+      "title": "Embedding / retrieval / qa failure ratios",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 8
+        "w": 24,
+        "x": 0,
+        "y": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -240,8 +164,26 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "rate(markhand_embedding_duration_seconds_sum[5m]) / clamp_min(rate(markhand_embedding_duration_seconds_count[5m]), 1e-9)",
-          "legendFormat": "__auto",
+          "expr": "markhand:embedding:failure_ratio_10m",
+          "legendFormat": "embedding",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "markhand:retrieval:failure_ratio_10m",
+          "legendFormat": "retrieval",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "markhand-prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "markhand:qa_provider:failure_ratio_10m",
+          "legendFormat": "qa_provider",
           "datasource": {
             "type": "prometheus",
             "uid": "markhand-prometheus"
@@ -265,8 +207,5 @@
   },
   "editable": false,
   "graphTooltip": 1,
-  "links": [],
-  "fiscalYearStartMonth": 0,
-  "liveNow": false,
-  "weekStart": ""
+  "links": []
 }

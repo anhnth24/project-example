@@ -8,7 +8,7 @@
   ],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -135,7 +135,7 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Job transitions rate",
+      "title": "Dead-letter increase (5m)",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -149,8 +149,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (job_type, result) (rate(markhand_job_transitions_total{job_type=~\"$queue|other\"}[5m]))",
-          "legendFormat": "{{job_type}}/{{result}}",
+          "expr": "markhand:job:dead_letter_increase_5m",
+          "legendFormat": "{{job_type}}",
           "datasource": {
             "type": "prometheus",
             "uid": "markhand-prometheus"
@@ -171,7 +171,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Dead letter rate",
+      "title": "Job transitions rate",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -185,8 +185,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "markhand:job:dead_letter_rate_5m",
-          "legendFormat": "{{job_type}}",
+          "expr": "sum by (job_type, result) (rate(markhand_job_transitions_total[5m]))",
+          "legendFormat": "{{job_type}}/{{result}}",
           "datasource": {
             "type": "prometheus",
             "uid": "markhand-prometheus"
@@ -210,8 +210,5 @@
   },
   "editable": false,
   "graphTooltip": 1,
-  "links": [],
-  "fiscalYearStartMonth": 0,
-  "liveNow": false,
-  "weekStart": ""
+  "links": []
 }

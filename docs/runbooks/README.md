@@ -21,8 +21,9 @@ with an explicit **rollback** section.
 | [Dependency outage](dependency-outage.md) | `MarkhandDependencyProbeDown`, embedding/retrieval/SLO burns |
 | [Vector rebuild / drift](vector-rebuild.md) | `MarkhandDriftDetected`, `MarkhandReconcileErrors` |
 | [Disk exhaustion](disk-exhaustion.md) | `MarkhandDiskLow` |
-| [GLM fallback](glm-fallback.md) | `MarkhandGlmProviderErrors` |
-| [Key rotation](key-rotation.md) | `MarkhandAuthDenySpike` |
+| [GLM fallback](glm-fallback.md) | `MarkhandGlmProviderErrors` (metric-only; GLM probe blocked) |
+| [Key rotation](key-rotation.md) | `MarkhandAuthDenySpike` (count policy, not SLA ratio) |
 
-Observability artifacts, thresholds, and synthetic fixtures live under
-`deploy/observability/`. Backup/restore runbooks are **P1B-O03** (out of O02 scope).
+Blocked (not loaded): filtered-query P99 SLO alert; GLM blackbox probe.
+Artifacts/validation: `deploy/observability/` + `make check-observability` (pinned promtool).
+Backup/restore runbooks are **P1B-O03** (out of O02 scope).

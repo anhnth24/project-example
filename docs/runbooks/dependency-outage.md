@@ -1,55 +1,82 @@
-# Runbook: Dependency outage (PG / Qdrant / MinIO / embedding / ready)
+# Runbook: Dependency outage (PG / Qdrant / MinIO / embedding / API ready)
 
-Issue: P1B-O02  
-Alerts: `MarkhandDependencyProbeDown`, `MarkhandEmbeddingErrorOutbreak`,
+Issue: P1B-O02
+Alerts: `MarkhandDependencyProbeDown`, `MarkhandScrapeTargetDown`,
+`MarkhandDependencyProbeAbsent`, `MarkhandEmbeddingErrorOutbreak`,
 `MarkhandRetrievalErrorOutbreak`, `MarkhandQueryLatencyP95Burn`,
-`MarkhandQueryLatencyP99Burn`, `MarkhandAvailabilityBurn`  
-Dashboard: Grafana `markhand-deps`, `markhand-slo`  
-Threshold sources: availability SLA 99.5%; latency gates
-`G0-SLO-QUERY-P95` (500ms) / `G0-SLO-QUERY-P99` (1000ms) in
-`bench/markhand_web/gates.yaml`.
+`MarkhandSearchAvailabilityBurn`
+Dashboard: `markhand-deps`, `markhand-slo`
 
 ## Prerequisites
 
-- Bounded dependency labels only: `postgres|qdrant|minio|embedding|glm|markhand_ready`.
-- Never put connection strings, signed URLs, or credentials in chat/tickets.
+- Stack: `deploy/compose.poc.yml` (services: `postgres`, `qdrant`, `minio`, `mock-embedding`|`embedding-cpu`, `api`)
+- Health script: `deploy/scripts/poc-health.sh` (authoritative host checks)
+- Observability overlay (optional): `deploy/observability/compose.observability.yml`
+- Probes (in-network):
+  - TCP `postgres:5432`
+  - HTTP `qdrant:6333/healthz`
+  - HTTP `minio:9000/minio/health/live`
+  - HTTP `mock-embedding:8080/health` (aiteamvn: `embedding-cpu`)
+  - HTTP `api:8787/api/v1/health/ready`
 
 ## Detection
 
-1. Confirm `probe_success{dependency=...} == 0` and/or elevated embedding/retrieval errors.
-2. Check Markhand `/live` (process) vs `/ready` (deps + reconcile fence).
-3. Identify which dependency label failed; avoid scraping raw target URLs into alerts.
-4. For latency burns, confirm recording series `markhand:retrieval:p95_5m` / `p99_5m`.
+```bash
+source deploy/scripts/poc-compose.sh && poc_compose_init
+deploy/scripts/poc-health.sh
+# expected lines: healthy: postgres / qdrant / minio / mock-embedding|embedding-cpu / api-live / api-ready
+
+curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/live"   # process up
+curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"  # deps + reconcile fence
+curl -fsS "http://127.0.0.1:${MARKHAND_QDRANT_HTTP_PORT:-6343}/healthz"
+curl -fsS "http://127.0.0.1:${MARKHAND_MINIO_API_PORT:-9010}/minio/health/live"
+curl -fsS "http://127.0.0.1:${MARKHAND_EMBEDDING_PORT:-8090}/health"
+```
+
+Prometheus (if overlay up):
+
+```bash
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=probe_success'
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=up'
+```
 
 ## Contain
 
-1. Keep API liveness if possible; fail closed on readiness (do not bypass reconcile fence).
-2. Pause workers that hard-depend on the failed system (embed/index/delete as applicable).
-3. Enable documented degraded mode only when authz-safe FTS/text fallback is configured
-   (see ADRs; do not invent unsafe fallbacks).
+1. Keep `/live` up if possible; **do not bypass** readiness/reconcile fail-closed behavior.
+2. Pause workers that need the failed dependency:
+
+```bash
+"${COMPOSE[@]}" stop worker-embedding worker-index   # if qdrant/embedding down
+"${COMPOSE[@]}" stop worker-convert                  # if postgres/minio down
+```
+
+3. Degraded vector fallback only if already configured per ADR — do not invent unsafe bypasses.
 
 ## Recover
 
-1. Restore the failed dependency with its own runbook/provider procedure.
-2. Verify dependency health endpoints independently (no secrets in command output).
-3. Resume Markhand readiness path; wait for reconcile gate when required.
-4. Restart paused workers gradually; watch error ratios and queue age.
+```bash
+"${COMPOSE[@]}" ps
+"${COMPOSE[@]}" restart postgres   # or qdrant|minio|mock-embedding|api
+deploy/scripts/poc-health.sh
+"${COMPOSE[@]}" start worker-convert worker-index worker-embedding
+```
+
+Never paste `MARKHAND_DATABASE_URL` / MinIO keys into tickets.
 
 ## Verify
 
-1. `probe_success` returns 1 for the affected dependency.
-2. `/ready` 200; retrieval/embedding error ratios under 0.05.
-3. Latency recording series under SLO thresholds (0.5s p95 / 1.0s p99).
-4. Availability success ratio ≥ 0.995.
+1. `poc-health.sh` all healthy.
+2. `probe_success == 1` for postgres/qdrant/minio/embedding/markhand_ready.
+3. Search P95 / search availability alerts clear (`route=search` only).
+4. **Not covered:** filtered-query P99 (blocked alert) — do not claim it.
 
 ## Rollback
 
-- Re-pause workers if probes flap.
-- Revert any emergency config that weakened authz or readiness checks.
-- If degraded mode was enabled, disable it only after vector path is verified.
+- Re-stop workers if probes flap.
+- Revert emergency config that weakened authz/readiness.
 
 ## Synthetic evidence
 
-Fixtures: `MarkhandDependencyProbeDown.json`, latency/availability fixtures under
-`deploy/observability/fixtures/alerts/`.  
-Tabletop: `tt-dependency` — synthetic probe failure only; not a live outage.
+Promtool cases `dependency_probe_down`, `scrape_target_down`, `search_p95_*`. No live outage claimed.

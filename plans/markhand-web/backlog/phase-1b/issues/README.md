@@ -375,14 +375,12 @@ ghi trong issue đã `Done`.
 - **Acceptance/tests:** Trigger từng alert; runbook detection→contain→recover→verify;
   rule validation/fault/tabletop evidence.
 - **Evidence (in progress):**
-  - Thresholds cited from `gates.yaml` G0-SLO-*/G0-CAP, SLA targets, workload
-    disk headroom (`deploy/observability/thresholds.yaml`).
-  - Prometheus recording/alert rules + Alertmanager example + OTel Prometheus export.
-  - Grafana dashboards `markhand-{slo,queue,deps,ops}` with bounded variables.
-  - 15 synthetic alert fixtures + tabletop JSON (`claims_real_outage: false`).
-  - Runbooks: stuck jobs, converter outbreak, dependency outage, vector rebuild,
-    disk, GLM fallback, key rotation (detection→contain→recover→verify+rollback).
-  - Validator: `python3 scripts/check-observability-o02.py --self-test`.
+  - Round-1 review fixes: explicit latency histogram boundaries; digest-pinned
+    node/blackbox exporters; search-route SLO only; P99/GLM probe blocked;
+    promtool check/test rules; executable runbooks against `compose.poc.yml`.
+  - Thresholds: formal G0/SLA vs O02 operational policy in
+    `deploy/observability/thresholds.yaml`.
+  - Validator regenerates `deploy/observability/evidence/validation-report.json`.
   - Report: `bench/markhand_web/reports/p1b-o02-observability.md`.
 - **Security/migration:** No tenant/document high-cardinality labels. **Out:** staffing.
 

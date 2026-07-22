@@ -1,6 +1,6 @@
 # P1B-O02 alert/recording thresholds.
-# Every numeric threshold MUST cite an approved gate, SLA, or workload-profile field.
-# Do not invent unexplained numbers. Validators cross-check cited gate IDs.
+# Distinguish formal G0/SLA gates from O02 operational policy.
+# `for` durations are O02 alert policy, not approved gate values.
 version: 1
 issue: P1B-O02
 registry: bench/markhand_web/gates.yaml
@@ -9,18 +9,27 @@ workloadProfile: bench/markhand_web/workload-profile.yaml
 
 sources:
   G0-SLO-QUERY-P95:
+    kind: formal_gate
     path: bench/markhand_web/gates.yaml
     gateId: G0-SLO-QUERY-P95
     value: 500
     unit: milliseconds
     operator: "<="
+    coverage: "API route=search histogram (end-to-end query path)"
   G0-SLO-QUERY-P99:
+    kind: formal_gate
     path: bench/markhand_web/gates.yaml
     gateId: G0-SLO-QUERY-P99
     value: 1000
     unit: milliseconds
     operator: "<="
+    coverage: blocked
+    coverageNote: >
+      Gate is filtered-query P99. O01 emits route=search API latency and hybrid
+      retrieval legs, not a filtered-query series. Alert kept in
+      alert_rules.blocked.yml and is NOT loaded by Prometheus.
   SLA-QUEUE-AGE-MINUTES:
+    kind: formal_sla
     path: docs/markhand-web-sla-targets.md
     metric: "Oldest ingest queue age under recovery load"
     value: 120
@@ -28,83 +37,121 @@ sources:
     operator: "<="
     note: Capacity/recovery operational target; Profile B measurement still blocked.
   WORKLOAD-DISK-HEADROOM-PERCENT:
+    kind: formal_workload
     path: bench/markhand_web/workload-profile.yaml
     field: hardware.headroomPercent.disk
     value: 30
     unit: percent
     operator: ">="
-    note: Alert when free disk ratio falls below headroom (used ratio above 1 - headroom).
   WORKLOAD-PEAK-INGEST-DOCS-PER-HOUR:
+    kind: formal_gate
     path: bench/markhand_web/gates.yaml
     gateId: G0-CAP-INGEST-THROUGHPUT
     value: 1200
     unit: count_per_hour
     operator: ">="
   SLA-AVAILABILITY:
+    kind: formal_sla
     path: docs/markhand-web-sla-targets.md
     metric: "Service availability"
     value: 99.5
     unit: percent
     operator: ">="
-    note: Operational SLA; monthly measurement not yet Profile B proven.
+    coverage: "API route=search success ratio only"
+  O02-OPS-ERROR-OUTBREAK-RATIO:
+    kind: operational_policy
+    value: 0.05
+    unit: ratio
+    note: >
+      O02 policy: sustained conversion/embedding/retrieval failure ratio above 5%.
+      Informed by 10x the 0.5% availability error budget, but NOT a formal gate citation
+      for auth/drift.
+  O02-OPS-AUTH-DENY-COUNT:
+    kind: operational_policy
+    value: 50
+    unit: count_per_10m
+    note: >
+      O02 policy: more than 50 auth deny decisions in 10m. Not SLA-derived; security ops signal.
+  O02-OPS-DRIFT-COUNT:
+    kind: operational_policy
+    value: 10
+    unit: count_per_10m
+    note: "O02 policy: more than 10 drift events in 10m. Not SLA-derived."
+  O02-OPS-ALERT-FOR:
+    kind: operational_policy
+    note: >
+      Alert `for` windows (2m/5m/10m/15m) are O02 paging policy to reduce flapping.
+      They are not approved G0 gate parameters.
 
-# Machine-consumed alert thresholds (seconds/ratios where PromQL needs them).
+# Machine-consumed alert thresholds.
 alerts:
   query_p95_seconds:
     value: 0.5
     source: G0-SLO-QUERY-P95
     conversion: "500 milliseconds -> 0.5 seconds"
+    series: markhand:api_search:p95_5m
   query_p99_seconds:
     value: 1.0
     source: G0-SLO-QUERY-P99
+    status: blocked
     conversion: "1000 milliseconds -> 1.0 seconds"
   queue_oldest_age_seconds:
     value: 7200
     source: SLA-QUEUE-AGE-MINUTES
     conversion: "120 minutes -> 7200 seconds"
-  # Half-hour of peak arrival backlog buffer derived from G0-CAP peak rate.
-  # 1200 docs/hour * 0.5 hour = 600 documents. Not a separate gate; operational
-  # warning derived from approved peak ingest throughput.
   queue_depth_warning:
     value: 600
     source: WORKLOAD-PEAK-INGEST-DOCS-PER-HOUR
     conversion: "1200 docs/hour * 0.5 hour peak backlog buffer = 600"
+    kind: operational_derivation
   disk_free_ratio_min:
     value: 0.30
     source: WORKLOAD-DISK-HEADROOM-PERCENT
     conversion: "30% headroom -> free ratio >= 0.30"
-  # Error-rate outbreak windows use ratio thresholds tied to availability budget.
-  # 99.5% availability => error budget 0.5%. Sustained 5% conversion/dependency
-  # error rate is an order of magnitude above budget and warrants page-level alert.
   conversion_error_ratio:
     value: 0.05
-    source: SLA-AVAILABILITY
-    conversion: "availability 99.5% => 0.5% error budget; outbreak at 5% (10x budget)"
+    source: O02-OPS-ERROR-OUTBREAK-RATIO
   dependency_error_ratio:
     value: 0.05
+    source: O02-OPS-ERROR-OUTBREAK-RATIO
+  auth_deny_count_10m:
+    value: 50
+    source: O02-OPS-AUTH-DENY-COUNT
+  drift_count_10m:
+    value: 10
+    source: O02-OPS-DRIFT-COUNT
+  search_availability_ratio:
+    value: 0.995
     source: SLA-AVAILABILITY
-    conversion: "same 10x error-budget outbreak threshold as conversion_error_ratio"
-  auth_deny_ratio:
-    value: 0.20
-    source: SLA-AVAILABILITY
-    conversion: "auth deny share >20% of auth decisions in 10m is anomaly (ops signal; not a gate)"
-    note: >
-      Auth deny spikes are security/ops signals, not G0-SLO latency gates.
-      Threshold is documented operational policy for O02; tune with evidence later.
-  drift_rate_per_minute:
-    value: 1.0
-    source: SLA-AVAILABILITY
-    conversion: "any sustained drift >1 event/min for 10m is actionable reconcile signal"
-    note: Operational drift signal; reconcile runbook owns recovery.
 
-# Bounded label allowlists (must match O01 docs/conventions/observability-audit.md).
+blockedAlerts:
+  - name: MarkhandQueryLatencyP99Burn
+    reason: filtered-query P99 series not emitted by O01
+    file: deploy/observability/prometheus/alert_rules.blocked.yml
+  - name: MarkhandGlmProbeDown
+    reason: no configured GLM health endpoint/metric for blackbox probing
+
 labelAllowlists:
   queue: [convert, embed, index, reconcile, delete]
   route: [health, auth, upload, search, stream, documents, collections, jobs, openapi, other]
   method: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, OTHER]
   status_class: ["1xx", "2xx", "3xx", "4xx", "5xx", unknown]
   format: [pdf, docx, pptx, spreadsheet, csv, html, txt, image, audio, zip, document, other]
-  result: [success, error, deny, retry, dead_letter, cancelled, leased, accepted, other]
+  result:
+    - success
+    - error
+    - http_error
+    - invalid_response
+    - outage
+    - timeout
+    - truncated
+    - deny
+    - retry
+    - dead_letter
+    - cancelled
+    - leased
+    - accepted
+    - other
   job_type: [convert, embed, index, reconcile, delete, other]
   transition: [enqueue, claim, finish, other]
   leg: [hybrid, lexical, vector, qa_provider, other]
@@ -114,8 +161,9 @@ labelAllowlists:
   decision: [reserve, deny, refund, commit, error, other]
   resource_kind: [documents, storage_bytes, jobs, tokens, embeddings, unknown, other]
   code: [permission_denied, membership_missing, user_disabled, collection_denied, unauthorized, invalid_credentials, other]
-  dependency: [postgres, qdrant, minio, embedding, glm, markhand_ready]
-  mountpoint: ["/", "/var/lib/postgresql", "/data", "/var/lib/markhand"]
+  dependency: [postgres, qdrant, minio, embedding, markhand_ready]
+  mountpoint: ["/", "/var/lib/postgresql", "/data"]
+  job: [otel-collector, node, blackbox-http, blackbox-tcp]
 
 forbiddenLabelKeys:
   - org_id
@@ -133,7 +181,6 @@ forbiddenLabelKeys:
   - url
   - object_key
 
-# O01 metric inventory (exact names from docs/conventions/observability-audit.md).
 metrics:
   - markhand_api_request_duration_seconds
   - markhand_api_requests_total
@@ -151,9 +198,27 @@ metrics:
   - markhand_job_transitions_total
   - markhand_auth_decisions_total
 
-# Infra metrics used only for disk/dependency probes (not product telemetry labels).
 infraMetrics:
   - node_filesystem_avail_bytes
   - node_filesystem_size_bytes
   - probe_success
   - up
+
+# Histogram boundaries expected from O01 (seconds).
+histogramBoundariesSeconds:
+  - 0.005
+  - 0.01
+  - 0.025
+  - 0.05
+  - 0.075
+  - 0.1
+  - 0.15
+  - 0.25
+  - 0.35
+  - 0.5
+  - 0.75
+  - 1.0
+  - 1.5
+  - 2.5
+  - 5.0
+  - 10.0

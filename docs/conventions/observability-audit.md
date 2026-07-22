@@ -48,8 +48,14 @@ logs/spans/audit metadata.
   - `markhand_job_transitions_total` (`job_type`, `transition`, `result`)
   - `markhand_auth_decisions_total` (`result`, `code`)
 - Backup metrics are emitted only when backup code paths exist (none in O01).
-- Histogram buckets and SLO thresholds belong to Phase 0 evidence / O02 dashboards
-  (`deploy/observability/thresholds.yaml` cites `bench/markhand_web/gates.yaml`).
+- Latency histograms use explicit second boundaries including `0.5` and `1.0`
+  (`LATENCY_SECONDS_BOUNDARIES` in `telemetry/metrics.rs`) so O02 can evaluate
+  approved G0-SLO P95/P99 cut-points. Default OTel boundaries are unsuitable.
+- Bounded `result` values include embedding (`http_error`, `invalid_response`) and
+  QA provider (`outage`, `timeout`, `truncated`) outcomes in addition to
+  success/error/deny/….
+- SLO thresholds and alert provenance: `deploy/observability/thresholds.yaml`
+  (formal gates vs O02 operational policy).
 
 ## OpenTelemetry (optional)
 

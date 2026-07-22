@@ -1,15 +1,17 @@
-# Example Prometheus scrape config for Markhand Web O02.
-# No secrets. Bind scrape endpoints via environment-specific overlays.
+# Prometheus scrape config for Markhand Web O02.
+# Designed as a compose overlay on deploy/compose.poc.yml (shared `private` network).
+# Service names match compose.poc.yml: api, postgres, qdrant, minio, mock-embedding.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
     system: markhand
-    env: example
+    env: poc
 
 rule_files:
   - /etc/prometheus/rules/recording_rules.yml
   - /etc/prometheus/rules/alert_rules.yml
+  # alert_rules.blocked.yml is intentionally NOT loaded.
 
 alerting:
   alertmanagers:
@@ -18,61 +20,41 @@ alerting:
             - alertmanager:9093
 
 scrape_configs:
-  # OTel Collector Prometheus exporter (OTLP metrics from markhand server/worker).
   - job_name: otel-collector
     static_configs:
       - targets: ["otel-collector:8889"]
         labels:
           component: otel-collector
 
-  # Optional direct scrape if a Prometheus exporter sidecar is attached.
-  - job_name: markhand-metrics
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["markhand-server:9464"]
-        labels:
-          component: server
-      - targets: ["markhand-worker:9464"]
-        labels:
-          component: worker
-
-  # Node filesystem metrics for disk headroom alerts (bounded mountpoints only).
   - job_name: node
     static_configs:
       - targets: ["node-exporter:9100"]
         labels:
           component: node
 
-  # Blackbox HTTP probes for dependency health (bounded dependency label).
-  - job_name: blackbox-deps
+  - job_name: blackbox-http
     metrics_path: /probe
     params:
       module: [http_2xx]
     static_configs:
       - targets:
-          - http://markhand-server:8080/ready
+          - http://api:8787/api/v1/health/ready
         labels:
           dependency: markhand_ready
       - targets:
-          - http://postgres:5432
-        labels:
-          dependency: postgres
-      - targets:
-          - http://qdrant:6333/readyz
+          - http://qdrant:6333/healthz
         labels:
           dependency: qdrant
       - targets:
-          - http://minio:9000/minio/health/ready
+          - http://minio:9000/minio/health/live
         labels:
           dependency: minio
+      # Default mock profile service name from compose.poc.yml.
+      # For aiteamvn profile, override via file_sd / extra scrape (embedding-cpu:8080/health).
       - targets:
-          - http://embedding:8080/health
+          - http://mock-embedding:8080/health
         labels:
           dependency: embedding
-      - targets:
-          - https://glm.example.invalid/health
-        labels:
-          dependency: glm
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -80,6 +62,24 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox-exporter:9115
-      # Drop high-cardinality instance URL from long-term labels used in alerts.
+      - action: labeldrop
+        regex: instance
+
+  - job_name: blackbox-tcp
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - postgres:5432
+        labels:
+          dependency: postgres
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
       - action: labeldrop
         regex: instance

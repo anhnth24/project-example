@@ -1,10 +1,7 @@
 # Alertmanager example routing for P1B-O02.
 # PLACEHOLDER receivers only — no real webhook URLs, tokens, or emails.
-# Operators must replace placeholders via sealed secrets / external config.
 global:
   resolve_timeout: 5m
-  # smtp_smarthost: "smtp.example.invalid:587"
-  # smtp_from: "alertmanager@example.invalid"
 
 route:
   receiver: default-log
@@ -25,16 +22,12 @@ route:
         - severity="ticket"
       receiver: ticket-placeholder
 
-inhibit_rules:
-  - source_matchers:
-      - alertname="MarkhandDependencyProbeDown"
-    target_matchers:
-      - class=~"slo|queue|parser"
-    equal: [team]
+# No inhibit_rules: prior broad class-based inhibition was incorrect (no shared
+# causal label across slo/queue/parser). Add inhibitions only when a genuine
+# shared label (e.g. dependency) exists on both source and target alerts.
 
 receivers:
   - name: default-log
-    # Local/dev: write to stdout via alertmanager log; no external secret.
   - name: pager-placeholder
     webhook_configs:
       - url: https://alerts.example.invalid/pagerduty-placeholder
@@ -60,5 +53,4 @@ receivers:
             type: Bearer
             credentials: "REPLACE_WITH_SEALED_SECRET"
 
-# Do not commit real SMTP passwords, Slack tokens, PagerDuty keys, or tenant emails.
 templates: []

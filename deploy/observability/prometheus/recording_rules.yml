@@ -1,32 +1,9 @@
 # Recording rules for P1B-O02. Metric names/labels follow O01 allowlist.
+# End-to-end query SLO uses API route=search only (not internal retrieval legs).
 groups:
   - name: markhand.recording.slo
     interval: 30s
     rules:
-      - record: markhand:retrieval:p95_5m
-        expr: |
-          histogram_quantile(
-            0.95,
-            sum by (le, leg) (
-              rate(markhand_retrieval_duration_seconds_bucket[5m])
-            )
-          )
-        labels:
-          quantile: "0.95"
-          window: 5m
-
-      - record: markhand:retrieval:p99_5m
-        expr: |
-          histogram_quantile(
-            0.99,
-            sum by (le, leg) (
-              rate(markhand_retrieval_duration_seconds_bucket[5m])
-            )
-          )
-        labels:
-          quantile: "0.99"
-          window: 5m
-
       - record: markhand:api_search:p95_5m
         expr: |
           histogram_quantile(
@@ -40,28 +17,16 @@ groups:
           window: 5m
           route: search
 
-      - record: markhand:api_search:p99_5m
-        expr: |
-          histogram_quantile(
-            0.99,
-            sum by (le) (
-              rate(markhand_api_request_duration_seconds_bucket{route="search"}[5m])
-            )
-          )
-        labels:
-          quantile: "0.99"
-          window: 5m
-          route: search
-
-      - record: markhand:availability:success_ratio_5m
+      - record: markhand:api_search:success_ratio_5m
         expr: |
           (
-            sum(rate(markhand_api_requests_total{status_class="2xx"}[5m]))
+            sum(rate(markhand_api_requests_total{route="search", status_class="2xx"}[5m]))
             /
-            clamp_min(sum(rate(markhand_api_requests_total[5m])), 1e-9)
+            clamp_min(sum(rate(markhand_api_requests_total{route="search"}[5m])), 1e-9)
           )
         labels:
           window: 5m
+          route: search
 
   - name: markhand.recording.queue
     interval: 30s
@@ -72,10 +37,10 @@ groups:
       - record: markhand:queue:oldest_age_seconds_max
         expr: max by (queue) (markhand_queue_oldest_age_seconds)
 
-      - record: markhand:job:dead_letter_rate_5m
+      - record: markhand:job:dead_letter_increase_5m
         expr: |
           sum by (job_type) (
-            rate(markhand_job_transitions_total{result="dead_letter"}[5m])
+            increase(markhand_job_transitions_total{result="dead_letter"}[5m])
           )
         labels:
           window: 5m
@@ -86,53 +51,60 @@ groups:
       - record: markhand:conversion:error_ratio_10m
         expr: |
           (
-            sum(rate(markhand_conversion_total{result="error"}[10m]))
+            sum(rate(markhand_conversion_total{result=~"error|other"}[10m]))
             /
             clamp_min(sum(rate(markhand_conversion_total[10m])), 1e-9)
           )
         labels:
           window: 10m
 
-      - record: markhand:embedding:error_ratio_10m
+      # Embedding failures: explicit enums + residual other (tradeoff documented).
+      - record: markhand:embedding:failure_ratio_10m
         expr: |
           (
-            sum(rate(markhand_embedding_total{result="error"}[10m]))
+            sum(rate(markhand_embedding_total{result=~"error|http_error|invalid_response|other"}[10m]))
             /
             clamp_min(sum(rate(markhand_embedding_total[10m])), 1e-9)
           )
         labels:
           window: 10m
 
-      - record: markhand:retrieval:error_ratio_10m
+      - record: markhand:retrieval:failure_ratio_10m
         expr: |
           (
-            sum(rate(markhand_retrieval_total{result="error"}[10m]))
+            sum(rate(markhand_retrieval_total{result=~"error|other"}[10m]))
             /
             clamp_min(sum(rate(markhand_retrieval_total[10m])), 1e-9)
           )
         labels:
           window: 10m
 
-      - record: markhand:auth:deny_ratio_10m
+      - record: markhand:qa_provider:failure_ratio_10m
         expr: |
           (
-            sum(rate(markhand_auth_decisions_total{result="deny"}[10m]))
+            sum(rate(markhand_retrieval_total{leg="qa_provider", result=~"error|outage|timeout|truncated|other"}[10m]))
             /
-            clamp_min(sum(rate(markhand_auth_decisions_total[10m])), 1e-9)
+            clamp_min(sum(rate(markhand_retrieval_total{leg="qa_provider"}[10m])), 1e-9)
           )
         labels:
           window: 10m
 
-      - record: markhand:drift:rate_1m
-        expr: sum(rate(markhand_drift_total[1m])) * 60
-        labels:
-          window: 1m
-
-      - record: markhand:reconcile:error_rate_10m
+      - record: markhand:auth:deny_increase_10m
         expr: |
-          sum(rate(markhand_reconcile_total{result="error"}[10m]))
+          sum(increase(markhand_auth_decisions_total{result="deny"}[10m]))
         labels:
           window: 10m
+
+      - record: markhand:drift:increase_10m
+        expr: sum(increase(markhand_drift_total[10m]))
+        labels:
+          window: 10m
+
+      - record: markhand:reconcile:error_increase_5m
+        expr: |
+          sum(increase(markhand_reconcile_total{result="error"}[5m]))
+        labels:
+          window: 5m
 
   - name: markhand.recording.disk
     interval: 30s

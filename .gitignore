@@ -35,3 +35,6 @@ pdfium/
 /bench/edge/
 /bench/sample10/
 /bench/corpus10/
+
+# Local pinned tooling (promtool etc.); fetch via scripts/fetch-promtool.sh
+.tools/

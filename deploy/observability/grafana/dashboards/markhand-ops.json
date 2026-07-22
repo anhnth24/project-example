@@ -8,7 +8,7 @@
   ],
   "timezone": "utc",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -20,7 +20,7 @@
         "name": "mountpoint",
         "label": "Mountpoint",
         "type": "custom",
-        "query": "/,/var/lib/postgresql,/data,/var/lib/markhand",
+        "query": "/,/var/lib/postgresql,/data",
         "current": {
           "selected": true,
           "text": "/",
@@ -41,11 +41,6 @@
             "selected": false,
             "text": "/data",
             "value": "/data"
-          },
-          {
-            "selected": false,
-            "text": "/var/lib/markhand",
-            "value": "/var/lib/markhand"
           }
         ],
         "multi": true,
@@ -206,7 +201,7 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "Conversion rate by format/result",
+      "title": "Conversion rate",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -242,7 +237,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Drift / reconcile",
+      "title": "Drift / reconcile increases",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -256,8 +251,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "markhand:drift:rate_1m",
-          "legendFormat": "drift/min",
+          "expr": "markhand:drift:increase_10m",
+          "legendFormat": "drift/10m",
           "datasource": {
             "type": "prometheus",
             "uid": "markhand-prometheus"
@@ -265,8 +260,8 @@
         },
         {
           "refId": "B",
-          "expr": "markhand:reconcile:error_rate_10m",
-          "legendFormat": "reconcile errors",
+          "expr": "markhand:reconcile:error_increase_5m",
+          "legendFormat": "reconcile errors/5m",
           "datasource": {
             "type": "prometheus",
             "uid": "markhand-prometheus"
@@ -287,7 +282,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Auth deny ratio",
+      "title": "Auth deny increase (10m)",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -301,7 +296,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "markhand:auth:deny_ratio_10m",
+          "expr": "markhand:auth:deny_increase_10m",
           "legendFormat": "__auto",
           "datasource": {
             "type": "prometheus",
@@ -362,8 +357,5 @@
   },
   "editable": false,
   "graphTooltip": 1,
-  "links": [],
-  "fiscalYearStartMonth": 0,
-  "liveNow": false,
-  "weekStart": ""
+  "links": []
 }

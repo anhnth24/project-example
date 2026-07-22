@@ -1,57 +1,96 @@
 # Runbook: Stuck / dead-letter jobs
 
-Issue: P1B-O02  
-Alerts: `MarkhandQueueOldestAgeHigh`, `MarkhandQueueDepthWarning`, `MarkhandDeadLetterJobs`  
-Dashboard: Grafana `markhand-queue`  
-Threshold sources: `docs/markhand-web-sla-targets.md` (queue age ≤ 120 min),
-`bench/markhand_web/gates.yaml#G0-CAP-INGEST-THROUGHPUT` (depth warning derived).
+Issue: P1B-O02
+Alerts: `MarkhandQueueOldestAgeHigh`, `MarkhandQueueDepthWarning`, `MarkhandDeadLetterJobs`
+Dashboard: Grafana `markhand-queue`
+Sources: queue age ≤ 120 min (`docs/markhand-web-sla-targets.md`); depth warn 600 derived from `G0-CAP-INGEST-THROUGHPUT`.
 
 ## Prerequisites
 
-- Read-only access to Prometheus/Grafana and server/worker logs (redacted).
-- Ability to pause workers / drain queues in the target environment.
-- Do **not** dump job payloads, document text, prompts, or secrets into tickets.
+- POC stack: `deploy/compose.poc.yml` via `deploy/scripts/poc-compose.sh`
+- Host tools: `docker`, `curl`
+- Env file: `deploy/.env` (from `deploy/.env.example`); project `MARKHAND_COMPOSE_PROJECT=markhand-poc`
+- Do **not** log job payloads, document text, prompts, or secrets
 
 ## Detection
 
-1. Confirm alert series:
-   - `markhand:queue:oldest_age_seconds_max > 7200`
-   - and/or `markhand:queue:depth_max > 600`
-   - and/or `markhand:job:dead_letter_rate_5m > 0`
-2. Identify bounded `queue` / `job_type` label (`convert|embed|index|reconcile|delete`).
-3. Correlate with `markhand_job_transitions_total` rates (enqueue/claim/finish/result).
-4. Check `/ready` and dependency probes (see [dependency-outage](dependency-outage.md)).
+1. Confirm alert in Prometheus/Alertmanager (or Grafana `markhand-queue`).
+2. On the host:
+
+```bash
+source deploy/scripts/poc-compose.sh && poc_compose_init
+"${COMPOSE[@]}" ps
+deploy/scripts/poc-health.sh
+curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"
+# expected: HTTP 200 JSON readiness (or non-200 if deps/reconcile fence failing)
+```
+
+3. Inspect worker kinds (compose services `worker-convert`, `worker-index`, `worker-embedding`):
+
+```bash
+"${COMPOSE[@]}" logs --tail=200 worker-convert worker-index worker-embedding
+# Look for job.dead_lettered / lease / sandbox errors — IDs only, no content
+```
+
+4. Metrics (if observability overlay is up on :9090):
+
+```bash
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=markhand:queue:oldest_age_seconds_max'
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=markhand:job:dead_letter_increase_5m'
+```
 
 ## Contain
 
-1. Stop admission of new heavy work if depth/age is growing unbounded:
-   - scale upload admission / disable non-critical ingest (environment-specific).
-2. Pause the affected worker pool only (keep API liveness if possible).
-3. Do not delete queue rows blindly; snapshot counts by `job_type`/`result` only.
+1. Stop admission of new uploads if age/depth is climbing (disable client traffic / edge ingress).
+2. Scale down the affected worker only:
+
+```bash
+"${COMPOSE[@]}" stop worker-convert   # or worker-index / worker-embedding
+```
+
+3. **Do not** DELETE job rows from PostgreSQL. There is **no supported admin requeue CLI** in this repo yet — treat dead-lettered jobs as escalate/contain until a job-admin tool ships (future gap).
 
 ## Recover
 
-1. Inspect recent worker errors for the bounded `job_type` (no content logging).
-2. If dependency fault: follow [dependency-outage](dependency-outage.md) first.
-3. If poison jobs: move/mark dead_letter per ops policy; requeue only idempotent jobs.
-4. Resume one worker replica; confirm `claim`/`finish` success rates recover.
-5. Gradually restore admission.
+1. If dependency/health failed first, follow [dependency-outage](dependency-outage.md).
+2. For convert sandbox failures:
+
+```bash
+convert_id="$("${COMPOSE[@]}" ps -q worker-convert)"
+docker exec "$convert_id" /usr/local/bin/fileconv-worker --sandbox-preflight
+# expected: exit 0
+```
+
+3. Restart one worker:
+
+```bash
+"${COMPOSE[@]}" start worker-convert
+"${COMPOSE[@]}" logs -f --tail=100 worker-convert
+```
+
+4. Local non-compose worker (dev only), from `deploy/dev/worker.env.example`:
+
+```bash
+export MARKHAND_WORKER_KIND=convert   # or index|embedding
+cargo run --release -p fileconv-server --bin fileconv-worker
+```
 
 ## Verify
 
-1. `markhand_queue_oldest_age_seconds` trending down for the affected queue.
-2. Depth below 600 and dead_letter rate returns to 0.
-3. `/ready` returns 200; search smoke succeeds without cross-tenant data.
-4. Resolve alert only after `for` windows clear.
+1. `deploy/scripts/poc-health.sh` passes.
+2. Queue age trending down; `markhand:job:dead_letter_increase_5m` returns to 0.
+3. `/api/v1/health/ready` stays 200 for ≥10 minutes.
+4. Resolve alert after the PromQL window clears.
 
 ## Rollback
 
-- Re-pause workers if finish errors return.
-- Re-enable admission only after age/depth improve for ≥10 minutes.
-- If requeue amplified failures, leave jobs in dead_letter and escalate.
+- `"${COMPOSE[@]}" stop <worker>` if errors return.
+- Keep admission closed until age < 7200s and depth < 600.
+- Escalate: open incident with job_type + error codes only (no payloads).
 
 ## Synthetic evidence
 
-Fixture: `deploy/observability/fixtures/alerts/MarkhandQueueOldestAgeHigh.json`  
-Tabletop: `deploy/observability/fixtures/tabletop/o02-tabletop.json` (`tt-queue-stuck`)  
-These are synthetic evaluations; they do **not** claim a live outage was exercised.
+`promtool test rules deploy/observability/prometheus/tests/alerts_test.yml`
+(`dead_letter_single_event_fires_and_resolves`). No live outage claimed.

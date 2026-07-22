@@ -1,60 +1,41 @@
-# Alert rules for P1B-O02.
-# Thresholds are loaded from deploy/observability/thresholds.yaml and must cite
-# approved G0-SLO / SLA / workload-profile sources. Backup-failure alerts are
-# intentionally omitted until P1B-O03 emits backup metrics.
+# Alert rules for P1B-O02 (active / loaded).
+# Threshold provenance: see deploy/observability/thresholds.yaml.
+# `for` windows are O02 operational paging policy, not formal G0 gates.
 groups:
   - name: markhand.alerts.slo
     rules:
       - alert: MarkhandQueryLatencyP95Burn
-        expr: markhand:retrieval:p95_5m > 0.5
+        expr: markhand:api_search:p95_5m > 0.5
         for: 10m
         labels:
           severity: page
           team: operations
           class: slo
         annotations:
-          summary: Retrieval P95 latency exceeds G0-SLO-QUERY-P95 (500ms).
+          summary: Search API P95 latency exceeds G0-SLO-QUERY-P95 (500ms).
           description: >
-            markhand:retrieval:p95_5m is above 0.5s for 10m.
-            Source gate: bench/markhand_web/gates.yaml#G0-SLO-QUERY-P95.
+            markhand:api_search:p95_5m (route=search) is above 0.5s for 10m (`for` = O02 policy).
+            Formal gate: bench/markhand_web/gates.yaml#G0-SLO-QUERY-P95.
+            Does not use internal retrieval-leg latency.
           threshold_source: G0-SLO-QUERY-P95
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-slo
-          fixture: deploy/observability/fixtures/alerts/MarkhandQueryLatencyP95Burn.json
 
-      - alert: MarkhandQueryLatencyP99Burn
-        expr: markhand:retrieval:p99_5m > 1.0
-        for: 10m
-        labels:
-          severity: page
-          team: operations
-          class: slo
-        annotations:
-          summary: Retrieval P99 latency exceeds G0-SLO-QUERY-P99 (1000ms).
-          description: >
-            markhand:retrieval:p99_5m is above 1.0s for 10m.
-            Source gate: bench/markhand_web/gates.yaml#G0-SLO-QUERY-P99.
-          threshold_source: G0-SLO-QUERY-P99
-          runbook: docs/runbooks/dependency-outage.md
-          dashboard: markhand-slo
-          fixture: deploy/observability/fixtures/alerts/MarkhandQueryLatencyP99Burn.json
-
-      - alert: MarkhandAvailabilityBurn
-        expr: markhand:availability:success_ratio_5m < 0.995
+      - alert: MarkhandSearchAvailabilityBurn
+        expr: markhand:api_search:success_ratio_5m < 0.995
         for: 15m
         labels:
           severity: page
           team: operations
           class: slo
         annotations:
-          summary: API success ratio below 99.5% availability target.
+          summary: Search API success ratio below 99.5% availability target.
           description: >
-            2xx success ratio over 5m is below 0.995 for 15m.
-            Source: docs/markhand-web-sla-targets.md Service availability.
+            route=search 2xx success ratio over 5m is below 0.995 for 15m (`for` = O02 policy).
+            Source: docs/markhand-web-sla-targets.md Service availability (search population only).
           threshold_source: SLA-AVAILABILITY
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-slo
-          fixture: deploy/observability/fixtures/alerts/MarkhandAvailabilityBurn.json
 
   - name: markhand.alerts.queue
     rules:
@@ -68,12 +49,11 @@ groups:
         annotations:
           summary: Oldest queue age exceeds 120-minute recovery target.
           description: >
-            Queue oldest age > 7200s (120 minutes).
-            Source: docs/markhand-web-sla-targets.md Queue age.
+            Queue oldest age > 7200s. Source: docs/markhand-web-sla-targets.md Queue age.
+            `for` 5m is O02 paging policy.
           threshold_source: SLA-QUEUE-AGE-MINUTES
           runbook: docs/runbooks/stuck-dead-jobs.md
           dashboard: markhand-queue
-          fixture: deploy/observability/fixtures/alerts/MarkhandQueueOldestAgeHigh.json
 
       - alert: MarkhandQueueDepthWarning
         expr: markhand:queue:depth_max > 600
@@ -85,33 +65,33 @@ groups:
         annotations:
           summary: Queue depth exceeds half-hour peak ingest backlog buffer.
           description: >
-            Queue depth > 600 (derived from G0-CAP peak 1200 docs/hour * 0.5h).
-            Source: bench/markhand_web/gates.yaml#G0-CAP-INGEST-THROUGHPUT.
+            Depth > 600 derived from G0-CAP peak 1200 docs/hour * 0.5h.
+            Operational derivation, not a separate formal gate.
           threshold_source: WORKLOAD-PEAK-INGEST-DOCS-PER-HOUR
           runbook: docs/runbooks/stuck-dead-jobs.md
           dashboard: markhand-queue
-          fixture: deploy/observability/fixtures/alerts/MarkhandQueueDepthWarning.json
 
+      # increase() so a single dead-letter event fires; no long `for` that swallows spikes.
       - alert: MarkhandDeadLetterJobs
-        expr: markhand:job:dead_letter_rate_5m > 0
-        for: 5m
+        expr: markhand:job:dead_letter_increase_5m > 0
         labels:
           severity: ticket
           team: operations
           class: queue
         annotations:
-          summary: Jobs are transitioning to dead_letter.
-          description: Non-zero dead_letter rate over 5m indicates stuck/failed jobs.
-          threshold_source: SLA-QUEUE-AGE-MINUTES
+          summary: At least one job transitioned to dead_letter in the last 5m.
+          description: >
+            Uses increase(...[5m]) so a single event is visible and clears when the
+            window slides past the event. Not rate()+long for.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
           runbook: docs/runbooks/stuck-dead-jobs.md
           dashboard: markhand-queue
-          fixture: deploy/observability/fixtures/alerts/MarkhandDeadLetterJobs.json
 
   - name: markhand.alerts.disk
     rules:
       - alert: MarkhandDiskLow
         expr: |
-          markhand:disk:free_ratio{mountpoint=~"/|/var/lib/postgresql|/data|/var/lib/markhand"} < 0.30
+          markhand:disk:free_ratio{mountpoint=~"/|/var/lib/postgresql|/data"} < 0.30
         for: 10m
         labels:
           severity: page
@@ -121,17 +101,16 @@ groups:
           summary: Free disk ratio below 30% headroom target.
           description: >
             Filesystem free ratio < 0.30.
-            Source: bench/markhand_web/workload-profile.yaml hardware.headroomPercent.disk=30.
+            Source: workload-profile.yaml hardware.headroomPercent.disk=30.
           threshold_source: WORKLOAD-DISK-HEADROOM-PERCENT
           runbook: docs/runbooks/disk-exhaustion.md
           dashboard: markhand-ops
-          fixture: deploy/observability/fixtures/alerts/MarkhandDiskLow.json
 
   - name: markhand.alerts.dependency
     rules:
       - alert: MarkhandDependencyProbeDown
         expr: |
-          probe_success{dependency=~"postgres|qdrant|minio|embedding|glm|markhand_ready"} == 0
+          probe_success{dependency=~"postgres|qdrant|minio|embedding|markhand_ready"} == 0
         for: 2m
         labels:
           severity: page
@@ -140,65 +119,92 @@ groups:
         annotations:
           summary: Dependency blackbox probe is failing.
           description: >
-            probe_success==0 for a bounded dependency label.
-            Uses infra probe metrics (not product high-cardinality labels).
-          threshold_source: SLA-AVAILABILITY
+            probe_success==0 for a bounded dependency label (HTTP or TCP module).
+            GLM blackbox probe is intentionally absent (no configured endpoint).
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-deps
-          fixture: deploy/observability/fixtures/alerts/MarkhandDependencyProbeDown.json
+
+      - alert: MarkhandScrapeTargetDown
+        expr: up{job=~"otel-collector|node|blackbox-http|blackbox-tcp"} == 0
+        for: 2m
+        labels:
+          severity: page
+          team: operations
+          class: dependency
+        annotations:
+          summary: Prometheus scrape target is down.
+          description: up==0 for an observability scrape job. `for` 2m is O02 policy.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+          runbook: docs/runbooks/dependency-outage.md
+          dashboard: markhand-deps
+
+      - alert: MarkhandDependencyProbeAbsent
+        expr: |
+          absent(probe_success{dependency="postgres"})
+          or absent(probe_success{dependency="qdrant"})
+          or absent(probe_success{dependency="minio"})
+          or absent(probe_success{dependency="embedding"})
+          or absent(probe_success{dependency="markhand_ready"})
+        for: 5m
+        labels:
+          severity: page
+          team: operations
+          class: dependency
+        annotations:
+          summary: Expected dependency probe series is absent.
+          description: >
+            Blackbox probe metrics missing for a required dependency label.
+            Indicates mis-scraped exporter, not necessarily dependency outage.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
+          runbook: docs/runbooks/dependency-outage.md
+          dashboard: markhand-deps
 
       - alert: MarkhandEmbeddingErrorOutbreak
-        expr: markhand:embedding:error_ratio_10m > 0.05
+        expr: markhand:embedding:failure_ratio_10m > 0.05
         for: 10m
         labels:
           severity: page
           team: operations
           class: dependency
         annotations:
-          summary: Embedding error ratio exceeds 5% outbreak threshold.
+          summary: Embedding failure ratio exceeds 5% outbreak threshold.
           description: >
-            Embedding errors >5% for 10m (10x 0.5% availability error budget).
-            Source: docs/markhand-web-sla-targets.md availability 99.5%.
-          threshold_source: SLA-AVAILABILITY
+            Failures include result=~error|http_error|invalid_response|other.
+            Threshold source: O02-OPS-ERROR-OUTBREAK-RATIO (operational policy).
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-deps
-          fixture: deploy/observability/fixtures/alerts/MarkhandEmbeddingErrorOutbreak.json
 
       - alert: MarkhandRetrievalErrorOutbreak
-        expr: markhand:retrieval:error_ratio_10m > 0.05
+        expr: markhand:retrieval:failure_ratio_10m > 0.05
         for: 10m
         labels:
           severity: page
           team: operations
           class: dependency
         annotations:
-          summary: Retrieval error ratio exceeds 5% outbreak threshold.
-          description: >
-            Retrieval errors >5% for 10m. Often Qdrant/PG/embedding dependency fault.
-          threshold_source: SLA-AVAILABILITY
+          summary: Retrieval failure ratio exceeds 5% outbreak threshold.
+          description: result=~error|other over 10m. Operational outbreak policy.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
           runbook: docs/runbooks/dependency-outage.md
           dashboard: markhand-deps
-          fixture: deploy/observability/fixtures/alerts/MarkhandRetrievalErrorOutbreak.json
 
       - alert: MarkhandGlmProviderErrors
-        expr: |
-          (
-            sum(rate(markhand_retrieval_total{leg="qa_provider", result="error"}[10m]))
-            /
-            clamp_min(sum(rate(markhand_retrieval_total{leg="qa_provider"}[10m])), 1e-9)
-          ) > 0.05
+        expr: markhand:qa_provider:failure_ratio_10m > 0.05
         for: 10m
         labels:
           severity: ticket
           team: operations
           class: dependency
         annotations:
-          summary: GLM/qa_provider error ratio exceeds outbreak threshold.
-          description: qa_provider leg error ratio >5% for 10m; follow GLM fallback runbook.
-          threshold_source: SLA-AVAILABILITY
+          summary: GLM/qa_provider failure ratio exceeds outbreak threshold.
+          description: >
+            Metric-based only (result=~error|outage|timeout|truncated|other).
+            No GLM blackbox probe — endpoint not configured in deploy stack.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
           runbook: docs/runbooks/glm-fallback.md
           dashboard: markhand-deps
-          fixture: deploy/observability/fixtures/alerts/MarkhandGlmProviderErrors.json
 
   - name: markhand.alerts.parser
     rules:
@@ -210,61 +216,58 @@ groups:
           team: operations
           class: parser
         annotations:
-          summary: Conversion/parser error ratio exceeds 5% outbreak threshold.
-          description: Conversion errors >5% for 10m; possible converter outbreak.
-          threshold_source: SLA-AVAILABILITY
+          summary: Conversion/parser failure ratio exceeds 5% outbreak threshold.
+          description: result=~error|other. Operational outbreak policy.
+          threshold_source: O02-OPS-ERROR-OUTBREAK-RATIO
           runbook: docs/runbooks/converter-outbreak.md
           dashboard: markhand-ops
-          fixture: deploy/observability/fixtures/alerts/MarkhandConversionErrorOutbreak.json
 
   - name: markhand.alerts.drift
     rules:
       - alert: MarkhandDriftDetected
-        expr: markhand:drift:rate_1m > 1
-        for: 10m
+        expr: markhand:drift:increase_10m > 10
+        for: 5m
         labels:
           severity: ticket
           team: operations
           class: drift
         annotations:
-          summary: Sustained reconciliation drift detected.
-          description: Drift events exceed 1/min for 10m; investigate rebuild/reconcile.
-          threshold_source: SLA-AVAILABILITY
+          summary: Drift event count exceeds O02 operational policy.
+          description: >
+            >10 drift events in 10m. Source: O02-OPS-DRIFT-COUNT (not SLA-derived).
+          threshold_source: O02-OPS-DRIFT-COUNT
           runbook: docs/runbooks/vector-rebuild.md
           dashboard: markhand-ops
-          fixture: deploy/observability/fixtures/alerts/MarkhandDriftDetected.json
 
       - alert: MarkhandReconcileErrors
-        expr: markhand:reconcile:error_rate_10m > 0
-        for: 10m
+        expr: markhand:reconcile:error_increase_5m > 0
         labels:
           severity: ticket
           team: operations
           class: drift
         annotations:
-          summary: Reconcile jobs are erroring.
-          description: Non-zero reconcile error rate over 10m.
-          threshold_source: SLA-AVAILABILITY
+          summary: At least one reconcile error in the last 5m.
+          description: >
+            Uses increase(...[5m]) so a single error fires and resolves when the
+            window slides past it.
+          threshold_source: O02-OPS-DRIFT-COUNT
           runbook: docs/runbooks/vector-rebuild.md
           dashboard: markhand-ops
-          fixture: deploy/observability/fixtures/alerts/MarkhandReconcileErrors.json
 
   - name: markhand.alerts.security
     rules:
       - alert: MarkhandAuthDenySpike
-        expr: markhand:auth:deny_ratio_10m > 0.20
-        for: 10m
+        expr: markhand:auth:deny_increase_10m > 50
+        for: 5m
         labels:
           severity: ticket
           team: security
           class: auth
         annotations:
-          summary: Auth deny ratio spike above 20%.
+          summary: Auth deny count spike (operational policy).
           description: >
-            Deny share of auth decisions >20% for 10m. May indicate key leak,
-            misconfig, or attack. Follow key-rotation runbook when credential
-            exposure is suspected.
-          threshold_source: SLA-AVAILABILITY
+            >50 deny decisions in 10m. Source: O02-OPS-AUTH-DENY-COUNT.
+            Not an SLA/availability-derived ratio; count-based ops signal.
+          threshold_source: O02-OPS-AUTH-DENY-COUNT
           runbook: docs/runbooks/key-rotation.md
           dashboard: markhand-ops
-          fixture: deploy/observability/fixtures/alerts/MarkhandAuthDenySpike.json

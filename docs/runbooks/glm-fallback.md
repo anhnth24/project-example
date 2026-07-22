@@ -1,49 +1,50 @@
 # Runbook: GLM / qa_provider fallback
 
-Issue: P1B-O02  
-Alert: `MarkhandGlmProviderErrors`  
-Dashboard: Grafana `markhand-deps`  
-Threshold source: availability SLA 99.5% → outbreak at 5% `qa_provider` error ratio.  
-Note: GLM is Q&A only; embedding remains on-prem local-neural (ADR 0005).
+Issue: P1B-O02
+Alert: `MarkhandGlmProviderErrors` (metric-based)
+Blocked: `MarkhandGlmProbeDown` — **no configured GLM health endpoint** in deploy stacks
+Dashboard: `markhand-deps`
+Threshold: O02-OPS-ERROR-OUTBREAK-RATIO (5%). GLM is Q&A only (ADR 0005).
 
 ## Prerequisites
 
-- Provider credentials stored in secret manager (never in git/alerts).
-- Understanding that search/citation must keep working without GLM answers.
+- Provider credentials in secret manager / env — never commit or paste into tickets
+- Search/citation must keep working without GLM answers
 
 ## Detection
 
-1. Confirm qa_provider error ratio > 0.05 for ≥10m via alert expression / fixture series.
-2. Check `markhand_retrieval_total{leg="qa_provider",result="error"}` rate.
-3. Distinguish provider outage vs local retrieval failure (`leg` vector/lexical/hybrid).
+```bash
+curl -fsG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=markhand:qa_provider:failure_ratio_10m'
+# Failures: result=~error|outage|timeout|truncated|other on leg=qa_provider
+```
+
+There is **no** blackbox GLM probe in `prometheus.yml` (intentionally blocked).
 
 ## Contain
 
-1. Disable or short-circuit ask/stream answer path to fail closed with a user-safe error
-   (no prompt/content in logs).
-2. Keep `/search` and citation paths up if vector/lexical legs are healthy.
-3. Do not broaden egress or disable auth to “make GLM work”.
+1. Disable ask/stream traffic at the edge / feature flag if available.
+2. Keep `POST /api/v1/search` up when hybrid/lexical/vector legs are healthy.
+3. Do not broaden egress or disable auth to “fix” GLM.
 
 ## Recover
 
-1. Validate provider endpoint/status with a non-production synthetic probe.
-2. Rotate provider key if auth errors dominate (see [key-rotation](key-rotation.md)).
-3. Restore ask/stream when error ratio < 0.05 for ≥15 minutes.
-4. If provider remains down, leave Q&A degraded and communicate status.
+1. Validate provider status with your vendor console (outside this repo).
+2. If auth failures dominate, follow [key-rotation](key-rotation.md) for the provider key.
+3. Reload API with updated sealed secrets (environment-specific — no checked-in secret files).
+4. Re-enable ask/stream when failure ratio < 0.05 for ≥15m.
 
 ## Verify
 
 1. `MarkhandGlmProviderErrors` clears.
-2. Search/retrieval legs remain within SLO; no cross-tenant leakage in deny tests.
-3. Ask path either healthy or intentionally disabled with clear error code.
+2. Search path within SLO; unauthorized still denied.
+3. Ask path healthy or intentionally disabled with a safe error code (no prompt logging).
 
 ## Rollback
 
-- Re-disable ask/stream if provider errors return.
-- Revert key/config change if the rotation caused auth failures.
-- Keep search available independently of GLM.
+- Re-disable ask/stream if errors return.
+- Never reuse a leaked provider key.
 
 ## Synthetic evidence
 
-Fixture: `MarkhandGlmProviderErrors.json`  
-Tabletop: `tt-glm` — synthetic qa_provider error ratio only.
+Promtool `qa_provider_outage_outbreak`. No live GLM outage claimed.
