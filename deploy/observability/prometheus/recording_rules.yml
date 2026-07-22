@@ -73,9 +73,9 @@ groups:
       - record: markhand:retrieval:failure_ratio_10m
         expr: |
           (
-            sum(rate(markhand_retrieval_total{result=~"error|other"}[10m]))
+            sum(rate(markhand_retrieval_total{leg!="qa_provider", result=~"error|other"}[10m]))
             /
-            clamp_min(sum(rate(markhand_retrieval_total[10m])), 1e-9)
+            clamp_min(sum(rate(markhand_retrieval_total{leg!="qa_provider"}[10m])), 1e-9)
           )
         labels:
           window: 10m

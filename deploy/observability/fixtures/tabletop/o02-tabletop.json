@@ -138,7 +138,7 @@
         "rollback"
       ],
       "outcome": "pass_tabletop",
-      "promtool_case": "search_availability_5xx_only_fires_and_resolves"
+      "promtool_case": "search_availability_5xx_only_fires_and_resolves_on_2xx_recovery"
     }
   ]
 }
