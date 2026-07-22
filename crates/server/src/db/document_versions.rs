@@ -353,6 +353,116 @@ pub async fn list_by_document(
     rows.iter().map(map_version).collect()
 }
 
+/// Keyset page of immutable versions for one document.
+pub async fn list_page_by_document(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    limit: i64,
+    after_version_number: Option<i32>,
+    after_id: Option<Uuid>,
+) -> Result<Vec<DocumentVersion>, DbError> {
+    if limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let rows = txn
+        .query(
+            "SELECT id, org_id, document_id, version_number, parent_version_id,
+                    publication_state, is_current, content_sha256, original_object_key,
+                    markdown_object_key, source_filename, source_content_type, byte_size,
+                    effective_from, effective_to, change_summary, created_by_user_id, created_at
+             FROM document_versions
+             WHERE org_id = $1
+               AND document_id = $2
+               AND (
+                 $3::integer IS NULL
+                 OR (version_number, id) > ($3::integer, $4::uuid)
+               )
+             ORDER BY version_number, id
+             LIMIT $5",
+            &[
+                &ctx.org_id(),
+                &document_id,
+                &after_version_number,
+                &after_id,
+                &limit,
+            ],
+        )
+        .await?;
+    rows.iter().map(map_version).collect()
+}
+
+/// Atomically publishes `version_id` as the document's current pointer.
+///
+/// Requires a published version, non-deleted document in a publishable state
+/// (`converted` or `indexed`). Idempotent when the version is already current.
+/// Callers that need indexing coordination must enqueue in the same transaction.
+/// Publish a draft (or reaffirm current) via authoritative
+/// `markhand_publish_document_version`, then return the updated document row.
+///
+/// Semantics match the SQL helper: draft→published+current; already-current is
+/// idempotent; published-but-not-current (superseded) is rejected.
+pub async fn publish_current_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<Document, DbError> {
+    let document = crate::db::documents::get_by_id_for_update(txn, ctx, document_id).await?;
+    if document.deleted_at.is_some()
+        || matches!(
+            document.state,
+            DocumentState::Tombstoned | DocumentState::Purged
+        )
+    {
+        return Err(DbError::NotFound);
+    }
+    if !matches!(
+        document.state,
+        DocumentState::Converted
+            | DocumentState::Indexed
+            | DocumentState::Uploaded
+            | DocumentState::Converting
+    ) {
+        return Err(DbError::StaleState {
+            expected: "converted, indexed, or conversion-eligible".into(),
+            observed: document.state.to_string(),
+        });
+    }
+
+    if let Err(error) = txn
+        .query_one(
+            "SELECT markhand_publish_document_version($1, $2, $3)",
+            &[&ctx.org_id(), &document_id, &version_id],
+        )
+        .await
+    {
+        return Err(map_publish_sql_error(error));
+    }
+
+    crate::db::documents::get_by_id(txn, ctx, document_id).await
+}
+
+fn map_publish_sql_error(error: tokio_postgres::Error) -> DbError {
+    let db = error.as_db_error();
+    let code = db.map(|err| err.code().code());
+    let message = db.map(|err| err.message()).unwrap_or("");
+    if code == Some("P0002") || message.contains("not found for document") {
+        return DbError::NotFound;
+    }
+    if message.contains("already published and not current") {
+        return DbError::Config("version_superseded".into());
+    }
+    if message.contains("future-dated")
+        || message.contains("effective_from")
+        || code == Some("23000")
+        || code == Some("23514")
+    {
+        return DbError::Config("invalid_publish".into());
+    }
+    DbError::Query(error)
+}
+
 pub async fn promote_current_if_needed(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

@@ -136,8 +136,152 @@ pub type OutboxJobSink = IndexingOutboxSink;
 /// The relay and staged-backfill paths must derive this key identically:
 /// otherwise a normal index request and a staged request for the same target
 /// generation can run concurrently and each create a different parent job.
-pub(crate) fn index_job_idempotency_key(index_metadata_id: Uuid, version_id: Uuid) -> String {
+pub fn index_job_idempotency_key(index_metadata_id: Uuid, version_id: Uuid) -> String {
     format!("index:{index_metadata_id}:{version_id}")
+}
+
+/// Errors from API-facing reindex / publish coordination.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CatalogIndexError {
+    #[error("document not found")]
+    NotFound,
+    #[error("document has no current version")]
+    NoCurrentVersion,
+    #[error("no active index generation")]
+    GenerationMissing,
+    #[error("document state conflict")]
+    StateConflict,
+    #[error("version is superseded")]
+    VersionSuperseded,
+    #[error("publish request is invalid")]
+    InvalidPublish,
+    #[error("job error")]
+    Job,
+    #[error("database error")]
+    Database,
+}
+
+impl From<DbError> for CatalogIndexError {
+    fn from(error: DbError) -> Self {
+        match error {
+            DbError::NotFound => Self::NotFound,
+            DbError::StaleState { .. } | DbError::IllegalTransition { .. } => Self::StateConflict,
+            DbError::Config(ref msg) if msg == "index_generation_missing" => {
+                Self::GenerationMissing
+            }
+            DbError::Config(ref msg) if msg == "version_superseded" => Self::VersionSuperseded,
+            DbError::Config(ref msg) if msg == "invalid_publish" => Self::InvalidPublish,
+            _ => Self::Database,
+        }
+    }
+}
+
+impl From<JobError> for CatalogIndexError {
+    fn from(_: JobError) -> Self {
+        Self::Job
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReindexOutcome {
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub job: crate::db::models::Job,
+    pub created: bool,
+}
+
+/// One-transaction reindex enqueue: lock document + current version + generation.
+pub async fn enqueue_document_reindex(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<ReindexOutcome, CatalogIndexError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(
+                async move { enqueue_document_reindex_within_txn(txn, &ctx, document_id).await },
+            )
+        }
+    })
+    .await
+}
+
+pub async fn enqueue_document_reindex_within_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    document_id: Uuid,
+) -> Result<ReindexOutcome, CatalogIndexError> {
+    let document = documents::get_by_id_for_update(txn, ctx, document_id).await?;
+    if document.deleted_at.is_some()
+        || matches!(
+            document.state,
+            DocumentState::Tombstoned | DocumentState::Purged
+        )
+    {
+        return Err(CatalogIndexError::NotFound);
+    }
+    let version_id = document
+        .current_version_id
+        .ok_or(CatalogIndexError::NoCurrentVersion)?;
+    let version = document_versions::find_by_id(txn, ctx, document_id, version_id)
+        .await?
+        .ok_or(CatalogIndexError::NotFound)?;
+    // Lock the current version row so publish/reindex races serialize.
+    txn.query_one(
+        "SELECT id FROM document_versions
+         WHERE org_id = $1 AND document_id = $2 AND id = $3
+         FOR UPDATE",
+        &[&ctx.org_id(), &document_id, &version.id],
+    )
+    .await
+    .map_err(DbError::from)?;
+    let metadata = index_metadata::find_active_for_update(txn, ctx, Some(document.collection_id))
+        .await?
+        .ok_or(CatalogIndexError::GenerationMissing)?;
+    let key = index_job_idempotency_key(metadata.id, version.id);
+    let outcome = jobs::enqueue_within_txn(
+        txn,
+        ctx,
+        EnqueueJob::new(
+            JobType::Index,
+            JobPayload {
+                document_id: Some(document_id),
+                version_id: Some(version.id),
+                index_metadata_id: Some(metadata.id),
+                ..JobPayload::default()
+            },
+            key,
+        ),
+    )
+    .await?;
+    Ok(ReindexOutcome {
+        document_id,
+        version_id: version.id,
+        job: outcome.job,
+        created: outcome.created,
+    })
+}
+
+/// Publish a version as current and enqueue reindex in one transaction.
+pub async fn publish_document_version(
+    pool: &Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<ReindexOutcome, CatalogIndexError> {
+    with_org_txn_typed(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let _document =
+                    document_versions::publish_current_version(txn, &ctx, document_id, version_id)
+                        .await?;
+                enqueue_document_reindex_within_txn(txn, &ctx, document_id).await
+            })
+        }
+    })
+    .await
 }
 
 /// Dedicated repair lifecycle key — never reuse the original succeeded index key.

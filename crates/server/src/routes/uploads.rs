@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::extract::multipart::Field;
 use axum::extract::DefaultBodyLimit;
-use axum::extract::{Multipart, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -16,9 +16,11 @@ use axum::{Json, Router};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::api::ApiError;
+use crate::api::{ApiError, AppMultipart};
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
+use crate::db::api_idempotency::{self, IdempotencyClaim, IdempotencyScope};
+use crate::db::pool::with_org_txn;
 use crate::http::AppState;
 use crate::services::quota::{self, QuotaError, QuotaSnapshot};
 use crate::services::upload::{
@@ -42,7 +44,7 @@ struct UploadResponse {
     threat_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason_code: Option<String>,
-    object_key: String,
+    /// Opaque upload identity only — never the quarantine object key.
     object_id: String,
     sha256: String,
     size_bytes: u64,
@@ -56,7 +58,7 @@ async fn create_upload(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedOrg,
     headers: HeaderMap,
-    multipart: Multipart,
+    AppMultipart(multipart): AppMultipart,
 ) -> Result<Response, UploadRouteError> {
     let request_id = auth.request_id.clone();
     require_permission(&auth.context, "doc.upload")
@@ -77,20 +79,81 @@ async fn create_upload(
         })?
         .map_err(|error| UploadRouteError::Upload(error, request_id.clone()))?;
 
-    let storage = state.object_store().ok_or_else(|| {
-        UploadRouteError::Upload(UploadError::StorageUnavailable, request_id.clone())
-    })?;
-    let reservation_key = upload_reservation_key(&auth, &request_id, &headers)
-        .map_err(|message| UploadRouteError::Validation(message, request_id.clone()))?;
-    let reservation = quota_reserve_hook(
+    let client_idempotency = headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if let Some(ref key) = client_idempotency {
+        validate_idempotency_key(key)
+            .map_err(|message| UploadRouteError::Validation(message, request_id.clone()))?;
+    }
+    let filename = pending.declared_filename.as_deref().unwrap_or("");
+    let content_type = pending.declared_content_type.as_deref().unwrap_or("");
+    let size_bytes = pending.streamed.size_bytes.to_string();
+    let request_hash = api_idempotency::hash_request_parts(&[
+        b"upload",
+        pending.streamed.sha256_hex.as_bytes(),
+        size_bytes.as_bytes(),
+        filename.as_bytes(),
+        content_type.as_bytes(),
+    ]);
+
+    // Claim before any quota/storage side effects so failed claims never orphan reservations.
+    let mut claimed_key: Option<String> = None;
+    if let Some(ref key) = client_idempotency {
+        match claim_upload_idempotency(state.pool(), &auth.context, key, &request_hash, &request_id)
+            .await?
+        {
+            Some(replay) => return Ok(replay),
+            None => claimed_key = Some(key.clone()),
+        }
+    }
+
+    let storage = match state.object_store() {
+        Some(store) => store,
+        None => {
+            if let Some(ref key) = claimed_key {
+                let _ = abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash)
+                    .await;
+            }
+            return Err(UploadRouteError::Upload(
+                UploadError::StorageUnavailable,
+                request_id.clone(),
+            ));
+        }
+    };
+    let reservation_key = match upload_reservation_key(&auth, &request_id, &headers) {
+        Ok(key) => key,
+        Err(message) => {
+            if let Some(ref key) = claimed_key {
+                let _ = abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash)
+                    .await;
+            }
+            return Err(UploadRouteError::Validation(message, request_id.clone()));
+        }
+    };
+    let reservation = match quota_reserve_hook(
         state.pool(),
         &auth.context,
         &reservation_key,
         pending.streamed.size_bytes,
     )
     .await
-    .map_err(|error| UploadRouteError::Quota(error, request_id.clone()))?;
+    {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            if let Some(ref key) = claimed_key {
+                let _ = abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash)
+                    .await;
+            }
+            return Err(UploadRouteError::Quota(error, request_id.clone()));
+        }
+    };
     if !reservation.storage.created || !reservation.document.created {
+        if let Some(ref key) = claimed_key {
+            let _ =
+                abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash).await;
+        }
         return Err(UploadRouteError::Quota(
             QuotaError::ReservationConflict,
             request_id,
@@ -108,26 +171,165 @@ async fn create_upload(
         reservation_key,
     );
     match handle.await {
-        Ok(Ok(success)) => Ok(success_response(
-            success.outcome,
-            &request_id,
-            Some(success.quota_snapshot),
-        )),
+        Ok(Ok(success)) => {
+            let (status, body) = upload_response_parts(success.outcome, &request_id);
+            if let Some(ref key) = claimed_key {
+                let body_json = serde_json::to_value(&body).map_err(|_| {
+                    UploadRouteError::Upload(UploadError::Internal, request_id.clone())
+                })?;
+                finalize_upload_idempotency(
+                    state.pool(),
+                    &auth.context,
+                    key,
+                    &request_hash,
+                    status.as_u16() as i32,
+                    &body_json,
+                    &request_id,
+                )
+                .await?;
+            }
+            Ok(success_response_from_parts(
+                status,
+                body,
+                Some(success.quota_snapshot),
+            ))
+        }
         Ok(Err(QuotaSettledUploadError::Upload(error))) => {
+            if let Some(ref key) = claimed_key {
+                let _ = abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash)
+                    .await;
+            }
             Err(UploadRouteError::Upload(error, request_id.clone()))
         }
         Ok(Err(QuotaSettledUploadError::Quota { error, .. })) => {
+            if let Some(ref key) = claimed_key {
+                let _ = abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash)
+                    .await;
+            }
             Err(UploadRouteError::Quota(error, request_id.clone()))
         }
-        Err(_) => Err(UploadRouteError::Upload(
-            UploadError::Internal,
-            request_id.clone(),
-        )),
+        Err(_) => {
+            if let Some(ref key) = claimed_key {
+                let _ = abandon_upload_idempotency(state.pool(), &auth.context, key, &request_hash)
+                    .await;
+            }
+            Err(UploadRouteError::Upload(
+                UploadError::Internal,
+                request_id.clone(),
+            ))
+        }
+    }
+}
+
+/// Returns `Some(replay)` when a completed identical request exists; `None` after a fresh claim.
+async fn claim_upload_idempotency(
+    pool: &deadpool_postgres::Pool,
+    ctx: &crate::auth::context::OrgContext,
+    key: &str,
+    request_hash: &str,
+    request_id: &str,
+) -> Result<Option<Response>, UploadRouteError> {
+    let claim = with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        let key = key.to_string();
+        let request_hash = request_hash.to_string();
+        move |txn| {
+            Box::pin(async move {
+                api_idempotency::claim_or_replay(
+                    txn,
+                    &ctx,
+                    IdempotencyScope::Upload,
+                    &key,
+                    &request_hash,
+                    api_idempotency::DEFAULT_IN_PROGRESS_TTL,
+                )
+                .await
+            })
+        }
+    })
+    .await
+    .map_err(|error| map_upload_idempotency_db(error, request_id))?;
+    match claim {
+        IdempotencyClaim::Proceed => Ok(None),
+        IdempotencyClaim::Replay(stored) => {
+            let status =
+                StatusCode::from_u16(stored.response_status as u16).unwrap_or(StatusCode::CREATED);
+            Ok(Some((status, Json(stored.response_body)).into_response()))
+        }
+    }
+}
+
+async fn finalize_upload_idempotency(
+    pool: &deadpool_postgres::Pool,
+    ctx: &crate::auth::context::OrgContext,
+    key: &str,
+    request_hash: &str,
+    response_status: i32,
+    response_body: &serde_json::Value,
+    request_id: &str,
+) -> Result<(), UploadRouteError> {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        let key = key.to_string();
+        let request_hash = request_hash.to_string();
+        let response_body = response_body.clone();
+        move |txn| {
+            Box::pin(async move {
+                api_idempotency::finalize(
+                    txn,
+                    &ctx,
+                    IdempotencyScope::Upload,
+                    &key,
+                    &request_hash,
+                    response_status,
+                    &response_body,
+                )
+                .await
+            })
+        }
+    })
+    .await
+    .map_err(|error| map_upload_idempotency_db(error, request_id))
+}
+
+async fn abandon_upload_idempotency(
+    pool: &deadpool_postgres::Pool,
+    ctx: &crate::auth::context::OrgContext,
+    key: &str,
+    request_hash: &str,
+) -> Result<(), ()> {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        let key = key.to_string();
+        let request_hash = request_hash.to_string();
+        move |txn| {
+            Box::pin(async move {
+                api_idempotency::abandon(txn, &ctx, IdempotencyScope::Upload, &key, &request_hash)
+                    .await
+            })
+        }
+    })
+    .await
+    .map_err(|_| ())
+}
+
+fn map_upload_idempotency_db(
+    error: crate::db::error::DbError,
+    request_id: &str,
+) -> UploadRouteError {
+    match error {
+        crate::db::error::DbError::Config(ref message) if message == "idempotency_key_conflict" => {
+            UploadRouteError::IdempotencyConflict(request_id.to_string())
+        }
+        crate::db::error::DbError::Config(ref message) if message == "idempotency_in_progress" => {
+            UploadRouteError::IdempotencyInProgress(request_id.to_string())
+        }
+        _ => UploadRouteError::Upload(UploadError::Internal, request_id.to_string()),
     }
 }
 
 async fn read_multipart(
-    mut multipart: Multipart,
+    mut multipart: axum::extract::Multipart,
     limits: LimitsConfig,
 ) -> Result<PendingUpload, UploadError> {
     let mut saw_file = false;
@@ -140,8 +342,14 @@ async fn read_multipart(
         .map_err(|_| UploadError::MultipartInvalid {
             reason: ReasonCode::MultipartTimeout,
         })?
-        .map_err(|_| UploadError::MultipartInvalid {
-            reason: ReasonCode::MultipartMissingFile,
+        .map_err(|error| {
+            if error.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                UploadError::rejected(ThreatClass::Oversize, ReasonCode::UploadTooLarge)
+            } else {
+                UploadError::MultipartInvalid {
+                    reason: ReasonCode::MultipartMissingFile,
+                }
+            }
         })?
     {
         parts_seen = parts_seen.saturating_add(1);
@@ -231,11 +439,7 @@ async fn drain_non_file_field(
     Ok(())
 }
 
-fn success_response(
-    outcome: UploadOutcome,
-    request_id: &str,
-    quota_snapshot: Option<QuotaSnapshot>,
-) -> Response {
+fn upload_response_parts(outcome: UploadOutcome, request_id: &str) -> (StatusCode, UploadResponse) {
     let status = match outcome.disposition {
         Disposition::Accepted | Disposition::Quarantined => StatusCode::CREATED,
         Disposition::Rejected => StatusCode::BAD_REQUEST,
@@ -248,7 +452,6 @@ fn success_response(
         reason_code: outcome
             .reason_code
             .map(|reason| reason.as_str().to_string()),
-        object_key: outcome.object_key.as_str(),
         object_id: outcome.object_id.to_string(),
         sha256: outcome.sha256_hex,
         size_bytes: outcome.size_bytes,
@@ -256,6 +459,14 @@ fn success_response(
         original_filename: outcome.original_filename,
         request_id: request_id.to_string(),
     };
+    (status, body)
+}
+
+fn success_response_from_parts(
+    status: StatusCode,
+    body: UploadResponse,
+    quota_snapshot: Option<QuotaSnapshot>,
+) -> Response {
     let mut response = (status, Json(body)).into_response();
     if let Some(snapshot) = quota_snapshot {
         quota::apply_quota_headers(response.headers_mut(), &snapshot);
@@ -267,6 +478,8 @@ enum UploadRouteError {
     Upload(UploadError, String),
     Quota(QuotaError, String),
     Validation(String, String),
+    IdempotencyConflict(String),
+    IdempotencyInProgress(String),
 }
 
 impl IntoResponse for UploadRouteError {
@@ -279,6 +492,26 @@ impl IntoResponse for UploadRouteError {
                 Json(ApiError {
                     code: "validation_failed".into(),
                     message,
+                    request_id,
+                    details: None,
+                }),
+            )
+                .into_response(),
+            Self::IdempotencyConflict(request_id) => (
+                StatusCode::CONFLICT,
+                Json(ApiError {
+                    code: "idempotency_key_conflict".into(),
+                    message: "Idempotency-Key was reused with a different request".into(),
+                    request_id,
+                    details: None,
+                }),
+            )
+                .into_response(),
+            Self::IdempotencyInProgress(request_id) => (
+                StatusCode::CONFLICT,
+                Json(ApiError {
+                    code: "idempotency_in_progress".into(),
+                    message: "Idempotency-Key request is still in progress".into(),
                     request_id,
                     details: None,
                 }),

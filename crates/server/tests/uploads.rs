@@ -33,7 +33,7 @@ use fileconv_server::services::upload::{
     Disposition, LimitsConfig, QuotaSettledUploadError, ReasonCode, ThreatClass, UploadError,
 };
 use fileconv_server::state::RuntimeState;
-use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
+use fileconv_server::storage::keys::{quarantine_key, trusted_key};
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use futures::stream;
 use http_body_util::BodyExt;
@@ -1411,10 +1411,12 @@ async fn http_upload_happy_and_spoof() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["disposition"], "accepted");
     assert_eq!(json["canonicalFormat"], "pdf");
-    let key = json["objectKey"].as_str().unwrap();
-    assert!(!key.contains("report.pdf"));
-    assert!(key.starts_with("quarantine/"));
-    let parsed_key = parse_key_for_org(key, org).expect("parse quarantine key");
+    assert!(
+        json.get("objectKey").is_none(),
+        "must not leak quarantine key"
+    );
+    let object_id = Uuid::parse_str(json["objectId"].as_str().unwrap()).expect("objectId");
+    let parsed_key = quarantine_key(org, object_id, Some("report.pdf")).expect("quarantine key");
     let stored_meta = store_for_assert
         .head_metadata(org, &parsed_key)
         .await
@@ -1434,6 +1436,7 @@ async fn http_upload_happy_and_spoof() {
     assert_eq!(stored.len(), pdf.len());
     assert_eq!(hex::encode(Sha256::digest(&stored)), json["sha256"]);
 
+    // Identical Idempotency-Key + request hash replays the original response.
     let retry = app
         .clone()
         .oneshot(
@@ -1451,7 +1454,37 @@ async fn http_upload_happy_and_spoof() {
         )
         .await
         .unwrap();
-    assert_eq!(retry.status(), StatusCode::CONFLICT);
+    assert_eq!(retry.status(), StatusCode::CREATED);
+    let retry_bytes = retry.into_body().collect().await.unwrap().to_bytes();
+    let retry_json: serde_json::Value = serde_json::from_slice(&retry_bytes).unwrap();
+    assert_eq!(retry_json["objectId"], json["objectId"]);
+    assert_eq!(retry_json["sha256"], json["sha256"]);
+    assert!(retry_json.get("objectKey").is_none());
+
+    // Same key with a different body hash is a conflict.
+    let other_pdf = std::fs::read(golden_dir().join("gold-001.pdf")).expect("gold-001");
+    assert_ne!(other_pdf, pdf);
+    let mismatch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header("idempotency-key", "http-upload-retry-key")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(multipart_body("other.pdf", &other_pdf)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+    let mismatch_bytes = mismatch.into_body().collect().await.unwrap().to_bytes();
+    let mismatch_json: serde_json::Value = serde_json::from_slice(&mismatch_bytes).unwrap();
+    assert_eq!(mismatch_json["code"], "idempotency_key_conflict");
 
     let spoof = std::fs::read(adversarial_dir().join("plain-text.pdf")).unwrap();
     let body = multipart_body("plain-text.pdf", &spoof);

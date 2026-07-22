@@ -175,8 +175,36 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/health/ready", get(readiness))
         .merge(routes::auth::router())
         .merge(routes::uploads::router(max_upload_bytes))
+        .merge(routes::collections::router())
         .merge(routes::documents::router())
+        .merge(routes::jobs::router())
+        .fallback(api_not_found)
+        .method_not_allowed_fallback(api_method_not_allowed)
         .with_state(Arc::new(state))
+}
+
+async fn api_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiError::new(
+            "not_found",
+            "Resource not found",
+            Uuid::new_v4().to_string(),
+        )),
+    )
+        .into_response()
+}
+
+async fn api_method_not_allowed() -> Response {
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        Json(ApiError::new(
+            "method_not_allowed",
+            "Method not allowed",
+            Uuid::new_v4().to_string(),
+        )),
+    )
+        .into_response()
 }
 
 async fn liveness() -> Json<Health> {
@@ -283,8 +311,7 @@ mod tests {
     use crate::db::pool::create_pool;
     use crate::state::RuntimeState;
 
-    #[tokio::test]
-    async fn liveness_has_a_contract_compliant_body() {
+    fn test_app() -> axum::Router {
         let runtime =
             RuntimeState::from_config(ServerConfig::test_with_endpoints(RuntimeEndpoints {
                 database_url: SecretString::new("postgres://unused"),
@@ -292,10 +319,15 @@ mod tests {
                 minio_url: "http://127.0.0.1:1".into(),
             }))
             .unwrap();
-        // Pool construction is lazy; a dummy URL is enough for the liveness route.
+        // Pool construction is lazy; a dummy URL is enough for hermetic route tests.
         let pool = create_pool("postgres://markhand_app:markhand_app@127.0.0.1:5432/markhand_test")
             .expect("pool");
-        let app = router(AppState::from_parts(runtime, pool, None).unwrap());
+        router(AppState::from_parts(runtime, pool, None).unwrap())
+    }
+
+    #[tokio::test]
+    async fn liveness_has_a_contract_compliant_body() {
+        let app = test_app();
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -310,6 +342,46 @@ mod tests {
         let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(health["status"], "ok");
         assert!(health["requestId"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn unknown_route_returns_canonical_json_404() {
+        let response = test_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "not_found");
+        assert!(json["requestId"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn wrong_method_returns_canonical_json_405() {
+        let response = test_app()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/health/live")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::METHOD_NOT_ALLOWED
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "method_not_allowed");
+        assert!(json["requestId"].as_str().is_some());
     }
 
     #[test]

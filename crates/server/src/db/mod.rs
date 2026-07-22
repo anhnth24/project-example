@@ -1,8 +1,10 @@
 //! Database models, pool, and tenant-scoped repositories.
 
+pub mod api_idempotency;
 pub mod chunks;
 pub mod claims;
 pub mod collections;
+pub mod conflicts;
 pub mod document_versions;
 pub mod documents;
 pub mod download_capabilities;

@@ -79,6 +79,81 @@ pub async fn list(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<Vec<Collect
     rows.iter().map(map_collection).collect()
 }
 
+/// Input for updating mutable collection metadata.
+#[derive(Debug, Clone)]
+pub struct UpdateCollection<'a> {
+    pub name: Option<&'a str>,
+    pub description: Option<Option<&'a str>>,
+    pub visibility: Option<CollectionVisibility>,
+}
+
+/// Updates name/description/visibility for a non-deleted collection.
+pub async fn update(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    input: UpdateCollection<'_>,
+) -> Result<Collection, DbError> {
+    let visibility = input.visibility.map(|value| value.as_str());
+    let row = txn
+        .query_opt(
+            "UPDATE collections
+             SET name = COALESCE($3, name),
+                 description = CASE
+                     WHEN $4::boolean THEN $5
+                     ELSE description
+                 END,
+                 visibility = COALESCE($6, visibility),
+                 updated_at = clock_timestamp()
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+             RETURNING id, org_id, name, slug, description, owner_user_id,
+                       visibility, created_at, updated_at, deleted_at",
+            &[
+                &ctx.org_id(),
+                &collection_id,
+                &input.name,
+                &input.description.is_some(),
+                &input.description.flatten(),
+                &visibility,
+            ],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    map_collection(&row)
+}
+
+/// Keyset page of collections restricted to the caller's allow-list.
+pub async fn list_allowed_page(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    allowed_ids: &[Uuid],
+    limit: i64,
+    after_name: Option<&str>,
+    after_id: Option<Uuid>,
+) -> Result<Vec<Collection>, DbError> {
+    if allowed_ids.is_empty() || limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let rows = txn
+        .query(
+            "SELECT id, org_id, name, slug, description, owner_user_id,
+                    visibility, created_at, updated_at, deleted_at
+             FROM collections
+             WHERE org_id = $1
+               AND deleted_at IS NULL
+               AND id = ANY($2)
+               AND (
+                 $3::text IS NULL
+                 OR (name, id) > ($3::text, $4::uuid)
+               )
+             ORDER BY name, id
+             LIMIT $5",
+            &[&ctx.org_id(), &allowed_ids, &after_name, &after_id, &limit],
+        )
+        .await?;
+    rows.iter().map(map_collection).collect()
+}
+
 fn map_collection(row: &Row) -> Result<Collection, DbError> {
     let visibility: String = row.get("visibility");
     Ok(Collection {

@@ -82,6 +82,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0019_expand_download_capability_clock.sql",
         include_str!("../migrations/0019_expand_download_capability_clock.sql"),
     ),
+    (
+        "0020_expand_api_idempotency.sql",
+        include_str!("../migrations/0020_expand_api_idempotency.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

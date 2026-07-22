@@ -293,6 +293,23 @@ pub enum PublicationState {
     Published,
 }
 
+impl PublicationState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Published => "published",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "draft" => Ok(Self::Draft),
+            "published" => Ok(Self::Published),
+            other => Err(format!("unknown publication state: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentVersion {
     pub id: Uuid,
@@ -431,12 +448,52 @@ pub enum ConflictStatus {
     FalsePositive,
 }
 
+impl ConflictStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Resolved => "resolved",
+            Self::AcceptedException => "accepted_exception",
+            Self::FalsePositive => "false_positive",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "open" => Ok(Self::Open),
+            "resolved" => Ok(Self::Resolved),
+            "accepted_exception" => Ok(Self::AcceptedException),
+            "false_positive" => Ok(Self::FalsePositive),
+            other => Err(format!("unknown conflict status: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictSeverity {
     Info,
     Warning,
     High,
+}
+
+impl ConflictSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::High => "high",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "info" => Ok(Self::Info),
+            "warning" => Ok(Self::Warning),
+            "high" => Ok(Self::High),
+            other => Err(format!("unknown conflict severity: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +505,31 @@ pub enum ConflictType {
     Limit,
     MustVsMustNot,
     Other,
+}
+
+impl ConflictType {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Numeric => "numeric",
+            Self::Enum => "enum",
+            Self::Date => "date",
+            Self::Limit => "limit",
+            Self::MustVsMustNot => "must_vs_must_not",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "numeric" => Ok(Self::Numeric),
+            "enum" => Ok(Self::Enum),
+            "date" => Ok(Self::Date),
+            "limit" => Ok(Self::Limit),
+            "must_vs_must_not" => Ok(Self::MustVsMustNot),
+            "other" => Ok(Self::Other),
+            other => Err(format!("unknown conflict type: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,6 +559,29 @@ pub enum EvidenceRole {
     ResolutionLeft,
     ResolutionRight,
     Supporting,
+}
+
+impl EvidenceRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::ResolutionLeft => "resolution_left",
+            Self::ResolutionRight => "resolution_right",
+            Self::Supporting => "supporting",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "left" => Ok(Self::Left),
+            "right" => Ok(Self::Right),
+            "resolution_left" => Ok(Self::ResolutionLeft),
+            "resolution_right" => Ok(Self::ResolutionRight),
+            "supporting" => Ok(Self::Supporting),
+            other => Err(format!("unknown evidence role: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
