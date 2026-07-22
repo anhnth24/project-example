@@ -722,7 +722,7 @@ pub async fn cancel_embedding_children(
                     WHERE batch.org_id = $1
                       AND batch.index_job_id = $2
                  )
-                 UPDATE jobs AS job
+                 UPDATE jobs AS j
                  SET status = 'cancelled',
                      lease_owner = NULL,
                      lease_expires_at = NULL,
@@ -730,9 +730,9 @@ pub async fn cancel_embedding_children(
                      finished_at = clock_timestamp(),
                      updated_at = clock_timestamp()
                  FROM children
-                 WHERE job.org_id = $1
-                   AND job.id = children.job_id
-                   AND job.status IN ('pending', 'leased')
+                 WHERE j.org_id = $1
+                   AND j.id = children.job_id
+                   AND j.status IN ('pending', 'leased')
                  RETURNING {JOB_COLUMNS_J}"
             ),
             &[&ctx.org_id(), &index_job_id],
