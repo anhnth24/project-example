@@ -476,6 +476,74 @@ tests:
               runbook: docs/runbooks/dependency-outage.md
               dashboard: markhand-deps
 
+  - name: dependency_probe_all_absent_identifies_every_dependency
+    interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandDependencyProbeAbsent
+        exp_alerts:
+          - exp_labels:
+              alertname: MarkhandDependencyProbeAbsent
+              severity: page
+              team: operations
+              class: dependency
+              dependency: postgres
+            exp_annotations:
+              summary: Expected dependency probe series is absent.
+              description: "Blackbox probe metrics missing for the dependency named by the alert label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+          - exp_labels:
+              alertname: MarkhandDependencyProbeAbsent
+              severity: page
+              team: operations
+              class: dependency
+              dependency: qdrant
+            exp_annotations:
+              summary: Expected dependency probe series is absent.
+              description: "Blackbox probe metrics missing for the dependency named by the alert label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+          - exp_labels:
+              alertname: MarkhandDependencyProbeAbsent
+              severity: page
+              team: operations
+              class: dependency
+              dependency: minio
+            exp_annotations:
+              summary: Expected dependency probe series is absent.
+              description: "Blackbox probe metrics missing for the dependency named by the alert label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+          - exp_labels:
+              alertname: MarkhandDependencyProbeAbsent
+              severity: page
+              team: operations
+              class: dependency
+              dependency: embedding
+            exp_annotations:
+              summary: Expected dependency probe series is absent.
+              description: "Blackbox probe metrics missing for the dependency named by the alert label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+          - exp_labels:
+              alertname: MarkhandDependencyProbeAbsent
+              severity: page
+              team: operations
+              class: dependency
+              dependency: markhand_ready
+            exp_annotations:
+              summary: Expected dependency probe series is absent.
+              description: "Blackbox probe metrics missing for the dependency named by the alert label. Indicates mis-scraped exporter, not necessarily dependency outage. Policy: O02-OPS-PROBE-FAILURE (metric absence).\n"
+              threshold_source: O02-OPS-PROBE-FAILURE
+              runbook: docs/runbooks/dependency-outage.md
+              dashboard: markhand-deps
+
   - name: drift_detected_fires
     interval: 1m
     input_series:

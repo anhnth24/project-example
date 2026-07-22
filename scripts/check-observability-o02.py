@@ -896,13 +896,36 @@ class ObservabilityO02Checks:
             return overrides.get(path.name, path.read_text(encoding="utf-8"))
 
         def check_active_alert_references(where: str, text: str) -> None:
-            for alert in re.findall(r"`(Markhand[A-Za-z0-9]+)`", text):
+            for alert in re.findall(r"\b(Markhand[A-Za-z0-9]+)\b", text):
                 if alert in active_alerts:
                     continue
                 if alert in blocked_alerts:
                     self.err(f"{where}: lists blocked alert {alert} as active")
                 else:
                     self.err(f"{where}: lists unknown alert {alert}")
+
+        def declared_alerts(text: str) -> list[str]:
+            declarations: list[str] = []
+            lines = text.splitlines()
+            for index, line in enumerate(lines):
+                match = re.match(r"^Alerts?:\s*(.*)$", line)
+                if match is None:
+                    continue
+                declaration = [match.group(1)]
+                for continuation in lines[index + 1 :]:
+                    if not re.match(r"^\s*`?Markhand[A-Za-z0-9]+", continuation):
+                        break
+                    declaration.append(continuation)
+                declarations.append("\n".join(declaration))
+            return declarations
+
+        def observability_export_index(text: str) -> int:
+            match = re.search(
+                r"^\s*export\s+POC_WITH_OBSERVABILITY=1\s*(?:#.*)?$",
+                text,
+                flags=re.MULTILINE,
+            )
+            return -1 if match is None else match.start()
 
         index_text = read_runbook(RUNBOOK_INDEX_PATH)
         for line in index_text.splitlines():
@@ -925,7 +948,7 @@ class ObservabilityO02Checks:
             if "logs --tail=0" in text:
                 self.err(f"{name}: no-op logs --tail=0 cleanup must be removed")
 
-            for declared in re.findall(r"^Alerts?:\s*(.+)$", text, flags=re.MULTILINE):
+            for declared in declared_alerts(text):
                 check_active_alert_references(name, declared)
 
             for expr in re.findall(
@@ -940,10 +963,10 @@ class ObservabilityO02Checks:
 
             prometheus_idx = text.find("http://127.0.0.1:9090")
             if prometheus_idx >= 0:
-                obs_idx = text.find("POC_WITH_OBSERVABILITY=1")
+                obs_idx = observability_export_index(text)
                 if obs_idx < 0 or obs_idx > prometheus_idx:
                     self.err(
-                        f"{name}: POC_WITH_OBSERVABILITY=1 must be set before "
+                        f"{name}: export POC_WITH_OBSERVABILITY=1 must be set before "
                         "querying Prometheus"
                     )
                 init_idx = text.find("poc_compose_init")
@@ -951,7 +974,7 @@ class ObservabilityO02Checks:
                     self.err(f"{name}: must initialize the observability compose stack")
                 elif obs_idx > init_idx:
                     self.err(
-                        f"{name}: POC_WITH_OBSERVABILITY=1 must appear before "
+                        f"{name}: export POC_WITH_OBSERVABILITY=1 must appear before "
                         "poc_compose_init"
                     )
 
@@ -986,15 +1009,6 @@ class ObservabilityO02Checks:
                 if "/var/lib/postgresql" in text and "blocked" not in lowered:
                     self.err(f"{name}: must not claim PG mount monitoring without blocked note")
             if name == "key-rotation.md":
-                if "POC_WITH_OBSERVABILITY=1" not in text:
-                    self.err(f"{name}: must set POC_WITH_OBSERVABILITY=1 before poc-compose")
-                # Ensure overlay flag appears before init/source usage order in Detection/Contain
-                obs_idx = text.find("POC_WITH_OBSERVABILITY=1")
-                init_idx = text.find("poc_compose_init")
-                if obs_idx < 0 or init_idx < 0 or obs_idx > init_idx:
-                    self.err(
-                        f"{name}: POC_WITH_OBSERVABILITY=1 must appear before poc_compose_init"
-                    )
                 for needle in (
                     "MARKHAND_OTEL_EXPORTER",
                     "MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -1338,6 +1352,75 @@ class ObservabilityO02Tests(unittest.TestCase):
         checks.check_runbooks()
         self.assertTrue(
             any("must be set before querying Prometheus" in e for e in checks.errors),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_multiline_alert_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "dependency-outage.md").read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "dependency-outage.md": text.replace(
+                "`MarkhandEmbeddingErrorOutbreak`",
+                "`MarkhandEmbeddingErrorOutbreakFake`",
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any(
+                "lists unknown alert MarkhandEmbeddingErrorOutbreakFake" in error
+                for error in checks.errors
+            ),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_commented_overlay_export_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "vector-rebuild.md").read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "vector-rebuild.md": text.replace(
+                "export POC_WITH_OBSERVABILITY=1",
+                "# export POC_WITH_OBSERVABILITY=1",
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any("must be set before querying Prometheus" in e for e in checks.errors),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_unknown_raw_metric_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "dependency-outage.md").read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "dependency-outage.md": text.replace(
+                "query=probe_success",
+                "query=syntactically_valid_unemitted_metric_total",
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any(
+                "unknown raw metric selector "
+                "syntactically_valid_unemitted_metric_total" in error
+                for error in checks.errors
+            ),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_overlay_after_init_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "vector-rebuild.md").read_text(encoding="utf-8")
+        export = "export POC_WITH_OBSERVABILITY=1\n"
+        checks._runbook_overrides = {
+            "vector-rebuild.md": text.replace(export, "").replace(
+                "poc_compose_init\n",
+                f"poc_compose_init\n{export}",
+                1,
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any("must appear before poc_compose_init" in e for e in checks.errors),
             checks.errors,
         )
 
