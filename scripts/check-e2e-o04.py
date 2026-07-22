@@ -248,35 +248,79 @@ def validate_suite_shape(suite: dict[str, Any]) -> None:
 
 
 def validate_no_bridge_mutations() -> None:
-    """Detect SQL/business DB write or object-store metadata/copy bridges regardless of filename."""
+    """Scan harness/deploy scripts/SQL for business inserts and storage bridges.
+
+    Seed SQL may only contain auth/org/role/collection fixtures — never
+    documents/versions/jobs/chunks/object-store operations.
+    """
     forbidden_res = [
         re.compile(r"UPDATE\s+uploads\b", re.I),
         re.compile(r"promote_upload|intake_bridge|bridge_upload", re.I),
         re.compile(r"copy_object\s*\(", re.I),
         re.compile(r"set_object_(?:tags|metadata)\s*\(", re.I),
         re.compile(r"rewrite(?:ing)?\s+(?:object\s+)?metadata", re.I),
+        re.compile(r"\bput_object\s*\(", re.I),
+        re.compile(r"\bupload_file(?:obj)?\s*\(", re.I),
     ]
-    # Business document/job inserts outside the IDOR seed file are forbidden.
-    insert_doc_re = re.compile(
-        r"INSERT\s+INTO\s+(documents|document_versions|jobs)\b", re.I
+    business_insert_re = re.compile(
+        r"INSERT\s+INTO\s+(documents|document_versions|jobs|chunks|objects|artifacts)\b",
+        re.I,
     )
-    allow_insert = {E2E / "sql" / "seed_e2e_accounts.sql"}
+    seed_forbidden_re = re.compile(
+        r"\b(documents|document_versions|jobs|chunks|objects|artifacts|original_object_key|"
+        r"markdown_object_key)\b",
+        re.I,
+    )
+    seed_allowed_tables = {
+        "users",
+        "orgs",
+        "org_memberships",
+        "roles",
+        "role_permissions",
+        "permissions",
+        "collections",
+        "org_quotas",
+    }
 
-    for path in E2E.rglob("*"):
-        if not path.is_file() or path.suffix not in {".py", ".sql", ".sh"}:
+    scan_roots = [E2E, ROOT / "deploy" / "scripts"]
+    for root in scan_roots:
+        if not root.exists():
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for pattern in forbidden_res:
-            if pattern.search(text):
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix not in {".py", ".sql", ".sh"}:
+                continue
+            if root == ROOT / "deploy" / "scripts" and path.name not in {
+                "poc-e2e-o04.sh",
+                "seed-poc-e2e.sh",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for pattern in forbidden_res:
+                if pattern.search(text):
+                    raise HarnessError(
+                        f"forbidden intake/object-store bridge in {path.relative_to(ROOT)}: "
+                        f"{pattern.pattern}"
+                    )
+            if business_insert_re.search(text):
                 raise HarnessError(
-                    f"forbidden intake/object-store bridge in {path.relative_to(ROOT)}: "
-                    f"{pattern.pattern}"
+                    f"forbidden business-table INSERT in {path.relative_to(ROOT)}"
                 )
-        if insert_doc_re.search(text) and path.resolve() not in {p.resolve() for p in allow_insert}:
+
+    seed = E2E / "sql" / "seed_e2e_accounts.sql"
+    seed_text = seed.read_text(encoding="utf-8")
+    for line in seed_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--"):
+            continue
+        if seed_forbidden_re.search(line):
             raise HarnessError(
-                f"forbidden business-table INSERT in {path.relative_to(ROOT)} "
-                "(only seed_e2e_accounts.sql may seed foreign IDOR rows)"
+                "seed SQL must only contain auth/org/role/collection fixtures; "
+                f"forbidden business/object reference: {stripped[:80]}"
             )
+    for match in re.finditer(r"INSERT\s+INTO\s+([a-z_]+)", seed_text, re.I):
+        table = match.group(1).lower()
+        if table not in seed_allowed_tables:
+            raise HarnessError(f"seed SQL inserts into forbidden table: {table}")
 
     for path in HARNESS_DIR.glob("*.py"):
         source = path.read_text(encoding="utf-8")
@@ -284,11 +328,93 @@ def validate_no_bridge_mutations() -> None:
             ast.parse(source, filename=str(path))
         except SyntaxError as error:
             raise HarnessError(f"harness syntax error {path.name}: {error}") from error
-        text = source.lower()
-        if "psycopg" in text or "sqlalchemy" in text:
+        lowered = source.lower()
+        if "psycopg" in lowered or "sqlalchemy" in lowered:
             raise HarnessError(f"{path.name}: direct DB driver import forbidden")
-        if re.search(r"\bboto3\b|\bminio\b", text) and path.name not in {"compose_util.py"}:
+        if re.search(r"\bboto3\b", lowered):
             raise HarnessError(f"{path.name}: object-store client import forbidden")
+
+
+def _validate_schema(instance: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
+    """Minimal JSON Schema subset validator (draft-2020-12 features we use)."""
+    errors: list[str] = []
+    schema_type = schema.get("type")
+    if isinstance(schema_type, list):
+        ok_any = False
+        sub_errors: list[str] = []
+        for option in schema_type:
+            sub = {k: v for k, v in schema.items() if k != "type"}
+            sub["type"] = option
+            opt_errs = _validate_schema(instance, sub, path)
+            if not opt_errs:
+                ok_any = True
+                break
+            sub_errors.extend(opt_errs)
+        if not ok_any:
+            errors.append(f"{path}: type union mismatch")
+        return errors
+    if "enum" in schema and instance not in schema["enum"]:
+        errors.append(f"{path}: enum mismatch ({instance!r})")
+        return errors
+    if schema_type == "object":
+        if not isinstance(instance, dict):
+            return [f"{path}: expected object"]
+        for key in schema.get("required") or []:
+            if key not in instance:
+                errors.append(f"{path}: missing required {key}")
+        props = schema.get("properties") or {}
+        additional = schema.get("additionalProperties", True)
+        for key, value in instance.items():
+            if key in props:
+                errors.extend(_validate_schema(value, props[key], f"{path}.{key}"))
+            elif additional is False:
+                errors.append(f"{path}: unexpected property {key}")
+            elif isinstance(additional, dict):
+                errors.extend(_validate_schema(value, additional, f"{path}.{key}"))
+    elif schema_type == "array":
+        if not isinstance(instance, list):
+            return [f"{path}: expected array"]
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for idx, item in enumerate(instance):
+                errors.extend(_validate_schema(item, item_schema, f"{path}[{idx}]"))
+        if "minItems" in schema and len(instance) < schema["minItems"]:
+            errors.append(f"{path}: minItems {schema['minItems']}")
+    elif schema_type == "string":
+        if not isinstance(instance, str):
+            return [f"{path}: expected string"]
+        if "const" in schema and instance != schema["const"]:
+            errors.append(f"{path}: const mismatch")
+        if "pattern" in schema and re.search(schema["pattern"], instance) is None:
+            errors.append(f"{path}: pattern mismatch")
+        if "minLength" in schema and len(instance) < schema["minLength"]:
+            errors.append(f"{path}: minLength")
+    elif schema_type == "integer":
+        if not isinstance(instance, int) or isinstance(instance, bool):
+            return [f"{path}: expected integer"]
+        if "const" in schema and instance != schema["const"]:
+            errors.append(f"{path}: const mismatch")
+        if "minimum" in schema and instance < schema["minimum"]:
+            errors.append(f"{path}: minimum")
+    elif schema_type == "boolean":
+        if not isinstance(instance, bool):
+            return [f"{path}: expected boolean"]
+    elif schema_type == "null":
+        if instance is not None:
+            return [f"{path}: expected null"]
+    return errors
+
+
+def validate_against_schemas(suite: dict[str, Any], evidence: dict[str, Any]) -> None:
+    suite_schema = load_json(SUITE_SCHEMA)
+    evidence_schema = load_json(EVIDENCE_SCHEMA)
+    suite_errors = _validate_schema(suite, suite_schema)
+    if suite_errors:
+        raise HarnessError("suite manifest schema invalid: " + "; ".join(suite_errors[:8]))
+    evidence_errors = _validate_schema(evidence, evidence_schema)
+    if evidence_errors:
+        raise HarnessError("evidence schema invalid: " + "; ".join(evidence_errors[:8]))
+
 
 
 def validate_fixtures() -> None:
@@ -378,6 +504,7 @@ def validate_scripts() -> None:
         "run_live.py",
         "die ",
         "trap ",
+        "CLEANUP_FAILED",
         "markhand-e2e",
         "markhand_e2e",
     ):
@@ -422,7 +549,7 @@ def validate_schemas() -> None:
 
 
 def inspect_committed_evidence_before_regen() -> None:
-    """Reject a false live claim already present in tracked evidence."""
+    """Reject any committed runtime/random/non-hermetic evidence, not just live=true."""
     if not REPORT_JSON.is_file():
         return
     data = load_json(REPORT_JSON)
@@ -431,18 +558,32 @@ def inspect_committed_evidence_before_regen() -> None:
             "committed evidence claimsLiveVerticalSlice=true before regeneration — "
             "rejecting false live claim"
         )
-    if data.get("mode") == "live":
+    if data.get("mode") != "hermetic":
         raise HarnessError(
-            "tracked evidence must not be mode=live (runtime live writes gitignored .live artifact)"
+            f"tracked evidence mode must be hermetic (got {data.get('mode')!r}); "
+            "runtime live writes gitignored .live artifact"
         )
-    # Determinism markers when present.
-    if data.get("mode") == "hermetic":
-        if data.get("generatedAt") not in {None, HERMETIC_GENERATED_AT} and data.get(
-            "generatedAt", ""
-        ).startswith("202"):
-            # Allow old reports; regeneration will fix. But reject runtime-looking claims.
-            if data.get("claimsLiveVerticalSlice") is True:
-                raise HarnessError("hermetic report must not claim live slice")
+    if data.get("generatedAt") != HERMETIC_GENERATED_AT:
+        raise HarnessError(
+            f"committed evidence generatedAt must be hermetic sentinel "
+            f"(got {data.get('generatedAt')!r})"
+        )
+    if data.get("runId") != HERMETIC_RUN_ID:
+        raise HarnessError(
+            f"committed evidence runId must be hermetic sentinel (got {data.get('runId')!r})"
+        )
+    if data.get("git") != HERMETIC_GIT:
+        raise HarnessError(
+            f"committed evidence git identity must be hermetic sentinel (got {data.get('git')!r})"
+        )
+    # Reject runtime-looking timestamps / branch names if present in markdown too.
+    if REPORT_MD.is_file():
+        md = REPORT_MD.read_text(encoding="utf-8")
+        if re.search(r"20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", md):
+            raise HarnessError("markdown evidence contains runtime timestamp")
+        if "claimsLiveVerticalSlice`: **true**" in md:
+            raise HarnessError("markdown evidence claims live vertical slice")
+
 
 
 class O04SelfTests(unittest.TestCase):
@@ -602,6 +743,100 @@ class O04SelfTests(unittest.TestCase):
             self.assertTrue(disposition in ("rejected", "quarantined"))
         self.assertFalse("accepted" in ("rejected", "quarantined"))
 
+    def test_seed_sql_rejects_document_inserts(self) -> None:
+        seed = (E2E / "sql" / "seed_e2e_accounts.sql").read_text(encoding="utf-8")
+        self.assertNotRegex(seed, r"(?i)INSERT\s+INTO\s+documents\b")
+        self.assertNotRegex(seed, r"(?i)INSERT\s+INTO\s+document_versions\b")
+        self.assertNotRegex(seed, r"(?i)INSERT\s+INTO\s+jobs\b")
+
+    def test_schemas_validate_suite_and_evidence(self) -> None:
+        suite = load_suite_manifest()
+        # Use current hermetic shape (or a minimal blocked report).
+        evidence = {
+            "version": 1,
+            "issue": "P1B-O04",
+            "generatedAt": HERMETIC_GENERATED_AT,
+            "runId": HERMETIC_RUN_ID,
+            "mode": "hermetic",
+            "git": dict(HERMETIC_GIT),
+            "claimsLiveVerticalSlice": False,
+            "summary": {
+                "passed": 0,
+                "failed": 0,
+                "blocked": 1,
+                "skippedOptional": 0,
+                "highCritical": 1,
+            },
+            "cases": [
+                {
+                    "id": "fmt-txt",
+                    "matrix": "format",
+                    "status": "blocked",
+                    "httpStatuses": [],
+                    "postconditions": {},
+                }
+            ],
+            "blockers": ["production_intake_not_wired"],
+            "severity": "high",
+        }
+        validate_against_schemas(suite, evidence)
+
+    def test_redaction_preserves_case_ids_rejects_passwords_uuids(self) -> None:
+        dirty = (
+            "case fmt-txt and sec-idor-cross-org "
+            "MAHOA_E2E_TXT_7F3A markhand-e2e "
+            "11111111-1111-1111-1111-111111111111 "
+            "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        )
+        clean = scrub_text(dirty)
+        self.assertIn("fmt-txt", clean)
+        self.assertIn("sec-idor-cross-org", clean)
+        self.assertNotIn("MAHOA_E2E_TXT_7F3A", clean)
+        self.assertNotIn("markhand-e2e", clean)
+        self.assertNotIn("11111111-1111-1111-1111-111111111111", clean)
+        self.assertNotIn("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", clean)
+        # Sentinel UUID allowed through scrub.
+        sentinel = scrub_text(HERMETIC_RUN_ID)
+        self.assertEqual(sentinel, HERMETIC_RUN_ID)
+        leaks = assert_no_forbidden_evidence(
+            json.dumps({"runId": HERMETIC_RUN_ID, "id": "fmt-txt"})
+        )
+        self.assertEqual(leaks, [])
+        leaks2 = assert_no_forbidden_evidence(
+            "run " + "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        )
+        self.assertTrue(any("UUID" in e or "uuid" in e.lower() for e in leaks2))
+
+    def test_checkpoint_requires_field_not_running(self) -> None:
+        from harness.runner import _job_phase_observed
+
+        self.assertTrue(
+            _job_phase_observed({"status": "running", "startedAt": "x"}, "after_claim")
+        )
+        self.assertFalse(
+            _job_phase_observed({"status": "running", "jobType": "convert"}, "after_checkpoint")
+        )
+        self.assertTrue(
+            _job_phase_observed(
+                {
+                    "status": "running",
+                    "jobType": "convert",
+                    "checkpoint": {"step": "staged"},
+                },
+                "after_checkpoint",
+            )
+        )
+
+    def test_cleanup_sql_uses_psql_variables(self) -> None:
+        cleanup_src = (HARNESS_DIR / "cleanup.py").read_text(encoding="utf-8")
+        self.assertIn(":'email'", cleanup_src)
+        self.assertIn("variables=", cleanup_src)
+        # No f-string SQL interpolation of email/uuid into quotes.
+        self.assertNotRegex(
+            cleanup_src,
+            r"f[\"'].*WHERE email = '\{email\}'",
+        )
+
 
 def run_self_tests() -> None:
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(O04SelfTests)
@@ -663,15 +898,19 @@ def main() -> int:
         require_file(COMPOSE)
         require_file(POC_E2E_MANIFEST)
         validate_schemas()
-        validate_suite_shape(load_json(SUITE))
+        suite = load_json(SUITE)
+        validate_suite_shape(suite)
         validate_no_bridge_mutations()
         validate_fixtures()
         validate_scripts()
         validate_poc_manifest()
         inspect_committed_evidence_before_regen()
+        if REPORT_JSON.is_file():
+            validate_against_schemas(suite, load_json(REPORT_JSON))
         if args.self_test:
             run_self_tests()
         report = regenerate_hermetic_evidence()
+        validate_against_schemas(suite, report)
         if args.json_report.resolve() != REPORT_JSON.resolve():
             args.json_report.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPORT_JSON, args.json_report)

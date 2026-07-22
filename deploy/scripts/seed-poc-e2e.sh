@@ -61,7 +61,6 @@ hash="$(
     2>/dev/null \
     || cargo run -p fileconv-server --bin dev-hash-password -- "$PASSWORD"
 )"
-hash_sql="${hash//\'/\'\'}"
 
 EMAILS=(
   "admin@poc.example"
@@ -76,8 +75,10 @@ for email in "${EMAILS[@]}"; do
     -U "${MARKHAND_POSTGRES_USER}" \
     -d "${MARKHAND_POSTGRES_DB}" \
     --set ON_ERROR_STOP=1 \
+    -v "email=${email}" \
+    -v "phash=${hash}" \
     -tAc \
-    "UPDATE users SET password_hash = '${hash_sql}', updated_at = now() WHERE email = '${email}' RETURNING email;" \
+    "UPDATE users SET password_hash = :'phash', updated_at = now() WHERE email = :'email' RETURNING email;" \
     | grep -q .; then
     echo "set E2E password for $email"
     updated=$((updated + 1))
@@ -90,9 +91,11 @@ if [[ "$updated" == "0" ]]; then
   die "no passwords updated — ensure migrations applied and API started once"
 fi
 
-# Export foreign seeded IDs for IDOR matrix (also documented here for runners).
-export MARKHAND_E2E_FOREIGN_DOCUMENT_ID="${MARKHAND_E2E_FOREIGN_DOCUMENT_ID:-67676767-6767-4676-8676-676767676701}"
-export MARKHAND_E2E_FOREIGN_VERSION_ID="${MARKHAND_E2E_FOREIGN_VERSION_ID:-68686868-6868-4686-8686-686868686801}"
+# Foreign document/version IDs are created via public API during the live runner
+# (seed SQL must not insert documents/versions/jobs/chunks/object rows).
+export MARKHAND_E2E_FOREIGN_COLLECTION_ID="${MARKHAND_E2E_FOREIGN_COLLECTION_ID:-56565656-5656-4565-8565-565656565601}"
+unset MARKHAND_E2E_FOREIGN_DOCUMENT_ID || true
+unset MARKHAND_E2E_FOREIGN_VERSION_ID || true
 
 echo "E2E seed complete (password via MARKHAND_E2E_PASSWORD; not printed)"
-echo "foreign document id set for IDOR matrix"
+echo "foreign collection ready; documents for IDOR created via public API only"

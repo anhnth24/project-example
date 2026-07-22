@@ -11,9 +11,9 @@ Severity: `high`
 
 - passed: 1
 - failed: 0
-- blocked: 31
-- optional unavailable: 1
-- high/critical cases: 8
+- blocked: 32
+- optional unavailable: 0
+- high/critical cases: 9
 
 ## Blockers
 
@@ -42,8 +42,8 @@ Severity: `high`
   - blocked: Docker unavailable; production intake wiring unverified
 - `fmt-image-ocr` [format] → **blocked** (severity=high; blocker=production_intake_not_wired; http=[])
   - blocked: Docker unavailable; production intake wiring unverified
-- `fmt-audio-spoken` [format] → **optional_unavailable** (severity=none; blocker=none; http=[])
-  - optional spoken-audio coverage requires approved spoken-token fixture/model; silence cannot satisfy all-formats claim
+- `fmt-audio-spoken` [format] → **blocked** (severity=medium; blocker=none; http=[])
+  - spoken-audio fixture absent; optional only after live server capability disable signal (hermetic cannot query)
 - `sec-user-disabled` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `sec-user-suspended` [security] → **blocked** (severity=medium; blocker=none; http=[])
@@ -68,8 +68,8 @@ Severity: `high`
   - live stack unavailable in this environment
 - `sec-idor-cross-org` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
-- `sec-[REDACTED_FIXTURE_TOKEN]` [security] → **blocked** (severity=medium; blocker=none; http=[])
-  - live stack unavailable in this environment
+- `sec-prompt-injection-untrusted` [security] → **blocked** (severity=high; blocker=production_intake_not_wired; http=[])
+  - prompt fixture requires accepted upload + convert/ask; intake blocker prevents reaching it today
 - `sec-zip-bomb` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `sec-path-traversal` [security] → **blocked** (severity=medium; blocker=none; http=[])
@@ -81,7 +81,7 @@ Severity: `high`
 - `sec-malformed-format` [security] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `adv-audio-silence-no-hallucination` [adversarial] → **blocked** (severity=medium; blocker=none; http=[])
-  - live stack unavailable in this environment
+  - silence no-hallucination requires completed transcription/answer path; live stack unavailable
 - `fault-kill-convert-after-claim` [fault] → **blocked** (severity=medium; blocker=none; http=[])
   - live stack unavailable in this environment
 - `fault-kill-convert-after-checkpoint` [fault] → **blocked** (severity=medium; blocker=none; http=[])
