@@ -13,6 +13,7 @@ pub mod index_signature;
 pub mod indexing;
 pub mod preview;
 pub mod promotion;
+pub mod qa;
 pub mod quota;
 pub mod reconciliation;
 pub mod retrieval;
