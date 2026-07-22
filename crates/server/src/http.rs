@@ -20,12 +20,12 @@ use crate::middleware::{
     rate_limit_middleware, request_id_middleware, InMemoryRateLimiter, RequestId,
 };
 use crate::routes;
-use crate::routes::health::{
-    check_signature_alignment, dependency_timeout, run_live_readiness, FakeHealthProbes,
-    HealthProbeBackend, ProbeReason, ReadinessCache, ReconciliationGate, StartupState,
-};
 use crate::services::download::DownloadFetchBudget;
 use crate::services::embedding::{ApprovedEmbeddingRuntime, EmbeddingError};
+use crate::services::health::{
+    dependency_timeout, FakeHealthProbes, HealthProbeBackend, ProbeReason, ReadinessCache,
+    ReconciliationGate, StartupState,
+};
 use crate::services::qa::provider::{ConfiguredProvider, ProviderError, QaProviderConfig};
 use crate::services::quota;
 use crate::state::RuntimeState;
@@ -296,36 +296,18 @@ impl AppState {
 
     /// Refresh the in-memory view from the durable marker (never a permanent latch).
     pub async fn refresh_reconciliation_gate(&self) -> Result<bool, ProbeReason> {
-        match crate::services::reconciliation::is_startup_reconciliation_ready(self.pool()).await {
-            Ok(ready) => {
-                self.reconciliation.set_ready(ready);
-                Ok(ready)
-            }
-            Err(_) => {
-                self.reconciliation.set_ready(false);
-                Err(ProbeReason::Reconciliation)
-            }
-        }
+        crate::services::health::refresh_reconciliation_gate(self.pool(), &self.reconciliation)
+            .await
     }
 
     pub async fn check_readiness(&self) -> Result<(), ProbeReason> {
-        self.readiness_cache
-            .get_or_run(|| async {
-                match &self.probes {
-                    HealthProbeBackend::Fake(fake) => {
-                        check_signature_alignment(self)?;
-                        // Fake path still honors the dynamic in-memory gate (tests).
-                        if !self.reconciliation.is_ready() {
-                            return Err(ProbeReason::Reconciliation);
-                        }
-                        fake.run().await
-                    }
-                    HealthProbeBackend::Live { timeout } => {
-                        run_live_readiness(self, *timeout).await
-                    }
-                }
-            })
-            .await
+        crate::services::health::check_readiness(
+            self,
+            &self.readiness_cache,
+            &self.probes,
+            &self.reconciliation,
+        )
+        .await
     }
 }
 

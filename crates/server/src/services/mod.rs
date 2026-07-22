@@ -9,6 +9,7 @@ pub mod deletion;
 pub mod document_state;
 pub mod download;
 pub mod embedding;
+pub mod health;
 pub mod index_signature;
 pub mod indexing;
 pub mod preview;
