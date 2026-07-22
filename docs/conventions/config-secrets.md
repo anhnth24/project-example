@@ -38,6 +38,24 @@ plain HTTP and PostgreSQL endpoints in `deploy/dev/.env.example`.
 | `test` | loopback | fixture/ephemeral values only |
 | `prod` | explicit required | no loopback/default database credential |
 
+## Telemetry / OpenTelemetry
+
+Optional. Defaults keep exporters off so unit/integration tests never dial a network
+collector.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `MARKHAND_OTEL_EXPORTER` | `none` | `none` or `otlp` |
+| `MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Required when exporter=`otlp` (e.g. `http://127.0.0.1:4317`) |
+| `MARKHAND_OTEL_SERVICE_NAME` | `markhand` | Resource service name |
+| `MARKHAND_OTEL_TRACES_SAMPLER_ARG` | `1.0` | Ratio in `[0,1]` |
+| `MARKHAND_OTEL_METRICS_ENABLED` | `true` | In-process allowlisted metrics |
+| `MARKHAND_OTEL_DISABLE_NETWORK` | `false` | Forced `true` under `MARKHAND_PROFILE=test` |
+
+Production fails closed on misconfig (otlp without endpoint, http remote endpoint,
+or `DISABLE_NETWORK=true` with otlp). Dev collector: `deploy/dev/otel-collector.yaml`.
+Dashboards/alerts are O02 — not configured here.
+
 Run a config-only check:
 
 ```bash

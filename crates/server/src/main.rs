@@ -60,6 +60,9 @@ async fn main() {
             {
                 exit_with_error(format!("server failed: {error}"));
             }
+            if let Err(error) = fileconv_server::telemetry::shutdown() {
+                eprintln!("telemetry shutdown: {error}");
+            }
         }
         Err(error) => {
             exit_with_error(format!("invalid server configuration: {error}"));

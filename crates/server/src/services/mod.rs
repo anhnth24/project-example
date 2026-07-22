@@ -1,6 +1,7 @@
 //! Application services (use cases over repositories).
 
 pub mod artifacts;
+pub mod audit;
 pub mod chunking;
 pub mod citation;
 pub mod claims;

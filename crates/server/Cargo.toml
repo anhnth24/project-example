@@ -39,6 +39,9 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 ipnet = "2.11.0"
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 libc = "0.2.186"
+opentelemetry = { version = "0.32", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["trace", "metrics", "grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio", "trace", "metrics", "testing"] }
 quick-xml = "0.41.0"
 rand = "0.10.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
@@ -57,6 +60,7 @@ tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4", "with-serd
 tokio-postgres-rustls = "0.14.0"
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.41"
+tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 url = "2.5.8"
 uuid = { version = "1.24.0", features = ["serde", "v4", "v8"] }

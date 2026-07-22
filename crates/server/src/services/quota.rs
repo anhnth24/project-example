@@ -269,6 +269,35 @@ pub async fn reserve(
     ttl: Duration,
     job_id: Option<Uuid>,
 ) -> Result<QuotaReservationOutcome, QuotaError> {
+    let result = reserve_inner(
+        db_pool,
+        ctx,
+        reservation_key,
+        resource_kind,
+        amount,
+        ttl,
+        job_id,
+    )
+    .await;
+    match &result {
+        Ok(_) => crate::telemetry::record_quota("reserve", resource_kind.as_str()),
+        Err(QuotaError::QuotaExceeded(_)) => {
+            crate::telemetry::record_quota("deny", resource_kind.as_str())
+        }
+        Err(_) => crate::telemetry::record_quota("error", resource_kind.as_str()),
+    }
+    result
+}
+
+async fn reserve_inner(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    reservation_key: &str,
+    resource_kind: ResourceKind,
+    amount: u64,
+    ttl: Duration,
+    job_id: Option<Uuid>,
+) -> Result<QuotaReservationOutcome, QuotaError> {
     validate_reservation_key(reservation_key)?;
     let amount = checked_amount(amount)?;
     let ttl_secs = checked_ttl_secs(ttl)?;
@@ -309,6 +338,21 @@ pub async fn reserve(
                     .map_err(map_quota_config_error)?;
                 let remaining = remaining(usage.limit, usage.committed, usage.active_reserved)?;
                 if amount > remaining {
+                    let request_id = crate::services::audit::request_id_from_correlation();
+                    crate::services::audit::write_org_action(
+                        txn,
+                        &ctx,
+                        crate::services::audit::actions::QUOTA_DENY,
+                        crate::services::audit::resources::QUOTA,
+                        None,
+                        "deny",
+                        &request_id,
+                        serde_json::json!({
+                            "reason": "quota_exceeded",
+                            "resource_kind": resource_kind.as_str(),
+                        }),
+                    )
+                    .await?;
                     return Err(QuotaError::QuotaExceeded(QuotaDenial {
                         resource_kind,
                         limit: usage.limit,
@@ -458,6 +502,22 @@ pub async fn finalize(
 }
 
 pub async fn refund(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<QuotaSettlement, QuotaError> {
+    let result = refund_inner(db_pool, ctx, reservation_key).await;
+    match &result {
+        Ok(settlement) => crate::telemetry::record_quota(
+            "refund",
+            settlement.reservation().resource_kind.as_str(),
+        ),
+        Err(_) => crate::telemetry::record_quota("error", "unknown"),
+    }
+    result
+}
+
+async fn refund_inner(
     db_pool: &Pool,
     ctx: &OrgContext,
     reservation_key: &str,
@@ -825,6 +885,21 @@ async fn reserve_spec_in_txn(
         .map_err(map_quota_config_error)?;
     let available = remaining(usage.limit, usage.committed, usage.active_reserved)?;
     if amount > available {
+        let request_id = crate::services::audit::request_id_from_correlation();
+        crate::services::audit::write_org_action(
+            txn,
+            ctx,
+            crate::services::audit::actions::QUOTA_DENY,
+            crate::services::audit::resources::QUOTA,
+            None,
+            "deny",
+            &request_id,
+            serde_json::json!({
+                "reason": "quota_exceeded",
+                "resource_kind": resource_kind.as_str(),
+            }),
+        )
+        .await?;
         return Err(QuotaError::QuotaExceeded(QuotaDenial {
             resource_kind,
             limit: usage.limit,

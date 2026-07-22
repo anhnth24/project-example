@@ -143,25 +143,37 @@ impl ApprovedEmbeddingRuntime {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
+        let started = std::time::Instant::now();
         let request = ProviderRequest {
             model: self.plan.model(),
             input: inputs,
             encoding_format: "float",
         };
-        let response = self
-            .client
-            .post(&self.endpoint)
-            .bearer_auth(&self.api_key)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|_| EmbeddingError::Http)?
-            .error_for_status()
-            .map_err(|_| EmbeddingError::Http)?
-            .json::<ProviderResponse>()
-            .await
-            .map_err(|_| EmbeddingError::InvalidResponse)?;
-        validate_response(response, inputs.len(), &self.plan)
+        let result = async {
+            let response = self
+                .client
+                .post(&self.endpoint)
+                .bearer_auth(&self.api_key)
+                .json(&request)
+                .send()
+                .await
+                .map_err(|_| EmbeddingError::Http)?
+                .error_for_status()
+                .map_err(|_| EmbeddingError::Http)?
+                .json::<ProviderResponse>()
+                .await
+                .map_err(|_| EmbeddingError::InvalidResponse)?;
+            validate_response(response, inputs.len(), &self.plan)
+        }
+        .await;
+        let outcome = match &result {
+            Ok(_) => "success",
+            Err(EmbeddingError::Http) => "http_error",
+            Err(EmbeddingError::InvalidResponse) => "invalid_response",
+            Err(_) => "error",
+        };
+        crate::telemetry::record_embedding(outcome, started.elapsed());
+        result
     }
 }
 
