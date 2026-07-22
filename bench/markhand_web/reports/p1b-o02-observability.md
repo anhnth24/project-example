@@ -1,4 +1,4 @@
-# P1B-O02 evidence — dashboards, alerts, runbooks (final-round fixes)
+# P1B-O02 evidence — dashboards, alerts, runbooks (verification blockers)
 
 Status: **In Progress** (branch `cursor/implement-p1b-o02-5007`; not Review/Done).
 `claims_real_outage`: **false**
@@ -8,6 +8,9 @@ Status: **In Progress** (branch `cursor/implement-p1b-o02-5007`; not Review/Done
 ```bash
 $ bash scripts/fetch-promtool.sh
 # → .tools/promtool (Prometheus 2.55.1, sha256 verified)
+
+$ git diff --check
+# exit 0
 
 $ .tools/promtool check rules \
     deploy/observability/prometheus/recording_rules.yml \
@@ -22,22 +25,7 @@ $ .tools/promtool test rules deploy/observability/prometheus/tests/alerts_test.y
 
 $ python3 scripts/check-observability-o02.py --self-test
 P1B-O02 observability validation OK (15 active alerts, 4 blocked, 4 dashboards, promtool check/test OK)
-Ran 7 tests … OK
-
-$ cargo fmt --all -- --check
-# exit 0
-
-$ cargo metadata --locked --format-version 1 --no-deps
-# exit 0
-
-$ python3 scripts/check-dependency-policy.py
-dependency policy passed
-
-$ cargo test -p fileconv-server metrics::tests --lib
-test result: ok. 5 passed; 0 failed …
-
-$ cargo clippy -p fileconv-server --lib --no-deps -- -D warnings
-# exit 0
+Ran 15 tests … OK
 
 $ make check-static
 # exit 0
@@ -47,19 +35,15 @@ $ make check-observability
 ```
 
 Machine report regenerated at `deploy/observability/evidence/validation-report.json`
-(repo-relative paths, deterministic fields, `sort_keys=True`).
+(v4; repo-relative paths; no `dockerAvailable`/host notes — runtime printed to stdout only).
 
-## Final-round fixes
+## Verification-blocker fixes
 
-1. Merged Compose: `REPO_ROOT` + `--project-directory`, root-relative binds, `up.sh`; validator resolves bind paths without Docker
-2. OTEL wired on api/worker-index/worker-embedding/worker-convert; collector on `private`+`convert`; convert stays internal-only
-3. Search availability: `or vector(0)` numerator + `and on()` traffic gate; 5xx-only fires; empty traffic does not; temporal fixture
-4. `MarkhandReconcileErrors` blocked (unemitted `result=error`); live `MarkhandDriftDetected` retained; fake fixture/dashboard removed
-5. Validator: O01+recording inventory, nonexistent-metric mutation, per-alert promtool fire+non-fire, tabletop stages/links, deterministic report
-6. Stable `embedding` alias for mock + aiteamvn profiles; static profile/alias checks
-7. Policy IDs: dead-letter event, probe failure/absence, drift/auth citations (no error-ratio misuse)
-8. Disk: host root `mountpoint="/"` only; named-volume attribution explicitly unavailable/blocked
-9. Runbooks: compose argv array/`poc_compose_init`, no `logs --tail=0`; Docker disk diagnostics without data deletion
+1. Exact PromQL metric inventory (any prefix) vs O01+infra raw / derived recording inventories; unknown prefixed+unprefixed mutations fail
+2. Evidence report deterministic (no `dockerAvailable`/dynamic notes); tabletop requires unique semantic `promtool_case`↔alert mapping + mutations
+3. Blocked reconcile cites `O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED` (>0), not live `O02-OPS-DRIFT-COUNT`
+4. Key-rotation keeps `POC_WITH_OBSERVABILITY=1` and verifies OTLP env after API recreate
+5. Disk runbook: `docker buildx du`, `docker inspect --size` before `.SizeRootFs`; diagnostics non-destructive by default
 
 ## Non-claims / remaining blockers
 
@@ -68,6 +52,6 @@ Machine report regenerated at `deploy/observability/evidence/validation-report.j
 - Filtered-query P99 series not emitted — alert blocked
 - GLM blackbox probe blocked (no configured endpoint)
 - Named-volume disk attribution blocked (host node_exporter only)
-- Reconcile `result=error` alert blocked (product emits success|drift)
+- Reconcile `result=error` alert blocked (product emits success|drift; policy `O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED`)
 - No supported admin requeue/reconcile CLI — contain/escalate gap documented
 - Backup alerts remain O03

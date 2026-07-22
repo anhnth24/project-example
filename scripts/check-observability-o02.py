@@ -85,16 +85,89 @@ SECRET_RE = re.compile(
     r"\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{20,}\b|xox[baprs]-[0-9A-Za-z-]+)"
 )
 DATASOURCE_UID = "markhand-prometheus"
-METRIC_RE = re.compile(
-    r"\b("
-    r"markhand_[a-z0-9_]+"
-    r"|markhand:[a-z0-9_:]+:[a-z0-9_]+"
-    r"|node_filesystem_(?:avail|size)_bytes"
-    r"|probe_success"
-    r"|up"
-    r")\b"
-)
+# Prometheus metric names: [a-zA-Z_:][a-zA-Z0-9_:]*
+METRIC_NAME_RE = re.compile(r"[a-zA-Z_:][a-zA-Z0-9_:]*")
 HISTOGRAM_SUFFIXES = ("_bucket", "_count", "_sum")
+# PromQL functions / operators / keywords — never treated as metric selectors.
+PROMQL_NON_METRICS = {
+    "abs",
+    "absent",
+    "absent_over_time",
+    "and",
+    "avg",
+    "avg_over_time",
+    "bool",
+    "bottomk",
+    "by",
+    "ceil",
+    "changes",
+    "clamp",
+    "clamp_max",
+    "clamp_min",
+    "count",
+    "count_over_time",
+    "count_values",
+    "day_of_month",
+    "day_of_week",
+    "days_in_month",
+    "delta",
+    "deriv",
+    "exp",
+    "floor",
+    "group",
+    "group_left",
+    "group_right",
+    "histogram_quantile",
+    "holt_winters",
+    "hour",
+    "idelta",
+    "ignoring",
+    "increase",
+    "irate",
+    "label_join",
+    "label_replace",
+    "last_over_time",
+    "ln",
+    "log2",
+    "log10",
+    "max",
+    "max_over_time",
+    "min",
+    "min_over_time",
+    "minute",
+    "month",
+    "on",
+    "or",
+    "predict_linear",
+    "present_over_time",
+    "quantile",
+    "quantile_over_time",
+    "rate",
+    "resets",
+    "round",
+    "scalar",
+    "sgn",
+    "sort",
+    "sort_desc",
+    "sqrt",
+    "stddev",
+    "stddev_over_time",
+    "stdvar",
+    "stdvar_over_time",
+    "sum",
+    "sum_over_time",
+    "time",
+    "timestamp",
+    "topk",
+    "unless",
+    "vector",
+    "without",
+    "year",
+    "offset",
+    "inf",
+    "nan",
+    "pi",
+}
 OTEL_EMITTERS = ("api", "worker-index", "worker-embedding", "worker-convert")
 REQUIRED_OTEL_ENV = {
     "MARKHAND_OTEL_EXPORTER": "otlp",
@@ -111,6 +184,7 @@ POLICY_CITATION_RULES = {
     "MarkhandHostRootFilesystemLow": "WORKLOAD-DISK-HEADROOM-PERCENT",
     "MarkhandSearchAvailabilityBurn": "SLA-AVAILABILITY",
 }
+BLOCKED_RECONCILE_POLICY = "O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED"
 
 
 def load_yaml(path: Path) -> Any:
@@ -172,24 +246,69 @@ def run_promtool(promtool: Path, args: list[str]) -> subprocess.CompletedProcess
     )
 
 
-def extract_metrics(expr: str) -> set[str]:
-    # Strip quoted label/string literals so values like markhand_ready are ignored.
-    cleaned = re.sub(r'"[^"]*"', '""', expr or "")
-    cleaned = re.sub(r"'[^']*'", "''", cleaned)
-    found = set(METRIC_RE.findall(cleaned))
-    # Normalize histogram children to base name for inventory compare.
-    normalized: set[str] = set()
-    for name in found:
-        if name.startswith("markhand_") and not name.startswith("markhand:"):
-            base = name
-            for suffix in HISTOGRAM_SUFFIXES:
-                if base.endswith(suffix):
-                    base = base[: -len(suffix)]
-                    break
-            normalized.add(base)
+def normalize_histogram_metric(name: str) -> str:
+    """Map histogram child series to the O01 base name for inventory compare."""
+    if ":" in name:
+        return name
+    for suffix in HISTOGRAM_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
+def extract_metric_selectors(expr: str) -> set[str]:
+    """Extract PromQL metric selectors/names regardless of prefix.
+
+    Excludes functions, operators/keywords, durations, label matchers/values,
+    and scalar numeric identifiers. Includes unknown names such as
+    ``syntactically_valid_unemitted_metric_total`` so inventory mutations fail.
+    """
+    cleaned = expr or ""
+    cleaned = re.sub(r"#[^\n]*", " ", cleaned)
+    cleaned = re.sub(r'"[^"]*"', " ", cleaned)
+    cleaned = re.sub(r"'[^']*'", " ", cleaned)
+    # Drop label matcher blocks so label names/values are never selectors.
+    cleaned = re.sub(r"\{[^{}]*\}", " ", cleaned)
+    # Drop range/subquery selectors: [5m], [5m:1m]
+    cleaned = re.sub(r"\[[^\[\]]*\]", " ", cleaned)
+    # Drop aggregation/join grouping clauses: by (le), on (), ignoring (job)
+    cleaned = re.sub(
+        r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    # Strip numeric literals (incl. scientific notation) so `1e-9` does not yield `e`.
+    cleaned = re.sub(
+        r"\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b", " ", cleaned, flags=re.IGNORECASE
+    )
+    found: set[str] = set()
+    for token in METRIC_NAME_RE.findall(cleaned):
+        lower = token.lower()
+        if lower in PROMQL_NON_METRICS:
+            continue
+        if re.fullmatch(r"\d+[smhdwy]", lower):
+            continue
+        found.add(token)
+    return found
+
+
+def classify_metric_selectors(names: set[str]) -> tuple[set[str], set[str]]:
+    """Split selectors into raw (O01/infra) vs derived recording-rule references."""
+    raw: set[str] = set()
+    derived: set[str] = set()
+    for name in names:
+        if ":" in name:
+            derived.add(name)
         else:
-            normalized.add(name)
-    return normalized
+            raw.add(normalize_histogram_metric(name))
+    return raw, derived
+
+
+def extract_metrics(expr: str) -> set[str]:
+    """Compatibility helper: all normalized selectors from an expression."""
+    raw, derived = classify_metric_selectors(extract_metric_selectors(expr))
+    return raw | derived
 
 
 def network_names(service: dict[str, Any]) -> set[str]:
@@ -233,11 +352,13 @@ class ObservabilityO02Checks:
     def err(self, msg: str) -> None:
         self.errors.append(msg)
 
-    def allowed_metric_set(self) -> set[str]:
-        base = set(self.thresholds.get("metrics") or [])
-        recording = set(self.thresholds.get("allowedRecordingMetrics") or [])
-        infra = set(self.thresholds.get("infraMetrics") or [])
-        return base | recording | infra
+    def raw_metric_inventory(self) -> set[str]:
+        return set(self.thresholds.get("metrics") or []) | set(
+            self.thresholds.get("infraMetrics") or []
+        )
+
+    def derived_metric_inventory(self) -> set[str]:
+        return set(self.thresholds.get("allowedRecordingMetrics") or [])
 
     def check_threshold_provenance(self) -> None:
         gate_by_id = {g["id"]: g for g in self.gates["gates"]}
@@ -271,9 +392,15 @@ class ObservabilityO02Checks:
                 "O02-OPS-DRIFT-COUNT",
                 "O02-OPS-DEAD-LETTER-EVENT",
                 "O02-OPS-PROBE-FAILURE",
+                "O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED",
             }:
                 if kind != "operational_policy":
                     self.err(f"{key} must be operational_policy")
+            if key == "O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED":
+                if src.get("status") != "blocked":
+                    self.err(f"{key} must declare status=blocked")
+                if float(src.get("value", 0)) != 1:
+                    self.err(f"{key} must be event value 1 (>0)")
 
         alerts = self.thresholds["alerts"]
         if alerts["query_p99_seconds"].get("status") != "blocked":
@@ -314,16 +441,16 @@ class ObservabilityO02Checks:
                 self.err(f"thresholds.blockedAlerts missing {required}")
 
     def check_metric_inventory(self) -> None:
-        allowed = self.allowed_metric_set()
+        raw_allowed = self.raw_metric_inventory()
+        derived_allowed = self.derived_metric_inventory()
         recording_names = {
             r["record"] for r in self.recording_rules if "record" in r
         }
-        expected_recording = set(self.thresholds.get("allowedRecordingMetrics") or [])
-        if recording_names != expected_recording:
+        if recording_names != derived_allowed:
             self.err(
                 "recording rule names != thresholds.allowedRecordingMetrics: "
-                f"extra={sorted(recording_names - expected_recording)} "
-                f"missing={sorted(expected_recording - recording_names)}"
+                f"extra={sorted(recording_names - derived_allowed)} "
+                f"missing={sorted(derived_allowed - recording_names)}"
             )
 
         texts: list[tuple[str, str]] = []
@@ -339,9 +466,13 @@ class ObservabilityO02Checks:
                     )
 
         for where, expr in texts:
-            for metric in extract_metrics(expr):
-                if metric not in allowed:
-                    self.err(f"{where}: unknown metric selector {metric}")
+            raw, derived = classify_metric_selectors(extract_metric_selectors(expr))
+            for metric in sorted(raw):
+                if metric not in raw_allowed:
+                    self.err(f"{where}: unknown raw metric selector {metric}")
+            for metric in sorted(derived):
+                if metric not in derived_allowed:
+                    self.err(f"{where}: unknown recording metric selector {metric}")
 
         # Availability recording must force empty 2xx to zero.
         success = next(
@@ -370,6 +501,28 @@ class ObservabilityO02Checks:
                 )
             if rule.get("alert") == "MarkhandReconcileErrors":
                 self.err("MarkhandReconcileErrors must not be in active alert_rules.yml")
+
+        # Blocked reconcile alert must cite blocked event policy, not live drift count.
+        recon = next(
+            (r for r in self.blocked_rules if r.get("alert") == "MarkhandReconcileErrors"),
+            None,
+        )
+        if not recon:
+            self.err("MarkhandReconcileErrors missing from blocked rules")
+        else:
+            src = (recon.get("annotations") or {}).get("threshold_source")
+            if src != BLOCKED_RECONCILE_POLICY:
+                self.err(
+                    "MarkhandReconcileErrors must cite "
+                    f"{BLOCKED_RECONCILE_POLICY}, got {src}"
+                )
+            if src == "O02-OPS-DRIFT-COUNT":
+                self.err(
+                    "MarkhandReconcileErrors must not cite O02-OPS-DRIFT-COUNT "
+                    "(implies active drift coverage)"
+                )
+            if "> 0" not in (recon.get("expr") or ""):
+                self.err("blocked MarkhandReconcileErrors must be >0 event semantics")
 
     def check_active_rules_inventory(self) -> None:
         alert_names = set(self.active_alert_names)
@@ -764,15 +917,37 @@ class ObservabilityO02Checks:
                     'mountpoint="/"',
                     "named-volume",
                     "docker system df",
+                    "docker buildx du",
+                    "docker inspect --size",
                     "poc_compose_init",
                     '"${COMPOSE[@]}"',
                 ):
                     if needle not in text and needle.lower() not in lowered:
                         self.err(f"{name}: missing required disk semantics: {needle}")
+                if "docker builder du" in text:
+                    self.err(f"{name}: replace unsupported `docker builder du` with buildx du")
                 if "unavailable" not in lowered and "blocked" not in lowered:
                     self.err(f"{name}: must state named-volume attribution unavailable/blocked")
                 if "/var/lib/postgresql" in text and "blocked" not in lowered:
                     self.err(f"{name}: must not claim PG mount monitoring without blocked note")
+            if name == "key-rotation.md":
+                if "POC_WITH_OBSERVABILITY=1" not in text:
+                    self.err(f"{name}: must set POC_WITH_OBSERVABILITY=1 before poc-compose")
+                # Ensure overlay flag appears before init/source usage order in Detection/Contain
+                obs_idx = text.find("POC_WITH_OBSERVABILITY=1")
+                init_idx = text.find("poc_compose_init")
+                if obs_idx < 0 or init_idx < 0 or obs_idx > init_idx:
+                    self.err(
+                        f"{name}: POC_WITH_OBSERVABILITY=1 must appear before poc_compose_init"
+                    )
+                for needle in (
+                    "MARKHAND_OTEL_EXPORTER",
+                    "MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT",
+                    "MARKHAND_OTEL_METRICS_ENABLED",
+                    "otel-collector:4317",
+                ):
+                    if needle not in text:
+                        self.err(f"{name}: missing OTLP verification {needle}")
             if re.search(
                 r"(?i)run\s+`?(admin requeue|reconcile --mode=|job-admin requeue)",
                 text,
@@ -790,7 +965,7 @@ class ObservabilityO02Checks:
                 self.err(f"possible secret in {path.relative_to(ROOT)}")
 
     def check_tabletop(self) -> None:
-        data = load_json(TABLETOP_PATH)
+        data = getattr(self, "_tabletop_override", None) or load_json(TABLETOP_PATH)
         if data.get("claims_real_outage") is not False:
             self.err("tabletop claims_real_outage must be false")
         if "promtool" not in str(data.get("validation", "")).lower():
@@ -820,9 +995,20 @@ class ObservabilityO02Checks:
             self.err("tabletop must not claim MarkhandReconcileErrors (blocked)")
         if "MarkhandDiskLow" in alerts_covered:
             self.err("tabletop must use host-root disk alert name")
-        prom_cases = {
-            t.get("name") for t in (load_yaml(PROM_TESTS).get("tests") or []) if t.get("name")
-        }
+
+        case_to_alerts: dict[str, set[str]] = {}
+        for case in load_yaml(PROM_TESTS).get("tests") or []:
+            name = case.get("name")
+            if not name:
+                continue
+            alerts = {
+                art.get("alertname")
+                for art in (case.get("alert_rule_test") or [])
+                if art.get("alertname")
+            }
+            case_to_alerts[str(name)] = {a for a in alerts if a}
+
+        seen_cases: set[str] = set()
         for scenario in scenarios:
             sid = scenario.get("id")
             runbook = scenario.get("runbook")
@@ -834,8 +1020,21 @@ class ObservabilityO02Checks:
             if scenario.get("outcome") != "pass_tabletop":
                 self.err(f"tabletop {sid}: outcome must be pass_tabletop")
             case = scenario.get("promtool_case")
-            if case and case not in prom_cases:
-                self.err(f"tabletop {sid}: unknown promtool_case {case}")
+            alert = scenario.get("alert")
+            if not case:
+                self.err(f"tabletop {sid}: missing required promtool_case")
+                continue
+            if case not in case_to_alerts:
+                self.err(f"tabletop {sid}: nonexistent promtool_case {case}")
+                continue
+            if case in seen_cases:
+                self.err(f"tabletop {sid}: duplicate promtool_case {case}")
+            seen_cases.add(str(case))
+            if alert not in case_to_alerts[str(case)]:
+                self.err(
+                    f"tabletop {sid}: promtool_case {case} does not cover alert {alert} "
+                    f"(unrelated; case alerts={sorted(case_to_alerts[str(case)])})"
+                )
 
     def run(self) -> list[str]:
         self.check_threshold_provenance()
@@ -852,15 +1051,16 @@ class ObservabilityO02Checks:
         return self.errors
 
     def report(self) -> dict[str, Any]:
-        # Deterministic fields only; repo-relative paths.
-        promtool_rel = None
+        # Deterministic, reproducible evidence only (no host-dependent fields).
+        # Live tool availability belongs in invocation stdout, not this report.
+        promtool_rel = ".tools/promtool"
         if self.promtool_path is not None:
             try:
                 promtool_rel = str(self.promtool_path.resolve().relative_to(ROOT))
             except ValueError:
                 promtool_rel = ".tools/promtool"
         return {
-            "version": 3,
+            "version": 4,
             "issue": "P1B-O02",
             "ok": not self.errors,
             "alertCount": len(self.active_alert_names),
@@ -874,23 +1074,8 @@ class ObservabilityO02Checks:
             "promtool": promtool_rel,
             "promtoolCheckOk": self.promtool_check_ok,
             "promtoolTestOk": self.promtool_test_ok,
-            "dockerAvailable": bool(shutil.which("docker")),
             "claims_real_outage": False,
-            "errors": self.errors,
-            "notes": sorted(
-                set(
-                    self.notes
-                    + (
-                        []
-                        if shutil.which("docker")
-                        else [
-                            "Docker not available in this environment; "
-                            "compose deployability validated via YAML/image pins/"
-                            "REPO_ROOT bind path checks/network matrix only."
-                        ]
-                    )
-                )
-            ),
+            "errors": list(self.errors),
             "commands": [
                 "bash scripts/fetch-promtool.sh",
                 "python3 scripts/check-observability-o02.py",
@@ -917,6 +1102,23 @@ class ObservabilityO02Tests(unittest.TestCase):
         test = run_promtool(promtool, ["test", "rules", str(PROM_TESTS.relative_to(ROOT))])
         self.assertEqual(test.returncode, 0, test.stderr or test.stdout)
 
+    def test_extract_metrics_excludes_functions_labels_durations(self) -> None:
+        expr = (
+            'histogram_quantile(0.95, sum by (le) ('
+            'rate(markhand_api_request_duration_seconds_bucket{route="search"}[5m])))'
+        )
+        self.assertEqual(
+            extract_metrics(expr),
+            {"markhand_api_request_duration_seconds"},
+        )
+        self.assertIn(
+            "syntactically_valid_unemitted_metric_total",
+            extract_metric_selectors("syntactically_valid_unemitted_metric_total > 1"),
+        )
+        self.assertNotIn("markhand_ready", extract_metric_selectors(
+            'probe_success{dependency="markhand_ready"} == 0'
+        ))
+
     def test_mutation_fake_metric_fails_promtool_check(self) -> None:
         promtool = resolve_promtool()
         with tempfile.TemporaryDirectory() as tmp:
@@ -932,7 +1134,7 @@ class ObservabilityO02Tests(unittest.TestCase):
             result = run_promtool(promtool, ["check", "rules", str(path)])
             self.assertNotEqual(result.returncode, 0)
 
-    def test_mutation_syntactically_valid_nonexistent_metric_fails_inventory(self) -> None:
+    def test_mutation_unknown_prefixed_metric_fails_inventory(self) -> None:
         checks = ObservabilityO02Checks()
         checks.alert_rules = list(checks.alert_rules)
         checks.alert_rules[0] = dict(checks.alert_rules[0])
@@ -940,6 +1142,28 @@ class ObservabilityO02Tests(unittest.TestCase):
         checks.check_metric_inventory()
         self.assertTrue(
             any("markhand_totally_nonexistent_metric_total" in e for e in checks.errors),
+            checks.errors,
+        )
+
+    def test_mutation_unknown_unprefixed_metric_fails_inventory(self) -> None:
+        checks = ObservabilityO02Checks()
+        checks.alert_rules = list(checks.alert_rules)
+        checks.alert_rules[0] = dict(checks.alert_rules[0])
+        checks.alert_rules[0]["expr"] = "syntactically_valid_unemitted_metric_total > 1"
+        checks.check_metric_inventory()
+        self.assertTrue(
+            any("syntactically_valid_unemitted_metric_total" in e for e in checks.errors),
+            checks.errors,
+        )
+
+    def test_mutation_unknown_recording_metric_fails_inventory(self) -> None:
+        checks = ObservabilityO02Checks()
+        checks.alert_rules = list(checks.alert_rules)
+        checks.alert_rules[0] = dict(checks.alert_rules[0])
+        checks.alert_rules[0]["expr"] = "markhand:fake:derived_ratio_5m > 0.5"
+        checks.check_metric_inventory()
+        self.assertTrue(
+            any("markhand:fake:derived_ratio_5m" in e for e in checks.errors),
             checks.errors,
         )
 
@@ -967,6 +1191,48 @@ class ObservabilityO02Tests(unittest.TestCase):
         checks.check_active_rules_inventory()
         self.assertTrue(any("DeadLetter" in e for e in checks.errors))
 
+    def test_mutation_tabletop_missing_promtool_case(self) -> None:
+        checks = ObservabilityO02Checks()
+        data = json.loads(TABLETOP_PATH.read_text(encoding="utf-8"))
+        del data["scenarios"][0]["promtool_case"]
+        checks._tabletop_override = data
+        checks.check_tabletop()
+        self.assertTrue(any("missing required promtool_case" in e for e in checks.errors))
+
+    def test_mutation_tabletop_unrelated_promtool_case(self) -> None:
+        checks = ObservabilityO02Checks()
+        data = json.loads(TABLETOP_PATH.read_text(encoding="utf-8"))
+        # Point queue scenario at auth deny case (exists but unrelated alert).
+        data["scenarios"][0]["promtool_case"] = "auth_deny_count_threshold"
+        checks._tabletop_override = data
+        checks.check_tabletop()
+        self.assertTrue(any("does not cover alert" in e for e in checks.errors), checks.errors)
+
+    def test_mutation_tabletop_duplicate_promtool_case(self) -> None:
+        checks = ObservabilityO02Checks()
+        data = json.loads(TABLETOP_PATH.read_text(encoding="utf-8"))
+        first = data["scenarios"][0]["promtool_case"]
+        data["scenarios"][1]["promtool_case"] = first
+        checks._tabletop_override = data
+        checks.check_tabletop()
+        self.assertTrue(any("duplicate promtool_case" in e for e in checks.errors))
+
+    def test_mutation_tabletop_nonexistent_promtool_case(self) -> None:
+        checks = ObservabilityO02Checks()
+        data = json.loads(TABLETOP_PATH.read_text(encoding="utf-8"))
+        data["scenarios"][0]["promtool_case"] = "definitely_not_a_real_promtool_case"
+        checks._tabletop_override = data
+        checks.check_tabletop()
+        self.assertTrue(any("nonexistent promtool_case" in e for e in checks.errors))
+
+    def test_report_excludes_host_dependent_fields(self) -> None:
+        checks = ObservabilityO02Checks()
+        checks.run()
+        report = checks.report()
+        self.assertNotIn("dockerAvailable", report)
+        self.assertNotIn("notes", report)
+        self.assertEqual(report.get("version"), 4)
+
     def test_full_validator_clean(self) -> None:
         errors = ObservabilityO02Checks().run()
         self.assertEqual(errors, [], "\n".join(errors))
@@ -991,17 +1257,25 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
+    docker_available = bool(shutil.which("docker"))
+    runtime_note = (
+        "docker present (live boot not claimed by this validator)"
+        if docker_available
+        else "docker absent — compose deployability validated statically only; no live boot"
+    )
+
     if errors:
         print("P1B-O02 observability validation FAILED:", file=sys.stderr, flush=True)
         for error in errors:
             print(f"  - {error}", file=sys.stderr, flush=True)
+        print(f"runtime: {runtime_note}", file=sys.stderr, flush=True)
         return 1
 
     print(
         "P1B-O02 observability validation OK "
         f"({report['alertCount']} active alerts, {report['blockedAlertCount']} blocked, "
         f"{report['dashboardCount']} dashboards, promtool check/test OK); "
-        "synthetic/promtool only — no live outage claimed",
+        f"synthetic/promtool only — no live outage claimed; runtime: {runtime_note}",
         flush=True,
     )
 

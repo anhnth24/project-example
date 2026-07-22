@@ -50,11 +50,12 @@ groups:
         annotations:
           summary: BLOCKED — reconcile result=error is not emitted by product telemetry.
           description: >
+            BLOCKED event policy O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED (increase > 0).
             record_reconcile() product paths label result as success or drift only.
-            Prefer live MarkhandDriftDetected (markhand_drift_total / drift increase)
-            as the real drift signal. Do not invent fake fixtures or dashboard panels
-            for result="error".
-          threshold_source: O02-OPS-DRIFT-COUNT
+            This alert is NOT loaded and does not imply active coverage. Prefer live
+            MarkhandDriftDetected (O02-OPS-DRIFT-COUNT on markhand_drift_total) for drift.
+            Do not invent fake fixtures or dashboard panels for result="error".
+          threshold_source: O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED
           runbook: docs/runbooks/vector-rebuild.md
           dashboard: markhand-ops
           coverage: blocked

@@ -45,23 +45,28 @@ curl -fsG http://127.0.0.1:9090/api/v1/query \
 
 ## Recover
 
-Safe host/Docker disk diagnostics and ephemeral reclaim only (no data deletion):
+Safe host/Docker disk diagnostics first (read-only / non-destructive by default).
+Ephemeral reclaim commands are separate and optional.
 
 ```bash
-# Diagnostics (supported; read-only / non-destructive)
+# Diagnostics only — supported; does not delete data
 docker system df -v
-docker builder du
+docker buildx du
 df -h /
 df -i /
 
-# Ephemeral reclaim only — build cache / unused images (NOT volumes, NOT containers with data)
+# Optional: inspect which containers contribute most writable-layer growth
+# (--size is required before SizeRootFs is populated)
+docker ps -q | while read -r id; do
+  docker inspect --size --format '{{.Name}} {{.SizeRootFs}}' "$id" 2>/dev/null || true
+done
+```
+
+Optional ephemeral reclaim only after diagnostics (build cache / unused images — NOT volumes, NOT container data mounts):
+
+```bash
 docker builder prune -f
 docker image prune -f
-
-# Optional: inspect which containers contribute most writable-layer growth (no truncate/delete of mounts)
-docker ps -q | while read -r id; do
-  docker inspect --format '{{.Name}} {{.SizeRootFs}}' "$id" 2>/dev/null || true
-done
 ```
 
 Expand host capacity / free space via infra. **Do not** delete MinIO objects, Postgres data dirs, or named volumes from this runbook.

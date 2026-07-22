@@ -91,6 +91,15 @@ sources:
     note: >
       O02 policy: probe_success==0, up==0, or absent(probe_success{dependency=...}).
       Boolean/absence semantics — not error-ratio.
+  O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED:
+    kind: operational_policy
+    value: 1
+    unit: event
+    status: blocked
+    note: >
+      BLOCKED event policy: any markhand_reconcile_total{result="error"} increase > 0.
+      Not active coverage — product emits success|drift only. Must not cite
+      O02-OPS-DRIFT-COUNT (that policy backs the live MarkhandDriftDetected alert).
   O02-OPS-ALERT-FOR:
     kind: operational_policy
     note: >
@@ -156,6 +165,7 @@ blockedAlerts:
     file: deploy/observability/prometheus/alert_rules.blocked.yml
   - name: MarkhandReconcileErrors
     reason: product emits markhand_reconcile_total result=success|drift only; result=error unemitted
+    policy: O02-OPS-RECONCILE-ERROR-EVENT-BLOCKED
     file: deploy/observability/prometheus/alert_rules.blocked.yml
   - name: MarkhandNamedVolumeDiskLow
     reason: named-volume free-space attribution unavailable with host-only node_exporter
