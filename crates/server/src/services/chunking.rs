@@ -1,6 +1,8 @@
 //! Pure markdown chunk preparation for indexing.
 
-use fileconv_core::chunk::{chunk_markdown, locate_chunk_span, normalize_newlines};
+#[cfg(test)]
+use fileconv_core::chunk::normalize_newlines;
+use fileconv_core::chunk::{chunk_markdown, locate_chunk_span};
 use fileconv_core::intelligence::page_before;
 use fileconv_knowledge::citation::infer_source_anchor;
 use fileconv_knowledge::identity::{chunk_identity, BODY_TEXT_VERSION};

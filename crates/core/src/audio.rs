@@ -118,11 +118,12 @@ impl WhisperModelKey {
     }
 
     fn context_parameters(&self) -> WhisperContextParameters<'static> {
-        let mut params = WhisperContextParameters::default();
-        params.use_gpu = self.use_gpu;
-        params.flash_attn = self.flash_attn;
-        params.gpu_device = self.gpu_device;
-        params
+        WhisperContextParameters {
+            use_gpu: self.use_gpu,
+            flash_attn: self.flash_attn,
+            gpu_device: self.gpu_device,
+            ..Default::default()
+        }
     }
 }
 

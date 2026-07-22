@@ -17,6 +17,7 @@ use super::recovery::{recover_needs_ocr_page, NeedsOcrPageResult, PDF_UNTRUSTED_
 /// `pages_needing_ocr` is inherited from pdf-inspector. Flagged pages that keep
 /// native text because OCR failed emit a typed partial-success warning. Trusted
 /// (unflagged) native text is not over-warned.
+#[allow(clippy::too_many_arguments)] // Explicit conversion controls are safer at this module boundary.
 pub(super) fn via_pdfium(
     path: &Path,
     ocr_langs: &str,

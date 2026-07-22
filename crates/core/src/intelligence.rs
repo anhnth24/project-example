@@ -776,31 +776,22 @@ pub fn quality_report(documents: &[CorpusDocument]) -> QualityReport {
     }
 }
 
-/// PII recall policy (conservative, Vietnamese-document oriented):
-///
-/// - **Spans** are exact candidate bytes (email / phone / number run), never the
-///   surrounding whitespace token, Markdown table pipes, link wrappers, or labels.
-/// - **Email**: dot-atom local (incl. `'` / numeric); reject `price@100.00`, local-dot
-///   abuse, domain-label hyphen abuse; strict delimiter boundaries on both sides
-///   (no partial carve-outs from unsupported adjacent characters).
-/// - **Phone**: maintained active VN mobile prefixes (incl. `055`/`087`) + exact
-///   landline area/length tables; leading `+` preserved and must be `+84`; optional
-///   `(0)` trunk; grouped separators; Unicode alphanumeric boundaries; consecutive
-///   separated phones detected independently; failed `+…` runs are skipped whole
-///   (no retry inside); reject `030…` and arbitrary bare digit runs.
-/// - **Labels**: nearest explicit label cannot cross newline, `|`, comma/`，`/`、`,
-///   or sentence/clause boundary, and must field-link within bounded distance;
-///   Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
-/// - **Email wrappers**: recursively peel balanced `***`/`**`/`~~`/`__`/`*`/`_`/
-///   `` ` `` (nested combinations); redact the inner address only; unwrapped locals
-///   may still contain those marker characters.
-/// - **Bank/CCCD**: nearest scoped label or table header only; bare `ngân hàng` prose
-///   does not classify transaction counts. Explicit phone header/label beats bank.
-/// - Bare valid VN mobiles/landlines remain in recall; exotic/foreign numbers,
-///   unlabeled account-like runs, and invalid prefixes are out of scope (precision).
-///
-/// Redaction keeps UTF-8 boundary checks, stale `finding.text` equality, and
-/// overlapping/crossing span coalescing.
+// PII recall policy (conservative, Vietnamese-document oriented):
+//
+// - Spans are exact candidate bytes (email / phone / number run), never the
+//   surrounding whitespace token, Markdown table pipes, link wrappers, or labels.
+// - Email: dot-atom local (incl. `'` / numeric); reject `price@100.00`, local-dot
+//   abuse, domain-label hyphen abuse; strict delimiter boundaries on both sides.
+// - Phone: maintained active VN mobile prefixes (incl. `055`/`087`) + exact
+//   landline area/length tables; leading `+` must be `+84`; optional `(0)` trunk;
+//   grouped separators; Unicode boundaries; consecutive phones remain independent.
+// - Labels: nearest explicit label cannot cross newline, table or clause boundaries;
+//   Markdown table body cells inherit the column header (`Tài khoản`/`SĐT`).
+// - Email wrappers: recursively peel balanced Markdown wrappers and redact only the
+//   inner address; unwrapped locals may still contain marker characters.
+// - Bank/CCCD: nearest scoped label or table header only; generic bank prose does
+//   not classify transaction counts. Explicit phone header/label beats bank.
+// Redaction also checks UTF-8 boundaries, stale finding text, and overlapping spans.
 
 /// Intended dot-atom atext (RFC 5322 subset) plus `.` with separate dot rules.
 /// `|` is excluded so Markdown table delimiters stay outside the email span.
@@ -1150,12 +1141,7 @@ fn first_valid_phone_prefix_len(digits: &str, require_plus84: bool) -> Option<us
         return None;
     }
     // Shortest-first so consecutive phones split (`0912… 0987…`).
-    for len in 10..=digits.len().min(13) {
-        if looks_like_vn_phone_digits(&digits[..len]) {
-            return Some(len);
-        }
-    }
-    None
+    (10..=digits.len().min(13)).find(|&len| looks_like_vn_phone_digits(&digits[..len]))
 }
 
 /// True when text after `ws_idx` (at whitespace) begins an independent valid VN phone.
@@ -1561,7 +1547,7 @@ fn field_value_link(between: &str) -> bool {
         // Tight `Label 123…` / compound no-colon — only a few spaces.
         return between.chars().count() <= 3;
     }
-    let sep = trimmed.rfind(|ch| matches!(ch, ':' | '=' | '：'));
+    let sep = trimmed.rfind([':', '=', '：']);
     let Some(sep_at) = sep else {
         // Without a terminal binder, letters between label and value are prose.
         return false;
@@ -1642,7 +1628,7 @@ fn is_label_scope_boundary(ch: char) -> bool {
 }
 
 /// Prefix for label association: cannot cross newline, table pipe, or clause boundary.
-fn label_scope_before<'a>(markdown: &'a str, start: usize) -> &'a str {
+fn label_scope_before(markdown: &str, start: usize) -> &str {
     let prefix_end = start.min(markdown.len());
     let prefix = markdown.get(..prefix_end).unwrap_or("");
     let mut cut = 0usize;

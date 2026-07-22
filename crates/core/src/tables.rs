@@ -99,7 +99,7 @@ fn csv_json(path: &Path) -> Result<String, ConvertError> {
     let rows: Vec<serde_json::Value> = rdr
         .records()
         .filter_map(|r| r.ok())
-        .map(|rec| serde_json::Value::Array(rec.iter().map(|s| json_string(s)).collect()))
+        .map(|rec| serde_json::Value::Array(rec.iter().map(json_string).collect()))
         .collect();
     serde_json::to_string(&serde_json::Value::Array(rows))
         .map_err(|e| ConvertError::Failed(e.to_string()))
@@ -206,10 +206,9 @@ mod tests {
 "#,
         )?;
         for index in 1..=sheets.len() {
-            write!(
+            writeln!(
                 zip,
-                r#"  <Override PartName="/xl/worksheets/sheet{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-"#
+                r#"  <Override PartName="/xl/worksheets/sheet{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#
             )?;
         }
         zip.write_all(b"</Types>")?;
@@ -231,10 +230,9 @@ mod tests {
         )?;
         for (index, (name, _)) in sheets.iter().enumerate() {
             let escaped = xml_escape(name);
-            write!(
+            writeln!(
                 zip,
-                r#"    <sheet name="{escaped}" sheetId="{id}" r:id="rId{id}"/>
-"#,
+                r#"    <sheet name="{escaped}" sheetId="{id}" r:id="rId{id}"/>"#,
                 id = index + 1
             )?;
         }
@@ -247,10 +245,9 @@ mod tests {
 "#,
         )?;
         for index in 1..=sheets.len() {
-            write!(
+            writeln!(
                 zip,
-                r#"  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>
-"#
+                r#"  <Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>"#
             )?;
         }
         write!(
@@ -270,10 +267,9 @@ mod tests {
             n = sheets.len()
         )?;
         for (_, cell) in sheets {
-            write!(
+            writeln!(
                 zip,
-                r#"  <si><t xml:space="preserve">{}</t></si>
-"#,
+                r#"  <si><t xml:space="preserve">{}</t></si>"#,
                 xml_escape(cell)
             )?;
         }

@@ -228,7 +228,7 @@ where
                     .collect())
             }
         },
-        || clear_ann(),
+        &mut clear_ann,
     )?;
     let mut warnings = Vec::new();
     if stored.replaced_incompatible_index {

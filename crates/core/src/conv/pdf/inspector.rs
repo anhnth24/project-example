@@ -80,11 +80,13 @@ pub(super) struct FastPages {
 }
 
 pub(super) fn extract_fast_pages_once(bytes: &[u8], selected: &[u32]) -> Option<FastPages> {
-    let mut markdown_options = pdf_inspector::MarkdownOptions::default();
-    markdown_options.include_page_numbers = true;
-    // Keep headers in each marked chunk so our page-aware cleanup can also
-    // process native-text replacements consistently.
-    markdown_options.strip_headers_footers = false;
+    let markdown_options = pdf_inspector::MarkdownOptions {
+        include_page_numbers: true,
+        // Keep headers in each marked chunk so our page-aware cleanup can also
+        // process native-text replacements consistently.
+        strip_headers_footers: false,
+        ..Default::default()
+    };
     let options = pdf_inspector::PdfOptions::new()
         .pages(selected.iter().copied())
         .markdown(markdown_options);
@@ -307,6 +309,7 @@ pub(super) fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Opti
 }
 
 /// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/Tesseract cho trang scan.
+#[allow(clippy::too_many_arguments)] // Explicit conversion controls are safer at this module boundary.
 pub(super) fn via_pdf_inspector(
     path: &Path,
     bytes: &[u8],

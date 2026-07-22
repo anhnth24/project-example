@@ -1704,9 +1704,7 @@ mod tests {
         assert!(redacted.contains("https://host/[REDACTED]"));
         assert_eq!(redact_endpoint(canary), "https://host/[REDACTED]");
 
-        let with_key = format!(
-            "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/x?key=abc123XYZ)"
-        );
+        let with_key = "error sending request for url (https://generativelanguage.googleapis.com/v1beta/models/x?key=abc123XYZ)".to_string();
         let redacted_key = redact_surfaced_error(&with_key, Some("abc123XYZ"));
         assert!(!redacted_key.contains("abc123XYZ"));
         assert!(!redacted_key.contains("/v1beta"));
