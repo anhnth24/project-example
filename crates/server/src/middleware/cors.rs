@@ -54,6 +54,16 @@ pub async fn cors_layer(config: CorsConfig, request: Request, next: Next) -> Res
             apply_cors_headers(&config, origin.as_deref(), response.headers_mut());
             return response;
         }
+        // Run the inner edge middleware before synthesizing the preflight response.
+        // The routed OPTIONS fallback has no business side effects, while this keeps
+        // preflights inside trusted-proxy validation and IP rate budgets.
+        let downstream = next.run(request).await;
+        if matches!(
+            downstream.status(),
+            StatusCode::BAD_REQUEST | StatusCode::TOO_MANY_REQUESTS
+        ) {
+            return downstream;
+        }
         if !origin_allowed(&config, origin.as_deref()) {
             return (
                 StatusCode::FORBIDDEN,
@@ -65,7 +75,9 @@ pub async fn cors_layer(config: CorsConfig, request: Request, next: Next) -> Res
             )
                 .into_response();
         }
-        return preflight_response(&config, origin.as_deref(), &request_id);
+        let mut response = preflight_response(&config, origin.as_deref(), &request_id);
+        copy_rate_headers(downstream.headers(), response.headers_mut());
+        return response;
     }
 
     let mut response = next.run(request).await;
@@ -162,6 +174,18 @@ fn join_csv(values: &[String]) -> Option<HeaderValue> {
         return None;
     }
     HeaderValue::from_str(&values.join(", ")).ok()
+}
+
+fn copy_rate_headers(from: &axum::http::HeaderMap, to: &mut axum::http::HeaderMap) {
+    for name in [
+        "x-ratelimit-limit",
+        "x-ratelimit-remaining",
+        "x-ratelimit-reset",
+    ] {
+        if let Some(value) = from.get(name) {
+            to.insert(name, value.clone());
+        }
+    }
 }
 
 #[cfg(test)]

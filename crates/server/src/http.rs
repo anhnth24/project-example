@@ -106,7 +106,7 @@ impl AppState {
         let startup = Arc::new(StartupState::new());
         // Fail closed until durable startup reconciliation completes.
         let reconciliation = Arc::new(ReconciliationGate::new_blocked());
-        let state = Self {
+        Ok(Self {
             runtime,
             http_client,
             pool,
@@ -123,10 +123,7 @@ impl AppState {
             reconciliation,
             probes: HealthProbeBackend::default(),
             readiness_cache: ReadinessCache::new(),
-        };
-        // One-way startup completion after successful construction.
-        state.startup.mark_completed(false);
-        Ok(state)
+        })
     }
 
     /// Builds state for tests with an explicit pool and optional auth provider.
@@ -236,7 +233,7 @@ impl AppState {
         &self.startup
     }
 
-    pub fn reconciliation_gate(&self) -> &ReconciliationGate {
+    pub fn reconciliation_gate(&self) -> &Arc<ReconciliationGate> {
         &self.reconciliation
     }
 
@@ -291,6 +288,10 @@ impl AppState {
             .map_err(|error| error.to_string())?;
         // Refresh cached view; durable marker remains the authority.
         self.reconciliation.set_ready(ready);
+        self.readiness_cache.invalidate().await;
+        // Listening can begin after bootstrap finishes. A pending reconciliation
+        // backlog is a completed-but-degraded startup, while `/ready` stays closed.
+        self.startup.mark_completed(!ready);
         Ok(ready)
     }
 

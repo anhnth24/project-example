@@ -22,6 +22,10 @@ use fileconv_server::jobs::{
     JobPayload, OutboxSink, CURRENT_EVENT_PAYLOAD_VERSION, CURRENT_JOB_PAYLOAD_VERSION,
     MAX_LEASE_TOKEN_LEN, MAX_WORKER_ID_LEN,
 };
+use fileconv_server::services::reconciliation::{
+    bootstrap_startup_reconciliation, certify_after_reconcile_success, enqueue_reconcile,
+    is_startup_reconciliation_ready, try_certify_startup_reconciliation,
+};
 use serde_json::json;
 use tokio::sync::Barrier;
 use tokio_postgres::{NoTls, Row};
@@ -128,6 +132,46 @@ async fn seed_org(pool: &Pool, org: Uuid, user: Uuid, slug: &str) -> OrgContext 
     .await
     .expect("seed org");
     context
+}
+
+async fn seed_reconcile_document(pool: &Pool, context: &OrgContext) -> Uuid {
+    let collection_id = Uuid::new_v4();
+    let document_id = Uuid::new_v4();
+    with_org_txn(pool, context, {
+        let context = context.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO collections (
+                        id, org_id, name, slug, owner_user_id, visibility
+                     ) VALUES ($1, $2, 'Readiness test', $3, $4, 'org')",
+                    &[
+                        &collection_id,
+                        &context.org_id(),
+                        &format!("readiness-{collection_id}"),
+                        &context.user_id(),
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO documents (
+                        id, org_id, collection_id, title, created_by_user_id
+                     ) VALUES ($1, $2, $3, 'Readiness test', $4)",
+                    &[
+                        &document_id,
+                        &context.org_id(),
+                        &collection_id,
+                        &context.user_id(),
+                    ],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed reconcile document");
+    document_id
 }
 
 fn enqueue_spec(key: &str) -> EnqueueJob {
@@ -467,6 +511,187 @@ async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
     .await;
     assert!(forced.is_err());
     assert_eq!(table_counts(&pool, &context).await, (1, 1, 0));
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn reconcile_readiness_fence_covers_enqueue_races_replays_and_bypasses() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_pool(&base_url).await;
+    let context = seed_org(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "jobs-readiness-fence",
+    )
+    .await;
+    let document_id = seed_reconcile_document(&pool, &context).await;
+    assert!(bootstrap_startup_reconciliation(&pool)
+        .await
+        .expect("bootstrap readiness"));
+
+    // Pause the job insert after enqueue has opened the readiness generation.
+    // Certification must wait for the enclosing transaction and then observe
+    // the committed pending job.
+    let control = connect_raw(&ephemeral.url).await;
+    control
+        .batch_execute(
+            "CREATE FUNCTION test_block_reconcile_insert()
+             RETURNS trigger
+             LANGUAGE plpgsql
+             AS $$
+             BEGIN
+                 IF NEW.job_type = 'reconcile' THEN
+                     PERFORM pg_advisory_xact_lock(263263);
+                 END IF;
+                 RETURN NEW;
+             END
+             $$;
+             CREATE TRIGGER test_block_reconcile_insert
+             BEFORE INSERT ON jobs
+             FOR EACH ROW EXECUTE FUNCTION test_block_reconcile_insert();",
+        )
+        .await
+        .expect("install blocking insert trigger");
+    let lock_key = 263_263_i64;
+    control
+        .query_one("SELECT pg_advisory_lock($1)", &[&lock_key])
+        .await
+        .expect("hold insert gate");
+
+    let enqueue_pool = pool.clone();
+    let enqueue_context = context.clone();
+    let enqueue = tokio::spawn(async move {
+        enqueue_reconcile(
+            &enqueue_pool,
+            &enqueue_context,
+            document_id,
+            "atomic-readiness",
+        )
+        .await
+    });
+    let mut insert_waiting = false;
+    for _ in 0..100 {
+        let blocked: i64 = control
+            .query_one(
+                "SELECT count(*)::bigint
+                 FROM pg_locks
+                 WHERE locktype = 'advisory'
+                   AND database = (
+                       SELECT oid FROM pg_database WHERE datname = current_database()
+                   )
+                   AND NOT granted",
+                &[],
+            )
+            .await
+            .expect("inspect advisory wait")
+            .get(0);
+        if blocked > 0 {
+            insert_waiting = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(insert_waiting, "reconcile insert did not reach test gate");
+
+    let certify_pool = pool.clone();
+    let certify = tokio::spawn(async move {
+        try_certify_startup_reconciliation(&certify_pool, "concurrent certification").await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let certification_waited_for_enqueue = !certify.is_finished();
+    let unlocked: bool = control
+        .query_one("SELECT pg_advisory_unlock($1)", &[&lock_key])
+        .await
+        .expect("release insert gate")
+        .get(0);
+    assert!(unlocked);
+
+    let first = enqueue
+        .await
+        .expect("enqueue task")
+        .expect("atomic reconcile enqueue");
+    let concurrently_ready = certify
+        .await
+        .expect("certify task")
+        .expect("concurrent certification");
+    assert!(
+        certification_waited_for_enqueue,
+        "certification raced ahead of the pending job commit"
+    );
+    assert!(!concurrently_ready);
+    assert!(!is_startup_reconciliation_ready(&pool).await.unwrap());
+
+    let claimed = jobs::claim(
+        &pool,
+        &context,
+        "readiness-worker",
+        1,
+        Duration::from_secs(60),
+    )
+    .await
+    .expect("claim reconcile job")
+    .pop()
+    .expect("pending reconcile job");
+    jobs::complete(
+        &pool,
+        &context,
+        claimed.id,
+        lease_token(&claimed),
+        claimed.attempts,
+    )
+    .await
+    .expect("complete reconcile job");
+    assert!(certify_after_reconcile_success(&pool)
+        .await
+        .expect("certify completed generation"));
+
+    let replay = enqueue_reconcile(&pool, &context, document_id, "atomic-readiness")
+        .await
+        .expect("idempotent replay");
+    assert!(!replay.created);
+    assert_eq!(replay.job.id, first.job.id);
+    assert!(
+        is_startup_reconciliation_ready(&pool)
+            .await
+            .expect("read replay readiness"),
+        "terminal replay must not strand readiness closed"
+    );
+
+    let bypass = jobs::enqueue(
+        &pool,
+        &context,
+        EnqueueJob::new(
+            JobType::Reconcile,
+            JobPayload {
+                document_id: Some(document_id),
+                ..JobPayload::default()
+            },
+            format!("convert.cleanup:{}", Uuid::new_v4()),
+        ),
+    )
+    .await
+    .expect("enqueue reconcile through generic path");
+    assert!(bypass.created);
+    let durable_flag: bool = control
+        .query_one(
+            "SELECT ready FROM runtime_readiness WHERE key = 'startup_reconciliation'",
+            &[],
+        )
+        .await
+        .expect("read durable flag")
+        .get(0);
+    assert!(durable_flag, "generic enqueue deliberately bypassed open");
+    assert!(
+        !is_startup_reconciliation_ready(&pool)
+            .await
+            .expect("read bypass readiness"),
+        "active reconcile work must fail closed even when the flag is stale"
+    );
 
     ephemeral.drop().await;
 }
