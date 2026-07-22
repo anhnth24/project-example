@@ -147,14 +147,9 @@ pub struct NewClosedSnapshot {
     pub ttl_secs: i64,
 }
 
-/// Persist a complete closed snapshot in one transaction (create + events + closed).
-///
-/// On any failure the caller rolls back — no durable open/partial rows.
-pub async fn persist_closed_snapshot(
-    txn: &Transaction<'_>,
-    ctx: &OrgContext,
-    input: NewClosedSnapshot,
-) -> Result<(SseStreamRequest, Vec<SseStreamEvent>), DbError> {
+type PreparedEvent = (i64, &'static str, JsonValue, i32);
+
+fn prepare_snapshot(input: &NewClosedSnapshot) -> Result<(i64, Vec<PreparedEvent>), DbError> {
     if matches!(input.status, SseStreamStatus::Expired) {
         return Err(DbError::Config("cannot persist expired snapshot".into()));
     }
@@ -175,16 +170,32 @@ pub async fn persist_closed_snapshot(
         return Err(DbError::Config("sse snapshot requires events".into()));
     }
     let last = input.events.last().expect("non-empty");
-    if last.event_type != "close" && last.event_type != "error" {
+    let expected_terminal = match input.status {
+        SseStreamStatus::Closed => "close",
+        SseStreamStatus::Error => "error",
+        SseStreamStatus::Expired => unreachable!("expired rejected above"),
+    };
+    if last.event_type != expected_terminal {
         return Err(DbError::Config(
-            "sse snapshot requires terminal event".into(),
+            "sse snapshot status and terminal event disagree".into(),
         ));
+    }
+    if input.status == SseStreamStatus::Closed && input.events.len() < 2 {
+        return Err(DbError::Config(
+            "closed sse snapshot requires metadata".into(),
+        ));
+    }
+    if input.events.len() > 1
+        && (input.events[0].event_type != "metadata"
+            || input.events[1..input.events.len() - 1]
+                .iter()
+                .any(|event| event.event_type != "token"))
+    {
+        return Err(DbError::Config("invalid sse snapshot event order".into()));
     }
     if input.events.len() as i32 > input.max_events {
         return Err(DbError::Config("sse snapshot exceeds max_events".into()));
     }
-
-    lock_request(txn, ctx, input.id).await?;
 
     let mut byte_count = 0i64;
     let mut prepared = Vec::with_capacity(input.events.len());
@@ -207,6 +218,20 @@ pub async fn persist_closed_snapshot(
             payload_bytes,
         ));
     }
+    Ok((byte_count, prepared))
+}
+
+/// Persist a complete closed snapshot in one transaction (create + events + closed).
+///
+/// On any failure the caller rolls back — no durable open/partial rows.
+pub async fn persist_closed_snapshot(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    input: NewClosedSnapshot,
+) -> Result<(SseStreamRequest, Vec<SseStreamEvent>), DbError> {
+    let (byte_count, prepared) = prepare_snapshot(&input)?;
+
+    lock_request(txn, ctx, input.id).await?;
 
     let event_count = i32::try_from(prepared.len()).unwrap_or(i32::MAX);
     let next_sequence = i64::from(event_count) + 1;
@@ -575,4 +600,133 @@ fn map_event(row: &Row) -> Result<SseStreamEvent, DbError> {
         payload_bytes: row.get("payload_bytes"),
         created_at: row.get("created_at"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(status: SseStreamStatus, events: Vec<PlannedSseEvent>) -> NewClosedSnapshot {
+        NewClosedSnapshot {
+            id: Uuid::new_v4(),
+            kind: SseStreamKind::Ask,
+            status,
+            close_reason: if status == SseStreamStatus::Closed {
+                "completed"
+            } else {
+                "truncated"
+            },
+            auth_scope: StreamAuthScope {
+                version_mode: "current".into(),
+                requires_history: false,
+                collection_ids: vec![Uuid::new_v4()],
+                cited_document_ids: vec![],
+                cited_version_ids: vec![],
+            },
+            events,
+            max_events: DEFAULT_MAX_EVENTS,
+            max_bytes: DEFAULT_MAX_BYTES,
+            ttl_secs: DEFAULT_TTL_SECS,
+        }
+    }
+
+    fn event(event_type: &'static str, data: JsonValue) -> PlannedSseEvent {
+        PlannedSseEvent { event_type, data }
+    }
+
+    #[test]
+    fn snapshot_preflight_accepts_canonical_closed_and_error_sequences() {
+        let closed = snapshot(
+            SseStreamStatus::Closed,
+            vec![
+                event("metadata", serde_json::json!({"grounded": true})),
+                event("token", serde_json::json!({"text": "xin "})),
+                event("token", serde_json::json!({"text": "chào"})),
+                event("close", serde_json::json!({"reason": "completed"})),
+            ],
+        );
+        let (bytes, prepared) = prepare_snapshot(&closed).unwrap();
+        assert!(bytes > 0);
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|row| (row.0, row.1))
+                .collect::<Vec<_>>(),
+            vec![(1, "metadata"), (2, "token"), (3, "token"), (4, "close")]
+        );
+
+        let error = snapshot(
+            SseStreamStatus::Error,
+            vec![event("error", serde_json::json!({"reason": "truncated"}))],
+        );
+        assert!(prepare_snapshot(&error).is_ok());
+    }
+
+    #[test]
+    fn snapshot_preflight_rejects_status_order_scope_and_bound_violations() {
+        let canonical = snapshot(
+            SseStreamStatus::Closed,
+            vec![
+                event("metadata", serde_json::json!({})),
+                event("close", serde_json::json!({"reason": "completed"})),
+            ],
+        );
+
+        let mut expired = canonical.clone();
+        expired.status = SseStreamStatus::Expired;
+        assert!(prepare_snapshot(&expired).is_err());
+
+        let mut mismatched = canonical.clone();
+        mismatched.status = SseStreamStatus::Error;
+        assert!(prepare_snapshot(&mismatched).is_err());
+
+        let missing_metadata = snapshot(
+            SseStreamStatus::Closed,
+            vec![event("close", serde_json::json!({"reason": "completed"}))],
+        );
+        assert!(prepare_snapshot(&missing_metadata).is_err());
+
+        let invalid_order = snapshot(
+            SseStreamStatus::Closed,
+            vec![
+                event("token", serde_json::json!({"text": "early"})),
+                event("close", serde_json::json!({"reason": "completed"})),
+            ],
+        );
+        assert!(prepare_snapshot(&invalid_order).is_err());
+
+        let early_terminal = snapshot(
+            SseStreamStatus::Closed,
+            vec![
+                event("metadata", serde_json::json!({})),
+                event("error", serde_json::json!({"reason": "early"})),
+                event("close", serde_json::json!({"reason": "completed"})),
+            ],
+        );
+        assert!(prepare_snapshot(&early_terminal).is_err());
+
+        let mut no_scope = canonical.clone();
+        no_scope.auth_scope.collection_ids.clear();
+        assert!(prepare_snapshot(&no_scope).is_err());
+
+        let mut too_many = canonical.clone();
+        too_many.max_events = TERMINAL_EVENT_RESERVE + 1;
+        too_many
+            .events
+            .insert(1, event("token", serde_json::json!({"text": "overflow"})));
+        assert!(prepare_snapshot(&too_many).is_err());
+
+        let oversized_payload = snapshot(
+            SseStreamStatus::Error,
+            vec![event(
+                "error",
+                serde_json::json!({"reason": "x".repeat(MAX_EVENT_PAYLOAD_BYTES as usize)}),
+            )],
+        );
+        assert!(prepare_snapshot(&oversized_payload).is_err());
+
+        let mut over_total = canonical;
+        over_total.max_bytes = 1;
+        assert!(prepare_snapshot(&over_total).is_err());
+    }
 }

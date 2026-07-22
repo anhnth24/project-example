@@ -28,8 +28,9 @@ use crate::db::conflicts::TriageConflict;
 use crate::db::document_versions;
 use crate::db::documents::{self as documents_repo, DocumentListPage};
 use crate::db::download_capabilities::DownloadPurpose;
-use crate::db::models::{ConflictStatus, DocumentState};
+use crate::db::models::{ConflictStatus, DocumentState, DocumentVersion, PublicationState};
 use crate::db::pool::with_org_txn;
+use crate::db::search;
 use crate::http::AppState;
 use crate::routes::common::{
     deny_or_not_found, document_response, load_document_authorized, map_db, read_idempotency_key,
@@ -42,6 +43,7 @@ use crate::services::download::{
 };
 use crate::services::indexing::{self, CatalogIndexError};
 use crate::services::preview::{self, PreviewError};
+use crate::services::retrieval::PERMISSION_QA_HISTORY;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -666,6 +668,7 @@ async fn list_versions(
         None => None,
     };
     let fetch_limit = i64::from(page.limit) + 1;
+    // list_page_by_document applies CASE WHEN is_current qa.query / qa.history.
     let mut rows = with_org_txn(state.pool(), &auth.context, {
         let ctx = auth.context.clone();
         let after_version_number = after.as_ref().map(|cursor| cursor.version_number);
@@ -721,18 +724,17 @@ async fn get_version(
     AppPath((document_id, version_id)): AppPath<(Uuid, Uuid)>,
 ) -> Result<Json<DocumentVersionResponse>, ApiRejection> {
     let request_id = auth.request_id.clone();
-    let _ = load_document_authorized(&state, &auth.context, document_id, &request_id).await?;
-    let version = with_org_txn(state.pool(), &auth.context, {
-        let ctx = auth.context.clone();
-        move |txn| {
-            Box::pin(async move {
-                document_versions::find_by_id(txn, &ctx, document_id, version_id).await
-            })
-        }
-    })
-    .await
-    .map_err(|error| map_db(error, &request_id))?
-    .ok_or_else(|| deny_or_not_found(&request_id))?;
+    let document =
+        load_document_authorized(&state, &auth.context, document_id, &request_id).await?;
+    let version = load_version_authorized_for_metadata(
+        &state,
+        &auth.context,
+        document_id,
+        version_id,
+        document.state,
+        &request_id,
+    )
+    .await?;
     Ok(Json(version_response(version, request_id)))
 }
 
@@ -742,23 +744,26 @@ async fn diff_versions(
     AppPath((document_id, left_version_id, right_version_id)): AppPath<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<VersionDiffResponse>, ApiRejection> {
     let request_id = auth.request_id.clone();
-    let _ = load_document_authorized(&state, &auth.context, document_id, &request_id).await?;
-    let (left, right) = with_org_txn(state.pool(), &auth.context, {
-        let ctx = auth.context.clone();
-        move |txn| {
-            Box::pin(async move {
-                let left =
-                    document_versions::find_by_id(txn, &ctx, document_id, left_version_id).await?;
-                let right =
-                    document_versions::find_by_id(txn, &ctx, document_id, right_version_id).await?;
-                Ok::<_, crate::db::error::DbError>((left, right))
-            })
-        }
-    })
-    .await
-    .map_err(|error| map_db(error, &request_id))?;
-    let left = left.ok_or_else(|| deny_or_not_found(&request_id))?;
-    let right = right.ok_or_else(|| deny_or_not_found(&request_id))?;
+    let document =
+        load_document_authorized(&state, &auth.context, document_id, &request_id).await?;
+    let left = load_version_authorized_for_metadata(
+        &state,
+        &auth.context,
+        document_id,
+        left_version_id,
+        document.state,
+        &request_id,
+    )
+    .await?;
+    let right = load_version_authorized_for_metadata(
+        &state,
+        &auth.context,
+        document_id,
+        right_version_id,
+        document.state,
+        &request_id,
+    )
+    .await?;
     Ok(Json(VersionDiffResponse {
         document_id,
         left_version_id: left.id,
@@ -771,6 +776,51 @@ async fn diff_versions(
         change_summary_changed: left.change_summary != right.change_summary,
         request_id,
     }))
+}
+
+/// Catalog version metadata read: drafts/current stay document-scoped; superseded
+/// published versions require `qa.history`, rechecked via
+/// [`search::load_authorized_version_for_read`] when the document is indexed.
+async fn load_version_authorized_for_metadata(
+    state: &AppState,
+    ctx: &crate::auth::context::OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+    document_state: DocumentState,
+    request_id: &str,
+) -> Result<DocumentVersion, ApiRejection> {
+    let version = with_org_txn(state.pool(), ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                document_versions::find_by_id(txn, &ctx, document_id, version_id).await
+            })
+        }
+    })
+    .await
+    .map_err(|error| map_db(error, request_id))?
+    .ok_or_else(|| deny_or_not_found(request_id))?;
+
+    if matches!(version.publication_state, PublicationState::Published) && !version.is_current {
+        require_perm(ctx, PERMISSION_QA_HISTORY, request_id)?;
+        if document_state == DocumentState::Indexed {
+            let authorized = with_org_txn(state.pool(), ctx, {
+                let ctx = ctx.clone();
+                move |txn| {
+                    Box::pin(async move {
+                        search::load_authorized_version_for_read(txn, &ctx, document_id, version_id)
+                            .await
+                    })
+                }
+            })
+            .await
+            .map_err(|error| map_db(error, request_id))?;
+            if authorized.is_none() {
+                return Err(deny_or_not_found(request_id));
+            }
+        }
+    }
+    Ok(version)
 }
 
 async fn publish_version(

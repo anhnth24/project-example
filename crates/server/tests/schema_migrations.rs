@@ -993,6 +993,7 @@ async fn rls_all_tenant_tables_and_pool_context_reset() {
     let org_b = Uuid::new_v4();
     let user_b = Uuid::new_v4();
     let collection_b = Uuid::new_v4();
+    let stream_b = Uuid::new_v4();
 
     client
         .execute(
@@ -1030,6 +1031,30 @@ async fn rls_all_tenant_tables_and_pool_context_reset() {
     )
     .await
     .unwrap();
+    tx.execute(
+        "INSERT INTO sse_stream_requests (
+            id, org_id, user_id, kind, status, close_reason, version_mode,
+            requires_history, collection_ids, cited_document_ids, cited_version_ids,
+            next_sequence, event_count, byte_count, max_events, max_bytes,
+            expires_at, closed_at
+         ) VALUES (
+            $1,$2,$3,'ask','closed','completed','current',
+            false,ARRAY[$4]::uuid[],'{}'::uuid[],'{}'::uuid[],
+            2,1,22,16,4096,clock_timestamp() + interval '15 minutes',clock_timestamp()
+         )",
+        &[&stream_b, &org_b, &user_b, &collection_b],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "INSERT INTO sse_stream_events (
+            org_id, request_id, user_id, sequence_no, event_type,
+            envelope_version, data, payload_bytes
+         ) VALUES ($1,$2,$3,1,'close',1,'{\"reason\":\"completed\"}'::jsonb,22)",
+        &[&org_b, &stream_b, &user_b],
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     for table in BUSINESS_TABLES {
@@ -1056,6 +1081,17 @@ async fn rls_all_tenant_tables_and_pool_context_reset() {
         .unwrap()
         .get(0);
     assert_eq!(leaked, 0);
+    for table in ["sse_stream_requests", "sse_stream_events"] {
+        let leaked: i64 = tx
+            .query_one(
+                &format!("SELECT count(*) FROM {table} WHERE org_id = $1"),
+                &[&org_b],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(leaked, 0, "{table} leaked across org RLS");
+    }
     tx.commit().await.unwrap();
 
     let tx = client.transaction().await.unwrap();

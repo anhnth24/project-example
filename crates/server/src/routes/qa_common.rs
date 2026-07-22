@@ -342,3 +342,216 @@ pub fn require_history_if_needed(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::sse::{EVENT_ERROR, EVENT_METADATA, EVENT_TOKEN};
+    use crate::db::sse_streams::MAX_EVENT_PAYLOAD_BYTES;
+    use crate::services::qa::grounding::VersionContext;
+    use crate::services::qa::stream::{DEFAULT_MAX_STREAM_BYTES, DEFAULT_MAX_STREAM_TOKENS};
+    use crate::services::qa::{AnswerMode, QaAuditMetadata};
+    use crate::services::sse_stream::{json_payload_bytes, SnapshotPlanBounds};
+
+    fn mode_body(mode_type: &str) -> VersionModeBody {
+        VersionModeBody {
+            mode_type: mode_type.to_string(),
+            at: None,
+            document_id: None,
+            version_a: None,
+            version_b: None,
+        }
+    }
+
+    fn sample_answer(answer: &str, quote: &str) -> QaAnswer {
+        let doc = Uuid::new_v4();
+        let version = Uuid::new_v4();
+        QaAnswer {
+            answer: answer.to_string(),
+            citations: vec![QaCitation {
+                cite_id: "c1".into(),
+                document_id: doc,
+                version_id: version,
+                version_number: 1,
+                content_sha256: "a".repeat(64),
+                chunk_id: Uuid::new_v4(),
+                is_current: true,
+                heading: "H".into(),
+                quote: quote.to_string(),
+            }],
+            mode: AnswerMode::OfflineExtractive,
+            grounded: true,
+            warnings: vec![],
+            version_context: VersionContext {
+                mode: "current",
+                current_version_ids: vec![version],
+                cited_version_ids: vec![version],
+                change_note: None,
+            },
+            conflict_warnings: vec![],
+            audit: QaAuditMetadata {
+                action: "ask",
+                outcome: "ok",
+                answer_mode: AnswerMode::OfflineExtractive.as_str(),
+                citation_count: 1,
+                conflict_warning_count: 0,
+                version_mode: "current",
+                provider_configured: false,
+                fallback_reason: None,
+                request_id: "test".into(),
+                grounded: true,
+                latency_ms: 1,
+                error: None,
+            },
+        }
+    }
+
+    #[test]
+    fn version_mode_parser_covers_supported_shapes_and_required_fields() {
+        assert_eq!(
+            parse_version_mode(None, "request").unwrap(),
+            VersionMode::Current
+        );
+
+        let at = Utc::now();
+        let mut as_of = mode_body("asOf");
+        as_of.at = Some(at);
+        assert_eq!(
+            parse_version_mode(Some(&as_of), "request").unwrap(),
+            VersionMode::AsOf { at }
+        );
+
+        let document_id = Uuid::new_v4();
+        let version_a = Uuid::new_v4();
+        let version_b = Uuid::new_v4();
+        let mut compare = mode_body("compare");
+        compare.document_id = Some(document_id);
+        compare.version_a = Some(version_a);
+        compare.version_b = Some(version_b);
+        assert_eq!(
+            parse_version_mode(Some(&compare), "request").unwrap(),
+            VersionMode::Compare {
+                document_id,
+                version_a,
+                version_b,
+            }
+        );
+
+        let mut history = mode_body("history");
+        history.document_id = Some(document_id);
+        assert_eq!(
+            parse_version_mode(Some(&history), "request").unwrap(),
+            VersionMode::History { document_id }
+        );
+
+        for invalid in [
+            mode_body("as_of"),
+            mode_body("compare"),
+            mode_body("history"),
+            mode_body("future"),
+        ] {
+            assert!(parse_version_mode(Some(&invalid), "request").is_err());
+        }
+    }
+
+    #[test]
+    fn request_bounds_trim_unicode_and_reject_invalid_limits() {
+        assert_eq!(
+            parse_query_text("  đối soát  ", "query", "request").unwrap(),
+            "đối soát"
+        );
+        assert!(parse_query_text(" \n\t ", "query", "request").is_err());
+        assert!(parse_query_text(&"ấ".repeat(MAX_QUERY_CHARS), "query", "request").is_ok());
+        assert!(parse_query_text(&"ấ".repeat(MAX_QUERY_CHARS + 1), "query", "request").is_err());
+
+        assert_eq!(
+            parse_search_limit(None, "request").unwrap(),
+            DEFAULT_SEARCH_LIMIT
+        );
+        assert_eq!(
+            parse_search_limit(Some(MAX_SEARCH_LIMIT as u32), "request").unwrap(),
+            MAX_SEARCH_LIMIT
+        );
+        assert!(parse_search_limit(Some(0), "request").is_err());
+        assert!(parse_search_limit(Some((MAX_SEARCH_LIMIT + 1) as u32), "request").is_err());
+
+        assert_eq!(
+            parse_ask_limit(Some(MAX_ASK_LIMIT as u32), "request").unwrap(),
+            MAX_ASK_LIMIT
+        );
+        assert!(parse_ask_limit(Some(0), "request").is_err());
+        assert!(parse_ask_limit(Some((MAX_ASK_LIMIT + 1) as u32), "request").is_err());
+    }
+
+    #[test]
+    fn collection_filter_is_bounded_and_deduplicated() {
+        assert_eq!(parse_collection_ids(None, "request").unwrap(), None);
+        assert!(parse_collection_ids(Some(vec![]), "request").is_err());
+
+        let collection = Uuid::new_v4();
+        let parsed = parse_collection_ids(Some(vec![collection, collection]), "request").unwrap();
+        assert_eq!(parsed.unwrap(), BTreeSet::from([collection]));
+
+        let too_many = (0..=MAX_COLLECTION_FILTER)
+            .map(|_| Uuid::new_v4())
+            .collect();
+        assert!(parse_collection_ids(Some(too_many), "request").is_err());
+    }
+
+    #[test]
+    fn oversized_metadata_is_bounded_or_truncated() {
+        let huge = "x".repeat(70_000);
+        let answer = sample_answer("short", &huge);
+        let (events, reason) = plan_closed_events(&answer, SnapshotPlanBounds::default());
+        // Full citations exceed migration payload; planner slims or emits truncated.
+        assert!(matches!(reason, "completed" | "truncated"));
+        assert!(!events.is_empty());
+        assert!(events
+            .iter()
+            .all(|e| json_payload_bytes(&e.data) <= MAX_EVENT_PAYLOAD_BYTES));
+        if reason == "completed" {
+            assert_eq!(events[0].event_type, EVENT_METADATA);
+            assert_eq!(events[0].data["citationsTruncated"], true);
+        } else {
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].event_type, EVENT_ERROR);
+            assert_eq!(events[0].data["reason"], "truncated");
+        }
+
+        // Hard total-byte cap forces safe truncated error snapshot (never 500).
+        let tiny = SnapshotPlanBounds {
+            max_events: 8,
+            max_bytes: 32,
+            max_event_payload_bytes: MAX_EVENT_PAYLOAD_BYTES,
+            max_token_events: DEFAULT_MAX_STREAM_TOKENS,
+            max_token_bytes: DEFAULT_MAX_STREAM_BYTES,
+        };
+        let (events, reason) = plan_closed_events(&answer, tiny);
+        assert_eq!(reason, "truncated");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, EVENT_ERROR);
+        assert!(json_payload_bytes(&events[0].data) <= MAX_EVENT_PAYLOAD_BYTES);
+    }
+
+    #[test]
+    fn token_caps_truncate_deterministically() {
+        let answer = sample_answer(&"word ".repeat(5_000), "q");
+        let bounds = SnapshotPlanBounds {
+            max_events: 8,
+            max_bytes: 256 * 1024,
+            max_event_payload_bytes: MAX_EVENT_PAYLOAD_BYTES,
+            max_token_events: 3,
+            max_token_bytes: DEFAULT_MAX_STREAM_BYTES,
+        };
+        let (events, reason) = plan_closed_events(&answer, bounds);
+        assert_eq!(reason, "truncated");
+        assert_eq!(events.last().unwrap().event_type, EVENT_ERROR);
+        assert_eq!(events.last().unwrap().data["reason"], "truncated");
+        assert!(events.len() <= 8);
+        let token_count = events
+            .iter()
+            .filter(|e| e.event_type == EVENT_TOKEN)
+            .count();
+        assert_eq!(token_count, 3);
+    }
+}
