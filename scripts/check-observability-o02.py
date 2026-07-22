@@ -52,6 +52,7 @@ EVIDENCE_PATH = OBS / "evidence" / "validation-report.json"
 GATES_PATH = ROOT / "bench" / "markhand_web" / "gates.yaml"
 WORKLOAD_PATH = ROOT / "bench" / "markhand_web" / "workload-profile.yaml"
 RUNBOOK_DIR = ROOT / "docs" / "runbooks"
+RUNBOOK_INDEX_PATH = RUNBOOK_DIR / "README.md"
 FETCH_PROMTOOL = ROOT / "scripts" / "fetch-promtool.sh"
 
 REQUIRED_RUNBOOKS = [
@@ -885,12 +886,35 @@ class ObservabilityO02Checks:
             self.err("prometheus.yml still references fake service names/GLM")
 
     def check_runbooks(self) -> None:
+        active_alerts = set(self.active_alert_names)
+        blocked_alerts = {r["alert"] for r in self.blocked_rules if "alert" in r}
+        raw_allowed = self.raw_metric_inventory()
+        derived_allowed = self.derived_metric_inventory()
+        overrides = getattr(self, "_runbook_overrides", {})
+
+        def read_runbook(path: Path) -> str:
+            return overrides.get(path.name, path.read_text(encoding="utf-8"))
+
+        def check_active_alert_references(where: str, text: str) -> None:
+            for alert in re.findall(r"`(Markhand[A-Za-z0-9]+)`", text):
+                if alert in active_alerts:
+                    continue
+                if alert in blocked_alerts:
+                    self.err(f"{where}: lists blocked alert {alert} as active")
+                else:
+                    self.err(f"{where}: lists unknown alert {alert}")
+
+        index_text = read_runbook(RUNBOOK_INDEX_PATH)
+        for line in index_text.splitlines():
+            if line.startswith("| ["):
+                check_active_alert_references("README.md operations table", line)
+
         for name in REQUIRED_RUNBOOKS:
             path = RUNBOOK_DIR / name
             if not path.is_file():
                 self.err(f"missing runbook {name}")
                 continue
-            text = path.read_text(encoding="utf-8")
+            text = read_runbook(path)
             for section in RUNBOOK_SECTIONS:
                 if f"## {section}" not in text:
                     self.err(f"{name}: missing ## {section}")
@@ -900,6 +924,37 @@ class ObservabilityO02Checks:
                 self.err(f"{name}: compose command stored in scalar string (word-split risk)")
             if "logs --tail=0" in text:
                 self.err(f"{name}: no-op logs --tail=0 cleanup must be removed")
+
+            for declared in re.findall(r"^Alerts?:\s*(.+)$", text, flags=re.MULTILINE):
+                check_active_alert_references(name, declared)
+
+            for expr in re.findall(
+                r"--data-urlencode\s+['\"]query=([^'\"]+)['\"]",
+                text,
+            ):
+                raw, derived = classify_metric_selectors(extract_metric_selectors(expr))
+                for metric in sorted(raw - raw_allowed):
+                    self.err(f"{name}: unknown raw metric selector {metric}")
+                for metric in sorted(derived - derived_allowed):
+                    self.err(f"{name}: unknown recording metric selector {metric}")
+
+            prometheus_idx = text.find("http://127.0.0.1:9090")
+            if prometheus_idx >= 0:
+                obs_idx = text.find("POC_WITH_OBSERVABILITY=1")
+                if obs_idx < 0 or obs_idx > prometheus_idx:
+                    self.err(
+                        f"{name}: POC_WITH_OBSERVABILITY=1 must be set before "
+                        "querying Prometheus"
+                    )
+                init_idx = text.find("poc_compose_init")
+                if init_idx < 0 or init_idx > prometheus_idx:
+                    self.err(f"{name}: must initialize the observability compose stack")
+                elif obs_idx > init_idx:
+                    self.err(
+                        f"{name}: POC_WITH_OBSERVABILITY=1 must appear before "
+                        "poc_compose_init"
+                    )
+
             if name == "dependency-outage.md":
                 for needle in (
                     "deploy/compose.poc.yml",
@@ -1224,6 +1279,67 @@ class ObservabilityO02Tests(unittest.TestCase):
         checks._tabletop_override = data
         checks.check_tabletop()
         self.assertTrue(any("nonexistent promtool_case" in e for e in checks.errors))
+
+    def test_mutation_runbook_blocked_alert_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "vector-rebuild.md").read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "vector-rebuild.md": text.replace(
+                "Alert: `MarkhandDriftDetected`",
+                "Alerts: `MarkhandDriftDetected`, `MarkhandReconcileErrors`",
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any("lists blocked alert MarkhandReconcileErrors" in e for e in checks.errors),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_unknown_recording_metric_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "vector-rebuild.md").read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "vector-rebuild.md": text.replace(
+                "query=markhand:drift:increase_10m",
+                "query=markhand:reconcile:error_increase_5m",
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any(
+                "unknown recording metric selector "
+                "markhand:reconcile:error_increase_5m" in e
+                for e in checks.errors
+            ),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_index_legacy_alert_fails(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = RUNBOOK_INDEX_PATH.read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "README.md": text.replace(
+                "`MarkhandHostRootFilesystemLow`",
+                "`MarkhandDiskLow`",
+            )
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any("lists unknown alert MarkhandDiskLow" in e for e in checks.errors),
+            checks.errors,
+        )
+
+    def test_mutation_runbook_prometheus_requires_overlay(self) -> None:
+        checks = ObservabilityO02Checks()
+        text = (RUNBOOK_DIR / "key-rotation.md").read_text(encoding="utf-8")
+        checks._runbook_overrides = {
+            "key-rotation.md": text.replace("export POC_WITH_OBSERVABILITY=1\n", "")
+        }
+        checks.check_runbooks()
+        self.assertTrue(
+            any("must be set before querying Prometheus" in e for e in checks.errors),
+            checks.errors,
+        )
 
     def test_report_excludes_host_dependent_fields(self) -> None:
         checks = ObservabilityO02Checks()

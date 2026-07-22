@@ -18,7 +18,13 @@ Sources: queue age ≤ 120 min (`docs/markhand-web-sla-targets.md`); depth warn 
 2. On the host:
 
 ```bash
-source deploy/scripts/poc-compose.sh && poc_compose_init
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export REPO_ROOT
+export POC_WITH_OBSERVABILITY=1
+# shellcheck source=deploy/scripts/poc-compose.sh
+source "$REPO_ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
+
 "${COMPOSE[@]}" ps
 deploy/scripts/poc-health.sh
 curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"
@@ -32,7 +38,7 @@ curl -fsS "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready"
 # Look for job.dead_lettered / lease / sandbox errors — IDs only, no content
 ```
 
-4. Metrics (if observability overlay is up on :9090):
+4. Metrics from the observability overlay on :9090:
 
 ```bash
 curl -fsG http://127.0.0.1:9090/api/v1/query \

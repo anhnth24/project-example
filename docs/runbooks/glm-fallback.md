@@ -14,6 +14,13 @@ Threshold: O02-OPS-ERROR-OUTBREAK-RATIO (5%). GLM is Q&A only (ADR 0005).
 ## Detection
 
 ```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export REPO_ROOT
+export POC_WITH_OBSERVABILITY=1
+# shellcheck source=deploy/scripts/poc-compose.sh
+source "$REPO_ROOT/deploy/scripts/poc-compose.sh"
+poc_compose_init
+
 curl -fsG http://127.0.0.1:9090/api/v1/query \
   --data-urlencode 'query=markhand:qa_provider:failure_ratio_10m'
 # Failures: result=~error|outage|timeout|truncated|other on leg=qa_provider
