@@ -139,6 +139,7 @@ pub(super) fn extract_with_pdf_extract(bytes: &[u8]) -> Result<String, DetailedC
 #[cfg(test)]
 mod tests {
     use super::via_pdfium;
+    use crate::conv::pdf::pdfium::pdfium_available;
     use crate::conv::pdf::recovery::PDF_UNTRUSTED_PDFIUM_SOURCE;
     use crate::diagnostics::MarkdownOutput;
     use crate::image_ocr::OcrRunConfig;
@@ -186,6 +187,9 @@ mod tests {
 
     #[test]
     fn pdfium_fallback_warns_when_inherited_needs_ocr_keeps_untrusted_native() {
+        if !pdfium_available() {
+            return; // PDFium is an optional runtime dependency.
+        }
         let dir = std::env::temp_dir().join(format!(
             "fileconv_pdf_flagged_{}_{}",
             std::process::id(),
@@ -236,6 +240,9 @@ mod tests {
 
     #[test]
     fn concurrent_pdfium_flagged_paths_do_not_cross_contaminate_warnings() {
+        if !pdfium_available() {
+            return; // PDFium is an optional runtime dependency.
+        }
         let dir = std::env::temp_dir().join(format!(
             "fileconv_pdf_conc_{}_{}",
             std::process::id(),

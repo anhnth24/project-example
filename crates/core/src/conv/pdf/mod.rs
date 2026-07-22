@@ -366,6 +366,9 @@ mod tests {
 
     #[test]
     fn missing_tesseract_on_scan_pdf_is_dependency_missing() {
+        if !super::pdfium::pdfium_available() {
+            return; // Rendering a scan requires the optional PDFium runtime.
+        }
         // Empty page: needs_ocr, no text to preserve → hard DependencyMissing.
         let stream = "";
         let objects = [
