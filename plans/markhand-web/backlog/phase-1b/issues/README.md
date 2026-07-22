@@ -191,8 +191,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-R01 — Tenant-scoped hybrid retrieval
 
-- **Status:** Review — PR #252 merged; post-merge authorization hardening and live
-  PostgreSQL acceptance evidence are in PR #254. Mark Done after that PR merges.
+- **Status:** Done — implementation merged via PR #252; authorization hardening and
+  live PostgreSQL acceptance evidence merged via PR #254.
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
@@ -205,11 +205,10 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
-- **Status:** Review — services `{citation,preview,download}` + bounded `BlobStore`/
+- **Status:** Done — merged via PR #256. Services `{citation,preview,download}` + bounded `BlobStore`/
   `MemoryBlobStore`; citation quotes from trusted Markdown spans; original download
   uses reconciliation parent-source metadata; exact citation ignores index generation
   activity; live PG + memory-store acceptance in `tests/citation_preview_download.rs`.
-  Mark Done after coordinator review/merge.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
@@ -225,8 +224,8 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
-- **Status:** Blocked — implementation ready on stacked branch; dependencies R01/R02
-  remain Review. Evidence: hermetic `services/qa/{mod,prompt,provider,grounding,stream}.rs`
+- **Status:** Done — merged via PR #257. Evidence: hermetic
+  `services/qa/{mod,prompt,provider,grounding,stream}.rs`
   + `tests/qa.rs`: policy-separated untrusted framing; claims-only provider with
   bounded HTTPS/local config (no redirects/proxy; secrets/model redacted); server
   validates cite-ID subset and renders markers; current/compare/history mode rules;
@@ -251,7 +250,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Status:** Blocked — implementation ready; R02 dependency Review
+- **Status:** Done — merged via PR #258.
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -281,7 +280,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
-- **Status:** Blocked — implementation ready; dependencies R01/R03/R04 Review/Blocked
+- **Status:** Review — implementation ready in PR #259; dependencies R01/R03/R04 are Done.
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`, `db/sse_streams.rs`,
