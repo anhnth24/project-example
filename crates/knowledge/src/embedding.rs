@@ -167,11 +167,12 @@ impl EmbeddingPlan {
                 "embedding dimensions must be positive",
             ));
         }
-        if !fileconv_core::embedding_runtime::is_allowed_embedding_runtime_path(&runtime_path) {
-            return Err(KnowledgeError::InvalidInput(
-                "embedding runtime_path is unsupported",
-            ));
-        }
+        // Public config / plan boundary — reject once before any signature digest.
+        let runtime_path =
+            fileconv_core::embedding_runtime::parse_embedding_runtime_path(&runtime_path)
+                .map_err(|_| KnowledgeError::InvalidInput("embedding runtime_path is unsupported"))?
+                .as_str()
+                .to_string();
         let family = embedding_family(&provider, &model, &deployment);
         Ok(Self {
             mode: PROVIDER_EMBEDDING_MODE,
@@ -223,6 +224,7 @@ impl EmbeddingPlan {
                 });
             }
         }
+        // Trusted path: runtime_path was allowlisted in constructors / local_hash_v1.
         Ok(self.index_signature_unchecked(actual_dimensions))
     }
 
@@ -704,5 +706,39 @@ mod tests {
             super::RUNTIME_PROVIDER_CLOUD,
             EMBEDDING_RUNTIME_PROVIDER_CLOUD
         );
+    }
+
+    #[test]
+    fn provider_plan_rejects_invalid_runtime_path_before_signature() {
+        let deployment =
+            super::ProviderDeployment::from_base_url(Some("http://embedding.internal")).unwrap();
+        for runtime in ["", "vllm-local\n", "local_hash_v1", " "] {
+            let err = EmbeddingPlan::provider(
+                "vllm",
+                "vi-model",
+                "r1",
+                deployment.clone(),
+                Some(3),
+                runtime,
+            )
+            .unwrap_err();
+            assert_eq!(
+                err,
+                KnowledgeError::InvalidInput("embedding runtime_path is unsupported"),
+                "{runtime:?}"
+            );
+        }
+        // Valid allowlisted round-trip still builds a signature.
+        let plan = EmbeddingPlan::provider(
+            "vllm",
+            "vi-model",
+            "r1",
+            deployment,
+            Some(3),
+            super::RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
+        assert!(plan.signature(3).is_ok());
+        assert_eq!(plan.runtime_path(), super::RUNTIME_VLLM_LOCAL);
     }
 }

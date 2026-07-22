@@ -11,12 +11,36 @@
 //! VNI/VPS maps được sinh từ bảng VietUnicode bằng `bench/generate_viet_legacy_maps.py`.
 //!
 //! **Hạn chế TCVN3 chữ hoa có dấu:** TCVN 5712-3 / VietUnicode mô tả capital vowels
-//! qua font hoa riêng (TCVN-3-1 thường / TCVN-3-2 hoa), không phải digraph byte chắc chắn
-//! trong luồng không có metadata font/run. Decode ở đây **không** đoán hoa bằng
-//! lookahead base+tone — chỉ map single-byte (base hoa ĂÂÊÔƠƯĐ + chữ thường có dấu).
-//! Cần font/run metadata (hoặc bảng TCVN-3-2 tường minh) mới nâng case đúng.
+//! qua font hoa riêng (TCVN3/VN3 regular font vs TCVN3/ABC all-capital H-font),
+//! không phải digraph byte chắc chắn trong luồng không có metadata font/run.
+//! Decode mặc định **không** đoán hoa bằng lookahead base+tone — chỉ map
+//! single-byte (base hoa ĂÂÊÔƠƯĐ + chữ thường có dấu).
+//!
+//! **Opt-in font/run case hint (C11):** caller đã có metadata TCVN3/ABC
+//! all-capital H-font (ví dụ `.Vn*H`, `w:rFonts`) thì dùng
+//! [`Tcvn3CaseHint::UppercaseFont`] với [`decode_tcvn3_with_hint`]: decode bảng
+//! single-byte hiện có, rồi áp dụng Unicode uppercase xác định. **Không** bịa
+//! digraph byte hoa. [`decode_tcvn3`] / [`decode_text`] giữ semantics cũ
+//! (an toàn khi thiếu metadata).
+//!
+//! **TXT/CSV thuần** không suy ra H-font đáng tin — cùng byte vừa có thể là chữ
+//! thường vừa là glyph hoa tùy font đã mất; không đoán từ tên file hay nội dung.
 
 use crate::viet_legacy_maps::{VNI_MAP, VPS_MAP};
+
+/// Hint font/run cho decode TCVN3 sau bước map single-byte canonical.
+///
+/// TCVN3 không có bảng byte riêng cho nguyên âm hoa có dấu; TCVN3/ABC all-capital
+/// H-font (`.Vn*H`) dùng cùng byte với chữ thường rồi vẽ glyph hoa. Chỉ bật
+/// [`Tcvn3CaseHint::UppercaseFont`] khi caller **đã có** metadata tường minh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Tcvn3CaseHint {
+    /// TCVN3/VN3 regular font / mixed / không metadata: giữ map single-byte.
+    #[default]
+    AsMapped,
+    /// TCVN3/ABC all-capital H-font run: Unicode uppercase sau decode.
+    UppercaseFont,
+}
 
 /// TCVN3 byte → ký tự Unicode. Byte không có trong bảng: <0x80 giữ ASCII,
 /// còn lại decode theo latin-1 (giữ nguyên hình).
@@ -123,15 +147,168 @@ pub fn looks_like_tcvn3(bytes: &[u8]) -> bool {
     high >= 3 && hit * 10 >= high * 7
 }
 
-/// Decode TCVN3 → String Unicode (single-byte map; xem hạn chế chữ hoa có dấu ở đầu module).
+/// Decode TCVN3 → String Unicode (single-byte map; [`Tcvn3CaseHint::AsMapped`]).
+///
+/// Không đổi case theo font. Xem [`decode_tcvn3_with_hint`] khi có metadata
+/// TCVN3/ABC all-capital H-font.
 pub fn decode_tcvn3(bytes: &[u8]) -> String {
-    bytes
+    decode_tcvn3_with_hint(bytes, Tcvn3CaseHint::AsMapped)
+}
+
+/// Decode TCVN3 với hint font/run tường minh.
+///
+/// Luôn map single-byte canonical trước; với [`Tcvn3CaseHint::UppercaseFont`] áp dụng
+/// Unicode uppercase trên chuỗi đã decode. Không lookahead base+tone, không digraph hoa.
+pub fn decode_tcvn3_with_hint(bytes: &[u8], hint: Tcvn3CaseHint) -> String {
+    let decoded: String = bytes
         .iter()
         .map(|&b| match tcvn3_char(b) {
             Some(c) => c,
             None => b as char, // ASCII + latin-1 passthrough
         })
-        .collect()
+        .collect();
+    apply_tcvn3_case_hint(&decoded, hint)
+}
+
+/// Áp dụng [`Tcvn3CaseHint`] lên chuỗi **đã** decode TCVN3 canonical.
+pub fn apply_tcvn3_case_hint(decoded: &str, hint: Tcvn3CaseHint) -> String {
+    match hint {
+        Tcvn3CaseHint::AsMapped => decoded.to_string(),
+        Tcvn3CaseHint::UppercaseFont => decoded.to_uppercase(),
+    }
+}
+
+/// Style-only tokens stripped from the **end** before H-font detection.
+///
+/// Width/weight tokens that commonly glue to terminal `H` (`HeavyH`, `NarrowH`,
+/// `LightH`, …) are intentionally **not** listed — they stay on the last family
+/// token so `… HeavyH Normal` still reads as all-capital H-font.
+const ABC_VN_STYLE_SUFFIXES: &[&str] = &[
+    "bold", "italic", "regular", "normal", "medium", "oblique", "thin", "semibold", "demibold",
+    "black",
+];
+
+/// Family names that look like `.Vn*` but are not TCVN3/ABC text fonts.
+const ABC_VN_REJECTED_FAMILIES: &[&str] = &[
+    "post", // VNPost / .VnPost
+    "vps",  // cross-encoding
+    "vni",  // cross-encoding (also caught by `.vni` prefix guard)
+];
+
+/// Phân loại font TCVN3/ABC `.Vn*` → hint case (terminal `H` = all-capital H-font).
+///
+/// **Bắt buộc** prefix case-insensitive `.Vn` (có dấu chấm). Dotless `VnTimeH`,
+/// VNI/VPS, `.VnPost` và tên cross-encoding → `None`.
+/// CSS `font-family` lấy family đầu trước dấu phẩy.
+///
+/// H-font: sau khi bỏ style suffix cuối (`Bold`/`Italic`/`Normal`/…), token họ
+/// cuối cùng kết thúc bằng `H` (ví dụ `.VNTimeH`, `.VnArial NarrowH`,
+/// `.VnTifani HeavyH Normal`, `.Vn3DH Normal`). Chữ số **nội bộ hợp lệ**
+/// (`.Vn3DH`) được giữ; chỉ loại hậu tố phiên bản Bách Khoa HCM2 dạng
+/// `letters+digits` / `letters+digits+H` (`.VnTimes2`, `.VnTime2H`,
+/// `.VnTimes2H`, `.VnArial2`, …) — không cấm digit rộng.
+pub fn tcvn3_case_hint_from_font_name(font_name: &str) -> Option<Tcvn3CaseHint> {
+    let primary = first_css_font_family(font_name)?;
+    let lower = primary.to_ascii_lowercase();
+    // Dot required; case-insensitive `.Vn`. Reject `.VNI…` (would be `.vn` + `i…`).
+    let body = lower.strip_prefix(".vn")?;
+    if body.is_empty() || body.starts_with('i') {
+        return None;
+    }
+
+    let mut tokens: Vec<&str> = body.split_whitespace().filter(|t| !t.is_empty()).collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    for token in &tokens {
+        if !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return None;
+        }
+        let alnum: String = token
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if alnum.is_empty() {
+            return None;
+        }
+        // Bách Khoa HCM2 version suffixes — not legitimate internal digits.
+        if is_bach_khoa_hcm2_version_token(&alnum) {
+            return None;
+        }
+        let letters: String = alnum.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+        if letters.is_empty() {
+            return None;
+        }
+        if ABC_VN_REJECTED_FAMILIES
+            .iter()
+            .any(|bad| letters.eq_ignore_ascii_case(bad))
+        {
+            return None;
+        }
+    }
+
+    while let Some(last) = tokens.last() {
+        if ABC_VN_STYLE_SUFFIXES
+            .iter()
+            .any(|style| last.eq_ignore_ascii_case(style))
+        {
+            tokens.pop();
+        } else {
+            break;
+        }
+    }
+    if tokens.is_empty() {
+        return None;
+    }
+
+    let last = *tokens.last()?;
+    let last_alnum: String = last
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    // Terminal H on the last remaining family/width token ⇒ all-capital H-font.
+    if last_alnum.len() > 1 && last_alnum.ends_with('h') {
+        Some(Tcvn3CaseHint::UppercaseFont)
+    } else {
+        Some(Tcvn3CaseHint::AsMapped)
+    }
+}
+
+/// Bách Khoa HCM2-style version suffix: `Times2`, `Time2H`, `Arial2`, `Times2H`.
+///
+/// Shape: one or more letters, then one or more digits, optional single trailing `H`.
+/// Does **not** match legitimate leading/internal digit names such as `3DH`.
+fn is_bach_khoa_hcm2_version_token(alnum_lower_or_mixed: &str) -> bool {
+    let t = alnum_lower_or_mixed.as_bytes();
+    if t.is_empty() || !t[0].is_ascii_alphabetic() {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < t.len() && t[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    if i == 0 || i == t.len() || !t[i].is_ascii_digit() {
+        return false;
+    }
+    while i < t.len() && t[i].is_ascii_digit() {
+        i += 1;
+    }
+    match t.len() - i {
+        0 => true,                             // Times2 / Arial2
+        1 => t[i].eq_ignore_ascii_case(&b'h'), // Time2H / Times2H
+        _ => false,
+    }
+}
+
+fn first_css_font_family(name: &str) -> Option<String> {
+    let primary = name.split(',').next()?.trim();
+    let unquoted = primary.trim_matches(|c| c == '"' || c == '\'').trim();
+    if unquoted.is_empty() {
+        None
+    } else {
+        Some(unquoted.to_string())
+    }
 }
 
 fn vni_match(bytes: &[u8]) -> Option<(char, usize)> {
@@ -224,6 +401,10 @@ pub fn looks_like_vps(bytes: &[u8]) -> bool {
 
 /// Decode text bytes "thông minh": UTF-8 → giữ nguyên; VNI/VPS/TCVN3 → chuyển;
 /// còn lại → lossy (giữ hành vi cũ).
+///
+/// Nhánh TCVN3 dùng [`decode_tcvn3`] ([`Tcvn3CaseHint::AsMapped`]). Không có
+/// smart-decoder có hint: TXT/CSV không suy H-font đáng tin; caller có metadata
+/// font/run gọi [`decode_tcvn3_with_hint`] trực tiếp.
 pub fn decode_text(bytes: &[u8]) -> String {
     match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
@@ -354,5 +535,150 @@ mod tests {
         // Không có font metadata: A + 0xB8 phải ra "Aá", không bị ghép thành "Á".
         assert_eq!(decode_tcvn3(&[0x41, 0xB8]), "Aá");
         assert_eq!(decode_tcvn3(&[0xA1, 0xA2, 0xA7]), "ĂÂĐ");
+        assert_eq!(
+            decode_tcvn3_with_hint(&[0x41, 0xB8], Tcvn3CaseHint::AsMapped),
+            "Aá"
+        );
+        // Hint hoa cũng không merge A+tone thành một grapheme — chỉ uppercase từng
+        // char đã map: "Aá" → "AÁ".
+        assert_eq!(
+            decode_tcvn3_with_hint(&[0x41, 0xB8], Tcvn3CaseHint::UppercaseFont),
+            "AÁ"
+        );
+    }
+
+    /// Mọi chữ thường có dấu trong TCVN3_MAP (+ đ) — kỳ vọng Unicode uppercase đủ gồm Đ.
+    const TCVN3_LOWER_ACCENTED: &str =
+        "ăâêôơưđàảãáạằẳẵắặầẩẫấậèẻẽéẹềểễếệìỉĩíịòỏõóọồổỗốộờởỡớợùủũúụừửữứựỳỷỹýỵ";
+    const TCVN3_UPPER_ACCENTED: &str =
+        "ĂÂÊÔƠƯĐÀẢÃÁẠẰẲẴẮẶẦẨẪẤẬÈẺẼÉẸỀỂỄẾỆÌỈĨÍỊÒỎÕÓỌỒỔỖỐỘỜỞỠỚỢÙỦŨÚỤỪỬỮỨỰỲỶỸÝỴ";
+
+    fn tcvn3_bytes_for_lower_accented() -> Vec<u8> {
+        TCVN3_LOWER_ACCENTED
+            .chars()
+            .map(|ch| {
+                TCVN3_MAP
+                    .iter()
+                    .find(|(_, mapped)| *mapped == ch)
+                    .map(|(b, _)| *b)
+                    .unwrap_or_else(|| panic!("missing TCVN3 byte for {ch}"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn default_decode_preserves_lowercase_accented_without_hint() {
+        let bytes = tcvn3_bytes_for_lower_accented();
+        assert_eq!(decode_tcvn3(&bytes), TCVN3_LOWER_ACCENTED);
+        assert_eq!(decode_text(&bytes), TCVN3_LOWER_ACCENTED);
+        assert_eq!(
+            decode_tcvn3_with_hint(&bytes, Tcvn3CaseHint::AsMapped),
+            TCVN3_LOWER_ACCENTED
+        );
+        assert_ne!(decode_tcvn3(&bytes), TCVN3_UPPER_ACCENTED);
+    }
+
+    #[test]
+    fn uppercase_font_hint_recovers_all_vietnamese_base_and_tone_combos() {
+        let bytes = tcvn3_bytes_for_lower_accented();
+        assert_eq!(
+            decode_tcvn3_with_hint(&bytes, Tcvn3CaseHint::UppercaseFont),
+            TCVN3_UPPER_ACCENTED
+        );
+        assert!(TCVN3_UPPER_ACCENTED.contains('Đ'));
+        assert_eq!(
+            apply_tcvn3_case_hint("đường", Tcvn3CaseHint::UppercaseFont),
+            "ĐƯỜNG"
+        );
+        // Base hoa đã có trong map (ĂÂÊÔƠƯĐ) giữ nguyên khi uppercase.
+        assert_eq!(
+            decode_tcvn3_with_hint(&[0xA1, 0xA2, 0xA7], Tcvn3CaseHint::UppercaseFont),
+            "ĂÂĐ"
+        );
+    }
+
+    #[test]
+    fn uppercase_font_hint_ascii_behavior() {
+        assert_eq!(
+            decode_tcvn3_with_hint(b"Abc-123", Tcvn3CaseHint::AsMapped),
+            "Abc-123"
+        );
+        assert_eq!(
+            decode_tcvn3_with_hint(b"Abc-123", Tcvn3CaseHint::UppercaseFont),
+            "ABC-123"
+        );
+        // Soft-hyphen byte 0xAD là 'ư' trong TCVN3 — không phải ASCII '-'.
+        assert_eq!(decode_tcvn3(b"a-b"), "a-b");
+        assert_eq!(
+            decode_tcvn3_with_hint(b"a-b", Tcvn3CaseHint::UppercaseFont),
+            "A-B"
+        );
+    }
+
+    #[test]
+    fn font_name_helper_table_accepts_h_fonts_and_rejects_cross_encoding() {
+        let cases: &[(&str, Option<Tcvn3CaseHint>)] = &[
+            // Regular TCVN3/VN3 fonts (dot + .Vn required, case-insensitive).
+            (".VnTime", Some(Tcvn3CaseHint::AsMapped)),
+            (".vntime", Some(Tcvn3CaseHint::AsMapped)),
+            (".VnTime Bold Italic", Some(Tcvn3CaseHint::AsMapped)),
+            (".VnArial Narrow", Some(Tcvn3CaseHint::AsMapped)),
+            // TCVN3/ABC all-capital H-fonts — terminal H before style suffixes.
+            (".VnTimeH", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".VNTimeH", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".VnArialH Bold", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".VnArial NarrowH", Some(Tcvn3CaseHint::UppercaseFont)),
+            (
+                ".VnTifani HeavyH Normal",
+                Some(Tcvn3CaseHint::UppercaseFont),
+            ),
+            (r#"".VnTimeH", serif"#, Some(Tcvn3CaseHint::UppercaseFont)),
+            // Legitimate internal digits (not HCM2 version suffixes).
+            (".Vn3DH", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".Vn3DH Normal", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".Vn3D", Some(Tcvn3CaseHint::AsMapped)),
+            // Dot required — reject dotless / non-.Vn names.
+            ("VnTimeH", None),
+            ("VnTime", None),
+            ("SomethingH", None),
+            ("Arial", None),
+            ("Times New Roman", None),
+            // VNI / VPS / Post / cross-encoding.
+            ("VNI-Times", None),
+            (".VNI-Times", None),
+            (".VNI Times", None),
+            ("VPS-Times", None),
+            (".VPS-Times", None),
+            ("VNPost", None),
+            (".VnPost", None),
+            (".VNPost", None),
+            // Bách Khoa HCM2 version suffixes (letters+digits[+H]) — not internal digits.
+            (".VnTimes2", None),
+            (".VnTime2H", None),
+            (".VnTimes2H", None),
+            (".VnArial2", None),
+            (".VnTime2", None),
+        ];
+        for &(name, expected) in cases {
+            assert_eq!(
+                tcvn3_case_hint_from_font_name(name),
+                expected,
+                "font name {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_tcvn3_case_hint_nfc_nfd_equivalent() {
+        use unicode_normalization::UnicodeNormalization;
+        let nfc = "đường phố";
+        let nfd: String = nfc.nfd().collect();
+        assert_ne!(nfc.as_bytes(), nfd.as_bytes());
+        let upper_nfc = apply_tcvn3_case_hint(nfc, Tcvn3CaseHint::UppercaseFont);
+        let upper_nfd = apply_tcvn3_case_hint(&nfd, Tcvn3CaseHint::UppercaseFont);
+        let norm = |s: &str| s.nfc().collect::<String>();
+        assert_eq!(norm(&upper_nfc), norm(&upper_nfd));
+        assert_eq!(norm(&upper_nfc), "ĐƯỜNG PHỐ");
+        assert_eq!(apply_tcvn3_case_hint(nfc, Tcvn3CaseHint::AsMapped), nfc);
     }
 }

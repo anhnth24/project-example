@@ -83,6 +83,12 @@ pub struct IndexSignature<'a> {
 }
 
 impl IndexSignature<'_> {
+    /// Compute the index signature digest.
+    ///
+    /// Does **not** validate `runtime_path` — trusted plans already allowlist at
+    /// construction, and untrusted DB/config boundaries must call
+    /// [`Self::validate_runtime_path`] / [`Self::try_digest`] (or
+    /// `parse_embedding_runtime_path`) once before hashing or loading.
     pub fn digest(&self) -> String {
         digest(
             "index",
@@ -97,6 +103,26 @@ impl IndexSignature<'_> {
                 self.query_normalization_version.as_bytes(),
             ],
         )
+    }
+
+    /// Allowlist check for untrusted/persisted `runtime_path` values.
+    pub fn validate_runtime_path(
+        &self,
+    ) -> Result<(), fileconv_core::embedding_runtime::EmbeddingRuntimePathError> {
+        fileconv_core::embedding_runtime::parse_embedding_runtime_path(self.runtime_path)
+            .map(|_| ())
+    }
+
+    /// Validate `runtime_path` then return [`Self::digest`].
+    ///
+    /// Prefer this (or an earlier config/DB parse) for hand-built signatures from
+    /// untrusted input. Trusted [`crate::embedding::EmbeddingPlan`] paths may call
+    /// [`Self::digest`] directly after construction-time allowlisting.
+    pub fn try_digest(
+        &self,
+    ) -> Result<String, fileconv_core::embedding_runtime::EmbeddingRuntimePathError> {
+        self.validate_runtime_path()?;
+        Ok(self.digest())
     }
 }
 
@@ -210,5 +236,49 @@ mod tests {
             }
             .digest()
         );
+    }
+
+    #[test]
+    fn index_signature_try_digest_rejects_invalid_runtime_path() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/identity-v2.json")).unwrap();
+        let base = IndexSignature {
+            runtime_path: fixture["index"]["runtimePath"].as_str().unwrap(),
+            embedding_family: fixture["index"]["embeddingFamily"].as_str().unwrap(),
+            embedding_revision: fixture["index"]["embeddingRevision"].as_str().unwrap(),
+            dimensions: fixture["index"]["dimensions"].as_u64().unwrap() as usize,
+            normalized: fixture["index"]["normalized"].as_bool().unwrap(),
+            chunking_version: fixture["index"]["chunkingVersion"].as_str().unwrap(),
+            body_text_version: fixture["index"]["bodyTextVersion"].as_str().unwrap(),
+            query_normalization_version: fixture["index"]["queryNormalizationVersion"]
+                .as_str()
+                .unwrap(),
+        };
+        // Public digest() stays infallible String for trusted callers.
+        assert_eq!(base.digest(), base.try_digest().unwrap());
+        assert!(matches!(
+            IndexSignature {
+                runtime_path: "",
+                ..base.clone()
+            }
+            .try_digest(),
+            Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::Empty)
+        ));
+        assert!(matches!(
+            IndexSignature {
+                runtime_path: "local-hash\n",
+                ..base.clone()
+            }
+            .validate_runtime_path(),
+            Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::ControlCharacter)
+        ));
+        assert!(matches!(
+            IndexSignature {
+                runtime_path: "local_hash_v1",
+                ..base
+            }
+            .try_digest(),
+            Err(fileconv_core::embedding_runtime::EmbeddingRuntimePathError::Unknown { .. })
+        ));
     }
 }

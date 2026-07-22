@@ -763,14 +763,22 @@ impl EmbeddingRuntimePath {
     }
 
     pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "local-hash" => Ok(Self::LocalHash),
-            "local-neural" => Ok(Self::LocalNeural),
-            "glm-cloud-interim" => Ok(Self::GlmCloudInterim),
-            "vllm-local" => Ok(Self::VllmLocal),
-            "provider-cloud" => Ok(Self::ProviderCloud),
-            other => Err(format!("unknown embedding runtime path: {other}")),
-        }
+        // Persisted DB boundary: reuse core allowlist (empty / control / unknown).
+        let parsed = fileconv_core::embedding_runtime::parse_embedding_runtime_path(value)
+            .map_err(|error| error.to_string())?;
+        Ok(match parsed {
+            fileconv_core::embedding_runtime::EmbeddingRuntimePath::LocalHash => Self::LocalHash,
+            fileconv_core::embedding_runtime::EmbeddingRuntimePath::LocalNeural => {
+                Self::LocalNeural
+            }
+            fileconv_core::embedding_runtime::EmbeddingRuntimePath::GlmCloudInterim => {
+                Self::GlmCloudInterim
+            }
+            fileconv_core::embedding_runtime::EmbeddingRuntimePath::VllmLocal => Self::VllmLocal,
+            fileconv_core::embedding_runtime::EmbeddingRuntimePath::ProviderCloud => {
+                Self::ProviderCloud
+            }
+        })
     }
 }
 

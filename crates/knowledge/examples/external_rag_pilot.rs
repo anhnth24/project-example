@@ -216,17 +216,16 @@ fn embedding_config() -> Result<(EmbeddingConfig, String), Box<dyn Error>> {
     )
     .parse::<usize>()?;
     let revision = env_value("MARKHAND_EMBEDDING_REVISION", DEFAULT_REVISION);
-    Ok((
-        EmbeddingConfig {
-            provider: Provider::OpenAiCompatible,
-            api_key: env_value("MARKHAND_EMBEDDING_SERVER_API_KEY", DEFAULT_API_KEY),
-            model: env_value("MARKHAND_EMBEDDING_MODEL", DEFAULT_MODEL),
-            base_url: Some(env_value("MARKHAND_EMBEDDING_BASE_URL", DEFAULT_BASE_URL)),
-            dimensions: Some(dimensions),
-            runtime_path: env_value("MARKHAND_EMBEDDING_RUNTIME_PATH", DEFAULT_RUNTIME_PATH),
-        },
-        revision,
-    ))
+    // Env/config boundary: validate runtime_path via EmbeddingConfig::new.
+    let config = EmbeddingConfig::new(
+        Provider::OpenAiCompatible,
+        env_value("MARKHAND_EMBEDDING_SERVER_API_KEY", DEFAULT_API_KEY),
+        env_value("MARKHAND_EMBEDDING_MODEL", DEFAULT_MODEL),
+        Some(env_value("MARKHAND_EMBEDDING_BASE_URL", DEFAULT_BASE_URL)),
+        Some(dimensions),
+        env_value("MARKHAND_EMBEDDING_RUNTIME_PATH", DEFAULT_RUNTIME_PATH),
+    )?;
+    Ok((config, revision))
 }
 
 fn sha256(payload: &[u8]) -> String {

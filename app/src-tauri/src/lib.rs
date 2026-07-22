@@ -1486,6 +1486,33 @@ mod tests {
     }
 
     #[test]
+    fn embedding_config_round_trips_allowlisted_runtime_paths() {
+        for runtime in fileconv_core::llm::ALLOWED_EMBEDDING_RUNTIME_PATHS {
+            let config = fileconv_core::llm::EmbeddingConfig::new(
+                fileconv_core::llm::Provider::OpenAiCompatible,
+                "",
+                "model",
+                Some("http://127.0.0.1:8000/v1".into()),
+                None,
+                *runtime,
+            )
+            .unwrap_or_else(|error| panic!("runtime {runtime}: {error}"));
+            assert_eq!(config.runtime_path, *runtime);
+        }
+        let err = fileconv_core::llm::EmbeddingConfig::new(
+            fileconv_core::llm::Provider::OpenAiCompatible,
+            "",
+            "model",
+            Some("http://127.0.0.1:8000/v1".into()),
+            None,
+            "local_hash_v1",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unsupported"));
+    }
+
+    #[test]
     fn persisted_settings_can_omit_api_key() {
         let mut settings = Settings::default();
         settings.llm_api_key = Some("do-not-write-me".into());

@@ -28,7 +28,13 @@ and query accent-fold into one `text_version` while the fixture still said
      Web POC/1B pins **`local-neural`** with `AITeamVN/Vietnamese_Embedding`
      (ADR 0005). Desktop presets may still set `vllm-local` or
      `glm-cloud-interim`; CPU sentence-transformers quality track uses
-     `local-neural`. Host/model inference via
+     `local-neural`. Untrusted config / DB boundaries validate once via
+     `fileconv_core::embedding_runtime::parse_embedding_runtime_path` (empty,
+     control characters, and unknown aliases such as `local_hash_v1` are
+     rejected) **before** index loads or signature use.
+     `IndexSignature::digest()` remains an infallible `String` for trusted
+     plans; additive `validate_runtime_path` / `try_digest` cover hand-built
+     untrusted values. Host/model inference via
      `fileconv_core::embedding_runtime::infer_embedding_runtime_path` is only a
      fallback for unknown/custom endpoints — real vLLM preset URLs do not
      contain a `vllm` DNS label.
