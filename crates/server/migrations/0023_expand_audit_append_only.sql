@@ -109,7 +109,7 @@ BEGIN
                 USING ERRCODE = 'check_violation';
         END IF;
     END LOOP;
-    IF NEW.metadata::text ~* '(CANARY_SECRET_TOKEN|CANARY_DOCUMENT_TEXT|CANARY_PROMPT_TEXT|CANARY_ANSWER_TEXT|CANARY_API_KEY|"mh1\.|"Bearer )' THEN
+    IF NEW.metadata::text ~* '(CANARY_SECRET_TOKEN|CANARY_DOCUMENT_TEXT|CANARY_PROMPT_TEXT|CANARY_ANSWER_TEXT|CANARY_API_KEY|"mh1\.|"Bearer |:[[:space:]]*"eyJ)' THEN
         RAISE EXCEPTION 'audit_log metadata contains forbidden material'
             USING ERRCODE = 'check_violation';
     END IF;

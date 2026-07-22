@@ -470,6 +470,14 @@ async fn audit_immutability_rls_and_redaction_live() {
         format!(
             "INSERT INTO audit_log (
                 org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
+             ) VALUES ('{org_id}', '{user_id}', 'auth.deny', 'session', NULL, 'deny',
+                       '{{\"reason\":\"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.signature\"}}'::jsonb,
+                       '{}')",
+            Uuid::new_v4()
+        ),
+        format!(
+            "INSERT INTO audit_log (
+                org_id, actor_user_id, action, resource_type, resource_id, outcome, metadata, request_id
              ) VALUES ('{org_id}', '{user_id}', 'document.delete', 'document', 'mh1.secret', 'success',
                        '{{}}'::jsonb, '{}')",
             Uuid::new_v4()
