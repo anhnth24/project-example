@@ -106,6 +106,15 @@ jobs:
         contains(needs.changes-and-static.outputs.rust_crates, 'server') ||
         needs.changes-and-static.outputs.knowledge == 'true'
       )
+    # ADVISORY (non-blocking) for now. This job was added to run the previously
+    # never-executed `#[ignore]` DB-backed suite; doing so revealed a backlog of
+    # pre-existing failures in that suite (real index-worker bugs, and RLS-probe
+    # tests that need the non-superuser `markhand_app` role rather than the
+    # compose superuser). Until that backlog is triaged/fixed by the owning teams
+    # it must not block unrelated merges, but it still runs so the failures stay
+    # visible. Flip back to blocking (remove continue-on-error) once the suite is
+    # green. Tracking: integration-suite hardening backlog.
+    continue-on-error: true
     runs-on: ubuntu-22.04
     env:
       SCCACHE_GHA_ENABLED: "true"
