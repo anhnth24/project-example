@@ -1,0 +1,159 @@
+{
+  "fixtures": [
+    {
+      "id": "e2e-vi-txt",
+      "kind": "text",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-note.txt",
+      "sensitive": false,
+      "sha256": "ed2330e3adb9025c33a59d9925a018aeac0f27a5523aaded0e80c794c55949f3",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-html",
+      "kind": "html",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-report.html",
+      "sensitive": false,
+      "sha256": "68590c9b463cc8916c73eb3433b4edad805fccf2806e35837409785212cdbb51",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-csv",
+      "kind": "csv",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-table.csv",
+      "sensitive": false,
+      "sha256": "65ca0a3b4277bdc89fc004dacf0c0d92aa684c02f02a86638eaa743eec10c6b5",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-pdf",
+      "kind": "pdf",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-brief.pdf",
+      "sensitive": false,
+      "sha256": "d428280167280792dd73d0c2861ccc2b34dee12d7e875214fc58e3d338236c2e",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-docx",
+      "kind": "docx",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-memo.docx",
+      "sensitive": false,
+      "sha256": "30bdff0f9fa66306b6e1e73f689a63160b7ba8e9fee4e968a749250d876740ed",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-pptx",
+      "kind": "pptx",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-slides.pptx",
+      "sensitive": false,
+      "sha256": "7665cc1d94edd139e1d39e7411c757bc60e24a923824df4896d855cb5905633d",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-xlsx",
+      "kind": "xlsx",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-sheet.xlsx",
+      "sensitive": false,
+      "sha256": "bf06815dbd53c67841c51cb6680041f6c76b3dd44b50a2e4c72c896a03adb99c",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-vi-png",
+      "kind": "image",
+      "license": "CC0-1.0",
+      "notes": "High-contrast rendered token bitmap for OCR (stdlib zlib PNG)",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/vi-ocr.png",
+      "sensitive": false,
+      "sha256": "89976ca95acab533cbd80f0448ad4aae8dc248ce5e0cdbfef0ffbf6927d0f8e9",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-adv-silence-wav",
+      "kind": "adversarial",
+      "license": "CC0-1.0",
+      "notes": "Adversarial silence: no-hallucination test; cannot satisfy spoken-audio coverage",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/adv-silence.wav",
+      "sensitive": false,
+      "sha256": "59460d5690616336b990fc7b1629428e3bd825e422da84469d2c8c8ecfaff43b",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-adv-spoof-pdf",
+      "kind": "adversarial",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/adv-plain-text.pdf",
+      "sensitive": false,
+      "sha256": "b83860943a0378f5552ac00dac352f8ac6458cd2b515678b9e50b8d82b43c859",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-adv-prompt-html",
+      "kind": "adversarial",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/adv-prompt.html",
+      "sensitive": false,
+      "sha256": "e4afa8f1da610c60608971a9ad396d58f268596169ad7d76c78a6306df40c212",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-adv-traversal",
+      "kind": "adversarial",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/adv-traversal.docx",
+      "sensitive": false,
+      "sha256": "d773915b1422133fb4ef092b46e8d328165ae2e6eda393421784f52f37667d1b",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-adv-zip-bomb",
+      "kind": "adversarial",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/adv-zip-bomb.docx",
+      "sensitive": false,
+      "sha256": "d9f9ab332c60ce0581d2448f4b05efe4002ac7c85978f4b6f52ec95268b3cfe4",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    },
+    {
+      "id": "e2e-adv-malformed-docx",
+      "kind": "adversarial",
+      "license": "CC0-1.0",
+      "owner": "phase1b-o04-e2e",
+      "path": "files/adv-malformed.docx",
+      "sensitive": false,
+      "sha256": "43e7149fb14ffe4e2e3901cdd9bd20a4d7dd10ca12c3f9c980a622b9770983a4",
+      "source": "python3 crates/server/tests/e2e/fixtures/generate.py"
+    }
+  ],
+  "generator": "python3 crates/server/tests/e2e/fixtures/generate.py",
+  "tokens": {
+    "csv": "MAHOA_E2E_CSV_44B1",
+    "docx": "MAHOA_E2E_DOCX_A01E",
+    "html": "MAHOA_E2E_HTML_91C2",
+    "pdf": "MAHOA_E2E_PDF_2D88",
+    "png": "MAHOA_E2E_OCR_E5F0",
+    "pptx": "MAHOA_E2E_PPTX_B77C",
+    "txt": "MAHOA_E2E_TXT_7F3A",
+    "wav": "MAHOA_E2E_AUD_6A12",
+    "xlsx": "MAHOA_E2E_XLSX_C3D9"
+  },
+  "version": 1
+}

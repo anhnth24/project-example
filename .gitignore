@@ -38,3 +38,8 @@ pdfium/
 
 # Local pinned tooling (promtool etc.); fetch via scripts/fetch-promtool.sh
 .tools/
+
+# P1B-O04 live runtime evidence (tracked hermetic report stays deterministic)
+/bench/markhand_web/reports/p1b-o04-vertical-slice.live.json
+/bench/markhand_web/reports/p1b-o04-vertical-slice.live.md
+/bench/markhand_web/reports/p1b-o04-runs/
