@@ -198,12 +198,15 @@ const ABC_VN_REJECTED_FAMILIES: &[&str] = &[
 /// Phân loại font TCVN3/ABC `.Vn*` → hint case (terminal `H` = all-capital H-font).
 ///
 /// **Bắt buộc** prefix case-insensitive `.Vn` (có dấu chấm). Dotless `VnTimeH`,
-/// VNI/VPS, `.VnTimes2`, `.VnPost` và tên cross-encoding → `None`.
+/// VNI/VPS, `.VnPost` và tên cross-encoding → `None`.
 /// CSS `font-family` lấy family đầu trước dấu phẩy.
 ///
 /// H-font: sau khi bỏ style suffix cuối (`Bold`/`Italic`/`Normal`/…), token họ
 /// cuối cùng kết thúc bằng `H` (ví dụ `.VNTimeH`, `.VnArial NarrowH`,
-/// `.VnTifani HeavyH Normal`).
+/// `.VnTifani HeavyH Normal`, `.Vn3DH Normal`). Chữ số **nội bộ hợp lệ**
+/// (`.Vn3DH`) được giữ; chỉ loại hậu tố phiên bản Bách Khoa HCM2 dạng
+/// `letters+digits` / `letters+digits+H` (`.VnTimes2`, `.VnTime2H`,
+/// `.VnTimes2H`, `.VnArial2`, …) — không cấm digit rộng.
 pub fn tcvn3_case_hint_from_font_name(font_name: &str) -> Option<Tcvn3CaseHint> {
     let primary = first_css_font_family(font_name)?;
     let lower = primary.to_ascii_lowercase();
@@ -218,17 +221,27 @@ pub fn tcvn3_case_hint_from_font_name(font_name: &str) -> Option<Tcvn3CaseHint> 
         return None;
     }
     for token in &tokens {
-        if !token.chars().all(|c| c.is_ascii_alphabetic() || c == '-') {
-            // Digits (`.VnTimes2`) and other punctuation → reject.
+        if !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
             return None;
         }
-        let compact: String = token.chars().filter(|c| c.is_ascii_alphabetic()).collect();
-        if compact.is_empty() {
+        let alnum: String = token
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if alnum.is_empty() {
+            return None;
+        }
+        // Bách Khoa HCM2 version suffixes — not legitimate internal digits.
+        if is_bach_khoa_hcm2_version_token(&alnum) {
+            return None;
+        }
+        let letters: String = alnum.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+        if letters.is_empty() {
             return None;
         }
         if ABC_VN_REJECTED_FAMILIES
             .iter()
-            .any(|bad| compact.eq_ignore_ascii_case(bad))
+            .any(|bad| letters.eq_ignore_ascii_case(bad))
         {
             return None;
         }
@@ -249,16 +262,42 @@ pub fn tcvn3_case_hint_from_font_name(font_name: &str) -> Option<Tcvn3CaseHint> 
     }
 
     let last = *tokens.last()?;
-    let last_alpha: String = last
+    let last_alnum: String = last
         .chars()
-        .filter(|c| c.is_ascii_alphabetic())
+        .filter(|c| c.is_ascii_alphanumeric())
         .map(|c| c.to_ascii_lowercase())
         .collect();
     // Terminal H on the last remaining family/width token ⇒ all-capital H-font.
-    if last_alpha.len() > 1 && last_alpha.ends_with('h') {
+    if last_alnum.len() > 1 && last_alnum.ends_with('h') {
         Some(Tcvn3CaseHint::UppercaseFont)
     } else {
         Some(Tcvn3CaseHint::AsMapped)
+    }
+}
+
+/// Bách Khoa HCM2-style version suffix: `Times2`, `Time2H`, `Arial2`, `Times2H`.
+///
+/// Shape: one or more letters, then one or more digits, optional single trailing `H`.
+/// Does **not** match legitimate leading/internal digit names such as `3DH`.
+fn is_bach_khoa_hcm2_version_token(alnum_lower_or_mixed: &str) -> bool {
+    let t = alnum_lower_or_mixed.as_bytes();
+    if t.is_empty() || !t[0].is_ascii_alphabetic() {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < t.len() && t[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    if i == 0 || i == t.len() || !t[i].is_ascii_digit() {
+        return false;
+    }
+    while i < t.len() && t[i].is_ascii_digit() {
+        i += 1;
+    }
+    match t.len() - i {
+        0 => true,                             // Times2 / Arial2
+        1 => t[i].eq_ignore_ascii_case(&b'h'), // Time2H / Times2H
+        _ => false,
     }
 }
 
@@ -594,13 +633,17 @@ mod tests {
                 Some(Tcvn3CaseHint::UppercaseFont),
             ),
             (r#"".VnTimeH", serif"#, Some(Tcvn3CaseHint::UppercaseFont)),
+            // Legitimate internal digits (not HCM2 version suffixes).
+            (".Vn3DH", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".Vn3DH Normal", Some(Tcvn3CaseHint::UppercaseFont)),
+            (".Vn3D", Some(Tcvn3CaseHint::AsMapped)),
             // Dot required — reject dotless / non-.Vn names.
             ("VnTimeH", None),
             ("VnTime", None),
             ("SomethingH", None),
             ("Arial", None),
             ("Times New Roman", None),
-            // VNI / VPS / Post / digit / cross-encoding.
+            // VNI / VPS / Post / cross-encoding.
             ("VNI-Times", None),
             (".VNI-Times", None),
             (".VNI Times", None),
@@ -609,8 +652,12 @@ mod tests {
             ("VNPost", None),
             (".VnPost", None),
             (".VNPost", None),
+            // Bách Khoa HCM2 version suffixes (letters+digits[+H]) — not internal digits.
             (".VnTimes2", None),
             (".VnTime2H", None),
+            (".VnTimes2H", None),
+            (".VnArial2", None),
+            (".VnTime2", None),
         ];
         for &(name, expected) in cases {
             assert_eq!(
