@@ -69,7 +69,8 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
  `no_speech_probability`. Tự tìm PhoWhisper đã tải về trước model chuẩn.
   - `chunk.rs` — chia Markdown thành chunk RAG theo heading (giữ đường dẫn tiêu đề cha).
   - `viet_legacy.rs` — decode **TCVN3, VNI-Windows, VPS**; maps sinh từ VietUnicode;
-    opt-in `Tcvn3CaseHint::UppercaseFont` khi caller có metadata TCVN-3-2 (không đoán từ TXT/CSV).
+    opt-in `Tcvn3CaseHint::UppercaseFont` khi caller có metadata TCVN3/ABC all-capital H-font
+    (không đoán từ TXT/CSV; helper font yêu cầu prefix `.Vn`).
   - `llm.rs`/`llm_cli.rs` (feature `llm`) — HTTP chat/vision, neural embedding và
     Cursor/Codex official subscription CLI; Claude subscription không route qua app thứ ba.
   - Desktop RAG: SQLite FTS5 + local/provider vector + persistent HNSW cache; exact fallback.

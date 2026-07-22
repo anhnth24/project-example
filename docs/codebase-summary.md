@@ -47,7 +47,7 @@ project-example/
 | `src/image_ocr.rs` | Tesseract CLI + tiền xử lý ảnh (grayscale/upscale/unsharpen/normalize); dùng `proc::background_command` |
 | `src/audio.rs` | AudioEngine (cache Whisper), decode symphonia + resample 16k, lang "vi" |
 | `src/chunk.rs` | tách chunk RAG theo heading-path |
-| `src/viet_legacy.rs` | decode TCVN3/VNI/VPS; opt-in `Tcvn3CaseHint` (TCVN-3-2 uppercase-font) — TXT/CSV không suy hoa |
+| `src/viet_legacy.rs` | decode TCVN3/VNI/VPS; opt-in `Tcvn3CaseHint` (TCVN3/ABC all-capital H-font) — TXT/CSV không suy hoa |
 | `src/llm.rs` | (feature `llm`) chat/summarize/extract_json/vision_ocr qua env `FILECONV_LLM_*` |
 | `src/probe.rs` | `probe()` → FileInfo{format,bytes,pages,sheets} |
 | `src/tables.rs` | `tables_json` (xlsx/csv → JSON rows) — LƯU Ý: không decode TCVN3 như csv_conv.rs |

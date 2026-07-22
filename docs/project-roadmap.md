@@ -11,7 +11,8 @@
 - **Tiền xử lý ảnh OCR**: grayscale → upscale → unsharpen → normalize (in OCR 98.5→99.5%, low-res 81→99%).
 - **NFC bắt buộc** trên mọi output (sửa tài liệu NFD từ macOS/PDF cũ).
 - **Decode TCVN3/VNI-Windows/VPS** với map VietUnicode trong CSV/text; opt-in
-  `Tcvn3CaseHint` khôi phục hoa TCVN-3-2 khi có font/run metadata (không đoán từ TXT/CSV).
+  `Tcvn3CaseHint` khôi phục hoa TCVN3/ABC all-capital H-font khi có font/run
+  metadata (không đoán từ TXT/CSV).
 - **RAG chunking** theo heading-path (`chunk.rs`).
 - **CLI bench**: `one` / `speed` / `accuracy` / `audio` với CER/WER Levenshtein.
 - **MCP server** (`fileconv-mcp`): 8 tool (4 deterministic + 4 LLM, gồm `ocr_hard` vision).
