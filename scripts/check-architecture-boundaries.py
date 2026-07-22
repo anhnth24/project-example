@@ -36,9 +36,9 @@ FORBIDDEN_WEB_PATTERNS = (
 DIRECT_ROUTE_IO = (
     r"\bsqlx::",
     r"\brusqlite::",
-    r"\bqdrant",
+    r"\bqdrant_client::",
     r"\baws_sdk_s3",
-    r"\bminio",
+    r"\bminio::",
 )
 
 
@@ -205,6 +205,19 @@ class BoundaryCheckTests(unittest.TestCase):
             )
             failures = validate(root, cargo_dependencies=lambda _: {"rusqlite"})
             self.assertTrue(any("must be optional" in failure for failure in failures))
+
+    def test_route_io_check_ignores_service_adapter_names_but_rejects_clients(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "Cargo.toml").write_text("[workspace]\n")
+            route = root / "crates/server/src/routes/search.rs"
+            route.parent.mkdir(parents=True)
+            route.write_text("fn route(qdrant: &Adapter, minio_ready: bool) {}\n")
+            self.assertEqual(validate(root, cargo_dependencies=lambda _: set()), [])
+
+            route.write_text("fn route() { qdrant_client::Qdrant::new(); }\n")
+            failures = validate(root, cargo_dependencies=lambda _: set())
+            self.assertTrue(any("truy cập DB/storage" in failure for failure in failures))
 
     def test_rejects_fat_desktop_knowledge_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
