@@ -245,6 +245,13 @@ async fn run_producer(
         let claims = claims.clone();
         let cited = cited_document_ids.clone();
         async move {
+            // Re-check O03 write-gate: SSE middleware releases the shared lock before the body.
+            if crate::middleware::write_gate::ensure_background_mutations_allowed(&pool)
+                .await
+                .is_err()
+            {
+                return Err(crate::db::error::DbError::Config("ops_fence_active".into()));
+            }
             // JWT exp check outside txn; family+principal+citation fence inside append.
             if stream_auth::token_expired(&claims, chrono::Utc::now().timestamp()) {
                 return Err(crate::db::error::DbError::Config("token_expired".into()));
@@ -461,6 +468,7 @@ fn config_reason(error: &crate::db::error::DbError) -> Option<&'static str> {
             "session_revoked" => Some("session_revoked"),
             "principal_denied" => Some("principal_denied"),
             "citation_revoked" => Some("citation_revoked"),
+            "ops_fence_active" => Some("ops_fence_active"),
             "ask stream session expired" => Some("session_expired"),
             _ => Some("stream_error"),
         },

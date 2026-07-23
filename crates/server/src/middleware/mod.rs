@@ -1,6 +1,12 @@
-//! HTTP middleware: rate limits, CORS, request IDs (P1B-R06).
+//! HTTP middleware: rate limits, CORS, request IDs, mutation write-gate (P1B-R06/O03).
 
 pub mod rate_limit;
+pub mod write_gate;
+
+pub use write_gate::{
+    ensure_background_mutations_allowed, is_write_gate_exempt, mutation_write_gate,
+    BACKUP_ADVISORY_LOCK_KEY, WRITE_GATE_CONTRACT_ID,
+};
 
 use std::net::IpAddr;
 use std::sync::Arc;

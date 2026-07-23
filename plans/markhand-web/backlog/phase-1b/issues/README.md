@@ -272,13 +272,13 @@ ghi trong issue đã `Done`.
 ### P1B-R04 — Collection/document/job REST API
 
 - **Status:** In progress — Sol R3 upload saga retained; live
-  `live_http_collection_document_job_contract_matrix` now asserts reindex
-  same `jobId` with `created=false` on idempotent replay; mutation routes
-  fail closed under ops fence (`live_mutation_routes_refuse_when_ops_fence_active`,
-  `ops_fence_active` 503). Remaining for Done: broader cross-tenant resource
-  IDOR suite beyond collections; publish/download/citation HTTP coverage in the
-  same contract matrix; full status/schema matrix vs OpenAPI; live Sol R3
-  barrier evidence on CI agent.
+  `live_http_collection_document_job_contract_matrix` asserts reindex same
+  `jobId` with `created=false` on idempotent replay. Business API mutations are
+  gated by central `mutation_write_gate` middleware (see O03), not per-handler
+  copies. Remaining for Done: broader cross-tenant resource IDOR suite beyond
+  collections; publish/download/citation HTTP coverage in the same contract
+  matrix; full status/schema matrix vs OpenAPI; live Sol R3 barrier evidence on
+  CI agent.
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -380,20 +380,23 @@ ghi trong issue đã `Done`.
 ### P1B-O03 — Backup/restore và migration safety
 
 - **Status:** In progress — Sol round-3 merge-safety retained. **Write-gate
-  closed in code:** mutation routes (`collections` create/update/delete,
-  `documents` delete/publish/reindex/triage/approve-intake, `uploads`) call
-  `AppState::ensure_mutations_allowed` → `ops_fence::ensure_mutations_allowed`;
-  hermetic
-  `test_app_mutation_write_gate_is_integrated` + live
-  `live_mutation_routes_refuse_when_ops_fence_active` (503 `ops_fence_active`).
-  Drill script now records pass when static scan is green (no longer always-gaps
-  write-gate). Evidence: `o03-restore.*` (raw stamp pre-dates write-gate; see
-  report note). **Exact gaps:** (1) promote/cutover disabled until API consumes
-  durable routing + independent reconcile target-state attestation; (2) encrypted
-  backup destination not exercised (POC `explicit_poc_tmp_only` policy).
-  `consistencyRpoPass` / `queryReadyRtoPass` remain null; windows reported
-  separately. Re-run `o03-bluegreen-restore-drill.sh` on Docker host to refresh
-  raw passes for write-gate.
+  architecture (Sol R1):** central `middleware/write_gate.rs` /
+  `mutation_write_gate` on all `/api/v1/*` except health/metrics/OpenAPI;
+  shared advisory lock `7303003` + `ops_fences`; stream paths release lock
+  before SSE body and ask producer re-checks; quota sweep + ask-stream
+  maintenance skip via `ensure_background_mutations_allowed`; honest
+  `ops_fence_active` vs `ops_fence_check_failed`. Detector is
+  architecture-specific (`write_gate_contract.py`) with negative fixtures —
+  not a false-positive `ops_fence::` substring scan. Live matrix
+  `live_central_write_gate_matrix_refuses_business_side_effects` covers auth
+  login, collection/document/upload/ask/search/preview, exempt health/OpenAPI,
+  and zero audit growth while fenced. Evidence: hermetic + live tests; raw
+  `o03-restore.*` stamp still pre-dates full drill re-run. **Exact gaps:**
+  (1) promote/cutover disabled until API consumes durable routing + independent
+  reconcile target-state attestation; (2) encrypted backup destination not
+  exercised (POC `explicit_poc_tmp_only` policy). `consistencyRpoPass` /
+  `queryReadyRtoPass` remain null. Re-run `o03-bluegreen-restore-drill.sh` on
+  Docker host to refresh raw passes.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, `deploy/scripts/o03-bluegreen-restore-drill.sh`,

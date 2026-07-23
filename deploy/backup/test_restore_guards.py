@@ -460,8 +460,11 @@ class ManifestGuardTests(unittest.TestCase):
         self.assertIn("mismatch", str(ctx.exception).lower())
 
     def test_app_mutation_write_gate_is_integrated(self) -> None:
-        """Consistency backup requires mutation routes to consult ops_fence."""
+        """Central write-gate contract must be complete; negatives prove each part."""
+        import shutil
         import sys
+        import tempfile
+        from pathlib import Path
         from unittest import mock
 
         sys.path.insert(0, str(LIB))
@@ -470,11 +473,15 @@ class ManifestGuardTests(unittest.TestCase):
             app_mutation_write_gate_sufficient,
             assert_consistency_write_gate,
         )
+        from write_gate_contract import (
+            app_mutation_write_gate_sufficient_in,
+            evaluate_write_gate_tree,
+        )
 
+        server_src = Path("/workspace/crates/server/src")
         self.assertTrue(
             app_mutation_write_gate_sufficient(),
-            "app mutation routes must call ops_fence / any_blocking_fence_active "
-            "(beyond readiness.rs) so consistency backup can arm the write-gate",
+            f"missing write-gate contract parts: {evaluate_write_gate_tree(server_src)}",
         )
         os.environ["MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE"] = "1"
         self.assertEqual(
@@ -498,6 +505,63 @@ class ManifestGuardTests(unittest.TestCase):
                 assert_consistency_write_gate(),
                 "fence_drain_lock_app_write_gate_absent",
             )
+
+        # Negative fixtures: remove each required component → False.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            shutil.copytree(server_src / "middleware", root / "middleware")
+            (root / "http.rs").write_text(
+                (server_src / "http.rs").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            self.assertTrue(app_mutation_write_gate_sufficient_in(root))
+
+            cases = {
+                "middleware_fn": lambda: (root / "middleware" / "write_gate.rs").write_text(
+                    (root / "middleware" / "write_gate.rs")
+                    .read_text(encoding="utf-8")
+                    .replace("pub async fn mutation_write_gate", "async fn mutation_write_gate_x"),
+                    encoding="utf-8",
+                ),
+                "lock_key": lambda: (root / "middleware" / "write_gate.rs").write_text(
+                    (root / "middleware" / "write_gate.rs")
+                    .read_text(encoding="utf-8")
+                    .replace("7303003", "9999999"),
+                    encoding="utf-8",
+                ),
+                "router_wired": lambda: (root / "http.rs").write_text(
+                    (root / "http.rs")
+                    .read_text(encoding="utf-8")
+                    .replace(
+                        "from_fn_with_state(state.clone(), mutation_write_gate)",
+                        "from_fn_with_state(state.clone(), baseline_ip_rate_limit)",
+                    ),
+                    encoding="utf-8",
+                ),
+                "background_skip": lambda: (root / "http.rs").write_text(
+                    (root / "http.rs")
+                    .read_text(encoding="utf-8")
+                    .replace(
+                        "ensure_background_mutations_allowed(&pool)",
+                        "Ok::<(), ()>(())",
+                    ),
+                    encoding="utf-8",
+                ),
+                "middleware_absent": lambda: shutil.rmtree(root / "middleware"),
+            }
+            # Re-copy fresh tree per negative case.
+            for name, mutate in cases.items():
+                shutil.rmtree(root)
+                shutil.copytree(server_src / "middleware", root / "middleware")
+                (root / "http.rs").write_text(
+                    (server_src / "http.rs").read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+                mutate()
+                self.assertFalse(
+                    app_mutation_write_gate_sufficient_in(root),
+                    f"negative fixture {name} must fail contract",
+                )
 
 
 if __name__ == "__main__":

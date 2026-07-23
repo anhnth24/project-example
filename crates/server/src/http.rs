@@ -15,11 +15,11 @@ use crate::auth::provider::PasswordAuthProvider;
 use crate::config::QuotaSweepConfig;
 use crate::db::pool::create_pool;
 use crate::middleware::rate_limit::{RateLimitConfig, RateLimiter};
+use crate::middleware::write_gate::{ensure_background_mutations_allowed, mutation_write_gate};
 use crate::middleware::{baseline_ip_rate_limit, cors_middleware, inject_request_id};
 use crate::routes;
 use crate::services::download::CapabilityKeys;
 use crate::services::embedding::ApprovedEmbeddingRuntime;
-use crate::services::ops_fence;
 use crate::services::qa::provider::{ChatProvider, OpenAiCompatibleChat};
 use crate::services::quota;
 use crate::services::readiness::{self, ReadinessDeps, StartupState};
@@ -257,14 +257,6 @@ impl AppState {
         &self.rate_limiter
     }
 
-    /// Fail-closed gate for mutating HTTP routes during restore/reconcile fences.
-    pub async fn ensure_mutations_allowed(&self) -> Result<(), &'static str> {
-        match ops_fence::ensure_mutations_allowed(self.pool()).await {
-            Ok(()) => Ok(()),
-            Err(error) => Err(ops_fence::mutation_pause_code(&error)),
-        }
-    }
-
     pub fn cors_origins(&self) -> &[String] {
         &self.cors_origins
     }
@@ -348,6 +340,10 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            if ensure_background_mutations_allowed(&pool).await.is_err() {
+                tracing::debug!(target: "quota", "quota sweep skipped: ops fence / backup lock active");
+                continue;
+            }
             match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
                 Ok(expired) if expired > 0 => {
                     tracing::info!(target: "quota", expired, "quota expiry sweep marked reservations");
@@ -409,6 +405,13 @@ fn start_ask_stream_maintenance(pool: Pool) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            if ensure_background_mutations_allowed(&pool).await.is_err() {
+                tracing::debug!(
+                    target: "ask_stream",
+                    "ask stream maintenance skipped: ops fence / backup lock active"
+                );
+                continue;
+            }
             match crate::db::ask_streams::run_maintenance(&pool, 100).await {
                 Ok((sessions, events, recovered)) if sessions > 0 || recovered > 0 => {
                     tracing::info!(
@@ -438,6 +441,8 @@ fn start_ask_stream_maintenance(pool: Pool) {
 pub fn router(state: AppState) -> Router {
     let max_upload_bytes = state.runtime.config().upload().limits.max_upload_bytes as usize;
     let state = Arc::new(state);
+    // Layer order (outer → inner): request-id → write-gate → cors → rate-limit → handler.
+    // `mutation_write_gate` is the central O03 contract (see middleware/write_gate.rs).
     Router::new()
         .merge(routes::health::router())
         .merge(routes::auth::router())
@@ -451,6 +456,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/openapi.yaml", axum::routing::get(openapi_yaml))
         .layer(from_fn_with_state(state.clone(), baseline_ip_rate_limit))
         .layer(from_fn_with_state(state.clone(), cors_middleware))
+        .layer(from_fn_with_state(state.clone(), mutation_write_gate))
         .layer(from_fn_with_state(state.clone(), inject_request_id))
         .with_state(state)
 }

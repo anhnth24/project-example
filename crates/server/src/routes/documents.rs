@@ -146,7 +146,6 @@ async fn approve_intake(
     Path((collection_id, document_id)): Path<(Uuid, Uuid)>,
     body: Option<Json<ApproveIntakeBody>>,
 ) -> Result<Json<serde_json::Value>, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     let reason = body.and_then(|Json(b)| b.reason);
     let registered = approve_quarantined_upload(
         state.pool(),
@@ -245,7 +244,6 @@ async fn delete_document(
     auth: AuthenticatedOrg,
     Path(document_id): Path<Uuid>,
 ) -> Result<StatusCode, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     if require_permission(&auth.context, "doc.delete").is_err() {
         let resource_id = document_id.to_string();
         audit::record_deny(
@@ -418,7 +416,6 @@ async fn publish_version(
     auth: AuthenticatedOrg,
     Path((document_id, version_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     require_permission(&auth.context, "doc.publish")
         .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
     let _ = load_document(&state, &auth, document_id).await?;
@@ -505,7 +502,6 @@ async fn reindex_document(
     Path(document_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     let ip = client_ip
         .map(|ext| ext.0 .0.clone())
         .unwrap_or_else(|| "unknown".into());
@@ -802,7 +798,6 @@ async fn triage_conflict(
     Path(conflict_id): Path<Uuid>,
     Json(body): Json<TriageConflictRequest>,
 ) -> Result<Json<serde_json::Value>, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     require_permission(&auth.context, "qa.query")
         .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
     let status = body.status.as_str();
@@ -889,15 +884,7 @@ enum RouteError {
     NotFound(String),
     Unavailable(String),
     Database(String),
-    MutationsPaused(String),
     RateLimited(crate::routes::rate_limit_guard::RateLimitRejected),
-}
-
-async fn require_mutations_allowed(state: &AppState, request_id: &str) -> Result<(), RouteError> {
-    state
-        .ensure_mutations_allowed()
-        .await
-        .map_err(|_| RouteError::MutationsPaused(request_id.to_string()))
 }
 
 impl RouteError {
@@ -985,12 +972,6 @@ impl IntoResponse for RouteError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "dependency_unavailable",
                 "Required dependency unavailable",
-                request_id,
-            ),
-            Self::MutationsPaused(request_id) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                crate::services::ops_fence::MUTATIONS_PAUSED_CODE,
-                "Mutations paused while an ops fence is active",
                 request_id,
             ),
             Self::Database(request_id) => (

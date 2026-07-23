@@ -838,7 +838,8 @@ async fn live_http_collection_document_job_contract_matrix() {
 
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
-async fn live_mutation_routes_refuse_when_ops_fence_active() {
+async fn live_central_write_gate_matrix_refuses_business_side_effects() {
+    use fileconv_server::middleware::write_gate::ensure_background_mutations_allowed;
     use fileconv_server::services::ops_fence::{self, FENCE_RESTORE};
 
     let Some(admin) = admin_database_url() else {
@@ -847,30 +848,210 @@ async fn live_mutation_routes_refuse_when_ops_fence_active() {
     let Some(app_url) = app_database_url() else {
         return;
     };
+    let Some(store) = test_minio_client() else {
+        return;
+    };
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
-    let (_org, _user, token) = seed_http_principal(&pool).await;
-    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let (org, user, token) = seed_http_principal(&pool).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, Some(store.clone()));
 
-    ops_fence::set_fence(&pool, FENCE_RESTORE, "p1b-write-gate-test", Some("test"))
+    // Seed a published doc before fencing so GET/search/ask side-effect paths exist.
+    let (collection_id, document_id, _version_id) =
+        seed_published_doc(&pool, &store, org, user).await;
+
+    let audit_before: i64 = with_org_txn(
+        &pool,
+        &OrgContext::try_new(
+            org,
+            user,
+            [
+                "qa.query",
+                "qa.history",
+                "doc.upload",
+                "doc.delete",
+                "doc.publish",
+                "jobs.system",
+            ],
+            [collection_id],
+        )
+        .unwrap(),
+        {
+            let org = org;
+            move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_one(
+                            "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
+                            &[&org],
+                        )
+                        .await?;
+                    Ok(row.get(0))
+                })
+            }
+        },
+    )
+    .await
+    .expect("audit before");
+
+    ops_fence::set_fence(&pool, FENCE_RESTORE, "p1b-write-gate-matrix", Some("test"))
         .await
         .expect("set restore fence");
+    assert!(
+        ensure_background_mutations_allowed(&pool).await.is_err(),
+        "background gate must observe active fence"
+    );
 
+    // Ops surfaces remain available.
+    for path in [
+        "/api/v1/health/live",
+        "/api/v1/health/start",
+        "/api/v1/openapi.yaml",
+    ] {
+        let (status, _, _) = json_request(app.clone(), "GET", path, None, None, &[]).await;
+        assert_eq!(status, StatusCode::OK, "exempt {path} must stay up");
+    }
+
+    // Unauthenticated auth mutation.
     let (status, err, _) = json_request(
         app.clone(),
         "POST",
-        "/api/v1/collections",
-        Some(&token),
+        "/api/v1/auth/login",
+        None,
         Some(serde_json::json!({
-            "name": "Fenced",
-            "slug": format!("fenced-{}", Uuid::new_v4().simple()),
-            "visibility": "org"
+            "email": format!("{user}@http.test"),
+            "password": "correct-password-1"
         })),
         &[],
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
     assert_eq!(err["code"], "ops_fence_active");
+
+    // Authenticated collection + document mutations.
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/v1/collections".to_string(),
+            Some(serde_json::json!({
+                "name": "Fenced",
+                "slug": format!("fenced-{}", Uuid::new_v4().simple()),
+                "visibility": "org"
+            })),
+        ),
+        (
+            "POST",
+            format!("/api/v1/documents/{document_id}/reindex"),
+            Some(serde_json::json!({})),
+        ),
+        ("DELETE", format!("/api/v1/documents/{document_id}"), None),
+        (
+            "POST",
+            "/api/v1/ask".to_string(),
+            Some(serde_json::json!({
+                "question": "Kinh phí?",
+                "mode": "current",
+                "limit": 3
+            })),
+        ),
+        (
+            "POST",
+            "/api/v1/search".to_string(),
+            Some(serde_json::json!({
+                "query": "Kinh phí",
+                "mode": "current",
+                "limit": 3
+            })),
+        ),
+        (
+            "GET",
+            format!("/api/v1/documents/{document_id}/preview"),
+            None,
+        ),
+    ] {
+        let (status, err, _) = json_request(
+            app.clone(),
+            method,
+            &uri,
+            Some(&token),
+            body,
+            if method == "POST" && uri.contains("reindex") {
+                &[("idempotency-key", "fenced-reindex")]
+            } else {
+                &[]
+            },
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {uri} => {err}"
+        );
+        assert_eq!(err["code"], "ops_fence_active", "{method} {uri}");
+    }
+
+    // Upload multipart mutation.
+    let upload = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header("idempotency-key", "fenced-upload")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(multipart_body(
+                    "fenced.txt",
+                    b"should not land\n",
+                    collection_id,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let upload_body = upload.into_body().collect().await.unwrap().to_bytes();
+    let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+    assert_eq!(upload_json["code"], "ops_fence_active");
+
+    // No new audit side effects while fenced.
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        [
+            "qa.query",
+            "qa.history",
+            "doc.upload",
+            "doc.delete",
+            "doc.publish",
+            "jobs.system",
+        ],
+        [collection_id],
+    )
+    .unwrap();
+    let audit_after: i64 = with_org_txn(&pool, &ctx, {
+        let org = org;
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
+                        &[&org],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("audit after");
+    assert_eq!(
+        audit_after, audit_before,
+        "fenced business traffic must not append audit rows"
+    );
 
     let attestation = "a".repeat(64);
     ops_fence::clear_fence_with_attestation(&pool, FENCE_RESTORE, &attestation)

@@ -45,11 +45,12 @@
 
 ## Code-closed since last drill (not re-proven by this raw stamp)
 
-- App mutation write-gate is now integrated (`AppState::ensure_mutations_allowed` /
-  mutation routes consult `ops_fence`). Hermetic proof:
-  `deploy/backup/test_restore_guards.py::test_app_mutation_write_gate_is_integrated`
-  and live `live_mutation_routes_refuse_when_ops_fence_active`. Re-run
-  `o03-bluegreen-restore-drill.sh` on a Docker host to refresh raw passes.txt.
+- Central write-gate middleware (`mutation_write_gate`) + advisory lock 7303003 +
+  background skip hooks. Hermetic:
+  `test_app_mutation_write_gate_is_integrated` (architecture contract + negative
+  fixtures). Live: `live_central_write_gate_matrix_refuses_business_side_effects`.
+  Re-run `o03-bluegreen-restore-drill.sh` on a Docker host to refresh raw
+  passes.txt.
 
 ## Notes
 

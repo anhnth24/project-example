@@ -120,7 +120,6 @@ async fn update_collection(
     Path(collection_id): Path<Uuid>,
     Json(body): Json<UpdateCollectionRequest>,
 ) -> Result<Json<CollectionDto>, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     if require_permission(&auth.context, "doc.upload").is_err() {
         let resource_id = collection_id.to_string();
         audit::record_deny(
@@ -216,7 +215,6 @@ async fn delete_collection(
     auth: AuthenticatedOrg,
     Path(collection_id): Path<Uuid>,
 ) -> Result<StatusCode, RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     if require_permission(&auth.context, "doc.delete").is_err() {
         let resource_id = collection_id.to_string();
         audit::record_deny(
@@ -270,7 +268,6 @@ async fn create_collection(
     auth: AuthenticatedOrg,
     Json(body): Json<CreateCollectionRequest>,
 ) -> Result<(StatusCode, Json<CollectionDto>), RouteError> {
-    require_mutations_allowed(&state, &auth.request_id).await?;
     if require_permission(&auth.context, "doc.upload").is_err() {
         audit::record_deny(
             state.pool(),
@@ -362,7 +359,6 @@ enum RouteError {
     Validation(String, &'static str),
     NotFound(String),
     Database(String),
-    MutationsPaused(String),
 }
 
 impl RouteError {
@@ -404,12 +400,6 @@ impl IntoResponse for RouteError {
                 "Request failed",
                 request_id,
             ),
-            Self::MutationsPaused(request_id) => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                crate::services::ops_fence::MUTATIONS_PAUSED_CODE,
-                "Mutations paused while an ops fence is active",
-                request_id,
-            ),
         };
         (
             status,
@@ -422,11 +412,4 @@ impl IntoResponse for RouteError {
         )
             .into_response()
     }
-}
-
-async fn require_mutations_allowed(state: &AppState, request_id: &str) -> Result<(), RouteError> {
-    state
-        .ensure_mutations_allowed()
-        .await
-        .map_err(|_| RouteError::MutationsPaused(request_id.to_string()))
 }

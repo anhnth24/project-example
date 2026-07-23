@@ -25,6 +25,9 @@ pub enum FenceError {
 /// Stable API/error code when mutations are refused due to an ops fence.
 pub const MUTATIONS_PAUSED_CODE: &str = "ops_fence_active";
 
+/// Stable API/error code when the fence check itself fails (DB/unavailable).
+pub const OPS_FENCE_CHECK_FAILED_CODE: &str = "ops_fence_check_failed";
+
 impl From<crate::db::error::DbError> for FenceError {
     fn from(_: crate::db::error::DbError) -> Self {
         Self::Database
@@ -34,6 +37,13 @@ impl From<crate::db::error::DbError> for FenceError {
 /// True when restore or reconcile fence is active (SECURITY DEFINER aggregate).
 pub async fn any_blocking_fence_active(pool: &Pool) -> Result<bool, FenceError> {
     let client = pool.get().await.map_err(|_| FenceError::Database)?;
+    any_blocking_fence_active_on(&client).await
+}
+
+/// Fence probe on an already-checked-out connection (shared-lock windows).
+pub async fn any_blocking_fence_active_on(
+    client: &tokio_postgres::Client,
+) -> Result<bool, FenceError> {
     let active: bool = client
         .query_one("SELECT markhand_any_blocking_fence_active()", &[])
         .await
@@ -44,7 +54,15 @@ pub async fn any_blocking_fence_active(pool: &Pool) -> Result<bool, FenceError> 
 
 /// Fail-closed gate for app mutation routes during restore/reconcile fences.
 pub async fn ensure_mutations_allowed(pool: &Pool) -> Result<(), FenceError> {
-    if any_blocking_fence_active(pool).await? {
+    let client = pool.get().await.map_err(|_| FenceError::Database)?;
+    ensure_mutations_allowed_on(&client).await
+}
+
+/// Fail-closed gate using a borrowed connection.
+pub async fn ensure_mutations_allowed_on(
+    client: &tokio_postgres::Client,
+) -> Result<(), FenceError> {
+    if any_blocking_fence_active_on(client).await? {
         return Err(FenceError::Active);
     }
     Ok(())
@@ -54,8 +72,8 @@ pub async fn ensure_mutations_allowed(pool: &Pool) -> Result<(), FenceError> {
 pub fn mutation_pause_code(error: &FenceError) -> &'static str {
     match error {
         FenceError::Active => MUTATIONS_PAUSED_CODE,
-        FenceError::Database => "ops_fence_check_failed",
-        FenceError::AttestationRequired | FenceError::NotActive => "ops_fence_check_failed",
+        FenceError::Database => OPS_FENCE_CHECK_FAILED_CODE,
+        FenceError::AttestationRequired | FenceError::NotActive => OPS_FENCE_CHECK_FAILED_CODE,
     }
 }
 
