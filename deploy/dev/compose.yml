@@ -70,6 +70,7 @@ services:
     ports:
       - "127.0.0.1:${MARKHAND_OTEL_HEALTH_PORT:-13133}:13133"
       - "127.0.0.1:${MARKHAND_OTEL_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${MARKHAND_OTEL_HTTP_PORT:-4318}:4318"
     networks: [private]
     restart: unless-stopped
 

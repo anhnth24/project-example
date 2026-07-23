@@ -1294,6 +1294,7 @@ async fn live_job_sse_replay_worker_restart_and_cross_org_idor() {
             document_id: Some(document_id),
             version_id: Some(version_id),
             outbox_event_id: None,
+            ..Default::default()
         },
     )
     .await
@@ -1307,6 +1308,7 @@ async fn live_job_sse_replay_worker_restart_and_cross_org_idor() {
             document_id: Some(document_id),
             version_id: Some(version_id),
             outbox_event_id: None,
+            ..Default::default()
         },
     )
     .await
@@ -1661,6 +1663,7 @@ async fn live_job_sse_real_logout_barrier_zero_events_after_commit() {
                 document_id: Some(document_id),
                 version_id: Some(version_id),
                 outbox_event_id: None,
+                ..Default::default()
             },
         )
         .await

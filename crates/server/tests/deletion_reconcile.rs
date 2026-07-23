@@ -879,6 +879,7 @@ async fn seed_converted_document(env: &LiveEnv, markdown: &str) -> (Uuid, Uuid, 
                     document_id: Some(document_id),
                     version_id: Some(version_id),
                     outbox_event_id: None,
+                    ..Default::default()
                 }
                 .to_json()
                 .expect("event payload");

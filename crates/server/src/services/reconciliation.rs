@@ -8,8 +8,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
-use crate::auth::session::{write_audit, AuditEvent};
 use crate::db::error::DbError;
+use crate::db::models::AuditOutcome;
 use crate::db::models::{
     Chunk, DerivedArtifact, Document, DocumentState, DocumentVersion, JobType,
 };
@@ -19,6 +19,7 @@ use crate::db::{
     vector_cleanup_intents,
 };
 use crate::jobs::{self, CheckpointPayload, EnqueueJob, EnqueueOutcome, JobError, JobPayload};
+use crate::services::audit::{self, AuditRecord};
 use crate::services::index_signature::collection_name_for_digest;
 use crate::services::indexing::{
     batch_covers_missing_ordinals, missing_chunks_fingerprint, repair_embedding_job_idempotency_key,
@@ -398,6 +399,12 @@ pub async fn reconcile_document(
     let object_drift = compare_document_minio_inventory(storage, ctx, &inventory).await?;
     report.missing_objects = object_drift.missing_objects.len();
     report.orphan_objects = object_drift.orphan_objects.len();
+    if report.missing_objects > 0 {
+        crate::telemetry::inc_drift("missing_object");
+    }
+    if report.orphan_objects > 0 {
+        crate::telemetry::inc_drift("orphan_object");
+    }
 
     if reads_suppressed(inventory.document.state) {
         let candidates = all_point_candidates(
@@ -726,8 +733,8 @@ async fn drain_pending_vector_intents(
                     "vector.cleanup_intent",
                     "success",
                     json!({
-                        "document_id": document_id,
-                        "point_count": repaired,
+                        "document_id": document_id.to_string(),
+                        "point_count": repaired as i64,
                     }),
                 )
                 .await?;
@@ -814,9 +821,8 @@ async fn delete_objects_with_audit(
             action,
             "intent",
             json!({
-                "document_id": document_id,
-                "object_count": batch_keys.len(),
-                "object_keys": batch_keys,
+                "document_id": document_id.to_string(),
+                "object_count": batch_keys.len() as i64,
             }),
         )
         .await?;
@@ -829,9 +835,8 @@ async fn delete_objects_with_audit(
                     action,
                     "success",
                     json!({
-                        "document_id": document_id,
-                        "object_count": batch_keys.len(),
-                        "object_keys": batch_keys,
+                        "document_id": document_id.to_string(),
+                        "object_count": batch_keys.len() as i64,
                     }),
                 )
                 .await?;
@@ -844,9 +849,8 @@ async fn delete_objects_with_audit(
                     action,
                     "error",
                     json!({
-                        "document_id": document_id,
-                        "object_count": batch_keys.len(),
-                        "object_keys": batch_keys,
+                        "document_id": document_id.to_string(),
+                        "object_count": batch_keys.len() as i64,
                     }),
                 )
                 .await?;
@@ -1259,27 +1263,27 @@ async fn write_repair_audit(
         "reconcile.repair",
         outcome,
         json!({
-            "document_id": document_id,
+            "document_id": document_id.to_string(),
             "phase": phase,
-            "orphan_vectors": report.repaired.orphan_vectors,
-            "stale_vectors": report.repaired.stale_vectors,
-            "orphan_objects": report.repaired.orphan_objects,
-            "rebuilt_vector_jobs": report.repaired.rebuilt_vector_jobs,
+            "orphan_vectors": report.repaired.orphan_vectors as i64,
+            "stale_vectors": report.repaired.stale_vectors as i64,
+            "orphan_objects": report.repaired.orphan_objects as i64,
+            "rebuilt_vector_jobs": report.repaired.rebuilt_vector_jobs as i64,
         }),
     )
     .await
 }
 
-/// Correlation id for reconcile audit rows.
+/// Server-minted UUID correlation id for reconcile audit rows.
 ///
-/// The document id already travels in the audit row's `resource_id` and
-/// `metadata`, so it is intentionally omitted here: embedding a 36-char UUID
-/// pushed longer actions (e.g. `reconcile.object_cleanup`, `reconcile.dead_letter_gc`)
-/// past the 64-char ceiling enforced by [`write_audit`], which rejected the row
-/// with `audit_request_id_contains_secret`. Dropping it keeps the id bounded for
-/// every action while preserving traceability through `resource_id`.
-fn reconcile_audit_request_id(action: &str, outcome: &str) -> String {
-    format!("{action}-{outcome}")
+/// Prefer the task-local inbound request id when present; otherwise mint a fresh
+/// UUID. Never synthesize non-UUID strings — `audit_log.request_id` is UUID-shaped
+/// (migration 0026).
+fn reconcile_audit_request_id(_action: &str, _outcome: &str) -> String {
+    crate::telemetry::CorrelationContext::current()
+        .and_then(|c| c.request_uuid())
+        .unwrap_or_else(uuid::Uuid::new_v4)
+        .to_string()
 }
 
 async fn write_intent_audit(
@@ -1300,20 +1304,25 @@ async fn write_intent_audit(
                     Some(document_id.to_string())
                 };
                 let request_id = reconcile_audit_request_id(action, outcome);
-                write_audit(
+                let typed_outcome = match outcome {
+                    "deny" => AuditOutcome::Deny,
+                    "error" => AuditOutcome::Error,
+                    "intent" => AuditOutcome::Intent,
+                    _ => AuditOutcome::Success,
+                };
+                audit::record_in_txn(
                     txn,
-                    AuditEvent {
-                        org_id: ctx.org_id(),
-                        actor_user_id: Some(ctx.user_id()),
+                    &ctx,
+                    AuditRecord {
+                        request_id: &request_id,
                         action,
                         resource_type: if document_id.is_nil() {
-                            "jobs"
+                            "job"
                         } else {
                             "document"
                         },
                         resource_id: resource_id.as_deref(),
-                        outcome,
-                        request_id: &request_id,
+                        outcome: typed_outcome,
                         metadata,
                     },
                 )
@@ -1364,10 +1373,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn reconcile_audit_request_id_respects_write_audit_bounds() {
-        // Every action/outcome the reconcile paths emit, plus a nil-document
-        // dead-letter run, must produce a request id the audit guard accepts:
-        // <= 64 chars and free of the secret markers `write_audit` rejects.
+    fn reconcile_audit_request_id_is_server_minted_uuid() {
         let actions = [
             "reconcile.repair",
             "reconcile.object_cleanup",
@@ -1378,10 +1384,10 @@ mod tests {
             for outcome in ["intent", "success", "error"] {
                 let id = reconcile_audit_request_id(action, outcome);
                 assert!(
-                    id.len() <= 64,
-                    "request id {id:?} ({} chars) exceeds the 64-char audit bound",
-                    id.len()
+                    uuid::Uuid::parse_str(&id).is_ok(),
+                    "request id {id:?} must be a server-minted UUID"
                 );
+                assert!(id.len() <= 64);
                 assert!(!id.contains("mh1."));
                 assert!(!id.contains("Bearer "));
                 assert!(!id.starts_with("eyJ"));

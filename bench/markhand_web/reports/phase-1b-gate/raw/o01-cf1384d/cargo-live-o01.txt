@@ -1,0 +1,9 @@
+
+running 1 test
+test live_o01_audit_append_only_correlation_and_canary ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.27s
+     Running tests/telemetry_audit.rs (target/debug/deps/telemetry_audit-57300b1113363773)

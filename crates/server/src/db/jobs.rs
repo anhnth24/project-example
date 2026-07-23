@@ -1051,27 +1051,41 @@ fn reject_forbidden_keys(value: &JsonValue) -> Result<(), DbError> {
 }
 
 fn validate_id_only_value(value: &JsonValue) -> Result<(), DbError> {
+    validate_id_only_value_at(value, None)
+}
+
+fn validate_id_only_value_at(value: &JsonValue, key: Option<&str>) -> Result<(), DbError> {
     match value {
         JsonValue::Null => Ok(()),
-        JsonValue::String(value) => Uuid::parse_str(value)
-            .map(|_| ())
-            .map_err(|_| DbError::Config("payload strings must be UUIDs".into())),
+        JsonValue::String(value) => {
+            if key == Some("traceparent") {
+                return validate_traceparent_payload(value);
+            }
+            Uuid::parse_str(value)
+                .map(|_| ())
+                .map_err(|_| DbError::Config("payload strings must be UUIDs".into()))
+        }
         JsonValue::Array(values) => {
             for nested in values {
-                validate_id_only_value(nested)?;
+                validate_id_only_value_at(nested, None)?;
             }
             Ok(())
         }
         JsonValue::Object(map) => {
-            for nested in map.values() {
-                validate_id_only_value(nested)?;
+            for (nested_key, nested) in map {
+                validate_id_only_value_at(nested, Some(nested_key.as_str()))?;
             }
             Ok(())
         }
         JsonValue::Bool(_) | JsonValue::Number(_) => Err(DbError::Config(
-            "job/event payloads may contain only UUID strings, arrays, objects, or null".into(),
+            "job/event payloads may contain only UUID strings, W3C traceparent, arrays, objects, or null"
+                .into(),
         )),
     }
+}
+
+fn validate_traceparent_payload(value: &str) -> Result<(), DbError> {
+    crate::telemetry::validate_traceparent(value).map_err(DbError::Config)
 }
 
 fn validate_checkpoint_payload(value: &JsonValue) -> Result<(), DbError> {

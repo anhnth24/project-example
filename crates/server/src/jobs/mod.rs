@@ -22,7 +22,7 @@ use crate::db::error::DbError;
 use crate::db::models::{EventLogEntry, Job, JobStatus, JobType, OutboxEvent};
 use crate::db::{jobs as repo, pool};
 
-pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 3;
+pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 4;
 pub const CURRENT_EVENT_PAYLOAD_VERSION: i32 = 2;
 
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 160;
@@ -47,6 +47,10 @@ pub struct JobPayload {
     pub cleanup_target_job_id: Option<Uuid>,
     /// Newer version that superseded `version_id` (lifecycle refresh).
     pub related_version_id: Option<Uuid>,
+    /// Originating API request id (UUID) for async correlation.
+    pub request_id: Option<Uuid>,
+    /// W3C `traceparent` for async trace propagation (not a UUID).
+    pub traceparent: Option<String>,
 }
 
 impl JobPayload {
@@ -77,6 +81,38 @@ impl From<JobPayloadV1> for JobPayload {
             index_metadata_id: None,
             cleanup_target_job_id: None,
             related_version_id: None,
+            request_id: None,
+            traceparent: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct JobPayloadV3 {
+    document_id: Option<Uuid>,
+    version_id: Option<Uuid>,
+    collection_id: Option<Uuid>,
+    upload_id: Option<Uuid>,
+    batch_id: Option<Uuid>,
+    index_metadata_id: Option<Uuid>,
+    cleanup_target_job_id: Option<Uuid>,
+    related_version_id: Option<Uuid>,
+}
+
+impl From<JobPayloadV3> for JobPayload {
+    fn from(value: JobPayloadV3) -> Self {
+        Self {
+            document_id: value.document_id,
+            version_id: value.version_id,
+            collection_id: value.collection_id,
+            upload_id: value.upload_id,
+            batch_id: value.batch_id,
+            index_metadata_id: value.index_metadata_id,
+            cleanup_target_job_id: value.cleanup_target_job_id,
+            related_version_id: value.related_version_id,
+            request_id: None,
+            traceparent: None,
         }
     }
 }
@@ -88,25 +124,60 @@ pub struct EventPayload {
     pub document_id: Option<Uuid>,
     pub version_id: Option<Uuid>,
     pub outbox_event_id: Option<Uuid>,
+    /// Propagated from the originating job / task-local correlation (O01).
+    pub request_id: Option<Uuid>,
+    pub traceparent: Option<String>,
 }
 
 impl EventPayload {
-    fn for_job(job: &Job) -> Self {
+    /// Inherit request/trace from task-local correlation when not already set.
+    pub(crate) fn with_current_correlation(mut self) -> Self {
+        if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+            if self.request_id.is_none() {
+                self.request_id = corr.request_uuid();
+            }
+            if self.traceparent.is_none() {
+                self.traceparent = corr.traceparent.clone();
+            }
+        }
+        self
+    }
+
+    pub(crate) fn for_job(job: &Job) -> Self {
+        let mut request_id = None;
+        let mut traceparent = None;
+        if let Ok(payload) = decode_job_payload(job.payload_version, job.payload.clone()) {
+            request_id = payload.request_id;
+            traceparent = payload.traceparent;
+        }
         Self {
             job_id: Some(job.id),
             document_id: job.document_id,
             version_id: job.version_id,
             outbox_event_id: None,
+            request_id,
+            traceparent,
         }
+        .with_current_correlation()
     }
 
-    fn for_outbox(outbox: &OutboxEvent) -> Self {
+    pub(crate) fn for_outbox(outbox: &OutboxEvent) -> Self {
+        let mut request_id = None;
+        let mut traceparent = None;
+        // Prefer durable correlation already on the outbox payload.
+        if let Ok(existing) = serde_json::from_value::<EventPayload>(outbox.payload.clone()) {
+            request_id = existing.request_id;
+            traceparent = existing.traceparent;
+        }
         Self {
             job_id: outbox.job_id,
             document_id: None,
             version_id: None,
             outbox_event_id: Some(outbox.id),
+            request_id,
+            traceparent,
         }
+        .with_current_correlation()
     }
 
     pub fn to_json(&self) -> Result<JsonValue, JobError> {
@@ -357,8 +428,13 @@ pub async fn enqueue(
 pub(crate) async fn enqueue_within_txn(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
-    input: EnqueueJob,
+    mut input: EnqueueJob,
 ) -> Result<EnqueueOutcome, JobError> {
+    // Central correlation inheritance: every child job inherits the task-local
+    // request_id/traceparent (API → convert → index → embed → delete/reindex).
+    if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+        crate::telemetry::apply_to_job_payload(&mut input.payload, &corr);
+    }
     validate_idempotency_key(&input.idempotency_key)?;
     let max_attempts = checked_max_attempts(input.max_attempts)?;
     let available_after = checked_duration(input.available_after)?;
@@ -374,6 +450,8 @@ pub(crate) async fn enqueue_within_txn(
         document_id: input.payload.document_id,
         version_id: input.payload.version_id,
         outbox_event_id: None,
+        request_id: input.payload.request_id,
+        traceparent: input.payload.traceparent.clone(),
     }
     .to_validated()?;
     let outbox_idempotency_key = format!("job.enqueued:{}", input.id);
@@ -398,6 +476,41 @@ pub(crate) async fn enqueue_within_txn(
     )
     .await?;
     Ok(EnqueueOutcome { job, created })
+}
+
+/// Publish authoritative pending queue depth/age gauges (no tenant labels).
+///
+/// Resets every known `JobType` to zero first so emptied queues do not leave
+/// stale non-zero gauges after the last pending job drains.
+pub async fn observe_queue_metrics(db_pool: &Pool) -> Result<(), JobError> {
+    const KNOWN_JOB_TYPES: &[JobType] = &[
+        JobType::Convert,
+        JobType::Index,
+        JobType::Delete,
+        JobType::Reconcile,
+        JobType::EmbeddingBatch,
+        JobType::LifecycleRefresh,
+    ];
+    for job_type in KNOWN_JOB_TYPES {
+        crate::telemetry::set_queue_depth(job_type.as_str(), 0.0);
+        crate::telemetry::set_queue_age_seconds(job_type.as_str(), 0.0);
+    }
+    let client = db_pool.get().await.map_err(DbError::from)?;
+    let rows = client
+        .query(
+            "SELECT job_type, depth, age_seconds FROM markhand_job_queue_stats()",
+            &[],
+        )
+        .await
+        .map_err(DbError::from)?;
+    for row in rows {
+        let job_type: String = row.get("job_type");
+        let depth: i64 = row.get("depth");
+        let age: f64 = row.get("age_seconds");
+        crate::telemetry::set_queue_depth(&job_type, depth as f64);
+        crate::telemetry::set_queue_age_seconds(&job_type, age);
+    }
+    Ok(())
 }
 
 pub async fn claim(
@@ -933,8 +1046,11 @@ pub fn decode_job_payload(version: i32, payload: JsonValue) -> Result<JobPayload
         1 => serde_json::from_value::<JobPayloadV1>(payload)
             .map(Into::into)
             .map_err(|error| JobError::InvalidPayload(format!("v1 decode failed: {error}"))),
-        2 | 3 => serde_json::from_value::<JobPayload>(payload)
-            .map_err(|error| JobError::InvalidPayload(format!("v2 decode failed: {error}"))),
+        2 | 3 => serde_json::from_value::<JobPayloadV3>(payload)
+            .map(Into::into)
+            .map_err(|error| JobError::InvalidPayload(format!("v2/v3 decode failed: {error}"))),
+        4 => serde_json::from_value::<JobPayload>(payload)
+            .map_err(|error| JobError::InvalidPayload(format!("v4 decode failed: {error}"))),
         other => Err(JobError::InvalidPayload(format!(
             "unsupported payload version: {other}"
         ))),
@@ -1115,6 +1231,47 @@ mod tests {
         assert_eq!(decoded.document_id, Some(document_id));
         assert_eq!(decoded.version_id, None);
         assert_eq!(decoded.collection_id, None);
+    }
+
+    #[tokio::test]
+    async fn central_correlation_inherits_event_outbox_to_child_job_payload() {
+        let request_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let ctx = crate::telemetry::CorrelationContext::new(request_id.to_string());
+        let parent_tp = ctx.traceparent.clone().expect("traceparent");
+        crate::telemetry::scope(ctx, async {
+            let event = EventPayload {
+                document_id: Some(Uuid::new_v4()),
+                version_id: Some(Uuid::new_v4()),
+                ..EventPayload::default()
+            }
+            .with_current_correlation();
+            assert_eq!(event.request_id, Some(request_id));
+            assert_eq!(event.traceparent.as_deref(), Some(parent_tp.as_str()));
+
+            // Outbox → child Index/Delete/Embedding/Reindex payloads inherit durable fields.
+            let mut child = JobPayload {
+                document_id: event.document_id,
+                version_id: event.version_id,
+                request_id: event.request_id,
+                traceparent: event.traceparent.clone(),
+                ..JobPayload::default()
+            };
+            if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+                crate::telemetry::apply_to_job_payload(&mut child, &corr);
+            }
+            assert_eq!(child.request_id, Some(request_id));
+            assert!(child.traceparent.is_some());
+            for job_type in [
+                JobType::Index,
+                JobType::Delete,
+                JobType::EmbeddingBatch,
+                JobType::Convert,
+            ] {
+                let _ = job_type.as_str();
+                assert_eq!(child.request_id, Some(request_id));
+            }
+        })
+        .await;
     }
 
     #[test]

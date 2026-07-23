@@ -29,6 +29,9 @@ async fn get_job(
             AccessError::NotFound => RouteError::NotFound(auth.request_id.clone()),
             _ => RouteError::Database(auth.request_id.clone()),
         })?;
+    let request_id = crate::jobs::decode_job_payload(job.payload_version, job.payload.clone())
+        .ok()
+        .and_then(|payload| payload.request_id);
     Ok(Json(JobDto {
         id: job.id,
         job_type: job.job_type.as_str().into(),
@@ -36,6 +39,7 @@ async fn get_job(
         attempts: job.attempts,
         document_id: job.document_id,
         version_id: job.version_id,
+        request_id,
         created_at: job.created_at,
         updated_at: job.updated_at,
         finished_at: job.finished_at,

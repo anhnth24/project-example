@@ -236,6 +236,8 @@ async fn run_producer(
     cancel: StreamCancel,
 ) {
     let family_id = Uuid::parse_str(&claims.sid).ok();
+    let started = std::time::Instant::now();
+    let corr = crate::telemetry::CorrelationContext::current();
 
     let append = |event_type: &'static str, data: Value| {
         let pool = pool.clone();
@@ -420,9 +422,36 @@ async fn run_producer(
     {
         let reason = config_reason(&error).unwrap_or("stream_error");
         close(AskStreamStatus::Error, reason).await;
+        if let Some(corr) = &corr {
+            crate::telemetry::emit_span(
+                "ask.stream",
+                &corr.request_id,
+                &corr.trace_id,
+                "internal",
+                "error",
+                started.elapsed(),
+            );
+        }
+        crate::telemetry::record_retrieval_leg("ask_stream", "error", started.elapsed());
         return;
     }
     close(AskStreamStatus::Closed, "completed").await;
+    let outcome = if cancel.is_cancelled() {
+        "cancelled"
+    } else {
+        "completed"
+    };
+    if let Some(corr) = &corr {
+        crate::telemetry::emit_span(
+            "ask.stream",
+            &corr.request_id,
+            &corr.trace_id,
+            "internal",
+            outcome,
+            started.elapsed(),
+        );
+    }
+    crate::telemetry::record_retrieval_leg("ask_stream", outcome, started.elapsed());
 }
 
 fn config_reason(error: &crate::db::error::DbError) -> Option<&'static str> {

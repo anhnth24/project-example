@@ -54,6 +54,7 @@ impl AppState {
         if !runtime.is_api_role() {
             return Err("HTTP application requires API runtime configuration".into());
         }
+        crate::telemetry::init(runtime.config().telemetry());
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))
             .build()
@@ -112,6 +113,7 @@ impl AppState {
         let rate_config = RateLimitConfig::from_env()?;
         start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
         start_ask_stream_maintenance(pool.clone());
+        start_telemetry_observers(pool.clone());
         let startup = StartupState::new();
         startup.mark_completed();
         Ok(Self {
@@ -348,6 +350,48 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
             }
         }
     });
+}
+
+fn start_telemetry_observers(pool: Pool) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(error) = crate::jobs::observe_queue_metrics(&pool).await {
+                tracing::debug!(target: "telemetry", error = %error, "queue metrics observe skipped");
+            }
+            observe_backup_age_from_env();
+        }
+    });
+}
+
+fn observe_backup_age_from_env() {
+    let Some(dir) = std::env::var_os("MARKHAND_BACKUP_DIR") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(dir);
+    let Ok(entries) = std::fs::read_dir(&path) else {
+        return;
+    };
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        newest = Some(newest.map_or(modified, |prev| prev.max(modified)));
+    }
+    if let Some(modified) = newest {
+        if let Ok(age) = std::time::SystemTime::now().duration_since(modified) {
+            crate::telemetry::set_backup_age_seconds("filesystem", age.as_secs_f64());
+        }
+    }
 }
 
 fn start_ask_stream_maintenance(pool: Pool) {

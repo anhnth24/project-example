@@ -85,8 +85,23 @@ async fn create_upload(
     {
         return Err(UploadRouteError::RateLimited(rejected));
     }
-    require_permission(&auth.context, "doc.upload")
-        .map_err(|_| UploadRouteError::Upload(UploadError::PermissionDenied, request_id.clone()))?;
+    if require_permission(&auth.context, "doc.upload").is_err() {
+        crate::services::audit::record_deny(
+            state.pool(),
+            &auth.context,
+            &request_id,
+            "document.upload",
+            "document",
+            None,
+            "permission_denied",
+        )
+        .await
+        .map_err(|_| UploadRouteError::Upload(UploadError::Internal, request_id.clone()))?;
+        return Err(UploadRouteError::Upload(
+            UploadError::PermissionDenied,
+            request_id.clone(),
+        ));
+    }
 
     let limits = state.runtime().config().upload().limits;
     let upload_timeout = Duration::from_secs(limits.upload_timeout_secs);
@@ -107,6 +122,18 @@ async fn create_upload(
         UploadRouteError::Validation("collectionId is required".into(), request_id.clone())
     })?;
     if !auth.context.allows_collection(collection_id) {
+        let resource_id = collection_id.to_string();
+        crate::services::audit::record_deny(
+            state.pool(),
+            &auth.context,
+            &request_id,
+            "document.upload",
+            "collection",
+            Some(&resource_id),
+            "collection_denied",
+        )
+        .await
+        .map_err(|_| UploadRouteError::Upload(UploadError::Internal, request_id.clone()))?;
         return Err(UploadRouteError::Upload(
             UploadError::PermissionDenied,
             request_id.clone(),
@@ -128,25 +155,31 @@ async fn create_upload(
 
     // Detach put→register→finalize so a cancelled HTTP request cannot leave a
     // reserved quota half-saga; the child task always reaches a terminal settle.
+    // Capture correlation BEFORE spawn — task-locals do not cross join boundaries.
+    let corr = crate::telemetry::CorrelationContext::current()
+        .unwrap_or_else(|| crate::telemetry::CorrelationContext::new(request_id.clone()));
     let pool = state.pool().clone();
     let storage = storage.clone();
     let ctx = auth.context.clone();
     let saga = tokio::spawn(async move {
-        run_upload_saga(
-            &pool,
-            &storage,
-            &ctx,
-            &limits,
-            SagaInput {
-                collection_id,
-                idempotency_key,
-                reservation_key,
-                streamed: pending.streamed,
-                declared_filename: pending.declared_filename,
-                declared_content_type: pending.declared_content_type,
-                identity,
-            },
-        )
+        crate::telemetry::scope(corr, async {
+            run_upload_saga(
+                &pool,
+                &storage,
+                &ctx,
+                &limits,
+                SagaInput {
+                    collection_id,
+                    idempotency_key,
+                    reservation_key,
+                    streamed: pending.streamed,
+                    declared_filename: pending.declared_filename,
+                    declared_content_type: pending.declared_content_type,
+                    identity,
+                },
+            )
+            .await
+        })
         .await
     });
     let success = match saga.await {

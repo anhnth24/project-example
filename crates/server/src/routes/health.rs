@@ -27,6 +27,29 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness_route))
         .route("/api/v1/health/start", get(startup_route))
+        .route("/metrics", get(metrics_export))
+}
+
+async fn metrics_export() -> Response {
+    if !crate::telemetry::MetricsRegistry::metrics_enabled() {
+        return (
+            StatusCode::NOT_FOUND,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            )],
+            r#"{"code":"metrics_disabled","message":"metrics scrape disabled"}"#,
+        )
+            .into_response();
+    }
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+        )],
+        crate::telemetry::MetricsRegistry::render_prometheus(),
+    )
+        .into_response()
 }
 
 async fn liveness(request_id: Option<axum::Extension<RequestId>>) -> Json<Health> {

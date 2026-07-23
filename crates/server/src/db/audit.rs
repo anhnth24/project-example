@@ -29,12 +29,7 @@ pub async fn list_recent(
 }
 
 fn map_entry(row: &Row) -> Result<AuditLogEntry, DbError> {
-    let outcome = match row.get::<_, &str>("outcome") {
-        "success" => AuditOutcome::Success,
-        "deny" => AuditOutcome::Deny,
-        "error" => AuditOutcome::Error,
-        other => return Err(DbError::Config(format!("unknown audit outcome: {other}"))),
-    };
+    let outcome = AuditOutcome::parse(row.get::<_, &str>("outcome")).map_err(DbError::Config)?;
     Ok(AuditLogEntry {
         id: row.get("id"),
         org_id: row.get("org_id"),

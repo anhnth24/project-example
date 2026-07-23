@@ -310,6 +310,7 @@ pub async fn reserve(
                     .map_err(map_quota_config_error)?;
                 let remaining = remaining(usage.limit, usage.committed, usage.active_reserved)?;
                 if amount > remaining {
+                    crate::telemetry::inc_quota("exceeded");
                     return Err(QuotaError::QuotaExceeded(QuotaDenial {
                         resource_kind,
                         limit: usage.limit,
@@ -853,6 +854,7 @@ async fn reserve_spec_in_txn(
         .map_err(map_quota_config_error)?;
     let available = remaining(usage.limit, usage.committed, usage.active_reserved)?;
     if amount > available {
+        crate::telemetry::inc_quota("exceeded");
         return Err(QuotaError::QuotaExceeded(QuotaDenial {
             resource_kind,
             limit: usage.limit,

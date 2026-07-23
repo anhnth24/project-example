@@ -25,6 +25,9 @@
     "0022_expand_lifecycle_refresh_job.sql": "0f5801b4ffae224c8a46a76b8c1004b6e22281c137310e8e4a7741fe826b6475",
     "0023_expand_upload_operations.sql": "f557c9fd5edc7eb82050ff41aee7f1ed1d001805462defb30566614d54fb3817",
     "0024_expand_ask_stream_sessions.sql": "f6e122380a3fcdd2103074ee4ebea355c44b037bcac9765743f3b0217ab4b2ef",
-    "0025_backfill_event_log_ids_ask_stream_ops.sql": "b8375bfae33f81ae799fcc2802b567c722816369bf793955221caad7ce5cb6c0"
+    "0025_backfill_event_log_ids_ask_stream_ops.sql": "b8375bfae33f81ae799fcc2802b567c722816369bf793955221caad7ce5cb6c0",
+    "0026_expand_audit_append_only.sql": "79ffe4cded8b9c1fee03691b7011d971a3ddb17aaa18d396f9c72100d5013eb8",
+    "0027_expand_migrator_app_grants.sql": "c46298a4a2e7c8a0a3fd4c5e3bcfe402d51dd007e5cf1423877f05a14d95fced",
+    "0028_expand_audit_ownership_migrator.sql": "087cd986645f779267011d359574afa8e8e255a60fcc63d01224ad7514efa2ee"
   }
 }

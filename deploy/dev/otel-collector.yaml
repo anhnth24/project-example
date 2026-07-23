@@ -7,9 +7,13 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
 
 processors:
   batch:
+    send_batch_size: 256
+    timeout: 5s
 
 exporters:
   debug:

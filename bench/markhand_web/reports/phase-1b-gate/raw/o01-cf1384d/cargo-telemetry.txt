@@ -1,0 +1,186 @@
+
+running 24 tests
+test telemetry::config::tests::defaults_to_disabled_exporter ... ok
+test telemetry::config::tests::otlp_endpoint_rejects_userinfo_query_fragment ... ok
+test telemetry::config::tests::prod_otlp_requires_endpoint ... ok
+test telemetry::config::tests::test_profile_never_dials_network ... ok
+test telemetry::correlation::tests::rejects_invalid_traceparent ... ok
+test telemetry::correlation::tests::child_of_requires_lowercase_and_mints_new_span ... ok
+test telemetry::correlation::tests::applies_request_id_and_traceparent_to_job_payload ... ok
+test telemetry::exporter::tests::export_queue_applies_backpressure_when_full ... ok
+test telemetry::exporter::tests::exporter_emits_canonical_metric_without_forbidden_labels ... ok
+test telemetry::exporter::tests::forbidden_label_observations_are_dropped ... ok
+test telemetry::exporter::tests::otlp_kind_enums_match_official_protobuf ... ok
+test telemetry::exporter::tests::one_exporter_dropped_counter_series_and_queue_gauges_zero_reset ... ok
+test telemetry::exporter::tests::otlp_encode_uses_canonical_kind_enums_and_parent_graph ... ok
+test telemetry::metrics::tests::canonical_metrics_pass_cardinality_policy ... ok
+test telemetry::tests::audit_envelope_round_trips_as_version_one ... ok
+test telemetry::tests::propagates_request_to_job_without_sensitive_content ... ok
+test telemetry::tests::redacts_canaries_and_rejects_high_cardinality_labels ... ok
+test telemetry::exporter::tests::mock_collector_export_outage_recovery_and_shutdown ... ok
+test telemetry::exporter::tests::real_span_lifecycle_exports_local_parents_no_artificial_nesting ... ok
+test telemetry::exporter::tests::label_cardinality_caps_with_other_bucket ... ok
+test telemetry::exporter::tests::separate_embedding_fts_vector_retrieval_timers ... ok
+test telemetry::exporter::tests::local_flush_drains_queue_without_network ... ok
+test telemetry::exporter::tests::shutdown_flush_bounds_each_http_attempt_against_blackhole_collector ... ok
+test telemetry::exporter::tests::mock_collector_receives_spans_on_shutdown_flush_sigterm_path ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 218 filtered out; finished in 0.51s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.00s
+
+
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [optimized + debuginfo] target(s) in 47.39s
+     Running unittests src/lib.rs (target/debug/deps/fileconv_server-9815dc6f8c37114e)
+     Running unittests src/bin/dev-hash-password.rs (target/debug/deps/dev_hash_password-491ba049997e4495)
+     Running unittests src/main.rs (target/debug/deps/fileconv_server-a2c2a272d3ea0cec)
+     Running unittests src/bin/worker.rs (target/debug/deps/fileconv_worker-8689942752fba5d3)
+     Running tests/api_http_contracts.rs (target/debug/deps/api_http_contracts-5bda0669561478fc)
+     Running tests/ask_grounding_matrix.rs (target/debug/deps/ask_grounding_matrix-cc953b6fcd06584b)
+     Running tests/auth.rs (target/debug/deps/auth-0609f5ebe21237ec)
+     Running tests/citation_authz_matrix.rs (target/debug/deps/citation_authz_matrix-68f9df2429440a4a)
+     Running tests/deletion_reconcile.rs (target/debug/deps/deletion_reconcile-4f4009ef357fe704)
+     Running tests/deploy_role.rs (target/debug/deps/deploy_role-95f4dd14d7b4b08f)
+     Running tests/e2e_release_suite.rs (target/debug/deps/e2e_release_suite-84abe0acb8a5d167)
+     Running tests/index_worker.rs (target/debug/deps/index_worker-6d57750136922d72)
+     Running tests/jobs.rs (target/debug/deps/jobs-e5b14c37a0c7b940)
+     Running tests/knowledge_consumer.rs (target/debug/deps/knowledge_consumer-e0e1a5efe8f6ca1d)
+     Running tests/phase1b_api_contracts.rs (target/debug/deps/phase1b_api_contracts-6bd476f89a6bfef3)
+     Running tests/quota.rs (target/debug/deps/quota-b17febb3451598c6)
+     Running tests/readiness_force_rls.rs (target/debug/deps/readiness_force_rls-877cdb6804b02ec4)
+     Running tests/repositories.rs (target/debug/deps/repositories-e360e161b0d111f1)
+     Running tests/retrieval.rs (target/debug/deps/retrieval-74e9a8de1544408e)
+     Running tests/retrieval_vertical_slice.rs (target/debug/deps/retrieval_vertical_slice-5bfbfceaa8ae4e44)
+     Running tests/schema_migrations.rs (target/debug/deps/schema_migrations-33b64f2126bd382e)
+     Running tests/sse_stream_readiness.rs (target/debug/deps/sse_stream_readiness-4e9e7853c76d0fc3)
+     Running tests/storage.rs (target/debug/deps/storage-c688bcf64c64f13f)
+     Running tests/telemetry_audit.rs (target/debug/deps/telemetry_audit-57300b1113363773)
+     Running tests/uploads.rs (target/debug/deps/uploads-376d3b0fac8cd2c7)
+     Running tests/worker.rs (target/debug/deps/worker-b664f8faccd34fc8)

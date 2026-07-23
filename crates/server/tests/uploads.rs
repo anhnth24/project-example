@@ -1443,7 +1443,7 @@ async fn http_upload_happy_and_spoof() {
             "uploader@example.test",
             "correct-password-1",
             &AuthRequestMeta {
-                request_id: "req-upload-test".into(),
+                request_id: Uuid::new_v4().to_string(),
             },
         )
         .await
@@ -1701,7 +1701,7 @@ async fn cancelled_http_upload_settles_quota_consistently() {
             "cancel-quota@example.test",
             "correct-password-1",
             &AuthRequestMeta {
-                request_id: "req-cancel-quota".into(),
+                request_id: Uuid::new_v4().to_string(),
             },
         )
         .await
@@ -2062,6 +2062,7 @@ async fn quarantined_review_requires_approval_for_single_job() {
     assert_eq!(chunks, 0);
 
     // Uploader without review permission cannot self-approve.
+    let self_approve_rid = Uuid::new_v4().to_string();
     let denied = approve_quarantined_upload(
         &pool,
         &ctx,
@@ -2069,7 +2070,7 @@ async fn quarantined_review_requires_approval_for_single_job() {
             collection_id,
             document_id: success.registered.document_id,
             reason: Some("self"),
-            request_id: "req-self-approve",
+            request_id: &self_approve_rid,
         },
     )
     .await;
@@ -2087,6 +2088,8 @@ async fn quarantined_review_requires_approval_for_single_job() {
         [collection_id],
     )
     .unwrap();
+    let approve_rid_1 = Uuid::new_v4().to_string();
+    let approve_rid_2 = Uuid::new_v4().to_string();
     let first = approve_quarantined_upload(
         &pool,
         &reviewer,
@@ -2094,7 +2097,7 @@ async fn quarantined_review_requires_approval_for_single_job() {
             collection_id,
             document_id: success.registered.document_id,
             reason: Some("looks safe"),
-            request_id: "req-approve-1",
+            request_id: &approve_rid_1,
         },
     )
     .await
@@ -2106,7 +2109,7 @@ async fn quarantined_review_requires_approval_for_single_job() {
             collection_id,
             document_id: success.registered.document_id,
             reason: Some("looks safe"),
-            request_id: "req-approve-2",
+            request_id: &approve_rid_2,
         },
     )
     .await
@@ -2116,6 +2119,7 @@ async fn quarantined_review_requires_approval_for_single_job() {
     assert!(!second.created_job);
     assert_eq!(count_org_rows(&pool, &ctx, "jobs").await, 1);
     // Cross-collection IDOR → not found.
+    let idor_rid = Uuid::new_v4().to_string();
     let idor = approve_quarantined_upload(
         &pool,
         &reviewer,
@@ -2123,7 +2127,7 @@ async fn quarantined_review_requires_approval_for_single_job() {
             collection_id: Uuid::new_v4(),
             document_id: success.registered.document_id,
             reason: None,
-            request_id: "req-idor",
+            request_id: &idor_rid,
         },
     )
     .await;
@@ -3165,6 +3169,7 @@ async fn quarantine_reviewer_concurrent_and_suspend_mid_approve() {
     let rev_b = reviewer.clone();
     let doc = success.registered.document_id;
     let a = tokio::spawn(async move {
+        let request_id = Uuid::new_v4().to_string();
         approve_quarantined_upload(
             &pool_a,
             &rev_a,
@@ -3172,12 +3177,13 @@ async fn quarantine_reviewer_concurrent_and_suspend_mid_approve() {
                 collection_id,
                 document_id: doc,
                 reason: Some("a"),
-                request_id: "req-a",
+                request_id: &request_id,
             },
         )
         .await
     });
     let b = tokio::spawn(async move {
+        let request_id = Uuid::new_v4().to_string();
         approve_quarantined_upload(
             &pool_b,
             &rev_b,
@@ -3185,7 +3191,7 @@ async fn quarantine_reviewer_concurrent_and_suspend_mid_approve() {
                 collection_id,
                 document_id: doc,
                 reason: Some("b"),
-                request_id: "req-b",
+                request_id: &request_id,
             },
         )
         .await
@@ -3235,6 +3241,7 @@ async fn quarantine_reviewer_concurrent_and_suspend_mid_approve() {
     let rev_bg = reviewer.clone();
     let doc2 = second.registered.document_id;
     let handle = tokio::spawn(async move {
+        let request_id = Uuid::new_v4().to_string();
         approve_quarantined_upload(
             &pool_bg,
             &rev_bg,
@@ -3242,7 +3249,7 @@ async fn quarantine_reviewer_concurrent_and_suspend_mid_approve() {
                 collection_id,
                 document_id: doc2,
                 reason: Some("suspend-me"),
-                request_id: "req-suspend",
+                request_id: &request_id,
             },
         )
         .await

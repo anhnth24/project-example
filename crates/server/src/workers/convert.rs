@@ -208,11 +208,54 @@ impl ConvertWorker {
                 .await?
             };
             if let Some(job) = jobs.into_iter().next() {
-                return if job_type == JobType::Convert {
-                    self.process_claimed_job(ctx, job).await
-                } else {
-                    self.process_reconciliation_job(ctx, job).await
-                };
+                let started = std::time::Instant::now();
+                let payload =
+                    jobs::decode_job_payload(job.payload_version, job.payload.clone()).ok();
+                let corr = payload
+                    .as_ref()
+                    .map(|payload| {
+                        crate::telemetry::from_job_payload(
+                            job.id,
+                            payload,
+                            crate::telemetry::WorkerIds {
+                                org_id: Some(ctx.org_id()),
+                                actor_id: Some(ctx.user_id()),
+                                index_signature: None,
+                            },
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        crate::telemetry::CorrelationContext::new(uuid::Uuid::new_v4().to_string())
+                    });
+                let result = crate::telemetry::scope(corr.clone(), async {
+                    let result = if job_type == JobType::Convert {
+                        self.process_claimed_job(ctx, job).await
+                    } else {
+                        self.process_reconciliation_job(ctx, job).await
+                    };
+                    let outcome = match &result {
+                        Ok(ConvertWorkerRun::Completed { .. })
+                        | Ok(ConvertWorkerRun::Reconciled { .. }) => "success",
+                        Ok(ConvertWorkerRun::Failed { .. }) => "failed",
+                        Ok(ConvertWorkerRun::LeaseLost { .. })
+                        | Ok(ConvertWorkerRun::ReconciliationNeeded { .. }) => "retry",
+                        Ok(ConvertWorkerRun::NoJob) => "idle",
+                        Err(_) => "error",
+                    };
+                    let elapsed = started.elapsed();
+                    crate::telemetry::record_conversion(outcome, elapsed);
+                    // Emit CONSUMER root inside restored scope so nested spans
+                    // parent to an exported id (no post-scope placeholder).
+                    crate::telemetry::complete_current_span(
+                        "worker.convert",
+                        "CONSUMER",
+                        outcome,
+                        elapsed,
+                    );
+                    result
+                })
+                .await;
+                return result;
             }
         }
         Ok(ConvertWorkerRun::NoJob)
@@ -667,6 +710,9 @@ impl ConvertWorker {
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent_job.id),
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert.cleanup:{}", parent_job.id),
         );

@@ -194,12 +194,16 @@ pub async fn promote_conversion(
                 }
                 maybe_fault(input.fault, PromotionFault::AfterPointerSwap)?;
 
-                let index_payload = validated_event_payload(EventPayload {
-                    job_id: Some(job.id),
-                    document_id: Some(input.source.document_id),
-                    version_id: Some(promoted_version_id),
-                    outbox_event_id: None,
-                })?;
+                let index_payload = validated_event_payload(
+                    EventPayload {
+                        job_id: Some(job.id),
+                        document_id: Some(input.source.document_id),
+                        version_id: Some(promoted_version_id),
+                        outbox_event_id: None,
+                        ..EventPayload::default()
+                    }
+                    .with_current_correlation(),
+                )?;
                 let index_outbox_key = input.identity.index_outbox_key();
                 jobs_repo::insert_outbox_event(
                     txn,
@@ -375,12 +379,7 @@ async fn write_job_succeeded_event(
     ctx: &OrgContext,
     job: &Job,
 ) -> Result<(), PromotionError> {
-    let payload = validated_event_payload(EventPayload {
-        job_id: Some(job.id),
-        document_id: job.document_id,
-        version_id: job.version_id,
-        outbox_event_id: None,
-    })?;
+    let payload = validated_event_payload(EventPayload::for_job(job))?;
     jobs_repo::append_event_and_outbox(
         txn,
         ctx,

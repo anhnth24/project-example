@@ -140,7 +140,7 @@ async fn update_collection(
     }
     if body.name.trim().is_empty() || body.name.len() > 200 {
         let resource_id = collection_id.to_string();
-        let _ = audit::record(
+        audit::record(
             state.pool(),
             &auth.context,
             audit::AuditRecord {
@@ -151,12 +151,11 @@ async fn update_collection(
                 outcome: crate::db::models::AuditOutcome::Error,
                 metadata: serde_json::json!({
                     "reason": "validation_failed",
-                    // Must be sanitized away if ever populated with secrets.
-                    "password": "should-be-stripped",
                 }),
             },
         )
-        .await;
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
         return Err(RouteError::Validation(
             auth.request_id.clone(),
             "Invalid collection name",
@@ -188,7 +187,10 @@ async fn update_collection(
                         resource_type: "collection",
                         resource_id: Some(&resource_id),
                         outcome: crate::db::models::AuditOutcome::Success,
-                        metadata: serde_json::json!({ "name": row.name.clone() }),
+                        metadata: serde_json::json!({
+                            "collection_id": row.id.to_string(),
+                            "name_chars": row.name.len() as i64,
+                        }),
                     },
                 )
                 .await?;
@@ -325,7 +327,11 @@ async fn create_collection(
                         resource_type: "collection",
                         resource_id: Some(&resource_id),
                         outcome: crate::db::models::AuditOutcome::Success,
-                        metadata: serde_json::json!({ "slug": row.slug.clone() }),
+                        metadata: serde_json::json!({
+                            "collection_id": row.id.to_string(),
+                            "name_chars": row.name.len() as i64,
+                            "slug_chars": row.slug.len() as i64,
+                        }),
                     },
                 )
                 .await?;

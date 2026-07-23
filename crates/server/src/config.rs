@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::services::upload::{LimitsConfig, UploadConfig};
+use crate::telemetry::TelemetryConfig;
 
 const DEFAULT_MAX_UPLOAD_BYTES: u64 = 200 * 1024 * 1024;
 const DEFAULT_JOB_LEASE_SECONDS: u64 = 60;
@@ -90,6 +91,7 @@ pub struct ServerConfig {
     upload: UploadConfig,
     quota_sweep: QuotaSweepConfig,
     index_signature: Option<String>,
+    telemetry: TelemetryConfig,
 }
 
 impl fmt::Debug for ServerConfig {
@@ -135,6 +137,7 @@ impl fmt::Debug for ServerConfig {
             .field("upload", &self.upload)
             .field("quota_sweep", &self.quota_sweep)
             .field("index_signature", &self.index_signature)
+            .field("telemetry", &self.telemetry)
             .finish()
     }
 }
@@ -681,6 +684,7 @@ impl ServerConfig {
         let index_signature = optional_value(file, env, "MARKHAND_INDEX_SIGNATURE", |value| {
             value.index_signature.as_ref()
         });
+        let telemetry = TelemetryConfig::from_env_map(env, profile)?;
 
         let config = Self {
             role,
@@ -701,6 +705,7 @@ impl ServerConfig {
             upload,
             quota_sweep,
             index_signature,
+            telemetry,
         };
         config.validate()?;
         Ok(config)
@@ -735,6 +740,10 @@ impl ServerConfig {
 
     pub fn index_signature(&self) -> Option<&str> {
         self.index_signature.as_deref()
+    }
+
+    pub fn telemetry(&self) -> &TelemetryConfig {
+        &self.telemetry
     }
 
     pub(crate) fn is_api_role(&self) -> bool {
@@ -786,6 +795,7 @@ impl ServerConfig {
                 batch_size: DEFAULT_QUOTA_SWEEP_BATCH_SIZE,
             },
             index_signature: None,
+            telemetry: TelemetryConfig::disabled(),
         }
     }
 
@@ -840,6 +850,7 @@ impl ServerConfig {
         self.validate_limits()?;
         self.upload.validate()?;
         self.validate_index_signature(false)?;
+        self.telemetry.validate(self.profile)?;
         if self.role == RuntimeRole::Api {
             self.validate_auth()?;
         }

@@ -334,11 +334,14 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
-- **Status:** In progress — typed `AuditOutcome` success|deny|error; `record_in_txn`
-  for same-transaction mutation audit; injection helper scoped behind `test-hooks`;
-  PATCH correlation + injected-failure rollback covered in
-  `live_patch_collection_audit_correlation_and_rollback`. Gap: async
-  API→worker→GLM canary still pending.
+- **Status:** In progress — Sol R3 final fixes (no commit/push; no more reviewer):
+  privileged idempotent POC `db-bootstrap` before migrate; `0028` owns audit_log +
+  both trigger fns + exact SELECT/INSERT grants; Compose pre-O01 volume upgrade;
+  OTLP kinds INTERNAL=1…CONSUMER=5; real span lifecycle (worker emit in scope);
+  bounded shutdown (stop claim → await run_once grace → flush per remaining
+  deadline); central typed route audit matrix + same-txn enqueue/audit; evidence
+  deny-by-request + named spans/parent graph + negative fixtures. Keep
+  `in_progress` until rebuilt POC full async evidence passes.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`,

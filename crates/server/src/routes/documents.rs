@@ -19,7 +19,7 @@ use crate::auth::permissions::require_permission;
 use crate::db::error::DbError;
 use crate::db::models::AuditOutcome;
 use crate::db::models::JobType;
-use crate::db::pool::with_org_txn;
+use crate::db::pool::{with_org_txn, with_org_txn_typed};
 use crate::db::{document_versions, documents};
 use crate::http::AppState;
 use crate::jobs::{self, EnqueueJob, JobPayload};
@@ -300,7 +300,7 @@ async fn preview_document(
     .await
     .map_err(|error| RouteError::from_preview(error, &auth.request_id))?;
     let resource_id = document_id.to_string();
-    let _ = audit::record(
+    audit::record(
         state.pool(),
         &auth.context,
         audit::AuditRecord {
@@ -309,10 +309,14 @@ async fn preview_document(
             resource_type: "document",
             resource_id: Some(&resource_id),
             outcome: AuditOutcome::Success,
-            metadata: serde_json::json!({ "versionId": preview.version.id }),
+            metadata: serde_json::json!({
+                "document_id": document_id.to_string(),
+                "version_id": preview.version.id.to_string(),
+            }),
         },
     )
-    .await;
+    .await
+    .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
     Ok(Json(serde_json::json!({
         "documentId": preview.document.id,
         "versionId": preview.version.id,
@@ -510,8 +514,21 @@ async fn reindex_document(
     .map_err(RouteError::RateLimited)?;
     crate::routes::rate_limit_guard::check_route(&state, "reindex", &ip, &auth.request_id)
         .map_err(RouteError::RateLimited)?;
-    require_permission(&auth.context, "doc.upload")
-        .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
+    if require_permission(&auth.context, "doc.upload").is_err() {
+        let resource_id = document_id.to_string();
+        audit::record_deny(
+            state.pool(),
+            &auth.context,
+            &auth.request_id,
+            "document.reindex",
+            "document",
+            Some(&resource_id),
+            "permission_denied",
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+        return Err(RouteError::Denied(auth.request_id.clone()));
+    }
     let document = load_document(&state, &auth, document_id).await?;
     let version_id = document.current_version_id.ok_or_else(|| {
         RouteError::Validation(auth.request_id.clone(), "Document has no current version")
@@ -522,6 +539,25 @@ async fn reindex_document(
         .map(str::to_string)
         .unwrap_or_else(|| format!("reindex:{document_id}:{version_id}"));
     if idem.len() > 160 {
+        let resource_id = document_id.to_string();
+        audit::record(
+            state.pool(),
+            &auth.context,
+            audit::AuditRecord {
+                request_id: &auth.request_id,
+                action: "document.reindex",
+                resource_type: "document",
+                resource_id: Some(&resource_id),
+                outcome: AuditOutcome::Error,
+                metadata: serde_json::json!({
+                    "reason": "validation_failed",
+                    "document_id": document_id.to_string(),
+                    "version_id": version_id.to_string(),
+                }),
+            },
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
         return Err(RouteError::Validation(
             auth.request_id.clone(),
             "Idempotency key too long",
@@ -532,11 +568,41 @@ async fn reindex_document(
         version_id: Some(version_id),
         ..JobPayload::default()
     };
-    let outcome = jobs::enqueue(
-        state.pool(),
-        &auth.context,
-        EnqueueJob::new(JobType::Index, payload, idem),
-    )
+    // Mutations/enqueue + success audit must commit in the same transaction.
+    let outcome = with_org_txn_typed(state.pool(), &auth.context, {
+        let ctx = auth.context.clone();
+        let request_id = auth.request_id.clone();
+        move |txn| {
+            Box::pin(async move {
+                let outcome = jobs::enqueue_within_txn(
+                    txn,
+                    &ctx,
+                    EnqueueJob::new(JobType::Index, payload, idem),
+                )
+                .await?;
+                let resource_id = document_id.to_string();
+                audit::record_in_txn(
+                    txn,
+                    &ctx,
+                    audit::AuditRecord {
+                        request_id: &request_id,
+                        action: "document.reindex",
+                        resource_type: "document",
+                        resource_id: Some(&resource_id),
+                        outcome: AuditOutcome::Success,
+                        metadata: serde_json::json!({
+                            "document_id": document_id.to_string(),
+                            "version_id": version_id.to_string(),
+                            "job_id": outcome.job.id.to_string(),
+                            "job_type": "index",
+                        }),
+                    },
+                )
+                .await?;
+                Ok::<_, jobs::JobError>(outcome)
+            })
+        }
+    })
     .await
     .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
     Ok(Json(serde_json::json!({
@@ -760,7 +826,10 @@ async fn triage_conflict(
             resource_type: "conflict",
             resource_id: Some(&resource_id),
             outcome: AuditOutcome::Success,
-            metadata: serde_json::json!({ "status": body.status }),
+            metadata: serde_json::json!({
+                "conflict_id": conflict_id.to_string(),
+                "status": body.status,
+            }),
         },
     )
     .await
