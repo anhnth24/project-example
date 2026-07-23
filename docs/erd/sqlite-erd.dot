@@ -26,7 +26,7 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#3979A8">
       <TR><TD BGCOLOR="#B9D7EA" COLSPAN="3"><B>documents</B></TD></TR>
       <TR><TD BGCOLOR="#EAF4FA" COLSPAN="3"><I>Tài liệu cục bộ và dấu vết embedding</I></TD></TR>
-      <TR><TD PORT="doc_rel"><B>PK</B></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">doc_rel</TD><TD PORT="doc_rel_out" ALIGN="LEFT">TEXT ?</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">md_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">content_hash</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">format</TD><TD ALIGN="LEFT">TEXT</TD></TR>
@@ -39,8 +39,8 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#6E56A0">
       <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>chunks</B></TD></TR>
       <TR><TD BGCOLOR="#F1EDF7" COLSPAN="3"><I>Đoạn Markdown, vị trí nguồn và vector tìm kiếm</I></TD></TR>
-      <TR><TD PORT="chunk_id"><B>PK</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">TEXT</TD></TR>
-      <TR><TD PORT="doc_rel"></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD PORT="chunk_id_out" ALIGN="LEFT">TEXT ?</TD></TR>
+      <TR><TD PORT="doc_rel_in"></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">md_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">heading</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">TEXT</TD></TR>
@@ -59,7 +59,7 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#408B76">
       <TR><TD BGCOLOR="#CDE8DF" COLSPAN="3"><B>index_meta</B></TD></TR>
       <TR><TD BGCOLOR="#EDF8F4" COLSPAN="3"><I>Cấu hình và khả năng tương thích của chỉ mục</I></TD></TR>
-      <TR><TD PORT="key"><B>PK</B></TD><TD ALIGN="LEFT">key</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">key</TD><TD ALIGN="LEFT">TEXT ?</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">value</TD><TD ALIGN="LEFT">TEXT</TD></TR>
     </TABLE>
   >];
@@ -68,7 +68,7 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#B47B25">
       <TR><TD BGCOLOR="#FCE5B5" COLSPAN="3"><B>chunks_fts</B> · FTS5</TD></TR>
       <TR><TD BGCOLOR="#FFF6E4" COLSPAN="3"><I>Bản sao toàn văn để tìm kiếm có và không dấu</I></TD></TR>
-      <TR><TD PORT="chunk_id"></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
+      <TR><TD PORT="chunk_id_in"></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">heading</TD><TD ALIGN="LEFT">— ?</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">— ?</TD></TR>
@@ -89,17 +89,17 @@ digraph markhand_desktop_sqlite {
   >];
 
   // Logical links only: the SQLite schema declares no FOREIGN KEY constraints.
-  documents:doc_rel -> chunks:doc_rel [
+  documents:doc_rel_out:e -> chunks:doc_rel_in:w [
     style=dashed,
     arrowtail=tee,
     arrowhead="crowodot",
-    label="doc_rel · 1 → 0..n"
+    label="doc_rel · liên kết logic · 1 → 0..n"
   ];
-  chunks:chunk_id -> chunks_fts:chunk_id [
+  chunks:chunk_id_out:e -> chunks_fts:chunk_id_in:w [
     style=dashed,
     arrowtail=tee,
     arrowhead=tee,
-    label="bản sao ứng dụng · 1 → 1"
+    label="chunk_id · bản sao FTS5 · 1 → 1"
   ];
 
   { rank=same; documents; index_meta; }
