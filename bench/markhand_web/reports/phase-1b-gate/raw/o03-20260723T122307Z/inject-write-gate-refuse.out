@@ -1,0 +1,1 @@
+pipeline_error: REFUSING_CONSISTENCY_BACKUP_WRITE_GATE_UNAVAILABLE: app mutation routes do not consult ops_fence; set MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=0 only for non-consistency isolation drills (records gap watermark)

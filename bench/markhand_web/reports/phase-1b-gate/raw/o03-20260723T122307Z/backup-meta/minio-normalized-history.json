@@ -1,0 +1,44 @@
+{
+  "keys": [
+    {
+      "key": "trusted/o03-seed-20260723t122307z.txt",
+      "events": [
+        {
+          "type": "put",
+          "size": 47,
+          "contentSha256": "1d1dd18cda184c0466c24b769ba5a06977d5715405def0def530aa4ab2ffba7f"
+        },
+        {
+          "type": "put",
+          "size": 50,
+          "contentSha256": "350f56e6ef4aeaac7d9df3cf8cd85deab682735cdd8b56dfea0170aa836a1b81"
+        }
+      ]
+    },
+    {
+      "key": "trusted/o03-tomb-20260723t122307z.txt",
+      "events": [
+        {
+          "type": "put",
+          "size": 25,
+          "contentSha256": "2893396f33c2afe38875b6715b2f952ba9f137642cafc08cc091199671b40cb8"
+        },
+        {
+          "type": "delete",
+          "size": null,
+          "contentSha256": null
+        },
+        {
+          "type": "put",
+          "size": 35,
+          "contentSha256": "e5cc75d23e7e35adbefeacb4a519cb3a0f7d3208f7d8b11429a2ed01bf171e16"
+        },
+        {
+          "type": "delete",
+          "size": null,
+          "contentSha256": null
+        }
+      ]
+    }
+  ]
+}

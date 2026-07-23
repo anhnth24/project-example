@@ -1,0 +1,14 @@
+{
+  "tombstones": [
+    {
+      "key": "trusted/o03-tomb-20260723t122307z.txt",
+      "deleteMarker": true,
+      "checked": true
+    },
+    {
+      "key": "trusted/o03-tomb-20260723t122307z.txt",
+      "deleteMarker": true,
+      "checked": true
+    }
+  ]
+}

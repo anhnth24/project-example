@@ -375,16 +375,28 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
-- **Status:** In progress — blue/green only: backup mandatorily sets `ops_fences`,
-  bundles versioned object bytes + Qdrant snapshot bytes; restore targets isolated
-  green namespaces, verifies target bytes, requires durable `reconcile.complete`,
-  refuses cutover without `MARKHAND_RESTORE_CUTOVER=1`, and fails zero-row fence
-  clear. No env fake attestation shortcuts. Hermetic corrupt/missing/orphan/
-  refuse-destructive guards. Gap: production-complete green restore + reconcile +
-  atomic cutover drill not executed in this environment — scripts refuse promote.
+- **Status:** In progress — Sol round-3 merge-safety fixes: session advisory lock for full capture;
+  strict drain (never cancel jobs); consistency backup refuses when app mutation
+  write-gate absent; mandatory PG/MinIO/Qdrant allowlists, exclusive green-target
+  creation and verifiable ownership tokens; preflight before mutate; restore/promote separated — **promote/cutover
+  disabled** (no `ops_routing` DDL/migration while capability not retained);
+  exact isolated cleanup verified before report; chronological MinIO events +
+  checked deletes + normalized ordered history equality and byte-for-byte latest objects;
+  JSON Schema `additionalProperties` + symlink reject + `is_relative_to` open;
+  private PGPASSFILE/no password argv; umask 077; encryption or explicit unencrypted
+  dest policy; wrappers propagate failures; no query-ready claim on ready≠200;
+  reproducible `o03-report-from-raw.py`. Evidence: `o03-restore.*`.
+  **Exact gaps:** (1) app mutation write-gate not integrated (consistency backup
+  refused unless `MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=0`); (2) promote/cutover
+  disabled until API consumes durable routing + independent reconcile
+  target-state attestation; (3) encrypted backup destination not exercised
+  (POC `explicit_poc_tmp_only` policy). `consistencyRpoPass` /
+  `queryReadyRtoPass` remain null; windows reported separately.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
-- **Files:** `deploy/backup/**`, `docs/runbooks/phase-1b/backup-restore.md`.
+- **Files:** `deploy/backup/**`, `deploy/scripts/o03-bluegreen-restore-drill.sh`,
+  `deploy/scripts/o03-report-from-raw.py`,
+  `docs/runbooks/phase-1b/backup-restore-o03.md`.
 - **Depends:** F02/F03/F06/I07 + G0-ARCH/G0-SLO.
 - **Acceptance/tests:** Clean restore đạt RPO/RTO; missing/orphan detect; readiness
   false until reconcile; PG rebuild; corrupt manifest/upgrade tests.
