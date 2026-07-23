@@ -722,6 +722,51 @@ async fn make_job_available(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
     .expect("make job available");
 }
 
+async fn force_lease_expired(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE jobs
+                     SET lease_expires_at = clock_timestamp() - interval '1 second'
+                     WHERE org_id = $1 AND id = $2",
+                    &[&ctx.org_id(), &job_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("force lease expired");
+}
+
+async fn reclaim_job_to_pending(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> Job {
+    const MAX_ATTEMPTS: usize = 40;
+    for attempt in 0..MAX_ATTEMPTS {
+        force_lease_expired(pool, ctx, job_id).await;
+        let reclaimed = jobs::reclaim_expired(pool, ctx, 10, Duration::from_secs(1))
+            .await
+            .expect("reclaim expired");
+        if let Some(job) = reclaimed.into_iter().find(|job| job.id == job_id) {
+            assert_eq!(
+                job.status,
+                JobStatus::Pending,
+                "reclaimed job must return to pending for retry"
+            );
+            make_job_available(pool, ctx, job_id).await;
+            return get_job(pool, ctx, job_id).await;
+        }
+        tokio::time::sleep(Duration::from_millis(25 * (attempt as u64 + 1))).await;
+    }
+    let job = get_job(pool, ctx, job_id).await;
+    panic!(
+        "job {job_id} was not reclaimed to pending within retry budget; status={:?}",
+        job.status
+    );
+}
+
 async fn version_inherits_document_collection(
     pool: &Pool,
     ctx: &OrgContext,
@@ -2018,13 +2063,9 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
         .await
         .expect("key A exists after stage"));
 
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let reclaimed = jobs::reclaim_expired(&pool, &ctx, 10, Duration::from_secs(1))
-        .await
-        .expect("reclaim expired");
-    assert_eq!(reclaimed.len(), 1);
-    assert_eq!(reclaimed[0].id, job.id);
-    make_job_available(&pool, &ctx, job.id).await;
+    let reclaimed = reclaim_job_to_pending(&pool, &ctx, job.id).await;
+    assert_eq!(reclaimed.id, job.id);
+    assert_eq!(reclaimed.status, JobStatus::Pending);
 
     let worker_b = ConvertWorker::new(
         pool.clone(),
@@ -2032,10 +2073,14 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
     .expect("worker b");
-    assert!(matches!(
-        worker_b.run_once(&ctx).await.expect("worker b promote"),
-        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
-    ));
+    let worker_b_result = worker_b.run_once(&ctx).await.expect("worker b promote");
+    assert!(
+        matches!(
+            &worker_b_result,
+            ConvertWorkerRun::Completed { job_id, .. } if *job_id == job.id
+        ),
+        "worker b promote: {worker_b_result:?}"
+    );
     let committed_key = first_markdown_artifact_key(&pool, &ctx, document_id).await;
     assert_ne!(committed_key, key_a.as_str());
     let committed = fileconv_server::storage::parse_key_for_org(&committed_key, ctx.org_id())
