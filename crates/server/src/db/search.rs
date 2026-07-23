@@ -58,6 +58,9 @@ pub struct HydratedChunkRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedConflictEvidence {
     pub conflict_id: Uuid,
+    pub status: String,
+    pub resolution_note: Option<String>,
+    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
     pub claim_a_id: Uuid,
     pub claim_b_id: Uuid,
     pub claim_a_document_id: Uuid,
@@ -475,6 +478,7 @@ pub async fn load_authorized_conflict_evidence(
         VersionVisibility::Current => {
             txn.query(
                 "SELECT conf.id AS conflict_id,
+                        conf.status, conf.resolution_note, conf.resolved_at,
                         conf.claim_a_id, conf.claim_b_id,
                         ca.document_id AS claim_a_document_id,
                         cb.document_id AS claim_b_document_id,
@@ -604,6 +608,7 @@ pub async fn load_authorized_conflict_evidence(
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
             txn.query(
                 "SELECT conf.id AS conflict_id,
+                        conf.status, conf.resolution_note, conf.resolved_at,
                         conf.claim_a_id, conf.claim_b_id,
                         ca.document_id AS claim_a_document_id,
                         cb.document_id AS claim_b_document_id,
@@ -750,6 +755,9 @@ fn map_fts_candidate(row: &Row) -> Result<FtsCandidate, DbError> {
 fn map_conflict_evidence(row: &Row) -> AuthorizedConflictEvidence {
     AuthorizedConflictEvidence {
         conflict_id: row.get("conflict_id"),
+        status: row.get("status"),
+        resolution_note: row.get("resolution_note"),
+        resolved_at: row.get("resolved_at"),
         claim_a_id: row.get("claim_a_id"),
         claim_b_id: row.get("claim_b_id"),
         claim_a_document_id: row.get("claim_a_document_id"),

@@ -80,7 +80,7 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              required: [file, collectionId]
               properties:
                 file:
                   type: string
@@ -89,13 +89,33 @@ paths:
                   type: string
                   format: uuid
       responses:
-        "200":
-          description: Quarantine upload accepted or rejected with disposition.
+        "201":
+          description: >
+            Upload stored; document+version registered. Accepted disposition also
+            enqueues convert. Quarantined disposition awaits approve-intake
+            (doc.quarantine.review). Idempotent same-envelope replay returns the
+            same stable body (requestId may differ).
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
+                required:
+                  [disposition, objectId, sha256, sizeBytes, canonicalFormat, requestId]
+                properties:
+                  disposition: { type: string }
+                  objectId: { type: string, format: uuid }
+                  documentId: { type: string, format: uuid }
+                  versionId: { type: string, format: uuid }
+                  jobId: { type: string, format: uuid }
+                  collectionId: { type: string, format: uuid }
+                  sha256: { type: string }
+                  sizeBytes: { type: integer }
+                  canonicalFormat: { type: string }
+                  requestId: { type: string }
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
         "413":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -149,6 +169,40 @@ paths:
       responses:
         "200":
           description: Paginated documents.
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /collections/{collectionId}/documents/{documentId}/approve-intake:
+    post:
+      operationId: approveIntake
+      summary: Approve a quarantined upload (requires doc.quarantine.review)
+      parameters:
+        - $ref: "#/components/parameters/collectionId"
+        - $ref: "#/components/parameters/documentId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: Convert job created or idempotent replay of existing job.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documentId, versionId, collectionId, jobId, created, requestId]
+                properties:
+                  documentId: { type: string, format: uuid }
+                  versionId: { type: string, format: uuid }
+                  collectionId: { type: string, format: uuid }
+                  jobId: { type: string, format: uuid }
+                  created: { type: boolean }
+                  requestId: { type: string }
+        "403":
+          $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
   /documents/{documentId}:
@@ -302,6 +356,36 @@ paths:
       responses:
         "200":
           description: Conflict detail (dual-collection authorized).
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /conflicts/{conflictId}/evidence:
+    get:
+      operationId: getConflictEvidence
+      parameters:
+        - name: conflictId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Immutable conflict evidence legs for an authorized conflict.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conflictId, status, items, requestId]
+                properties:
+                  conflictId: { type: string, format: uuid }
+                  status: { type: string }
+                  resolutionNote: { type: string, nullable: true }
+                  resolvedAt: { type: string, format: date-time, nullable: true }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                  requestId: { type: string }
         "404":
           $ref: "#/components/responses/ApiError"
   /conflicts/{conflictId}/triage:

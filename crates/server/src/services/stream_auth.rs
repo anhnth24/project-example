@@ -61,26 +61,39 @@ pub fn token_expired(claims: &AccessClaims, now_epoch_secs: i64) -> bool {
 }
 
 /// True when the refresh-token family still has a live (unrevoked, unexpired) row.
+///
+/// Must run under transaction-local `app.org_id` so FORCE RLS on `refresh_tokens`
+/// can observe the caller's family (bare pool clients see zero rows).
 pub async fn session_family_active(
     pool: &Pool,
     org_id: Uuid,
     family_id: Uuid,
 ) -> Result<bool, StreamAuthError> {
-    let client = pool.get().await.map_err(|_| StreamAuthError::Database)?;
-    let row = client
-        .query_opt(
-            "SELECT 1
-             FROM refresh_tokens
-             WHERE org_id = $1
-               AND family_id = $2
-               AND revoked_at IS NULL
-               AND expires_at > now()
-             LIMIT 1",
-            &[&org_id, &family_id],
-        )
-        .await
-        .map_err(|_| StreamAuthError::Database)?;
-    Ok(row.is_some())
+    // user_id is required by OrgContext construction but unused by this probe;
+    // reuse family_id (never nil) so the GUC scope is valid under FORCE RLS.
+    let provisional = OrgContext::try_new(org_id, family_id, [] as [&str; 0], [])
+        .map_err(|_| StreamAuthError::SessionRevoked)?;
+    crate::db::pool::with_org_txn(pool, &provisional, {
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_opt(
+                        "SELECT 1
+                         FROM refresh_tokens
+                         WHERE org_id = $1
+                           AND family_id = $2
+                           AND revoked_at IS NULL
+                           AND expires_at > now()
+                         LIMIT 1",
+                        &[&org_id, &family_id],
+                    )
+                    .await?;
+                Ok(row.is_some())
+            })
+        }
+    })
+    .await
+    .map_err(|_| StreamAuthError::Database)
 }
 
 /// Revalidates JWT exp + PG session/membership + job access; reloads terminal status.

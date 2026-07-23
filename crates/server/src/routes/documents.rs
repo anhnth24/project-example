@@ -30,6 +30,7 @@ use crate::services::deletion;
 use crate::services::download::{self, DownloadPurpose};
 use crate::services::preview;
 use crate::services::retrieval::PERMISSION_QA_HISTORY;
+use crate::services::upload::{approve_quarantined_upload, ApproveIntakeRequest, SagaError};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -40,6 +41,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route(
             "/api/v1/documents/{document_id}",
             get(get_document).delete(delete_document),
+        )
+        .route(
+            "/api/v1/collections/{collection_id}/documents/{document_id}/approve-intake",
+            post(approve_intake),
         )
         .route(
             "/api/v1/documents/{document_id}/preview",
@@ -69,6 +74,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/v1/citations/resolve", post(resolve_citation_route))
         .route("/api/v1/conflicts", get(list_conflicts))
         .route("/api/v1/conflicts/{conflict_id}", get(get_conflict))
+        .route(
+            "/api/v1/conflicts/{conflict_id}/evidence",
+            get(get_conflict_evidence),
+        )
         .route(
             "/api/v1/conflicts/{conflict_id}/triage",
             post(triage_conflict),
@@ -123,6 +132,54 @@ struct ResolveBody {
     quote: String,
     #[serde(default)]
     require_current: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApproveIntakeBody {
+    reason: Option<String>,
+}
+
+async fn approve_intake(
+    State(state): State<Arc<AppState>>,
+    auth: AuthenticatedOrg,
+    Path((collection_id, document_id)): Path<(Uuid, Uuid)>,
+    body: Option<Json<ApproveIntakeBody>>,
+) -> Result<Json<serde_json::Value>, RouteError> {
+    let reason = body.and_then(|Json(b)| b.reason);
+    let registered = approve_quarantined_upload(
+        state.pool(),
+        &auth.context,
+        ApproveIntakeRequest {
+            collection_id,
+            document_id,
+            reason: reason.as_deref(),
+            request_id: &auth.request_id,
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        SagaError::PermissionDenied => RouteError::Denied(auth.request_id.clone()),
+        SagaError::NotFound => RouteError::NotFound(auth.request_id.clone()),
+        SagaError::Database(_) | SagaError::Job(_) | SagaError::Internal => {
+            RouteError::Database(auth.request_id.clone())
+        }
+        _ => RouteError::Validation(
+            auth.request_id.clone(),
+            "Upload is not awaiting intake approval",
+        ),
+    })?;
+    let job_id = registered
+        .job_id
+        .ok_or_else(|| RouteError::Database(auth.request_id.clone()))?;
+    Ok(Json(serde_json::json!({
+        "documentId": registered.document_id,
+        "versionId": registered.version_id,
+        "collectionId": registered.collection_id,
+        "jobId": job_id,
+        "created": registered.created_job,
+        "requestId": auth.request_id,
+    })))
 }
 
 async fn list_documents(
@@ -615,6 +672,56 @@ async fn get_conflict(
         "collectionBId": row.get::<_, Uuid>("collection_b_id"),
         "resolutionNote": row.get::<_, Option<String>>("resolution_note"),
         "resolvedAt": row.get::<_, Option<chrono::DateTime<chrono::Utc>>>("resolved_at"),
+        "requestId": auth.request_id,
+    })))
+}
+
+async fn get_conflict_evidence(
+    State(state): State<Arc<AppState>>,
+    auth: AuthenticatedOrg,
+    Path(conflict_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, RouteError> {
+    require_permission(&auth.context, "qa.query")
+        .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
+    let row = access::resolve_conflict(state.pool(), &auth.context, conflict_id)
+        .await
+        .map_err(|error| RouteError::from_access(error, &auth.request_id))?;
+    let evidence = with_org_txn(state.pool(), &auth.context, {
+        let ctx = auth.context.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.query(
+                    "SELECT id, claim_id, evidence_role, citation_quote, created_at
+                     FROM conflict_evidence
+                     WHERE org_id = $1 AND conflict_id = $2
+                     ORDER BY evidence_role, created_at",
+                    &[&ctx.org_id(), &conflict_id],
+                )
+                .await
+                .map_err(crate::db::error::DbError::from)
+            })
+        }
+    })
+    .await
+    .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+    let items: Vec<serde_json::Value> = evidence
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "id": item.get::<_, Uuid>("id"),
+                "claimId": item.get::<_, Uuid>("claim_id"),
+                "evidenceRole": item.get::<_, String>("evidence_role"),
+                "citationQuote": item.get::<_, Option<String>>("citation_quote"),
+                "createdAt": item.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "conflictId": row.get::<_, Uuid>("id"),
+        "status": row.get::<_, String>("status"),
+        "resolutionNote": row.get::<_, Option<String>>("resolution_note"),
+        "resolvedAt": row.get::<_, Option<chrono::DateTime<chrono::Utc>>>("resolved_at"),
+        "items": items,
         "requestId": auth.request_id,
     })))
 }

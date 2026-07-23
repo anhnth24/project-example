@@ -71,6 +71,34 @@ impl CanonicalFormat {
             other => other.as_str(),
         }
     }
+
+    /// Parse a stored canonical format string (wire/DB value).
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "pdf" => Ok(Self::Pdf),
+            "docx" => Ok(Self::Docx),
+            "pptx" => Ok(Self::Pptx),
+            "xlsx" => Ok(Self::Xlsx),
+            "ods" => Ok(Self::Ods),
+            "xls" => Ok(Self::Xls),
+            "xlsb" => Ok(Self::Xlsb),
+            "csv" => Ok(Self::Csv),
+            "html" => Ok(Self::Html),
+            "txt" => Ok(Self::PlainText),
+            "png" => Ok(Self::Png),
+            "jpeg" | "jpg" => Ok(Self::Jpeg),
+            "webp" => Ok(Self::Webp),
+            "tiff" => Ok(Self::Tiff),
+            "bmp" => Ok(Self::Bmp),
+            "wav" => Ok(Self::Wav),
+            "mp3" => Ok(Self::Mp3),
+            "ogg" => Ok(Self::Ogg),
+            "flac" => Ok(Self::Flac),
+            "m4a" => Ok(Self::M4a),
+            "zip" => Ok(Self::ZipContainer),
+            other => Err(format!("unknown canonical format: {other}")),
+        }
+    }
 }
 
 /// Resolve canonical format from magic bytes; require declared extension consistency.

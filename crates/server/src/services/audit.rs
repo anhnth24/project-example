@@ -85,12 +85,26 @@ pub fn sanitize_metadata(metadata: JsonValue) -> JsonValue {
     JsonValue::Object(safe)
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
+static INJECT_AUDIT_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Arms a one-shot failure for the next [`record_in_txn`] (test-hooks / unit tests only).
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn arm_injected_audit_failure() {
+    INJECT_AUDIT_FAILURE.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Write an audit row inside an existing org transaction (mutation co-commit).
 pub async fn record_in_txn(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     record: AuditRecord<'_>,
 ) -> Result<(), DbError> {
+    #[cfg(any(test, feature = "test-hooks"))]
+    if INJECT_AUDIT_FAILURE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return Err(DbError::Config("injected_audit_failure".into()));
+    }
     let metadata = sanitize_metadata(record.metadata);
     write_audit(
         txn,

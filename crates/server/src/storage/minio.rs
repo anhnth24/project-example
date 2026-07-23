@@ -535,6 +535,129 @@ impl MinioClient {
         self.delete_object_authorized_key(key, false).await
     }
 
+    /// Test cleanup: delete listed keys then remove the bucket.
+    ///
+    /// Propagates errors from list/delete/bucket-delete. Callers that need a
+    /// hard assertion should prefer [`Self::cleanup_bucket_and_assert_gone`].
+    pub async fn force_cleanup_bucket_for_tests(&self) -> Result<(), StorageError> {
+        match self.cleanup_bucket_contents().await {
+            Ok(()) | Err(StorageError::NotFound) => {}
+            Err(error) => return Err(error),
+        }
+        let status = match self
+            .with_s3_timeout(self.bucket.delete(), map_s3_bucket_delete_error)
+            .await
+        {
+            Ok(status) => status,
+            Err(StorageError::NotFound) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if status == 404 || (200..300).contains(&status) {
+            Ok(())
+        } else {
+            Err(StorageError::Backend)
+        }
+    }
+
+    /// Explicit async cleanup that propagates errors and asserts the bucket is gone.
+    ///
+    /// Retries transient transport/backend errors, then polls until list returns
+    /// explicit 404 / NotFound (including MinIO NoSuchBucket XML that rust-s3
+    /// fails to deserialize as a list page).
+    pub async fn cleanup_bucket_and_assert_gone(&self) -> Result<(), StorageError> {
+        let mut last_err = None;
+        for attempt in 0..4 {
+            match self.force_cleanup_bucket_for_tests().await {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(StorageError::NotFound) => {
+                    last_err = None;
+                    break;
+                }
+                Err(StorageError::Transport) | Err(StorageError::Backend) => {
+                    last_err = Some(StorageError::Transport);
+                    tokio::time::sleep(std::time::Duration::from_millis(50 * (attempt + 1))).await;
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        if let Some(err) = last_err {
+            return Err(err);
+        }
+        for attempt in 0..30 {
+            let probe = self
+                .with_s3_timeout(
+                    self.bucket
+                        .list_page(String::new(), None, None, None, Some(1)),
+                    map_s3_get_error,
+                )
+                .await;
+            match probe {
+                Err(StorageError::NotFound) | Ok((_, 404)) => return Ok(()),
+                Ok((_, status)) if (200..300).contains(&status) => {
+                    match self.force_cleanup_bucket_for_tests().await {
+                        Ok(()) | Err(StorageError::NotFound) => {}
+                        Err(_) => {}
+                    }
+                }
+                Err(StorageError::Transport) | Err(StorageError::Backend) => {
+                    match self.force_cleanup_bucket_for_tests().await {
+                        Ok(()) | Err(StorageError::NotFound) => {}
+                        Err(_) => {}
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50 * (attempt + 1))).await;
+                    continue;
+                }
+                Ok(_) | Err(_) => {}
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Err(StorageError::Backend)
+    }
+
+    async fn cleanup_bucket_contents(&self) -> Result<(), StorageError> {
+        let mut continuation = None;
+        loop {
+            let (page, status) = self
+                .with_s3_timeout(
+                    self.bucket.list_page(
+                        String::new(),
+                        None,
+                        continuation.clone(),
+                        None,
+                        Some(1000),
+                    ),
+                    map_s3_get_error,
+                )
+                .await?;
+            if status == 404 {
+                return Ok(());
+            }
+            if !(200..300).contains(&status) {
+                return Err(StorageError::Backend);
+            }
+            for object in page.contents {
+                let response = self
+                    .with_s3_timeout(self.bucket.delete_object(&object.key), map_s3_get_error)
+                    .await?;
+                let del_status = response.status_code();
+                if del_status != 404 && !(200..300).contains(&del_status) {
+                    return Err(StorageError::Backend);
+                }
+            }
+            if !page.is_truncated {
+                break;
+            }
+            continuation = page.next_continuation_token;
+            if continuation.is_none() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// Internal cleanup for objects whose key was just generated for `org_id`.
     ///
     /// This intentionally authorizes by the generated key instead of stored metadata so
@@ -781,12 +904,28 @@ fn metadata_map(head: &HeadObjectResult) -> HashMap<String, String> {
 }
 
 fn map_s3_get_error(error: S3Error) -> StorageError {
+    // MinIO NoSuchBucket error XML is sometimes surfaced as a serde failure
+    // (`missing field Name`) instead of HTTP 404 when listing a deleted bucket.
+    let rendered = format!("{error:?}");
+    if rendered.contains("NoSuchBucket")
+        || rendered.contains("missing field `Name`")
+        || rendered.contains("missing field \\\"Name\\\"")
+    {
+        return StorageError::NotFound;
+    }
     match error {
         S3Error::HttpFailWithBody(404, _) => StorageError::NotFound,
+        S3Error::HttpFailWithBody(_, body) if body.contains("NoSuchBucket") => {
+            StorageError::NotFound
+        }
         S3Error::HttpFailWithBody(_, _) => StorageError::Backend,
         S3Error::HttpFail => StorageError::Backend,
         _ => StorageError::Transport,
     }
+}
+
+fn map_s3_bucket_delete_error(error: S3Error) -> StorageError {
+    map_s3_get_error(error)
 }
 
 fn map_s3_head_error(error: S3Error) -> StorageError {

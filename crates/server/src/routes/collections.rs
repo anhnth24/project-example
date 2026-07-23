@@ -120,31 +120,79 @@ async fn update_collection(
     Path(collection_id): Path<Uuid>,
     Json(body): Json<UpdateCollectionRequest>,
 ) -> Result<Json<CollectionDto>, RouteError> {
-    require_permission(&auth.context, "doc.upload")
-        .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
+    if require_permission(&auth.context, "doc.upload").is_err() {
+        let resource_id = collection_id.to_string();
+        audit::record_deny(
+            state.pool(),
+            &auth.context,
+            &auth.request_id,
+            "collection.update",
+            "collection",
+            Some(&resource_id),
+            "permission_denied",
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+        return Err(RouteError::Denied(auth.request_id.clone()));
+    }
     if !auth.context.allows_collection(collection_id) {
         return Err(RouteError::NotFound(auth.request_id));
     }
     if body.name.trim().is_empty() || body.name.len() > 200 {
+        let resource_id = collection_id.to_string();
+        let _ = audit::record(
+            state.pool(),
+            &auth.context,
+            audit::AuditRecord {
+                request_id: &auth.request_id,
+                action: "collection.update",
+                resource_type: "collection",
+                resource_id: Some(&resource_id),
+                outcome: crate::db::models::AuditOutcome::Error,
+                metadata: serde_json::json!({
+                    "reason": "validation_failed",
+                    // Must be sanitized away if ever populated with secrets.
+                    "password": "should-be-stripped",
+                }),
+            },
+        )
+        .await;
         return Err(RouteError::Validation(
             auth.request_id.clone(),
             "Invalid collection name",
         ));
     }
+    let request_id = auth.request_id.clone();
     let row = with_org_txn(state.pool(), &auth.context, {
         let ctx = auth.context.clone();
         let name = body.name.trim().to_string();
         let description = body.description.clone();
+        let request_id = request_id.clone();
         move |txn| {
             Box::pin(async move {
-                collections::update_metadata(
+                let row = collections::update_metadata(
                     txn,
                     &ctx,
                     collection_id,
                     &name,
                     description.as_deref(),
                 )
-                .await
+                .await?;
+                let resource_id = row.id.to_string();
+                audit::record_in_txn(
+                    txn,
+                    &ctx,
+                    audit::AuditRecord {
+                        request_id: &request_id,
+                        action: "collection.update",
+                        resource_type: "collection",
+                        resource_id: Some(&resource_id),
+                        outcome: crate::db::models::AuditOutcome::Success,
+                        metadata: serde_json::json!({ "name": row.name.clone() }),
+                    },
+                )
+                .await?;
+                Ok(row)
             })
         }
     })
@@ -183,27 +231,33 @@ async fn delete_collection(
     if !auth.context.allows_collection(collection_id) {
         return Err(RouteError::NotFound(auth.request_id));
     }
+    let request_id = auth.request_id.clone();
     with_org_txn(state.pool(), &auth.context, {
         let ctx = auth.context.clone();
-        move |txn| Box::pin(async move { collections::soft_delete(txn, &ctx, collection_id).await })
+        let request_id = request_id.clone();
+        move |txn| {
+            Box::pin(async move {
+                collections::soft_delete(txn, &ctx, collection_id).await?;
+                let resource_id = collection_id.to_string();
+                audit::record_in_txn(
+                    txn,
+                    &ctx,
+                    audit::AuditRecord {
+                        request_id: &request_id,
+                        action: "collection.delete",
+                        resource_type: "collection",
+                        resource_id: Some(&resource_id),
+                        outcome: crate::db::models::AuditOutcome::Success,
+                        metadata: serde_json::json!({}),
+                    },
+                )
+                .await?;
+                Ok(())
+            })
+        }
     })
     .await
     .map_err(|error| RouteError::from_db(error, &auth.request_id))?;
-    let resource_id = collection_id.to_string();
-    audit::record(
-        state.pool(),
-        &auth.context,
-        audit::AuditRecord {
-            request_id: &auth.request_id,
-            action: "collection.delete",
-            resource_type: "collection",
-            resource_id: Some(&resource_id),
-            outcome: crate::db::models::AuditOutcome::Success,
-            metadata: serde_json::json!({}),
-        },
-    )
-    .await
-    .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -240,14 +294,16 @@ async fn create_collection(
         RouteError::Validation(auth.request_id.clone(), "Invalid collection visibility")
     })?;
     let id = Uuid::new_v4();
+    let request_id = auth.request_id.clone();
     let row = with_org_txn(state.pool(), &auth.context, {
         let ctx = auth.context.clone();
         let name = body.name.trim().to_string();
         let slug = body.slug.trim().to_string();
         let description = body.description.clone();
+        let request_id = request_id.clone();
         move |txn| {
             Box::pin(async move {
-                collections::insert(
+                let row = collections::insert(
                     txn,
                     &ctx,
                     NewCollection {
@@ -258,27 +314,27 @@ async fn create_collection(
                         visibility,
                     },
                 )
-                .await
+                .await?;
+                let resource_id = row.id.to_string();
+                audit::record_in_txn(
+                    txn,
+                    &ctx,
+                    audit::AuditRecord {
+                        request_id: &request_id,
+                        action: "collection.create",
+                        resource_type: "collection",
+                        resource_id: Some(&resource_id),
+                        outcome: crate::db::models::AuditOutcome::Success,
+                        metadata: serde_json::json!({ "slug": row.slug.clone() }),
+                    },
+                )
+                .await?;
+                Ok(row)
             })
         }
     })
     .await
     .map_err(|error| RouteError::from_db(error, &auth.request_id))?;
-    let resource_id = row.id.to_string();
-    audit::record(
-        state.pool(),
-        &auth.context,
-        audit::AuditRecord {
-            request_id: &auth.request_id,
-            action: "collection.create",
-            resource_type: "collection",
-            resource_id: Some(&resource_id),
-            outcome: crate::db::models::AuditOutcome::Success,
-            metadata: serde_json::json!({ "slug": row.slug }),
-        },
-    )
-    .await
-    .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
     Ok((
         StatusCode::CREATED,
         Json(CollectionDto {

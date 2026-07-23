@@ -29,6 +29,10 @@ pub enum ProviderError {
 pub enum ChatProvider {
     OpenAi(OpenAiCompatibleChat),
     Static(StaticChatProvider),
+    /// Deterministic transport failure for ask outage paths.
+    Failing,
+    /// Deterministic timeout for ask timeout fallback paths.
+    Timeout,
 }
 
 impl ChatProvider {
@@ -36,6 +40,8 @@ impl ChatProvider {
         match self {
             Self::OpenAi(provider) => provider.complete(messages).await,
             Self::Static(provider) => Ok(provider.answer.clone()),
+            Self::Failing => Err(ProviderError::Transport),
+            Self::Timeout => Err(ProviderError::Timeout),
         }
     }
 
@@ -43,6 +49,7 @@ impl ChatProvider {
         match self {
             Self::OpenAi(provider) => provider.mode,
             Self::Static(provider) => provider.mode,
+            Self::Failing | Self::Timeout => AnswerMode::FallbackExtractive,
         }
     }
 }
@@ -56,6 +63,8 @@ impl std::fmt::Debug for ChatProvider {
                 .field("mode", &provider.mode)
                 .field("answer", &"[REDACTED_ANSWER]")
                 .finish(),
+            Self::Failing => formatter.write_str("FailingChatProvider"),
+            Self::Timeout => formatter.write_str("TimeoutChatProvider"),
         }
     }
 }

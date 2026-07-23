@@ -17,7 +17,8 @@ use crate::auth::context::OrgContext;
 use crate::services::citation::{pins_from_hits, CitationPin};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::qa::grounding::{
-    conflict_warnings_for_current, validate_answer_citations, version_context_note, VersionContext,
+    conflict_resolution_notes_for_history, conflict_warnings_for_current,
+    validate_answer_citations, version_context_note, VersionContext,
 };
 use crate::services::qa::prompt::{build_grounded_messages, GroundedMessages};
 use crate::services::qa::provider::{ChatProvider, ProviderError};
@@ -31,6 +32,11 @@ pub const ASK_TIMEOUT: Duration = Duration::from_secs(45);
 /// Structured entailment is not yet an approved trusted verifier.
 /// Until it is, grounded ask stays fail-closed on extractive-only answers.
 const STRUCTURED_ENTAILMENT_AVAILABLE: bool = false;
+
+/// Runtime probe used by tests/gates (avoids clippy `assertions_on_constants`).
+pub fn structured_entailment_available() -> bool {
+    STRUCTURED_ENTAILMENT_AVAILABLE
+}
 
 fn force_extractive_only() -> bool {
     if !STRUCTURED_ENTAILMENT_AVAILABLE {
@@ -143,54 +149,72 @@ pub async fn ask(
         &request.mode,
         &retrieval.conflict_evidence,
     ));
+    warnings.extend(conflict_resolution_notes_for_history(
+        &request.mode,
+        &retrieval.conflict_evidence,
+    ));
     let version_context = version_context_note(&request.mode, &citations, &retrieval.hits);
 
     let extractive = extractive_answer(&request.question, &hybrid);
     let valid_ids = valid_citation_ids(hybrid.len());
 
-    let (answer, mode) = if force_extractive_only() {
-        warnings.push(
-            "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
-        );
-        (extractive, AnswerMode::OfflineExtractive)
-    } else {
-        match provider {
-            Some(chat) if !hybrid.is_empty() => {
-                let messages = build_grounded_messages(&request.question, &hybrid, &request.mode);
-                match chat.complete(&messages).await {
-                    Ok(llm_answer) => match validate_answer_citations(
-                        &llm_answer,
-                        &valid_ids,
-                        &citations,
-                        &request.mode,
-                    ) {
-                        Ok(()) => (llm_answer, chat.answer_mode()),
-                        Err(failure) => {
-                            warnings.extend(failure.warnings);
-                            warnings.push(
-                                if failure.unverifiable {
-                                    "Unverifiable claim-level grounding; using extractive fallback."
-                                } else {
-                                    "LLM grounding failed validation; using extractive fallback."
-                                }
+    // Provider may be attempted for outage/timeout observability, but GLM answers are
+    // never claimed grounded unless structured entailment is available AND validation passes.
+    let (answer, mode) = match provider {
+        Some(chat) if !hybrid.is_empty() => {
+            let messages = build_grounded_messages(&request.question, &hybrid, &request.mode);
+            match chat.complete(&messages).await {
+                Ok(llm_answer) => {
+                    if force_extractive_only() {
+                        warnings.push(
+                            "Structured entailment unavailable; fail-closed extractive-only grounding."
                                 .into(),
-                            );
-                            (extractive, AnswerMode::FallbackExtractive)
+                        );
+                        (extractive, AnswerMode::OfflineExtractive)
+                    } else {
+                        match validate_answer_citations(
+                            &llm_answer,
+                            &valid_ids,
+                            &citations,
+                            &request.mode,
+                        ) {
+                            Ok(()) => (llm_answer, chat.answer_mode()),
+                            Err(failure) => {
+                                warnings.extend(failure.warnings);
+                                warnings.push(
+                                    if failure.unverifiable {
+                                        "Unverifiable claim-level grounding; using extractive fallback."
+                                    } else {
+                                        "LLM grounding failed validation; using extractive fallback."
+                                    }
+                                    .into(),
+                                );
+                                (extractive, AnswerMode::FallbackExtractive)
+                            }
                         }
-                    },
-                    Err(_) => {
-                        warnings
-                            .push("LLM provider unavailable; using extractive fallback.".into());
-                        (extractive, AnswerMode::FallbackExtractive)
                     }
                 }
-            }
-            _ => {
-                if provider.is_none() {
-                    warnings.push("No chat provider configured; using extractive answer.".into());
+                Err(ProviderError::Timeout) => {
+                    warnings.push("LLM provider timed out; using extractive fallback.".into());
+                    (extractive, AnswerMode::FallbackExtractive)
                 }
-                (extractive, AnswerMode::OfflineExtractive)
+                Err(_) => {
+                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
+                    (extractive, AnswerMode::FallbackExtractive)
+                }
             }
+        }
+        _ => {
+            if provider.is_none() {
+                warnings.push("No chat provider configured; using extractive answer.".into());
+            }
+            if force_extractive_only() {
+                warnings.push(
+                    "Structured entailment unavailable; fail-closed extractive-only grounding."
+                        .into(),
+                );
+            }
+            (extractive, AnswerMode::OfflineExtractive)
         }
     };
 

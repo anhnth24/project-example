@@ -25,12 +25,18 @@ use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::http::{router, AppState};
-use fileconv_server::services::quota as quota_service;
+#[cfg(feature = "test-hooks")]
 use fileconv_server::services::upload::{
-    assert_disposition_is_typed, detect_magic, quota_reserve_hook, reject_dangerous_entry_name,
-    resolve_canonical_format, spawn_quota_settled_quarantine, stream_to_tempfile,
-    validate_and_quarantine, validate_streamed_bytes, validate_zip_archive, CanonicalFormat,
-    Disposition, LimitsConfig, QuotaSettledUploadError, ReasonCode, ThreatClass, UploadError,
+    acquire_hook_test_guard, arm_pause_after_reconcile_claim, arm_pause_before_approve_commit,
+    arm_pause_before_commit, arm_saga_fault, reconcile_stale_uploads, resume_after_reconcile_claim,
+    resume_before_approve_commit, resume_before_commit, SagaFaultBarrier,
+};
+use fileconv_server::services::upload::{
+    approve_quarantined_upload, assert_disposition_is_typed, detect_magic, quota_reserve_hook,
+    reject_dangerous_entry_name, resolve_canonical_format, run_upload_saga, stream_to_tempfile,
+    validate_and_quarantine, validate_streamed_bytes, validate_zip_archive, ApproveIntakeRequest,
+    CanonicalFormat, Disposition, LimitsConfig, QuarantineIdentity, ReasonCode, SagaInput,
+    ThreatClass, UploadError, PERMISSION_QUARANTINE_REVIEW,
 };
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
@@ -237,14 +243,21 @@ fn test_auth_config() -> AuthConfig {
     }
 }
 
-async fn seed_uploader(pool: &Pool, org: Uuid, user: Uuid, email: &str, password: &str) {
-    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+async fn seed_uploader(pool: &Pool, org: Uuid, user: Uuid, email: &str, password: &str) -> Uuid {
+    let collection_id = Uuid::new_v4();
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
     let email = email.to_string();
     with_org_txn(pool, &ctx, {
         let owned = ctx.clone();
         move |txn| {
             Box::pin(async move {
-                orgs::ensure_exists(txn, &owned, "uploadorg", "Upload Org").await?;
+                orgs::ensure_exists(
+                    txn,
+                    &owned,
+                    &format!("uploadorg-{}", owned.org_id().simple()),
+                    "Upload Org",
+                )
+                .await?;
                 orgs::ensure_user(txn, &owned, user, &email, "Uploader").await?;
                 orgs::ensure_membership(txn, &owned).await?;
                 txn.execute(
@@ -290,6 +303,18 @@ async fn seed_uploader(pool: &Pool, org: Uuid, user: Uuid, email: &str, password
                     &[&org, &role_id, &perm_id],
                 )
                 .await?;
+                txn.execute(
+                    "INSERT INTO collections (
+                        id, org_id, name, slug, visibility, owner_user_id
+                     ) VALUES ($1, $2, 'Upload Collection', $3, 'org', $4)",
+                    &[
+                        &collection_id,
+                        &org,
+                        &format!("upload-{}", collection_id.simple()),
+                        &user,
+                    ],
+                )
+                .await?;
                 Ok(())
             })
         }
@@ -300,6 +325,7 @@ async fn seed_uploader(pool: &Pool, org: Uuid, user: Uuid, email: &str, password
     session::set_password_hash(pool, user, password, &test_auth_config().argon2)
         .await
         .expect("set password");
+    collection_id
 }
 
 async fn stream_file(path: &Path) -> fileconv_server::services::upload::StreamedUpload {
@@ -1032,7 +1058,7 @@ async fn quota_hook_is_callable() {
     let pool = create_pool(&ephemeral.url).expect("pool");
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
-    seed_uploader(
+    let _collection_id = seed_uploader(
         &pool,
         org,
         user,
@@ -1048,13 +1074,15 @@ async fn quota_hook_is_callable() {
     ephemeral.drop().await;
 }
 
+#[cfg(feature = "test-hooks")]
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
-async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn registration_fault_refunds_quota_and_deletes_quarantine_object() {
     let Some(db_url) = test_database_url() else {
         return;
     };
-    let Some((client, _bucket)) = test_minio_client() else {
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, bucket)) = test_minio_client() else {
         return;
     };
     client.ensure_bucket().await.expect("bucket");
@@ -1064,7 +1092,7 @@ async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
     let pool = create_pool(&ephemeral.url).expect("pool");
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
-    seed_uploader(
+    let collection_id = seed_uploader(
         &pool,
         org,
         user,
@@ -1072,55 +1100,84 @@ async fn finalize_failure_refunds_quota_and_deletes_quarantine_object() {
         "correct-password-1",
     )
     .await;
-    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
-    let reservation_key = "finalize-cleanup";
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
     let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
-    quota_reserve_hook(&pool, &ctx, reservation_key, streamed.size_bytes)
-        .await
-        .expect("reserve quota");
-    quota_service::refund(&pool, &ctx, &format!("upload.documents.{reservation_key}"))
-        .await
-        .expect("force document reservation non-finalizable");
-
-    let handle = spawn_quota_settled_quarantine(
-        pool.clone(),
-        ctx.clone(),
-        client.clone(),
-        LimitsConfig::policy_defaults(),
-        streamed,
-        Some("report.pdf".into()),
-        Some("application/pdf".into()),
-        reservation_key.into(),
-    );
-    let err = handle
-        .await
-        .expect("upload task join")
-        .expect_err("finalize should fail");
-    let outcome = match err {
-        QuotaSettledUploadError::Quota { error, outcome } => {
-            assert!(matches!(
-                error,
-                quota_service::QuotaError::RefundedCannotFinalize
-            ));
-            outcome
-        }
-        other => panic!("unexpected upload task result: {other:?}"),
+    let reservation_key = "op.registration-fault";
+    let identity = QuarantineIdentity {
+        object_id: Uuid::new_v4(),
+        collection_id,
+        document_id: Uuid::new_v4(),
+        version_id: Uuid::new_v4(),
     };
+    arm_saga_fault(SagaFaultBarrier::RegistrationFail);
+    let err = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &LimitsConfig::policy_defaults(),
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:registration-fault".into(),
+            reservation_key: reservation_key.into(),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity,
+        },
+    )
+    .await
+    .expect_err("registration fault must fail closed");
+    let _ = err;
 
-    assert!(!client
-        .object_exists(org, &outcome.object_key)
-        .await
-        .expect("object exists"));
     assert_eq!(
-        quota_reservation_status(&pool, &ctx, "upload.storage.finalize-cleanup").await,
+        quota_reservation_status(&pool, &ctx, &format!("upload.storage.{reservation_key}")).await,
         Some("refunded".into())
     );
     assert_eq!(
-        quota_reservation_status(&pool, &ctx, "upload.documents.finalize-cleanup").await,
+        quota_reservation_status(&pool, &ctx, &format!("upload.documents.{reservation_key}")).await,
         Some("refunded".into())
     );
     assert_eq!(quota_counter_value(&pool, &ctx, "storage_bytes").await, 0);
     assert_eq!(quota_counter_value(&pool, &ctx, "documents").await, 0);
+    let docs: i64 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM documents WHERE org_id = $1",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(docs, 0, "registration fault must leave zero document rows");
+    let jobs: i64 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM jobs WHERE org_id = $1",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(jobs, 0);
+    let _ = bucket;
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("minio bucket cleanup must succeed and assert gone");
 
     ephemeral.drop().await;
 }
@@ -1338,7 +1395,7 @@ async fn http_upload_happy_and_spoof() {
     let pool = create_pool(&ephemeral.url).expect("pool");
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
-    seed_uploader(
+    let collection_id = seed_uploader(
         &pool,
         org,
         user,
@@ -1394,7 +1451,7 @@ async fn http_upload_happy_and_spoof() {
     let token = login.tokens.access_token.expose().to_string();
 
     let pdf = std::fs::read(golden_dir().join("gold-004.pdf")).unwrap();
-    let body = multipart_body("report.pdf", &pdf);
+    let body = multipart_body("report.pdf", &pdf, collection_id);
     let response = app
         .clone()
         .oneshot(
@@ -1440,6 +1497,8 @@ async fn http_upload_happy_and_spoof() {
     assert_eq!(stored.len(), pdf.len());
     assert_eq!(hex::encode(Sha256::digest(&stored)), json["sha256"]);
 
+    let first_document_id = json["documentId"].as_str().unwrap().to_string();
+    let first_job_id = json["jobId"].as_str().unwrap().to_string();
     let retry = app
         .clone()
         .oneshot(
@@ -1452,15 +1511,54 @@ async fn http_upload_happy_and_spoof() {
                     "content-type",
                     format!("multipart/form-data; boundary={BOUNDARY}"),
                 )
-                .body(Body::from(multipart_body("report.pdf", &pdf)))
+                .body(Body::from(multipart_body(
+                    "report.pdf",
+                    &pdf,
+                    collection_id,
+                )))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(retry.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        retry.status(),
+        StatusCode::CREATED,
+        "same digest replay must return 201"
+    );
+    let retry_bytes = retry.into_body().collect().await.unwrap().to_bytes();
+    let retry_json: serde_json::Value = serde_json::from_slice(&retry_bytes).unwrap();
+    assert_eq!(retry_json["documentId"], first_document_id);
+    assert_eq!(retry_json["jobId"], first_job_id);
+
+    let conflict = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header("idempotency-key", "http-upload-retry-key")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(multipart_body(
+                    "note.txt",
+                    b"different digest payload\n",
+                    collection_id,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        conflict.status(),
+        StatusCode::CONFLICT,
+        "different digest with same Idempotency-Key must 409"
+    );
 
     let spoof = std::fs::read(adversarial_dir().join("plain-text.pdf")).unwrap();
-    let body = multipart_body("plain-text.pdf", &spoof);
+    let body = multipart_body("plain-text.pdf", &spoof, collection_id);
     let response = app
         .clone()
         .oneshot(
@@ -1483,7 +1581,7 @@ async fn http_upload_happy_and_spoof() {
     assert_eq!(json["code"], "upload_rejected");
     assert!(!bytes.windows(b"not a pdf".len()).any(|w| w == b"not a pdf"));
 
-    let truncated = multipart_body_without_close("late.pdf", &pdf);
+    let truncated = multipart_body_without_close("late.pdf", &pdf, collection_id);
     let response = app
         .clone()
         .oneshot(
@@ -1542,7 +1640,7 @@ async fn http_upload_happy_and_spoof() {
                     "content-type",
                     format!("multipart/form-data; boundary={BOUNDARY}"),
                 )
-                .body(Body::from(multipart_body(&huge_name, &pdf)))
+                .body(Body::from(multipart_body(&huge_name, &pdf, collection_id)))
                 .unwrap(),
         )
         .await
@@ -1568,7 +1666,7 @@ async fn cancelled_http_upload_settles_quota_consistently() {
     let pool = create_pool(&ephemeral.url).expect("pool");
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
-    seed_uploader(
+    let collection_id = seed_uploader(
         &pool,
         org,
         user,
@@ -1624,7 +1722,11 @@ async fn cancelled_http_upload_settles_quota_consistently() {
             "content-type",
             format!("multipart/form-data; boundary={BOUNDARY}"),
         )
-        .body(Body::from(multipart_body("cancelled.txt", &payload)))
+        .body(Body::from(multipart_body(
+            "cancelled.txt",
+            &payload,
+            collection_id,
+        )))
         .unwrap();
     let handle = tokio::spawn(app.oneshot(request));
 
@@ -1671,8 +1773,14 @@ async fn cancelled_http_upload_settles_quota_consistently() {
 
 const BOUNDARY: &str = "----markhandUploadBoundary7MA4YWxk";
 
-fn multipart_body(filename: &str, content: &[u8]) -> Vec<u8> {
+fn multipart_body(filename: &str, content: &[u8], collection_id: Uuid) -> Vec<u8> {
     let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"collectionId\"\r\n\r\n{collection_id}\r\n"
+        )
+        .as_bytes(),
+    );
     body.extend_from_slice(
         format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes(),
     );
@@ -1681,8 +1789,14 @@ fn multipart_body(filename: &str, content: &[u8]) -> Vec<u8> {
     body
 }
 
-fn multipart_body_without_close(filename: &str, content: &[u8]) -> Vec<u8> {
+fn multipart_body_without_close(filename: &str, content: &[u8], collection_id: Uuid) -> Vec<u8> {
     let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"collectionId\"\r\n\r\n{collection_id}\r\n"
+        )
+        .as_bytes(),
+    );
     body.extend_from_slice(
         format!("--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/pdf\r\n\r\n").as_bytes(),
     );
@@ -1714,4 +1828,1482 @@ fn upload_error_redacts_and_maps_status() {
         hex::encode(Sha256::digest(b"hello")),
         hex::encode(Sha256::digest(b"hello"))
     );
+}
+
+async fn count_org_rows(pool: &Pool, ctx: &OrgContext, table: &str) -> i64 {
+    let sql = format!("SELECT COUNT(*)::bigint FROM {table} WHERE org_id = $1");
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn.query_one(&sql, &[&ctx.org_id()]).await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("count")
+}
+
+async fn grant_permission(pool: &Pool, ctx: &OrgContext, code: &str) {
+    let code = code.to_string();
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                fileconv_server::services::authz_lock::lock_principal_authz(
+                    txn,
+                    ctx.org_id(),
+                    ctx.user_id(),
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO permissions (id, code, description)
+                     VALUES ($1, $2, $2)
+                     ON CONFLICT (code) DO NOTHING",
+                    &[&Uuid::new_v4(), &code],
+                )
+                .await?;
+                let role_id: Uuid = txn
+                    .query_one(
+                        "SELECT id FROM roles WHERE org_id = $1 AND code = 'owner'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?
+                    .get(0);
+                let perm_id: Uuid = txn
+                    .query_one("SELECT id FROM permissions WHERE code = $1", &[&code])
+                    .await?
+                    .get(0);
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT DO NOTHING",
+                    &[&ctx.org_id(), &role_id, &perm_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("grant permission");
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn saga_fault_barriers_leave_terminal_cleanup() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = seed_uploader(
+        &pool,
+        org,
+        user,
+        "saga-barriers@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+    let limits = LimitsConfig::policy_defaults();
+
+    for (idx, barrier) in [
+        SagaFaultBarrier::AfterReserve,
+        SagaFaultBarrier::AfterObjectPut,
+        SagaFaultBarrier::BeforeCommit,
+        SagaFaultBarrier::RegistrationFail,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+        let reservation_key = format!("op.barrier-{idx}");
+        arm_saga_fault(barrier);
+        let err = run_upload_saga(
+            &pool,
+            &client,
+            &ctx,
+            &limits,
+            SagaInput {
+                collection_id,
+                idempotency_key: format!("client:barrier-{idx}"),
+                reservation_key: reservation_key.clone(),
+                streamed,
+                declared_filename: Some("report.pdf".into()),
+                declared_content_type: Some("application/pdf".into()),
+                identity: QuarantineIdentity {
+                    object_id: Uuid::new_v4(),
+                    collection_id,
+                    document_id: Uuid::new_v4(),
+                    version_id: Uuid::new_v4(),
+                },
+            },
+        )
+        .await
+        .expect_err("armed barrier must fail");
+        let _ = err;
+        assert_eq!(count_org_rows(&pool, &ctx, "documents").await, 0);
+        assert_eq!(count_org_rows(&pool, &ctx, "jobs").await, 0);
+        assert_eq!(quota_counter_value(&pool, &ctx, "storage_bytes").await, 0);
+        assert_eq!(quota_counter_value(&pool, &ctx, "documents").await, 0);
+        assert_eq!(
+            quota_reservation_status(&pool, &ctx, &format!("upload.storage.{reservation_key}"))
+                .await,
+            Some("refunded".into())
+        );
+    }
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn quarantined_review_requires_approval_for_single_job() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = seed_uploader(
+        &pool,
+        org,
+        user,
+        "review-upload@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+    let streamed = stream_file(&adversarial_dir().join("formula.csv")).await;
+    let success = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &LimitsConfig::policy_defaults(),
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:review-csv".into(),
+            reservation_key: "op.review-csv".into(),
+            streamed,
+            declared_filename: Some("formula.csv".into()),
+            declared_content_type: Some("text/csv".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect("quarantined upload registers");
+    assert_eq!(success.outcome.disposition, Disposition::Quarantined);
+    assert!(success.registered.job_id.is_none());
+    assert_eq!(count_org_rows(&pool, &ctx, "jobs").await, 0);
+    assert_eq!(count_org_rows(&pool, &ctx, "documents").await, 1);
+    // No current published version / chunks before approval.
+    let currents: i64 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        let document_id = success.registered.document_id;
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM document_versions
+                         WHERE org_id = $1 AND document_id = $2 AND is_current",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(currents, 0);
+    let chunks: i64 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        let document_id = success.registered.document_id;
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM chunks
+                         WHERE org_id = $1 AND document_id = $2",
+                        &[&ctx.org_id(), &document_id],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(chunks, 0);
+
+    // Uploader without review permission cannot self-approve.
+    let denied = approve_quarantined_upload(
+        &pool,
+        &ctx,
+        ApproveIntakeRequest {
+            collection_id,
+            document_id: success.registered.document_id,
+            reason: Some("self"),
+            request_id: "req-self-approve",
+        },
+    )
+    .await;
+    assert!(
+        denied.is_err(),
+        "uploader without review permission must fail"
+    );
+
+    // Grant reviewer permission and approve twice (idempotent).
+    grant_permission(&pool, &ctx, PERMISSION_QUARANTINE_REVIEW).await;
+    let reviewer = OrgContext::try_new(
+        org,
+        user,
+        ["doc.upload", PERMISSION_QUARANTINE_REVIEW],
+        [collection_id],
+    )
+    .unwrap();
+    let first = approve_quarantined_upload(
+        &pool,
+        &reviewer,
+        ApproveIntakeRequest {
+            collection_id,
+            document_id: success.registered.document_id,
+            reason: Some("looks safe"),
+            request_id: "req-approve-1",
+        },
+    )
+    .await
+    .expect("approve");
+    let second = approve_quarantined_upload(
+        &pool,
+        &reviewer,
+        ApproveIntakeRequest {
+            collection_id,
+            document_id: success.registered.document_id,
+            reason: Some("looks safe"),
+            request_id: "req-approve-2",
+        },
+    )
+    .await
+    .expect("approve replay");
+    assert_eq!(first.job_id, second.job_id);
+    assert!(first.created_job);
+    assert!(!second.created_job);
+    assert_eq!(count_org_rows(&pool, &ctx, "jobs").await, 1);
+    // Cross-collection IDOR → not found.
+    let idor = approve_quarantined_upload(
+        &pool,
+        &reviewer,
+        ApproveIntakeRequest {
+            collection_id: Uuid::new_v4(),
+            document_id: success.registered.document_id,
+            reason: None,
+            request_id: "req-idor",
+        },
+    )
+    .await;
+    assert!(matches!(
+        idor,
+        Err(fileconv_server::services::upload::SagaError::NotFound)
+            | Err(fileconv_server::services::upload::SagaError::PermissionDenied)
+    ));
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[cfg(feature = "test-hooks")]
+async fn run_fresh_auth_barrier_case(
+    pool: &Pool,
+    client: &MinioClient,
+    label: &str,
+    mutate: impl FnOnce(
+        Pool,
+        Uuid,
+        Uuid,
+        Uuid,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+) {
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = seed_uploader(
+        pool,
+        org,
+        user,
+        &format!("{label}@example.test"),
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+    let limits = LimitsConfig::policy_defaults();
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    arm_pause_before_commit();
+    let pool_bg = pool.clone();
+    let client_bg = client.clone();
+    let ctx_bg = ctx.clone();
+    let idem = format!("client:auth-{label}");
+    let reservation_key = format!("op.auth-{label}");
+    let handle = tokio::spawn(async move {
+        run_upload_saga(
+            &pool_bg,
+            &client_bg,
+            &ctx_bg,
+            &limits,
+            SagaInput {
+                collection_id,
+                idempotency_key: idem,
+                reservation_key,
+                streamed,
+                declared_filename: Some("report.pdf".into()),
+                declared_content_type: Some("application/pdf".into()),
+                identity: QuarantineIdentity {
+                    object_id: Uuid::new_v4(),
+                    collection_id,
+                    document_id: Uuid::new_v4(),
+                    version_id: Uuid::new_v4(),
+                },
+            },
+        )
+        .await
+    });
+    for _ in 0..50 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // Wait until durable object_stored intent exists.
+        let ready = with_org_txn(pool, &ctx, {
+            let ctx = ctx.clone();
+            let key = format!("client:auth-{label}");
+            move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_opt(
+                            "SELECT state FROM upload_operations
+                             WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3",
+                            &[&ctx.org_id(), &ctx.user_id(), &key],
+                        )
+                        .await?;
+                    Ok(row.map(|r| r.get::<_, String>(0)))
+                })
+            }
+        })
+        .await
+        .unwrap();
+        if ready.as_deref() == Some("object_stored") {
+            break;
+        }
+    }
+    mutate(pool.clone(), org, user, collection_id).await;
+    resume_before_commit();
+    let result = handle.await.expect("join");
+    assert!(
+        result.is_err(),
+        "{label}: fresh auth barrier must deny registration: {result:?}"
+    );
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn fresh_auth_barriers_deny_cleanup_and_zero_rows() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+
+    run_fresh_auth_barrier_case(
+        &pool,
+        &client,
+        "disable",
+        |pool, _org, user, _collection| {
+            Box::pin(async move {
+                let client = pool.get().await.expect("client");
+                client
+                    .execute(
+                        "UPDATE users SET disabled_at = now() WHERE id = $1",
+                        &[&user],
+                    )
+                    .await
+                    .expect("disable");
+            })
+        },
+    )
+    .await;
+
+    run_fresh_auth_barrier_case(
+        &pool,
+        &client,
+        "remove-membership",
+        |pool, org, user, _collection| {
+            Box::pin(async move {
+                let client = pool.get().await.expect("client");
+                client
+                    .execute(
+                        "DELETE FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+                        &[&org, &user],
+                    )
+                    .await
+                    .expect("remove");
+            })
+        },
+    )
+    .await;
+
+    run_fresh_auth_barrier_case(
+        &pool,
+        &client,
+        "delete-collection",
+        |pool, org, _user, collection| {
+            Box::pin(async move {
+                let client = pool.get().await.expect("client");
+                client
+                    .execute(
+                        "UPDATE collections SET deleted_at = now()
+                         WHERE org_id = $1 AND id = $2",
+                        &[&org, &collection],
+                    )
+                    .await
+                    .expect("soft-delete");
+            })
+        },
+    )
+    .await;
+
+    run_fresh_auth_barrier_case(
+        &pool,
+        &client,
+        "revoke-upload-perm",
+        |pool, org, user, _collection| {
+            Box::pin(async move {
+                let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+                with_org_txn(&pool, &ctx, {
+                    let ctx = ctx.clone();
+                    move |txn| {
+                        Box::pin(async move {
+                            fileconv_server::services::acl_mutate::revoke_role_permission_for_principal(
+                                txn,
+                                ctx.org_id(),
+                                ctx.user_id(),
+                                "doc.upload",
+                            )
+                            .await?;
+                            Ok(())
+                        })
+                    }
+                })
+                .await
+                .expect("revoke upload perm");
+            })
+        },
+    )
+    .await;
+
+    run_fresh_auth_barrier_case(
+        &pool,
+        &client,
+        "revoke-collection-acl",
+        |pool, org, user, collection| {
+            Box::pin(async move {
+                // Alternate owner so target principal loses private-collection access.
+                let alt = Uuid::new_v4();
+                let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection]).unwrap();
+                with_org_txn(&pool, &ctx, {
+                    let ctx = ctx.clone();
+                    move |txn| {
+                        Box::pin(async move {
+                            orgs::ensure_user(
+                                txn,
+                                &ctx,
+                                alt,
+                                &format!("alt-{}@example.test", alt.simple()),
+                                "Alt Owner",
+                            )
+                            .await?;
+                            txn.execute(
+                                "INSERT INTO org_memberships (org_id, user_id, role)
+                                 VALUES ($1, $2, 'owner')
+                                 ON CONFLICT (org_id, user_id) DO NOTHING",
+                                &[&org, &alt],
+                            )
+                            .await?;
+                            fileconv_server::services::acl_mutate::revoke_collection_access_for_principal(
+                                txn,
+                                org,
+                                user,
+                                collection,
+                                alt,
+                            )
+                            .await?;
+                            Ok(())
+                        })
+                    }
+                })
+                .await
+                .expect("revoke collection acl");
+            })
+        },
+    )
+    .await;
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn concurrent_idempotent_upload_one_side_effect() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = seed_uploader(
+        &pool,
+        org,
+        user,
+        "concurrent-idem@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+    let limits = LimitsConfig::policy_defaults();
+    let pool_a = pool.clone();
+    let pool_b = pool.clone();
+    let client_a = client.clone();
+    let client_b = client.clone();
+    let ctx_a = ctx.clone();
+    let ctx_b = ctx.clone();
+    let a = tokio::spawn(async move {
+        let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+        run_upload_saga(
+            &pool_a,
+            &client_a,
+            &ctx_a,
+            &limits,
+            SagaInput {
+                collection_id,
+                idempotency_key: "client:concurrent-same".into(),
+                reservation_key: upload_operation_key(org, user, "concurrent-same"),
+                streamed,
+                declared_filename: Some("report.pdf".into()),
+                declared_content_type: Some("application/pdf".into()),
+                identity: QuarantineIdentity {
+                    object_id: Uuid::new_v4(),
+                    collection_id,
+                    document_id: Uuid::new_v4(),
+                    version_id: Uuid::new_v4(),
+                },
+            },
+        )
+        .await
+    });
+    let b = tokio::spawn(async move {
+        let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+        run_upload_saga(
+            &pool_b,
+            &client_b,
+            &ctx_b,
+            &limits,
+            SagaInput {
+                collection_id,
+                idempotency_key: "client:concurrent-same".into(),
+                reservation_key: upload_operation_key(org, user, "concurrent-same"),
+                streamed,
+                declared_filename: Some("report.pdf".into()),
+                declared_content_type: Some("application/pdf".into()),
+                identity: QuarantineIdentity {
+                    object_id: Uuid::new_v4(),
+                    collection_id,
+                    document_id: Uuid::new_v4(),
+                    version_id: Uuid::new_v4(),
+                },
+            },
+        )
+        .await
+    });
+    let ra = a.await.unwrap();
+    let rb = b.await.unwrap();
+    let successes = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
+    let conflicts = [&ra, &rb]
+        .iter()
+        .filter(|r| {
+            matches!(
+                r,
+                Err(fileconv_server::services::upload::SagaError::IdempotencyInProgress)
+                    | Err(fileconv_server::services::upload::SagaError::IdempotencyConflict)
+            )
+        })
+        .count();
+    assert!(
+        successes >= 1,
+        "at least one concurrent upload must complete: {ra:?} {rb:?}"
+    );
+    assert_eq!(
+        successes + conflicts,
+        2,
+        "other side must be in-progress/conflict or success replay"
+    );
+    // Retry the loser until durable replay 201-equivalent.
+    let mut final_ok = ra.ok().or_else(|| rb.ok());
+    for _ in 0..20 {
+        if final_ok.is_some()
+            && final_ok
+                .as_ref()
+                .is_some_and(|s| s.registered.job_id.is_some())
+        {
+            break;
+        }
+        let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+        match run_upload_saga(
+            &pool,
+            &client,
+            &ctx,
+            &limits,
+            SagaInput {
+                collection_id,
+                idempotency_key: "client:concurrent-same".into(),
+                reservation_key: upload_operation_key(org, user, "concurrent-same"),
+                streamed,
+                declared_filename: Some("report.pdf".into()),
+                declared_content_type: Some("application/pdf".into()),
+                identity: QuarantineIdentity {
+                    object_id: Uuid::new_v4(),
+                    collection_id,
+                    document_id: Uuid::new_v4(),
+                    version_id: Uuid::new_v4(),
+                },
+            },
+        )
+        .await
+        {
+            Ok(success) => final_ok = Some(success),
+            Err(fileconv_server::services::upload::SagaError::IdempotencyInProgress) => {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(other) => panic!("unexpected concurrent retry error: {other:?}"),
+        }
+    }
+    let success = final_ok.expect("eventually one completed upload");
+    assert_eq!(count_org_rows(&pool, &ctx, "documents").await, 1);
+    assert_eq!(count_org_rows(&pool, &ctx, "jobs").await, 1);
+    assert!(success.registered.job_id.is_some());
+    assert_eq!(
+        quota_counter_value(&pool, &ctx, "documents").await,
+        1,
+        "quota documents committed exactly once"
+    );
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
+async fn envelope_binds_collection_and_stable_replay_deep_equality() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_a = seed_uploader(
+        &pool,
+        org,
+        user,
+        "envelope-a@example.test",
+        "correct-password-1",
+    )
+    .await;
+    // Second collection in same org.
+    let collection_b = Uuid::new_v4();
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_a, collection_b]).unwrap();
+    with_org_txn(&pool, &ctx, {
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO collections (
+                        id, org_id, name, slug, visibility, owner_user_id
+                     ) VALUES ($1, $2, 'B', $3, 'org', $4)",
+                    &[
+                        &collection_b,
+                        &org,
+                        &format!("upload-b-{}", collection_b.simple()),
+                        &user,
+                    ],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed collection b");
+
+    let limits = LimitsConfig::policy_defaults();
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let first = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &limits,
+        SagaInput {
+            collection_id: collection_a,
+            idempotency_key: "client:envelope-stable".into(),
+            reservation_key: upload_operation_key(org, user, "envelope-stable"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id: collection_a,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect("first upload");
+    assert!(!first.replayed);
+
+    // Same key + bytes but different collection → conflict.
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let conflict = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &limits,
+        SagaInput {
+            collection_id: collection_b,
+            idempotency_key: "client:envelope-stable".into(),
+            reservation_key: upload_operation_key(org, user, "envelope-stable"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id: collection_b,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await;
+    assert!(matches!(
+        conflict,
+        Err(fileconv_server::services::upload::SagaError::IdempotencyConflict)
+    ));
+
+    // Same envelope → deep-equal stable fields (requestId is outside StableUploadResponse).
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let replay = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &limits,
+        SagaInput {
+            collection_id: collection_a,
+            idempotency_key: "client:envelope-stable".into(),
+            reservation_key: upload_operation_key(org, user, "envelope-stable"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id: collection_a,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect("replay");
+    assert!(replay.replayed);
+    assert_eq!(first.stable, replay.stable);
+
+    // Revoke ACL on original collection → replay fail-closed.
+    with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                fileconv_server::services::acl_mutate::revoke_role_permission_for_principal(
+                    txn,
+                    ctx.org_id(),
+                    ctx.user_id(),
+                    "doc.upload",
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("revoke");
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let denied = run_upload_saga(
+        &pool,
+        &client,
+        &OrgContext::try_new(org, user, ["doc.upload"], [collection_a]).unwrap(),
+        &limits,
+        SagaInput {
+            collection_id: collection_a,
+            idempotency_key: "client:envelope-stable".into(),
+            reservation_key: upload_operation_key(org, user, "envelope-stable"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id: collection_a,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await;
+    assert!(matches!(
+        denied,
+        Err(fileconv_server::services::upload::SagaError::PermissionDenied)
+    ));
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn reconcile_vs_commit_interleavings_no_deadlock_object_retained_when_completed() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let limits = LimitsConfig::policy_defaults();
+
+    // Interleaving A: reconcile claims first → commit loses; no documents.
+    {
+        let org = Uuid::new_v4();
+        let user = Uuid::new_v4();
+        let collection_id = seed_uploader(
+            &pool,
+            org,
+            user,
+            "recon-a@example.test",
+            "correct-password-1",
+        )
+        .await;
+        let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+        arm_pause_before_commit();
+        let pool_bg = pool.clone();
+        let client_bg = client.clone();
+        let ctx_bg = ctx.clone();
+        let handle = tokio::spawn(async move {
+            let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+            run_upload_saga(
+                &pool_bg,
+                &client_bg,
+                &ctx_bg,
+                &limits,
+                SagaInput {
+                    collection_id,
+                    idempotency_key: "client:recon-a".into(),
+                    reservation_key: upload_operation_key(org, user, "recon-a"),
+                    streamed,
+                    declared_filename: Some("report.pdf".into()),
+                    declared_content_type: Some("application/pdf".into()),
+                    identity: QuarantineIdentity {
+                        object_id: Uuid::new_v4(),
+                        collection_id,
+                        document_id: Uuid::new_v4(),
+                        version_id: Uuid::new_v4(),
+                    },
+                },
+            )
+            .await
+        });
+        wait_for_op_state(&pool, &ctx, "client:recon-a", "object_stored").await;
+        with_org_txn(&pool, &ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    txn.execute(
+                        "UPDATE upload_operations SET updated_at = now() - interval '2 hours'
+                         WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3",
+                        &[&ctx.org_id(), &ctx.user_id(), &"client:recon-a"],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            }
+        })
+        .await
+        .expect("age");
+        arm_pause_after_reconcile_claim();
+        let pool_r = pool.clone();
+        let client_r = client.clone();
+        let ctx_r = ctx.clone();
+        let recon = tokio::spawn(async move {
+            reconcile_stale_uploads(
+                &pool_r,
+                &client_r,
+                &ctx_r,
+                chrono::Utc::now() - chrono::Duration::hours(1),
+                10,
+            )
+            .await
+        });
+        // Wait until reconciling claimed.
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if op_state(&pool, &ctx, "client:recon-a").await.as_deref() == Some("reconciling") {
+                break;
+            }
+        }
+        resume_before_commit();
+        let commit_result = handle.await.expect("join");
+        resume_after_reconcile_claim();
+        let _ = recon.await.expect("recon join");
+        assert!(
+            commit_result.is_err(),
+            "commit must lose to reconcile claim: {commit_result:?}"
+        );
+        assert_eq!(count_org_rows(&pool, &ctx, "documents").await, 0);
+    }
+
+    // Interleaving B: commit completes first → reconcile must retain object.
+    {
+        let org = Uuid::new_v4();
+        let user = Uuid::new_v4();
+        let collection_id = seed_uploader(
+            &pool,
+            org,
+            user,
+            "recon-b@example.test",
+            "correct-password-1",
+        )
+        .await;
+        let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+        arm_pause_before_commit();
+        let pool_bg = pool.clone();
+        let client_bg = client.clone();
+        let ctx_bg = ctx.clone();
+        let handle = tokio::spawn(async move {
+            let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+            run_upload_saga(
+                &pool_bg,
+                &client_bg,
+                &ctx_bg,
+                &limits,
+                SagaInput {
+                    collection_id,
+                    idempotency_key: "client:recon-b".into(),
+                    reservation_key: upload_operation_key(org, user, "recon-b"),
+                    streamed,
+                    declared_filename: Some("report.pdf".into()),
+                    declared_content_type: Some("application/pdf".into()),
+                    identity: QuarantineIdentity {
+                        object_id: Uuid::new_v4(),
+                        collection_id,
+                        document_id: Uuid::new_v4(),
+                        version_id: Uuid::new_v4(),
+                    },
+                },
+            )
+            .await
+        });
+        wait_for_op_state(&pool, &ctx, "client:recon-b", "object_stored").await;
+        resume_before_commit();
+        let success = handle.await.expect("join").expect("commit wins");
+        assert!(!success.replayed);
+        assert_eq!(
+            op_state(&pool, &ctx, "client:recon-b").await.as_deref(),
+            Some("completed")
+        );
+        with_org_txn(&pool, &ctx, {
+            let ctx = ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    txn.execute(
+                        "UPDATE upload_operations SET updated_at = now() - interval '2 hours'
+                         WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3",
+                        &[&ctx.org_id(), &ctx.user_id(), &"client:recon-b"],
+                    )
+                    .await?;
+                    Ok(())
+                })
+            }
+        })
+        .await
+        .expect("age");
+        let cleaned = reconcile_stale_uploads(
+            &pool,
+            &client,
+            &ctx,
+            chrono::Utc::now() - chrono::Duration::hours(1),
+            10,
+        )
+        .await
+        .expect("reconcile");
+        assert_eq!(cleaned, 0, "completed ops must not be claimed");
+        assert_eq!(
+            op_state(&pool, &ctx, "client:recon-b").await.as_deref(),
+            Some("completed")
+        );
+        assert!(
+            client
+                .object_exists(org, &success.outcome.object_key)
+                .await
+                .expect("exists"),
+            "completed object must be retained"
+        );
+        assert_eq!(count_org_rows(&pool, &ctx, "documents").await, 1);
+    }
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn stale_started_putting_reconcile_and_retry_with_new_attempt() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = seed_uploader(
+        &pool,
+        org,
+        user,
+        "retry-stale@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+    let limits = LimitsConfig::policy_defaults();
+
+    // Fault after reserve → refunded; retry with same idempotency key succeeds.
+    arm_saga_fault(SagaFaultBarrier::AfterReserve);
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let err = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &limits,
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:retry-stale".into(),
+            reservation_key: upload_operation_key(org, user, "retry-stale"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect_err("fault");
+    let _ = err;
+    assert_eq!(
+        op_state(&pool, &ctx, "client:retry-stale").await.as_deref(),
+        Some("refunded")
+    );
+
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let success = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &limits,
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:retry-stale".into(),
+            reservation_key: upload_operation_key(org, user, "retry-stale"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect("retry after refunded");
+    assert!(!success.replayed);
+    assert_eq!(
+        op_state(&pool, &ctx, "client:retry-stale").await.as_deref(),
+        Some("completed")
+    );
+    let attempt: i32 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT attempt FROM upload_operations
+                         WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3",
+                        &[&ctx.org_id(), &ctx.user_id(), &"client:retry-stale"],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("attempt");
+    assert!(attempt >= 2, "retry must bump attempt, got {attempt}");
+
+    // Stale started/putting reconcile window: age a reserved-only op.
+    arm_saga_fault(SagaFaultBarrier::AfterReserve);
+    let streamed = stream_file(&golden_dir().join("gold-004.pdf")).await;
+    let _ = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &limits,
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:stale-putting".into(),
+            reservation_key: upload_operation_key(org, user, "stale-putting"),
+            streamed,
+            declared_filename: Some("report.pdf".into()),
+            declared_content_type: Some("application/pdf".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await;
+    with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                // Force putting + age for reconciler coverage.
+                txn.execute(
+                    "UPDATE upload_operations
+                     SET state = 'putting', updated_at = now() - interval '3 hours'
+                     WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3",
+                    &[&ctx.org_id(), &ctx.user_id(), &"client:stale-putting"],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("force putting");
+    let cleaned = reconcile_stale_uploads(
+        &pool,
+        &client,
+        &ctx,
+        chrono::Utc::now() - chrono::Duration::hours(1),
+        10,
+    )
+    .await
+    .expect("reconcile stale putting");
+    assert!(cleaned >= 1);
+    assert_eq!(
+        op_state(&pool, &ctx, "client:stale-putting")
+            .await
+            .as_deref(),
+        Some("refunded")
+    );
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks"]
+async fn quarantine_reviewer_concurrent_and_suspend_mid_approve() {
+    let Some(db_url) = test_database_url() else {
+        return;
+    };
+    let _hook_guard = acquire_hook_test_guard();
+    let Some((client, _bucket)) = test_minio_client() else {
+        return;
+    };
+    client.ensure_bucket().await.expect("bucket");
+    let ephemeral = EphemeralDb::create(&db_url).await;
+    apply_migrations(&ephemeral.url).await.expect("migrations");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = seed_uploader(
+        &pool,
+        org,
+        user,
+        "review-conc@example.test",
+        "correct-password-1",
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["doc.upload"], [collection_id]).unwrap();
+    let streamed = stream_file(&adversarial_dir().join("formula.csv")).await;
+    let success = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &LimitsConfig::policy_defaults(),
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:review-conc".into(),
+            reservation_key: "op.review-conc".into(),
+            streamed,
+            declared_filename: Some("formula.csv".into()),
+            declared_content_type: Some("text/csv".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect("quarantined");
+    grant_permission(&pool, &ctx, PERMISSION_QUARANTINE_REVIEW).await;
+    let reviewer = OrgContext::try_new(
+        org,
+        user,
+        ["doc.upload", PERMISSION_QUARANTINE_REVIEW],
+        [collection_id],
+    )
+    .unwrap();
+
+    let pool_a = pool.clone();
+    let pool_b = pool.clone();
+    let rev_a = reviewer.clone();
+    let rev_b = reviewer.clone();
+    let doc = success.registered.document_id;
+    let a = tokio::spawn(async move {
+        approve_quarantined_upload(
+            &pool_a,
+            &rev_a,
+            ApproveIntakeRequest {
+                collection_id,
+                document_id: doc,
+                reason: Some("a"),
+                request_id: "req-a",
+            },
+        )
+        .await
+    });
+    let b = tokio::spawn(async move {
+        approve_quarantined_upload(
+            &pool_b,
+            &rev_b,
+            ApproveIntakeRequest {
+                collection_id,
+                document_id: doc,
+                reason: Some("b"),
+                request_id: "req-b",
+            },
+        )
+        .await
+    });
+    let ra = a.await.unwrap();
+    let rb = b.await.unwrap();
+    let oks: Vec<_> = [&ra, &rb].iter().filter_map(|r| r.as_ref().ok()).collect();
+    assert_eq!(
+        oks.len(),
+        2,
+        "both approves must succeed idempotently: {ra:?} {rb:?}"
+    );
+    assert_eq!(oks[0].job_id, oks[1].job_id);
+    assert_eq!(
+        oks.iter().filter(|r| r.created_job).count(),
+        1,
+        "exactly one created job"
+    );
+    assert_eq!(count_org_rows(&pool, &ctx, "jobs").await, 1);
+
+    // Second quarantined doc: suspend mid-approve fail-closed.
+    let streamed = stream_file(&adversarial_dir().join("formula.csv")).await;
+    let second = run_upload_saga(
+        &pool,
+        &client,
+        &ctx,
+        &LimitsConfig::policy_defaults(),
+        SagaInput {
+            collection_id,
+            idempotency_key: "client:review-suspend".into(),
+            reservation_key: "op.review-suspend".into(),
+            streamed,
+            declared_filename: Some("formula.csv".into()),
+            declared_content_type: Some("text/csv".into()),
+            identity: QuarantineIdentity {
+                object_id: Uuid::new_v4(),
+                collection_id,
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+            },
+        },
+    )
+    .await
+    .expect("second quarantined");
+    arm_pause_before_approve_commit();
+    let pool_bg = pool.clone();
+    let rev_bg = reviewer.clone();
+    let doc2 = second.registered.document_id;
+    let handle = tokio::spawn(async move {
+        approve_quarantined_upload(
+            &pool_bg,
+            &rev_bg,
+            ApproveIntakeRequest {
+                collection_id,
+                document_id: doc2,
+                reason: Some("suspend-me"),
+                request_id: "req-suspend",
+            },
+        )
+        .await
+    });
+    // Wait until approve has entered the txn (best-effort short delay).
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let admin = pool.get().await.expect("client");
+    admin
+        .execute(
+            "UPDATE users SET disabled_at = now() WHERE id = $1",
+            &[&user],
+        )
+        .await
+        .expect("suspend");
+    resume_before_approve_commit();
+    let denied = handle.await.expect("join");
+    assert!(
+        matches!(
+            denied,
+            Err(fileconv_server::services::upload::SagaError::PermissionDenied)
+        ),
+        "suspend mid-approve must deny: {denied:?}"
+    );
+
+    client
+        .cleanup_bucket_and_assert_gone()
+        .await
+        .expect("cleanup");
+    ephemeral.drop().await;
+}
+
+#[cfg(feature = "test-hooks")]
+async fn op_state(pool: &Pool, ctx: &OrgContext, idempotency_key: &str) -> Option<String> {
+    let key = idempotency_key.to_string();
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_opt(
+                        "SELECT state FROM upload_operations
+                         WHERE org_id = $1 AND user_id = $2 AND idempotency_key = $3",
+                        &[&ctx.org_id(), &ctx.user_id(), &key],
+                    )
+                    .await?;
+                Ok(row.map(|r| r.get::<_, String>(0)))
+            })
+        }
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[cfg(feature = "test-hooks")]
+async fn wait_for_op_state(pool: &Pool, ctx: &OrgContext, idempotency_key: &str, want: &str) {
+    for _ in 0..100 {
+        if op_state(pool, ctx, idempotency_key).await.as_deref() == Some(want) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for upload_operations.state={want}");
 }
