@@ -220,12 +220,21 @@ fn verify_mac(keys: &CapabilityKeys, payload_b64: &str, mac_b64: &str) -> bool {
         == 0
 }
 
+struct AuthorizedDownloadTargets {
+    original_object_key: String,
+    markdown_object_key: Option<String>,
+    /// `document_versions.content_sha256` (source/original bytes).
+    source_content_sha256: String,
+    /// `derived_artifacts.content_sha256` for Markdown, when present.
+    markdown_content_sha256: Option<String>,
+}
+
 async fn authorize_version_access(
     pool: &Pool,
     ctx: &OrgContext,
     document_id: Uuid,
     version_id: Uuid,
-) -> Result<(String, Option<String>, String), DownloadError> {
+) -> Result<AuthorizedDownloadTargets, DownloadError> {
     let authorized = access::resolve_published_version(pool, ctx, document_id, Some(version_id))
         .await
         .map_err(|error| match error {
@@ -234,11 +243,40 @@ async fn authorize_version_access(
             AccessError::NotPublished => DownloadError::NotPublished,
             AccessError::Database => DownloadError::Database,
         })?;
-    Ok((
-        authorized.version.original_object_key,
-        authorized.version.markdown_object_key,
-        authorized.version.content_sha256,
-    ))
+    let markdown_content_sha256 = if authorized.version.markdown_object_key.is_some() {
+        Some(load_markdown_artifact_sha(pool, ctx, version_id).await?)
+    } else {
+        None
+    };
+    Ok(AuthorizedDownloadTargets {
+        original_object_key: authorized.version.original_object_key,
+        markdown_object_key: authorized.version.markdown_object_key,
+        source_content_sha256: authorized.version.content_sha256,
+        markdown_content_sha256,
+    })
+}
+
+async fn load_markdown_artifact_sha(
+    pool: &Pool,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> Result<String, DownloadError> {
+    use crate::db::document_versions;
+
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                match document_versions::find_markdown_artifact(txn, &ctx, version_id).await {
+                    Ok(Some(artifact)) => Ok(Ok(artifact.content_sha256)),
+                    Ok(None) => Ok(Err(DownloadError::ObjectUnavailable)),
+                    Err(_) => Ok(Err(DownloadError::Database)),
+                }
+            })
+        }
+    })
+    .await
+    .map_err(|_| DownloadError::Database)?
 }
 
 /// Mints a short single-purpose capability after fresh ACL checks.
@@ -252,9 +290,14 @@ pub async fn issue_capability(
     ttl_secs: Option<i64>,
 ) -> Result<IssuedCapability, DownloadError> {
     let ttl = ttl_secs.unwrap_or(DEFAULT_TTL_SECS).clamp(1, MAX_TTL_SECS);
-    let (_original, markdown, _hash) =
-        authorize_version_access(pool, ctx, document_id, version_id).await?;
-    if purpose == DownloadPurpose::Markdown && markdown.as_deref().unwrap_or("").is_empty() {
+    let targets = authorize_version_access(pool, ctx, document_id, version_id).await?;
+    if purpose == DownloadPurpose::Markdown
+        && targets
+            .markdown_object_key
+            .as_deref()
+            .unwrap_or("")
+            .is_empty()
+    {
         return Err(DownloadError::ObjectUnavailable);
     }
     let now = Utc::now();
@@ -308,7 +351,8 @@ fn decode_capability(
         return Err(DownloadError::InvalidCapability);
     }
     let now = Utc::now().timestamp();
-    if claims.exp < now || claims.iat > now + 30 {
+    // Expired at or before `now` (inclusive) must fail closed.
+    if claims.exp <= now || claims.iat > now + 30 {
         return Err(DownloadError::InvalidCapability);
     }
     Ok(claims)
@@ -368,11 +412,13 @@ pub async fn redeem_capability(
     let purpose =
         DownloadPurpose::parse(&claims.purpose).ok_or(DownloadError::InvalidCapability)?;
     redeem_jti(pool, ctx, claims.jti, claims.exp).await?;
-    let (original_key, markdown_key, content_sha256) =
+    let targets =
         authorize_version_access(pool, ctx, claims.document_id, claims.version_id).await?;
     let object_key = match purpose {
-        DownloadPurpose::Original => original_key,
-        DownloadPurpose::Markdown => markdown_key.ok_or(DownloadError::ObjectUnavailable)?,
+        DownloadPurpose::Original => targets.original_object_key,
+        DownloadPurpose::Markdown => targets
+            .markdown_object_key
+            .ok_or(DownloadError::ObjectUnavailable)?,
     };
     let key = parse_key_for_org(&object_key, ctx.org_id())
         .map_err(|_| DownloadError::ObjectUnavailable)?;
@@ -393,13 +439,21 @@ pub async fn redeem_capability(
     let returned_hash = match purpose {
         // Original: hash returned bytes and verify against stored source hash.
         DownloadPurpose::Original => {
-            if actual_hash != content_sha256 {
+            if actual_hash != targets.source_content_sha256 {
                 return Err(DownloadError::ObjectUnavailable);
             }
             actual_hash
         }
-        // Markdown: return the artifact digest (never the source hash).
-        DownloadPurpose::Markdown => actual_hash,
+        // Markdown: verify against derived_artifacts digest (never source hash).
+        DownloadPurpose::Markdown => {
+            let expected = targets
+                .markdown_content_sha256
+                .ok_or(DownloadError::ObjectUnavailable)?;
+            if actual_hash != expected {
+                return Err(DownloadError::ObjectUnavailable);
+            }
+            actual_hash
+        }
     };
     Ok(DownloadBytes {
         bytes,
@@ -470,6 +524,26 @@ mod tests {
             exp: Utc::now().timestamp() - 10,
         };
         let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+        let mac = sign_payload(&keys, &payload);
+        let token = format!("{TOKEN_PREFIX}.{payload}.{mac}");
+        assert_eq!(
+            decode_capability(&keys, &token).unwrap_err(),
+            DownloadError::InvalidCapability
+        );
+
+        let now = Utc::now().timestamp();
+        let equal_now = CapabilityClaims {
+            v: 1,
+            org_id: Uuid::from_u128(1),
+            user_id: Uuid::from_u128(2),
+            document_id: Uuid::from_u128(3),
+            version_id: Uuid::from_u128(4),
+            purpose: "markdown".into(),
+            jti: Uuid::new_v4(),
+            iat: now - 1,
+            exp: now,
+        };
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&equal_now).unwrap());
         let mac = sign_payload(&keys, &payload);
         let token = format!("{TOKEN_PREFIX}.{payload}.{mac}");
         assert_eq!(

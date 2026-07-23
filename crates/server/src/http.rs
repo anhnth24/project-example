@@ -202,6 +202,23 @@ impl AppState {
         self.chat_provider.as_ref()
     }
 
+    /// Test helper: inject a chat provider (failing/timeout/static) into app state.
+    pub fn with_chat_provider(mut self, provider: ChatProvider) -> Self {
+        self.chat_provider = Some(provider);
+        self
+    }
+
+    /// Test helper: attach Qdrant + embedder for ask/search route suites.
+    pub fn with_retrieval_backends(
+        mut self,
+        qdrant: QdrantClient,
+        embedder: Option<ApprovedEmbeddingRuntime>,
+    ) -> Self {
+        self.qdrant = Some(qdrant);
+        self.embedder = embedder;
+        self
+    }
+
     pub fn capability_keys(&self) -> Option<&CapabilityKeys> {
         self.capability_keys.as_ref()
     }

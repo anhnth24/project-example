@@ -166,6 +166,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collections/{collectionId}/documents/{documentId}/approve-intake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve a quarantined upload (requires doc.quarantine.review) */
+        post: operations["approveIntake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/documents/{documentId}": {
         parameters: {
             query?: never;
@@ -350,6 +367,22 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getConflict"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/conflicts/{conflictId}/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConflictEvidence"];
         put?: never;
         post?: never;
         delete?: never;
@@ -777,22 +810,38 @@ export interface operations {
                     /** Format: binary */
                     file: string;
                     /** Format: uuid */
-                    collectionId?: string;
+                    collectionId: string;
                 };
             };
         };
         responses: {
-            /** @description Quarantine upload accepted or rejected with disposition. */
-            200: {
+            /** @description Upload stored; document+version registered. Accepted disposition also enqueues convert. Quarantined disposition awaits approve-intake (doc.quarantine.review). Idempotent same-envelope replay returns the same stable body (requestId may differ). */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        disposition: string;
+                        /** Format: uuid */
+                        objectId: string;
+                        /** Format: uuid */
+                        documentId?: string;
+                        /** Format: uuid */
+                        versionId?: string;
+                        /** Format: uuid */
+                        jobId?: string;
+                        /** Format: uuid */
+                        collectionId?: string;
+                        sha256: string;
+                        sizeBytes: number;
+                        canonicalFormat: string;
+                        requestId: string;
                     };
                 };
             };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
             413: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
@@ -917,6 +966,48 @@ export interface operations {
                 };
                 content?: never;
             };
+            404: components["responses"]["ApiError"];
+        };
+    };
+    approveIntake: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["collectionId"];
+                documentId: components["parameters"]["documentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Convert job created or idempotent replay of existing job. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        documentId: string;
+                        /** Format: uuid */
+                        versionId: string;
+                        /** Format: uuid */
+                        collectionId: string;
+                        /** Format: uuid */
+                        jobId: string;
+                        created: boolean;
+                        requestId: string;
+                    };
+                };
+            };
+            403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
         };
     };
@@ -1195,6 +1286,38 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            404: components["responses"]["ApiError"];
+        };
+    };
+    getConflictEvidence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conflictId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable conflict evidence legs for an authorized conflict. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        conflictId: string;
+                        status: string;
+                        resolutionNote?: string | null;
+                        /** Format: date-time */
+                        resolvedAt?: string | null;
+                        items: Record<string, never>[];
+                        requestId: string;
+                    };
+                };
             };
             404: components["responses"]["ApiError"];
         };

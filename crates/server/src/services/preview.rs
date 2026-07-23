@@ -89,6 +89,7 @@ pub async fn preview_markdown(
         .map_err(map_access)?;
     let document = authorized.document;
     let version = authorized.version;
+    let expected_markdown_sha256 = load_markdown_artifact_sha(pool, ctx, version.id).await?;
 
     let markdown_key = version
         .markdown_object_key
@@ -109,11 +110,15 @@ pub async fn preview_markdown(
     if bytes.len() > MAX_PREVIEW_BYTES * 2 {
         return Err(PreviewError::TooLarge);
     }
-    // Hash the full trusted artifact *before* any client truncation.
+    // Hash the full trusted artifact *before* any client truncation, then
+    // fail closed if object storage was tampered relative to derived_artifacts.
     let canonical_markdown_sha256 = {
         use sha2::{Digest, Sha256};
         hex::encode(Sha256::digest(&bytes))
     };
+    if canonical_markdown_sha256 != expected_markdown_sha256 {
+        return Err(PreviewError::ArtifactUnavailable);
+    }
     let truncated = bytes.len() > MAX_PREVIEW_BYTES;
     let slice = if truncated {
         &bytes[..MAX_PREVIEW_BYTES]
@@ -129,6 +134,30 @@ pub async fn preview_markdown(
         markdown,
         truncated,
     })
+}
+
+async fn load_markdown_artifact_sha(
+    pool: &Pool,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> Result<String, PreviewError> {
+    use crate::db::document_versions;
+    use crate::db::pool::with_org_txn;
+
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                match document_versions::find_markdown_artifact(txn, &ctx, version_id).await {
+                    Ok(Some(artifact)) => Ok(Ok(artifact.content_sha256)),
+                    Ok(None) => Ok(Err(PreviewError::ArtifactUnavailable)),
+                    Err(_) => Ok(Err(PreviewError::Database)),
+                }
+            })
+        }
+    })
+    .await
+    .map_err(|_| PreviewError::Database)?
 }
 
 /// Pure helper: full-artifact digest is independent of the truncated response body.

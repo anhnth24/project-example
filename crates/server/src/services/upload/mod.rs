@@ -1,20 +1,32 @@
 //! Quarantine upload intake (P1B-I01): auth → stream → hash → allowlist → disposition.
 //!
-//! Upload routes must call [`quota_reserve_hook`] after streaming has produced a
-//! server-measured byte count, then finalize the returned reservation only after
-//! object-store persistence succeeds. Failures after reservation must refund; if
-//! a process crashes, the reservation TTL releases admission and the expiry sweep
-//! marks it terminal.
+//! After a successful object put, [`saga::run_upload_saga`] performs fresh auth,
+//! document/version/(optional job) registration, and quota finalize in one DB
+//! transaction. Crash between MinIO and that commit leaves a durable
+//! `upload_operations.state = object_stored` reconciliation intent.
 
 mod archive;
 mod error;
 mod limits;
+mod saga;
 mod sniff;
 mod stream;
 
 pub use archive::{reject_dangerous_entry_name, validate_zip_archive, ArchiveCheck};
 pub use error::{Disposition, ReasonCode, ThreatClass, UploadError};
 pub use limits::{LimitsConfig, STREAM_CHUNK_BYTES};
+#[cfg(any(test, feature = "test-hooks"))]
+pub use saga::{
+    acquire_hook_test_guard, arm_pause_after_reconcile_claim, arm_pause_before_approve_commit,
+    arm_pause_before_commit, arm_saga_fault, resume_after_reconcile_claim,
+    resume_before_approve_commit, resume_before_commit, HookTestGuard,
+};
+pub use saga::{
+    approve_quarantined_upload, envelope_sha256, reconcile_stale_object_stored,
+    reconcile_stale_uploads, run_upload_saga, stable_from_parts, ApproveIntakeRequest,
+    RegisteredUpload, SagaError, SagaFaultBarrier, SagaInput, SagaSuccess, StableUploadResponse,
+    PERMISSION_QUARANTINE_REVIEW,
+};
 pub use sniff::{
     declared_extension, detect_magic, extension_matches, mime_matches, resolve_canonical_format,
     CanonicalFormat,
@@ -33,9 +45,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::auth::permissions::{require_permission, ResolveError};
-use crate::services::quota::{
-    self, QuotaError, QuotaSnapshot, UploadQuotaReservation, DEFAULT_RESERVATION_TTL,
-};
+use crate::services::quota::{self, QuotaError, UploadQuotaReservation, DEFAULT_RESERVATION_TTL};
 use crate::storage::keys::quarantine_key;
 use crate::storage::minio::{MinioClient, ObjectIdentityMeta, ObjectPutVerification};
 use crate::storage::ObjectKey;
@@ -96,20 +106,48 @@ pub async fn quota_reserve_hook(
 }
 
 #[derive(Debug)]
-pub struct QuotaSettledUpload {
+pub struct QuarantinePutResult {
     pub outcome: UploadOutcome,
-    pub quota_snapshot: QuotaSnapshot,
 }
 
 #[derive(Debug)]
-pub enum QuotaSettledUploadError {
+pub enum QuarantinePutError {
     Upload(UploadError),
-    Quota {
-        error: QuotaError,
-        outcome: Box<UploadOutcome>,
-    },
 }
 
+/// Validate + put quarantine object only (no quota finalize / DB registration).
+///
+/// Callers that need the full terminal saga must use [`run_upload_saga`] so
+/// registration and quota finalize share one transaction after the put.
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_quarantine_put(
+    org: OrgContext,
+    storage: MinioClient,
+    limits: LimitsConfig,
+    streamed: StreamedUpload,
+    declared_filename: Option<String>,
+    declared_content_type: Option<String>,
+    identity: Option<QuarantineIdentity>,
+) -> tokio::task::JoinHandle<Result<QuarantinePutResult, QuarantinePutError>> {
+    tokio::spawn(async move {
+        match validate_and_quarantine_with_identity(
+            &org,
+            &storage,
+            &limits,
+            streamed,
+            declared_filename.as_deref(),
+            declared_content_type.as_deref(),
+            identity,
+        )
+        .await
+        {
+            Ok(outcome) => Ok(QuarantinePutResult { outcome }),
+            Err(error) => Err(QuarantinePutError::Upload(error)),
+        }
+    })
+}
+
+/// Backward-compatible name used by older integration tests.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_quota_settled_quarantine(
     pool: deadpool_postgres::Pool,
@@ -120,69 +158,26 @@ pub fn spawn_quota_settled_quarantine(
     declared_filename: Option<String>,
     declared_content_type: Option<String>,
     reservation_key: String,
-) -> tokio::task::JoinHandle<Result<QuotaSettledUpload, QuotaSettledUploadError>> {
-    tokio::spawn(async move {
-        let outcome = validate_and_quarantine(
-            &org,
-            &storage,
-            &limits,
-            streamed,
-            declared_filename.as_deref(),
-            declared_content_type.as_deref(),
-        )
-        .await;
-        match outcome {
-            Ok(outcome) => match quota::finalize_upload(&pool, &org, &reservation_key).await {
-                Ok(settlement) => Ok(QuotaSettledUpload {
-                    outcome,
-                    quota_snapshot: settlement.storage_quota,
-                }),
-                Err(error) => {
-                    // In-process settlement guarantee: after storage succeeds but quota
-                    // finalize fails, release quota before deleting the untrusted
-                    // quarantine object. If either best-effort cleanup step fails, the
-                    // reservation TTL/sweep prevents permanent over-limit state and the
-                    // quarantine object remains eligible for later GC.
-                    // TODO(I03/I07): durable finalize/cleanup reconciliation on crash / double-failure.
-                    if let Err(refund_error) =
-                        quota::refund_upload(&pool, &org, &reservation_key).await
-                    {
-                        eprintln!(
-                            "fileconv-server: quota refund after finalize failure failed; \
-                             reservation_key={} code={}",
-                            reservation_key,
-                            refund_error.code()
-                        );
-                    }
-                    if let Err(cleanup_error) = storage
-                        .cleanup_generated_object(org.org_id(), &outcome.object_key)
-                        .await
-                    {
-                        eprintln!(
-                            "fileconv-server: quota finalize failed and upload cleanup failed; \
-                             reservation_key={} code={}",
-                            reservation_key,
-                            cleanup_error.code()
-                        );
-                    }
-                    Err(QuotaSettledUploadError::Quota {
-                        error,
-                        outcome: Box::new(outcome),
-                    })
-                }
-            },
-            Err(error) => {
-                if let Err(refund_error) = quota::refund_upload(&pool, &org, &reservation_key).await
-                {
-                    eprintln!(
-                        "fileconv-server: quota refund after upload failure failed: {}",
-                        refund_error.code()
-                    );
-                }
-                Err(QuotaSettledUploadError::Upload(error))
-            }
-        }
-    })
+) -> tokio::task::JoinHandle<Result<QuarantinePutResult, QuarantinePutError>> {
+    let _ = (pool, reservation_key);
+    spawn_quarantine_put(
+        org,
+        storage,
+        limits,
+        streamed,
+        declared_filename,
+        declared_content_type,
+        None,
+    )
+}
+
+/// Identity minted before quarantine put so convert workers can verify metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuarantineIdentity {
+    pub object_id: Uuid,
+    pub collection_id: Uuid,
+    pub document_id: Uuid,
+    pub version_id: Uuid,
 }
 
 /// Validate a fully-received tempfile and optionally persist to quarantine storage.
@@ -193,6 +188,28 @@ pub async fn validate_and_quarantine(
     streamed: StreamedUpload,
     declared_filename: Option<&str>,
     declared_content_type: Option<&str>,
+) -> Result<UploadOutcome, UploadError> {
+    validate_and_quarantine_with_identity(
+        org,
+        storage,
+        limits,
+        streamed,
+        declared_filename,
+        declared_content_type,
+        None,
+    )
+    .await
+}
+
+/// Like [`validate_and_quarantine`], but stamps document/version/collection into object meta.
+pub async fn validate_and_quarantine_with_identity(
+    org: &OrgContext,
+    storage: &MinioClient,
+    limits: &LimitsConfig,
+    streamed: StreamedUpload,
+    declared_filename: Option<&str>,
+    declared_content_type: Option<&str>,
+    identity: Option<QuarantineIdentity>,
 ) -> Result<UploadOutcome, UploadError> {
     require_permission(org, "doc.upload").map_err(|error| match error {
         ResolveError::PermissionDenied => UploadError::PermissionDenied,
@@ -216,7 +233,7 @@ pub async fn validate_and_quarantine(
     .await
     .map_err(|_| UploadError::Internal)??;
 
-    let object_id = Uuid::new_v4();
+    let object_id = identity.map(|id| id.object_id).unwrap_or_else(Uuid::new_v4);
     // Filename is metadata only — quarantine_key ignores it for the path.
     let key = quarantine_key(org.org_id(), object_id, declared_filename)
         .map_err(|_| UploadError::Internal)?;
@@ -232,9 +249,9 @@ pub async fn validate_and_quarantine(
     let safe_filename = declared_filename.map(sanitize_filename_metadata);
     let meta = ObjectIdentityMeta {
         org_id: org.org_id(),
-        collection_id: None,
-        document_id: None,
-        version_id: None,
+        collection_id: identity.map(|id| id.collection_id),
+        document_id: identity.map(|id| id.document_id),
+        version_id: identity.map(|id| id.version_id),
         original_filename: safe_filename.clone(),
         canonical_format: Some(validation.format.as_str().to_string()),
         content_sha256: Some(streamed.sha256_hex.clone()),

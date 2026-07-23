@@ -58,6 +58,11 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 uuid = { version = "1.24.0", features = ["serde", "v4", "v8"] }
 zip = "2.2"
 
+[features]
+default = []
+# Enables fault-injection helpers for integration tests (audit/saga barriers).
+test-hooks = []
+
 [dev-dependencies]
 http-body-util = "0.1.4"
 tower = { version = "0.5.3", features = ["util"] }

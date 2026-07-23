@@ -323,6 +323,9 @@ mod tests {
         let vb = Uuid::new_v4();
         let evidence = AuthorizedConflictEvidence {
             conflict_id: Uuid::new_v4(),
+            status: "open".into(),
+            resolution_note: None,
+            resolved_at: None,
             claim_a_id: Uuid::new_v4(),
             claim_b_id: Uuid::new_v4(),
             claim_a_document_id: Uuid::new_v4(),

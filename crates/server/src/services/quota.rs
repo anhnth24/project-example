@@ -596,74 +596,89 @@ pub async fn finalize_upload(
     reservation_key: &str,
 ) -> Result<UploadQuotaSettlement, QuotaError> {
     validate_reservation_key(reservation_key)?;
-    let storage_key = format!("upload.storage.{reservation_key}");
-    let document_key = format!("upload.documents.{reservation_key}");
     let settlement = pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let storage_key = storage_key.clone();
-        let document_key = document_key.clone();
+        let reservation_key = reservation_key.to_string();
         move |txn| {
-            Box::pin(async move {
-                lock_resource_kinds(
-                    txn,
-                    &ctx,
-                    &[ResourceKind::Documents, ResourceKind::StorageBytes],
-                )
-                .await?;
-                let observed_at = quota::fresh_clock_timestamp(txn).await?;
-                let document_preview = preview_locked(
-                    txn,
-                    &ctx,
-                    &document_key,
-                    ResourceKind::Documents,
-                    observed_at,
-                )
-                .await?;
-                let storage_preview = preview_locked(
-                    txn,
-                    &ctx,
-                    &storage_key,
-                    ResourceKind::StorageBytes,
-                    observed_at,
-                )
-                .await?;
-                let (document, storage) = match (&document_preview, &storage_preview) {
-                    (QuotaSettlement::Reserved(_), QuotaSettlement::Reserved(_)) => {
-                        let document = finalize_locked(
-                            txn,
-                            &ctx,
-                            &document_key,
-                            ResourceKind::Documents,
-                            observed_at,
-                        )
-                        .await?;
-                        let storage = finalize_locked(
-                            txn,
-                            &ctx,
-                            &storage_key,
-                            ResourceKind::StorageBytes,
-                            observed_at,
-                        )
-                        .await?;
-                        (document, storage)
-                    }
-                    (
-                        QuotaSettlement::AlreadyFinalized(_),
-                        QuotaSettlement::AlreadyFinalized(_),
-                    ) => (document_preview, storage_preview),
-                    _ => (document_preview, storage_preview),
-                };
-                let storage_quota =
-                    current_snapshot(txn, &ctx, ResourceKind::StorageBytes, observed_at).await?;
-                Ok::<UploadQuotaSettlement, QuotaError>(UploadQuotaSettlement {
-                    storage,
-                    document,
-                    storage_quota,
-                })
-            })
+            Box::pin(async move { finalize_upload_in_txn(txn, &ctx, &reservation_key).await })
         }
     })
     .await?;
+    if settlement.storage.is_finalize_success() && settlement.document.is_finalize_success() {
+        Ok(settlement)
+    } else {
+        Err(
+            finalize_settlement_error(&settlement.storage).unwrap_or_else(|| {
+                finalize_settlement_error(&settlement.document)
+                    .unwrap_or(QuotaError::ReservationConflict)
+            }),
+        )
+    }
+}
+
+/// Finalize both upload child reservations inside an existing org transaction.
+pub async fn finalize_upload_in_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<UploadQuotaSettlement, QuotaError> {
+    validate_reservation_key(reservation_key)?;
+    let storage_key = format!("upload.storage.{reservation_key}");
+    let document_key = format!("upload.documents.{reservation_key}");
+    lock_resource_kinds(
+        txn,
+        ctx,
+        &[ResourceKind::Documents, ResourceKind::StorageBytes],
+    )
+    .await?;
+    let observed_at = quota::fresh_clock_timestamp(txn).await?;
+    let document_preview = preview_locked(
+        txn,
+        ctx,
+        &document_key,
+        ResourceKind::Documents,
+        observed_at,
+    )
+    .await?;
+    let storage_preview = preview_locked(
+        txn,
+        ctx,
+        &storage_key,
+        ResourceKind::StorageBytes,
+        observed_at,
+    )
+    .await?;
+    let (document, storage) = match (&document_preview, &storage_preview) {
+        (QuotaSettlement::Reserved(_), QuotaSettlement::Reserved(_)) => {
+            let document = finalize_locked(
+                txn,
+                ctx,
+                &document_key,
+                ResourceKind::Documents,
+                observed_at,
+            )
+            .await?;
+            let storage = finalize_locked(
+                txn,
+                ctx,
+                &storage_key,
+                ResourceKind::StorageBytes,
+                observed_at,
+            )
+            .await?;
+            (document, storage)
+        }
+        (QuotaSettlement::AlreadyFinalized(_), QuotaSettlement::AlreadyFinalized(_)) => {
+            (document_preview, storage_preview)
+        }
+        _ => (document_preview, storage_preview),
+    };
+    let storage_quota = current_snapshot(txn, ctx, ResourceKind::StorageBytes, observed_at).await?;
+    let settlement = UploadQuotaSettlement {
+        storage,
+        document,
+        storage_quota,
+    };
     if settlement.storage.is_finalize_success() && settlement.document.is_finalize_success() {
         Ok(settlement)
     } else {
@@ -682,81 +697,93 @@ pub async fn refund_upload(
     reservation_key: &str,
 ) -> Result<UploadQuotaSettlement, QuotaError> {
     validate_reservation_key(reservation_key)?;
-    let storage_key = format!("upload.storage.{reservation_key}");
-    let document_key = format!("upload.documents.{reservation_key}");
     let settlement = pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
-        let storage_key = storage_key.clone();
-        let document_key = document_key.clone();
-        move |txn| {
-            Box::pin(async move {
-                lock_resource_kinds(
-                    txn,
-                    &ctx,
-                    &[ResourceKind::Documents, ResourceKind::StorageBytes],
-                )
-                .await?;
-                let observed_at = quota::fresh_clock_timestamp(txn).await?;
-                let document_preview = preview_locked(
-                    txn,
-                    &ctx,
-                    &document_key,
-                    ResourceKind::Documents,
-                    observed_at,
-                )
-                .await?;
-                let storage_preview = preview_locked(
-                    txn,
-                    &ctx,
-                    &storage_key,
-                    ResourceKind::StorageBytes,
-                    observed_at,
-                )
-                .await?;
-                let (document, storage) =
-                    if matches!(&document_preview, QuotaSettlement::AlreadyFinalized(_))
-                        || matches!(&storage_preview, QuotaSettlement::AlreadyFinalized(_))
-                    {
-                        (document_preview, storage_preview)
-                    } else {
-                        let document = if matches!(&document_preview, QuotaSettlement::Reserved(_))
-                        {
-                            refund_locked(
-                                txn,
-                                &ctx,
-                                &document_key,
-                                ResourceKind::Documents,
-                                observed_at,
-                            )
-                            .await?
-                        } else {
-                            document_preview
-                        };
-                        let storage = if matches!(&storage_preview, QuotaSettlement::Reserved(_)) {
-                            refund_locked(
-                                txn,
-                                &ctx,
-                                &storage_key,
-                                ResourceKind::StorageBytes,
-                                observed_at,
-                            )
-                            .await?
-                        } else {
-                            storage_preview
-                        };
-                        (document, storage)
-                    };
-                let storage_quota =
-                    current_snapshot(txn, &ctx, ResourceKind::StorageBytes, observed_at).await?;
-                Ok::<UploadQuotaSettlement, QuotaError>(UploadQuotaSettlement {
-                    storage,
-                    document,
-                    storage_quota,
-                })
-            })
-        }
+        let reservation_key = reservation_key.to_string();
+        move |txn| Box::pin(async move { refund_upload_in_txn(txn, &ctx, &reservation_key).await })
     })
     .await?;
+    if settlement.storage.is_refund_success() && settlement.document.is_refund_success() {
+        Ok(settlement)
+    } else {
+        Err(
+            refund_settlement_error(&settlement.storage).unwrap_or_else(|| {
+                refund_settlement_error(&settlement.document)
+                    .unwrap_or(QuotaError::ReservationConflict)
+            }),
+        )
+    }
+}
+
+/// Refund both upload child reservations inside an existing org transaction.
+pub async fn refund_upload_in_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+) -> Result<UploadQuotaSettlement, QuotaError> {
+    validate_reservation_key(reservation_key)?;
+    let storage_key = format!("upload.storage.{reservation_key}");
+    let document_key = format!("upload.documents.{reservation_key}");
+    lock_resource_kinds(
+        txn,
+        ctx,
+        &[ResourceKind::Documents, ResourceKind::StorageBytes],
+    )
+    .await?;
+    let observed_at = quota::fresh_clock_timestamp(txn).await?;
+    let document_preview = preview_locked(
+        txn,
+        ctx,
+        &document_key,
+        ResourceKind::Documents,
+        observed_at,
+    )
+    .await?;
+    let storage_preview = preview_locked(
+        txn,
+        ctx,
+        &storage_key,
+        ResourceKind::StorageBytes,
+        observed_at,
+    )
+    .await?;
+    let (document, storage) = if matches!(&document_preview, QuotaSettlement::AlreadyFinalized(_))
+        || matches!(&storage_preview, QuotaSettlement::AlreadyFinalized(_))
+    {
+        (document_preview, storage_preview)
+    } else {
+        let document = if matches!(&document_preview, QuotaSettlement::Reserved(_)) {
+            refund_locked(
+                txn,
+                ctx,
+                &document_key,
+                ResourceKind::Documents,
+                observed_at,
+            )
+            .await?
+        } else {
+            document_preview
+        };
+        let storage = if matches!(&storage_preview, QuotaSettlement::Reserved(_)) {
+            refund_locked(
+                txn,
+                ctx,
+                &storage_key,
+                ResourceKind::StorageBytes,
+                observed_at,
+            )
+            .await?
+        } else {
+            storage_preview
+        };
+        (document, storage)
+    };
+    let storage_quota = current_snapshot(txn, ctx, ResourceKind::StorageBytes, observed_at).await?;
+    let settlement = UploadQuotaSettlement {
+        storage,
+        document,
+        storage_quota,
+    };
     if settlement.storage.is_refund_success() && settlement.document.is_refund_success() {
         Ok(settlement)
     } else {

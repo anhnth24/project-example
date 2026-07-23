@@ -30,6 +30,7 @@ mod tests {
             "/collections",
             "/citations/resolve",
             "/conflicts",
+            "/conflicts/{conflictId}/evidence",
             "/jobs/{jobId}",
             "/jobs/{jobId}/events",
             "/search",

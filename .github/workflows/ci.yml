@@ -195,8 +195,11 @@ jobs:
         id: integration_tests
         # Blocking gate. Skip the live E2E opt-in test so missing MARKHAND_E2E
         # stays an honest not_run (#[ignore] + --skip), not a soft-return pass.
+        # retrieval_vertical_slice runs ConvertWorker against target/debug/fileconv;
+        # build fileconv-cli first (no audio — vertical slice only needs text formats).
         # Use cargo --no-fail-fast so one red binary still surfaces the full backlog.
         run: >-
+          cargo build -p fileconv-cli --no-default-features &&
           cargo test -p fileconv-server --no-fail-fast --
           --include-ignored
           --skip e2e_live_vertical_slice

@@ -224,18 +224,19 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
-- **Status:** In progress — promotion stores source SHA on `document_versions` and
-  Markdown SHA on `derived_artifacts`; preview hashes full artifact before truncate;
-  original download hashes bytes and verifies source; CRLF-aware normalized→source
-  span mapping; migration `0020` backfills mis-stored hashes. Hermetic tests cover
-  source≠markdown, >2MiB digest independence, CRLF UTF-8 mapping, mid-codepoint
-  reject. Gap: live PDF/PPTX/XLSX convert→anchor matrix + live download tamper
-  evidence not captured here.
+- **Status:** In progress — vertical-slice evidence started in
+  `tests/retrieval_vertical_slice.rs` (HTTP upload → ConvertWorker/`fileconv` →
+  IndexWorker → citation resolve on worker-produced IDs/artifacts/chunks; no SQL
+  seed of versions/artifacts/chunks). Capability decode now rejects `exp <= now`.
+  Remaining for Done: PDF/PPTX/XLSX live worker matrix, concurrent redemption
+  barrier (exactly one success), history ACL/IDOR/delete-deny matrices without
+  SQL-seeded derived artifacts, MinIO cleanup guard soak.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
 - **Files:** `services/{access,citation,preview,download}.rs`, `routes/documents.rs`,
-  `migrations/0018_expand_download_capability_redemptions.sql`.
+  `migrations/0018_expand_download_capability_redemptions.sql`,
+  `tests/{citation_authz_matrix.rs,common/fixtures.rs}`.
 - **Depends:** F05/F06/R01.
 - **Acceptance/tests:** Quote/hash/version/anchor valid; historical permission + fresh
   ACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,
@@ -244,15 +245,19 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
-- **Status:** Review — grounding fail-closed for qualitative factual claims
-  (negation/contradiction/date/unit/misplaced citation → extractive); ask path
-  stays extractive-only while structured entailment is unavailable. Gap: BA/design
-  conflict golden matrix + delete-during-stream live evidence not yet recorded.
+- **Status:** Review — ask now attempts injectable ChatProvider
+  (Static/Failing/Timeout) but never claims GLM grounded while structured
+  entailment is unavailable. Conflict hydrate exposes status/resolutionNote;
+  current warns only `open`; history emits resolution notes for
+  resolved/accepted_exception/false_positive. Remaining for Done: live router SSE
+  consume + delete-between-batches `citation_revoked`; triage-then-current/history
+  matrix on real DB; wrong-delta/same-topic contradiction soak through ask path.
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
   deterministic extractive fallback.
-- **Files:** `services/qa/{mod,prompt,provider,grounding,stream}.rs`, `routes/ask.rs`.
+- **Files:** `services/qa/{mod,prompt,provider,grounding,stream}.rs`,
+  `services/stream_auth.rs`, `routes/ask.rs`, `tests/ask_grounding_matrix.rs`.
 - **Depends:** R01/R02 + G0-RET/G0-SEC/G1A.
 - **Acceptance/tests:** Citation subset only; current claim không cite version cũ;
   compare cite old+new và đúng delta; injection không tool/scope change; provider
@@ -263,15 +268,20 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Status:** Review — collection CRUD (incl. patch/delete), document/version/preview/
-  download/reindex, conflict list/detail/triage via shared dual-leg resolver
-  (deleted/tombstoned/unpublished excluded), version diff identity payload, job
-  status via document-collection authz; documentless jobs require `jobs.system`
-  (IDOR → 404). Gap: full HTTP contract suite against live DB still gated.
+- **Status:** In progress — Sol R3 upload saga: pre-persist envelope/IDs,
+  CAS `object_stored→reconciling` before external cleanup, commit CAS only
+  `object_stored→completed`, `cleanup_pending` on delete failure, shared
+  principal authz advisory lock with ACL/permission mutation helpers,
+  `doc.quarantine.review` approve-intake (collection-scoped 404 IDOR),
+  stable response deep-equality replay. Remaining for Done: full R04
+  status/schema matrix; cross-tenant resource IDOR suite; reindex same
+  jobId `created=false`; publish/download/citation HTTP; live evidence
+  for every Sol R3 barrier on a green CI agent.
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
-- **Files:** `routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`.
+- **Files:** `routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`,
+  `tests/api_http_contracts.rs`.
 - **Depends:** F04/F05/I01/I03/I07/R02.
 - **Acceptance/tests:** Org context + permissions; stable errors; idempotent reindex;
   HTTP contract/pagination/IDOR/malformed tests.
@@ -316,10 +326,10 @@ ghi trong issue đã `Done`.
 ### P1B-O01 — End-to-end telemetry và safe audit
 
 - **Status:** In progress — typed `AuditOutcome` success|deny|error; `record_in_txn`
-  for same-transaction mutation audit; middleware request IDs only (no UUID mint in
-  `From<DbError>` / bare IntoResponse). Gap: live DB deny=403/audit-deny + injected
-  audit-failure rollback suite not executed here; async API→worker→GLM canary still
-  pending.
+  for same-transaction mutation audit; injection helper scoped behind `test-hooks`;
+  PATCH correlation + injected-failure rollback covered in
+  `live_patch_collection_audit_correlation_and_rollback`. Gap: async
+  API→worker→GLM canary still pending.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`,

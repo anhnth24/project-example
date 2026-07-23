@@ -166,6 +166,9 @@ async fn search(
         "conflictEvidence": response.conflict_evidence.iter().map(|item| {
             serde_json::json!({
                 "conflictId": item.conflict_id,
+                "status": item.status,
+                "resolutionNote": item.resolution_note,
+                "resolvedAt": item.resolved_at,
                 "claimAId": item.claim_a_id,
                 "claimBId": item.claim_b_id,
             })
