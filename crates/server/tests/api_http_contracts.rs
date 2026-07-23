@@ -839,7 +839,7 @@ async fn live_http_collection_document_job_contract_matrix() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
 async fn live_central_write_gate_matrix_refuses_business_side_effects() {
-    use fileconv_server::middleware::write_gate::ensure_background_mutations_allowed;
+    use fileconv_server::middleware::write_gate::acquire_background_mutation_guard;
     use fileconv_server::services::ops_fence::{self, FENCE_RESTORE};
 
     let Some(admin) = admin_database_url() else {
@@ -898,7 +898,7 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
         .await
         .expect("set restore fence");
     assert!(
-        ensure_background_mutations_allowed(&pool).await.is_err(),
+        acquire_background_mutation_guard(&pool).await.is_err(),
         "background gate must observe active fence"
     );
 
@@ -948,6 +948,15 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
         (
             "POST",
             "/api/v1/ask".to_string(),
+            Some(serde_json::json!({
+                "question": "Kinh phí?",
+                "mode": "current",
+                "limit": 3
+            })),
+        ),
+        (
+            "POST",
+            "/api/v1/ask/stream".to_string(),
             Some(serde_json::json!({
                 "question": "Kinh phí?",
                 "mode": "current",
@@ -1017,7 +1026,7 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
     let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
     assert_eq!(upload_json["code"], "ops_fence_active");
 
-    // No new audit side effects while fenced.
+    // No new audit side effects while fenced; ask/stream must not init sessions.
     let ctx = OrgContext::try_new(
         org,
         user,
@@ -1052,6 +1061,21 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
         audit_after, audit_before,
         "fenced business traffic must not append audit rows"
     );
+    let ask_sessions: i64 = {
+        let client = pool.get().await.expect("client");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM ask_stream_sessions WHERE org_id = $1",
+                &[&org],
+            )
+            .await
+            .expect("ask session count")
+            .get(0)
+    };
+    assert_eq!(
+        ask_sessions, 0,
+        "ask/stream handler init must be covered by write-gate (no session rows)"
+    );
 
     let attestation = "a".repeat(64);
     ops_fence::clear_fence_with_attestation(&pool, FENCE_RESTORE, &attestation)
@@ -1072,6 +1096,193 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+async fn live_write_gate_advisory_lock_concurrency_contract() {
+    use fileconv_server::middleware::write_gate::{
+        acquire_background_mutation_guard, BACKUP_ADVISORY_LOCK_KEY,
+    };
+
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    let Some(store) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let (org, user, token) = seed_http_principal(&pool).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, Some(store.clone()));
+
+    // 1) Shared request/background guard held ⇒ exclusive try on other conn is false.
+    let shared = acquire_background_mutation_guard(&pool)
+        .await
+        .expect("shared background guard");
+    {
+        let other = pool.get().await.expect("other conn");
+        let exclusive: bool = other
+            .query_one(
+                "SELECT pg_try_advisory_lock($1)",
+                &[&BACKUP_ADVISORY_LOCK_KEY],
+            )
+            .await
+            .expect("try exclusive")
+            .get(0);
+        assert!(
+            !exclusive,
+            "pg_try_advisory_lock(7303003) must be false while shared guard held"
+        );
+    }
+    shared.release().await;
+
+    // 2) Exclusive held ⇒ business + background acquire fail closed, no side effects.
+    let holder = pool.get().await.expect("exclusive holder");
+    let got_exclusive: bool = holder
+        .query_one(
+            "SELECT pg_try_advisory_lock($1)",
+            &[&BACKUP_ADVISORY_LOCK_KEY],
+        )
+        .await
+        .expect("take exclusive")
+        .get(0);
+    assert!(
+        got_exclusive,
+        "exclusive lock must be acquirable after shared release"
+    );
+
+    assert!(
+        acquire_background_mutation_guard(&pool).await.is_err(),
+        "background acquire must fail closed under exclusive lock"
+    );
+
+    let slug = format!("exclusive-blocked-{}", Uuid::new_v4().simple());
+    let (status, err, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "Blocked",
+            "slug": slug,
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    assert_eq!(err["code"], "ops_fence_active");
+
+    let sessions_before: i64 = {
+        let client = pool.get().await.expect("count conn");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM ask_stream_sessions WHERE org_id = $1",
+                &[&org],
+            )
+            .await
+            .expect("sessions before")
+            .get(0)
+    };
+    let (status, err, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/ask/stream",
+        Some(&token),
+        Some(serde_json::json!({
+            "question": "Kinh phí?",
+            "mode": "current",
+            "limit": 3
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    assert_eq!(err["code"], "ops_fence_active");
+    let sessions_after: i64 = {
+        let client = pool.get().await.expect("count conn");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM ask_stream_sessions WHERE org_id = $1",
+                &[&org],
+            )
+            .await
+            .expect("sessions after")
+            .get(0)
+    };
+    assert_eq!(
+        sessions_after, sessions_before,
+        "exclusive lock must cover ask/stream init (no session side effects)"
+    );
+
+    let collections_named: i64 = {
+        let client = pool.get().await.expect("collection count");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM collections WHERE org_id = $1 AND slug = $2",
+                &[&org, &slug],
+            )
+            .await
+            .expect("slug count")
+            .get(0)
+    };
+    assert_eq!(collections_named, 0, "refused collection must not persist");
+
+    holder
+        .execute(
+            "SELECT pg_advisory_unlock($1)",
+            &[&BACKUP_ADVISORY_LOCK_KEY],
+        )
+        .await
+        .expect("unlock exclusive");
+    drop(holder);
+
+    // 3) After release, lock can be acquired again; no session advisory leak into pool.
+    for _ in 0..4 {
+        let probe = pool.get().await.expect("pool probe");
+        let ok: bool = probe
+            .query_one(
+                "SELECT pg_try_advisory_lock($1)",
+                &[&BACKUP_ADVISORY_LOCK_KEY],
+            )
+            .await
+            .expect("reacquire")
+            .get(0);
+        assert!(
+            ok,
+            "advisory lock must be free on pooled connections after release (no leak)"
+        );
+        probe
+            .execute(
+                "SELECT pg_advisory_unlock($1)",
+                &[&BACKUP_ADVISORY_LOCK_KEY],
+            )
+            .await
+            .expect("unlock probe");
+        drop(probe);
+    }
+
+    let (status, created, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "AfterUnlock",
+            "slug": format!("after-unlock-{}", Uuid::new_v4().simple()),
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let _ = (org, user);
 
     ephemeral.drop().await;
 }

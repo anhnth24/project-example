@@ -45,12 +45,12 @@
 
 ## Code-closed since last drill (not re-proven by this raw stamp)
 
-- Central write-gate middleware (`mutation_write_gate`) + advisory lock 7303003 +
-  background skip hooks. Hermetic:
-  `test_app_mutation_write_gate_is_integrated` (architecture contract + negative
-  fixtures). Live: `live_central_write_gate_matrix_refuses_business_side_effects`.
-  Re-run `o03-bluegreen-restore-drill.sh` on a Docker host to refresh raw
-  passes.txt.
+- Central write-gate middleware (`mutation_write_gate`) holds shared advisory
+  lock `7303003` through `next.run`; RAII
+  `acquire_background_mutation_guard` covers quota/ask maintenance/ask append.
+  Hermetic: `test_app_mutation_write_gate_is_integrated`. Live matrix +
+  `live_write_gate_advisory_lock_concurrency_contract`. Re-run
+  `o03-bluegreen-restore-drill.sh` on a Docker host to refresh raw passes.txt.
 
 ## Notes
 

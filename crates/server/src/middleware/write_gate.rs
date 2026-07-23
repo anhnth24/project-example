@@ -3,10 +3,14 @@
 //! Coordinates with backup consistency capture via shared/exclusive advisory
 //! lock key [`BACKUP_ADVISORY_LOCK_KEY`] (same as `deploy/backup` 7303003):
 //! - Backup holds an exclusive session lock for the capture window.
-//! - Business API traffic takes a shared session lock for the request window
-//!   (released before long-lived SSE bodies; stream producers re-check).
+//! - Business API traffic takes a shared session lock for the full handler
+//!   invocation (through `next.run`; Axum returns `Response` before the body
+//!   is consumed, so SSE producers must re-acquire around each DB append).
 //! - Active `ops_fences` rows fail closed with `ops_fence_active`.
 //! - DB errors while checking fail closed with `ops_fence_check_failed`.
+//!
+//! Background writers acquire [`BackgroundMutationGuard`] (RAII) and hold it
+//! across the real DB mutation, then release on every return path.
 //!
 //! Health/readiness/startup, `/metrics`, and OpenAPI stay exempt for ops.
 //!
@@ -14,6 +18,7 @@
 //! - `WRITE_GATE_CONTRACT_ID = "markhand.write_gate.v1"`
 //! - `BACKUP_ADVISORY_LOCK_KEY: i64 = 7303003`
 //! - `pub async fn mutation_write_gate`
+//! - `pub async fn acquire_background_mutation_guard`
 
 use std::sync::Arc;
 
@@ -43,12 +48,11 @@ pub fn is_write_gate_exempt(path: &str) -> bool {
         || !path.starts_with("/api/v1/")
 }
 
-/// Long-lived SSE responses must not hold the shared lock for the body lifetime.
-pub fn is_long_lived_stream_path(path: &str) -> bool {
-    path == "/api/v1/ask/stream" || path.ends_with("/events")
-}
-
 /// Central middleware: shared advisory lock + fence check for business API traffic.
+///
+/// The shared guard is held through the entire `next.run(request)` invocation
+/// (handler builds the `Response`, including ask/stream session init), then
+/// released immediately afterward. Streaming bodies are not kept under the lock.
 pub async fn mutation_write_gate(
     State(state): State<Arc<AppState>>,
     request: Request<Body>,
@@ -64,10 +68,8 @@ pub async fn mutation_write_gate(
         .map(|id| id.0.clone())
         .unwrap_or_else(|| "missing-middleware-request-id".into());
 
-    let stream = is_long_lived_stream_path(&path);
-    match begin_request_write_gate(state.pool(), stream).await {
-        Ok(None) => next.run(request).await,
-        Ok(Some(mut guard)) => {
+    match begin_request_write_gate(state.pool()).await {
+        Ok(mut guard) => {
             let response = next.run(request).await;
             guard.release().await;
             response
@@ -76,12 +78,67 @@ pub async fn mutation_write_gate(
     }
 }
 
-/// Acquire shared backup lock + verify fence. For stream paths, unlock before return
-/// so the SSE body does not pin the lock; producers must re-check.
-async fn begin_request_write_gate(
+/// RAII shared lock + fence clearance for background DB writers.
+///
+/// Hold across the actual mutation (quota sweep, ask maintenance, producer
+/// append txn). Do not hold across provider/token waits that do not write DB.
+pub struct BackgroundMutationGuard {
+    client: Option<Object>,
+}
+
+impl BackgroundMutationGuard {
+    /// Unlock and return the connection to the pool.
+    pub async fn release(mut self) {
+        self.release_inner().await;
+    }
+
+    async fn release_inner(&mut self) {
+        if let Some(client) = self.client.take() {
+            let _ = unlock_shared(&client).await;
+        }
+    }
+}
+
+impl Drop for BackgroundMutationGuard {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            // Best-effort unlock so a forgotten release cannot poison the pool.
+            tokio::spawn(async move {
+                let _ = unlock_shared(&client).await;
+            });
+        }
+    }
+}
+
+/// Acquire shared backup lock + verify fence for a background DB write window.
+pub async fn acquire_background_mutation_guard(
     pool: &Pool,
-    release_before_handler: bool,
-) -> Result<Option<SharedLockGuard>, FenceError> {
+) -> Result<BackgroundMutationGuard, FenceError> {
+    let client = pool.get().await.map_err(|_| FenceError::Database)?;
+    let locked: bool = client
+        .query_one(
+            "SELECT pg_try_advisory_lock_shared($1)",
+            &[&BACKUP_ADVISORY_LOCK_KEY],
+        )
+        .await
+        .map_err(|_| FenceError::Database)?
+        .get(0);
+    if !locked {
+        return Err(FenceError::Active);
+    }
+    match ops_fence::ensure_mutations_allowed_on(&client).await {
+        Ok(()) => Ok(BackgroundMutationGuard {
+            client: Some(client),
+        }),
+        Err(error) => {
+            let _ = unlock_shared(&client).await;
+            Err(error)
+        }
+    }
+}
+
+/// Acquire shared backup lock + verify fence; caller holds until after `next.run`.
+async fn begin_request_write_gate(pool: &Pool) -> Result<SharedLockGuard, FenceError> {
     let client = pool.get().await.map_err(|_| FenceError::Database)?;
     let locked: bool = client
         .query_one(
@@ -95,43 +152,19 @@ async fn begin_request_write_gate(
         // Exclusive backup lock held — treat as fenced capture in progress.
         return Err(FenceError::Active);
     }
-    let fence = match ops_fence::any_blocking_fence_active_on(&client).await {
-        Ok(active) => active,
+    match ops_fence::any_blocking_fence_active_on(&client).await {
+        Ok(true) => {
+            let _ = unlock_shared(&client).await;
+            Err(FenceError::Active)
+        }
+        Ok(false) => Ok(SharedLockGuard {
+            client: Some(client),
+        }),
         Err(error) => {
             let _ = unlock_shared(&client).await;
-            return Err(error);
+            Err(error)
         }
-    };
-    if fence {
-        let _ = unlock_shared(&client).await;
-        return Err(FenceError::Active);
     }
-    if release_before_handler {
-        let _ = unlock_shared(&client).await;
-        return Ok(None);
-    }
-    Ok(Some(SharedLockGuard {
-        client: Some(client),
-    }))
-}
-
-/// Background loops / stream producers: fail closed without holding past the check.
-pub async fn ensure_background_mutations_allowed(pool: &Pool) -> Result<(), FenceError> {
-    let client = pool.get().await.map_err(|_| FenceError::Database)?;
-    let locked: bool = client
-        .query_one(
-            "SELECT pg_try_advisory_lock_shared($1)",
-            &[&BACKUP_ADVISORY_LOCK_KEY],
-        )
-        .await
-        .map_err(|_| FenceError::Database)?
-        .get(0);
-    if !locked {
-        return Err(FenceError::Active);
-    }
-    let result = ops_fence::ensure_mutations_allowed_on(&client).await;
-    let _ = unlock_shared(&client).await;
-    result
 }
 
 struct SharedLockGuard {
@@ -149,7 +182,6 @@ impl SharedLockGuard {
 impl Drop for SharedLockGuard {
     fn drop(&mut self) {
         if let Some(client) = self.client.take() {
-            // Fallback if caller forgot release(); unlock on a detached task.
             tokio::spawn(async move {
                 let _ = unlock_shared(&client).await;
             });
@@ -216,16 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn stream_paths_release_lock_before_body() {
-        assert!(is_long_lived_stream_path("/api/v1/ask/stream"));
-        assert!(is_long_lived_stream_path(
-            "/api/v1/jobs/00000000-0000-0000-0000-000000000001/events"
-        ));
-        assert!(!is_long_lived_stream_path("/api/v1/ask"));
-        assert!(!is_long_lived_stream_path("/api/v1/collections"));
-    }
-
-    #[test]
     fn pause_codes_distinguish_active_vs_check_failed() {
         assert_eq!(
             ops_fence::mutation_pause_code(&FenceError::Active),
@@ -234,6 +256,36 @@ mod tests {
         assert_eq!(
             ops_fence::mutation_pause_code(&FenceError::Database),
             "ops_fence_check_failed"
+        );
+    }
+
+    #[test]
+    fn middleware_source_holds_shared_lock_across_next_run() {
+        // Architecture contract: no early unlock before handler for stream paths.
+        let src = include_str!("write_gate.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        let early_unlock_flag = format!("{}{}", "release_before_", "handler");
+        let stream_special_case = format!("{}{}", "is_long_lived_", "stream_path");
+        assert!(
+            !production.contains(&early_unlock_flag),
+            "stream paths must not unlock before next.run"
+        );
+        assert!(
+            !production.contains(&stream_special_case),
+            "no special-case early release for SSE paths"
+        );
+        let start = production
+            .find("pub async fn mutation_write_gate(")
+            .expect("mutation_write_gate definition");
+        let end = production
+            .find("pub async fn acquire_background_mutation_guard(")
+            .expect("acquire_background_mutation_guard definition");
+        let body = &production[start..end];
+        let next_idx = body.rfind("next.run(request).await").expect("next.run");
+        let release_idx = body.find("guard.release().await").expect("guard.release");
+        assert!(
+            next_idx < release_idx,
+            "shared guard must cover next.run then release"
         );
     }
 }

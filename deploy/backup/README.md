@@ -39,7 +39,8 @@ Endpoint/bucket/collection aliases of blue are refused. Backup dirs use external
 - Strict job drain: wait then **fail without mutating jobs** (never cancel)
 - Consistency requires the central API write-gate contract
   (`middleware/write_gate.rs` `mutation_write_gate`, advisory lock `7303003`,
-  background skip hooks); otherwise refuse
+  RAII `acquire_background_mutation_guard` around quota/ask maintenance and
+  ask-stream append); otherwise refuse
   (`MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=1`, default). Isolation drills may
   set `=0` and record watermark `fence_drain_lock_app_write_gate_absent`.
   Detector: `deploy/backup/lib/write_gate_contract.py`.

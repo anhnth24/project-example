@@ -380,17 +380,19 @@ ghi trong issue đã `Done`.
 ### P1B-O03 — Backup/restore và migration safety
 
 - **Status:** In progress — Sol round-3 merge-safety retained. **Write-gate
-  architecture (Sol R1):** central `middleware/write_gate.rs` /
+  architecture (Sol R2):** central `middleware/write_gate.rs` /
   `mutation_write_gate` on all `/api/v1/*` except health/metrics/OpenAPI;
-  shared advisory lock `7303003` + `ops_fences`; stream paths release lock
-  before SSE body and ask producer re-checks; quota sweep + ask-stream
-  maintenance skip via `ensure_background_mutations_allowed`; honest
-  `ops_fence_active` vs `ops_fence_check_failed`. Detector is
-  architecture-specific (`write_gate_contract.py`) with negative fixtures —
-  not a false-positive `ops_fence::` substring scan. Live matrix
-  `live_central_write_gate_matrix_refuses_business_side_effects` covers auth
-  login, collection/document/upload/ask/search/preview, exempt health/OpenAPI,
-  and zero audit growth while fenced. Evidence: hermetic + live tests; raw
+  shared advisory lock `7303003` held through entire `next.run` (ask/stream
+  session init covered; lock released after `Response` is built, not for the
+  SSE body lifetime); background/producer use RAII
+  `acquire_background_mutation_guard` across quota sweep, ask maintenance, and
+  each append txn (no check-then-release TOCTOU); honest `ops_fence_active` vs
+  `ops_fence_check_failed`. Detector (`write_gate_contract.py`) requires
+  ask-stream append guard + negative fixtures (comment-only decoys fail). Live:
+  `live_central_write_gate_matrix_refuses_business_side_effects` (incl.
+  ask/stream no session init) and
+  `live_write_gate_advisory_lock_concurrency_contract` (shared blocks exclusive;
+  exclusive fail-closed; no pool leak). Evidence: hermetic + live tests; raw
   `o03-restore.*` stamp still pre-dates full drill re-run. **Exact gaps:**
   (1) promote/cutover disabled until API consumes durable routing + independent
   reconcile target-state attestation; (2) encrypted backup destination not

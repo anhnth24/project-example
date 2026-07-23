@@ -85,8 +85,9 @@ def assert_encryption_policy(dest: Path) -> None:
 def app_mutation_write_gate_sufficient() -> bool:
     """True only when the central write-gate architecture contract is present.
 
-    Requires middleware + advisory lock 7303003 + router wiring + background
-    skip hooks. A stray `ops_fence::` import is intentionally insufficient.
+    Requires middleware + advisory lock 7303003 + router wiring + RAII
+    background/ask-producer guards. A stray `ops_fence::` import is
+    intentionally insufficient.
     """
     from write_gate_contract import app_mutation_write_gate_sufficient_in
 

@@ -478,7 +478,7 @@ class ManifestGuardTests(unittest.TestCase):
             evaluate_write_gate_tree,
         )
 
-        server_src = Path("/workspace/crates/server/src")
+        server_src = ROOT / "crates" / "server" / "src"
         self.assertTrue(
             app_mutation_write_gate_sufficient(),
             f"missing write-gate contract parts: {evaluate_write_gate_tree(server_src)}",
@@ -507,14 +507,43 @@ class ManifestGuardTests(unittest.TestCase):
             )
 
         # Negative fixtures: remove each required component → False.
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
+        def _seed_tree(root: Path) -> None:
+            if root.exists():
+                shutil.rmtree(root)
             shutil.copytree(server_src / "middleware", root / "middleware")
             (root / "http.rs").write_text(
                 (server_src / "http.rs").read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
-            self.assertTrue(app_mutation_write_gate_sufficient_in(root))
+            qa = root / "services" / "qa"
+            qa.mkdir(parents=True)
+            (qa / "ask_stream.rs").write_text(
+                (server_src / "services" / "qa" / "ask_stream.rs").read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+
+        def _strip_ask_append_guard(root: Path) -> None:
+            path = root / "services" / "qa" / "ask_stream.rs"
+            text = path.read_text(encoding="utf-8")
+            # Remove only the append-path acquire; leave a comment decoy that must not pass.
+            text = text.replace(
+                "crate::middleware::write_gate::acquire_background_mutation_guard(&pool)",
+                "/* acquire_background_mutation_guard(&pool) */ async { Err(()) }.await",
+                1,
+            )
+            # First occurrence is append; also neutralize its release so region fails.
+            text = text.replace("guard.release().await;", "/* guard.release().await */", 1)
+            path.write_text(text, encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "src"
+            _seed_tree(root)
+            self.assertTrue(
+                app_mutation_write_gate_sufficient_in(root),
+                evaluate_write_gate_tree(root),
+            )
 
             cases = {
                 "middleware_fn": lambda: (root / "middleware" / "write_gate.rs").write_text(
@@ -538,29 +567,35 @@ class ManifestGuardTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 ),
-                "background_skip": lambda: (root / "http.rs").write_text(
+                "background_quota_guard": lambda: (root / "http.rs").write_text(
                     (root / "http.rs")
                     .read_text(encoding="utf-8")
                     .replace(
-                        "ensure_background_mutations_allowed(&pool)",
+                        "acquire_background_mutation_guard(&pool)",
                         "Ok::<(), ()>(())",
                     ),
                     encoding="utf-8",
                 ),
+                "ask_producer_append_guard": lambda: _strip_ask_append_guard(root),
+                "comment_only_ask_guard": lambda: (
+                    root / "services" / "qa" / "ask_stream.rs"
+                ).write_text(
+                    "// acquire_background_mutation_guard(&pool)\n"
+                    "// append_event_authorized\n"
+                    "async fn run_producer() {}\n",
+                    encoding="utf-8",
+                ),
                 "middleware_absent": lambda: shutil.rmtree(root / "middleware"),
             }
+
             # Re-copy fresh tree per negative case.
             for name, mutate in cases.items():
-                shutil.rmtree(root)
-                shutil.copytree(server_src / "middleware", root / "middleware")
-                (root / "http.rs").write_text(
-                    (server_src / "http.rs").read_text(encoding="utf-8"),
-                    encoding="utf-8",
-                )
+                _seed_tree(root)
                 mutate()
                 self.assertFalse(
                     app_mutation_write_gate_sufficient_in(root),
-                    f"negative fixture {name} must fail contract",
+                    f"negative fixture {name} must fail contract: "
+                    f"{evaluate_write_gate_tree(root)}",
                 )
 
 

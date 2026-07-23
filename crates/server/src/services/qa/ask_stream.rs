@@ -245,21 +245,20 @@ async fn run_producer(
         let claims = claims.clone();
         let cited = cited_document_ids.clone();
         async move {
-            // Re-check O03 write-gate: SSE middleware releases the shared lock before the body.
-            if crate::middleware::write_gate::ensure_background_mutations_allowed(&pool)
-                .await
-                .is_err()
-            {
-                return Err(crate::db::error::DbError::Config("ops_fence_active".into()));
-            }
-            // JWT exp check outside txn; family+principal+citation fence inside append.
+            // JWT/token checks outside the write-gate; hold the RAII guard only
+            // around the authorized append transaction (not provider waits).
             if stream_auth::token_expired(&claims, chrono::Utc::now().timestamp()) {
                 return Err(crate::db::error::DbError::Config("token_expired".into()));
             }
             let Some(family_id) = Uuid::parse_str(&claims.sid).ok() else {
                 return Err(crate::db::error::DbError::Config("session_revoked".into()));
             };
-            with_org_txn(&pool, &ctx, {
+            let Ok(guard) =
+                crate::middleware::write_gate::acquire_background_mutation_guard(&pool).await
+            else {
+                return Err(crate::db::error::DbError::Config("ops_fence_active".into()));
+            };
+            let result = with_org_txn(&pool, &ctx, {
                 let ctx = ctx.clone();
                 move |txn| {
                     Box::pin(async move {
@@ -271,7 +270,9 @@ async fn run_producer(
                     })
                 }
             })
-            .await
+            .await;
+            guard.release().await;
+            result
         }
     };
 
@@ -280,6 +281,11 @@ async fn run_producer(
         let ctx = ctx.clone();
         let cited = cited_document_ids.clone();
         async move {
+            let Ok(guard) =
+                crate::middleware::write_gate::acquire_background_mutation_guard(&pool).await
+            else {
+                return;
+            };
             let _ = with_org_txn(&pool, &ctx, {
                 let ctx = ctx.clone();
                 move |txn| {
@@ -293,6 +299,7 @@ async fn run_producer(
                 }
             })
             .await;
+            guard.release().await;
         }
     };
 
