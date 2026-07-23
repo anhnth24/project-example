@@ -200,7 +200,6 @@ pub async fn assert_markhand_app_role(pool: &Pool) {
     assert!(!rolsuper, "markhand_app must not be superuser");
     assert!(!rolbypassrls, "markhand_app must not bypass RLS");
 }
-
 pub fn test_auth_config() -> AuthConfig {
     AuthConfig {
         issuer: Some("https://issuer.markhand.test".into()),
