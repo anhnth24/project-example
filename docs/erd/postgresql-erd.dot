@@ -1,0 +1,912 @@
+digraph markhand_postgresql {
+  graph [
+    label="Markhand Web — PostgreSQL (migrations 0001–0028)",
+    labelloc=t,
+    fontsize=22,
+    fontname="DejaVu Sans",
+    bgcolor="white",
+    rankdir=TB,
+    newrank=true,
+    compound=true,
+    clusterrank=local,
+    splines=polyline,
+    nodesep=0.35,
+    ranksep=0.80,
+    pad=0.40,
+    margin=0.10,
+    outputorder=edgesfirst,
+    overlap=false,
+    concentrate=false,
+    remincross=true,
+    mclimit=2.0,
+    charset="UTF-8"
+  ];
+  node [shape=plain, fontname="DejaVu Sans", fontsize=9];
+  edge [
+    color="#667085",
+    penwidth=1.15,
+    arrowsize=0.75,
+    dir=both,
+    fontname="DejaVu Sans",
+    fontsize=6.5
+  ];
+
+  subgraph cluster_identity {
+    label="Danh tính, xác thực và RBAC";
+    color="#93B4D7";
+    style="rounded,filled";
+    fillcolor="#F5F9FD";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    orgs [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>orgs</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Tổ chức thuê bao của hệ thống</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">slug</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    users [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>users</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Tài khoản người dùng toàn hệ thống</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">email</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">display_name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">disabled_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">password_hash</TD><TD ALIGN="LEFT">text ?</TD></TR>
+      </TABLE>
+    >];
+
+    org_memberships [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>org_memberships</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Thành viên và vai trò cơ bản trong tổ chức</I></TD></TR>
+        <TR><TD PORT="org_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">role</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    permissions [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>permissions</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Danh mục quyền thao tác chuẩn</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">code</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">description</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    roles [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>roles</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Vai trò RBAC theo tổ chức</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">code</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">is_system</TD><TD ALIGN="LEFT">boolean</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    role_permissions [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>role_permissions</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Gán quyền cho vai trò RBAC</I></TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="role_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">role_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="permission_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">permission_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    groups [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>groups</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Nhóm người dùng theo tổ chức</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">description</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    group_memberships [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>group_memberships</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Gán người dùng vào nhóm</I></TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="group_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">group_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    refresh_tokens [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>refresh_tokens</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Phiên đăng nhập bằng refresh token</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">family_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">token_hash</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">expires_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">revoked_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD PORT="replaced_by_id"><B>FK</B></TD><TD ALIGN="LEFT">replaced_by_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    org_invites [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7397BD">
+        <TR><TD BGCOLOR="#CFE2F3" COLSPAN="3"><B>org_invites</B></TD></TR>
+        <TR><TD BGCOLOR="#EAF3FA" COLSPAN="3"><I>Lời mời tham gia tổ chức</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">email</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">role</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">token_hash</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="invited_by_user_id"><B>FK</B></TD><TD ALIGN="LEFT">invited_by_user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">expires_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">accepted_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">revoked_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_acl {
+    label="Bộ sưu tập và ACL";
+    color="#A5C58C";
+    style="rounded,filled";
+    fillcolor="#F7FBF3";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    collections [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#80A665">
+        <TR><TD BGCOLOR="#D9EAD3" COLSPAN="3"><B>collections</B></TD></TR>
+        <TR><TD BGCOLOR="#EEF6EA" COLSPAN="3"><I>Bộ sưu tập tài liệu và phạm vi chia sẻ</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">slug</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">description</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD PORT="owner_user_id"><B>FK</B></TD><TD ALIGN="LEFT">owner_user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">visibility</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">deleted_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+      </TABLE>
+    >];
+
+    collection_user_access [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#80A665">
+        <TR><TD BGCOLOR="#D9EAD3" COLSPAN="3"><B>collection_user_access</B></TD></TR>
+        <TR><TD BGCOLOR="#EEF6EA" COLSPAN="3"><I>ACL bộ sưu tập cho từng người dùng</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="collection_id"><B>FK</B></TD><TD ALIGN="LEFT">collection_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">access_level</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    collection_group_access [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#80A665">
+        <TR><TD BGCOLOR="#D9EAD3" COLSPAN="3"><B>collection_group_access</B></TD></TR>
+        <TR><TD BGCOLOR="#EEF6EA" COLSPAN="3"><I>ACL bộ sưu tập cho nhóm</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="collection_id"><B>FK</B></TD><TD ALIGN="LEFT">collection_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="group_id"><B>FK</B></TD><TD ALIGN="LEFT">group_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">access_level</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    collection_role_access [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#80A665">
+        <TR><TD BGCOLOR="#D9EAD3" COLSPAN="3"><B>collection_role_access</B></TD></TR>
+        <TR><TD BGCOLOR="#EEF6EA" COLSPAN="3"><I>ACL bộ sưu tập cho vai trò</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="collection_id"><B>FK</B></TD><TD ALIGN="LEFT">collection_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="role_id"><B>FK</B></TD><TD ALIGN="LEFT">role_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">access_level</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_documents {
+    label="Tài liệu và phiên bản";
+    color="#D3A46F";
+    style="rounded,filled";
+    fillcolor="#FFF9F2";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    documents [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B98750">
+        <TR><TD BGCOLOR="#FCE5CD" COLSPAN="3"><B>documents</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF2E3" COLSPAN="3"><I>Tài liệu logic và phiên bản hiện hành</I></TD></TR>
+        <TR><TD PORT="id"><B>PK/FK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="collection_id"><B>FK</B></TD><TD ALIGN="LEFT">collection_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">title</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">state</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="current_version_id"><B>FK</B></TD><TD ALIGN="LEFT">current_version_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD PORT="created_by_user_id"><B>FK</B></TD><TD ALIGN="LEFT">created_by_user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">deleted_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+      </TABLE>
+    >];
+
+    document_versions [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B98750">
+        <TR><TD BGCOLOR="#FCE5CD" COLSPAN="3"><B>document_versions</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF2E3" COLSPAN="3"><I>Ảnh chụp nội dung bất biến của tài liệu</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">version_number</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD PORT="parent_version_id"><B>FK</B></TD><TD ALIGN="LEFT">parent_version_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">publication_state</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">is_current</TD><TD ALIGN="LEFT">boolean</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">content_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">original_object_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">markdown_object_key</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">source_filename</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">source_content_type</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">byte_size</TD><TD ALIGN="LEFT">bigint ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">effective_from</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">effective_to</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">change_summary</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD PORT="created_by_user_id"><B>FK</B></TD><TD ALIGN="LEFT">created_by_user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    derived_artifacts [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B98750">
+        <TR><TD BGCOLOR="#FCE5CD" COLSPAN="3"><B>derived_artifacts</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF2E3" COLSPAN="3"><I>Tệp dẫn xuất từ một phiên bản tài liệu</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">artifact_kind</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">object_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">content_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">content_type</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">byte_size</TD><TD ALIGN="LEFT">bigint ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_retrieval {
+    label="Lập chỉ mục, truy hồi và tri thức";
+    color="#A88AC4";
+    style="rounded,filled";
+    fillcolor="#FAF6FD";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    index_metadata [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>index_metadata</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Cấu hình và thế hệ chỉ mục truy hồi</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="collection_id"><B>FK</B></TD><TD ALIGN="LEFT">collection_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">index_signature_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">identity_version</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">chunking_version</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">body_text_version</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">query_normalization_version</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">embedding_family</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">embedding_revision</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">dimensions</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">normalized</TD><TD ALIGN="LEFT">boolean</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">runtime_path</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">generation</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">is_active</TD><TD ALIGN="LEFT">boolean</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">state</TD><TD ALIGN="LEFT">text</TD></TR>
+      </TABLE>
+    >];
+
+    chunks [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>chunks</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Đoạn nội dung để tìm kiếm và trích dẫn</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">ordinal</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">heading_path</TD><TD ALIGN="LEFT">text[]</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">body_text_version</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">chunk_identity_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="index_metadata_id"><B>FK</B></TD><TD ALIGN="LEFT">index_metadata_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">index_signature</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">page</TD><TD ALIGN="LEFT">integer ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">slide</TD><TD ALIGN="LEFT">integer ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">sheet</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">span_start</TD><TD ALIGN="LEFT">integer ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">span_end</TD><TD ALIGN="LEFT">integer ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">tsv</TD><TD ALIGN="LEFT">tsvector</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    claims [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>claims</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Mệnh đề có kiểu được trích từ tài liệu</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="chunk_id"><B>FK</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">claim_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">subject</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">predicate</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value_number</TD><TD ALIGN="LEFT">numeric ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value_text</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value_boolean</TD><TD ALIGN="LEFT">boolean ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value_date</TD><TD ALIGN="LEFT">date ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value_money</TD><TD ALIGN="LEFT">numeric ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">unit</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">scope</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">effective_from</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">effective_to</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">citation_quote</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">citation_span_start</TD><TD ALIGN="LEFT">integer ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">citation_span_end</TD><TD ALIGN="LEFT">integer ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    conflicts [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>conflicts</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Xung đột phát hiện giữa hai mệnh đề</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">severity</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">conflict_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="claim_a_id"><B>FK</B></TD><TD ALIGN="LEFT">claim_a_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="claim_b_id"><B>FK</B></TD><TD ALIGN="LEFT">claim_b_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">first_detected_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD PORT="first_detected_version_id"><B>FK</B></TD><TD ALIGN="LEFT">first_detected_version_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">resolved_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">resolution_note</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD PORT="resolution_version_a_id"><B>FK</B></TD><TD ALIGN="LEFT">resolution_version_a_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD PORT="resolution_version_b_id"><B>FK</B></TD><TD ALIGN="LEFT">resolution_version_b_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    conflict_evidence [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>conflict_evidence</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Bằng chứng bất biến cho xung đột</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="conflict_id"><B>FK</B></TD><TD ALIGN="LEFT">conflict_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="claim_id"><B>FK</B></TD><TD ALIGN="LEFT">claim_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">evidence_role</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">citation_quote</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    index_generation_backfills [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>index_generation_backfills</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Tiến độ backfill phiên bản vào thế hệ chỉ mục</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="index_metadata_id"><B>FK</B></TD><TD ALIGN="LEFT">index_metadata_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">completed_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+      </TABLE>
+    >];
+
+    embedding_batches [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>embedding_batches</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Lô công việc tạo embedding bền vững</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="index_job_id"><B>FK</B></TD><TD ALIGN="LEFT">index_job_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="job_id"><B>FK</B></TD><TD ALIGN="LEFT">job_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="index_metadata_id"><B>FK</B></TD><TD ALIGN="LEFT">index_metadata_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">start_ordinal</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">end_ordinal</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">input_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">completed_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+      </TABLE>
+    >];
+
+    vector_cleanup_intents [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#8D70AA">
+        <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>vector_cleanup_intents</B></TD></TR>
+        <TR><TD BGCOLOR="#F0ECF6" COLSPAN="3"><I>Ý định bền vững dọn vector Qdrant</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="job_id"><B>FK</B></TD><TD ALIGN="LEFT">job_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">index_signature_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">point_ids</TD><TD ALIGN="LEFT">uuid[]</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_jobs {
+    label="Công việc và sự kiện";
+    color="#7FB6AD";
+    style="rounded,filled";
+    fillcolor="#F3FAF8";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    jobs [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#5D998F">
+        <TR><TD BGCOLOR="#D0E8E4" COLSPAN="3"><B>jobs</B></TD></TR>
+        <TR><TD BGCOLOR="#E8F5F2" COLSPAN="3"><I>Hàng đợi công việc bền vững</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">job_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload_version</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload</TD><TD ALIGN="LEFT">jsonb</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">attempts</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_attempts</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">lease_owner</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">lease_expires_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">heartbeat_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">checkpoint</TD><TD ALIGN="LEFT">jsonb ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">idempotency_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">available_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">started_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">finished_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">last_error</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    outbox_events [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#5D998F">
+        <TR><TD BGCOLOR="#D0E8E4" COLSPAN="3"><B>outbox_events</B></TD></TR>
+        <TR><TD BGCOLOR="#E8F5F2" COLSPAN="3"><I>Sự kiện chờ phát theo transactional outbox</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">event_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload_version</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload</TD><TD ALIGN="LEFT">jsonb</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">idempotency_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="job_id"><B>FK</B></TD><TD ALIGN="LEFT">job_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">published_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    event_log [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#5D998F">
+        <TR><TD BGCOLOR="#D0E8E4" COLSPAN="3"><B>event_log</B></TD></TR>
+        <TR><TD BGCOLOR="#E8F5F2" COLSPAN="3"><I>Nhật ký sự kiện tuần tự theo tổ chức</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">sequence_no</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">event_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload_version</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload</TD><TD ALIGN="LEFT">jsonb</TD></TR>
+        <TR><TD PORT="job_id"><B>FK</B></TD><TD ALIGN="LEFT">job_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD PORT="document_id"><B>FK</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD PORT="version_id"><B>FK</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_quota_audit {
+    label="Hạn mức và kiểm toán";
+    color="#D68E9E";
+    style="rounded,filled";
+    fillcolor="#FFF6F8";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    org_quotas [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B96E80">
+        <TR><TD BGCOLOR="#F4CCCC" COLSPAN="3"><B>org_quotas</B></TD></TR>
+        <TR><TD BGCOLOR="#FCE8EB" COLSPAN="3"><I>Giới hạn tài nguyên của tổ chức</I></TD></TR>
+        <TR><TD PORT="org_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_storage_bytes</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_documents</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_concurrent_jobs</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_monthly_tokens</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    usage_counters [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B96E80">
+        <TR><TD BGCOLOR="#F4CCCC" COLSPAN="3"><B>usage_counters</B></TD></TR>
+        <TR><TD BGCOLOR="#FCE8EB" COLSPAN="3"><I>Bộ đếm mức sử dụng theo kỳ</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">counter_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">period_start</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">period_end</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">value</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    quota_reservations [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B96E80">
+        <TR><TD BGCOLOR="#F4CCCC" COLSPAN="3"><B>quota_reservations</B></TD></TR>
+        <TR><TD BGCOLOR="#FCE8EB" COLSPAN="3"><I>Đặt trước hạn mức cho thao tác đang chạy</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">reservation_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">resource_kind</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">amount</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">expires_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD PORT="job_id"><B>FK</B></TD><TD ALIGN="LEFT">job_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">settled_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+      </TABLE>
+    >];
+
+    audit_log [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B96E80">
+        <TR><TD BGCOLOR="#F4CCCC" COLSPAN="3"><B>audit_log</B></TD></TR>
+        <TR><TD BGCOLOR="#FCE8EB" COLSPAN="3"><I>Nhật ký kiểm toán chỉ được ghi nối tiếp</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">seq</TD><TD ALIGN="LEFT">bigserial</TD></TR>
+        <TR><TD PORT="actor_user_id"><B>FK</B></TD><TD ALIGN="LEFT">actor_user_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">action</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">resource_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">resource_id</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">outcome</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">metadata</TD><TD ALIGN="LEFT">jsonb</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">request_id</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_streaming {
+    label="Tải lên, tải xuống và luồng hỏi đáp";
+    color="#D4B85E";
+    style="rounded,filled";
+    fillcolor="#FFFBEF";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    upload_operations [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B99A3C">
+        <TR><TD BGCOLOR="#FFF2CC" COLSPAN="3"><B>upload_operations</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF8E1" COLSPAN="3"><I>Trạng thái tải lên và đối soát MinIO–DB</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">idempotency_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">envelope_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">content_sha256</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">state</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">attempt</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">reservation_key</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">expected_object_key</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">object_key</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">object_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="collection_id"><B>REF</B></TD><TD ALIGN="LEFT">collection_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="document_id"><B>REF</B></TD><TD ALIGN="LEFT">document_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="version_id"><B>REF</B></TD><TD ALIGN="LEFT">version_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="job_id"><B>REF</B></TD><TD ALIGN="LEFT">job_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">disposition</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">size_bytes</TD><TD ALIGN="LEFT">bigint ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">canonical_format</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">original_filename</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">threat_class</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">reason_code</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD PORT="reviewed_by_user_id"><B>FK</B></TD><TD ALIGN="LEFT">reviewed_by_user_id</TD><TD ALIGN="LEFT">uuid ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">reviewed_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">review_reason</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">error_code</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    download_capability_redemptions [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B99A3C">
+        <TR><TD BGCOLOR="#FFF2CC" COLSPAN="3"><B>download_capability_redemptions</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF8E1" COLSPAN="3"><I>Ghi nhận capability tải xuống dùng một lần</I></TD></TR>
+        <TR><TD PORT="org_id"><B>PK/FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="jti"><B>PK</B></TD><TD ALIGN="LEFT">jti</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">redeemed_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">expires_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+
+    ask_stream_sessions [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B99A3C">
+        <TR><TD BGCOLOR="#FFF2CC" COLSPAN="3"><B>ask_stream_sessions</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF8E1" COLSPAN="3"><I>Phiên SSE hỏi đáp có thể tiếp tục</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">status</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">close_reason</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">version_mode</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD PORT="collection_ids"><B>REF</B></TD><TD ALIGN="LEFT">collection_ids</TD><TD ALIGN="LEFT">uuid[]</TD></TR>
+        <TR><TD PORT="cited_document_ids"><B>REF</B></TD><TD ALIGN="LEFT">cited_document_ids</TD><TD ALIGN="LEFT">uuid[]</TD></TR>
+        <TR><TD PORT="cited_version_ids"><B>REF</B></TD><TD ALIGN="LEFT">cited_version_ids</TD><TD ALIGN="LEFT">uuid[]</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">pinned_snapshot</TD><TD ALIGN="LEFT">jsonb</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">next_sequence</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">event_count</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">byte_count</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_events</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">max_bytes</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">expires_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">closed_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">producer_lease_until</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">producer_epoch</TD><TD ALIGN="LEFT">integer</TD></TR>
+      </TABLE>
+    >];
+
+    ask_stream_events [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#B99A3C">
+        <TR><TD BGCOLOR="#FFF2CC" COLSPAN="3"><B>ask_stream_events</B></TD></TR>
+        <TR><TD BGCOLOR="#FFF8E1" COLSPAN="3"><I>Sự kiện SSE tuần tự của phiên hỏi đáp</I></TD></TR>
+        <TR><TD PORT="id"><B>PK</B></TD><TD ALIGN="LEFT">id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="org_id"><B>FK</B></TD><TD ALIGN="LEFT">org_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="session_id"><B>FK</B></TD><TD ALIGN="LEFT">session_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD PORT="user_id"><B>FK</B></TD><TD ALIGN="LEFT">user_id</TD><TD ALIGN="LEFT">uuid</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">sequence_no</TD><TD ALIGN="LEFT">bigint</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">event_type</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">envelope_version</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">data</TD><TD ALIGN="LEFT">jsonb</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">payload_bytes</TD><TD ALIGN="LEFT">integer</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">created_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  subgraph cluster_infrastructure {
+    label="Hạ tầng";
+    color="#9E9E9E";
+    style="rounded,filled";
+    fillcolor="#FAFAFA";
+    fontname="DejaVu Sans";
+    fontsize=14;
+
+    ops_fences [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7E7E7E">
+        <TR><TD BGCOLOR="#E6E6E6" COLSPAN="3"><B>ops_fences</B></TD></TR>
+        <TR><TD BGCOLOR="#F2F2F2" COLSPAN="3"><I>Chốt vận hành cho restore và reconcile</I></TD></TR>
+        <TR><TD PORT="name"><B>PK</B></TD><TD ALIGN="LEFT">name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">reason</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">active</TD><TD ALIGN="LEFT">boolean</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">set_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">cleared_at</TD><TD ALIGN="LEFT">timestamptz ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">set_by</TD><TD ALIGN="LEFT">text ?</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">attestation_sha256</TD><TD ALIGN="LEFT">text ?</TD></TR>
+      </TABLE>
+    >];
+
+    markhand_schema_migrations [label=<
+      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4" COLOR="#7E7E7E">
+        <TR><TD BGCOLOR="#E6E6E6" COLSPAN="3"><B>markhand_schema_migrations</B></TD></TR>
+        <TR><TD BGCOLOR="#F2F2F2" COLSPAN="3"><I>Sổ cái migration bất biến đã áp dụng</I></TD></TR>
+        <TR><TD PORT="name"><B>PK</B></TD><TD ALIGN="LEFT">name</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">checksum</TD><TD ALIGN="LEFT">text</TD></TR>
+        <TR><TD></TD><TD ALIGN="LEFT">applied_at</TD><TD ALIGN="LEFT">timestamptz</TD></TR>
+      </TABLE>
+    >];
+  }
+
+  legend [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#667085">
+      <TR><TD BGCOLOR="#EAECF0" COLSPAN="2"><B>Chú giải</B></TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">khóa chính</TD></TR>
+      <TR><TD><B>FK</B></TD><TD ALIGN="LEFT">khóa ngoại được PostgreSQL thực thi</TD></TR>
+      <TR><TD><B>REF</B></TD><TD ALIGN="LEFT">tham chiếu logic do ứng dụng duy trì, không phải FK</TD></TR>
+      <TR><TD><B>?</B></TD><TD ALIGN="LEFT">cột cho phép NULL</TD></TR>
+      <TR><TD>||</TD><TD ALIGN="LEFT">đầu quan hệ đúng 1</TD></TR>
+      <TR><TD>○|</TD><TD ALIGN="LEFT">đầu quan hệ 0..1</TD></TR>
+      <TR><TD>○&lt;</TD><TD ALIGN="LEFT">đầu quan hệ 0..n (chân quạ)</TD></TR>
+      <TR><TD><FONT COLOR="#356FA3">nét liền màu</FONT></TD><TD ALIGN="LEFT">FK; màu theo phân hệ của bảng con</TD></TR>
+      <TR><TD><FONT COLOR="#B42318">nét đứt REF</FONT></TD><TD ALIGN="LEFT">liên kết logic do ứng dụng duy trì</TD></TR>
+      <TR><TD COLSPAN="2" ALIGN="LEFT">Nhãn FK ghép hiển thị đầy đủ bộ cột nguồn → bộ cột đích.</TD></TR>
+    </TABLE>
+  >];
+
+  // Enforced FKs: parent (tail) → child (head). Composite labels are complete tuples.
+  orgs:id -> org_memberships:org_id [kind="fk", child="org_memberships", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  users:id -> org_memberships:user_id [kind="fk", child="org_memberships", local_cols="user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  orgs:id -> roles:org_id [kind="fk", child="roles", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  orgs:id -> role_permissions:org_id [kind="fk", child="role_permissions", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  permissions:id -> role_permissions:permission_id [kind="fk", child="role_permissions", local_cols="permission_id", parent="permissions", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  roles:id -> role_permissions:role_id [kind="fk", child="role_permissions", local_cols="org_id, role_id", parent="roles", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3", label="role_permissions(org_id, role_id) → roles(org_id, id)"];
+  orgs:id -> groups:org_id [kind="fk", child="groups", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  orgs:id -> group_memberships:org_id [kind="fk", child="group_memberships", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  users:id -> group_memberships:user_id [kind="fk", child="group_memberships", local_cols="user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  groups:id -> group_memberships:group_id [kind="fk", child="group_memberships", local_cols="org_id, group_id", parent="groups", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3", label="group_memberships(org_id, group_id) → groups(org_id, id)"];
+  orgs:id -> refresh_tokens:org_id [kind="fk", child="refresh_tokens", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  users:id -> refresh_tokens:user_id [kind="fk", child="refresh_tokens", local_cols="user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  refresh_tokens:id -> refresh_tokens:replaced_by_id [kind="fk", child="refresh_tokens", local_cols="replaced_by_id", parent="refresh_tokens", ref_cols="id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  org_memberships:org_id -> refresh_tokens:org_id [kind="fk", child="refresh_tokens", local_cols="org_id, user_id", parent="org_memberships", ref_cols="org_id, user_id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3", label="refresh_tokens(org_id, user_id) → org_memberships(org_id, user_id)"];
+  orgs:id -> org_invites:org_id [kind="fk", child="org_invites", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  users:id -> org_invites:invited_by_user_id [kind="fk", child="org_invites", local_cols="invited_by_user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#356FA3", fontcolor="#356FA3"];
+  orgs:id -> collections:org_id [kind="fk", child="collections", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35"];
+  users:id -> collections:owner_user_id [kind="fk", child="collections", local_cols="owner_user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35"];
+  orgs:id -> collection_user_access:org_id [kind="fk", child="collection_user_access", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35"];
+  collections:id -> collection_user_access:collection_id [kind="fk", child="collection_user_access", local_cols="org_id, collection_id", parent="collections", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35", label="collection_user_access(org_id, collection_id) → collections(org_id, id)"];
+  org_memberships:org_id -> collection_user_access:org_id [kind="fk", child="collection_user_access", local_cols="org_id, user_id", parent="org_memberships", ref_cols="org_id, user_id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35", label="collection_user_access(org_id, user_id) → org_memberships(org_id, user_id)"];
+  orgs:id -> collection_group_access:org_id [kind="fk", child="collection_group_access", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35"];
+  collections:id -> collection_group_access:collection_id [kind="fk", child="collection_group_access", local_cols="org_id, collection_id", parent="collections", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35", label="collection_group_access(org_id, collection_id) → collections(org_id, id)"];
+  groups:id -> collection_group_access:group_id [kind="fk", child="collection_group_access", local_cols="org_id, group_id", parent="groups", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35", label="collection_group_access(org_id, group_id) → groups(org_id, id)"];
+  orgs:id -> collection_role_access:org_id [kind="fk", child="collection_role_access", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35"];
+  collections:id -> collection_role_access:collection_id [kind="fk", child="collection_role_access", local_cols="org_id, collection_id", parent="collections", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35", label="collection_role_access(org_id, collection_id) → collections(org_id, id)"];
+  roles:id -> collection_role_access:role_id [kind="fk", child="collection_role_access", local_cols="org_id, role_id", parent="roles", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#568A35", fontcolor="#568A35", label="collection_role_access(org_id, role_id) → roles(org_id, id)"];
+  orgs:id -> documents:org_id [kind="fk", child="documents", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D"];
+  users:id -> documents:created_by_user_id [kind="fk", child="documents", local_cols="created_by_user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D"];
+  collections:id -> documents:collection_id [kind="fk", child="documents", local_cols="org_id, collection_id", parent="collections", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D", label="documents(org_id, collection_id) → collections(org_id, id)"];
+  orgs:id -> document_versions:org_id [kind="fk", child="document_versions", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D"];
+  users:id -> document_versions:created_by_user_id [kind="fk", child="document_versions", local_cols="created_by_user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D"];
+  documents:id -> document_versions:document_id [kind="fk", child="document_versions", local_cols="org_id, document_id", parent="documents", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D", label="document_versions(org_id, document_id) → documents(org_id, id)"];
+  document_versions:id -> document_versions:parent_version_id [kind="fk", child="document_versions", local_cols="org_id, document_id, parent_version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D", label="document_versions(org_id, document_id, parent_version_id) → document_versions(org_id, document_id, id)"];
+  orgs:id -> derived_artifacts:org_id [kind="fk", child="derived_artifacts", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D"];
+  document_versions:id -> derived_artifacts:version_id [kind="fk", child="derived_artifacts", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B56D2D", fontcolor="#B56D2D", label="derived_artifacts(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  orgs:id -> index_metadata:org_id [kind="fk", child="index_metadata", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  collections:id -> index_metadata:collection_id [kind="fk", child="index_metadata", local_cols="org_id, collection_id", parent="collections", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="index_metadata(org_id, collection_id) → collections(org_id, id)"];
+  orgs:id -> chunks:org_id [kind="fk", child="chunks", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  document_versions:id -> chunks:version_id [kind="fk", child="chunks", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="chunks(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  index_metadata:id -> chunks:index_metadata_id [kind="fk", child="chunks", local_cols="org_id, index_metadata_id", parent="index_metadata", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="chunks(org_id, index_metadata_id) → index_metadata(org_id, id)"];
+  orgs:id -> claims:org_id [kind="fk", child="claims", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  document_versions:id -> claims:version_id [kind="fk", child="claims", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="claims(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  chunks:id -> claims:chunk_id [kind="fk", child="claims", local_cols="org_id, document_id, version_id, chunk_id", parent="chunks", ref_cols="org_id, document_id, version_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="claims(org_id, document_id, version_id, chunk_id) → chunks(org_id, document_id, version_id, id)"];
+  orgs:id -> conflicts:org_id [kind="fk", child="conflicts", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  claims:id -> conflicts:claim_a_id [kind="fk", child="conflicts", local_cols="org_id, claim_a_id", parent="claims", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflicts(org_id, claim_a_id) → claims(org_id, id)"];
+  claims:id -> conflicts:claim_b_id [kind="fk", child="conflicts", local_cols="org_id, claim_b_id", parent="claims", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflicts(org_id, claim_b_id) → claims(org_id, id)"];
+  document_versions:id -> conflicts:first_detected_version_id [kind="fk", child="conflicts", local_cols="org_id, first_detected_version_id", parent="document_versions", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflicts(org_id, first_detected_version_id) → document_versions(org_id, id)"];
+  document_versions:id -> conflicts:resolution_version_a_id [kind="fk", child="conflicts", local_cols="org_id, resolution_version_a_id", parent="document_versions", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflicts(org_id, resolution_version_a_id) → document_versions(org_id, id)"];
+  document_versions:id -> conflicts:resolution_version_b_id [kind="fk", child="conflicts", local_cols="org_id, resolution_version_b_id", parent="document_versions", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflicts(org_id, resolution_version_b_id) → document_versions(org_id, id)"];
+  orgs:id -> conflict_evidence:org_id [kind="fk", child="conflict_evidence", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  conflicts:id -> conflict_evidence:conflict_id [kind="fk", child="conflict_evidence", local_cols="org_id, conflict_id", parent="conflicts", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflict_evidence(org_id, conflict_id) → conflicts(org_id, id)"];
+  claims:id -> conflict_evidence:claim_id [kind="fk", child="conflict_evidence", local_cols="org_id, claim_id", parent="claims", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="conflict_evidence(org_id, claim_id) → claims(org_id, id)"];
+  orgs:id -> jobs:org_id [kind="fk", child="jobs", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#287A70", fontcolor="#287A70"];
+  documents:id -> jobs:document_id [kind="fk", child="jobs", local_cols="org_id, document_id", parent="documents", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#287A70", fontcolor="#287A70", label="jobs(org_id, document_id) → documents(org_id, id)"];
+  document_versions:id -> jobs:version_id [kind="fk", child="jobs", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#287A70", fontcolor="#287A70", label="jobs(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  orgs:id -> outbox_events:org_id [kind="fk", child="outbox_events", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#287A70", fontcolor="#287A70"];
+  jobs:id -> outbox_events:job_id [kind="fk", child="outbox_events", local_cols="org_id, job_id", parent="jobs", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#287A70", fontcolor="#287A70", label="outbox_events(org_id, job_id) → jobs(org_id, id)"];
+  orgs:id -> event_log:org_id [kind="fk", child="event_log", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#287A70", fontcolor="#287A70"];
+  jobs:id -> event_log:job_id [kind="fk", child="event_log", local_cols="org_id, job_id", parent="jobs", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#287A70", fontcolor="#287A70", label="event_log(org_id, job_id) → jobs(org_id, id)"];
+  documents:id -> event_log:document_id [kind="fk", child="event_log", local_cols="org_id, document_id", parent="documents", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#287A70", fontcolor="#287A70", label="event_log(org_id, document_id) → documents(org_id, id)"];
+  document_versions:id -> event_log:version_id [kind="fk", child="event_log", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#287A70", fontcolor="#287A70", label="event_log(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  orgs:id -> org_quotas:org_id [kind="fk", child="org_quotas", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..1", arrowtail="teetee", arrowhead="teeodot", color="#B0445A", fontcolor="#B0445A"];
+  orgs:id -> usage_counters:org_id [kind="fk", child="usage_counters", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B0445A", fontcolor="#B0445A"];
+  orgs:id -> quota_reservations:org_id [kind="fk", child="quota_reservations", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B0445A", fontcolor="#B0445A"];
+  jobs:id -> quota_reservations:job_id [kind="fk", child="quota_reservations", local_cols="org_id, job_id", parent="jobs", ref_cols="org_id, id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#B0445A", fontcolor="#B0445A", label="quota_reservations(org_id, job_id) → jobs(org_id, id)"];
+  orgs:id -> audit_log:org_id [kind="fk", child="audit_log", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#B0445A", fontcolor="#B0445A"];
+  users:id -> audit_log:actor_user_id [kind="fk", child="audit_log", local_cols="actor_user_id", parent="users", ref_cols="id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#B0445A", fontcolor="#B0445A"];
+  orgs:id -> index_generation_backfills:org_id [kind="fk", child="index_generation_backfills", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  index_metadata:id -> index_generation_backfills:index_metadata_id [kind="fk", child="index_generation_backfills", local_cols="org_id, index_metadata_id", parent="index_metadata", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="index_generation_backfills(org_id, index_metadata_id) → index_metadata(org_id, id)"];
+  document_versions:id -> index_generation_backfills:version_id [kind="fk", child="index_generation_backfills", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="index_generation_backfills(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  orgs:id -> embedding_batches:org_id [kind="fk", child="embedding_batches", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  jobs:id -> embedding_batches:index_job_id [kind="fk", child="embedding_batches", local_cols="org_id, index_job_id", parent="jobs", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="embedding_batches(org_id, index_job_id) → jobs(org_id, id)"];
+  jobs:id -> embedding_batches:job_id [kind="fk", child="embedding_batches", local_cols="org_id, job_id", parent="jobs", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="embedding_batches(org_id, job_id) → jobs(org_id, id)"];
+  index_metadata:id -> embedding_batches:index_metadata_id [kind="fk", child="embedding_batches", local_cols="org_id, index_metadata_id", parent="index_metadata", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="embedding_batches(org_id, index_metadata_id) → index_metadata(org_id, id)"];
+  document_versions:id -> embedding_batches:version_id [kind="fk", child="embedding_batches", local_cols="org_id, document_id, version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="embedding_batches(org_id, document_id, version_id) → document_versions(org_id, document_id, id)"];
+  orgs:id -> vector_cleanup_intents:org_id [kind="fk", child="vector_cleanup_intents", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A"];
+  documents:id -> vector_cleanup_intents:document_id [kind="fk", child="vector_cleanup_intents", local_cols="org_id, document_id", parent="documents", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#79539A", fontcolor="#79539A", label="vector_cleanup_intents(org_id, document_id) → documents(org_id, id)"];
+  jobs:id -> vector_cleanup_intents:job_id [kind="fk", child="vector_cleanup_intents", local_cols="org_id, job_id", parent="jobs", ref_cols="org_id, id", parent_cardinality="1", child_cardinality="0..1", arrowtail="teetee", arrowhead="teeodot", color="#79539A", fontcolor="#79539A", label="vector_cleanup_intents(org_id, job_id) → jobs(org_id, id)"];
+  orgs:id -> download_capability_redemptions:org_id [kind="fk", child="download_capability_redemptions", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#947313", fontcolor="#947313"];
+  orgs:id -> upload_operations:org_id [kind="fk", child="upload_operations", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#947313", fontcolor="#947313"];
+  users:id -> upload_operations:user_id [kind="fk", child="upload_operations", local_cols="user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#947313", fontcolor="#947313", label="upload_operations(user_id) → users(id)"];
+  users:id -> upload_operations:reviewed_by_user_id [kind="fk", child="upload_operations", local_cols="reviewed_by_user_id", parent="users", ref_cols="id", parent_cardinality="0..1", child_cardinality="0..many", arrowtail="teeodot", arrowhead="crowodot", color="#947313", fontcolor="#947313", label="upload_operations(reviewed_by_user_id) → users(id)"];
+  orgs:id -> ask_stream_sessions:org_id [kind="fk", child="ask_stream_sessions", local_cols="org_id", parent="orgs", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#947313", fontcolor="#947313"];
+  users:id -> ask_stream_sessions:user_id [kind="fk", child="ask_stream_sessions", local_cols="user_id", parent="users", ref_cols="id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#947313", fontcolor="#947313"];
+  ask_stream_sessions:id -> ask_stream_events:session_id [kind="fk", child="ask_stream_events", local_cols="org_id, session_id, user_id", parent="ask_stream_sessions", ref_cols="org_id, id, user_id", parent_cardinality="1", child_cardinality="0..many", arrowtail="teetee", arrowhead="crowodot", color="#947313", fontcolor="#947313", label="ask_stream_events(org_id, session_id, user_id) → ask_stream_sessions(org_id, id, user_id)"];
+  document_versions:id -> documents:current_version_id [kind="fk", child="documents", local_cols="org_id, id, current_version_id", parent="document_versions", ref_cols="org_id, document_id, id", parent_cardinality="0..1", child_cardinality="0..1", arrowtail="teeodot", arrowhead="teeodot", color="#B56D2D", fontcolor="#B56D2D", label="documents(org_id, id, current_version_id) → document_versions(org_id, document_id, id)"];
+
+  // Application-maintained references. These are deliberately not PostgreSQL FKs.
+  collections:id -> upload_operations:collection_id [
+    kind="logical", source_table="upload_operations", source_column="collection_id",
+    target_table="collections", target_column="id", array="false",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF logic do ứng dụng duy trì · upload_operations.collection_id → collections.id"
+  ];
+  documents:id -> upload_operations:document_id [
+    kind="logical", source_table="upload_operations", source_column="document_id",
+    target_table="documents", target_column="id", array="false",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF logic do ứng dụng duy trì · upload_operations.document_id → documents.id"
+  ];
+  document_versions:id -> upload_operations:version_id [
+    kind="logical", source_table="upload_operations", source_column="version_id",
+    target_table="document_versions", target_column="id", array="false",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF logic do ứng dụng duy trì · upload_operations.version_id → document_versions.id"
+  ];
+  jobs:id -> upload_operations:job_id [
+    kind="logical", source_table="upload_operations", source_column="job_id",
+    target_table="jobs", target_column="id", array="false",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF logic do ứng dụng duy trì · upload_operations.job_id → jobs.id"
+  ];
+  collections:id -> ask_stream_sessions:collection_ids [
+    kind="logical", source_table="ask_stream_sessions", source_column="collection_ids",
+    target_table="collections", target_column="id", array="true",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF mảng logic do ứng dụng duy trì · ask_stream_sessions.collection_ids[] → collections.id"
+  ];
+  documents:id -> ask_stream_sessions:cited_document_ids [
+    kind="logical", source_table="ask_stream_sessions", source_column="cited_document_ids",
+    target_table="documents", target_column="id", array="true",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF mảng logic do ứng dụng duy trì · ask_stream_sessions.cited_document_ids[] → documents.id"
+  ];
+  document_versions:id -> ask_stream_sessions:cited_version_ids [
+    kind="logical", source_table="ask_stream_sessions", source_column="cited_version_ids",
+    target_table="document_versions", target_column="id", array="true",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
+    fontcolor="#B42318", arrowtail="none", arrowhead="vee",
+    label="REF mảng logic do ứng dụng duy trì · ask_stream_sessions.cited_version_ids[] → document_versions.id"
+  ];
+
+  // Layout guides keep subsystem entry points separated without hiding relationships.
+  orgs -> collections -> documents -> index_metadata -> jobs -> org_quotas
+      -> upload_operations -> ops_fences [style=invis, weight=40];
+}
