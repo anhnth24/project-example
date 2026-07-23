@@ -13,6 +13,7 @@ pub mod download;
 pub mod embedding;
 pub mod index_signature;
 pub mod indexing;
+pub mod lifecycle;
 pub mod ops_fence;
 pub mod preview;
 pub mod promotion;

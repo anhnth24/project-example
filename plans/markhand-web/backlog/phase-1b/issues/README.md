@@ -37,7 +37,12 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** Done — Docker boot + sandbox preflight evidence in `bench/markhand_web/reports/poc-f02-boot.md` (API ready, workers healthy, convert preflight ok, format smoke).
+- **Status:** In progress — #281 fixed the broken `python-slim-bookworm` digest in
+  `deploy/poc/images.lock.json` and added digest-length guards; compose/Dockerfiles
+  remain on master. Gap: `bench/markhand_web/reports/poc-f02-boot.md` is explicitly
+  **hand-authored / [Unverified]** (no machine-captured logs or `docker inspect`
+  artifacts). Do not claim Done until `deploy/scripts/poc-boot-evidence.sh` is
+  re-run on a standard Docker host and raw evidence is committed.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
@@ -164,7 +169,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-I06 — Chunk/embedding/index worker
 
-- **Status:** done — merged to `master` (orchestrated branch, lifecycle fixes through `3af4c79`).
+- **Status:** Done — Sol R2 evidence green: multi-generation
+  `lifecycle_refresh` (one idempotent job per materialized generation; no
+  active-generation fallback); Index↔LifecycleRefresh claim fairness
+  (ConvertWorker atomic pattern); mixed-scope filter-only Qdrant update (has_id
+  + org/collection/version, no body `points`). LiveEnv dual-role
+  (`markhand_app`). Local:
+  `cargo test -p fileconv-server --test index_worker -- --include-ignored`
+  → 10 ok (natural A→B, multi-gen demote + idempotent replay, fairness ≤2
+  `run_once`, mixed-scope, race, retry).
 - **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
   chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
   extract typed claim key/value/unit/scope; incremental conflict candidate outbox;
@@ -172,13 +185,19 @@ ghi trong issue đã `Done`.
 - **Files:** `workers/{index,embedding}.rs`, `services/{chunking,embedding,indexing}.rs`.
 - **Depends:** I03/I05/F06 + G0-RET/G0-CAP/G1A.
 - **Acceptance/tests:** Approved signature; ≤1 replay batch; no duplicate; mismatch
-  before publish; golden/mock/backpressure/kill/consistency tests.
+  before publish; golden/mock/backpressure/kill/consistency tests;
+  `live_index_worker_replay_is_idempotent`;
+  `live_index_worker_stale_version_does_not_mark_current_indexed`.
 - **Security/migration:** Local approved embedding only; new signature=new generation.
   **Out:** user-selected models.
 
 ### P1B-I07 — Tombstone delete và reconcile
 
-- **Status:** done — merged to `master` via PR #245
+- **Status:** Done — merged via PR #245; #282 fixed reconcile audit `request_id`
+  length so `live_reconcile_repairs_orphan_vectors` /
+  `live_reconcile_dead_letter_staging_gc` pass under rust-integration. ADR 0015
+  (purge retention semantics) remains Proposed — wording follow-up only, not a
+  blocker for the delete/reconcile acceptance matrix already covered by live tests.
 - **Plan:** PG tombstone first; idempotent vector/object cleanup; dry-run/repair
   missing/orphan/stale across three stores.
 - **Files:** `workers/{delete,reconcile}.rs`, `services/{deletion,reconciliation}.rs`.
@@ -276,13 +295,13 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
-- **Status:** In progress — SECURITY DEFINER readiness aggregates
-  (`markhand_index_generation_consistent` / fence/reconcile) under FORCE RLS;
-  baseline `/api/v1` IP middleware (health exempt); hard-cap rejects unseen keys
-  without insert; OpenAPI requestBody/response/multipart/SSE expanded + client
-  regenerated. Gap: live two-org app-role readiness DB proof
-  (`tests/readiness_force_rls.rs` ignored); trusted-proxy soak; full route schema
-  parity still deepening.
+- **Status:** In progress — dual-role FORCE RLS evidence closed:
+  `tests/readiness_force_rls.rs` as `markhand_app` proves direct rows without
+  GUC = 0 and SECURITY DEFINER transitions (A=b/B=c → false; B→b → true;
+  missing active generation → false; fence/reconcile true/false). Also:
+  baseline `/api/v1` IP middleware (health exempt); hard-cap rejects unseen keys;
+  OpenAPI requestBody/response/multipart/SSE expanded + client regenerated.
+  Gap: trusted-proxy soak; full route schema parity still deepening.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,

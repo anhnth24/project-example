@@ -666,6 +666,7 @@ impl ConvertWorker {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent_job.id),
+                related_version_id: None,
             },
             format!("convert.cleanup:{}", parent_job.id),
         );

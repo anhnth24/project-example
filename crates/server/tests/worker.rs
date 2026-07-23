@@ -167,14 +167,20 @@ impl EphemeralDb {
 
     async fn drop(self) {
         let admin = connect_raw(&self.admin_url).await;
-        let _ = admin
+        admin
             .batch_execute(&format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity                  WHERE datname = '{}' AND pid <> pg_backend_pid()",
+                self.db_name
             ))
-            .await;
+            .await
+            .unwrap_or_else(|error| panic!("terminate backends failed: {error}"));
+        admin
+            .batch_execute(&format!(
+                "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+                self.db_name
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("DROP DATABASE WITH (FORCE) failed: {error}"));
     }
 }
 
@@ -396,6 +402,7 @@ async fn enqueue_convert(
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-{version_id}"),
         ),
@@ -1337,6 +1344,7 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
                     batch_id: None,
                     index_metadata_id: None,
                     cleanup_target_job_id: None,
+                    related_version_id: None,
                 },
                 format!("convert-fault-{fault:?}-{version_id}"),
             ),
@@ -1526,6 +1534,7 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
             batch_id: None,
             index_metadata_id: None,
             cleanup_target_job_id: None,
+            related_version_id: None,
         },
         format!("convert-terminal-cleanup-{version_id}"),
     );
@@ -1627,6 +1636,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-fair-first-{version_id}"),
         ),
@@ -1647,6 +1657,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-fair-second-{version_id}"),
         ),
@@ -1667,6 +1678,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-fair-cleanup-parent-{version_id}"),
         ),
@@ -1690,6 +1702,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent.id),
+                related_version_id: None,
             },
             format!("convert.cleanup:{}", parent.id),
         ),
@@ -1864,6 +1877,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-reclaim-race-{version_id}"),
         ),
@@ -1972,6 +1986,7 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-barrier-reclaim-{version_id}"),
         ),
@@ -2712,6 +2727,7 @@ while True:
                     batch_id: None,
                     index_metadata_id: None,
                     cleanup_target_job_id: None,
+                    related_version_id: None,
                 },
                 format!("convert-resource-{name}-{version_id}"),
             ),

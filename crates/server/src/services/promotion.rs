@@ -15,6 +15,7 @@ use crate::db::models::{ArtifactKind, DocumentVersion, Job, JobStatus, ResourceK
 use crate::db::{documents, pool, quota as quota_repo};
 use crate::jobs::{self, CheckpointPayload, EventPayload, JobError};
 use crate::services::conversion::{checkpoint_with_step, ConversionIdentity, ConversionStep};
+use crate::services::lifecycle;
 use crate::services::quota::QuotaError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,13 +173,24 @@ pub async fn promote_conversion(
                 }
 
                 if created || version.is_current {
-                    document_versions::promote_current_if_needed(
+                    if let Some(previous_version_id) = document_versions::promote_current_if_needed(
                         txn,
                         &ctx,
                         &document,
                         promoted_version_id,
                     )
-                    .await?;
+                    .await?
+                    {
+                        lifecycle::enqueue_refresh_within_txn(
+                            txn,
+                            &ctx,
+                            input.source.document_id,
+                            document.collection_id,
+                            previous_version_id,
+                            promoted_version_id,
+                        )
+                        .await?;
+                    }
                 }
                 maybe_fault(input.fault, PromotionFault::AfterPointerSwap)?;
 

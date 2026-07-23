@@ -1,104 +1,32 @@
 //! Live PostgreSQL tests for P1B-I02 atomic quota admission.
 //!
-//! Skips cleanly when `MARKHAND_TEST_DATABASE_URL` is unset. These tests use the
-//! non-superuser app role and the same tenant transaction helper as production.
+//! Skips cleanly when dual-role URLs are unset. Uses non-superuser
+//! `markhand_app` so FORCE RLS tenant isolation assertions are meaningful.
+
+mod common;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use common::{admin_database_url, app_database_url, boot_app_pool, DualRoleEphemeralDb};
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::database::apply_migrations;
 use fileconv_server::db::models::{ReservationStatus, ResourceKind};
 use fileconv_server::db::orgs;
-use fileconv_server::db::pool::{create_pool, with_org_txn};
+use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::db::quota as db_quota;
 use fileconv_server::services::quota::{
     self, apply_quota_headers, QuotaDenial, QuotaError, QuotaSettlement, QuotaSnapshot,
 };
 use tokio::sync::oneshot;
-use tokio_postgres::NoTls;
 use uuid::Uuid;
 
-fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
-    }
-}
-
-fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
-    let (without_query, query) = match base_url.split_once('?') {
-        Some((head, tail)) => (head, Some(tail)),
-        None => (base_url, None),
-    };
-    let prefix = without_query
-        .rsplit_once('/')
-        .map(|(head, _)| head)
-        .expect("database URL must include a path");
-    match query {
-        Some(tail) => format!("{prefix}/{database_name}?{tail}"),
-        None => format!("{prefix}/{database_name}"),
-    }
-}
-
-async fn connect_raw(database_url: &str) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
-        .await
-        .unwrap_or_else(|error| panic!("connect failed for {database_url}: {error}"));
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    client
-}
-
-struct EphemeralDb {
-    admin_url: String,
-    db_name: String,
-    url: String,
-}
-
-impl EphemeralDb {
-    async fn create(base_url: &str) -> Self {
-        let db_name = format!("markhand_quota_{}", Uuid::new_v4().simple());
-        let admin_url = rewrite_database_url(base_url, "postgres");
-        let admin = connect_raw(&admin_url).await;
-        admin
-            .batch_execute(&format!("CREATE DATABASE \"{db_name}\""))
-            .await
-            .expect("CREATE DATABASE");
-        Self {
-            admin_url,
-            db_name: db_name.clone(),
-            url: rewrite_database_url(base_url, &db_name),
-        }
-    }
-
-    async fn drop(self) {
-        let admin = connect_raw(&self.admin_url).await;
-        let _ = admin
-            .batch_execute(&format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
-            ))
-            .await;
-    }
-}
-
-async fn boot_pool(base_url: &str) -> (EphemeralDb, Pool) {
-    let ephemeral = EphemeralDb::create(base_url).await;
-    apply_migrations(&ephemeral.url)
-        .await
-        .expect("apply migrations");
-    let pool = create_pool(&ephemeral.url).expect("pool");
-    (ephemeral, pool)
+async fn boot_pool() -> Option<(DualRoleEphemeralDb, Pool)> {
+    let admin = admin_database_url()?;
+    let app = app_database_url()?;
+    Some(boot_app_pool(&admin, &app).await)
 }
 
 fn ctx(org: Uuid, user: Uuid) -> OrgContext {
@@ -243,12 +171,11 @@ async fn force_expire(pool: &Pool, context: &OrgContext, key: &str) {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn concurrent_reserve_does_not_over_reserve() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let pool = Arc::new(pool);
     let context = seed_org_with_quota(
         &pool,
@@ -303,12 +230,11 @@ async fn concurrent_reserve_does_not_over_reserve() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn terminal_settlement_is_idempotent_and_typed() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org_with_quota(
         &pool,
         Uuid::new_v4(),
@@ -411,12 +337,11 @@ async fn terminal_settlement_is_idempotent_and_typed() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn idempotency_key_retries_create_one_reservation() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let pool = Arc::new(pool);
     let context = seed_org_with_quota(
         &pool,
@@ -492,12 +417,11 @@ async fn idempotency_key_retries_create_one_reservation() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn mismatched_and_terminal_key_reuse_is_rejected() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org_with_quota(
         &pool,
         Uuid::new_v4(),
@@ -614,12 +538,11 @@ async fn mismatched_and_terminal_key_reuse_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn concurrent_finalize_and_refund_do_not_double_apply() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let pool = Arc::new(pool);
     let context = seed_org_with_quota(
         &pool,
@@ -675,12 +598,11 @@ async fn concurrent_finalize_and_refund_do_not_double_apply() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn upload_two_resource_settlement_is_atomic() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org_with_quota(
         &pool,
         Uuid::new_v4(),
@@ -726,12 +648,11 @@ async fn upload_two_resource_settlement_is_atomic() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn concurrent_jobs_admission_respects_limit() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let pool = Arc::new(pool);
     let context = seed_org_with_quota(
         &pool,
@@ -783,12 +704,11 @@ async fn concurrent_jobs_admission_respects_limit() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn expired_crash_reservation_does_not_block_and_sweeps() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org_with_quota(
         &pool,
         Uuid::new_v4(),
@@ -855,12 +775,11 @@ async fn expired_crash_reservation_does_not_block_and_sweeps() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn finalize_waiting_on_quota_lock_uses_fresh_post_lock_clock() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org_with_quota(
         &pool,
         Uuid::new_v4(),
@@ -965,12 +884,11 @@ async fn finalize_waiting_on_quota_lock_uses_fresh_post_lock_clock() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn overflow_paths_reject_without_wrap_or_panic() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let context = seed_org_with_quota(
         &pool,
         Uuid::new_v4(),
@@ -1039,12 +957,11 @@ async fn overflow_paths_reject_without_wrap_or_panic() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn quota_rows_are_org_scoped_by_predicate_and_rls() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let org_a = Uuid::new_v4();
     let org_b = Uuid::new_v4();
     let ctx_a = seed_org_with_quota(

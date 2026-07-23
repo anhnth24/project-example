@@ -1,110 +1,38 @@
 //! Integration tests for OrgContext, repositories, RLS, and document state machine.
 //!
-//! Skips cleanly when `MARKHAND_TEST_DATABASE_URL` is unset (same pattern as
-//! `schema_migrations.rs`). Uses the non-superuser `markhand_app` role so FORCE
-//! RLS genuinely applies.
+//! Skips cleanly when dual-role URLs are unset. Uses the non-superuser
+//! `markhand_app` role so FORCE RLS genuinely applies.
+
+mod common;
 
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::{
+    admin_database_url, app_database_url, boot_app_pool, boot_app_pool_with_max_size,
+    DualRoleEphemeralDb,
+};
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::{OrgContext, OrgContextError};
-use fileconv_server::database::apply_migrations;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::error::DbError;
 use fileconv_server::db::models::{CollectionVisibility, DocumentState};
 use fileconv_server::db::orgs;
-use fileconv_server::db::pool::{
-    apply_org_context, create_pool, create_pool_with_max_size, with_org_txn,
-};
+use fileconv_server::db::pool::{apply_org_context, with_org_txn};
 use fileconv_server::services::document_state;
-use tokio_postgres::NoTls;
 use uuid::Uuid;
 
-fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_DATABASE_URL unset — repository integration tests require PostgreSQL"
-            );
-            None
-        }
-    }
+async fn boot_pool() -> Option<(DualRoleEphemeralDb, Pool)> {
+    let admin = admin_database_url()?;
+    let app = app_database_url()?;
+    Some(boot_app_pool(&admin, &app).await)
 }
 
-fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
-    let (without_query, query) = match base_url.split_once('?') {
-        Some((head, tail)) => (head, Some(tail)),
-        None => (base_url, None),
-    };
-    let prefix = without_query
-        .rsplit_once('/')
-        .map(|(head, _)| head)
-        .expect("database URL must include a path");
-    match query {
-        Some(tail) => format!("{prefix}/{database_name}?{tail}"),
-        None => format!("{prefix}/{database_name}"),
-    }
-}
-
-fn admin_database_url(base_url: &str) -> String {
-    rewrite_database_url(base_url, "postgres")
-}
-
-async fn connect_raw(database_url: &str) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
-        .await
-        .unwrap_or_else(|error| panic!("connect failed for {database_url}: {error}"));
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    client
-}
-
-struct EphemeralDb {
-    admin_url: String,
-    db_name: String,
-    url: String,
-}
-
-impl EphemeralDb {
-    async fn create(base_url: &str) -> Self {
-        let db_name = format!("markhand_it_{}", Uuid::new_v4().simple());
-        let admin_url = admin_database_url(base_url);
-        let admin = connect_raw(&admin_url).await;
-        admin
-            .batch_execute(&format!("CREATE DATABASE \"{db_name}\""))
-            .await
-            .expect("CREATE DATABASE");
-        Self {
-            admin_url,
-            db_name: db_name.clone(),
-            url: rewrite_database_url(base_url, &db_name),
-        }
-    }
-
-    async fn drop(self) {
-        let admin = connect_raw(&self.admin_url).await;
-        let _ = admin
-            .batch_execute(&format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
-            ))
-            .await;
-    }
-}
-
-async fn boot_pool(base_url: &str) -> (EphemeralDb, Pool) {
-    let ephemeral = EphemeralDb::create(base_url).await;
-    apply_migrations(&ephemeral.url)
-        .await
-        .expect("apply migrations");
-    let pool = create_pool(&ephemeral.url).expect("create pool");
-    (ephemeral, pool)
+async fn boot_pool_sized(max_size: usize) -> Option<(DualRoleEphemeralDb, Pool)> {
+    let admin = admin_database_url()?;
+    let app = app_database_url()?;
+    Some(boot_app_pool_with_max_size(&admin, &app, max_size).await)
 }
 
 fn make_ctx(org: Uuid, user: Uuid) -> OrgContext {
@@ -179,12 +107,11 @@ fn org_context_fail_closed_on_empty_scope() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn cross_org_deny_via_predicate_and_rls() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
 
     let org_a = Uuid::new_v4();
     let user_a = Uuid::new_v4();
@@ -289,17 +216,12 @@ async fn cross_org_deny_via_predicate_and_rls() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn pool_does_not_leak_tenant_gucs() {
-    let Some(base_url) = test_database_url() else {
+    // Max size 1 forces the same physical backend connection to be reused.
+    let Some((ephemeral, pool)) = boot_pool_sized(1).await else {
         return;
     };
-    // Max size 1 forces the same physical backend connection to be reused.
-    let ephemeral = EphemeralDb::create(&base_url).await;
-    apply_migrations(&ephemeral.url)
-        .await
-        .expect("apply migrations");
-    let pool = create_pool_with_max_size(&ephemeral.url, 1).expect("pool size 1");
 
     let org_a = Uuid::new_v4();
     let user_a = Uuid::new_v4();
@@ -439,12 +361,11 @@ async fn pool_does_not_leak_tenant_gucs() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn document_state_machine_legal_illegal_and_concurrent() {
-    let Some(base_url) = test_database_url() else {
+    let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let (ephemeral, pool) = boot_pool(&base_url).await;
     let pool = Arc::new(pool);
 
     let org = Uuid::new_v4();

@@ -462,6 +462,44 @@ impl QdrantClient {
         Ok(hits)
     }
 
+    /// Overwrite selected payload fields via filter only (no body `points`).
+    ///
+    /// The filter always includes mandatory org/collection scope, `has_id` for
+    /// the exact point set, plus any caller extras (e.g. `version_id`). Used to
+    /// refresh lifecycle markers without re-embedding.
+    pub async fn set_payload_fields(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        point_ids: &[Uuid],
+        fields: &Value,
+        extra_must: &[Value],
+    ) -> Result<(), StorageError> {
+        scope.validate()?;
+        if point_ids.is_empty() {
+            return Ok(());
+        }
+        let body = set_payload_fields_body(scope, point_ids, fields, extra_must)?;
+        let url = format!(
+            "{}/collections/{}/points/payload?wait=true",
+            self.base_url,
+            collection_name.as_str()
+        );
+        let response = self
+            .authed(self.http.post(&url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if response.status().as_u16() == 404 {
+            return Ok(());
+        }
+        if !response.status().is_success() {
+            return Err(StorageError::Backend);
+        }
+        Ok(())
+    }
+
     /// Delete points matching the mandatory org/collection filter (and optional extra).
     pub async fn delete_by_scope(
         &self,
@@ -819,6 +857,29 @@ fn distance_matches(existing: &str, expected: &str) -> bool {
     existing.eq_ignore_ascii_case(expected)
 }
 
+/// Builds the filter-only set-payload body (never includes a top-level `points`).
+pub(crate) fn set_payload_fields_body(
+    scope: &VectorScope,
+    point_ids: &[Uuid],
+    fields: &Value,
+    extra_must: &[Value],
+) -> Result<Value, StorageError> {
+    if !fields.is_object() {
+        return Err(StorageError::PreconditionFailed);
+    }
+    let mut must = mandatory_filter_must(scope);
+    must.extend(extra_must.iter().cloned());
+    let ids: Vec<Value> = point_ids
+        .iter()
+        .map(|id| Value::String(id.to_string()))
+        .collect();
+    must.push(json!({ "has_id": ids }));
+    Ok(json!({
+        "payload": fields,
+        "filter": { "must": must },
+    }))
+}
+
 fn mandatory_filter(scope: &VectorScope) -> Value {
     json!({ "must": mandatory_filter_must(scope) })
 }
@@ -902,6 +963,52 @@ fn parse_point_id(value: &Value) -> Result<Uuid, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_payload_body_is_filter_only_with_has_id_and_version() {
+        let org = Uuid::new_v4();
+        let collection = Uuid::new_v4();
+        let version = Uuid::new_v4();
+        let point = Uuid::new_v4();
+        let body = set_payload_fields_body(
+            &VectorScope::new(org, [collection]),
+            &[point],
+            &json!({ "is_current": false }),
+            &[json!({
+                "key": "version_id",
+                "match": { "value": version.to_string() }
+            })],
+        )
+        .expect("body");
+        assert!(
+            body.get("points").is_none(),
+            "set_payload must not send body points"
+        );
+        let must = body
+            .pointer("/filter/must")
+            .and_then(Value::as_array)
+            .expect("must filter");
+        assert!(
+            must.iter().any(|clause| clause.get("has_id").is_some()),
+            "has_id required in must"
+        );
+        assert!(
+            must.iter()
+                .any(|clause| { clause.get("key").and_then(Value::as_str) == Some("version_id") }),
+            "version_id required in must"
+        );
+        assert!(
+            must.iter()
+                .any(|clause| clause.get("key").and_then(Value::as_str) == Some("org_id")),
+            "org_id required in must"
+        );
+        assert!(
+            must.iter().any(|clause| {
+                clause.get("key").and_then(Value::as_str) == Some("collection_id")
+            }),
+            "collection_id required in must"
+        );
+    }
 
     #[test]
     fn empty_scope_is_rejected() {

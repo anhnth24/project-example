@@ -1,5 +1,9 @@
 //! Durable index job worker.
 
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
@@ -14,6 +18,7 @@ use crate::db::models::{Job, JobStatus, JobType};
 use crate::jobs::{self, JobError};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::indexing::{self, IndexVersionInput, IndexVersionOutcome, IndexingError};
+use crate::services::lifecycle::{self, LifecycleError};
 use crate::storage::minio::MinioClient;
 use crate::storage::qdrant::QdrantClient;
 
@@ -68,6 +73,8 @@ pub struct IndexWorker {
     config: IndexWorkerConfig,
     approved_signature: Option<String>,
     embedding_plan: EmbeddingPlan,
+    /// Alternates Index ↔ LifecycleRefresh claim preference (ConvertWorker pattern).
+    next_claim_prefers_lifecycle: Arc<AtomicBool>,
 }
 
 impl IndexWorker {
@@ -122,23 +129,40 @@ impl IndexWorker {
             config,
             approved_signature,
             embedding_plan,
+            next_claim_prefers_lifecycle: Arc::new(AtomicBool::new(false)),
         })
     }
 
     pub async fn run_once(&self, ctx: &OrgContext) -> Result<IndexWorkerRun, IndexWorkerError> {
-        let jobs = jobs::claim_type(
-            &self.db_pool,
-            ctx,
-            JobType::Index,
-            &self.config.worker_id,
-            DEFAULT_CLAIM_LIMIT,
-            self.config.lease_ttl,
-        )
-        .await?;
-        let Some(job) = jobs.into_iter().next() else {
-            return Ok(IndexWorkerRun::NoJob);
+        // Fairness: alternate Index ↔ LifecycleRefresh so a continuous index
+        // backlog cannot starve demoted-version lifecycle refresh.
+        let claim_order = if self
+            .next_claim_prefers_lifecycle
+            .fetch_xor(true, Ordering::Relaxed)
+        {
+            [JobType::LifecycleRefresh, JobType::Index]
+        } else {
+            [JobType::Index, JobType::LifecycleRefresh]
         };
-        self.process_claimed_job(ctx, job).await
+        for job_type in claim_order {
+            let jobs = jobs::claim_type(
+                &self.db_pool,
+                ctx,
+                job_type,
+                &self.config.worker_id,
+                DEFAULT_CLAIM_LIMIT,
+                self.config.lease_ttl,
+            )
+            .await?;
+            if let Some(job) = jobs.into_iter().next() {
+                return if job.job_type == JobType::LifecycleRefresh {
+                    self.process_lifecycle_job(ctx, job).await
+                } else {
+                    self.process_claimed_job(ctx, job).await
+                };
+            }
+        }
+        Ok(IndexWorkerRun::NoJob)
     }
 
     /// Returns the immutable embedding plan used to resolve target generations
@@ -230,6 +254,68 @@ impl IndexWorker {
         }
     }
 
+    async fn process_lifecycle_job(
+        &self,
+        ctx: &OrgContext,
+        job: Job,
+    ) -> Result<IndexWorkerRun, IndexWorkerError> {
+        let lease_token = job
+            .lease_owner
+            .as_deref()
+            .ok_or(IndexWorkerError::MissingLease)?
+            .to_string();
+        let attempts = job.attempts;
+        let deadline = TokioInstant::now() + self.config.max_job_duration;
+        let result = timeout_at(
+            deadline,
+            lifecycle::refresh_version_lifecycle(
+                &self.db_pool,
+                &self.qdrant,
+                ctx,
+                &job,
+                &lease_token,
+                attempts,
+            ),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => {
+                match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
+                    Ok(completed) => Ok(IndexWorkerRun::Completed {
+                        job_id: completed.id,
+                        chunks: 0,
+                    }),
+                    Err(JobError::LeaseLost) => Ok(IndexWorkerRun::LeaseLost { job_id: job.id }),
+                    Err(error) => Err(IndexWorkerError::Job(error)),
+                }
+            }
+            Ok(Err(LifecycleError::Job(JobError::LeaseLost))) => {
+                Ok(IndexWorkerRun::LeaseLost { job_id: job.id })
+            }
+            Ok(Err(error)) if error.is_retryable_job_failure() => {
+                self.fail_lifecycle_claimed(
+                    ctx,
+                    &job,
+                    &lease_token,
+                    attempts,
+                    error.safe_job_error(),
+                )
+                .await
+            }
+            Ok(Err(error)) => Err(IndexWorkerError::Lifecycle(error)),
+            Err(_) => {
+                self.fail_lifecycle_claimed(
+                    ctx,
+                    &job,
+                    &lease_token,
+                    attempts,
+                    IndexWorkerError::JobTimedOut.safe_job_error(),
+                )
+                .await
+            }
+        }
+    }
+
     async fn fail_claimed(
         &self,
         ctx: &OrgContext,
@@ -251,6 +337,33 @@ impl IndexWorker {
             Err(error) => Err(IndexWorkerError::Indexing(error)),
         }
     }
+
+    async fn fail_lifecycle_claimed(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        last_error: &str,
+    ) -> Result<IndexWorkerRun, IndexWorkerError> {
+        match jobs::fail(
+            &self.db_pool,
+            ctx,
+            job.id,
+            lease_token,
+            attempts,
+            last_error,
+        )
+        .await
+        {
+            Ok(failed) => Ok(IndexWorkerRun::Failed {
+                job_id: failed.id,
+                terminal: failed.status == JobStatus::DeadLetter,
+            }),
+            Err(JobError::LeaseLost) => Ok(IndexWorkerRun::LeaseLost { job_id: job.id }),
+            Err(error) => Err(IndexWorkerError::Job(error)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +380,8 @@ pub enum IndexWorkerError {
     Job(#[from] JobError),
     #[error("indexing error")]
     Indexing(#[from] IndexingError),
+    #[error("lifecycle error")]
+    Lifecycle(#[from] LifecycleError),
     #[error("claimed job is missing a lease token")]
     MissingLease,
     #[error("worker heartbeat interval must be <= one third of lease ttl")]
@@ -294,6 +409,7 @@ impl IndexWorkerError {
         match self {
             Self::Job(_) => "index job error",
             Self::Indexing(error) => error.safe_job_error(),
+            Self::Lifecycle(error) => error.safe_job_error(),
             Self::MissingLease => "index missing lease",
             Self::InvalidHeartbeatConfig => "index heartbeat config invalid",
             Self::InvalidMaxJobDuration => "index max job duration invalid",

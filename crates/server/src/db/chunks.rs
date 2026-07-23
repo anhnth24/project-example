@@ -217,6 +217,71 @@ pub async fn count_by_version(
     Ok(row.get(0))
 }
 
+/// Counts chunks for one version bound to a specific index generation.
+pub async fn count_by_version_and_generation(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    version_id: Uuid,
+    index_metadata_id: Uuid,
+) -> Result<i64, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT count(*)::bigint
+             FROM chunks
+             WHERE org_id = $1
+               AND version_id = $2
+               AND index_metadata_id = $3",
+            &[&ctx.org_id(), &version_id, &index_metadata_id],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+/// Returns every distinct index generation that has durable chunks for a version.
+pub async fn list_generations_for_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    version_id: Uuid,
+) -> Result<Vec<Uuid>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT DISTINCT index_metadata_id
+             FROM chunks
+             WHERE org_id = $1 AND version_id = $2
+             ORDER BY index_metadata_id",
+            &[&ctx.org_id(), &version_id],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| row.get::<_, Uuid>("index_metadata_id"))
+        .collect())
+}
+
+/// Loads chunk identity digests for one version bound to a generation.
+pub async fn list_identities_by_version_and_generation(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    version_id: Uuid,
+    index_metadata_id: Uuid,
+) -> Result<Vec<String>, DbError> {
+    let rows = txn
+        .query(
+            "SELECT chunk_identity_sha256
+             FROM chunks
+             WHERE org_id = $1
+               AND version_id = $2
+               AND index_metadata_id = $3
+             ORDER BY ordinal, id",
+            &[&ctx.org_id(), &version_id, &index_metadata_id],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|row| row.get::<_, String>("chunk_identity_sha256"))
+        .collect())
+}
+
 /// Loads one immutable ordinal range for a particular vector generation.
 pub async fn list_generation_range(
     txn: &Transaction<'_>,

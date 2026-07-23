@@ -90,6 +90,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0021_expand_audit_intent_outcome.sql",
         include_str!("../migrations/0021_expand_audit_intent_outcome.sql"),
     ),
+    (
+        "0022_expand_lifecycle_refresh_job.sql",
+        include_str!("../migrations/0022_expand_lifecycle_refresh_job.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
