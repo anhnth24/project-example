@@ -36,11 +36,12 @@ The PostgreSQL ERD will contain every active table, including
 into identity/RBAC, collection ACL, documents, indexing/retrieval, jobs/events,
 quota/audit, uploads/streaming, and infrastructure.
 
-Each entity will show its columns, SQL types, primary keys, foreign keys, and
-nullable fields. Solid relationship lines represent database-enforced foreign
-keys. Important self-references and composite foreign keys are included.
-Application-level UUID references without foreign-key constraints are not drawn
-as enforced relationships.
+Each entity will show a concise Vietnamese description of the table's purpose,
+its columns, SQL types, primary keys, foreign keys, and nullable fields. Solid
+relationship lines represent database-enforced foreign keys. Important
+self-references and composite foreign keys are included. Application-level UUID
+references without foreign-key constraints are not drawn as enforced
+relationships.
 
 The image uses a high-resolution landscape layout because the complete schema is
 too large for a conventional page-sized diagram.
@@ -48,9 +49,10 @@ too large for a conventional page-sized diagram.
 ## SQLite diagram
 
 The SQLite ERD will show `documents`, `chunks`, `index_meta`, and the
-`chunks_fts` FTS5 virtual table. The `documents` to `chunks` association and the
-`chunks` to `chunks_fts` mirror are marked as logical/application-maintained
-relationships because SQLite does not declare foreign keys for them.
+`chunks_fts` FTS5 virtual table, with a concise Vietnamese purpose description
+for each entity. The `documents` to `chunks` association and the `chunks` to
+`chunks_fts` mirror are marked as logical/application-maintained relationships
+because SQLite does not declare foreign keys for them.
 
 ## Visual conventions
 
