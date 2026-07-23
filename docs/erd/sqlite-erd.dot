@@ -1,0 +1,106 @@
+digraph markhand_desktop_sqlite {
+  graph [
+    label="Markhand Desktop — SQLite knowledge index",
+    labelloc=t,
+    fontsize=22,
+    fontname="DejaVu Sans",
+    bgcolor="white",
+    rankdir=LR,
+    splines=polyline,
+    nodesep=0.55,
+    ranksep=1.00,
+    pad=0.25,
+    charset="UTF-8"
+  ];
+  node [shape=plain, fontname="DejaVu Sans", fontsize=10];
+  edge [
+    color="#667085",
+    penwidth=1.2,
+    arrowsize=0.8,
+    dir=both,
+    fontname="DejaVu Sans",
+    fontsize=9
+  ];
+
+  documents [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#3979A8">
+      <TR><TD BGCOLOR="#B9D7EA" COLSPAN="3"><B>documents</B></TD></TR>
+      <TR><TD BGCOLOR="#EAF4FA" COLSPAN="3"><I>Tài liệu cục bộ và dấu vết embedding</I></TD></TR>
+      <TR><TD PORT="doc_rel"><B>PK</B></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">md_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">content_hash</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">format</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">chunks</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">embedding_signature</TD><TD ALIGN="LEFT">TEXT · DEFAULT ''</TD></TR>
+    </TABLE>
+  >];
+
+  chunks [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#6E56A0">
+      <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>chunks</B></TD></TR>
+      <TR><TD BGCOLOR="#F1EDF7" COLSPAN="3"><I>Đoạn Markdown, vị trí nguồn và vector tìm kiếm</I></TD></TR>
+      <TR><TD PORT="chunk_id"><B>PK</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD PORT="doc_rel"></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">md_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">heading</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">start_offset</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">end_offset</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">page</TD><TD ALIGN="LEFT">INTEGER ?</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">slide</TD><TD ALIGN="LEFT">INTEGER ?</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">sheet</TD><TD ALIGN="LEFT">TEXT ?</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">vector</TD><TD ALIGN="LEFT">BLOB</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">vector_dims</TD><TD ALIGN="LEFT">INTEGER · DEFAULT 256</TD></TR>
+      <TR><TD BGCOLOR="#F8F6FB" COLSPAN="3"><I>INDEX chunks_doc_rel (doc_rel)</I></TD></TR>
+    </TABLE>
+  >];
+
+  index_meta [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#408B76">
+      <TR><TD BGCOLOR="#CDE8DF" COLSPAN="3"><B>index_meta</B></TD></TR>
+      <TR><TD BGCOLOR="#EDF8F4" COLSPAN="3"><I>Cấu hình và khả năng tương thích của chỉ mục</I></TD></TR>
+      <TR><TD PORT="key"><B>PK</B></TD><TD ALIGN="LEFT">key</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">value</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+    </TABLE>
+  >];
+
+  chunks_fts [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#B47B25">
+      <TR><TD BGCOLOR="#FCE5B5" COLSPAN="3"><B>chunks_fts</B> · FTS5</TD></TR>
+      <TR><TD BGCOLOR="#FFF6E4" COLSPAN="3"><I>Bản sao toàn văn để tìm kiếm có và không dấu</I></TD></TR>
+      <TR><TD PORT="chunk_id"></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">heading</TD><TD ALIGN="LEFT">— ?</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">— ?</TD></TR>
+      <TR><TD></TD><TD ALIGN="LEFT">folded</TD><TD ALIGN="LEFT">— ?</TD></TR>
+      <TR><TD BGCOLOR="#FFF9EE" COLSPAN="3"><I>tokenize: unicode61 remove_diacritics 2</I></TD></TR>
+    </TABLE>
+  >];
+
+  legend [label=<
+    <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#667085">
+      <TR><TD BGCOLOR="#EAECF0" COLSPAN="2"><B>Chú giải</B></TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">khóa chính do SQLite thực thi</TD></TR>
+      <TR><TD><B>?</B></TD><TD ALIGN="LEFT">cột cho phép NULL</TD></TR>
+      <TR><TD><B>—</B></TD><TD ALIGN="LEFT">FTS5 không khai báo kiểu SQL</TD></TR>
+      <TR><TD>nét đứt</TD><TD ALIGN="LEFT">liên kết logic do ứng dụng duy trì</TD></TR>
+      <TR><TD COLSPAN="2" ALIGN="LEFT">Schema không khai báo khóa ngoại.</TD></TR>
+    </TABLE>
+  >];
+
+  // Logical links only: the SQLite schema declares no FOREIGN KEY constraints.
+  documents:doc_rel -> chunks:doc_rel [
+    style=dashed,
+    arrowtail=tee,
+    arrowhead="crowodot",
+    label="doc_rel · 1 → 0..n"
+  ];
+  chunks:chunk_id -> chunks_fts:chunk_id [
+    style=dashed,
+    arrowtail=tee,
+    arrowhead=tee,
+    label="bản sao ứng dụng · 1 → 1"
+  ];
+
+  { rank=same; documents; index_meta; }
+}
