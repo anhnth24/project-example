@@ -388,6 +388,11 @@ pub async fn seed_user_with_permissions(
 }
 
 pub async fn login_access_token(pool: &Pool, email: &str, password: &str) -> String {
+    login_tokens(pool, email, password).await.0
+}
+
+/// Returns `(access_token, refresh_token)` for production-router logout barriers.
+pub async fn login_tokens(pool: &Pool, email: &str, password: &str) -> (String, String) {
     let auth = PasswordAuthProvider::new(
         pool.clone(),
         test_auth_config(),
@@ -403,7 +408,10 @@ pub async fn login_access_token(pool: &Pool, email: &str, password: &str) -> Str
         )
         .await
         .expect("login");
-    login.tokens.access_token.expose().to_string()
+    (
+        login.tokens.access_token.expose().to_string(),
+        login.tokens.refresh_token.expose().to_string(),
+    )
 }
 
 pub fn build_app_state(pool: Pool, app_database_url: &str, store: Option<MinioClient>) -> AppState {

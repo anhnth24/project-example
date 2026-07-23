@@ -1,11 +1,14 @@
 //! Shared principal authorization serialization for upload saga and ACL mutations.
 //!
 //! Lock order (must be respected by all callers):
-//! 1. `pg_advisory_xact_lock(principal_authz_key(org, user))`
-//! 2. `org_memberships` / `users` / `collections` / `role_permissions` /
+//! 1. Refresh-token family advisory (`auth::session::lock_refresh_family`) when the
+//!    path is session-scoped (ask SSE append/send, logout/refresh). Compatible with
+//!    auth: logout/refresh take family only; revoke-all takes user lock then families.
+//! 2. `pg_advisory_xact_lock(principal_authz_key(org, user))`
+//! 3. `org_memberships` / `users` / `collections` / `role_permissions` /
 //!    `collection_user_access` row locks as needed
-//! 3. upload_operations row (`FOR UPDATE`)
-//! 4. quota admission locks
+//! 4. upload_operations row (`FOR UPDATE`) / ask stream session advisory
+//! 5. quota admission locks
 
 use tokio_postgres::Transaction;
 use uuid::Uuid;

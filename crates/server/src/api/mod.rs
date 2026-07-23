@@ -1,13 +1,18 @@
 //! Versioned wire-contract types shared by routes, workers and fixtures.
 
 mod error;
+mod last_event_id;
 mod openapi;
 mod pagination;
 mod sse;
 mod types;
 
 pub use error::ApiError;
-pub use openapi::{embedded_openapi_yaml, openapi_path_count};
+pub use last_event_id::{parse_last_event_id_token, resolve_last_event_id, LastEventIdError};
+pub use openapi::{
+    embedded_openapi_yaml, openapi_inventory_gaps, openapi_path_count, openapi_yaml_gaps,
+    router_openapi_parity_gaps, ROUTE_INVENTORY,
+};
 pub use pagination::{decode_cursor, encode_cursor, PageInfo, Pagination};
 pub use sse::SseEnvelope;
 pub use types::*;

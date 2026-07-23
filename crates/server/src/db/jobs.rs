@@ -201,6 +201,8 @@ pub async fn list_events_after(
     limit: i64,
 ) -> Result<Vec<EventLogEntry>, DbError> {
     let limit = limit.clamp(1, 500);
+    // Rollout fallback: legacy rows may still have NULL job_id after partial
+    // backfill — match canonical snake_case payload keys, with optional camelCase.
     let rows = txn
         .query(
             &format!(
@@ -208,7 +210,17 @@ pub async fn list_events_after(
                  FROM event_log
                  WHERE org_id = $1
                    AND sequence_no > $2
-                   AND ($3::uuid IS NULL OR job_id = $3)
+                   AND (
+                        $3::uuid IS NULL
+                        OR job_id = $3
+                        OR (
+                            job_id IS NULL
+                            AND (
+                                (payload ? 'job_id' AND payload->>'job_id' = $3::text)
+                                OR (payload ? 'jobId' AND payload->>'jobId' = $3::text)
+                            )
+                        )
+                   )
                  ORDER BY sequence_no ASC
                  LIMIT $4"
             ),
@@ -216,6 +228,33 @@ pub async fn list_events_after(
         )
         .await?;
     rows.iter().map(map_event_log_entry).collect()
+}
+
+/// Authoritative high-water sequence for a job's durable event_log rows.
+pub async fn job_event_high_water(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<i64, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT COALESCE(MAX(sequence_no), 0)::bigint
+             FROM event_log
+             WHERE org_id = $1
+               AND (
+                    job_id = $2
+                    OR (
+                        job_id IS NULL
+                        AND (
+                            (payload ? 'job_id' AND payload->>'job_id' = $2::text)
+                            OR (payload ? 'jobId' AND payload->>'jobId' = $2::text)
+                        )
+                    )
+               )",
+            &[&ctx.org_id(), &job_id],
+        )
+        .await?;
+    Ok(row.get(0))
 }
 
 pub async fn find_by_idempotency_key(

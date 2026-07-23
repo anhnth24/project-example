@@ -1,5 +1,6 @@
 //! Grounded Q&A with version-aware citations and extractive fallback (P1B-R03).
 
+pub mod ask_stream;
 pub mod grounding;
 pub mod prompt;
 pub mod provider;
@@ -39,6 +40,11 @@ pub fn structured_entailment_available() -> bool {
 }
 
 fn force_extractive_only() -> bool {
+    force_extractive_only_runtime()
+}
+
+/// Shared by JSON ask and durable SSE producer (P1B-R05).
+pub fn force_extractive_only_runtime() -> bool {
     if !STRUCTURED_ENTAILMENT_AVAILABLE {
         return true;
     }
@@ -90,7 +96,7 @@ impl AskError {
     }
 }
 
-fn hits_to_hybrid(hits: &[RetrievalHit]) -> Vec<HybridSearchHit> {
+pub(crate) fn hits_to_hybrid(hits: &[RetrievalHit]) -> Vec<HybridSearchHit> {
     hits.iter()
         .map(|hit| HybridSearchHit {
             chunk_id: hit.chunk_identity_sha256.clone(),

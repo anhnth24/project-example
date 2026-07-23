@@ -25,7 +25,20 @@ paths:
       security: []
       responses:
         "200":
-          description: Fail-closed dependency readiness (DB/vector/object/signature/reconcile).
+          description: Fail-closed dependency readiness (DB/vector/object/embedding/signature/reconcile).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          $ref: "#/components/responses/ApiError"
+  /health/start:
+    get:
+      operationId: healthStart
+      security: []
+      responses:
+        "200":
+          description: Startup latch completed (migrations/runtime boot finished).
           content:
             application/json:
               schema:
@@ -71,6 +84,8 @@ paths:
           description: Current OrgContext snapshot.
         "401":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /uploads:
     post:
       operationId: createUpload
@@ -130,6 +145,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CollectionPage"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     post:
       operationId: createCollection
       responses:
@@ -137,6 +154,8 @@ paths:
           description: Collection created.
         "403":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /collections/{collectionId}:
     parameters:
       - $ref: "#/components/parameters/collectionId"
@@ -147,6 +166,8 @@ paths:
           description: Collection detail.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     patch:
       operationId: updateCollection
       responses:
@@ -154,6 +175,8 @@ paths:
           description: Collection metadata updated.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     delete:
       operationId: deleteCollection
       responses:
@@ -161,6 +184,8 @@ paths:
           description: Collection soft-deleted.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /collections/{collectionId}/documents:
     get:
       operationId: listDocuments
@@ -171,6 +196,8 @@ paths:
           description: Paginated documents.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /collections/{collectionId}/documents/{documentId}/approve-intake:
     post:
       operationId: approveIntake
@@ -205,6 +232,8 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}:
     get:
       operationId: getDocument
@@ -215,6 +244,8 @@ paths:
           description: Document detail (published-visible).
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
     delete:
       operationId: deleteDocument
       parameters:
@@ -224,6 +255,8 @@ paths:
           description: Tombstone delete requested.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/preview:
     get:
       operationId: previewDocument
@@ -241,6 +274,8 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/versions:
     get:
       operationId: listDocumentVersions
@@ -249,6 +284,8 @@ paths:
       responses:
         "200":
           description: Published versions (non-current requires qa.history).
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/versions/{versionId}:
     get:
       operationId: getDocumentVersion
@@ -262,6 +299,8 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/versions/{versionId}/diff:
     get:
       operationId: diffDocumentVersions
@@ -281,6 +320,8 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/versions/{versionId}/publish:
     post:
       operationId: publishDocumentVersion
@@ -290,6 +331,8 @@ paths:
       responses:
         "204":
           description: Version published / current pointer updated.
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/versions/{versionId}/download-capability:
     post:
       operationId: issueDownloadCapability
@@ -303,6 +346,8 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /downloads/{capability}:
     get:
       operationId: redeemDownload
@@ -317,6 +362,8 @@ paths:
           description: Object bytes streamed after fresh ACL + single-use redeem.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/reindex:
     post:
       operationId: reindexDocument
@@ -337,12 +384,16 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /conflicts:
     get:
       operationId: listConflicts
       responses:
         "200":
           description: Open conflicts where both claim collections are authorized.
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /conflicts/{conflictId}:
     get:
       operationId: getConflict
@@ -358,6 +409,8 @@ paths:
           description: Conflict detail (dual-collection authorized).
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /conflicts/{conflictId}/evidence:
     get:
       operationId: getConflictEvidence
@@ -388,6 +441,8 @@ paths:
                   requestId: { type: string }
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /conflicts/{conflictId}/triage:
     post:
       operationId: triageConflict
@@ -416,6 +471,8 @@ paths:
           description: Conflict triage applied.
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /jobs/{jobId}:
     get:
       operationId: getJob
@@ -426,6 +483,8 @@ paths:
           description: Job status (document collection authorized).
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /jobs/{jobId}/events:
     get:
       operationId: jobEvents
@@ -436,15 +495,29 @@ paths:
           schema:
             type: integer
             format: int64
+            minimum: 0
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
       responses:
+        "400":
+          $ref: "#/components/responses/ApiError"
         "200":
-          description: Resumable SSE job events with live-tail + durable sequence.
+          description: >
+            Resumable SSE job events with durable event_log sequence, live-tail
+            across worker restart, heartbeats, and per-poll principal revalidation.
           content:
             text/event-stream:
               schema:
                 $ref: "#/components/schemas/SseEnvelope"
+        "401":
+          $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /search:
     post:
       operationId: search
@@ -496,6 +569,27 @@ paths:
   /ask/stream:
     post:
       operationId: askStream
+      parameters:
+        - name: streamSessionId
+          in: query
+          required: false
+          description: >
+            Resume an existing durable ask stream against its pinned retrieval
+            snapshot. When set, retrieval/provider are not re-run.
+          schema:
+            type: string
+            format: uuid
+        - name: lastEventId
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -504,7 +598,10 @@ paths:
               $ref: "#/components/schemas/AskRequest"
       responses:
         "200":
-          description: Sequenced SSE answer stream with per-batch principal revalidation.
+          description: >
+            Sequenced SSE answer stream with durable session id, provider-token
+            or extractive chunk streaming, Last-Event-ID replay, and per-batch
+            principal revalidation.
           content:
             text/event-stream:
               schema:
@@ -512,6 +609,10 @@ paths:
         "400":
           $ref: "#/components/responses/ApiError"
         "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
@@ -522,6 +623,8 @@ paths:
       responses:
         "200":
           description: Embedded OpenAPI document.
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     bearerAuth:

@@ -2,6 +2,7 @@
 
 use deadpool_postgres::Client;
 use thiserror::Error;
+use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
@@ -131,6 +132,78 @@ pub fn require_collection(ctx: &OrgContext, collection_id: Uuid) -> Result<(), R
     }
 }
 
+/// Reload full permissions + collection allow-list on an open transaction.
+///
+/// Call after family + principal authz locks so ACL/role writers cannot tear
+/// the snapshot observed by stream append/pull.
+pub async fn resolve_org_context_on_txn(
+    txn: &Transaction<'_>,
+    org_id: Uuid,
+    user_id: Uuid,
+) -> Result<OrgContext, ResolveError> {
+    let user_row = txn
+        .query_opt("SELECT disabled_at FROM users WHERE id = $1", &[&user_id])
+        .await
+        .map_err(|_| ResolveError::Database)?;
+    let Some(user_row) = user_row else {
+        return Err(ResolveError::MembershipMissing);
+    };
+    let disabled_at: Option<chrono::DateTime<chrono::Utc>> = user_row.get(0);
+    if disabled_at.is_some() {
+        return Err(ResolveError::UserDisabled);
+    }
+    let membership = txn
+        .query_opt(
+            "SELECT role FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+            &[&org_id, &user_id],
+        )
+        .await
+        .map_err(|_| ResolveError::Database)?;
+    if membership.is_none() {
+        return Err(ResolveError::MembershipMissing);
+    }
+    let permission_rows = txn
+        .query(
+            "SELECT p.code
+             FROM org_memberships m
+             JOIN roles r
+               ON r.org_id = m.org_id AND r.code = m.role
+             JOIN role_permissions rp
+               ON rp.org_id = r.org_id AND rp.role_id = r.id
+             JOIN permissions p
+               ON p.id = rp.permission_id
+             WHERE m.org_id = $1 AND m.user_id = $2
+             ORDER BY p.code",
+            &[&org_id, &user_id],
+        )
+        .await
+        .map_err(|_| ResolveError::Database)?;
+    let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
+    let collection_rows = txn
+        .query(
+            "SELECT c.id
+             FROM collections c
+             WHERE c.org_id = $1
+               AND c.deleted_at IS NULL
+               AND (
+                 c.visibility = 'org'
+                 OR c.owner_user_id = $2
+                 OR EXISTS (
+                   SELECT 1 FROM collection_user_access cua
+                   WHERE cua.org_id = c.org_id
+                     AND cua.collection_id = c.id
+                     AND cua.user_id = $2
+                 )
+               )",
+            &[&org_id, &user_id],
+        )
+        .await
+        .map_err(|_| ResolveError::Database)?;
+    let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
+    OrgContext::try_new(org_id, user_id, permissions, collections)
+        .map_err(|_| ResolveError::InvalidContext)
+}
+
 /// Convenience: resolve inside a transaction-local org GUC scope.
 pub async fn resolve_org_context_in_txn(
     pool: &deadpool_postgres::Pool,
@@ -142,64 +215,14 @@ pub async fn resolve_org_context_in_txn(
         .map_err(|_| ResolveError::InvalidContext)?;
     crate::db::pool::with_org_txn(pool, &provisional, move |txn| {
         Box::pin(async move {
-            // Re-run resolution using the transaction connection via raw queries.
-            let user_row = txn
-                .query_opt("SELECT disabled_at FROM users WHERE id = $1", &[&user_id])
-                .await?;
-            let Some(user_row) = user_row else {
-                return Err(DbError::NotFound);
-            };
-            let disabled_at: Option<chrono::DateTime<chrono::Utc>> = user_row.get(0);
-            if disabled_at.is_some() {
-                return Err(DbError::Config("user_disabled".into()));
-            }
-            let membership = txn
-                .query_opt(
-                    "SELECT role FROM org_memberships WHERE org_id = $1 AND user_id = $2",
-                    &[&org_id, &user_id],
-                )
-                .await?;
-            if membership.is_none() {
-                return Err(DbError::NotFound);
-            }
-            let permission_rows = txn
-                .query(
-                    "SELECT p.code
-                     FROM org_memberships m
-                     JOIN roles r
-                       ON r.org_id = m.org_id AND r.code = m.role
-                     JOIN role_permissions rp
-                       ON rp.org_id = r.org_id AND rp.role_id = r.id
-                     JOIN permissions p
-                       ON p.id = rp.permission_id
-                     WHERE m.org_id = $1 AND m.user_id = $2
-                     ORDER BY p.code",
-                    &[&org_id, &user_id],
-                )
-                .await?;
-            let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
-            let collection_rows = txn
-                .query(
-                    "SELECT c.id
-                     FROM collections c
-                     WHERE c.org_id = $1
-                       AND c.deleted_at IS NULL
-                       AND (
-                         c.visibility = 'org'
-                         OR c.owner_user_id = $2
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = c.org_id
-                             AND cua.collection_id = c.id
-                             AND cua.user_id = $2
-                         )
-                       )",
-                    &[&org_id, &user_id],
-                )
-                .await?;
-            let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
-            OrgContext::try_new(org_id, user_id, permissions, collections)
-                .map_err(|_| DbError::Config("invalid_org_context".into()))
+            resolve_org_context_on_txn(txn, org_id, user_id)
+                .await
+                .map_err(|error| match error {
+                    ResolveError::MembershipMissing => DbError::NotFound,
+                    ResolveError::UserDisabled => DbError::Config("user_disabled".into()),
+                    ResolveError::InvalidContext => DbError::Config("invalid_org_context".into()),
+                    _ => DbError::Config("resolve_failed".into()),
+                })
         })
     })
     .await

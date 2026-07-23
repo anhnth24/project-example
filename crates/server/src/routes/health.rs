@@ -1,4 +1,4 @@
-//! Liveness/readiness endpoints (P1B-R06).
+//! Liveness/readiness/startup endpoints (P1B-R06).
 //!
 //! Dependency probes live in `services::readiness` / `AppState` so this route
 //! module stays free of direct storage product names (ADR 0001).
@@ -26,6 +26,7 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/v1/health/live", get(liveness))
         .route("/api/v1/health/ready", get(readiness_route))
+        .route("/api/v1/health/start", get(startup_route))
 }
 
 async fn liveness(request_id: Option<axum::Extension<RequestId>>) -> Json<Health> {
@@ -51,6 +52,25 @@ async fn readiness_route(
             code,
             request_id: request_id.clone(),
         })?;
+    Ok(Json(Health {
+        status: "ok",
+        request_id,
+    }))
+}
+
+async fn startup_route(
+    State(state): State<Arc<AppState>>,
+    request_id: Option<axum::Extension<RequestId>>,
+) -> Result<Json<Health>, ReadinessError> {
+    let request_id = request_id
+        .map(|id| id.0 .0)
+        .unwrap_or_else(|| "missing-middleware-request-id".into());
+    if !state.startup().is_completed() {
+        return Err(ReadinessError {
+            code: "ready_startup",
+            request_id,
+        });
+    }
     Ok(Json(Health {
         status: "ok",
         request_id,
