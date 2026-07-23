@@ -1,0 +1,147 @@
+{
+  "appVersion": "fed5224",
+  "artifactBytes": {
+    "WRITE_FENCE": 92,
+    "capture-end.epoch": 11,
+    "capture-start.epoch": 11,
+    "fence-epoch.txt": 37,
+    "minio-normalized-history.json": 1061,
+    "minio-object-checksums.json": 1397,
+    "minio-tombstones.json": 259,
+    "minio-versions.jsonl": 1912,
+    "minio-versions.txt": 744,
+    "objects/3b3432d5a6c9010650f5cc6c55ac617f119dbd31b74577b03982f147f3cf1a32.bin": 25,
+    "objects/53de79c455424990c6182cee1adfdeb1fef3feb057fd81bba3d563fe642bff2f.bin": 50,
+    "objects/6d5e59aa5f3c3fdefe42cf40a04766a619349dc22c7e7d91881e58f0c41670f4.bin": 35,
+    "objects/ddd259102166ba818ad5e1e51e79848da657c91a6787138f391729cd2e93959d.bin": 47,
+    "postgres.dump": 231315,
+    "qdrant-snapshot-create.json": 305,
+    "qdrant-snapshot.bin": 94208,
+    "qdrant-snapshot.name": 81
+  },
+  "artifactSha256": {
+    "WRITE_FENCE": "fbfb75259ad12301349ea53c590f1de433d1e1dd4de03b40e3ce383e467fd392",
+    "capture-end.epoch": "b4a9e2e95270cf2787e81fdc895c71b529448273159e37bbb25519151269eee5",
+    "capture-start.epoch": "61c886d139374c9d636bd48eae0fdf67d553175aef188bd4545a3a5a7603e615",
+    "fence-epoch.txt": "9576b89d7be5974112293f5435a4f794c8de0d1daf15d5f024bb5cefdc0d16cd",
+    "minio-normalized-history.json": "a8897e950f4c6f9852c840c9ec6cd392e5d2356233467e6dc2b35e72353b3013",
+    "minio-object-checksums.json": "4d831fe215248e315aaa60eaf08659b702c13f0dd5e280f2f0eccfd5dbdc2ebe",
+    "minio-tombstones.json": "b49b7f8ca1cb7e0fab9d1ff1491d07e71f16b61f18786d071ba4f5e8accc25e8",
+    "minio-versions.jsonl": "a4986a9f976e71e9126c4c56d974246cb2ccf886d76ab0b7a714a9dd022275d7",
+    "minio-versions.txt": "8e4824275da99fd005a9468b95bc94a95775d16e42a88bcc02f1b8177cff5baf",
+    "objects/3b3432d5a6c9010650f5cc6c55ac617f119dbd31b74577b03982f147f3cf1a32.bin": "2893396f33c2afe38875b6715b2f952ba9f137642cafc08cc091199671b40cb8",
+    "objects/53de79c455424990c6182cee1adfdeb1fef3feb057fd81bba3d563fe642bff2f.bin": "350f56e6ef4aeaac7d9df3cf8cd85deab682735cdd8b56dfea0170aa836a1b81",
+    "objects/6d5e59aa5f3c3fdefe42cf40a04766a619349dc22c7e7d91881e58f0c41670f4.bin": "e5cc75d23e7e35adbefeacb4a519cb3a0f7d3208f7d8b11429a2ed01bf171e16",
+    "objects/ddd259102166ba818ad5e1e51e79848da657c91a6787138f391729cd2e93959d.bin": "1d1dd18cda184c0466c24b769ba5a06977d5715405def0def530aa4ab2ffba7f",
+    "postgres.dump": "8ff338e7cdb8831b33a48a7e153774ae39911302a787d80b51a92f1057f84fe9",
+    "qdrant-snapshot-create.json": "e043aead66674d3664dc398801a67eac9f37d9ed412d1ea1fc03a84550aa04e4",
+    "qdrant-snapshot.bin": "3b1e989f52972921d27d369891d781c64c97d61698f0781b775f766389ac39cf",
+    "qdrant-snapshot.name": "ae54875a8acd3dc3a95e7671d66daf3f5b1f06829e27c334b6c4c6317790516a"
+  },
+  "captureEndEpoch": 1784809413,
+  "captureStartEpoch": 1784809411,
+  "capturedAt": "20260723T122307Z",
+  "crossStoreRefs": [
+    {
+      "documentId": "8ca33624-8678-47d2-9e24-2fe6c0560b0b",
+      "objectKey": "trusted/o03-seed-20260723t122307z.txt",
+      "objectSha256": "1d1dd18cda184c0466c24b769ba5a06977d5715405def0def530aa4ab2ffba7f",
+      "qdrantPointId": 1,
+      "versionId": "b810c04e-30d9-4adf-851f-347839137668"
+    }
+  ],
+  "fence": "WRITE_FENCE",
+  "fenceEpoch": "8a487fa2-e02b-4794-bcbd-53b837a62a8f",
+  "fenceSetAt": "2026-07-23 12:23:31.415061+00",
+  "imageVersions": {
+    "debian-bookworm-slim": "debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818",
+    "minio": "pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "minio-init": "minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+    "mock-embedding": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "postgres": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "python-slim-bookworm": "python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c",
+    "qdrant": "qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "rust-bookworm": "rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0"
+  },
+  "migrationVersion": "0028_expand_audit_ownership_migrator.sql",
+  "minio": {
+    "inventory": "minio-versions.jsonl",
+    "objects": "minio-object-checksums.json",
+    "tombstones": "minio-tombstones.json",
+    "versioning": "Enabled"
+  },
+  "mode": "blue_green",
+  "opsFence": "restore",
+  "opsFenceMandatory": true,
+  "postgres": {
+    "database": "markhand",
+    "dump": "postgres.dump",
+    "migrations": [
+      "0001_expand_orgs_users.sql",
+      "0002_expand_org_membership_rls.sql",
+      "0003_expand_auth_sessions_rbac.sql",
+      "0004_expand_collections.sql",
+      "0005_expand_documents_versions_artifacts.sql",
+      "0006_expand_chunks_claims.sql",
+      "0007_expand_conflicts_lifecycle.sql",
+      "0008_expand_jobs_outbox_events.sql",
+      "0009_expand_quota_audit_index.sql",
+      "0010_expand_tenant_rls.sql",
+      "0011_expand_poc_seed.sql",
+      "0012_index_generation_embedding_batches.sql",
+      "0013_expand_index_generation_rls.sql",
+      "0014_expand_vector_cleanup_intents.sql",
+      "0015_expand_vector_cleanup_intent_states.sql",
+      "0016_expand_chunks_accent_fold_tsv.sql",
+      "0017_expand_qa_history_permission.sql",
+      "0018_expand_download_capability_redemptions.sql",
+      "0019_expand_ops_fences_jobs_system.sql",
+      "0020_expand_hash_semantics_readiness_ops.sql",
+      "0021_expand_audit_intent_outcome.sql",
+      "0022_expand_lifecycle_refresh_job.sql",
+      "0023_expand_upload_operations.sql",
+      "0024_expand_ask_stream_sessions.sql",
+      "0025_backfill_event_log_ids_ask_stream_ops.sql",
+      "0026_expand_audit_append_only.sql",
+      "0027_expand_migrator_app_grants.sql",
+      "0028_expand_audit_ownership_migrator.sql"
+    ],
+    "systemIdentifier": "7665641212283523114"
+  },
+  "qdrant": {
+    "collection": "markhand-o03-blue-20260723t122307z",
+    "configSha256": "c64ff838ad8e0978239624b6458b2d592dd679877578b78a216654f3ddbad9f1",
+    "payloadRefSha256": "06c738892fbb5f82259b8aa35070e0ab7652e0b25e61a760f0ad3dca34d45625",
+    "pointsCount": 1,
+    "snapshot": "qdrant-snapshot.bin"
+  },
+  "queryReadyRtoSecondsTarget": 3600,
+  "rpoSecondsTarget": 900,
+  "schemaVersion": 3,
+  "sourceIds": {
+    "minioBucket": "markhand-documents",
+    "minioEndpoint": "http://127.0.0.1:9010",
+    "pgDatabase": "markhand",
+    "pgSystemIdentifier": "7665641212283523114",
+    "qdrantCollection": "markhand-o03-blue-20260723t122307z",
+    "qdrantUrl": "http://127.0.0.1:6343"
+  },
+  "status": "captured",
+  "toolVersions": {
+    "appGit": "fed5224",
+    "mc": "minio/mc:env-MC_HOST",
+    "pg_dump": "pg_dump"
+  },
+  "trustedBoundary": {
+    "keyId": "o03-debug",
+    "mode": "hmac_sha256",
+    "note": "HMAC-SHA256 over raw manifest.json; key via env only",
+    "signatureFile": "manifest.sig"
+  },
+  "watermarks": {
+    "fenceEpoch": "8a487fa2-e02b-4794-bcbd-53b837a62a8f",
+    "jobsDrained": true,
+    "pgWalLsn": "0/E529B08",
+    "writeGate": "fence_drain_lock_app_write_gate_absent"
+  }
+}

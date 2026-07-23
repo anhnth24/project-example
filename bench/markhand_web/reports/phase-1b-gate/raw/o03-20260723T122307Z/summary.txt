@@ -1,0 +1,29 @@
+== P1B-O03 drill 20260723T122307Z (restore-green; promote disabled; external mktemp) ==
+PASS: baseline ready 200
+PASS: consistency backup refused when app write gate unavailable
+PASS: hermetic auth/schema/symlink/traversal/malformed/pgpass/mc guards
+PASS: proc canary: no MinIO secret on mc argv
+PASS: concurrent backup refused under session advisory lock
+PASS: manifest mode 0600 (umask 077)
+PASS: backup.sh capture (captureWindow 2s)
+PASS: minio normalized history written
+PASS: normalized MinIO history (type/size/hash; no versionId/ts)
+PASS: restore.sh refuses without green targets
+PASS: restore refuses missing MinIO allowlist
+PASS: restore.sh refuses wrong green allowlist
+PASS: restore.sh refuses blue bucket alias
+PASS: restore.sh refuses blue collection alias
+PASS: existing allowlisted MinIO target refused before mutation
+PASS: restore.sh refuses tampered artifacts
+PASS: restore-green OK; promote disabled
+PASS: cutover/promote disabled (exit 3)
+PASS: no query-ready claim (ready HTTP 503 after restore query)
+PASS: post-restore API live 200
+PASS: blue restore fence retained (no false cutover)
+PASS: no raw dumps in evidence
+GAP: app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)
+GAP: promote/cutover disabled: API does not consume durable routing + independent reconcile target-state attestation
+GAP: encrypted backup destination not exercised (POC explicit_poc_tmp_only policy)
+PASS: verified cleanup before report
+PASS: reproducible raw→report
+drill complete status=in_progress gaps=3 raw=/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o03-20260723T122307Z

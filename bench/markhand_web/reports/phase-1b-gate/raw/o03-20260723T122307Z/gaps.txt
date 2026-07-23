@@ -1,0 +1,3 @@
+app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)
+promote/cutover disabled: API does not consume durable routing + independent reconcile target-state attestation
+encrypted backup destination not exercised (POC explicit_poc_tmp_only policy)

@@ -1,0 +1,157 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://markhand.local/schemas/o03-backup-manifest.schema.json",
+  "title": "Markhand O03 backup manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "capturedAt",
+    "fenceEpoch",
+    "fenceSetAt",
+    "migrationVersion",
+    "mode",
+    "opsFenceMandatory",
+    "sourceIds",
+    "postgres",
+    "minio",
+    "qdrant",
+    "artifactSha256",
+    "artifactBytes",
+    "trustedBoundary",
+    "watermarks",
+    "rpoSecondsTarget",
+    "queryReadyRtoSecondsTarget",
+    "status"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 3 },
+    "capturedAt": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z$" },
+    "fenceEpoch": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "fenceSetAt": { "type": "string", "minLength": 10 },
+    "captureStartEpoch": { "type": "integer", "minimum": 0 },
+    "captureEndEpoch": { "type": "integer", "minimum": 0 },
+    "appVersion": { "type": "string", "minLength": 1 },
+    "migrationVersion": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "const": "blue_green" },
+    "fence": { "type": "string", "const": "WRITE_FENCE" },
+    "opsFence": { "type": "string", "const": "restore" },
+    "opsFenceMandatory": { "type": "boolean", "const": true },
+    "sourceIds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pgSystemIdentifier",
+        "pgDatabase",
+        "minioEndpoint",
+        "minioBucket",
+        "qdrantUrl",
+        "qdrantCollection"
+      ],
+      "properties": {
+        "pgSystemIdentifier": { "type": "string", "pattern": "^[0-9]+$" },
+        "pgDatabase": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_]+$" },
+        "minioEndpoint": { "type": "string", "minLength": 1 },
+        "minioBucket": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9.-]+$" },
+        "qdrantUrl": { "type": "string", "minLength": 1 },
+        "qdrantCollection": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$" }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dump", "migrations", "systemIdentifier", "database"],
+      "properties": {
+        "dump": { "$ref": "#/definitions/safeRel" },
+        "migrations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "systemIdentifier": { "type": "string", "pattern": "^[0-9]+$" },
+        "database": { "type": "string", "minLength": 1 }
+      }
+    },
+    "minio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["versioning", "inventory", "objects", "tombstones"],
+      "properties": {
+        "versioning": { "type": "string", "const": "Enabled" },
+        "inventory": { "$ref": "#/definitions/safeRel" },
+        "objects": { "$ref": "#/definitions/safeRel" },
+        "tombstones": { "$ref": "#/definitions/safeRel" }
+      }
+    },
+    "qdrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["snapshot", "collection", "pointsCount", "configSha256", "payloadRefSha256"],
+      "properties": {
+        "snapshot": { "$ref": "#/definitions/safeRel" },
+        "collection": { "type": "string", "minLength": 1 },
+        "pointsCount": { "type": "integer", "minimum": 0 },
+        "configSha256": { "$ref": "#/definitions/sha256" },
+        "payloadRefSha256": { "$ref": "#/definitions/sha256" }
+      }
+    },
+    "toolVersions": { "type": "object" },
+    "imageVersions": { "type": "object" },
+    "artifactSha256": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/definitions/sha256" }
+    },
+    "artifactBytes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "crossStoreRefs": { "type": "array" },
+    "watermarks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pgWalLsn", "fenceEpoch", "jobsDrained", "writeGate"],
+      "properties": {
+        "pgWalLsn": { "type": "string", "minLength": 1 },
+        "fenceEpoch": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "jobsDrained": { "type": "boolean", "const": true },
+        "writeGate": {
+          "type": "string",
+          "enum": [
+            "app_mutation_write_gate+ops_fences.restore",
+            "fence_drain_lock_app_write_gate_absent"
+          ]
+        }
+      }
+    },
+    "trustedBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "keyId", "signatureFile"],
+      "properties": {
+        "mode": { "type": "string", "const": "hmac_sha256" },
+        "keyId": { "type": "string", "minLength": 1 },
+        "signatureFile": { "type": "string", "const": "manifest.sig" },
+        "note": { "type": "string" }
+      }
+    },
+    "rpoSecondsTarget": { "type": "integer", "const": 900 },
+    "queryReadyRtoSecondsTarget": { "type": "integer", "const": 3600 },
+    "status": { "type": "string", "const": "captured" }
+  },
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "safeRel": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*\\.\\./)[A-Za-z0-9._/-]+$",
+      "minLength": 1
+    }
+  }
+}
