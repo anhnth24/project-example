@@ -459,6 +459,46 @@ class ManifestGuardTests(unittest.TestCase):
             compare_normalized_history(exp, act)
         self.assertIn("mismatch", str(ctx.exception).lower())
 
+    def test_app_mutation_write_gate_is_integrated(self) -> None:
+        """Consistency backup requires mutation routes to consult ops_fence."""
+        import sys
+        from unittest import mock
+
+        sys.path.insert(0, str(LIB))
+        from pipeline import (
+            PipelineError,
+            app_mutation_write_gate_sufficient,
+            assert_consistency_write_gate,
+        )
+
+        self.assertTrue(
+            app_mutation_write_gate_sufficient(),
+            "app mutation routes must call ops_fence / any_blocking_fence_active "
+            "(beyond readiness.rs) so consistency backup can arm the write-gate",
+        )
+        os.environ["MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE"] = "1"
+        self.assertEqual(
+            assert_consistency_write_gate(),
+            "app_mutation_write_gate+ops_fences.restore",
+        )
+        with mock.patch(
+            "pipeline.app_mutation_write_gate_sufficient", return_value=False
+        ):
+            with self.assertRaises(PipelineError) as ctx:
+                assert_consistency_write_gate()
+            self.assertIn(
+                "REFUSING_CONSISTENCY_BACKUP_WRITE_GATE_UNAVAILABLE",
+                str(ctx.exception),
+            )
+        os.environ["MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE"] = "0"
+        with mock.patch(
+            "pipeline.app_mutation_write_gate_sufficient", return_value=False
+        ):
+            self.assertEqual(
+                assert_consistency_write_gate(),
+                "fence_drain_lock_app_write_gate_absent",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

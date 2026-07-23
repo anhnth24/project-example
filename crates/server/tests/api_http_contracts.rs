@@ -420,11 +420,16 @@ async fn live_http_collection_document_job_contract_matrix() {
     )
     .await;
     assert!(
-        status == StatusCode::OK
-            || status == StatusCode::ACCEPTED
-            || status == StatusCode::CREATED
-            || status == StatusCode::CONFLICT,
+        status == StatusCode::OK || status == StatusCode::ACCEPTED || status == StatusCode::CREATED,
         "reindex status {status}: {reindex1}"
+    );
+    let job_id_1 = reindex1["jobId"]
+        .as_str()
+        .expect("reindex must return jobId");
+    assert_eq!(
+        reindex1["created"].as_bool(),
+        Some(true),
+        "first reindex must create a job: {reindex1}"
     );
     let (status, reindex2, _) = json_request(
         app.clone(),
@@ -436,11 +441,18 @@ async fn live_http_collection_document_job_contract_matrix() {
     )
     .await;
     assert!(
-        status == StatusCode::OK
-            || status == StatusCode::ACCEPTED
-            || status == StatusCode::CREATED
-            || status == StatusCode::CONFLICT,
+        status == StatusCode::OK || status == StatusCode::ACCEPTED || status == StatusCode::CREATED,
         "idempotent reindex status {status}: {reindex2}"
+    );
+    assert_eq!(
+        reindex2["jobId"].as_str(),
+        Some(job_id_1),
+        "idempotent reindex must return the same jobId: {reindex1} vs {reindex2}"
+    );
+    assert_eq!(
+        reindex2["created"].as_bool(),
+        Some(false),
+        "idempotent reindex replay must set created=false: {reindex2}"
     );
 
     // Conflicts list/detail/triage + dual-leg evidence authorization.
@@ -820,6 +832,65 @@ async fn live_http_collection_document_job_contract_matrix() {
     .await
     .expect("audit count");
     assert!(audit_count >= 1, "collection.create must be audited in-txn");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+async fn live_mutation_routes_refuse_when_ops_fence_active() {
+    use fileconv_server::services::ops_fence::{self, FENCE_RESTORE};
+
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let (_org, _user, token) = seed_http_principal(&pool).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    ops_fence::set_fence(&pool, FENCE_RESTORE, "p1b-write-gate-test", Some("test"))
+        .await
+        .expect("set restore fence");
+
+    let (status, err, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "Fenced",
+            "slug": format!("fenced-{}", Uuid::new_v4().simple()),
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    assert_eq!(err["code"], "ops_fence_active");
+
+    let attestation = "a".repeat(64);
+    ops_fence::clear_fence_with_attestation(&pool, FENCE_RESTORE, &attestation)
+        .await
+        .expect("clear fence");
+
+    let (status, created, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "Unfenced",
+            "slug": format!("unfenced-{}", Uuid::new_v4().simple()),
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
 
     ephemeral.drop().await;
 }

@@ -19,6 +19,7 @@ use crate::middleware::{baseline_ip_rate_limit, cors_middleware, inject_request_
 use crate::routes;
 use crate::services::download::CapabilityKeys;
 use crate::services::embedding::ApprovedEmbeddingRuntime;
+use crate::services::ops_fence;
 use crate::services::qa::provider::{ChatProvider, OpenAiCompatibleChat};
 use crate::services::quota;
 use crate::services::readiness::{self, ReadinessDeps, StartupState};
@@ -254,6 +255,14 @@ impl AppState {
 
     pub fn rate_limiter(&self) -> &RateLimiter {
         &self.rate_limiter
+    }
+
+    /// Fail-closed gate for mutating HTTP routes during restore/reconcile fences.
+    pub async fn ensure_mutations_allowed(&self) -> Result<(), &'static str> {
+        match ops_fence::ensure_mutations_allowed(self.pool()).await {
+            Ok(()) => Ok(()),
+            Err(error) => Err(ops_fence::mutation_pause_code(&error)),
+        }
     }
 
     pub fn cors_origins(&self) -> &[String] {

@@ -40,9 +40,16 @@
 
 ## Exact gaps
 
-- app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)
 - promote/cutover disabled: API does not consume durable routing + independent reconcile target-state attestation
 - encrypted backup destination not exercised (POC explicit_poc_tmp_only policy)
+
+## Code-closed since last drill (not re-proven by this raw stamp)
+
+- App mutation write-gate is now integrated (`AppState::ensure_mutations_allowed` /
+  mutation routes consult `ops_fence`). Hermetic proof:
+  `deploy/backup/test_restore_guards.py::test_app_mutation_write_gate_is_integrated`
+  and live `live_mutation_routes_refuse_when_ops_fence_active`. Re-run
+  `o03-bluegreen-restore-drill.sh` on a Docker host to refresh raw passes.txt.
 
 ## Notes
 

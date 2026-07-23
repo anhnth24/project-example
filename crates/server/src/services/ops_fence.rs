@@ -18,7 +18,12 @@ pub enum FenceError {
     AttestationRequired,
     #[error("fence not active")]
     NotActive,
+    #[error("ops fence active; mutations paused")]
+    Active,
 }
+
+/// Stable API/error code when mutations are refused due to an ops fence.
+pub const MUTATIONS_PAUSED_CODE: &str = "ops_fence_active";
 
 impl From<crate::db::error::DbError> for FenceError {
     fn from(_: crate::db::error::DbError) -> Self {
@@ -35,6 +40,23 @@ pub async fn any_blocking_fence_active(pool: &Pool) -> Result<bool, FenceError> 
         .map_err(|_| FenceError::Database)?
         .get(0);
     Ok(active)
+}
+
+/// Fail-closed gate for app mutation routes during restore/reconcile fences.
+pub async fn ensure_mutations_allowed(pool: &Pool) -> Result<(), FenceError> {
+    if any_blocking_fence_active(pool).await? {
+        return Err(FenceError::Active);
+    }
+    Ok(())
+}
+
+/// Maps fence check outcomes to a stable HTTP error code for mutation routes.
+pub fn mutation_pause_code(error: &FenceError) -> &'static str {
+    match error {
+        FenceError::Active => MUTATIONS_PAUSED_CODE,
+        FenceError::Database => "ops_fence_check_failed",
+        FenceError::AttestationRequired | FenceError::NotActive => "ops_fence_check_failed",
+    }
 }
 
 /// True when any org has an in-flight reconcile job (SECURITY DEFINER; all orgs).
@@ -112,5 +134,15 @@ mod tests {
     fn fence_names_are_stable() {
         assert_eq!(FENCE_RESTORE, "restore");
         assert_eq!(FENCE_RECONCILE, "reconcile");
+    }
+
+    #[test]
+    fn mutation_pause_code_is_stable_and_fail_closed() {
+        assert_eq!(mutation_pause_code(&FenceError::Active), "ops_fence_active");
+        assert_eq!(
+            mutation_pause_code(&FenceError::Database),
+            "ops_fence_check_failed"
+        );
+        assert_eq!(MUTATIONS_PAUSED_CODE, "ops_fence_active");
     }
 }

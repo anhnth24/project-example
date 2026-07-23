@@ -69,6 +69,9 @@ async fn create_upload(
     multipart: Multipart,
 ) -> Result<Response, UploadRouteError> {
     let request_id = auth.request_id.clone();
+    if state.ensure_mutations_allowed().await.is_err() {
+        return Err(UploadRouteError::MutationsPaused(request_id.clone()));
+    }
     let ip = client_ip
         .map(|ext| ext.0 .0.clone())
         .unwrap_or_else(|| "unknown".into());
@@ -397,6 +400,7 @@ enum UploadRouteError {
     Quota(QuotaError, String),
     Validation(String, String),
     Conflict(String, String),
+    MutationsPaused(String),
     RateLimited(crate::routes::rate_limit_guard::RateLimitRejected),
 }
 
@@ -442,6 +446,16 @@ impl IntoResponse for UploadRouteError {
                 Json(ApiError {
                     code: "idempotency_conflict".into(),
                     message,
+                    request_id,
+                    details: None,
+                }),
+            )
+                .into_response(),
+            Self::MutationsPaused(request_id) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    code: crate::services::ops_fence::MUTATIONS_PAUSED_CODE.into(),
+                    message: "Mutations paused while an ops fence is active".into(),
                     request_id,
                     details: None,
                 }),

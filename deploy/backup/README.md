@@ -37,9 +37,11 @@ Endpoint/bucket/collection aliases of blue are refused. Backup dirs use external
 
 - Session-scoped advisory lock held for the **entire** capture (`PgSession`)
 - Strict job drain: wait then **fail without mutating jobs** (never cancel)
-- Consistency requires app mutation routes to consult `ops_fence`; otherwise
-  refuse (`MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=1`, default). Isolation drills
-  may set `=0` and record watermark `fence_drain_lock_app_write_gate_absent`
+- Consistency requires app mutation routes to consult `ops_fence` (API
+  `AppState::ensure_mutations_allowed` on upload/collection/document mutations);
+  otherwise refuse (`MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=1`, default).
+  Isolation drills may set `=0` and record watermark
+  `fence_drain_lock_app_write_gate_absent`
 - Scripts perform **no DDL**; `ops_fences` must already exist. `ops_routing` is
   **not** retained (no migration) while promote is disabled
 
