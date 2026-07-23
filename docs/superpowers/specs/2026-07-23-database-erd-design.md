@@ -91,7 +91,9 @@ The purpose row in each entity uses the following explicit inventory:
 Columns such as `upload_operations.collection_id`, `document_id`, `version_id`,
 and `job_id`, plus UUID arrays in `ask_stream_sessions`, are application-level
 references because the migrations do not declare foreign keys for them. They are
-shown as ordinary columns and are deliberately not connected by solid lines.
+marked `REF` and connected with visually distinct dashed lines whose labels state
+that the relationship is maintained by the application. They are never marked
+`FK` or connected by a solid line.
 
 ## SQLite diagram
 
@@ -104,9 +106,10 @@ because SQLite does not declare foreign keys for them.
 ## Visual conventions
 
 - Entity header: table name.
-- Column markers: `PK`, `FK`, or both where applicable.
+- Column markers: `PK`, `FK`, `REF`, or combinations where applicable.
 - A trailing `?` marks a nullable column.
-- Crow's-foot cardinality communicates one-to-many and optional links.
+- Crow's-foot endpoints distinguish exactly one, zero-or-one, and zero-or-many.
+- Every composite FK has a visible complete local-tuple → referenced-tuple label.
 - A legend distinguishes enforced and logical relationships.
 - JPEG output uses a white background and sufficient resolution for zooming.
 
@@ -114,7 +117,8 @@ because SQLite does not declare foreign keys for them.
 
 - Compare the entity list against all migration `CREATE TABLE` statements and
   later `ALTER TABLE` additions.
-- Confirm every rendered foreign key against migration SQL.
+- Run `python3 docs/erd/validate_erd.py` to compare entities, final columns,
+  nullability, FK tuples/cardinality, and logical links against source.
 - Render Graphviz sources and verify both JPEG files are valid, non-empty images
   with legible dimensions.
 - Review the generated images for clipping, overlapping entities, and unreadable

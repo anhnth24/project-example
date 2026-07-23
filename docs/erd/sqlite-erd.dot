@@ -26,7 +26,7 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#3979A8">
       <TR><TD BGCOLOR="#B9D7EA" COLSPAN="3"><B>documents</B></TD></TR>
       <TR><TD BGCOLOR="#EAF4FA" COLSPAN="3"><I>Tài liệu cục bộ và dấu vết embedding</I></TD></TR>
-      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">doc_rel</TD><TD PORT="doc_rel_out" ALIGN="LEFT">TEXT ?</TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">doc_rel</TD><TD PORT="doc_rel" ALIGN="LEFT">TEXT ?</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">md_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">content_hash</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">format</TD><TD ALIGN="LEFT">TEXT</TD></TR>
@@ -39,8 +39,8 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#6E56A0">
       <TR><TD BGCOLOR="#D9D2E9" COLSPAN="3"><B>chunks</B></TD></TR>
       <TR><TD BGCOLOR="#F1EDF7" COLSPAN="3"><I>Đoạn Markdown, vị trí nguồn và vector tìm kiếm</I></TD></TR>
-      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD PORT="chunk_id_out" ALIGN="LEFT">TEXT ?</TD></TR>
-      <TR><TD PORT="doc_rel_in"></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD PORT="chunk_id" ALIGN="LEFT">TEXT ?</TD></TR>
+      <TR><TD PORT="doc_rel"><B>REF</B></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">md_rel</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">heading</TD><TD ALIGN="LEFT">TEXT</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">TEXT</TD></TR>
@@ -68,7 +68,7 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#B47B25">
       <TR><TD BGCOLOR="#FCE5B5" COLSPAN="3"><B>chunks_fts</B> · FTS5</TD></TR>
       <TR><TD BGCOLOR="#FFF6E4" COLSPAN="3"><I>Bản sao toàn văn để tìm kiếm có và không dấu</I></TD></TR>
-      <TR><TD PORT="chunk_id_in"></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
+      <TR><TD PORT="chunk_id"><B>REF</B></TD><TD ALIGN="LEFT">chunk_id</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">doc_rel</TD><TD ALIGN="LEFT">— ? · UNINDEXED</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">heading</TD><TD ALIGN="LEFT">— ?</TD></TR>
       <TR><TD></TD><TD ALIGN="LEFT">body</TD><TD ALIGN="LEFT">— ?</TD></TR>
@@ -81,25 +81,44 @@ digraph markhand_desktop_sqlite {
     <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="5" COLOR="#667085">
       <TR><TD BGCOLOR="#EAECF0" COLSPAN="2"><B>Chú giải</B></TD></TR>
       <TR><TD><B>PK</B></TD><TD ALIGN="LEFT">khóa chính do SQLite thực thi</TD></TR>
+      <TR><TD><B>REF</B></TD><TD ALIGN="LEFT">tham chiếu logic do ứng dụng duy trì, không phải FK</TD></TR>
       <TR><TD><B>?</B></TD><TD ALIGN="LEFT">cột cho phép NULL</TD></TR>
       <TR><TD><B>—</B></TD><TD ALIGN="LEFT">FTS5 không khai báo kiểu SQL</TD></TR>
-      <TR><TD>nét đứt</TD><TD ALIGN="LEFT">liên kết logic do ứng dụng duy trì</TD></TR>
+      <TR><TD><FONT COLOR="#B42318">nét đứt REF</FONT></TD><TD ALIGN="LEFT">liên kết logic do ứng dụng duy trì</TD></TR>
       <TR><TD COLSPAN="2" ALIGN="LEFT">Schema không khai báo khóa ngoại.</TD></TR>
     </TABLE>
   >];
 
   // Logical links only: the SQLite schema declares no FOREIGN KEY constraints.
-  documents:doc_rel_out:e -> chunks:doc_rel_in:w [
-    style=dashed,
-    arrowtail=tee,
-    arrowhead="crowodot",
-    label="doc_rel · liên kết logic · 1 → 0..n"
+  documents:doc_rel:e -> chunks:doc_rel:w [
+    kind="logical",
+    source_table="chunks",
+    source_column="doc_rel",
+    target_table="documents",
+    target_column="doc_rel",
+    array="false",
+    app_maintained="true",
+    style="dashed,bold",
+    color="#B42318",
+    fontcolor="#B42318",
+    arrowtail="none",
+    arrowhead="vee",
+    label="REF logic do ứng dụng duy trì · documents.doc_rel (1) → chunks.doc_rel (0..n)"
   ];
-  chunks:chunk_id_out:e -> chunks_fts:chunk_id_in:w [
-    style=dashed,
-    arrowtail=tee,
-    arrowhead=tee,
-    label="chunk_id · bản sao FTS5 · 1 → 1"
+  chunks:chunk_id:e -> chunks_fts:chunk_id:w [
+    kind="logical",
+    source_table="chunks_fts",
+    source_column="chunk_id",
+    target_table="chunks",
+    target_column="chunk_id",
+    array="false",
+    app_maintained="true",
+    style="dashed,bold",
+    color="#B42318",
+    fontcolor="#B42318",
+    arrowtail="none",
+    arrowhead="vee",
+    label="REF logic do ứng dụng duy trì · chunks.chunk_id (1) → chunks_fts.chunk_id (1)"
   ];
 
   { rank=same; documents; index_meta; }
