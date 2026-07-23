@@ -83,13 +83,6 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
     let user_id = env_uuid("MARKHAND_WORKER_USER_ID")?;
     let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
         .map_err(|error| format!("invalid worker tenant context: {error}"))?;
-    let endpoints = state.endpoints();
-    let pool = create_pool(endpoints.database_url.expose())
-        .map_err(|error| format!("database pool failed: {error}"))?;
-    let storage_config = state
-        .config()
-        .storage_config()
-        .map_err(|error| format!("invalid storage configuration: {error}"))?;
     let worker_id = std::env::var("MARKHAND_WORKER_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -98,6 +91,19 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "convert".into());
+    // Reconcile oneshot: require a valid document UUID *before* opening a DB pool
+    // so missing/empty/malformed IDs exit without contacting Postgres.
+    let oneshot = env_truthy("MARKHAND_WORKER_ONESHOT");
+    if kind == "reconcile" && oneshot {
+        let _ = require_oneshot_reconcile_document_id()?;
+    }
+    let endpoints = state.endpoints();
+    let pool = create_pool(endpoints.database_url.expose())
+        .map_err(|error| format!("database pool failed: {error}"))?;
+    let storage_config = state
+        .config()
+        .storage_config()
+        .map_err(|error| format!("invalid storage configuration: {error}"))?;
     match kind.as_str() {
         "convert" => {
             let storage = MinioClient::from_config(storage_config.minio())
@@ -350,6 +356,33 @@ async fn run_reconcile_worker(
     if let Ok(value) = std::env::var("MARKHAND_RECONCILE_MODE") {
         config.mode = ReconcileMode::parse(value.trim()).map_err(|error| error.to_string())?;
     }
+    let oneshot = env_truthy("MARKHAND_WORKER_ONESHOT");
+    if oneshot {
+        config.document_id = Some(require_oneshot_reconcile_document_id()?);
+    } else if let Ok(value) = std::env::var("MARKHAND_RECONCILE_DOCUMENT_ID") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            config.document_id = Some(
+                Uuid::parse_str(trimmed)
+                    .map_err(|_| "MARKHAND_RECONCILE_DOCUMENT_ID must be a UUID".to_string())?,
+            );
+        }
+    }
+    // Document-scoped oneshot: ensure exactly one durable drift job exists so the
+    // worker has a single job/document unit of work (idempotent key).
+    if oneshot {
+        let document_id = config
+            .document_id
+            .ok_or_else(|| "reconcile oneshot missing document id".to_string())?;
+        fileconv_server::services::reconciliation::enqueue_reconcile(
+            &pool,
+            &ctx,
+            document_id,
+            "oneshot-scope",
+        )
+        .await
+        .map_err(|error| format!("reconcile oneshot enqueue failed: {error}"))?;
+    }
     let worker = ReconcileWorker::new(pool.clone(), storage, qdrant, config)
         .map_err(|error| format!("reconcile worker initialization failed: {error}"))?;
     let approved_signature = state.config().index_signature().map(str::to_string);
@@ -448,6 +481,7 @@ where
     T: std::fmt::Debug + Send + 'static,
     Idle: Fn(&T) -> bool,
 {
+    let oneshot = env_truthy("MARKHAND_WORKER_ONESHOT");
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         shutdown_signal().await;
@@ -465,6 +499,13 @@ where
             join = &mut handle => {
                 match join {
                     Ok(Ok(outcome)) => {
+                        if oneshot {
+                            println!("fileconv-worker: {outcome:?}");
+                            println!(
+                                "fileconv-worker: MARKHAND_WORKER_ONESHOT=1 — finite exit after one {kind} cycle"
+                            );
+                            break;
+                        }
                         if is_idle(&outcome) {
                             tokio::select! {
                                 _ = tokio::time::sleep(Duration::from_secs(2)) => {}
@@ -478,6 +519,10 @@ where
                     }
                     Ok(Err(error)) => {
                         eprintln!("fileconv-worker: {kind} worker error: {error}");
+                        if oneshot {
+                            shutdown_flush_telemetry(flush_budget).await;
+                            return Err(format!("{kind} oneshot failed: {error}"));
+                        }
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(2)) => {}
                             changed = stop_rx.changed() => {
@@ -487,6 +532,10 @@ where
                     }
                     Err(error) => {
                         eprintln!("fileconv-worker: {kind} join error: {error}");
+                        if oneshot {
+                            shutdown_flush_telemetry(flush_budget).await;
+                            return Err(format!("{kind} oneshot join failed: {error}"));
+                        }
                     }
                 }
             }
@@ -517,6 +566,28 @@ where
     }
     shutdown_flush_telemetry(flush_budget).await;
     Ok(())
+}
+
+fn env_truthy(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
+/// Validate `MARKHAND_RECONCILE_DOCUMENT_ID` for oneshot reconcile (no DB I/O).
+fn require_oneshot_reconcile_document_id() -> Result<Uuid, String> {
+    match std::env::var("MARKHAND_RECONCILE_DOCUMENT_ID") {
+        Err(_) => Err("MARKHAND_RECONCILE_DOCUMENT_ID is required for reconcile oneshot".into()),
+        Ok(value) if value.trim().is_empty() => {
+            Err("MARKHAND_RECONCILE_DOCUMENT_ID is required for reconcile oneshot".into())
+        }
+        Ok(value) => Uuid::parse_str(value.trim())
+            .map_err(|_| "MARKHAND_RECONCILE_DOCUMENT_ID must be a UUID".to_string()),
+    }
 }
 
 async fn shutdown_signal() {

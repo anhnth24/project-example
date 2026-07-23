@@ -563,6 +563,9 @@ pub async fn claim_type(
 }
 
 /// Claims reconcile jobs for either conversion cleanup or document-drift workers.
+///
+/// When `document_id` is `Some`, only pending document-drift jobs for that
+/// document are eligible (conversion-cleanup claims should pass `None`).
 pub async fn claim_reconcile(
     db_pool: &Pool,
     ctx: &OrgContext,
@@ -570,6 +573,7 @@ pub async fn claim_reconcile(
     limit: u32,
     lease_ttl: Duration,
     require_cleanup_target: bool,
+    document_id: Option<Uuid>,
 ) -> Result<Vec<Job>, JobError> {
     validate_worker_id(worker_id)?;
     let limit = checked_limit(limit)?;
@@ -586,9 +590,36 @@ pub async fn claim_reconcile(
                     limit,
                     lease_ttl_secs,
                     require_cleanup_target,
+                    document_id,
                 )
                 .await
                 .map_err(Into::into)
+            })
+        }
+    })
+    .await
+}
+
+/// Releases a leased reconcile job after dry-run without completing it.
+///
+/// Dry-run must not consume repair intent: the job returns to `pending` with
+/// attempts restored so a subsequent repair claim can proceed safely.
+pub async fn release_dry_run(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    claimed_attempts: i32,
+) -> Result<Job, JobError> {
+    validate_lease_identifier(lease_token)?;
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let lease_token = lease_token.to_string();
+        move |txn| {
+            Box::pin(async move {
+                repo::release_dry_run_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
+                    .await?
+                    .ok_or(JobError::LeaseLost)
             })
         }
     })

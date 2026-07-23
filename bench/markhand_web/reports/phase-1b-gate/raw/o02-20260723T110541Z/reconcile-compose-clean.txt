@@ -1,0 +1,2 @@
+fileconv-worker: NoJob
+fileconv-worker: MARKHAND_WORKER_ONESHOT=1 — finite exit after one reconcile cycle

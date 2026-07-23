@@ -1,0 +1,1 @@
+docker compose run cgroupv2; finite exits proven via docker run fallback

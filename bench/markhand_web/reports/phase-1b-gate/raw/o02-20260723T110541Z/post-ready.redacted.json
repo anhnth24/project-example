@@ -1,0 +1,8 @@
+{
+  "code": "dependency_unavailable",
+  "message": "A required service is unavailable (ready_active_generation)",
+  "requestId": "57380d31-f61d-46a1-840d-c8e35a31d4a8",
+  "details": {
+    "probe": "ready_active_generation"
+  }
+}

@@ -1,0 +1,6 @@
+recover_status=starting
+recover_status=starting
+recover_status=starting
+recover_status=starting
+recover_status=starting
+recover_status=healthy

@@ -1,3 +1,8 @@
+# Phase 1B Prometheus alerts (P1B-O02).
+# App metrics must use canonical O01 names from crates/server/src/telemetry/metrics.rs.
+# Label policy: route, job_type, store, leg, outcome, kind, provider, job,
+# instance, device, mountpoint. Never use org_id, user_id, document_id,
+# request_id, filename, job_id, version_id.
 groups:
   - name: markhand-phase1b-slo
     rules:
@@ -7,37 +12,123 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: API p95 latency above 2s
+          summary: API p95 latency above 2s SLO
           runbook: docs/runbooks/phase-1b/api-latency.md
+
       - alert: MarkhandQueueGrowth
         expr: max(markhand_job_queue_depth) by (job_type) > 100
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: Job queue depth growing
+          summary: Job queue depth above backlog threshold
           runbook: docs/runbooks/phase-1b/stuck-jobs.md
+
+      - alert: MarkhandQueueAgeHigh
+        expr: max(markhand_job_queue_age_seconds) by (job_type) > 600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Oldest queued job age above 10m
+          runbook: docs/runbooks/phase-1b/stuck-jobs.md
+
+      - alert: MarkhandDiskLow
+        # Host/volume signal (node_exporter). Match on instance+device+mountpoint.
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay",mountpoint=~"/|/var|/data|/workspace"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay",mountpoint=~"/|/var|/data|/workspace"}
+          ) < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Filesystem free space below 10%
+          runbook: docs/runbooks/phase-1b/disk-exhaustion.md
+
+      # API uses Prometheus `up` on /metrics. TCP deps use blackbox probe_success
+      # (same job names) so stopping Compose postgres makes the alert true.
+      - alert: MarkhandDependencyDown
+        expr: |
+          up{job="markhand-api"} == 0
+          or
+          probe_success{job=~"markhand-(postgres|qdrant|minio|embedding)"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Required dependency scrape/probe target is down
+          runbook: docs/runbooks/phase-1b/dependency-outage.md
+
+      - alert: MarkhandProviderErrors
+        expr: |
+          (
+            sum(rate(markhand_provider_duration_seconds_count{outcome="error"}[5m])) by (provider)
+            /
+            clamp_min(sum(rate(markhand_provider_duration_seconds_count[5m])) by (provider), 1e-9)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Chat/GLM provider error rate above 50%
+          runbook: docs/runbooks/phase-1b/glm-fallback.md
+
+      - alert: MarkhandEmbeddingErrors
+        expr: |
+          (
+            sum(rate(markhand_embedding_batch_duration_seconds_count{outcome=~"failed|error"}[5m]))
+            /
+            clamp_min(sum(rate(markhand_embedding_batch_duration_seconds_count[5m])), 1e-9)
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Embedding batch failure ratio above 50%
+          runbook: docs/runbooks/phase-1b/dependency-outage.md
+
+      - alert: MarkhandConversionFailures
+        expr: |
+          (
+            sum(rate(markhand_conversion_duration_seconds_count{outcome=~"failed|error"}[5m]))
+            /
+            clamp_min(sum(rate(markhand_conversion_duration_seconds_count[5m])), 1e-9)
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Conversion failure ratio above 20%
+          runbook: docs/runbooks/phase-1b/converter-outbreak.md
+
       - alert: MarkhandReconcileDrift
         expr: increase(markhand_reconcile_drift_total[30m]) > 0
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: Cross-store drift detected
+          summary: Cross-store reconcile drift detected
           runbook: docs/runbooks/phase-1b/reconcile-drift.md
+
+      - alert: MarkhandQuotaExceeded
+        expr: increase(markhand_quota_reservation_total{outcome="exceeded"}[15m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sustained quota reservation denials
+          runbook: docs/runbooks/phase-1b/stuck-jobs.md
+
+      # Uses O01-as-shipped markhand_backup_age_seconds when the series exists.
+      # O02 does not claim an always-present live exporter; capture/restore drill is P1B-O03.
       - alert: MarkhandBackupStale
         expr: max(markhand_backup_age_seconds) by (store) > 900
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: Backup age exceeds RPO target (15m)
+          summary: Backup age exceeds RPO target (15m) when series is present
           runbook: docs/runbooks/phase-1b/backup-restore.md
-      - alert: MarkhandDependencyDown
-        expr: up{job=~"markhand-(api|postgres|qdrant|minio)"} == 0
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: Required dependency is down
-          runbook: docs/runbooks/phase-1b/dependency-outage.md

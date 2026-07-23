@@ -592,6 +592,7 @@ pub async fn claim_pending_reconcile(
     limit: i64,
     lease_ttl_secs: i64,
     require_cleanup_target: bool,
+    document_id: Option<Uuid>,
 ) -> Result<Vec<Job>, DbError> {
     let rows = txn
         .query(
@@ -609,6 +610,7 @@ pub async fn claim_pending_reconcile(
                           ELSE payload->>'cleanup_target_job_id' IS NULL
                         END
                       )
+                      AND ($6::uuid IS NULL OR (payload->>'document_id')::uuid = $6)
                     ORDER BY available_at, created_at, id
                     FOR UPDATE SKIP LOCKED
                     LIMIT $2
@@ -631,10 +633,48 @@ pub async fn claim_pending_reconcile(
                 &worker_id,
                 &lease_ttl_secs,
                 &require_cleanup_target,
+                &document_id,
             ],
         )
         .await?;
     rows.iter().map(map_job).collect()
+}
+
+/// Returns a leased reconcile job to `pending` after a dry-run report.
+///
+/// Restores `attempts` so dry-run does not consume repair budget / intent, clears
+/// the lease, and makes the job immediately claimable again.
+pub async fn release_dry_run_owned(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    lease_token: &str,
+    claimed_attempts: i32,
+) -> Result<Option<Job>, DbError> {
+    let row = txn
+        .query_opt(
+            &format!(
+                "UPDATE jobs
+                 SET status = 'pending',
+                     lease_owner = NULL,
+                     lease_expires_at = NULL,
+                     heartbeat_at = NULL,
+                     started_at = NULL,
+                     finished_at = NULL,
+                     attempts = GREATEST(attempts - 1, 0),
+                     available_at = clock_timestamp(),
+                     updated_at = clock_timestamp()
+                 WHERE org_id = $1
+                   AND id = $2
+                   AND lease_owner = $3
+                   AND attempts = $4
+                   AND status = 'leased'
+                 RETURNING {JOB_COLUMNS}"
+            ),
+            &[&ctx.org_id(), &job_id, &lease_token, &claimed_attempts],
+        )
+        .await?;
+    row.map(|row| map_job(&row)).transpose()
 }
 
 pub async fn complete_owned(

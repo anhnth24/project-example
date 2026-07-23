@@ -1348,6 +1348,8 @@ pub enum ReconciliationError {
     InvalidCheckpoint,
     #[error("reconcile qdrant scroll limit exceeded")]
     ScrollLimitExceeded,
+    #[error("reconcile job payload does not match document scope")]
+    DocumentScopeMismatch,
 }
 
 impl ReconciliationError {
@@ -1359,6 +1361,7 @@ impl ReconciliationError {
             Self::InvalidMode => "reconcile mode invalid",
             Self::InvalidCheckpoint => "reconcile checkpoint invalid",
             Self::ScrollLimitExceeded => "reconcile scroll limit exceeded",
+            Self::DocumentScopeMismatch => "reconcile document scope mismatch",
         }
     }
 

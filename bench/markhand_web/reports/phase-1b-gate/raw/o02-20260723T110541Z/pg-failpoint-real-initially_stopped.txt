@@ -1,0 +1,2 @@
+inject=0 armed=0
+restore_skipped armed=0

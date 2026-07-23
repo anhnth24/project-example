@@ -204,6 +204,7 @@ impl ConvertWorker {
                     DEFAULT_CLAIM_LIMIT,
                     self.config.lease_ttl,
                     true,
+                    None,
                 )
                 .await?
             };

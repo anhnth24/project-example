@@ -1,0 +1,19 @@
+restore_armed_before_stop=1
+stop_at_unix=1784804803
+t=10s alert_state=absent file=alerts-during-20260723T110653Z.json
+t=20s alert_state=pending file=alerts-during-20260723T110703Z.json
+t=30s alert_state=pending file=alerts-during-20260723T110713Z.json
+t=40s alert_state=pending file=alerts-during-20260723T110723Z.json
+t=50s alert_state=pending file=alerts-during-20260723T110733Z.json
+t=60s alert_state=pending file=alerts-during-20260723T110743Z.json
+t=70s alert_state=pending file=alerts-during-20260723T110753Z.json
+t=80s alert_state=pending file=alerts-during-20260723T110803Z.json
+t=90s alert_state=pending file=alerts-during-20260723T110813Z.json
+t=100s alert_state=pending file=alerts-during-20260723T110823Z.json
+t=110s alert_state=pending file=alerts-during-20260723T110833Z.json
+t=120s alert_state=pending file=alerts-during-20260723T110843Z.json
+t=130s alert_state=pending file=alerts-during-20260723T110853Z.json
+t=140s alert_state=firing file=alerts-during-20260723T110903Z.json
+start_at_unix=1784804944
+restore_disarmed_confirmed=1
+recover_t=15s alert_state=absent file=alerts-after-20260723T110919Z.json

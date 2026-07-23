@@ -1,0 +1,2 @@
+fileconv-worker: Completed { job_id: 75acd622-4d42-46f6-be7e-1058a256af99, report: ReconcileReport { missing_vectors: 0, orphan_vectors: 0, stale_vectors: 0, in_flight_vectors: 0, missing_objects: 0, orphan_objects: 0, repaired: ReconcileRepairCounts { orphan_vectors: 0, stale_vectors: 0, staged_objects: 0, orphan_objects: 0, rebuilt_vector_jobs: 0 } } }
+fileconv-worker: MARKHAND_WORKER_ONESHOT=1 — finite exit after one reconcile cycle

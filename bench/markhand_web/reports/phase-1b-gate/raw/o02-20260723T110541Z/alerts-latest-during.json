@@ -1,0 +1,22 @@
+{
+  "status": "success",
+  "data": {
+    "alerts": [
+      {
+        "labels": {
+          "alertname": "MarkhandDependencyDown",
+          "instance": "postgres:5432",
+          "job": "markhand-postgres",
+          "severity": "critical"
+        },
+        "annotations": {
+          "runbook": "docs/runbooks/phase-1b/dependency-outage.md",
+          "summary": "Required dependency scrape/probe target is down"
+        },
+        "state": "firing",
+        "activeAt": "2026-07-23T11:07:02.758755217Z",
+        "value": "0e+00"
+      }
+    ]
+  }
+}

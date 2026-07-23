@@ -1,0 +1,261 @@
+# promtool unit tests — fire then resolve. Histogram fixtures are physically
+# cumulative (validated by check_histogram_fixtures.py).
+rule_files:
+  - markhand-rules.yml
+evaluation_interval: 1m
+
+tests:
+  - name: MarkhandApiLatencyBurn fire then resolve
+    interval: 1m
+    input_series:
+      # 16m burn: +10 obs/min all >2s; then 9m recover: +10 obs/min all <=2s.
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.005"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.01"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.025"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.05"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.1"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.25"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="0.5"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="1.0"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="2.0"}'
+        values: "0x16 0+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="5.0"}'
+        values: "0+10x16 160+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="10.0"}'
+        values: "0+10x16 160+10x9"
+      - series: 'markhand_http_request_duration_seconds_bucket{route="search",le="+Inf"}'
+        values: "0+10x16 160+10x9"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandApiLatencyBurn
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: search
+            exp_annotations:
+              summary: API p95 latency above 2s SLO
+              runbook: docs/runbooks/phase-1b/api-latency.md
+      - eval_time: 25m
+        alertname: MarkhandApiLatencyBurn
+        exp_alerts: []
+
+  - name: MarkhandQueueGrowth fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_job_queue_depth{job_type="convert"}'
+        values: "120x20 10x10"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandQueueGrowth
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job_type: convert
+            exp_annotations:
+              summary: Job queue depth above backlog threshold
+              runbook: docs/runbooks/phase-1b/stuck-jobs.md
+      - eval_time: 30m
+        alertname: MarkhandQueueGrowth
+        exp_alerts: []
+
+  - name: MarkhandQueueAgeHigh fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_job_queue_age_seconds{job_type="index"}'
+        values: "900x15 30x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandQueueAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job_type: index
+            exp_annotations:
+              summary: Oldest queued job age above 10m
+              runbook: docs/runbooks/phase-1b/stuck-jobs.md
+      - eval_time: 24m
+        alertname: MarkhandQueueAgeHigh
+        exp_alerts: []
+
+  - name: MarkhandDiskLow two-instance fire only low disk then resolve
+    interval: 1m
+    input_series:
+      # instance a: low disk on /data
+      - series: 'node_filesystem_avail_bytes{instance="node-a",device="sda1",fstype="ext4",mountpoint="/data"}'
+        values: "5e9x10 50e9x10"
+      - series: 'node_filesystem_size_bytes{instance="node-a",device="sda1",fstype="ext4",mountpoint="/data"}'
+        values: "100e9x20"
+      # instance b: healthy — must not alert
+      - series: 'node_filesystem_avail_bytes{instance="node-b",device="sdb1",fstype="ext4",mountpoint="/data"}'
+        values: "50e9x20"
+      - series: 'node_filesystem_size_bytes{instance="node-b",device="sdb1",fstype="ext4",mountpoint="/data"}'
+        values: "100e9x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MarkhandDiskLow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              instance: node-a
+              device: sda1
+              fstype: ext4
+              mountpoint: /data
+            exp_annotations:
+              summary: Filesystem free space below 10%
+              runbook: docs/runbooks/phase-1b/disk-exhaustion.md
+      - eval_time: 19m
+        alertname: MarkhandDiskLow
+        exp_alerts: []
+
+  - name: MarkhandDependencyDown fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'up{job="markhand-api"}'
+        values: "1x10"
+      - series: 'probe_success{job="markhand-postgres"}'
+        values: "0x5 1x5"
+      - series: 'probe_success{job="markhand-qdrant"}'
+        values: "1x10"
+      - series: 'probe_success{job="markhand-minio"}'
+        values: "1x10"
+      - series: 'probe_success{job="markhand-embedding"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MarkhandDependencyDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: markhand-postgres
+            exp_annotations:
+              summary: Required dependency scrape/probe target is down
+              runbook: docs/runbooks/phase-1b/dependency-outage.md
+      - eval_time: 9m
+        alertname: MarkhandDependencyDown
+        exp_alerts: []
+
+  - name: MarkhandProviderErrors fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_provider_duration_seconds_count{provider="glm",outcome="error"}'
+        values: "0+20x12 240+0x10"
+      - series: 'markhand_provider_duration_seconds_count{provider="glm",outcome="ok"}'
+        values: "0+2x12 24+20x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandProviderErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              provider: glm
+            exp_annotations:
+              summary: Chat/GLM provider error rate above 50%
+              runbook: docs/runbooks/phase-1b/glm-fallback.md
+      - eval_time: 21m
+        alertname: MarkhandProviderErrors
+        exp_alerts: []
+
+  - name: MarkhandEmbeddingErrors fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_embedding_batch_duration_seconds_count{outcome="failed"}'
+        values: "0+20x12 240+0x10"
+      - series: 'markhand_embedding_batch_duration_seconds_count{outcome="success"}'
+        values: "0+2x12 24+20x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandEmbeddingErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Embedding batch failure ratio above 50%
+              runbook: docs/runbooks/phase-1b/dependency-outage.md
+      - eval_time: 21m
+        alertname: MarkhandEmbeddingErrors
+        exp_alerts: []
+
+  - name: MarkhandConversionFailures fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_conversion_duration_seconds_count{outcome="failed"}'
+        values: "0+10x20 200+0x10"
+      - series: 'markhand_conversion_duration_seconds_count{outcome="success"}'
+        values: "0+5x20 100+40x10"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandConversionFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Conversion failure ratio above 20%
+              runbook: docs/runbooks/phase-1b/converter-outbreak.md
+      - eval_time: 29m
+        alertname: MarkhandConversionFailures
+        exp_alerts: []
+
+  - name: MarkhandReconcileDrift fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_reconcile_drift_total{kind="orphan_vector"}'
+        values: "0x1 1x45"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MarkhandReconcileDrift
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              kind: orphan_vector
+            exp_annotations:
+              summary: Cross-store reconcile drift detected
+              runbook: docs/runbooks/phase-1b/reconcile-drift.md
+      - eval_time: 45m
+        alertname: MarkhandReconcileDrift
+        exp_alerts: []
+
+  - name: MarkhandQuotaExceeded fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_quota_reservation_total{outcome="exceeded"}'
+        values: "0+2x20 40+0x25"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MarkhandQuotaExceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              outcome: exceeded
+            exp_annotations:
+              summary: Sustained quota reservation denials
+              runbook: docs/runbooks/phase-1b/stuck-jobs.md
+      - eval_time: 45m
+        alertname: MarkhandQuotaExceeded
+        exp_alerts: []
+
+  - name: MarkhandBackupStale fire then resolve
+    interval: 1m
+    input_series:
+      - series: 'markhand_backup_age_seconds{store="filesystem"}'
+        values: "1200x10 120x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MarkhandBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              store: filesystem
+            exp_annotations:
+              summary: Backup age exceeds RPO target (15m) when series is present
+              runbook: docs/runbooks/phase-1b/backup-restore.md
+      - eval_time: 19m
+        alertname: MarkhandBackupStale
+        exp_alerts: []
