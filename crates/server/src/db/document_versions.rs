@@ -394,12 +394,16 @@ pub async fn list_by_document(
     rows.iter().map(map_version).collect()
 }
 
+/// Promotes `version_id` to current when needed.
+///
+/// Returns `Some(previous_version_id)` when a different version was demoted in
+/// this transaction (caller should durably enqueue lifecycle refresh).
 pub async fn promote_current_if_needed(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
     document: &Document,
     version_id: Uuid,
-) -> Result<(), DbError> {
+) -> Result<Option<Uuid>, DbError> {
     let row = txn
         .query_one(
             "SELECT is_current
@@ -412,7 +416,7 @@ pub async fn promote_current_if_needed(
     let already_current: bool = row.get("is_current");
     if already_current {
         return if document.current_version_id == Some(version_id) {
-            Ok(())
+            Ok(None)
         } else {
             Err(DbError::StaleState {
                 expected: version_id.to_string(),
@@ -429,6 +433,20 @@ pub async fn promote_current_if_needed(
             observed: document.state.to_string(),
         });
     }
+
+    let previous = txn
+        .query_opt(
+            "SELECT id
+             FROM document_versions
+             WHERE org_id = $1
+               AND document_id = $2
+               AND is_current
+             FOR UPDATE",
+            &[&ctx.org_id(), &document.id],
+        )
+        .await?
+        .map(|row| row.get::<_, Uuid>("id"))
+        .filter(|id| *id != version_id);
 
     let effective_to = txn
         .query_one("SELECT clock_timestamp()", &[])
@@ -469,7 +487,7 @@ pub async fn promote_current_if_needed(
             observed: "missing_or_changed".into(),
         });
     }
-    Ok(())
+    Ok(previous)
 }
 
 fn is_eligible_for_conversion_promotion(document: &Document) -> bool {

@@ -2,7 +2,11 @@
 //!
 //! Skips gracefully when `MARKHAND_TEST_DATABASE_URL` is unset so CI without a
 //! database stays green. Local runs must set the URL and exercise real Postgres.
+//! FORCE RLS assertions require `MARKHAND_TEST_APP_DATABASE_URL` (`markhand_app`).
 
+mod common;
+
+use common::{app_database_url, boot_app_pool};
 use fileconv_server::database::{apply_migrations, embedded_migrations, migration_checksum};
 use fileconv_server::db::models::expected_table_columns;
 use std::collections::BTreeSet;
@@ -113,14 +117,21 @@ impl EphemeralDb {
 
     async fn drop(self) {
         let admin = connect(&self.admin_url).await;
-        let _ = admin
+        admin
             .batch_execute(&format!(
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
+                 WHERE datname = '{}' AND pid <> pg_backend_pid()",
+                self.db_name
             ))
-            .await;
+            .await
+            .unwrap_or_else(|error| panic!("terminate backends failed: {error}"));
+        admin
+            .batch_execute(&format!(
+                "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+                self.db_name
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("DROP DATABASE WITH (FORCE) failed: {error}"));
     }
 }
 
@@ -922,14 +933,23 @@ async fn concurrent_publish_and_lineage_as_of() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn rls_all_tenant_tables_and_pool_context_reset() {
-    let Some(base_url) = test_database_url() else {
+    let Some(admin_url) = test_database_url() else {
         return;
     };
-    let ephemeral = EphemeralDb::create(&base_url).await;
-    apply_migrations(&ephemeral.url).await.unwrap();
-    let mut client = connect(&ephemeral.url).await;
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    // FORCE RLS is a no-op for the compose superuser; assert as markhand_app.
+    let (ephemeral, _pool) = boot_app_pool(&admin_url, &app_url).await;
+    let mut client = connect(&ephemeral.app_url).await;
+    let role: String = client
+        .query_one("SELECT current_user", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(role, "markhand_app");
 
     let org_a = Uuid::parse_str(POC_ORG).unwrap();
     let org_b = Uuid::new_v4();

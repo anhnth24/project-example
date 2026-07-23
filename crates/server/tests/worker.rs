@@ -167,14 +167,20 @@ impl EphemeralDb {
 
     async fn drop(self) {
         let admin = connect_raw(&self.admin_url).await;
-        let _ = admin
+        admin
             .batch_execute(&format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity                  WHERE datname = '{}' AND pid <> pg_backend_pid()",
+                self.db_name
             ))
-            .await;
+            .await
+            .unwrap_or_else(|error| panic!("terminate backends failed: {error}"));
+        admin
+            .batch_execute(&format!(
+                "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+                self.db_name
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("DROP DATABASE WITH (FORCE) failed: {error}"));
     }
 }
 
@@ -396,6 +402,7 @@ async fn enqueue_convert(
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-{version_id}"),
         ),
@@ -713,6 +720,51 @@ async fn make_job_available(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
     })
     .await
     .expect("make job available");
+}
+
+async fn force_lease_expired(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE jobs
+                     SET lease_expires_at = clock_timestamp() - interval '1 second'
+                     WHERE org_id = $1 AND id = $2",
+                    &[&ctx.org_id(), &job_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("force lease expired");
+}
+
+async fn reclaim_job_to_pending(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> Job {
+    const MAX_ATTEMPTS: usize = 40;
+    for attempt in 0..MAX_ATTEMPTS {
+        force_lease_expired(pool, ctx, job_id).await;
+        let reclaimed = jobs::reclaim_expired(pool, ctx, 10, Duration::from_secs(1))
+            .await
+            .expect("reclaim expired");
+        if let Some(job) = reclaimed.into_iter().find(|job| job.id == job_id) {
+            assert_eq!(
+                job.status,
+                JobStatus::Pending,
+                "reclaimed job must return to pending for retry"
+            );
+            make_job_available(pool, ctx, job_id).await;
+            return get_job(pool, ctx, job_id).await;
+        }
+        tokio::time::sleep(Duration::from_millis(25 * (attempt as u64 + 1))).await;
+    }
+    let job = get_job(pool, ctx, job_id).await;
+    panic!(
+        "job {job_id} was not reclaimed to pending within retry budget; status={:?}",
+        job.status
+    );
 }
 
 async fn version_inherits_document_collection(
@@ -1337,6 +1389,7 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
                     batch_id: None,
                     index_metadata_id: None,
                     cleanup_target_job_id: None,
+                    related_version_id: None,
                 },
                 format!("convert-fault-{fault:?}-{version_id}"),
             ),
@@ -1526,6 +1579,7 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
             batch_id: None,
             index_metadata_id: None,
             cleanup_target_job_id: None,
+            related_version_id: None,
         },
         format!("convert-terminal-cleanup-{version_id}"),
     );
@@ -1627,6 +1681,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-fair-first-{version_id}"),
         ),
@@ -1647,6 +1702,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-fair-second-{version_id}"),
         ),
@@ -1667,6 +1723,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-fair-cleanup-parent-{version_id}"),
         ),
@@ -1690,6 +1747,7 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent.id),
+                related_version_id: None,
             },
             format!("convert.cleanup:{}", parent.id),
         ),
@@ -1864,6 +1922,7 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-reclaim-race-{version_id}"),
         ),
@@ -1972,6 +2031,7 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
                 batch_id: None,
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
+                related_version_id: None,
             },
             format!("convert-barrier-reclaim-{version_id}"),
         ),
@@ -2003,13 +2063,9 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
         .await
         .expect("key A exists after stage"));
 
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    let reclaimed = jobs::reclaim_expired(&pool, &ctx, 10, Duration::from_secs(1))
-        .await
-        .expect("reclaim expired");
-    assert_eq!(reclaimed.len(), 1);
-    assert_eq!(reclaimed[0].id, job.id);
-    make_job_available(&pool, &ctx, job.id).await;
+    let reclaimed = reclaim_job_to_pending(&pool, &ctx, job.id).await;
+    assert_eq!(reclaimed.id, job.id);
+    assert_eq!(reclaimed.status, JobStatus::Pending);
 
     let worker_b = ConvertWorker::new(
         pool.clone(),
@@ -2017,10 +2073,14 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
     .expect("worker b");
-    assert!(matches!(
-        worker_b.run_once(&ctx).await.expect("worker b promote"),
-        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
-    ));
+    let worker_b_result = worker_b.run_once(&ctx).await.expect("worker b promote");
+    assert!(
+        matches!(
+            &worker_b_result,
+            ConvertWorkerRun::Completed { job_id, .. } if *job_id == job.id
+        ),
+        "worker b promote: {worker_b_result:?}"
+    );
     let committed_key = first_markdown_artifact_key(&pool, &ctx, document_id).await;
     assert_ne!(committed_key, key_a.as_str());
     let committed = fileconv_server::storage::parse_key_for_org(&committed_key, ctx.org_id())
@@ -2712,6 +2772,7 @@ while True:
                     batch_id: None,
                     index_metadata_id: None,
                     cleanup_target_job_id: None,
+                    related_version_id: None,
                 },
                 format!("convert-resource-{name}-{version_id}"),
             ),

@@ -683,14 +683,20 @@ impl EphemeralDb {
 
     async fn drop(self) {
         let admin = connect_raw(&self.admin_url).await;
-        let _ = admin
+        admin
             .batch_execute(&format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity                  WHERE datname = '{}' AND pid <> pg_backend_pid()",
+                self.db_name
             ))
-            .await;
+            .await
+            .unwrap_or_else(|error| panic!("terminate backends failed: {error}"));
+        admin
+            .batch_execute(&format!(
+                "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+                self.db_name
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("DROP DATABASE WITH (FORCE) failed: {error}"));
     }
 }
 

@@ -3,22 +3,30 @@
 //! These tests require PostgreSQL, MinIO, and Qdrant. They use a local
 //! OpenAI-compatible mock for embeddings and are explicitly ignored unless
 //! the live storage environment is configured.
+//!
+//! Database access runs as non-superuser `markhand_app` (FORCE RLS).
+
+mod common;
 
 use bytes::Bytes;
+use common::{
+    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool,
+    DualRoleEphemeralDb,
+};
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::config::{MinioConfig, Profile, SecretString};
-use fileconv_server::database::apply_migrations;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{ArtifactKind, CollectionVisibility, DocumentState};
 use fileconv_server::db::orgs;
-use fileconv_server::db::pool::{create_pool, with_org_txn};
+use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs::{self, EventPayload, CURRENT_EVENT_PAYLOAD_VERSION};
 use fileconv_server::services::chunking::prepare_chunks;
 use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::indexing::IndexingOutboxSink;
+use fileconv_server::services::lifecycle;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
     point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantClient, UpsertPoint,
@@ -37,15 +45,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio_postgres::NoTls;
 use uuid::Uuid;
-
-fn test_database_url() -> Result<String, String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Ok(url),
-        _ => Err("MARKHAND_TEST_DATABASE_URL is required".into()),
-    }
-}
 
 fn test_minio_client() -> Result<MinioClient, String> {
     let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
@@ -211,68 +211,8 @@ fn read_http_request(stream: &mut TcpStream) -> Vec<u8> {
     }
 }
 
-fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
-    let (without_query, query) = match base_url.split_once('?') {
-        Some((head, tail)) => (head, Some(tail)),
-        None => (base_url, None),
-    };
-    let prefix = without_query
-        .rsplit_once('/')
-        .map(|(head, _)| head)
-        .expect("database URL must include a path");
-    match query {
-        Some(tail) => format!("{prefix}/{database_name}?{tail}"),
-        None => format!("{prefix}/{database_name}"),
-    }
-}
-
-async fn connect_raw(database_url: &str) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls)
-        .await
-        .unwrap_or_else(|error| panic!("database connection failed: {error}"));
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    client
-}
-
-struct EphemeralDb {
-    admin_url: String,
-    db_name: String,
-    url: String,
-}
-
-impl EphemeralDb {
-    async fn create(base_url: &str) -> Self {
-        let db_name = format!("markhand_index_worker_{}", Uuid::new_v4().simple());
-        let admin_url = rewrite_database_url(base_url, "postgres");
-        let admin = connect_raw(&admin_url).await;
-        admin
-            .batch_execute(&format!("CREATE DATABASE \"{db_name}\""))
-            .await
-            .expect("CREATE DATABASE");
-        Self {
-            admin_url,
-            db_name: db_name.clone(),
-            url: rewrite_database_url(base_url, &db_name),
-        }
-    }
-
-    async fn drop(self) {
-        let admin = connect_raw(&self.admin_url).await;
-        let _ = admin
-            .batch_execute(&format!(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-                 WHERE datname = '{}' AND pid <> pg_backend_pid(); \
-                 DROP DATABASE IF EXISTS \"{}\"",
-                self.db_name, self.db_name
-            ))
-            .await;
-    }
-}
-
 struct LiveEnv {
-    db: EphemeralDb,
+    db: DualRoleEphemeralDb,
     pool: Pool,
     storage: MinioClient,
     qdrant: QdrantClient,
@@ -281,32 +221,85 @@ struct LiveEnv {
 
 impl LiveEnv {
     async fn boot() -> Result<Self, String> {
-        let base_url = test_database_url()?;
+        let admin_url = admin_database_url()
+            .ok_or_else(|| "MARKHAND_TEST_DATABASE_URL is required".to_string())?;
+        let app_url = app_database_url()
+            .ok_or_else(|| "MARKHAND_TEST_APP_DATABASE_URL is required".to_string())?;
         let storage = test_minio_client()?;
         let qdrant = test_qdrant_client()?;
         storage
             .ensure_bucket()
             .await
             .map_err(|error| format!("ensure test bucket: {error}"))?;
-        let db = EphemeralDb::create(&base_url).await;
-        apply_migrations(&db.url)
-            .await
-            .map_err(|error| format!("apply test migrations: {error}"))?;
-        let pool = create_pool(&db.url).map_err(|error| format!("create test pool: {error}"))?;
+        let (db, pool) = boot_app_pool(&admin_url, &app_url).await;
+        assert_markhand_app_role(&pool).await;
         let ctx = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], [])
             .map_err(|error| format!("create test org context: {error}"))?;
-        Ok(Self {
+        let env = Self {
             db,
             pool,
             storage,
             qdrant,
             ctx,
-        })
+        };
+        assert_cross_org_raw_query_is_zero(&env).await;
+        Ok(env)
     }
 
     async fn drop(self) {
         self.db.drop().await;
     }
+}
+
+async fn assert_cross_org_raw_query_is_zero(env: &LiveEnv) {
+    let other = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], [])
+        .expect("other org context");
+    let other_collection = Uuid::new_v4();
+    with_org_txn(&env.pool, &other, {
+        let ctx = other.clone();
+        move |txn| {
+            Box::pin(async move {
+                orgs::ensure_exists(txn, &ctx, "other-org", "Other Org").await?;
+                orgs::ensure_user(txn, &ctx, ctx.user_id(), "other@example.test", "Other").await?;
+                orgs::ensure_membership(txn, &ctx).await?;
+                collections::insert(
+                    txn,
+                    &ctx,
+                    NewCollection {
+                        id: other_collection,
+                        name: "other",
+                        slug: "other",
+                        description: None,
+                        visibility: CollectionVisibility::Private,
+                    },
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed other org");
+    let visible: i64 = with_org_txn(&env.pool, &env.ctx, {
+        let other_org = other.org_id();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint FROM collections WHERE org_id = $1",
+                        &[&other_org],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("cross-org probe");
+    assert_eq!(
+        visible, 0,
+        "app-role FORCE RLS must hide other-org rows from raw queries"
+    );
 }
 
 async fn seed_converted_document(
@@ -579,6 +572,20 @@ async fn seed_promoted_current_version(
                     &[&ctx.org_id(), &document_id, &version_id],
                 )
                 .await?;
+                // Same durable enqueue path production promotion uses: lifecycle
+                // refresh for the demoted version in the pointer-swap transaction.
+                lifecycle::enqueue_refresh_within_txn(
+                    txn,
+                    &ctx,
+                    document_id,
+                    collection_id,
+                    previous_version_id,
+                    version_id,
+                )
+                .await
+                .map_err(|error| {
+                    fileconv_server::db::error::DbError::Config(format!("{error:?}"))
+                })?;
                 let payload = EventPayload {
                     job_id: None,
                     document_id: Some(document_id),
@@ -690,6 +697,212 @@ async fn index_job_count(env: &LiveEnv) -> i64 {
     })
     .await
     .expect("index job count")
+}
+
+async fn lifecycle_job_count(env: &LiveEnv) -> i64 {
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM jobs
+                         WHERE org_id = $1 AND job_type = 'lifecycle_refresh'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("lifecycle job count")
+}
+
+async fn lifecycle_job_succeeded_count(env: &LiveEnv) -> i64 {
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM jobs
+                         WHERE org_id = $1
+                           AND job_type = 'lifecycle_refresh'
+                           AND status = 'succeeded'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("lifecycle succeeded count")
+}
+
+async fn lifecycle_job_generation_ids(env: &LiveEnv) -> Vec<Uuid> {
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT DISTINCT (payload->>'index_metadata_id')::uuid AS generation_id
+                         FROM jobs
+                         WHERE org_id = $1 AND job_type = 'lifecycle_refresh'
+                         ORDER BY generation_id",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(rows
+                    .iter()
+                    .map(|row| row.get::<_, Uuid>("generation_id"))
+                    .collect::<Vec<_>>())
+            })
+        }
+    })
+    .await
+    .expect("lifecycle generation ids")
+}
+
+async fn lifecycle_pending_count(env: &LiveEnv) -> i64 {
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint
+                         FROM jobs
+                         WHERE org_id = $1
+                           AND job_type = 'lifecycle_refresh'
+                           AND status = 'pending'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("lifecycle pending count")
+}
+
+/// Materializes version chunks under a second (inactive) generation so promotion
+/// enqueues one lifecycle job per generation.
+async fn materialize_second_generation_for_version(
+    env: &LiveEnv,
+    collection_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    markdown: &str,
+) -> Uuid {
+    let chunks = prepare_chunks(document_id, version_id, markdown, "");
+    let second_generation = Uuid::new_v4();
+    let second_collection = Uuid::new_v4();
+    let signature = "f".repeat(64);
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                // Second collection + inactive generation (distinct Qdrant routing key).
+                let collection_name = format!("Second Gen {second_collection}");
+                let collection_slug = format!("second-gen-{second_collection}");
+                collections::insert(
+                    txn,
+                    &ctx,
+                    NewCollection {
+                        id: second_collection,
+                        name: &collection_name,
+                        slug: &collection_slug,
+                        description: None,
+                        visibility: CollectionVisibility::Private,
+                    },
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO index_metadata (
+                        id, org_id, collection_id, index_signature_sha256, embedding_family,
+                        embedding_revision, dimensions, runtime_path, generation, is_active, state
+                     ) VALUES (
+                        $1, $2, $3, $4, 'test', 'r1', 8, 'vllm-local', 1, false, 'retired'
+                     )",
+                    &[
+                        &second_generation,
+                        &ctx.org_id(),
+                        &second_collection,
+                        &signature,
+                    ],
+                )
+                .await?;
+                for (ordinal, chunk) in chunks.iter().enumerate() {
+                    let ordinal = i32::try_from(ordinal).expect("ordinal");
+                    txn.execute(
+                        "INSERT INTO chunks (
+                            id, org_id, document_id, version_id, ordinal, body,
+                            chunk_identity_sha256, index_metadata_id, index_signature, tsv
+                         ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9,
+                            to_tsvector('simple', $6)
+                         )",
+                        &[
+                            &Uuid::new_v4(),
+                            &ctx.org_id(),
+                            &document_id,
+                            &version_id,
+                            &ordinal,
+                            &chunk.body,
+                            &chunk.chunk_identity,
+                            &second_generation,
+                            &signature,
+                        ],
+                    )
+                    .await?;
+                }
+                let _ = collection_id;
+                Ok(second_generation)
+            })
+        }
+    })
+    .await
+    .expect("materialize second generation")
+}
+
+async fn reset_lifecycle_job_to_pending(env: &LiveEnv) {
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE jobs
+                     SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL,
+                         heartbeat_at = NULL, available_at = clock_timestamp(),
+                         finished_at = NULL, last_error = NULL, updated_at = clock_timestamp()
+                     WHERE org_id = $1 AND job_type = 'lifecycle_refresh'",
+                    &[&ctx.org_id()],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("reset lifecycle job");
+}
+
+async fn drain_index_and_lifecycle(env: &LiveEnv, worker: &IndexWorker) {
+    for _ in 0..16 {
+        match worker.run_once(&env.ctx).await.expect("drain run") {
+            IndexWorkerRun::NoJob => return,
+            IndexWorkerRun::Completed { .. }
+            | IndexWorkerRun::Failed { .. }
+            | IndexWorkerRun::LeaseLost { .. } => {}
+        }
+    }
+    panic!("index/lifecycle worker did not drain");
 }
 
 async fn chunk_count(env: &LiveEnv, version_id: Uuid) -> i64 {
@@ -1040,17 +1253,6 @@ async fn live_index_worker_indexes_converted_document() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_replay_is_idempotent() {
-    // QUARANTINED — opt in with MARKHAND_INDEX_WORKER_LIVE=1.
-    // This surfaces a real, unfixed index-worker bug (pre-existing; never ran in CI
-    // until the rust-integration job): replaying an already-indexed version does not
-    // yield IndexVersionOutcome::AlreadyIndexed, so run_once returns chunks>0 instead
-    // of the expected Completed { chunks: 0 }. Gated (not deleted) so the integration
-    // gate stays green for the rest of the suite while the indexing owner fixes the
-    // AlreadyIndexed detection in indexing::index_version. Remove the gate with the fix.
-    if std::env::var("MARKHAND_INDEX_WORKER_LIVE").ok().as_deref() != Some("1") {
-        eprintln!("skipped: quarantined known-failing (replay idempotency); set MARKHAND_INDEX_WORKER_LIVE=1 to run");
-        return;
-    }
     let env = match LiveEnv::boot().await {
         Ok(env) => env,
         Err(error) => {
@@ -1135,19 +1337,8 @@ async fn live_index_worker_signature_mismatch_fails_closed() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
-    // QUARANTINED — opt in with MARKHAND_INDEX_WORKER_LIVE=1.
-    // This surfaces a real, unfixed index-worker bug (pre-existing; never ran in CI
-    // until the rust-integration job): a stale/superseded version's Qdrant points are
-    // not written with is_current=false && is_effective=false, so the staleness-flag
-    // assertion fails. Gated (not deleted) so the integration gate stays green for the
-    // rest of the suite while the indexing owner fixes the point-payload staleness
-    // marking. Remove the gate with the fix.
-    if std::env::var("MARKHAND_INDEX_WORKER_LIVE").ok().as_deref() != Some("1") {
-        eprintln!("skipped: quarantined known-failing (stale-version flags); set MARKHAND_INDEX_WORKER_LIVE=1 to run");
-        return;
-    }
     let env = match LiveEnv::boot().await {
         Ok(env) => env,
         Err(error) => {
@@ -1174,21 +1365,27 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
         DocumentState::Indexed
     );
 
+    // Natural A→B: promote B (durably enqueues lifecycle_refresh for A) without
+    // resetting A's succeeded index job. Fairness may claim lifecycle before
+    // index B, so drain both job types then embeddings.
     let version_b =
         seed_promoted_current_version(&env, document_id, collection_id, version_a, markdown_b)
             .await;
-    reset_index_job_for_version(&env, version_a).await;
+    assert_eq!(lifecycle_job_count(&env).await, 1);
     relay(&env, &embedding_plan).await;
-
-    let stale_run = worker.run_once(&env.ctx).await.expect("stale run");
-    assert!(matches!(
-        stale_run,
-        IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_a, markdown_a, "").len()
-    ));
+    drain_index_and_lifecycle(&env, &worker).await;
+    run_embedding_jobs(&env, &embedding_worker).await;
+    drain_index_and_lifecycle(&env, &worker).await;
     assert_eq!(
         document_state(&env, document_id).await,
-        DocumentState::Converted
+        DocumentState::Indexed
     );
+    assert_eq!(lifecycle_job_succeeded_count(&env).await, 1);
+    assert_eq!(
+        chunk_count(&env, version_b).await,
+        prepare_chunks(document_id, version_b, markdown_b, "").len() as i64
+    );
+
     let points_a = fetched_points(
         &env,
         &embedding_plan,
@@ -1202,17 +1399,6 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
     assert!(points_a
         .iter()
         .all(|(_, payload)| !payload.is_current && !payload.is_effective));
-
-    let current_run = worker.run_once(&env.ctx).await.expect("current run");
-    assert!(matches!(
-        current_run,
-        IndexWorkerRun::Completed { chunks, .. } if chunks == prepare_chunks(document_id, version_b, markdown_b, "").len()
-    ));
-    run_embedding_jobs(&env, &embedding_worker).await;
-    assert_eq!(
-        document_state(&env, document_id).await,
-        DocumentState::Indexed
-    );
     let points_b = fetched_points(
         &env,
         &embedding_plan,
@@ -1284,6 +1470,560 @@ async fn live_index_worker_resumes_from_indexing_state() {
     assert_eq!(
         document_state(&env, document_id).await,
         DocumentState::Indexed
+    );
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_qdrant_set_payload_mixed_scope_ids_only_target_changes() {
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let embedding_plan = test_embedding_plan("http://embedding.test/v1");
+    let signature = embedding_plan.index_signature(8).unwrap();
+    let collection_name = env
+        .qdrant
+        .ensure_collection_for_signature(&signature)
+        .await
+        .expect("ensure collection");
+
+    let org = env.ctx.org_id();
+    let other_org = Uuid::new_v4();
+    let collection = Uuid::new_v4();
+    let other_collection = Uuid::new_v4();
+    let document = Uuid::new_v4();
+    let version_target = Uuid::new_v4();
+    let version_other = Uuid::new_v4();
+    let id_target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let id_other_version = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let id_other_collection = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let id_other_org = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    let point_target =
+        point_id_from_org_collection_and_chunk(org, collection, id_target).expect("target");
+    let point_other_version =
+        point_id_from_org_collection_and_chunk(org, collection, id_other_version)
+            .expect("other version");
+    let point_other_collection =
+        point_id_from_org_collection_and_chunk(org, other_collection, id_other_collection)
+            .expect("other collection");
+    let point_other_org =
+        point_id_from_org_collection_and_chunk(other_org, collection, id_other_org)
+            .expect("other org");
+    let vector = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let points = [
+        (org, collection, id_target, document, version_target),
+        (org, collection, id_other_version, document, version_other),
+        (
+            org,
+            other_collection,
+            id_other_collection,
+            document,
+            version_target,
+        ),
+        (
+            other_org,
+            collection,
+            id_other_org,
+            document,
+            version_target,
+        ),
+    ];
+    for (scope_org, scope_col, identity, document_id, version_id) in points {
+        env.qdrant
+            .upsert_points(
+                &collection_name,
+                &VectorScope::new(scope_org, [scope_col]),
+                &[UpsertPoint {
+                    chunk_identity: identity.into(),
+                    vector: vector.clone(),
+                    payload: ChunkPointPayload {
+                        org_id: scope_org,
+                        collection_id: scope_col,
+                        document_id,
+                        version_id,
+                        chunk_id: identity.into(),
+                        ordinal: 0,
+                        is_current: true,
+                        is_effective: true,
+                        index_generation: 1,
+                    },
+                }],
+            )
+            .await
+            .expect("upsert mixed-scope point");
+    }
+
+    // Mixed has_id set: only target must change when org/collection/version filter holds.
+    // Dropping version_id would flip same-org/collection other-version; body `points`
+    // without filter would flip foreign IDs — both regressions fail this assertion.
+    let mixed_ids = [
+        point_target,
+        point_other_version,
+        point_other_collection,
+        point_other_org,
+    ];
+    env.qdrant
+        .set_payload_fields(
+            &collection_name,
+            &VectorScope::new(org, [collection]),
+            &mixed_ids,
+            &json!({ "is_current": false, "is_effective": false }),
+            &[json!({
+                "key": "version_id",
+                "match": { "value": version_target.to_string() }
+            })],
+        )
+        .await
+        .expect("mixed-scope filter-only update");
+
+    let target = env
+        .qdrant
+        .get_points(
+            &collection_name,
+            &VectorScope::new(org, [collection]),
+            &[point_target],
+        )
+        .await
+        .expect("get target");
+    assert_eq!(target.len(), 1);
+    assert!(!target[0].1.is_current && !target[0].1.is_effective);
+
+    let other_version = env
+        .qdrant
+        .get_points(
+            &collection_name,
+            &VectorScope::new(org, [collection]),
+            &[point_other_version],
+        )
+        .await
+        .expect("get other version");
+    assert!(
+        other_version[0].1.is_current && other_version[0].1.is_effective,
+        "other version must stay current when version filter is present"
+    );
+
+    let other_collection_pts = env
+        .qdrant
+        .get_points(
+            &collection_name,
+            &VectorScope::new(org, [other_collection]),
+            &[point_other_collection],
+        )
+        .await
+        .expect("get other collection");
+    assert!(other_collection_pts[0].1.is_current && other_collection_pts[0].1.is_effective);
+
+    let other_org_pts = env
+        .qdrant
+        .get_points(
+            &collection_name,
+            &VectorScope::new(other_org, [collection]),
+            &[point_other_org],
+        )
+        .await
+        .expect("get other org");
+    assert!(other_org_pts[0].1.is_current && other_org_pts[0].1.is_effective);
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_lifecycle_refresh_retries_converge_without_losing_work() {
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
+    let markdown_a = sample_markdown();
+    let markdown_b = "# Chương II\n\nBản retry.\n\n## Điều 3\n\nNội dung.\n";
+    let (document_id, version_a, collection_id) =
+        seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown_a).await;
+    relay(&env, &embedding_plan).await;
+    let worker = index_worker(&env, None, embedding_plan.clone()).expect("worker");
+    assert!(matches!(
+        worker.run_once(&env.ctx).await.expect("index a"),
+        IndexWorkerRun::Completed { .. }
+    ));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
+    let _version_b =
+        seed_promoted_current_version(&env, document_id, collection_id, version_a, markdown_b)
+            .await;
+    relay(&env, &embedding_plan).await;
+    drain_index_and_lifecycle(&env, &worker).await;
+    run_embedding_jobs(&env, &embedding_worker).await;
+    drain_index_and_lifecycle(&env, &worker).await;
+    assert_eq!(lifecycle_job_succeeded_count(&env).await, 1);
+
+    // Corrupt markers, then re-queue the same durable lifecycle job and converge.
+    let points_a = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_a,
+        markdown_a,
+    )
+    .await;
+    let point_ids = points_a.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    let signature = embedding_plan.index_signature(8).unwrap();
+    let collection_name = env
+        .qdrant
+        .ensure_collection_for_signature(&signature)
+        .await
+        .expect("collection");
+    env.qdrant
+        .set_payload_fields(
+            &collection_name,
+            &VectorScope::new(env.ctx.org_id(), [collection_id]),
+            &point_ids,
+            &json!({ "is_current": true, "is_effective": true }),
+            &[json!({
+                "key": "version_id",
+                "match": { "value": version_a.to_string() }
+            })],
+        )
+        .await
+        .expect("corrupt markers");
+    reset_lifecycle_job_to_pending(&env).await;
+    assert!(matches!(
+        worker.run_once(&env.ctx).await.expect("lifecycle retry"),
+        IndexWorkerRun::Completed { chunks: 0, .. }
+    ));
+    let repaired = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_a,
+        markdown_a,
+    )
+    .await;
+    assert!(repaired
+        .iter()
+        .all(|(_, payload)| !payload.is_current && !payload.is_effective));
+    assert_eq!(lifecycle_job_count(&env).await, 1);
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_replay_a_races_promotion_b_under_barrier() {
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
+    let markdown_a = sample_markdown();
+    let markdown_b = "# Chương II\n\nBản race.\n\n## Điều 3\n\nNội dung race.\n";
+    let (document_id, version_a, collection_id) =
+        seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown_a).await;
+    relay(&env, &embedding_plan).await;
+    let worker = Arc::new(index_worker(&env, None, embedding_plan.clone()).expect("worker"));
+    assert!(matches!(
+        worker.run_once(&env.ctx).await.expect("index a"),
+        IndexWorkerRun::Completed { .. }
+    ));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
+
+    // Race: replay superseded A vs promoting B (lifecycle enqueue) at a barrier.
+    reset_index_job_for_version(&env, version_a).await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let barrier_replay = barrier.clone();
+    let worker_replay = worker.clone();
+    let ctx_replay = env.ctx.clone();
+    let replay = tokio::spawn(async move {
+        barrier_replay.wait().await;
+        worker_replay.run_once(&ctx_replay).await
+    });
+    barrier.wait().await;
+    let version_b =
+        seed_promoted_current_version(&env, document_id, collection_id, version_a, markdown_b)
+            .await;
+    let replay_outcome = replay.await.expect("join replay").expect("replay run");
+    assert!(matches!(
+        replay_outcome,
+        IndexWorkerRun::Completed { .. } | IndexWorkerRun::NoJob | IndexWorkerRun::LeaseLost { .. }
+    ));
+    relay(&env, &embedding_plan).await;
+    drain_index_and_lifecycle(&env, &worker).await;
+    run_embedding_jobs(&env, &embedding_worker).await;
+    drain_index_and_lifecycle(&env, &worker).await;
+
+    let points_a = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_a,
+        markdown_a,
+    )
+    .await;
+    let points_b = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_b,
+        markdown_b,
+    )
+    .await;
+    assert!(!points_a.is_empty());
+    assert!(points_a
+        .iter()
+        .all(|(_, payload)| !payload.is_current && !payload.is_effective));
+    assert!(!points_b.is_empty());
+    assert!(points_b
+        .iter()
+        .all(|(_, payload)| payload.is_current && payload.is_effective));
+    assert_eq!(
+        document_state(&env, document_id).await,
+        DocumentState::Indexed
+    );
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_promotion_enqueues_lifecycle_per_materialized_generation() {
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
+    let markdown_a = sample_markdown();
+    let markdown_b = "# Chương II\n\nHai generation.\n\n## Điều 3\n\nNội dung.\n";
+    let (document_id, version_a, collection_id) =
+        seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown_a).await;
+    relay(&env, &embedding_plan).await;
+    let worker = index_worker(&env, None, embedding_plan.clone()).expect("worker");
+    assert!(matches!(
+        worker.run_once(&env.ctx).await.expect("index a"),
+        IndexWorkerRun::Completed { .. }
+    ));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
+
+    let second_generation = materialize_second_generation_for_version(
+        &env,
+        collection_id,
+        document_id,
+        version_a,
+        markdown_a,
+    )
+    .await;
+    let second_collection = with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT collection_id FROM index_metadata
+                         WHERE org_id = $1 AND id = $2",
+                        &[&ctx.org_id(), &second_generation],
+                    )
+                    .await?;
+                Ok(row.get::<_, Uuid>("collection_id"))
+            })
+        }
+    })
+    .await
+    .expect("second collection");
+
+    let second_signature = "f".repeat(64);
+    let collection_name =
+        fileconv_server::services::index_signature::collection_name_for_digest(&second_signature)
+            .expect("collection name");
+    env.qdrant
+        .ensure_collection_for_digest(&second_signature, 8, true)
+        .await
+        .expect("ensure second qdrant collection");
+
+    let chunks = prepare_chunks(document_id, version_a, markdown_a, "");
+    let vector = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    for chunk in &chunks {
+        env.qdrant
+            .upsert_points(
+                &collection_name,
+                &VectorScope::new(env.ctx.org_id(), [second_collection]),
+                &[UpsertPoint {
+                    chunk_identity: chunk.chunk_identity.clone(),
+                    vector: vector.clone(),
+                    payload: ChunkPointPayload {
+                        org_id: env.ctx.org_id(),
+                        collection_id: second_collection,
+                        document_id,
+                        version_id: version_a,
+                        chunk_id: chunk.chunk_identity.clone(),
+                        ordinal: u64::try_from(chunk.ordinal).expect("ordinal"),
+                        is_current: true,
+                        is_effective: true,
+                        index_generation: 1,
+                    },
+                }],
+            )
+            .await
+            .expect("upsert second gen point");
+    }
+
+    let version_b =
+        seed_promoted_current_version(&env, document_id, collection_id, version_a, markdown_b)
+            .await;
+    assert_eq!(lifecycle_job_count(&env).await, 2);
+    let generations = lifecycle_job_generation_ids(&env).await;
+    assert_eq!(generations.len(), 2);
+    assert!(generations.contains(&second_generation));
+
+    with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let outcomes = lifecycle::enqueue_refresh_within_txn(
+                    txn,
+                    &ctx,
+                    document_id,
+                    collection_id,
+                    version_a,
+                    version_b,
+                )
+                .await
+                .map_err(|error| {
+                    fileconv_server::db::error::DbError::Config(format!("{error:?}"))
+                })?;
+                assert_eq!(outcomes.len(), 2);
+                assert!(outcomes.iter().all(|outcome| !outcome.created));
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("idempotent re-enqueue");
+    assert_eq!(lifecycle_job_count(&env).await, 2);
+
+    relay(&env, &embedding_plan).await;
+    drain_index_and_lifecycle(&env, &worker).await;
+    run_embedding_jobs(&env, &embedding_worker).await;
+    drain_index_and_lifecycle(&env, &worker).await;
+    assert_eq!(lifecycle_job_succeeded_count(&env).await, 2);
+
+    let points_primary = fetched_points(
+        &env,
+        &embedding_plan,
+        collection_id,
+        document_id,
+        version_a,
+        markdown_a,
+    )
+    .await;
+    assert!(points_primary
+        .iter()
+        .all(|(_, payload)| !payload.is_current && !payload.is_effective));
+
+    let second_ids = chunks
+        .iter()
+        .map(|chunk| {
+            point_id_from_org_collection_and_chunk(
+                env.ctx.org_id(),
+                second_collection,
+                &chunk.chunk_identity,
+            )
+            .expect("id")
+        })
+        .collect::<Vec<_>>();
+    let points_second = env
+        .qdrant
+        .get_points(
+            &collection_name,
+            &VectorScope::new(env.ctx.org_id(), [second_collection]),
+            &second_ids,
+        )
+        .await
+        .expect("second gen points");
+    assert!(!points_second.is_empty());
+    assert!(points_second
+        .iter()
+        .all(|(_, payload)| !payload.is_current && !payload.is_effective));
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_index_worker_fairness_claims_lifecycle_within_two_run_once() {
+    let env = match LiveEnv::boot().await {
+        Ok(env) => env,
+        Err(error) => {
+            eprintln!("skipped: {error}");
+            return;
+        }
+    };
+    let provider = MockEmbeddingProvider::start();
+    let embedding_plan = test_embedding_plan(provider.base_url());
+    let markdown_a = sample_markdown();
+    let markdown_b = "# Chương II\n\nFairness.\n\n## Điều 3\n\nNội dung.\n";
+    let markdown_c = "# Chương III\n\nBacklog.\n\n## Điều 4\n\nThêm index.\n";
+
+    let (document_a, version_a, collection_a) =
+        seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown_a).await;
+    relay(&env, &embedding_plan).await;
+    let worker = index_worker(&env, None, embedding_plan.clone()).expect("worker");
+    assert!(matches!(
+        worker.run_once(&env.ctx).await.expect("index a"),
+        IndexWorkerRun::Completed { .. }
+    ));
+    let embedding_worker = embedding_worker(&env, &provider).expect("embedding worker");
+    run_embedding_jobs(&env, &embedding_worker).await;
+
+    let _version_b =
+        seed_promoted_current_version(&env, document_a, collection_a, version_a, markdown_b).await;
+    let (_document_c, _version_c, _collection_c) =
+        seed_converted_document(&env.pool, &env.storage, &env.ctx, markdown_c).await;
+    relay(&env, &embedding_plan).await;
+    assert!(lifecycle_pending_count(&env).await >= 1);
+    let index_pending_before = with_org_txn(&env.pool, &env.ctx, {
+        let ctx = env.ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT count(*)::bigint FROM jobs
+                         WHERE org_id = $1 AND job_type = 'index' AND status = 'pending'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get::<_, i64>(0))
+            })
+        }
+    })
+    .await
+    .expect("index pending");
+    assert!(
+        index_pending_before >= 2,
+        "need continuous index backlog, got {index_pending_before}"
+    );
+
+    worker.run_once(&env.ctx).await.expect("run_once 1");
+    worker.run_once(&env.ctx).await.expect("run_once 2");
+    assert!(
+        lifecycle_pending_count(&env).await < lifecycle_job_count(&env).await,
+        "lifecycle must be claimed within 2 run_once despite index backlog"
     );
     env.drop().await;
 }

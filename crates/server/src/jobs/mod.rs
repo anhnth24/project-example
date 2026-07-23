@@ -45,6 +45,8 @@ pub struct JobPayload {
     pub index_metadata_id: Option<Uuid>,
     /// Parent conversion job for an independent reconciliation job.
     pub cleanup_target_job_id: Option<Uuid>,
+    /// Newer version that superseded `version_id` (lifecycle refresh).
+    pub related_version_id: Option<Uuid>,
 }
 
 impl JobPayload {
@@ -74,6 +76,7 @@ impl From<JobPayloadV1> for JobPayload {
             batch_id: None,
             index_metadata_id: None,
             cleanup_target_job_id: None,
+            related_version_id: None,
         }
     }
 }

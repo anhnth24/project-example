@@ -21,6 +21,7 @@
     "0018_expand_download_capability_redemptions.sql": "fe660678523878cb62c174116545de3cb9b5037ff9db19590e6c3c312dc682d0",
     "0019_expand_ops_fences_jobs_system.sql": "90bc4c28bd5804aed1739fa484df7eb0f32d909713fe3e08a9fcd331d5fc451f",
     "0020_expand_hash_semantics_readiness_ops.sql": "d36f471ff4c8f91e0b11d91dce605f6a84b7216004649e45d4e8ff34282dd02c",
-    "0021_expand_audit_intent_outcome.sql": "378f6056970172cc7fa5bbd1491c67415ec4e0fc4707e295bffb20de57a09fae"
+    "0021_expand_audit_intent_outcome.sql": "378f6056970172cc7fa5bbd1491c67415ec4e0fc4707e295bffb20de57a09fae",
+    "0022_expand_lifecycle_refresh_job.sql": "0f5801b4ffae224c8a46a76b8c1004b6e22281c137310e8e4a7741fe826b6475"
   }
 }

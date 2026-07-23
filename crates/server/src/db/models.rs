@@ -498,6 +498,7 @@ pub enum JobType {
     Delete,
     Reconcile,
     EmbeddingBatch,
+    LifecycleRefresh,
 }
 
 impl JobType {
@@ -508,6 +509,7 @@ impl JobType {
             Self::Delete => "delete",
             Self::Reconcile => "reconcile",
             Self::EmbeddingBatch => "embedding_batch",
+            Self::LifecycleRefresh => "lifecycle_refresh",
         }
     }
 
@@ -518,6 +520,7 @@ impl JobType {
             "delete" => Ok(Self::Delete),
             "reconcile" => Ok(Self::Reconcile),
             "embedding_batch" => Ok(Self::EmbeddingBatch),
+            "lifecycle_refresh" => Ok(Self::LifecycleRefresh),
             other => Err(format!("unknown job type: {other}")),
         }
     }

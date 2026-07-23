@@ -2,6 +2,8 @@
 //!
 //! Default `cargo test` must not claim a green live E2E. The live suite is
 //! `#[ignore]` and only runs with `--ignored` under `MARKHAND_E2E=1`.
+//! Integration CI that uses `--include-ignored` must `--skip e2e_live_vertical_slice`
+//! so absence of the live opt-in stays an honest not_run, not a fake pass.
 
 #[test]
 fn e2e_suite_default_is_not_run() {
@@ -33,15 +35,11 @@ fn e2e_suite_default_is_not_run() {
 #[test]
 #[ignore = "live Compose POC vertical slice; run with --ignored and MARKHAND_E2E=1"]
 fn e2e_live_vertical_slice() {
-    // Opt-in operator gate: only exercised under MARKHAND_E2E=1. Absent the flag
-    // (e.g. the rust-integration CI job that runs `--include-ignored` with a live
-    // database but no live-evidence opt-in), skip gracefully instead of failing —
-    // mirroring the DB-gated tests' `else { return }` idiom, per this suite's own
-    // "only runs with --ignored under MARKHAND_E2E=1" contract.
-    if std::env::var("MARKHAND_E2E").ok().as_deref() != Some("1") {
-        eprintln!("e2e_live_vertical_slice: skipped (set MARKHAND_E2E=1 for the live suite)");
-        return;
-    }
+    assert_eq!(
+        std::env::var("MARKHAND_E2E").ok().as_deref(),
+        Some("1"),
+        "e2e_live_vertical_slice requires MARKHAND_E2E=1; CI must --skip this test under plain --include-ignored"
+    );
     let database = std::env::var("MARKHAND_TEST_DATABASE_URL")
         .expect("MARKHAND_E2E=1 requires MARKHAND_TEST_DATABASE_URL");
     assert!(

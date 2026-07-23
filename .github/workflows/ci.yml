@@ -112,13 +112,11 @@ jobs:
       RUSTC_WRAPPER: "sccache"
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
-      # Same dev-only credentials as deploy/dev/compose.yml defaults /
-      # deploy/dev/.env.example — MARKHAND_TEST_DATABASE_URL intentionally
-      # uses the Postgres bootstrap superuser (not markhand_app, which
-      # bootstrap-server-role.sh creates NOCREATEDB) because the tests
-      # themselves CREATE/DROP an ephemeral database per test via
-      # EphemeralDb::create() + apply_migrations().
+      # Dual-role DB URLs (deploy/dev/compose.yml defaults):
+      # - admin/superuser: CREATE/DROP ephemeral databases + migrate
+      # - markhand_app: application pool for FORCE RLS / tenant assertions
       MARKHAND_TEST_DATABASE_URL: postgresql://markhand:markhand_dev_only@127.0.0.1:54329/markhand
+      MARKHAND_TEST_APP_DATABASE_URL: postgresql://markhand_app:markhand_app_dev_only@127.0.0.1:54329/markhand
       MARKHAND_TEST_MINIO_ENDPOINT: http://127.0.0.1:9000
       MARKHAND_TEST_MINIO_ACCESS_KEY: markhand
       MARKHAND_TEST_MINIO_SECRET_KEY: markhand_dev_only
@@ -191,20 +189,17 @@ jobs:
             "${COMPOSE[@]}" logs minio >&2 || true
             exit 1
           fi
+      - name: Bootstrap non-superuser markhand_app role
+        run: bash deploy/scripts/bootstrap-server-role.sh
       - name: Rust DB-backed integration tests (fileconv-server, --include-ignored)
         id: integration_tests
-        # ADVISORY (non-blocking) for now. Running the previously never-executed
-        # #[ignore] DB-backed suite revealed a backlog of pre-existing failures
-        # (real index-worker bugs; RLS-probe tests that need the non-superuser
-        # markhand_app role, not the compose superuser which bypasses FORCE RLS).
-        # Real deterministic defects the suite caught are fixed on the branch; the
-        # rest is owning-team/test-infra work that must not block unrelated merges.
-        # Step-level continue-on-error keeps the job (and its required check) green
-        # while the step still runs and surfaces failures in the log. (Job-level
-        # continue-on-error was insufficient — the workflow passed but this check
-        # itself still reported failure and blocked.) Remove once the suite is green.
-        continue-on-error: true
-        run: cargo test -p fileconv-server -- --include-ignored
+        # Blocking gate. Skip the live E2E opt-in test so missing MARKHAND_E2E
+        # stays an honest not_run (#[ignore] + --skip), not a soft-return pass.
+        # Use cargo --no-fail-fast so one red binary still surfaces the full backlog.
+        run: >-
+          cargo test -p fileconv-server --no-fail-fast --
+          --include-ignored
+          --skip e2e_live_vertical_slice
       - name: Dump service logs on failure
         if: steps.integration_tests.outcome == 'failure'
         run: docker compose -f deploy/dev/compose.yml logs --tail=200

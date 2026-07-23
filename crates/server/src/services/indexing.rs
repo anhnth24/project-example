@@ -320,6 +320,24 @@ pub async fn index_version(
     }
     heartbeat_once(db_pool, ctx, input).await?;
 
+    // Replay short-circuit: when PG chunks + embedding batches (or empty
+    // backfill) are already durable for this generation, do not re-enqueue
+    // embedding work. Lifecycle markers for superseded versions are refreshed
+    // by durable `lifecycle_refresh` jobs enqueued at promotion time — not by
+    // replaying the old index job.
+    if version_index_materialized(
+        db_pool,
+        ctx,
+        metadata.id,
+        document_id,
+        version_id,
+        prepared_chunks.len(),
+    )
+    .await?
+    {
+        return Ok(IndexVersionOutcome::AlreadyIndexed);
+    }
+
     if is_current {
         match document.state {
             DocumentState::Converted => {
@@ -1456,6 +1474,51 @@ impl IndexingError {
     pub fn is_retryable_job_failure(&self) -> bool {
         !matches!(self, Self::Job(JobError::LeaseLost))
     }
+}
+
+/// Returns true when this version's index output for `metadata_id` is already
+/// durable: chunk rows match `expected_chunks`, and either embedding batches all
+/// succeeded (non-empty) or the generation backfill is `backfilled` (empty).
+async fn version_index_materialized(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    expected_chunks: usize,
+) -> Result<bool, IndexingError> {
+    with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let chunk_count =
+                    chunks::count_by_version_and_generation(txn, &ctx, version_id, metadata_id)
+                        .await?;
+                if chunk_count as usize != expected_chunks {
+                    return Ok(false);
+                }
+                if expected_chunks == 0 {
+                    return Ok(embedding_batches::generation_backfill_is_backfilled(
+                        txn,
+                        &ctx,
+                        metadata_id,
+                        document_id,
+                        version_id,
+                    )
+                    .await?);
+                }
+                Ok(embedding_batches::embedding_batches_succeeded_for_version(
+                    txn,
+                    &ctx,
+                    metadata_id,
+                    document_id,
+                    version_id,
+                )
+                .await?)
+            })
+        }
+    })
+    .await
 }
 
 /// Compensates just-upserted batch vectors with an exact-point-id, document-scoped delete.

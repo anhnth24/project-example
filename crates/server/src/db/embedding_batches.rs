@@ -352,6 +352,59 @@ pub async fn document_batches_complete(
     ))
 }
 
+/// True when every embedding batch for this generation/version succeeded.
+///
+/// Unlike [`document_batches_complete`], this intentionally ignores the parent
+/// index job status so a reset/replayed index lease can still observe that the
+/// version's vectors were already materialized.
+pub async fn embedding_batches_succeeded_for_version(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    index_metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<bool, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT count(*)::bigint > 0 AS has_batches,
+                    COALESCE(bool_and(status = 'succeeded'), false) AS all_succeeded
+             FROM embedding_batches
+             WHERE org_id = $1
+               AND index_metadata_id = $2
+               AND document_id = $3
+               AND version_id = $4",
+            &[&ctx.org_id(), &index_metadata_id, &document_id, &version_id],
+        )
+        .await?;
+    Ok(row.get::<_, bool>("has_batches") && row.get::<_, bool>("all_succeeded"))
+}
+
+/// True when the generation backfill row for this document/version is terminal
+/// `backfilled` (used for empty documents that have no embedding batches).
+pub async fn generation_backfill_is_backfilled(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    index_metadata_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> Result<bool, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM index_generation_backfills
+                WHERE org_id = $1
+                  AND index_metadata_id = $2
+                  AND document_id = $3
+                  AND version_id = $4
+                  AND status = 'backfilled'
+             )",
+            &[&ctx.org_id(), &index_metadata_id, &document_id, &version_id],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
 pub async fn generation_backfill_complete(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
