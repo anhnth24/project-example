@@ -1,0 +1,11 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.34s
+     Running tests/deletion_reconcile.rs (target/debug/deps/deletion_reconcile-4f4009ef357fe704)
+
+running 2 tests
+reconcile_drill_ok document_id=24a6c0db-546a-4b52-8956-614e83bc40eb job_id=3547c2ea-8473-4ac6-b701-b732fac43e39
+reconcile_scope_ok other_doc_not_claimed a=0a63b2bd-1522-4a19-801b-57ae0d647dd1 b=70092fc4-0fed-4c1e-a546-e2ca7721040d
+test live_reconcile_worker_dry_run_then_repair_idempotent ... ok
+test live_reconcile_scoped_worker_cannot_claim_other_document ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.51s
+

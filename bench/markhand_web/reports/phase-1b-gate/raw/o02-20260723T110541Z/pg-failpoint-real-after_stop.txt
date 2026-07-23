@@ -1,0 +1,3 @@
+armed=1
+stopped=1
+restored=1 disarmed=1

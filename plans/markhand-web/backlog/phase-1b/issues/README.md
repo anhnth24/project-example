@@ -353,16 +353,24 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
-- **Status:** In progress — Prometheus rules + Phase 1B runbooks
-  (detect→contain→recover→verify) landed. Live alert-trigger tabletop evidence still
-  required under `bench/markhand_web/reports/phase-1b-gate/` before Done; validate
-  with `promtool check rules` when available.
+- **Status:** In progress — Sol R3: JSON fallback redaction (malformed/truncated/
+  prefixed/multi-record), PG restore arm-before-stop + failpoint harness,
+  reconcile oneshot requires document UUID before DB + scoped claim, exact
+  `worker-reconcile-oneshot` compose evidence (or honest deployment gap). Catalog
+  stays In progress while O01 is not Done and full backup/restore remains O03.
+  Evidence: `bench/markhand_web/reports/phase-1b-gate/o02-alerts.*`.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
-- **Files:** `deploy/observability/**`, `docs/runbooks/phase-1b/**`.
+- **Files / scope:** `deploy/observability/**`, `docs/runbooks/phase-1b/**`,
+  `deploy/scripts/o02-alert-tabletop.sh`, `deploy/scripts/o02-pg-restore-guard.sh`,
+  `deploy/scripts/redact_secrets.py`, `deploy/scripts/test_redact_secrets.py`,
+  `deploy/compose.poc.yml` (`worker-reconcile-oneshot` profile / job),
+  `crates/server/src/{bin/worker.rs,workers/reconcile.rs,jobs/**,db/jobs.rs}`,
+  `crates/server/tests/deletion_reconcile.rs` (live reconcile worker drills).
 - **Depends:** F02/F06/I03/O01 + G0-SLO.
 - **Acceptance/tests:** Trigger từng alert; runbook detection→contain→recover→verify;
-  rule validation/fault/tabletop evidence.
+  rule validation/fault/tabletop evidence; compose oneshot dry-run/repair/clean or
+  documented deployment gap.
 - **Security/migration:** No tenant/document high-cardinality labels. **Out:** staffing.
 
 ### P1B-O03 — Backup/restore và migration safety

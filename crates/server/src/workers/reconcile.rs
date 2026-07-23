@@ -25,6 +25,8 @@ pub struct ReconcileWorkerConfig {
     pub heartbeat_interval: Duration,
     pub max_job_duration: Duration,
     pub mode: ReconcileMode,
+    /// When set, claim at most one pending document-drift job for this document.
+    pub document_id: Option<Uuid>,
 }
 
 impl ReconcileWorkerConfig {
@@ -35,6 +37,7 @@ impl ReconcileWorkerConfig {
             heartbeat_interval: Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECS),
             max_job_duration: Duration::from_secs(DEFAULT_MAX_JOB_DURATION_SECS),
             mode: ReconcileMode::DryRun,
+            document_id: None,
         }
     }
 
@@ -89,6 +92,7 @@ impl ReconcileWorker {
             DEFAULT_CLAIM_LIMIT,
             self.config.lease_ttl,
             false,
+            self.config.document_id,
         )
         .await?;
         let Some(job) = jobs.into_iter().next() else {
@@ -127,15 +131,31 @@ impl ReconcileWorker {
                 {
                     return Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id });
                 }
-                match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
-                    Ok(completed) => Ok(ReconcileWorkerRun::Completed {
-                        job_id: completed.id,
-                        report,
-                    }),
-                    Err(JobError::LeaseLost) => {
-                        Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id })
+                // Dry-run must not complete the job (would consume repair intent).
+                if self.config.mode == ReconcileMode::DryRun {
+                    match jobs::release_dry_run(&self.db_pool, ctx, job.id, &lease_token, attempts)
+                        .await
+                    {
+                        Ok(released) => Ok(ReconcileWorkerRun::DryRunReported {
+                            job_id: released.id,
+                            report,
+                        }),
+                        Err(JobError::LeaseLost) => {
+                            Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id })
+                        }
+                        Err(error) => Err(ReconcileWorkerError::Job(error)),
                     }
-                    Err(error) => Err(ReconcileWorkerError::Job(error)),
+                } else {
+                    match jobs::complete(&self.db_pool, ctx, job.id, &lease_token, attempts).await {
+                        Ok(completed) => Ok(ReconcileWorkerRun::Completed {
+                            job_id: completed.id,
+                            report,
+                        }),
+                        Err(JobError::LeaseLost) => {
+                            Ok(ReconcileWorkerRun::LeaseLost { job_id: job.id })
+                        }
+                        Err(error) => Err(ReconcileWorkerError::Job(error)),
+                    }
                 }
             }
             Err(ReconcileWorkerError::Job(JobError::LeaseLost))
@@ -168,6 +188,15 @@ impl ReconcileWorker {
         job: &Job,
     ) -> Result<ReconcileReport, ReconciliationError> {
         let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone())?;
+        // Document-scoped workers must never act on a differently-scoped job.
+        if let Some(expected) = self.config.document_id {
+            match payload.document_id {
+                Some(actual) if actual == expected => {}
+                _ => {
+                    return Err(ReconciliationError::DocumentScopeMismatch);
+                }
+            }
+        }
         let mut report = if let Some(document_id) = payload.document_id {
             reconciliation::reconcile_document(
                 &self.db_pool,
@@ -181,21 +210,25 @@ impl ReconcileWorker {
         } else {
             ReconcileReport::default()
         };
-        let gc_report = reconciliation::reconcile_dead_letter_jobs(
-            &self.db_pool,
-            &self.storage,
-            ctx,
-            self.config.mode,
-        )
-        .await?;
-        report.orphan_objects = report
-            .orphan_objects
-            .saturating_add(gc_report.orphan_objects);
-        report.repaired.staged_objects = gc_report.repaired.staged_objects;
-        report.repaired.orphan_objects = report
-            .repaired
-            .orphan_objects
-            .saturating_add(gc_report.repaired.orphan_objects);
+        // Document-scoped one-shot drills skip org-wide DLQ GC so a single job
+        // remains the only mutate/report unit of work.
+        if self.config.document_id.is_none() {
+            let gc_report = reconciliation::reconcile_dead_letter_jobs(
+                &self.db_pool,
+                &self.storage,
+                ctx,
+                self.config.mode,
+            )
+            .await?;
+            report.orphan_objects = report
+                .orphan_objects
+                .saturating_add(gc_report.orphan_objects);
+            report.repaired.staged_objects = gc_report.repaired.staged_objects;
+            report.repaired.orphan_objects = report
+                .repaired
+                .orphan_objects
+                .saturating_add(gc_report.repaired.orphan_objects);
+        }
         Ok(report)
     }
 
@@ -288,6 +321,11 @@ impl ReconcileWorker {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReconcileWorkerRun {
     NoJob,
+    /// Dry-run finished; job released back to pending (repair intent preserved).
+    DryRunReported {
+        job_id: Uuid,
+        report: ReconcileReport,
+    },
     Completed {
         job_id: Uuid,
         report: ReconcileReport,

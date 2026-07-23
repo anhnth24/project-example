@@ -1,0 +1,40 @@
+# Ephemeral Prometheus + blackbox attached to the POC private network for O02 live drills.
+# Usage (from repo root, with markhand-poc up):
+#   docker compose -f deploy/observability/compose.observe.yml up -d
+#   docker compose -f deploy/observability/compose.observe.yml down
+
+name: markhand-o02-observe
+
+services:
+  blackbox:
+    image: quay.io/prometheus/blackbox-exporter:v0.25.0@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+    volumes:
+      - ./prometheus/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks:
+      - poc_private
+    restart: "no"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+      - --storage.tsdb.retention.time=2h
+    ports:
+      - "127.0.0.1:9095:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/markhand-rules.yml:/etc/prometheus/rules/markhand-rules.yml:ro
+    depends_on:
+      - blackbox
+    networks:
+      - poc_private
+    restart: "no"
+
+networks:
+  poc_private:
+    external: true
+    name: markhand-poc_private

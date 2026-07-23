@@ -48,6 +48,9 @@ use fileconv_server::workers::embedding::{
     EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
 };
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
+use fileconv_server::workers::reconcile::{
+    ReconcileWorker, ReconcileWorkerConfig, ReconcileWorkerRun,
+};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -806,13 +809,17 @@ async fn seed_converted_document(env: &LiveEnv, markdown: &str) -> (Uuid, Uuid, 
         let sha256 = sha256.clone();
         move |txn| {
             Box::pin(async move {
+                // Unique per seed: scoped drills create multiple docs in one org.
+                let collection_name = format!("Delete Reconcile Collection {collection_id}");
+                let collection_slug = format!("delete-reconcile-{collection_id}");
+                let document_title = format!("Delete Reconcile Doc {document_id}");
                 collections::insert(
                     txn,
                     &ctx,
                     NewCollection {
                         id: collection_id,
-                        name: "Delete Reconcile Collection",
-                        slug: &format!("delete-reconcile-{collection_id}"),
+                        name: &collection_name,
+                        slug: &collection_slug,
                         description: None,
                         visibility: CollectionVisibility::Private,
                     },
@@ -824,7 +831,7 @@ async fn seed_converted_document(env: &LiveEnv, markdown: &str) -> (Uuid, Uuid, 
                     NewDocument {
                         id: document_id,
                         collection_id,
-                        title: "Delete Reconcile Doc",
+                        title: &document_title,
                     },
                 )
                 .await?;
@@ -934,6 +941,26 @@ fn delete_worker(env: &LiveEnv) -> DeleteWorker {
         config,
     )
     .expect("delete worker")
+}
+
+fn reconcile_worker(
+    env: &LiveEnv,
+    mode: ReconcileMode,
+    document_id: Option<Uuid>,
+) -> ReconcileWorker {
+    let mut config = ReconcileWorkerConfig::new(format!("reconcile-worker-{}", Uuid::new_v4()));
+    config.lease_ttl = Duration::from_secs(30);
+    config.heartbeat_interval = Duration::from_secs(5);
+    config.max_job_duration = Duration::from_secs(60);
+    config.mode = mode;
+    config.document_id = document_id;
+    ReconcileWorker::new(
+        env.pool.clone(),
+        env.storage.clone(),
+        env.qdrant.clone(),
+        config,
+    )
+    .expect("reconcile worker")
 }
 
 fn embedding_worker(env: &LiveEnv, provider: &MockEmbeddingProvider) -> EmbeddingWorker {
@@ -1638,6 +1665,117 @@ async fn live_reconcile_repairs_orphan_vectors() {
     .await
     .expect("repeat repair");
     assert_eq!(repeat.orphan_vectors, 0);
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_reconcile_worker_dry_run_then_repair_idempotent() {
+    let Some(env) = LiveEnv::boot().await else {
+        return;
+    };
+    let provider = MockEmbeddingProvider::start();
+    let (document_id, _version_id, collection_id, _object_key, signature) =
+        index_seeded(&env, &provider, sample_markdown()).await;
+    let before = points_for_doc(&env, collection_id, document_id, &signature).await;
+    assert!(before > 0);
+    tombstone_directly(&env, document_id).await;
+
+    let enqueued = enqueue_reconcile(&env.pool, &env.ctx, document_id, "oneshot-scope")
+        .await
+        .expect("enqueue reconcile");
+    let job_id = enqueued.job.id;
+    assert_eq!(job_status(&env, job_id).await, "pending");
+
+    let dry = reconcile_worker(&env, ReconcileMode::DryRun, Some(document_id))
+        .run_once(&env.ctx)
+        .await
+        .expect("dry-run oneshot");
+    match dry {
+        ReconcileWorkerRun::DryRunReported {
+            job_id: reported,
+            report,
+        } => {
+            assert_eq!(reported, job_id);
+            assert!(report.orphan_vectors >= before);
+            assert_eq!(report.repaired.orphan_vectors, 0);
+        }
+        other => panic!("expected DryRunReported, got {other:?}"),
+    }
+    // Dry-run must not consume repair intent: same job stays pending, attempts not burned.
+    assert_eq!(job_status(&env, job_id).await, "pending");
+    assert_eq!(
+        points_for_doc(&env, collection_id, document_id, &signature).await,
+        before
+    );
+
+    let repaired = reconcile_worker(&env, ReconcileMode::Repair, Some(document_id))
+        .run_once(&env.ctx)
+        .await
+        .expect("repair oneshot");
+    match repaired {
+        ReconcileWorkerRun::Completed {
+            job_id: done,
+            report,
+        } => {
+            assert_eq!(done, job_id);
+            assert_eq!(report.repaired.orphan_vectors, before);
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(job_status(&env, job_id).await, "succeeded");
+    assert_eq!(
+        points_for_doc(&env, collection_id, document_id, &signature).await,
+        0
+    );
+
+    // Idempotent clean: scoped claim finds no pending job for this document.
+    let clean = reconcile_worker(&env, ReconcileMode::Repair, Some(document_id))
+        .run_once(&env.ctx)
+        .await
+        .expect("idempotent clean");
+    assert!(
+        matches!(clean, ReconcileWorkerRun::NoJob),
+        "expected NoJob after repair consumed the scoped job, got {clean:?}"
+    );
+    eprintln!("reconcile_drill_ok document_id={document_id} job_id={job_id}");
+    env.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
+async fn live_reconcile_scoped_worker_cannot_claim_other_document() {
+    let Some(env) = LiveEnv::boot().await else {
+        return;
+    };
+    let provider = MockEmbeddingProvider::start();
+    let (document_a, _va, _ca, _oa, _sa) = index_seeded(&env, &provider, sample_markdown()).await;
+    let (document_b, _vb, _cb, _ob, _sb) = index_seeded(&env, &provider, sample_markdown()).await;
+    enqueue_reconcile(&env.pool, &env.ctx, document_a, "oneshot-scope")
+        .await
+        .expect("enqueue A");
+    // Scoped to B must not claim A's pending job.
+    let run = reconcile_worker(&env, ReconcileMode::DryRun, Some(document_b))
+        .run_once(&env.ctx)
+        .await
+        .expect("scoped B run");
+    assert!(
+        matches!(run, ReconcileWorkerRun::NoJob),
+        "expected NoJob when only other-document jobs are pending, got {run:?}"
+    );
+    assert_eq!(
+        job_status(&env, {
+            // re-fetch job id for A via enqueue idempotency
+            enqueue_reconcile(&env.pool, &env.ctx, document_a, "oneshot-scope")
+                .await
+                .expect("replay A")
+                .job
+                .id
+        })
+        .await,
+        "pending"
+    );
+    eprintln!("reconcile_scope_ok other_doc_not_claimed a={document_a} b={document_b}");
     env.drop().await;
 }
 

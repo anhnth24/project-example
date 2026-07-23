@@ -1,0 +1,2 @@
+armed=1 before_stop=1
+restored=1 disarmed=1

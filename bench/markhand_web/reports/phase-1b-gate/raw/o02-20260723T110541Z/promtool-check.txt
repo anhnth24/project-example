@@ -1,0 +1,3 @@
+Checking markhand-rules.yml
+  SUCCESS: 11 rules found
+

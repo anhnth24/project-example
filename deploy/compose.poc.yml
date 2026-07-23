@@ -447,6 +447,60 @@ services:
     pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
     restart: unless-stopped
 
+  # One-shot document-drift reconcile on the private network (Postgres + MinIO + Qdrant).
+  # Not on the convert-only network — Qdrant is required. Finite exit via ONESHOT.
+  # Usage:
+  #   MARKHAND_RECONCILE_MODE=dry-run MARKHAND_RECONCILE_DOCUMENT_ID=<uuid> \
+  #     docker compose -f deploy/compose.poc.yml --env-file deploy/.env \
+  #     --profile reconcile-oneshot run --rm worker-reconcile-oneshot
+  worker-reconcile-oneshot:
+    <<: *app-security
+    build: *worker-build
+    image: ${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}
+    profiles: ["reconcile-oneshot"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
+      MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
+      MARKHAND_WORKER_KIND: reconcile
+      MARKHAND_WORKER_ID: poc-reconcile-oneshot
+      MARKHAND_WORKER_ONESHOT: "1"
+      MARKHAND_RECONCILE_MODE: ${MARKHAND_RECONCILE_MODE:-dry-run}
+      MARKHAND_RECONCILE_DOCUMENT_ID: ${MARKHAND_RECONCILE_DOCUMENT_ID:-}
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+    networks: [private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_WORKER_MEM_LIMIT:-768m}
+    cpus: ${MARKHAND_WORKER_CPUS:-1.0}
+    pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
+    restart: "no"
+
 networks:
   edge:
     driver: bridge
