@@ -323,4 +323,50 @@ mod tests {
         }
         assert!(limiter.len_for_test() <= HARD_CAP_KEYS);
     }
+
+    #[test]
+    fn concurrent_checkers_share_ceil_and_stay_bounded() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let limiter = Arc::new(RateLimiter::new(RateLimitConfig {
+            auth_per_minute: 8,
+            user_per_minute: 8,
+            ip_per_minute: 8,
+            expensive_route_per_minute: 8,
+        }));
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let rejected = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let limiter = Arc::clone(&limiter);
+            let accepted = Arc::clone(&accepted);
+            let rejected = Arc::clone(&rejected);
+            handles.push(thread::spawn(move || {
+                for i in 0..64 {
+                    match limiter.check_ip("198.51.100.50") {
+                        Ok(()) => {
+                            accepted.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(_) => {
+                            rejected.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let _ = limiter.check_route("search", &format!("card-{i}"));
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("worker");
+        }
+        let ok = accepted.load(Ordering::Relaxed);
+        let deny = rejected.load(Ordering::Relaxed);
+        assert!(
+            ok <= 8,
+            "shared IP ceil must not exceed capacity, accepted={ok}"
+        );
+        assert!(deny > 0, "concurrent pressure must observe rejections");
+        assert!(limiter.len_for_test() <= HARD_CAP_KEYS);
+    }
 }

@@ -12,7 +12,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, seed_user_with_permissions, test_minio_client, MinioCleanupGuard,
+    login_access_token, seed_user_with_permissions, test_minio_client, tiny_pdf_bytes,
+    tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
 };
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
@@ -45,7 +46,7 @@ fn test_qdrant() -> Option<QdrantClient> {
     QdrantClient::with_api_key(url, None).ok()
 }
 
-fn multipart(filename: &str, bytes: &[u8], collection_id: Uuid) -> Vec<u8> {
+fn multipart(filename: &str, content_type: &str, bytes: &[u8], collection_id: Uuid) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(
         format!(
@@ -55,13 +56,42 @@ fn multipart(filename: &str, bytes: &[u8], collection_id: Uuid) -> Vec<u8> {
     );
     body.extend_from_slice(
         format!(
-            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: text/plain\r\n\r\n"
+            "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
         )
         .as_bytes(),
     );
     body.extend_from_slice(bytes);
     body.extend_from_slice(format!("\r\n--{BOUNDARY}--\r\n").as_bytes());
     body
+}
+
+fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec<u8>)> {
+    vec![
+        (
+            "txt",
+            "budget.txt",
+            "text/plain",
+            b"Kinh phi du an la 15 trieu dong.\n".to_vec(),
+        ),
+        (
+            "pdf",
+            "budget.pdf",
+            "application/pdf",
+            tiny_pdf_bytes("Kinh phi PDF 15 trieu"),
+        ),
+        (
+            "pptx",
+            "budget.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            tiny_pptx_bytes("Kinh phi PPTX 15 trieu"),
+        ),
+        (
+            "xlsx",
+            "budget.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            tiny_xlsx_bytes("Kinh phi XLSX 15 trieu"),
+        ),
+    ]
 }
 
 async fn json_post(
@@ -152,38 +182,6 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let collection_id = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
-
-    let source = b"Kinh phi du an la 15 trieu dong.\n";
-    let upload_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/uploads")
-                .header("authorization", format!("Bearer {token}"))
-                .header("idempotency-key", "vertical-slice-upload-1")
-                .header(
-                    "content-type",
-                    format!("multipart/form-data; boundary={BOUNDARY}"),
-                )
-                .body(Body::from(multipart("budget.txt", source, collection_id)))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(upload_response.status(), StatusCode::CREATED);
-    let upload_bytes = upload_response
-        .into_body()
-        .collect()
-        .await
-        .unwrap()
-        .to_bytes();
-    let upload: serde_json::Value = serde_json::from_slice(&upload_bytes).unwrap();
-    assert_eq!(upload["disposition"], "accepted");
-    let document_id = Uuid::parse_str(upload["documentId"].as_str().unwrap()).unwrap();
-    let source_version_id = Uuid::parse_str(upload["versionId"].as_str().unwrap()).unwrap();
-    let convert_job_id = Uuid::parse_str(upload["jobId"].as_str().unwrap()).unwrap();
-
     let worker_ctx = OrgContext::try_new(
         org,
         user,
@@ -191,42 +189,8 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         [collection_id],
     )
     .unwrap();
-    let mut convert_config = ConvertWorkerConfig::new(
-        format!("vertical-convert-{}", Uuid::new_v4()),
-        SandboxConfig {
-            argv_template: vec![
-                fileconv.display().to_string(),
-                "one".into(),
-                "{input}".into(),
-            ],
-            limits: ResourceLimits {
-                wall_timeout: Duration::from_secs(30),
-                ..ResourceLimits::default()
-            },
-        },
-    );
-    convert_config.heartbeat_interval = Duration::from_millis(50);
-    convert_config.lease_ttl = Duration::from_secs(5);
-    let convert_worker =
-        ConvertWorker::new(pool.clone(), store.clone(), convert_config).expect("convert worker");
-    let convert_run = convert_worker
-        .run_once(&worker_ctx)
-        .await
-        .expect("convert run");
-    assert!(
-        matches!(
-            convert_run,
-            ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
-        ),
-        "unexpected convert outcome: {convert_run:?}"
-    );
-
-    let (published_version_id, markdown_sha, source_sha) =
-        load_published_version(&pool, &worker_ctx, document_id).await;
-    assert_ne!(published_version_id, source_version_id);
-    assert_ne!(markdown_sha, source_sha);
-
-    // Relay convert outbox → index job, then index with mock embeddings.
+    // One embedding plan/signature for the whole matrix — swapping mock URLs
+    // mid-collection produces index signature mismatch against the active generation.
     let mock = MockEmbedding::start();
     let embedding_plan = EmbeddingPlan::provider(
         "test",
@@ -238,10 +202,6 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     )
     .expect("plan");
     let sink = Arc::new(IndexingOutboxSink::new(&embedding_plan).expect("sink"));
-    jobs::relay_outbox_with_sink(&pool, &worker_ctx, 32, &sink)
-        .await
-        .expect("relay");
-
     let mut index_config = IndexWorkerConfig::new(format!("vertical-index-{}", Uuid::new_v4()));
     index_config.lease_ttl = Duration::from_secs(30);
     index_config.heartbeat_interval = Duration::from_secs(5);
@@ -256,38 +216,127 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         embedding_plan,
     )
     .expect("index worker");
-    let index_run = index_worker.run_once(&worker_ctx).await.expect("index run");
-    assert!(
-        matches!(index_run, IndexWorkerRun::Completed { .. }),
-        "unexpected index outcome: {index_run:?}"
-    );
 
-    let chunk = load_first_chunk(&pool, &worker_ctx, document_id, published_version_id).await;
-    let quote = chunk.body.clone();
-    let resolved = resolve_citation(
-        &pool,
-        &worker_ctx,
-        &store,
-        ResolveCitationRequest {
-            logical_document_id: document_id,
-            version_id: published_version_id,
-            source_content_sha256: source_sha,
-            canonical_markdown_sha256: markdown_sha,
-            chunk_id: chunk.id,
-            source_span_start: chunk.span_start.unwrap_or(0) as usize,
-            source_span_end: chunk.span_end.unwrap_or(quote.len() as i32) as usize,
-            quote_local_start: 0,
-            quote_local_end: quote.len(),
-            quote: quote.clone(),
-            require_current: true,
-        },
-    )
-    .await
-    .expect("citation resolve from worker-produced IDs");
-    assert_eq!(resolved.logical_document_id, document_id);
-    assert_eq!(resolved.version_id, published_version_id);
-    assert_eq!(resolved.chunk_id, chunk.id);
-    assert!(resolved.is_current);
+    for (ext, filename, content_type, source) in vertical_format_cases() {
+        let upload_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/uploads")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header(
+                        "idempotency-key",
+                        format!("vertical-slice-upload-{ext}-{}", Uuid::new_v4().simple()),
+                    )
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={BOUNDARY}"),
+                    )
+                    .body(Body::from(multipart(
+                        filename,
+                        content_type,
+                        &source,
+                        collection_id,
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            upload_response.status(),
+            StatusCode::CREATED,
+            "{ext} upload status"
+        );
+        let upload_bytes = upload_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes();
+        let upload: serde_json::Value = serde_json::from_slice(&upload_bytes).unwrap();
+        assert_eq!(upload["disposition"], "accepted", "{ext} disposition");
+        let document_id = Uuid::parse_str(upload["documentId"].as_str().unwrap()).unwrap();
+        let source_version_id = Uuid::parse_str(upload["versionId"].as_str().unwrap()).unwrap();
+        let convert_job_id = Uuid::parse_str(upload["jobId"].as_str().unwrap()).unwrap();
+
+        let mut convert_config = ConvertWorkerConfig::new(
+            format!("vertical-convert-{ext}-{}", Uuid::new_v4()),
+            SandboxConfig {
+                argv_template: vec![
+                    fileconv.display().to_string(),
+                    "one".into(),
+                    "{input}".into(),
+                ],
+                limits: ResourceLimits {
+                    wall_timeout: Duration::from_secs(30),
+                    ..ResourceLimits::default()
+                },
+            },
+        );
+        convert_config.heartbeat_interval = Duration::from_millis(50);
+        convert_config.lease_ttl = Duration::from_secs(5);
+        let convert_worker = ConvertWorker::new(pool.clone(), store.clone(), convert_config)
+            .expect("convert worker");
+        let convert_run = convert_worker
+            .run_once(&worker_ctx)
+            .await
+            .unwrap_or_else(|error| panic!("{ext} convert run: {error}"));
+        assert!(
+            matches!(
+                convert_run,
+                ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
+            ),
+            "{ext} unexpected convert outcome: {convert_run:?}"
+        );
+
+        let (published_version_id, markdown_sha, source_sha) =
+            load_published_version(&pool, &worker_ctx, document_id).await;
+        assert_ne!(
+            published_version_id, source_version_id,
+            "{ext} published version must differ from upload draft"
+        );
+        assert_ne!(markdown_sha, source_sha, "{ext} dual-hash identity");
+
+        jobs::relay_outbox_with_sink(&pool, &worker_ctx, 32, &sink)
+            .await
+            .unwrap_or_else(|error| panic!("{ext} relay: {error}"));
+        let index_run = index_worker
+            .run_once(&worker_ctx)
+            .await
+            .unwrap_or_else(|error| panic!("{ext} index run: {error}"));
+        assert!(
+            matches!(index_run, IndexWorkerRun::Completed { .. }),
+            "{ext} unexpected index outcome: {index_run:?}"
+        );
+
+        let chunk = load_first_chunk(&pool, &worker_ctx, document_id, published_version_id).await;
+        let quote = chunk.body.clone();
+        let resolved = resolve_citation(
+            &pool,
+            &worker_ctx,
+            &store,
+            ResolveCitationRequest {
+                logical_document_id: document_id,
+                version_id: published_version_id,
+                source_content_sha256: source_sha,
+                canonical_markdown_sha256: markdown_sha,
+                chunk_id: chunk.id,
+                source_span_start: chunk.span_start.unwrap_or(0) as usize,
+                source_span_end: chunk.span_end.unwrap_or(quote.len() as i32) as usize,
+                quote_local_start: 0,
+                quote_local_end: quote.len(),
+                quote: quote.clone(),
+                require_current: true,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{ext} citation resolve: {error:?}"));
+        assert_eq!(resolved.logical_document_id, document_id);
+        assert_eq!(resolved.version_id, published_version_id);
+        assert_eq!(resolved.chunk_id, chunk.id);
+        assert!(resolved.is_current, "{ext} citation must be current");
+    }
 
     cleanup.cleanup().await.expect("minio bucket cleanup");
     ephemeral.drop().await;

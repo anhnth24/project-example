@@ -224,13 +224,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
-- **Status:** In progress — vertical-slice evidence started in
-  `tests/retrieval_vertical_slice.rs` (HTTP upload → ConvertWorker/`fileconv` →
-  IndexWorker → citation resolve on worker-produced IDs/artifacts/chunks; no SQL
-  seed of versions/artifacts/chunks). Capability decode now rejects `exp <= now`.
-  Remaining for Done: PDF/PPTX/XLSX live worker matrix, concurrent redemption
-  barrier (exactly one success), history ACL/IDOR/delete-deny matrices without
-  SQL-seeded derived artifacts, MinIO cleanup guard soak.
+- **Status:** In progress — multi-format vertical slice green on live PG/MinIO/
+  Qdrant: `live_upload_convert_index_citation_vertical_slice` covers
+  txt/pdf/pptx/xlsx (HTTP upload → ConvertWorker/`fileconv` → IndexWorker →
+  citation resolve on worker-produced IDs/artifacts/chunks; no SQL seed of
+  versions/artifacts/chunks; shared embedding plan/signature). Concurrent
+  redemption barrier + expiry/IDOR/delete/suspend/membership deny covered by
+  `live_citation_authz_expiry_replay_idor_and_immediate_deny` (still SQL-seeds
+  derived artifacts for history ACL paths). Remaining for Done: history
+  ACL/IDOR/delete-deny matrices driven only by worker-produced artifacts;
+  MinIO cleanup guard soak evidence.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
@@ -268,15 +271,14 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Status:** In progress — Sol R3 upload saga: pre-persist envelope/IDs,
-  CAS `object_stored→reconciling` before external cleanup, commit CAS only
-  `object_stored→completed`, `cleanup_pending` on delete failure, shared
-  principal authz advisory lock with ACL/permission mutation helpers,
-  `doc.quarantine.review` approve-intake (collection-scoped 404 IDOR),
-  stable response deep-equality replay. Remaining for Done: full R04
-  status/schema matrix; cross-tenant resource IDOR suite; reindex same
-  jobId `created=false`; publish/download/citation HTTP; live evidence
-  for every Sol R3 barrier on a green CI agent.
+- **Status:** In progress — Sol R3 upload saga retained; live
+  `live_http_collection_document_job_contract_matrix` now asserts reindex
+  same `jobId` with `created=false` on idempotent replay; mutation routes
+  fail closed under ops fence (`live_mutation_routes_refuse_when_ops_fence_active`,
+  `ops_fence_active` 503). Remaining for Done: broader cross-tenant resource
+  IDOR suite beyond collections; publish/download/citation HTTP coverage in the
+  same contract matrix; full status/schema matrix vs OpenAPI; live Sol R3
+  barrier evidence on CI agent.
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -317,9 +319,11 @@ ghi trong issue đã `Done`.
 - **Status:** In progress — Sol R2 complete for rate/readiness/OpenAPI; kept open with
   R05. Implemented: outer readiness timeout reports in-progress probe code; hanging
   probe router matrix (code+deadline); baseline IP shares ceil `RateLimitRejected`;
-  OpenAPI `/openapi.yaml` 429. Gaps remaining for Done: Compose-stack hanging soak;
-  client regenerate/check after OpenAPI 429 sweep committed; concurrency/cardinality
-  rate evidence beyond unit hard-cap tests.
+  OpenAPI `/openapi.yaml` 429; hermetic
+  `concurrent_checkers_share_ceil_and_stay_bounded` for shared-ceil + hard-cap
+  cardinality under concurrent pressure; `pnpm --dir web api:check` regenerates
+  TS client from OpenAPI (429 sweep already in `contract.ts`). Gaps remaining
+  for Done: Compose-stack hanging soak on a Docker host.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,
@@ -375,23 +379,21 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
-- **Status:** In progress — Sol round-3 merge-safety fixes: session advisory lock for full capture;
-  strict drain (never cancel jobs); consistency backup refuses when app mutation
-  write-gate absent; mandatory PG/MinIO/Qdrant allowlists, exclusive green-target
-  creation and verifiable ownership tokens; preflight before mutate; restore/promote separated — **promote/cutover
-  disabled** (no `ops_routing` DDL/migration while capability not retained);
-  exact isolated cleanup verified before report; chronological MinIO events +
-  checked deletes + normalized ordered history equality and byte-for-byte latest objects;
-  JSON Schema `additionalProperties` + symlink reject + `is_relative_to` open;
-  private PGPASSFILE/no password argv; umask 077; encryption or explicit unencrypted
-  dest policy; wrappers propagate failures; no query-ready claim on ready≠200;
-  reproducible `o03-report-from-raw.py`. Evidence: `o03-restore.*`.
-  **Exact gaps:** (1) app mutation write-gate not integrated (consistency backup
-  refused unless `MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=0`); (2) promote/cutover
-  disabled until API consumes durable routing + independent reconcile
-  target-state attestation; (3) encrypted backup destination not exercised
-  (POC `explicit_poc_tmp_only` policy). `consistencyRpoPass` /
-  `queryReadyRtoPass` remain null; windows reported separately.
+- **Status:** In progress — Sol round-3 merge-safety retained. **Write-gate
+  closed in code:** mutation routes (`collections` create/update/delete,
+  `documents` delete/publish/reindex/triage/approve-intake, `uploads`) call
+  `AppState::ensure_mutations_allowed` → `ops_fence::ensure_mutations_allowed`;
+  hermetic
+  `test_app_mutation_write_gate_is_integrated` + live
+  `live_mutation_routes_refuse_when_ops_fence_active` (503 `ops_fence_active`).
+  Drill script now records pass when static scan is green (no longer always-gaps
+  write-gate). Evidence: `o03-restore.*` (raw stamp pre-dates write-gate; see
+  report note). **Exact gaps:** (1) promote/cutover disabled until API consumes
+  durable routing + independent reconcile target-state attestation; (2) encrypted
+  backup destination not exercised (POC `explicit_poc_tmp_only` policy).
+  `consistencyRpoPass` / `queryReadyRtoPass` remain null; windows reported
+  separately. Re-run `o03-bluegreen-restore-drill.sh` on Docker host to refresh
+  raw passes for write-gate.
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, `deploy/scripts/o03-bluegreen-restore-drill.sh`,
