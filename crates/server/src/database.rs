@@ -86,6 +86,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0020_expand_hash_semantics_readiness_ops.sql",
         include_str!("../migrations/0020_expand_hash_semantics_readiness_ops.sql"),
     ),
+    (
+        "0021_expand_audit_intent_outcome.sql",
+        include_str!("../migrations/0021_expand_audit_intent_outcome.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

@@ -1270,6 +1270,18 @@ async fn write_repair_audit(
     .await
 }
 
+/// Correlation id for reconcile audit rows.
+///
+/// The document id already travels in the audit row's `resource_id` and
+/// `metadata`, so it is intentionally omitted here: embedding a 36-char UUID
+/// pushed longer actions (e.g. `reconcile.object_cleanup`, `reconcile.dead_letter_gc`)
+/// past the 64-char ceiling enforced by [`write_audit`], which rejected the row
+/// with `audit_request_id_contains_secret`. Dropping it keeps the id bounded for
+/// every action while preserving traceability through `resource_id`.
+fn reconcile_audit_request_id(action: &str, outcome: &str) -> String {
+    format!("{action}-{outcome}")
+}
+
 async fn write_intent_audit(
     pool: &Pool,
     ctx: &OrgContext,
@@ -1287,7 +1299,7 @@ async fn write_intent_audit(
                 } else {
                     Some(document_id.to_string())
                 };
-                let request_id = format!("{action}-{document_id}-{outcome}");
+                let request_id = reconcile_audit_request_id(action, outcome);
                 write_audit(
                     txn,
                     AuditEvent {
@@ -1350,6 +1362,32 @@ impl ReconciliationError {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn reconcile_audit_request_id_respects_write_audit_bounds() {
+        // Every action/outcome the reconcile paths emit, plus a nil-document
+        // dead-letter run, must produce a request id the audit guard accepts:
+        // <= 64 chars and free of the secret markers `write_audit` rejects.
+        let actions = [
+            "reconcile.repair",
+            "reconcile.object_cleanup",
+            "reconcile.dead_letter_gc",
+            "vector.cleanup_intent",
+        ];
+        for action in actions {
+            for outcome in ["intent", "success", "error"] {
+                let id = reconcile_audit_request_id(action, outcome);
+                assert!(
+                    id.len() <= 64,
+                    "request id {id:?} ({} chars) exceeds the 64-char audit bound",
+                    id.len()
+                );
+                assert!(!id.contains("mh1."));
+                assert!(!id.contains("Bearer "));
+                assert!(!id.starts_with("eyJ"));
+            }
+        }
+    }
 
     #[test]
     fn parses_reconcile_modes() {
