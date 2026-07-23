@@ -725,6 +725,46 @@ async fn make_job_available(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
     .expect("make job available");
 }
 
+/// Drive a convert worker until `convert_job_id` completes, draining any
+/// conversion-cleanup reconcile work enqueued by a prior fault/compensation path.
+/// A fresh [`ConvertWorker`] prefers reconcile on its first `run_once`, so a single
+/// call is not sufficient when cleanup reconciliation was scheduled.
+async fn run_convert_worker_until_completed(
+    pool: &Pool,
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    convert_job_id: Uuid,
+    config: ConvertWorkerConfig,
+) -> ConvertWorkerRun {
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("worker");
+    for round in 0..12 {
+        make_job_available(pool, ctx, convert_job_id).await;
+        let outcome = worker.run_once(ctx).await.expect("worker run");
+        match outcome {
+            ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id => {
+                return outcome;
+            }
+            ConvertWorkerRun::Failed {
+                job_id,
+                terminal: true,
+                ..
+            } if job_id == convert_job_id => {
+                let job = get_job(pool, ctx, convert_job_id).await;
+                panic!("convert job {convert_job_id} dead-lettered on round {round}: {job:?}");
+            }
+            ConvertWorkerRun::NoJob if round + 1 < 12 => continue,
+            other if round + 1 < 12 => {
+                let _ = other;
+                continue;
+            }
+            other => panic!(
+                "convert job {convert_job_id} did not complete within run budget; last={other:?}"
+            ),
+        }
+    }
+    unreachable!("loop bound exhausted");
+}
+
 async fn force_lease_expired(pool: &Pool, ctx: &OrgContext, job_id: Uuid) {
     with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
@@ -1438,14 +1478,16 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         }
 
         make_job_available(&pool, &ctx, job.id).await;
-        let retry_worker = ConvertWorker::new(
-            pool.clone(),
-            storage.clone(),
+        let retry_outcome = run_convert_worker_until_completed(
+            &pool,
+            &storage,
+            &ctx,
+            job.id,
             stub_worker_config(ECHO_INPUT_SCRIPT, 50),
         )
-        .expect("retry worker");
+        .await;
         assert!(matches!(
-            retry_worker.run_once(&ctx).await.expect("retry run"),
+            retry_outcome,
             ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
         ));
         assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
