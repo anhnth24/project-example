@@ -831,6 +831,32 @@ async fn commit_registration_and_finalize(
                 // CAS only object_stored → completed.
                 upload_operations::mark_completed(txn, &fresh, op_id, registered.job_id).await?;
 
+                let request_id = crate::telemetry::CorrelationContext::current()
+                    .and_then(|c| c.request_uuid())
+                    .unwrap_or_else(uuid::Uuid::new_v4)
+                    .to_string();
+                let resource_id = registered.document_id.to_string();
+                audit::record_in_txn(
+                    txn,
+                    &fresh,
+                    AuditRecord {
+                        request_id: &request_id,
+                        action: "document.upload",
+                        resource_type: "document",
+                        resource_id: Some(&resource_id),
+                        outcome: AuditOutcome::Success,
+                        metadata: serde_json::json!({
+                            "reason": "upload_accepted",
+                            "document_id": registered.document_id.to_string(),
+                            "version_id": registered.version_id.to_string(),
+                            "collection_id": collection_id.to_string(),
+                            "format": outcome.canonical_format.as_str(),
+                            "byte_size": outcome.size_bytes as i64,
+                        }),
+                    },
+                )
+                .await?;
+
                 let stable = stable_from_parts(&outcome, &registered);
                 Ok(SagaSuccess {
                     outcome,
@@ -1001,20 +1027,20 @@ async fn register_rows(
     .map_err(DbError::from)?;
 
     let (job_id, created_job) = if outcome.disposition == Disposition::Accepted {
+        let mut payload = JobPayload {
+            document_id: Some(document_id),
+            version_id: Some(version_id),
+            collection_id: Some(collection_id),
+            upload_id: Some(upload_id),
+            ..JobPayload::default()
+        };
+        if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+            crate::telemetry::apply_to_job_payload(&mut payload, &corr);
+        }
         let enqueue = jobs::enqueue_within_txn(
             txn,
             ctx,
-            EnqueueJob::new(
-                JobType::Convert,
-                JobPayload {
-                    document_id: Some(document_id),
-                    version_id: Some(version_id),
-                    collection_id: Some(collection_id),
-                    upload_id: Some(upload_id),
-                    ..JobPayload::default()
-                },
-                format!("convert-{version_id}"),
-            ),
+            EnqueueJob::new(JobType::Convert, payload, format!("convert-{version_id}")),
         )
         .await?;
         (Some(enqueue.job.id), enqueue.created)
@@ -1099,20 +1125,22 @@ pub async fn approve_quarantined_upload(
                 require_permission(&fresh, PERMISSION_QUARANTINE_REVIEW)
                     .map_err(|_| SagaError::PermissionDenied)?;
 
+                let mut payload = JobPayload {
+                    document_id: Some(document_id),
+                    version_id: Some(version_id),
+                    collection_id: Some(collection_id),
+                    upload_id: Some(op.object_id),
+                    ..JobPayload::default()
+                };
+                if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+                    crate::telemetry::apply_to_job_payload(&mut payload, &corr);
+                } else if let Ok(req) = uuid::Uuid::parse_str(&request_id) {
+                    payload.request_id = Some(req);
+                }
                 let enqueue = jobs::enqueue_within_txn(
                     txn,
                     &fresh,
-                    EnqueueJob::new(
-                        JobType::Convert,
-                        JobPayload {
-                            document_id: Some(document_id),
-                            version_id: Some(version_id),
-                            collection_id: Some(collection_id),
-                            upload_id: Some(op.object_id),
-                            ..JobPayload::default()
-                        },
-                        format!("convert-{version_id}"),
-                    ),
+                    EnqueueJob::new(JobType::Convert, payload, format!("convert-{version_id}")),
                 )
                 .await?;
                 upload_operations::set_job_id_and_review(
@@ -1125,6 +1153,25 @@ pub async fn approve_quarantined_upload(
                 )
                 .await?;
                 let resource_id = document_id.to_string();
+                let mut meta = serde_json::Map::new();
+                meta.insert(
+                    "collection_id".into(),
+                    serde_json::json!(collection_id.to_string()),
+                );
+                meta.insert(
+                    "job_id".into(),
+                    serde_json::json!(enqueue.job.id.to_string()),
+                );
+                meta.insert("created".into(), serde_json::json!(enqueue.created));
+                meta.insert(
+                    "document_id".into(),
+                    serde_json::json!(document_id.to_string()),
+                );
+                if let Some(ref text) = reason {
+                    if crate::services::audit::AuditReason::parse(text).is_ok() {
+                        meta.insert("reason".into(), serde_json::json!(text));
+                    }
+                }
                 audit::record_in_txn(
                     txn,
                     &fresh,
@@ -1134,12 +1181,7 @@ pub async fn approve_quarantined_upload(
                         resource_type: "document",
                         resource_id: Some(&resource_id),
                         outcome: AuditOutcome::Success,
-                        metadata: serde_json::json!({
-                            "collectionId": collection_id,
-                            "jobId": enqueue.job.id,
-                            "created": enqueue.created,
-                            "reason": reason,
-                        }),
+                        metadata: serde_json::Value::Object(meta),
                     },
                 )
                 .await?;

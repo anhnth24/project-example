@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::api::{resolve_last_event_id, ApiError, LastEventIdError};
 use crate::auth::middleware::AuthenticatedOrg;
+use crate::auth::permissions::require_permission;
 use crate::db::ask_streams;
 use crate::db::models::AuditOutcome;
 use crate::db::pool::with_org_txn;
@@ -24,7 +25,7 @@ use crate::http::AppState;
 use crate::services::audit;
 use crate::services::qa::ask_stream::{self, AskStreamPrepareError};
 use crate::services::qa::{ask, AskRequest};
-use crate::services::retrieval::{RetrievalError, VersionMode};
+use crate::services::retrieval::{RetrievalError, VersionMode, PERMISSION_QA_QUERY};
 use crate::services::stream_auth;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -184,6 +185,7 @@ async fn ask_stream_route(
         let vector_index = state
             .vector_index()
             .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
+        let question_chars = body.question.len();
         let started = ask_stream::start_ask_stream(
             state.pool(),
             vector_index,
@@ -210,7 +212,7 @@ async fn ask_stream_route(
             AskStreamPrepareError::Database => RouteError::Database(auth.request_id.clone()),
         })?;
         let session_id_str = started.session_id.to_string();
-        let _ = audit::record(
+        audit::record(
             state.pool(),
             &auth.context,
             audit::AuditRecord {
@@ -220,11 +222,13 @@ async fn ask_stream_route(
                 resource_id: Some(&session_id_str),
                 outcome: AuditOutcome::Success,
                 metadata: serde_json::json!({
-                    "streamSessionId": started.session_id,
+                    "stream_session_id": started.session_id.to_string(),
+                    "question_chars": question_chars,
                 }),
             },
         )
-        .await;
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
         (
             started.session_id,
             started.cited_document_ids,
@@ -255,7 +259,35 @@ async fn run_ask(
     auth: &AuthenticatedOrg,
     body: AskBody,
 ) -> Result<crate::services::qa::AskResponse, RouteError> {
+    if require_permission(&auth.context, PERMISSION_QA_QUERY).is_err() {
+        audit::record_deny(
+            state.pool(),
+            &auth.context,
+            &auth.request_id,
+            "ask.query",
+            "ask",
+            None,
+            "permission_denied",
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+        return Err(RouteError::Denied(auth.request_id.clone()));
+    }
     if body.question.trim().is_empty() || body.question.len() > 8_192 {
+        audit::record(
+            state.pool(),
+            &auth.context,
+            audit::AuditRecord {
+                request_id: &auth.request_id,
+                action: "ask.query",
+                resource_type: "ask",
+                resource_id: None,
+                outcome: AuditOutcome::Error,
+                metadata: serde_json::json!({ "reason": "validation_failed" }),
+            },
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
         return Err(RouteError::Validation(
             auth.request_id.clone(),
             "Invalid question",
@@ -266,7 +298,8 @@ async fn run_ask(
     let vector_index = state
         .vector_index()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
-    let response = ask(
+    let question_chars = body.question.len();
+    let response = match ask(
         state.pool(),
         vector_index,
         state.embedder(),
@@ -283,18 +316,63 @@ async fn run_ask(
         },
     )
     .await
-    .map_err(|error| match error {
-        crate::services::qa::AskError::Retrieval(error) => {
-            RouteError::from_retrieval(error, &auth.request_id)
+    {
+        Ok(response) => response,
+        Err(crate::services::qa::AskError::Retrieval(
+            RetrievalError::PermissionDenied | RetrievalError::EmptyScope,
+        )) => {
+            audit::record_deny(
+                state.pool(),
+                &auth.context,
+                &auth.request_id,
+                "ask.query",
+                "ask",
+                None,
+                "permission_denied",
+            )
+            .await
+            .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+            return Err(RouteError::Denied(auth.request_id.clone()));
         }
-        crate::services::qa::AskError::InvalidRequest(message) => {
-            RouteError::Validation(auth.request_id.clone(), message)
+        Err(crate::services::qa::AskError::InvalidRequest(message)) => {
+            audit::record(
+                state.pool(),
+                &auth.context,
+                audit::AuditRecord {
+                    request_id: &auth.request_id,
+                    action: "ask.query",
+                    resource_type: "ask",
+                    resource_id: None,
+                    outcome: AuditOutcome::Error,
+                    metadata: serde_json::json!({ "reason": "validation_failed" }),
+                },
+            )
+            .await
+            .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+            return Err(RouteError::Validation(auth.request_id.clone(), message));
         }
-        crate::services::qa::AskError::Provider(_) => {
-            RouteError::Unavailable(auth.request_id.clone())
+        Err(crate::services::qa::AskError::Provider(_)) => {
+            audit::record(
+                state.pool(),
+                &auth.context,
+                audit::AuditRecord {
+                    request_id: &auth.request_id,
+                    action: "ask.query",
+                    resource_type: "ask",
+                    resource_id: None,
+                    outcome: AuditOutcome::Error,
+                    metadata: serde_json::json!({ "reason": "provider_error" }),
+                },
+            )
+            .await
+            .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+            return Err(RouteError::Unavailable(auth.request_id.clone()));
         }
-    })?;
-    let _ = audit::record(
+        Err(crate::services::qa::AskError::Retrieval(error)) => {
+            return Err(RouteError::from_retrieval(error, &auth.request_id));
+        }
+    };
+    audit::record(
         state.pool(),
         &auth.context,
         audit::AuditRecord {
@@ -305,11 +383,13 @@ async fn run_ask(
             outcome: AuditOutcome::Success,
             metadata: serde_json::json!({
                 "mode": response.mode.as_str(),
-                "citationCount": response.citations.len(),
+                "citation_count": response.citations.len(),
+                "question_chars": question_chars,
             }),
         },
     )
-    .await;
+    .await
+    .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
     Ok(response)
 }
 

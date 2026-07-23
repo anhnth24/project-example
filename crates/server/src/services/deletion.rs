@@ -10,8 +10,8 @@ use tokio::time::Instant as TokioInstant;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
-use crate::auth::session::{write_audit, AuditEvent};
 use crate::db::error::DbError;
+use crate::db::models::AuditOutcome;
 use crate::db::models::{Document, DocumentState, Job, JobStatus};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::{
@@ -20,6 +20,7 @@ use crate::db::{
 use crate::jobs::{
     self, CheckpointPayload, EventPayload, HeartbeatClaim, HeartbeatError, JobError,
 };
+use crate::services::audit::{self, AuditRecord};
 use crate::services::document_state;
 use crate::services::index_signature::collection_name_for_digest;
 use crate::storage::keys::parse_key_for_org;
@@ -109,12 +110,16 @@ pub async fn request_delete(
                         )
                         .await?;
                         let tombstoned = documents::mark_deleted_at(txn, &ctx, document_id).await?;
-                        let payload = validated_event_payload(EventPayload {
-                            job_id: None,
-                            document_id: Some(document_id),
-                            version_id: tombstoned.current_version_id,
-                            outbox_event_id: None,
-                        })?;
+                        let payload = validated_event_payload(
+                            EventPayload {
+                                job_id: None,
+                                document_id: Some(document_id),
+                                version_id: tombstoned.current_version_id,
+                                outbox_event_id: None,
+                                ..EventPayload::default()
+                            }
+                            .with_current_correlation(),
+                        )?;
                         repo::insert_outbox_event(
                             txn,
                             &ctx,
@@ -130,20 +135,23 @@ pub async fn request_delete(
                         )
                         .await?;
                         let resource_id = document_id.to_string();
-                        let request_id = format!("delete-{document_id}");
-                        write_audit(
+                        // Server-minted UUID only — audit_log.request_id is UUID-shaped.
+                        let request_id = crate::telemetry::CorrelationContext::current()
+                            .and_then(|c| c.request_uuid())
+                            .unwrap_or_else(Uuid::new_v4)
+                            .to_string();
+                        audit::record_in_txn(
                             txn,
-                            AuditEvent {
-                                org_id: ctx.org_id(),
-                                actor_user_id: Some(ctx.user_id()),
+                            &ctx,
+                            AuditRecord {
+                                request_id: &request_id,
                                 action: "document.tombstone",
                                 resource_type: "document",
                                 resource_id: Some(&resource_id),
-                                outcome: "success",
-                                request_id: &request_id,
+                                outcome: AuditOutcome::Success,
                                 metadata: json!({
-                                    "document_id": document_id,
-                                    "version_id": tombstoned.current_version_id,
+                                    "document_id": document_id.to_string(),
+                                    "version_id": tombstoned.current_version_id.map(|id| id.to_string()),
                                     "cancelled_writer_jobs": cancelled_count,
                                 }),
                             },
@@ -442,22 +450,29 @@ async fn write_object_cleanup_audit(
         move |txn| {
             Box::pin(async move {
                 let resource_id = document_id.to_string();
-                let request_id = format!("purge-objects-{document_id}-{phase}");
-                write_audit(
+                let request_id = crate::telemetry::CorrelationContext::current()
+                    .and_then(|c| c.request_uuid())
+                    .unwrap_or_else(Uuid::new_v4)
+                    .to_string();
+                let object_count = object_keys.len() as i64;
+                let typed_outcome = if outcome == "error" {
+                    AuditOutcome::Error
+                } else {
+                    AuditOutcome::Success
+                };
+                audit::record_in_txn(
                     txn,
-                    AuditEvent {
-                        org_id: ctx.org_id(),
-                        actor_user_id: Some(ctx.user_id()),
+                    &ctx,
+                    AuditRecord {
+                        request_id: &request_id,
                         action: "document.purge_objects",
                         resource_type: "document",
                         resource_id: Some(&resource_id),
-                        outcome,
-                        request_id: &request_id,
+                        outcome: typed_outcome,
                         metadata: json!({
-                            "document_id": document_id,
+                            "document_id": document_id.to_string(),
                             "phase": phase,
-                            "object_count": object_keys.len(),
-                            "object_keys": object_keys,
+                            "object_count": object_count,
                         }),
                     },
                 )
@@ -525,21 +540,23 @@ async fn finalize_purged(
                     .ok_or(DeletionError::Job(JobError::LeaseLost))?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
                 let resource_id = document_id.to_string();
-                let request_id = format!("purge-{job_id}");
-                write_audit(
+                let request_id = crate::telemetry::CorrelationContext::current()
+                    .and_then(|c| c.request_uuid())
+                    .unwrap_or_else(Uuid::new_v4)
+                    .to_string();
+                audit::record_in_txn(
                     txn,
-                    AuditEvent {
-                        org_id: ctx.org_id(),
-                        actor_user_id: Some(ctx.user_id()),
+                    &ctx,
+                    AuditRecord {
+                        request_id: &request_id,
                         action: "document.purge",
                         resource_type: "document",
                         resource_id: Some(&resource_id),
-                        outcome: "success",
-                        request_id: &request_id,
+                        outcome: AuditOutcome::Success,
                         metadata: json!({
-                            "document_id": document_id,
-                            "job_id": job_id,
-                            "deleted_chunks": deleted_chunks,
+                            "document_id": document_id.to_string(),
+                            "job_id": job_id.to_string(),
+                            "deleted_chunks": deleted_chunks as i64,
                         }),
                     },
                 )
@@ -573,12 +590,7 @@ async fn write_job_succeeded_event(
     ctx: &OrgContext,
     job: &Job,
 ) -> Result<(), DeletionError> {
-    let payload = validated_event_payload(EventPayload {
-        job_id: Some(job.id),
-        document_id: job.document_id,
-        version_id: job.version_id,
-        outbox_event_id: None,
-    })?;
+    let payload = validated_event_payload(EventPayload::for_job(job))?;
     repo::append_event_and_outbox(
         txn,
         ctx,

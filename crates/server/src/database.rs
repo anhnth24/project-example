@@ -106,6 +106,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0025_backfill_event_log_ids_ask_stream_ops.sql",
         include_str!("../migrations/0025_backfill_event_log_ids_ask_stream_ops.sql"),
     ),
+    (
+        "0026_expand_audit_append_only.sql",
+        include_str!("../migrations/0026_expand_audit_append_only.sql"),
+    ),
+    (
+        "0027_expand_migrator_app_grants.sql",
+        include_str!("../migrations/0027_expand_migrator_app_grants.sql"),
+    ),
+    (
+        "0028_expand_audit_ownership_migrator.sql",
+        include_str!("../migrations/0028_expand_audit_ownership_migrator.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -178,7 +190,7 @@ async fn apply_all_migrations(client: &mut Client) -> Result<(), String> {
                 transaction
                     .batch_execute(source)
                     .await
-                    .map_err(|error| format!("cannot apply migration {name}: {error}"))?;
+                    .map_err(|error| format!("cannot apply migration {name}: {error:?}"))?;
                 transaction
                     .execute(
                         "INSERT INTO markhand_schema_migrations (name, checksum) VALUES ($1, $2)",

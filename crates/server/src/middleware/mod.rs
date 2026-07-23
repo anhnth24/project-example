@@ -90,12 +90,39 @@ pub fn state_limiter(state: &Arc<AppState>) -> &rate_limit::RateLimiter {
     state.rate_limiter()
 }
 
+/// Optional client-supplied correlation hint (never used as durable audit request id).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientRequestId(pub String);
+
 pub async fn inject_request_id(
     state: axum::extract::State<Arc<AppState>>,
     mut request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
+    // Always mint the internal request id. Client X-Request-Id is advisory only.
     let request_id = Uuid::new_v4().to_string();
+    if let Some(client_id) = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(validate_request_id)
+    {
+        request.extensions_mut().insert(ClientRequestId(client_id));
+    }
+    let inbound_traceparent = request
+        .headers()
+        .get("traceparent")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| crate::telemetry::validate_traceparent(value).is_ok())
+        .map(|value| value.to_ascii_lowercase());
+    // Parent context from inbound traceparent; child span id is minted per request.
+    let correlation = if let Some(ref tp) = inbound_traceparent {
+        crate::telemetry::CorrelationContext::child_of(request_id.clone(), tp)
+            .unwrap_or_else(|| crate::telemetry::CorrelationContext::new(request_id.clone()))
+    } else {
+        crate::telemetry::CorrelationContext::new(request_id.clone())
+    };
     let ip = match resolve_client_ip(&request, state.trusted_proxies()) {
         Ok(ip) => ip,
         Err(ClientIpError::InvalidForwardedFor) => {
@@ -124,13 +151,71 @@ pub async fn inject_request_id(
         .extensions_mut()
         .insert(RequestId(request_id.clone()));
     request.extensions_mut().insert(ClientIp(ip));
-    let mut response = next.run(request).await;
-    if let Ok(value) = HeaderValue::from_str(&request_id) {
+    request.extensions_mut().insert(correlation.clone());
+    let route = classify_route(request.uri().path());
+    let started = std::time::Instant::now();
+    let response = crate::telemetry::scope(correlation.clone(), async move {
+        let mut response = next.run(request).await;
+        let status_class = match response.status().as_u16() {
+            100..=199 => "1xx",
+            200..=299 => "2xx",
+            300..=399 => "3xx",
+            400..=499 => "4xx",
+            _ => "5xx",
+        };
+        let elapsed = started.elapsed();
+        crate::telemetry::record_http_request(&route, status_class, elapsed);
+        // Export the correlation span id as the SERVER root (children parent to it).
+        crate::telemetry::complete_current_span("api.request", "SERVER", status_class, elapsed);
+        if let Ok(value) = HeaderValue::from_str(&request_id) {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static(REQUEST_ID_HEADER), value);
+        }
+        if let Some(tp) = correlation.traceparent.as_deref() {
+            if let Ok(value) = HeaderValue::from_str(tp) {
+                response
+                    .headers_mut()
+                    .insert(HeaderName::from_static("traceparent"), value);
+            }
+        }
         response
-            .headers_mut()
-            .insert(HeaderName::from_static(REQUEST_ID_HEADER), value);
-    }
+    })
+    .await;
     response
+}
+
+/// Accept only canonical UUID strings (rejects opaque/secret-like values).
+pub fn validate_request_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() > 36 {
+        return None;
+    }
+    Uuid::parse_str(trimmed).ok().map(|id| id.to_string())
+}
+
+fn classify_route(path: &str) -> String {
+    // Keep cardinality bounded: collapse UUID/id segments.
+    let mut parts = Vec::new();
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        if looks_like_id(segment) {
+            parts.push("{id}");
+        } else {
+            parts.push(segment);
+        }
+    }
+    if parts.is_empty() {
+        "root".into()
+    } else {
+        parts.join(".")
+    }
+}
+
+fn looks_like_id(segment: &str) -> bool {
+    if segment.len() >= 32 && segment.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        return true;
+    }
+    uuid::Uuid::parse_str(segment).is_ok()
 }
 
 /// Baseline IP rate limit for `/api/v1/*` except health probes.
@@ -140,7 +225,7 @@ pub async fn baseline_ip_rate_limit(
     next: Next,
 ) -> Response<Body> {
     let path = request.uri().path();
-    if path.starts_with("/api/v1/health/") {
+    if path.starts_with("/api/v1/health/") || path == "/metrics" {
         return next.run(request).await;
     }
     if !path.starts_with("/api/v1/") {

@@ -256,6 +256,8 @@ pub async fn hybrid_search(
 ) -> Result<RetrievalResponse, RetrievalError> {
     require_mode_permissions(ctx, &request.mode)?;
     validate_request(&request)?;
+    // Real nested lifecycle: local children parent to this exported INTERNAL span.
+    let retrieval_span = crate::telemetry::start_span("retrieval", "INTERNAL");
     let scope = resolve_scope(ctx, request.collection_ids.as_ref())?;
     let collection_ids: Vec<Uuid> = scope.collection_ids.iter().copied().collect();
 
@@ -270,15 +272,40 @@ pub async fn hybrid_search(
     let prepared = PreparedQuery::new(&request.query);
     let mut warnings = Vec::new();
     let runtime_plan = embedder.map(ApprovedEmbeddingRuntime::plan);
+    let embed_started = std::time::Instant::now();
     let query_vector = match embedder {
         Some(runtime) => {
             match with_timeout(EMBED_TIMEOUT, runtime.embed(&[request.query.clone()])).await {
-                Ok(Ok(mut vectors)) => vectors.pop().filter(|vector| !vector.is_empty()),
+                Ok(Ok(mut vectors)) => {
+                    let elapsed = embed_started.elapsed();
+                    crate::telemetry::record_retrieval_leg("embedding", "ok", elapsed);
+                    if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+                        crate::telemetry::emit_span(
+                            "retrieval.embedding",
+                            &corr.request_id,
+                            &corr.trace_id,
+                            "client",
+                            "ok",
+                            elapsed,
+                        );
+                    }
+                    vectors.pop().filter(|vector| !vector.is_empty())
+                }
                 Ok(Err(_)) => {
+                    crate::telemetry::record_retrieval_leg(
+                        "embedding",
+                        "error",
+                        embed_started.elapsed(),
+                    );
                     warnings.push("Embedding provider error; using FTS-only retrieval.".into());
                     None
                 }
                 Err(_) => {
+                    crate::telemetry::record_retrieval_leg(
+                        "embedding",
+                        "error",
+                        embed_started.elapsed(),
+                    );
                     warnings.push("Embedding timed out; using FTS-only retrieval.".into());
                     None
                 }
@@ -296,7 +323,8 @@ pub async fn hybrid_search(
     let leg_limit = LEG_CANDIDATE_LIMIT.max(request.limit);
 
     let lexical_future = async {
-        with_timeout(
+        let started = std::time::Instant::now();
+        let result = with_timeout(
             LEG_TIMEOUT,
             fts_leg::search_lexical(
                 pool,
@@ -307,11 +335,13 @@ pub async fn hybrid_search(
                 leg_limit,
             ),
         )
-        .await
+        .await;
+        (result, started.elapsed())
     };
 
     let vector_future = async {
-        match query_vector.as_deref() {
+        let started = std::time::Instant::now();
+        let result = match query_vector.as_deref() {
             Some(vector) => {
                 with_timeout(
                     LEG_TIMEOUT,
@@ -331,25 +361,55 @@ pub async fn hybrid_search(
                 .await
             }
             None => Ok(Ok(Vec::new())),
-        }
+        };
+        (result, started.elapsed())
     };
 
-    let (lexical_result, vector_result) = tokio::join!(lexical_future, vector_future);
+    let ((lexical_result, fts_elapsed), (vector_result, vector_elapsed)) =
+        tokio::join!(lexical_future, vector_future);
 
     let mut lexical_failed = false;
     let mut vector_failed = false;
     let mut lexical = match lexical_result {
-        Ok(Ok(rows)) => fts_leg::filter_lexical_in_scope(&collection_ids, rows),
+        Ok(Ok(rows)) => {
+            crate::telemetry::record_retrieval_leg("fts", "ok", fts_elapsed);
+            if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+                crate::telemetry::emit_span(
+                    "retrieval.fts",
+                    &corr.request_id,
+                    &corr.trace_id,
+                    "internal",
+                    "ok",
+                    fts_elapsed,
+                );
+            }
+            fts_leg::filter_lexical_in_scope(&collection_ids, rows)
+        }
         Ok(Err(_)) | Err(_) => {
             lexical_failed = true;
+            crate::telemetry::record_retrieval_leg("fts", "error", fts_elapsed);
             warnings.push("FTS leg unavailable; continuing with vector-only retrieval.".into());
             Vec::new()
         }
     };
     let mut vector_candidates = match vector_result {
-        Ok(Ok(rows)) => rows,
+        Ok(Ok(rows)) => {
+            crate::telemetry::record_retrieval_leg("vector", "ok", vector_elapsed);
+            if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+                crate::telemetry::emit_span(
+                    "retrieval.vector",
+                    &corr.request_id,
+                    &corr.trace_id,
+                    "internal",
+                    "ok",
+                    vector_elapsed,
+                );
+            }
+            rows
+        }
         Ok(Err(_)) | Err(_) => {
             vector_failed = true;
+            crate::telemetry::record_retrieval_leg("vector", "error", vector_elapsed);
             warnings.push("Vector leg unavailable; continuing with FTS-only retrieval.".into());
             Vec::new()
         }
@@ -358,6 +418,9 @@ pub async fn hybrid_search(
     // One-leg outage / timeout is graceful; only fail when every attempted leg errored.
     let vector_attempted = query_vector.is_some();
     if lexical_failed && (vector_failed || !vector_attempted) {
+        if let Some(span) = retrieval_span {
+            span.end("error");
+        }
         return Err(RetrievalError::BothLegsFailed);
     }
 
@@ -416,6 +479,9 @@ pub async fn hybrid_search(
     let _anchor: f32 = VECTOR_WEIGHT;
     debug_assert!((_anchor - 0.55).abs() < f32::EPSILON);
 
+    if let Some(span) = retrieval_span {
+        span.end("ok");
+    }
     Ok(RetrievalResponse {
         hits,
         warnings,

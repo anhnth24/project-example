@@ -422,6 +422,7 @@ async fn enqueue_and_outbox_are_atomic_and_rollback_together() {
         document_id: None,
         version_id: None,
         outbox_event_id: None,
+        ..Default::default()
     }
     .to_json()
     .expect("event payload");
@@ -1180,6 +1181,7 @@ async fn concurrent_event_appends_are_per_org_gapless_and_unique() {
                     document_id: None,
                     version_id: None,
                     outbox_event_id: None,
+                    ..Default::default()
                 },
             )
             .await

@@ -129,21 +129,28 @@ pub fn spawn_quarantine_put(
     declared_content_type: Option<String>,
     identity: Option<QuarantineIdentity>,
 ) -> tokio::task::JoinHandle<Result<QuarantinePutResult, QuarantinePutError>> {
+    // Capture correlation before spawn — task-locals do not cross join boundaries.
+    let corr = crate::telemetry::CorrelationContext::current().unwrap_or_else(|| {
+        crate::telemetry::CorrelationContext::new(uuid::Uuid::new_v4().to_string())
+    });
     tokio::spawn(async move {
-        match validate_and_quarantine_with_identity(
-            &org,
-            &storage,
-            &limits,
-            streamed,
-            declared_filename.as_deref(),
-            declared_content_type.as_deref(),
-            identity,
-        )
+        crate::telemetry::scope(corr, async {
+            match validate_and_quarantine_with_identity(
+                &org,
+                &storage,
+                &limits,
+                streamed,
+                declared_filename.as_deref(),
+                declared_content_type.as_deref(),
+                identity,
+            )
+            .await
+            {
+                Ok(outcome) => Ok(QuarantinePutResult { outcome }),
+                Err(error) => Err(QuarantinePutError::Upload(error)),
+            }
+        })
         .await
-        {
-            Ok(outcome) => Ok(QuarantinePutResult { outcome }),
-            Err(error) => Err(QuarantinePutError::Upload(error)),
-        }
     })
 }
 

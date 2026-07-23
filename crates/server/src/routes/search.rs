@@ -14,11 +14,14 @@ use uuid::Uuid;
 
 use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
+use crate::auth::permissions::require_permission;
 use crate::db::models::AuditOutcome;
 use crate::http::AppState;
 use crate::services::audit;
 use crate::services::citation::pins_from_hits;
-use crate::services::retrieval::{hybrid_search, RetrievalError, RetrievalRequest, VersionMode};
+use crate::services::retrieval::{
+    hybrid_search, RetrievalError, RetrievalRequest, VersionMode, PERMISSION_QA_QUERY,
+};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/search", post(search))
@@ -87,7 +90,35 @@ async fn search(
     .map_err(RouteError::RateLimited)?;
     crate::routes::rate_limit_guard::check_route(&state, "search", &ip, &auth.request_id)
         .map_err(RouteError::RateLimited)?;
+    if require_permission(&auth.context, PERMISSION_QA_QUERY).is_err() {
+        audit::record_deny(
+            state.pool(),
+            &auth.context,
+            &auth.request_id,
+            "search.query",
+            "search",
+            None,
+            "permission_denied",
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+        return Err(RouteError::Denied(auth.request_id.clone()));
+    }
     if body.query.trim().is_empty() || body.query.len() > 8_192 {
+        audit::record(
+            state.pool(),
+            &auth.context,
+            audit::AuditRecord {
+                request_id: &auth.request_id,
+                action: "search.query",
+                resource_type: "search",
+                resource_id: None,
+                outcome: AuditOutcome::Error,
+                metadata: serde_json::json!({ "reason": "validation_failed" }),
+            },
+        )
+        .await
+        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
         return Err(RouteError::Validation(
             auth.request_id.clone(),
             "Invalid query",
@@ -101,7 +132,9 @@ async fn search(
     let collection_ids = body
         .collection_ids
         .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
-    let response = hybrid_search(
+    let query_chars = body.query.len();
+    let limit = body.limit.clamp(1, 100);
+    let response = match hybrid_search(
         state.pool(),
         vector_index,
         state.embedder(),
@@ -110,14 +143,31 @@ async fn search(
             query: body.query,
             collection_ids,
             mode,
-            limit: body.limit.clamp(1, 100),
+            limit,
             conflict_ids: body.conflict_ids,
         },
     )
     .await
-    .map_err(|error| RouteError::from_retrieval(error, &auth.request_id))?;
+    {
+        Ok(response) => response,
+        Err(RetrievalError::PermissionDenied | RetrievalError::EmptyScope) => {
+            audit::record_deny(
+                state.pool(),
+                &auth.context,
+                &auth.request_id,
+                "search.query",
+                "search",
+                None,
+                "permission_denied",
+            )
+            .await
+            .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+            return Err(RouteError::Denied(auth.request_id.clone()));
+        }
+        Err(error) => return Err(RouteError::from_retrieval(error, &auth.request_id)),
+    };
     let citations = pins_from_hits(auth.context.org_id(), &response.hits);
-    let _ = audit::record(
+    audit::record(
         state.pool(),
         &auth.context,
         audit::AuditRecord {
@@ -126,10 +176,15 @@ async fn search(
             resource_type: "search",
             resource_id: None,
             outcome: AuditOutcome::Success,
-            metadata: serde_json::json!({ "hitCount": response.hits.len() }),
+            metadata: serde_json::json!({
+                "hit_count": response.hits.len(),
+                "query_chars": query_chars,
+                "limit": limit as i64,
+            }),
         },
     )
-    .await;
+    .await
+    .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
     let hits: Vec<serde_json::Value> = response
         .hits
         .iter()

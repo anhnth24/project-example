@@ -106,7 +106,39 @@ impl EmbeddingWorker {
         let Some(job) = jobs.into_iter().next() else {
             return Ok(EmbeddingWorkerRun::NoJob);
         };
-        self.process_claimed_job(ctx, job).await
+        let started = std::time::Instant::now();
+        let payload = jobs::decode_job_payload(job.payload_version, job.payload.clone()).ok();
+        let corr = payload
+            .as_ref()
+            .map(|payload| {
+                crate::telemetry::from_job_payload(
+                    job.id,
+                    payload,
+                    crate::telemetry::WorkerIds {
+                        org_id: Some(ctx.org_id()),
+                        actor_id: Some(ctx.user_id()),
+                        index_signature: None,
+                    },
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::telemetry::CorrelationContext::new(uuid::Uuid::new_v4().to_string())
+            });
+        crate::telemetry::scope(corr.clone(), async {
+            let result = self.process_claimed_job(ctx, job).await;
+            let outcome = match &result {
+                Ok(EmbeddingWorkerRun::Completed { .. }) => "success",
+                Ok(EmbeddingWorkerRun::LeaseLost { .. }) => "retry",
+                Ok(EmbeddingWorkerRun::Failed { .. }) => "failed",
+                Ok(EmbeddingWorkerRun::NoJob) => "idle",
+                Err(_) => "error",
+            };
+            let elapsed = started.elapsed();
+            crate::telemetry::record_embedding_batch(outcome, elapsed);
+            crate::telemetry::complete_current_span("worker.embed", "CONSUMER", outcome, elapsed);
+            result
+        })
+        .await
     }
 
     pub async fn process_claimed_job(

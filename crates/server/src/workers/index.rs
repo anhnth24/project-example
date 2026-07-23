@@ -155,11 +155,52 @@ impl IndexWorker {
             )
             .await?;
             if let Some(job) = jobs.into_iter().next() {
-                return if job.job_type == JobType::LifecycleRefresh {
-                    self.process_lifecycle_job(ctx, job).await
-                } else {
-                    self.process_claimed_job(ctx, job).await
-                };
+                let started = std::time::Instant::now();
+                let payload =
+                    jobs::decode_job_payload(job.payload_version, job.payload.clone()).ok();
+                let corr = payload
+                    .as_ref()
+                    .map(|payload| {
+                        crate::telemetry::from_job_payload(
+                            job.id,
+                            payload,
+                            crate::telemetry::WorkerIds {
+                                org_id: Some(ctx.org_id()),
+                                actor_id: Some(ctx.user_id()),
+                                index_signature: self.approved_signature.clone(),
+                            },
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        crate::telemetry::CorrelationContext::new(uuid::Uuid::new_v4().to_string())
+                    });
+                let is_lifecycle = job.job_type == JobType::LifecycleRefresh;
+                let result = crate::telemetry::scope(corr.clone(), async {
+                    let result = if is_lifecycle {
+                        self.process_lifecycle_job(ctx, job).await
+                    } else {
+                        self.process_claimed_job(ctx, job).await
+                    };
+                    let outcome = match &result {
+                        Ok(IndexWorkerRun::Completed { .. }) => "success",
+                        Ok(IndexWorkerRun::Failed { .. }) => "failed",
+                        Ok(IndexWorkerRun::LeaseLost { .. }) => "retry",
+                        Ok(IndexWorkerRun::NoJob) => "idle",
+                        Err(_) => "error",
+                    };
+                    let elapsed = started.elapsed();
+                    let span_name = if is_lifecycle {
+                        "worker.lifecycle"
+                    } else {
+                        "worker.index"
+                    };
+                    crate::telemetry::complete_current_span(
+                        span_name, "CONSUMER", outcome, elapsed,
+                    );
+                    result
+                })
+                .await;
+                return result;
             }
         }
         Ok(IndexWorkerRun::NoJob)

@@ -53,6 +53,9 @@ pub struct JobDto {
     pub attempts: i32,
     pub document_id: Option<Uuid>,
     pub version_id: Option<Uuid>,
+    /// Server-minted request correlation id from the job payload (O01), when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,

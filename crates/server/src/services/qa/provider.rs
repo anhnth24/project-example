@@ -92,13 +92,28 @@ pub enum ChatProvider {
 
 impl ChatProvider {
     pub async fn complete(&self, messages: &GroundedMessages) -> Result<String, ProviderError> {
-        match self {
+        let started = std::time::Instant::now();
+        let result = match self {
             Self::OpenAi(provider) => provider.complete(messages).await,
             Self::Static(provider) => Ok(provider.answer.clone()),
             Self::StreamingStatic(provider) => Ok(provider.tokens.join("")),
             Self::Failing => Err(ProviderError::Transport),
             Self::Timeout => Err(ProviderError::Timeout),
+        };
+        let outcome = if result.is_ok() { "ok" } else { "error" };
+        let elapsed = started.elapsed();
+        crate::telemetry::record_provider_call("chat", outcome, elapsed);
+        if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+            crate::telemetry::emit_span(
+                "provider.chat",
+                &corr.request_id,
+                &corr.trace_id,
+                "client",
+                outcome,
+                elapsed,
+            );
         }
+        result
     }
 
     /// Incremental token stream. Cancel drops the upstream HTTP body/reader.
@@ -107,7 +122,8 @@ impl ChatProvider {
         messages: &GroundedMessages,
         cancel: StreamCancel,
     ) -> Result<mpsc::Receiver<Result<String, ProviderError>>, ProviderError> {
-        match self {
+        let started = std::time::Instant::now();
+        let result = match self {
             Self::OpenAi(provider) => provider.stream_tokens(messages, cancel).await,
             Self::Static(provider) => {
                 Ok(spawn_chunk_stream(tokenize_answer(&provider.answer), cancel).await)
@@ -117,7 +133,10 @@ impl ChatProvider {
             }
             Self::Failing => Err(ProviderError::Transport),
             Self::Timeout => Err(ProviderError::Timeout),
-        }
+        };
+        let outcome = if result.is_ok() { "ok" } else { "error" };
+        crate::telemetry::record_provider_call("chat_stream", outcome, started.elapsed());
+        result
     }
 
     pub fn answer_mode(&self) -> AnswerMode {

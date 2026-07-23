@@ -441,6 +441,7 @@ async fn seed_converted_document(
                     document_id: Some(document_id),
                     version_id: Some(version_id),
                     outbox_event_id: None,
+                    ..Default::default()
                 }
                 .to_json()
                 .expect("event payload");
@@ -591,6 +592,7 @@ async fn seed_promoted_current_version(
                     document_id: Some(document_id),
                     version_id: Some(version_id),
                     outbox_event_id: None,
+                    ..Default::default()
                 }
                 .to_json()
                 .expect("event payload");
@@ -1039,6 +1041,7 @@ async fn insert_duplicate_index_outbox(env: &LiveEnv, document_id: Uuid, version
                     document_id: Some(document_id),
                     version_id: Some(version_id),
                     outbox_event_id: None,
+                    ..Default::default()
                 }
                 .to_json()
                 .expect("event payload");

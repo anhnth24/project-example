@@ -727,6 +727,28 @@ pub enum AuditOutcome {
     Success,
     Deny,
     Error,
+    Intent,
+}
+
+impl AuditOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Deny => "deny",
+            Self::Error => "error",
+            Self::Intent => "intent",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "success" => Ok(Self::Success),
+            "deny" => Ok(Self::Deny),
+            "error" => Ok(Self::Error),
+            "intent" => Ok(Self::Intent),
+            other => Err(format!("unknown audit outcome: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

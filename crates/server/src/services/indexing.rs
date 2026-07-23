@@ -80,10 +80,14 @@ impl jobs::OutboxSink for IndexingOutboxSink {
                             .as_input_for_collection(Some(document.collection_id)),
                     )
                     .await?;
+                    // Inherit durable correlation from the outbox event (relay
+                    // may run outside a job scope — task-local alone is insufficient).
                     let job_payload = JobPayload {
                         document_id: Some(document_id),
                         version_id: Some(version_id),
                         index_metadata_id: Some(metadata.id),
+                        request_id: payload.request_id,
+                        traceparent: payload.traceparent.clone(),
                         ..JobPayload::default()
                     };
                     jobs::enqueue_within_txn(
@@ -107,6 +111,8 @@ impl jobs::OutboxSink for IndexingOutboxSink {
                     })?;
                     let job_payload = JobPayload {
                         document_id: Some(document_id),
+                        request_id: payload.request_id,
+                        traceparent: payload.traceparent.clone(),
                         ..JobPayload::default()
                     };
                     jobs::enqueue_within_txn(
@@ -176,13 +182,7 @@ async fn append_outbox_published(
     if let Some(existing) = repo::find_outbox_published_event(txn, ctx, event.id).await? {
         return Ok(existing);
     }
-    let payload = EventPayload {
-        job_id: event.job_id,
-        document_id: None,
-        version_id: None,
-        outbox_event_id: Some(event.id),
-    }
-    .to_json()?;
+    let payload = EventPayload::for_outbox(event).to_json()?;
     let payload = repo::ValidatedEventPayload::new(payload)
         .map_err(|error| JobError::InvalidPayload(error.to_string()))?;
     repo::append_event_log(
@@ -906,12 +906,7 @@ async fn write_job_succeeded_event(
     ctx: &OrgContext,
     job: &Job,
 ) -> Result<(), IndexingError> {
-    let payload = validated_event_payload(EventPayload {
-        job_id: Some(job.id),
-        document_id: job.document_id,
-        version_id: job.version_id,
-        outbox_event_id: None,
-    })?;
+    let payload = validated_event_payload(EventPayload::for_job(job))?;
     repo::append_event_and_outbox(
         txn,
         ctx,

@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::Duration;
 
 use fileconv_server::auth::context::OrgContext;
@@ -21,6 +22,8 @@ use uuid::Uuid;
 
 const RECLAIM_LIMIT: u32 = 32;
 const RECLAIM_BACKOFF: Duration = Duration::from_secs(1);
+const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const DEFAULT_SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
 
 #[tokio::main]
 async fn main() {
@@ -58,14 +61,17 @@ async fn main() {
                 Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
             }
         }
-        Ok(config) => match fileconv_server::state::RuntimeState::from_config(config) {
-            Ok(state) => {
-                if let Err(error) = run_worker(state).await {
-                    exit_with_error(error);
+        Ok(config) => {
+            fileconv_server::telemetry::init(config.telemetry());
+            match fileconv_server::state::RuntimeState::from_config(config) {
+                Ok(state) => {
+                    if let Err(error) = run_worker(state).await {
+                        exit_with_error(error);
+                    }
                 }
+                Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
             }
-            Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
-        },
+        }
         Err(error) => {
             exit_with_error(format!("invalid worker configuration: {error}"));
         }
@@ -171,30 +177,29 @@ async fn run_convert_worker(
     }
     let worker = ConvertWorker::new(pool.clone(), storage, config)
         .map_err(|error| format!("converter worker initialization failed: {error}"))?;
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("fileconv-worker: shutdown requested");
-                break;
-            }
-            result = async {
+    run_bounded_claim_loop(
+        "convert",
+        || {
+            let pool = pool.clone();
+            let ctx = ctx.clone();
+            let worker = worker.clone();
+            async move {
                 reclaim_expired_leases(&pool, &ctx).await;
-                worker.run_once(&ctx).await
-            } => {
-                match result {
-                    Ok(fileconv_server::workers::convert::ConvertWorkerRun::NoJob) => {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
-                    Err(error) => {
-                        eprintln!("fileconv-worker: convert worker error: {error}");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                }
+                let _ = fileconv_server::jobs::observe_queue_metrics(&pool).await;
+                worker
+                    .run_once(&ctx)
+                    .await
+                    .map_err(|error| error.to_string())
             }
-        }
-    }
-    Ok(())
+        },
+        |outcome| {
+            matches!(
+                outcome,
+                fileconv_server::workers::convert::ConvertWorkerRun::NoJob
+            )
+        },
+    )
+    .await
 }
 
 async fn run_index_worker(
@@ -238,33 +243,27 @@ async fn run_index_worker(
         IndexingOutboxSink::new(worker.embedding_plan())
             .map_err(|error| format!("index worker generation setup failed: {error}"))?,
     );
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("fileconv-worker: shutdown requested");
-                break;
-            }
-            result = async {
+    run_bounded_claim_loop(
+        "index",
+        || {
+            let pool = pool.clone();
+            let ctx = ctx.clone();
+            let worker = worker.clone();
+            let sink = sink.clone();
+            async move {
                 reclaim_expired_leases(&pool, &ctx).await;
                 jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
                     .await
                     .map_err(|error| error.to_string())?;
-                worker.run_once(&ctx).await.map_err(|error| error.to_string())
-            } => {
-                match result {
-                    Ok(IndexWorkerRun::NoJob) => {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
-                    Err(error) => {
-                        eprintln!("fileconv-worker: index worker error: {error}");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                }
+                worker
+                    .run_once(&ctx)
+                    .await
+                    .map_err(|error| error.to_string())
             }
-        }
-    }
-    Ok(())
+        },
+        |outcome| matches!(outcome, IndexWorkerRun::NoJob),
+    )
+    .await
 }
 
 async fn run_delete_worker(
@@ -303,33 +302,27 @@ async fn run_delete_worker(
         IndexingOutboxSink::new(&embedding_plan)
             .map_err(|error| format!("delete worker outbox sink failed: {error}"))?,
     );
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("fileconv-worker: shutdown requested");
-                break;
-            }
-            result = async {
+    run_bounded_claim_loop(
+        "delete",
+        || {
+            let pool = pool.clone();
+            let ctx = ctx.clone();
+            let worker = worker.clone();
+            let sink = sink.clone();
+            async move {
                 reclaim_expired_leases(&pool, &ctx).await;
                 jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
                     .await
                     .map_err(|error| error.to_string())?;
-                worker.run_once(&ctx).await.map_err(|error| error.to_string())
-            } => {
-                match result {
-                    Ok(DeleteWorkerRun::NoJob) => {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
-                    Err(error) => {
-                        eprintln!("fileconv-worker: delete worker error: {error}");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                }
+                worker
+                    .run_once(&ctx)
+                    .await
+                    .map_err(|error| error.to_string())
             }
-        }
-    }
-    Ok(())
+        },
+        |outcome| matches!(outcome, DeleteWorkerRun::NoJob),
+    )
+    .await
 }
 
 async fn run_reconcile_worker(
@@ -371,33 +364,27 @@ async fn run_reconcile_worker(
         IndexingOutboxSink::new(&embedding_plan)
             .map_err(|error| format!("reconcile worker outbox sink failed: {error}"))?,
     );
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("fileconv-worker: shutdown requested");
-                break;
-            }
-            result = async {
+    run_bounded_claim_loop(
+        "reconcile",
+        || {
+            let pool = pool.clone();
+            let ctx = ctx.clone();
+            let worker = worker.clone();
+            let sink = sink.clone();
+            async move {
                 reclaim_expired_leases(&pool, &ctx).await;
                 jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
                     .await
                     .map_err(|error| error.to_string())?;
-                worker.run_once(&ctx).await.map_err(|error| error.to_string())
-            } => {
-                match result {
-                    Ok(ReconcileWorkerRun::NoJob) => {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
-                    Err(error) => {
-                        eprintln!("fileconv-worker: reconcile worker error: {error}");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
-                }
+                worker
+                    .run_once(&ctx)
+                    .await
+                    .map_err(|error| error.to_string())
             }
-        }
-    }
-    Ok(())
+        },
+        |outcome| matches!(outcome, ReconcileWorkerRun::NoJob),
+    )
+    .await
 }
 
 async fn run_embedding_worker(
@@ -428,28 +415,156 @@ async fn run_embedding_worker(
     .map_err(|error| format!("embedding runtime initialization failed: {error}"))?;
     let worker = EmbeddingWorker::new(pool.clone(), qdrant, config, runtime)
         .map_err(|error| format!("embedding worker initialization failed: {error}"))?;
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                println!("fileconv-worker: shutdown requested");
-                break;
-            }
-            result = async {
+    run_bounded_claim_loop(
+        "embedding",
+        || {
+            let pool = pool.clone();
+            let ctx = ctx.clone();
+            let worker = worker.clone();
+            async move {
                 reclaim_expired_leases(&pool, &ctx).await;
-                worker.run_once(&ctx).await
-            } => {
-                match result {
-                    Ok(EmbeddingWorkerRun::NoJob) => tokio::time::sleep(Duration::from_secs(2)).await,
-                    Ok(outcome) => println!("fileconv-worker: {outcome:?}"),
+                let _ = fileconv_server::jobs::observe_queue_metrics(&pool).await;
+                worker
+                    .run_once(&ctx)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        },
+        |outcome| matches!(outcome, EmbeddingWorkerRun::NoJob),
+    )
+    .await
+}
+
+/// Stop new claims on SIGTERM/Ctrl-C, await the active `run_once` within grace,
+/// then flush OTLP with each HTTP attempt bounded by the remaining deadline.
+async fn run_bounded_claim_loop<F, Fut, T, Idle>(
+    kind: &str,
+    mut cycle: F,
+    is_idle: Idle,
+) -> Result<(), String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, String>> + Send + 'static,
+    T: std::fmt::Debug + Send + 'static,
+    Idle: Fn(&T) -> bool,
+{
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop_tx.send(true);
+    });
+    let grace = shutdown_grace_from_env();
+    let flush_budget = shutdown_flush_from_env();
+
+    loop {
+        if *stop_rx.borrow() {
+            break;
+        }
+        let mut handle = tokio::spawn(cycle());
+        tokio::select! {
+            join = &mut handle => {
+                match join {
+                    Ok(Ok(outcome)) => {
+                        if is_idle(&outcome) {
+                            tokio::select! {
+                                _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                                changed = stop_rx.changed() => {
+                                    let _ = changed;
+                                }
+                            }
+                        } else {
+                            println!("fileconv-worker: {outcome:?}");
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!("fileconv-worker: {kind} worker error: {error}");
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                            changed = stop_rx.changed() => {
+                                let _ = changed;
+                            }
+                        }
+                    }
                     Err(error) => {
-                        eprintln!("fileconv-worker: embedding worker error: {error}");
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        eprintln!("fileconv-worker: {kind} join error: {error}");
                     }
                 }
             }
+            changed = stop_rx.changed() => {
+                let _ = changed;
+                println!(
+                    "fileconv-worker: shutdown requested — stop claim, await active run_once (grace {grace:?})"
+                );
+                match tokio::time::timeout(grace, handle).await {
+                    Ok(Ok(Ok(outcome))) => {
+                        println!("fileconv-worker: active job finished during grace: {outcome:?}");
+                    }
+                    Ok(Ok(Err(error))) => {
+                        eprintln!("fileconv-worker: active job error during grace: {error}");
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!("fileconv-worker: active job join error during grace: {error}");
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "fileconv-worker: grace expired waiting for active run_once; proceeding to flush"
+                        );
+                    }
+                }
+                break;
+            }
         }
     }
+    shutdown_flush_telemetry(flush_budget).await;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    {
+        let terminate = async {
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(mut signal) => {
+                    signal.recv().await;
+                }
+                Err(error) => {
+                    eprintln!("fileconv-worker: cannot register SIGTERM handler: {error}");
+                }
+            }
+        };
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = terminate => {}
+        }
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await;
+}
+
+fn shutdown_grace_from_env() -> Duration {
+    std::env::var("MARKHAND_WORKER_SHUTDOWN_GRACE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SHUTDOWN_GRACE)
+}
+
+fn shutdown_flush_from_env() -> Duration {
+    std::env::var("MARKHAND_WORKER_SHUTDOWN_FLUSH_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SHUTDOWN_FLUSH)
+}
+
+async fn shutdown_flush_telemetry(timeout: Duration) {
+    let flushed = fileconv_server::telemetry::MetricsRegistry::shutdown_flush(timeout).await;
+    if flushed > 0 {
+        println!("fileconv-worker: exporter shutdown flush complete ({flushed} spans)");
+    }
 }
 
 async fn reclaim_expired_leases(pool: &deadpool_postgres::Pool, ctx: &OrgContext) {
@@ -526,4 +641,68 @@ fn env_uuid(name: &str) -> Result<Uuid, String> {
 fn exit_with_error(error: String) -> ! {
     eprintln!("fileconv-worker: {error}");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn stop_claim_awaits_active_cycle_within_grace_then_returns() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let started_c = started.clone();
+        let finished_c = finished.clone();
+        let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+
+        let runner = tokio::spawn(async move {
+            let mut cycles = 0u32;
+            loop {
+                if *stop_rx.borrow() {
+                    break;
+                }
+                let started_c = started_c.clone();
+                let finished_c = finished_c.clone();
+                let mut handle: tokio::task::JoinHandle<Result<&'static str, String>> =
+                    tokio::spawn(async move {
+                        started_c.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        finished_c.fetch_add(1, Ordering::SeqCst);
+                        Ok("done")
+                    });
+                tokio::select! {
+                    join = &mut handle => {
+                        let _ = join;
+                        cycles += 1;
+                        if cycles >= 1 {
+                            // allow outer stop after first claim starts
+                        }
+                    }
+                    changed = stop_rx.changed() => {
+                        let _ = changed;
+                        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Wait until an active cycle is in flight, then stop claiming.
+        for _ in 0..50 {
+            if started.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(started.load(Ordering::SeqCst) >= 1);
+        let _ = stop_tx.send(true);
+        runner.await.expect("runner");
+        assert_eq!(
+            finished.load(Ordering::SeqCst),
+            started.load(Ordering::SeqCst),
+            "active run_once must finish under grace (not cancelled by stop claim)"
+        );
+    }
 }

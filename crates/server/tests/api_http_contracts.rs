@@ -1021,3 +1021,141 @@ async fn live_patch_collection_audit_correlation_and_rollback() {
 
     ephemeral.drop().await;
 }
+
+#[cfg(feature = "test-hooks")]
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + test-hooks"]
+async fn live_reindex_audit_failure_rolls_back_enqueue() {
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let (org, user, token) = seed_http_principal(&pool).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let collection_id = Uuid::new_v4();
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        ["doc.upload", "doc.delete", "qa.query"],
+        [collection_id],
+    )
+    .unwrap();
+    let sha = "a".repeat(64);
+    with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        let sha = sha.clone();
+        move |txn| {
+            Box::pin(async move {
+                collections::insert(
+                    txn,
+                    &ctx,
+                    NewCollection {
+                        id: collection_id,
+                        name: "Reindex Audit",
+                        slug: &format!("reindex-audit-{}", collection_id.simple()),
+                        description: None,
+                        visibility: fileconv_server::db::models::CollectionVisibility::Org,
+                    },
+                )
+                .await?;
+                documents::insert(
+                    txn,
+                    &ctx,
+                    NewDocument {
+                        id: document_id,
+                        collection_id,
+                        title: "Reindex Audit Doc",
+                    },
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO document_versions (
+                        id, org_id, document_id, version_number, publication_state,
+                        is_current, content_sha256, original_object_key, created_by_user_id
+                     ) VALUES ($1, $2, $3, 1, 'published', true, $4, $5, $6)",
+                    &[
+                        &version_id,
+                        &ctx.org_id(),
+                        &document_id,
+                        &sha,
+                        &format!("org/{}/objects/reindex-audit", ctx.org_id()),
+                        &ctx.user_id(),
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "UPDATE documents SET current_version_id = $1, state = 'indexed'
+                     WHERE id = $2 AND org_id = $3",
+                    &[&version_id, &document_id, &ctx.org_id()],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed document for reindex");
+
+    let before_jobs: i64 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM jobs WHERE org_id = $1 AND job_type = 'index'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("count jobs");
+
+    fileconv_server::services::audit::arm_injected_audit_failure();
+    let (status, body, _) = json_request(
+        app,
+        "POST",
+        &format!("/api/v1/documents/{document_id}/reindex"),
+        Some(&token),
+        None,
+        &[("idempotency-key", "reindex-audit-rollback")],
+    )
+    .await;
+    assert!(
+        status.is_server_error()
+            || status == StatusCode::BAD_REQUEST
+            || status == StatusCode::CONFLICT,
+        "injected audit failure must fail reindex: {status} {body}"
+    );
+
+    let after_jobs: i64 = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM jobs WHERE org_id = $1 AND job_type = 'index'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("count jobs after");
+    assert_eq!(
+        after_jobs, before_jobs,
+        "reindex enqueue must roll back when co-committed audit fails"
+    );
+
+    ephemeral.drop().await;
+}

@@ -1,0 +1,126 @@
+{
+  "apiBase": "http://127.0.0.1:8788",
+  "blockers": [
+    "async API\u2192worker\u2192provider canary not opted in (MARKHAND_O01_ASYNC!=1)"
+  ],
+  "checks": {
+    "/api/v1/health/live": {
+      "httpStatus": 200,
+      "passed": true,
+      "requestId": "e11d96e9-0625-41fd-801a-b0e3065522ae"
+    },
+    "/api/v1/health/ready": {
+      "httpStatus": 200,
+      "passed": true,
+      "requestId": "06c80e43-5fde-4ff7-87c9-9b07729ac35e"
+    },
+    "async_api_worker_provider_canary": {
+      "note": "Set MARKHAND_O01_ASYNC=1 with full convert/index/chat stack to close async canary",
+      "passed": false,
+      "status": "not_run"
+    },
+    "cargo_telemetry": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "telemetry",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "passed": true
+    },
+    "http_histogram_emitted": {
+      "httpStatus": 200,
+      "passed": true
+    },
+    "live_app_role_audit": {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "telemetry_audit",
+        "--",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "passed": true
+    },
+    "metrics_scrape": {
+      "bytes": 16210,
+      "canaryHits": [],
+      "forbiddenLabels": [],
+      "hasExportQueueGauge": true,
+      "hasExporter": true,
+      "hasLatencyOrBuild": true,
+      "httpStatus": 200,
+      "passed": true
+    },
+    "negative_proof_fixtures": {
+      "fixtures": {
+        "complete_proofs_exit_0": {
+          "exit": 0,
+          "passed": true
+        },
+        "missing_canonical_kinds": {
+          "exit": 1,
+          "passed": true
+        },
+        "missing_deny_audit": {
+          "exit": 1,
+          "passed": true
+        },
+        "missing_named_spans": {
+          "exit": 1,
+          "passed": true
+        },
+        "missing_parent_graph": {
+          "exit": 1,
+          "passed": true
+        },
+        "missing_same_trace": {
+          "exit": 1,
+          "passed": true
+        }
+      },
+      "passed": true
+    }
+  },
+  "commands": {
+    "cargo_live_o01": [
+      "cargo",
+      "test",
+      "-p",
+      "fileconv-server",
+      "--test",
+      "telemetry_audit",
+      "--",
+      "--ignored",
+      "--nocapture"
+    ],
+    "cargo_telemetry": [
+      "cargo",
+      "test",
+      "-p",
+      "fileconv-server",
+      "telemetry",
+      "--",
+      "--nocapture"
+    ],
+    "evidence": [
+      "python3",
+      "bench/markhand_web/scripts/run_o01_telemetry_evidence.py"
+    ]
+  },
+  "commitStampStrategy": "git_rev_parse_short_head_precommit_may_be_not_run",
+  "generatedAt": "2026-07-23T08:14:32Z",
+  "git": "cf1384d",
+  "issue": "P1B-O01",
+  "status": "incomplete",
+  "version": "cf1384d-dirty"
+}

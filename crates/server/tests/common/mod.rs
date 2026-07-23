@@ -137,9 +137,12 @@ impl DualRoleEphemeralDb {
         admin_on_db
             .batch_execute(
                 "GRANT USAGE ON SCHEMA public TO markhand_app;
+                 REVOKE CREATE ON SCHEMA public FROM markhand_app;
                  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO markhand_app;
                  GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO markhand_app;
-                 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO markhand_app;",
+                 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO markhand_app;
+                 REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_log FROM markhand_app;
+                 GRANT SELECT, INSERT ON TABLE audit_log TO markhand_app;",
             )
             .await
             .expect("grant app role privileges on ephemeral database");
@@ -403,7 +406,8 @@ pub async fn login_tokens(pool: &Pool, email: &str, password: &str) -> (String, 
             email,
             password,
             &AuthRequestMeta {
-                request_id: "req-it".into(),
+                // audit_log_validate_insert requires a UUID request_id.
+                request_id: Uuid::new_v4().to_string(),
             },
         )
         .await

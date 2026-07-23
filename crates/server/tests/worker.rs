@@ -403,6 +403,9 @@ async fn enqueue_convert(
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert-{version_id}"),
         ),
@@ -1390,6 +1393,9 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
                     index_metadata_id: None,
                     cleanup_target_job_id: None,
                     related_version_id: None,
+
+                    request_id: None,
+                    traceparent: None,
                 },
                 format!("convert-fault-{fault:?}-{version_id}"),
             ),
@@ -1580,6 +1586,9 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
             index_metadata_id: None,
             cleanup_target_job_id: None,
             related_version_id: None,
+
+            request_id: None,
+            traceparent: None,
         },
         format!("convert-terminal-cleanup-{version_id}"),
     );
@@ -1682,6 +1691,9 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert-fair-first-{version_id}"),
         ),
@@ -1703,6 +1715,9 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert-fair-second-{version_id}"),
         ),
@@ -1724,6 +1739,9 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert-fair-cleanup-parent-{version_id}"),
         ),
@@ -1748,6 +1766,9 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
                 index_metadata_id: None,
                 cleanup_target_job_id: Some(parent.id),
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert.cleanup:{}", parent.id),
         ),
@@ -1923,6 +1944,9 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert-reclaim-race-{version_id}"),
         ),
@@ -2032,6 +2056,9 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
                 index_metadata_id: None,
                 cleanup_target_job_id: None,
                 related_version_id: None,
+
+                request_id: None,
+                traceparent: None,
             },
             format!("convert-barrier-reclaim-{version_id}"),
         ),
@@ -2773,6 +2800,9 @@ while True:
                     index_metadata_id: None,
                     cleanup_target_job_id: None,
                     related_version_id: None,
+
+                    request_id: None,
+                    traceparent: None,
                 },
                 format!("convert-resource-{name}-{version_id}"),
             ),

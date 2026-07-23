@@ -56,6 +56,9 @@ authorization cache; source ACL snapshots are provenance only.
 
 ## Validation
 
-`fileconv-server::telemetry` supplies field propagation, metric-name/label checks and
-redaction helpers. F-11 is in-memory contract only: durable audit, middleware, exporter,
-dashboard and SIEM integration arrive in later phases.
+`fileconv-server::telemetry` supplies field propagation, metric-name/label checks,
+redaction helpers, Prometheus scrape (`GET /metrics`, `MARKHAND_METRICS_ENABLED`), and a
+bounded OTLP/HTTP export queue (`MARKHAND_OTEL_EXPORTER`, capacity/backpressure drop
+counters). Job payloads carry `request_id` + W3C `traceparent` for async correlation.
+Audit rows are append-only (UPDATE/DELETE/TRUNCATE forbidden) with success|deny|error|intent
+outcomes. Dashboard/SIEM integration remains out of scope for P1B-O01.
