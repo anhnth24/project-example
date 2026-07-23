@@ -560,7 +560,8 @@ def parse_dot_nodes(source: str) -> dict[str, DotNode]:
 def parse_attrs(value: str) -> dict[str, str]:
     attrs: dict[str, str] = {}
     for match in re.finditer(
-        r"([A-Za-z_]\w*)\s*=\s*(?:\"([^\"]*)\"|([A-Za-z_][\w.]*))",
+        r"([A-Za-z_]\w*)\s*=\s*"
+        r"(?:\"([^\"]*)\"|([A-Za-z_][\w.]*|-?(?:\d+(?:\.\d*)?|\.\d+)))",
         value,
     ):
         attrs[match.group(1)] = (
@@ -868,8 +869,19 @@ def validate_logical_edges(
                     f"{database}: logical link {key} {attribute} must be "
                     f"{expected_value!r}, got {attrs.get(attribute)!r}"
                 )
-        if "dashed" not in attrs.get("style", ""):
+        style_tokens = {
+            token.strip() for token in attrs.get("style", "").split(",")
+        }
+        if "dashed" not in style_tokens:
             errors.append(f"{database}: logical link {key} must be dashed")
+        try:
+            penwidth = float(attrs.get("penwidth", "1"))
+        except ValueError:
+            penwidth = float("inf")
+        if "bold" in style_tokens or penwidth > 1:
+            errors.append(
+                f"{database}: logical link {key} must use light dashed routing"
+            )
         label = attrs.get("label", "")
         if "REF" not in label or "ứng dụng duy trì" not in label:
             errors.append(

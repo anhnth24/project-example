@@ -859,49 +859,49 @@ digraph markhand_postgresql {
   collections:id -> upload_operations:collection_id [
     kind="logical", source_table="upload_operations", source_column="collection_id",
     target_table="collections", target_column="id", array="false",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF logic do ứng dụng duy trì · upload_operations.collection_id → collections.id"
   ];
   documents:id -> upload_operations:document_id [
     kind="logical", source_table="upload_operations", source_column="document_id",
     target_table="documents", target_column="id", array="false",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF logic do ứng dụng duy trì · upload_operations.document_id → documents.id"
   ];
   document_versions:id -> upload_operations:version_id [
     kind="logical", source_table="upload_operations", source_column="version_id",
     target_table="document_versions", target_column="id", array="false",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF logic do ứng dụng duy trì · upload_operations.version_id → document_versions.id"
   ];
   jobs:id -> upload_operations:job_id [
     kind="logical", source_table="upload_operations", source_column="job_id",
     target_table="jobs", target_column="id", array="false",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF logic do ứng dụng duy trì · upload_operations.job_id → jobs.id"
   ];
   collections:id -> ask_stream_sessions:collection_ids [
     kind="logical", source_table="ask_stream_sessions", source_column="collection_ids",
     target_table="collections", target_column="id", array="true",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF mảng logic do ứng dụng duy trì · ask_stream_sessions.collection_ids[] → collections.id"
   ];
   documents:id -> ask_stream_sessions:cited_document_ids [
     kind="logical", source_table="ask_stream_sessions", source_column="cited_document_ids",
     target_table="documents", target_column="id", array="true",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF mảng logic do ứng dụng duy trì · ask_stream_sessions.cited_document_ids[] → documents.id"
   ];
   document_versions:id -> ask_stream_sessions:cited_version_ids [
     kind="logical", source_table="ask_stream_sessions", source_column="cited_version_ids",
     target_table="document_versions", target_column="id", array="true",
-    app_maintained="true", style="dashed,bold", color="#B42318",
+    app_maintained="true", style="dashed", penwidth=0.85, color="#C96A62",
     fontcolor="#B42318", arrowtail="none", arrowhead="vee",
     label="REF mảng logic do ứng dụng duy trì · ask_stream_sessions.cited_version_ids[] → document_versions.id"
   ];

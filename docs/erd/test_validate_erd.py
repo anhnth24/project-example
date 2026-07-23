@@ -128,6 +128,46 @@ class ErdValidationTests(unittest.TestCase):
             ["fk_child_parent_a", "fk_child_parent_b"],
         )
 
+    def test_logical_edges_must_use_light_dashed_routing(self) -> None:
+        schema = validate_erd.parse_postgresql_sources(
+            [
+                """
+                CREATE TABLE parent (id uuid PRIMARY KEY);
+                CREATE TABLE child (parent_id uuid NOT NULL);
+                """
+            ]
+        )
+        link = validate_erd.LogicalLink(
+            "child", "parent_id", "parent", "id", False
+        )
+        edge = validate_erd.DotEdge(
+            "parent",
+            "id",
+            "child",
+            "parent_id",
+            {
+                "kind": "logical",
+                "source_table": "child",
+                "source_column": "parent_id",
+                "target_table": "parent",
+                "target_column": "id",
+                "array": "false",
+                "app_maintained": "true",
+                "style": "dashed,bold",
+                "penwidth": "2",
+                "arrowtail": "none",
+                "arrowhead": "vee",
+                "label": "REF logic do ứng dụng duy trì",
+            },
+        )
+        errors = validate_erd.validate_logical_edges(
+            ROOT, schema, [edge], [link], database="PostgreSQL"
+        )
+        self.assertTrue(
+            any("light dashed" in error for error in errors),
+            errors,
+        )
+
     def test_jpeg_dimensions_are_read_without_third_party_packages(self) -> None:
         jpeg = (
             b"\xff\xd8"
