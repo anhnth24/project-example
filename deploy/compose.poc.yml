@@ -37,6 +37,8 @@ services:
       POSTGRES_PASSWORD: ${MARKHAND_POSTGRES_PASSWORD:-markhand_poc_change_me}
       MARKHAND_APP_DB_USER: ${MARKHAND_APP_DB_USER:-markhand_app}
       MARKHAND_APP_DB_PASSWORD: ${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}
+      MARKHAND_MIGRATOR_DB_USER: ${MARKHAND_MIGRATOR_DB_USER:-markhand_migrator}
+      MARKHAND_MIGRATOR_DB_PASSWORD: ${MARKHAND_MIGRATOR_DB_PASSWORD:-markhand_migrator_poc_change_me}
     ports:
       - "127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}:5432"
     volumes:
@@ -190,6 +192,61 @@ services:
       retries: 40
       start_period: 600s
 
+  # Privileged idempotent bootstrap for existing volumes (initdb.d is fresh-only).
+  # Creates migrator/app roles + GRANT app TO migrator WITH INHERIT TRUE before migrate.
+  db-bootstrap:
+    image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${MARKHAND_POSTGRES_DB:-markhand}
+      POSTGRES_USER: ${MARKHAND_POSTGRES_USER:-markhand}
+      PGPASSWORD: ${MARKHAND_POSTGRES_PASSWORD:-markhand_poc_change_me}
+      MARKHAND_APP_DB_USER: ${MARKHAND_APP_DB_USER:-markhand_app}
+      MARKHAND_APP_DB_PASSWORD: ${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}
+      MARKHAND_MIGRATOR_DB_USER: ${MARKHAND_MIGRATOR_DB_USER:-markhand_migrator}
+      MARKHAND_MIGRATOR_DB_PASSWORD: ${MARKHAND_MIGRATOR_DB_PASSWORD:-markhand_migrator_poc_change_me}
+    volumes:
+      - ./poc/bootstrap-roles.sh:/bootstrap-roles.sh:ro
+    entrypoint: ["/bin/bash", "/bootstrap-roles.sh"]
+    networks: [private]
+    restart: "no"
+    mem_limit: 256m
+
+  migrate:
+    <<: *app-security
+    image: ${MARKHAND_API_IMAGE:-markhand-api:poc}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_MIGRATOR_DATABASE_URL: postgres://${MARKHAND_MIGRATOR_DB_USER:-markhand_migrator}:${MARKHAND_MIGRATOR_DB_PASSWORD:-markhand_migrator_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      # App URL present for config validation only — migrate-only refuses app role.
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_AUTH_ISSUER: ${MARKHAND_AUTH_ISSUER:-http://127.0.0.1:8788}
+      MARKHAND_AUTH_AUDIENCE: ${MARKHAND_AUTH_AUDIENCE:-markhand-poc}
+      MARKHAND_AUTH_SIGNING_KEY: ${MARKHAND_AUTH_SIGNING_KEY:-poc-only-signing-key-at-least-32-bytes}
+      MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+    command: ["fileconv-server", "--migrate-only"]
+    networks: [private]
+    restart: "no"
+    mem_limit: ${MARKHAND_API_MEM_LIMIT:-512m}
+
+
   api:
     <<: *app-security
     build:
@@ -199,6 +256,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       qdrant:
         condition: service_started
       minio-init:
