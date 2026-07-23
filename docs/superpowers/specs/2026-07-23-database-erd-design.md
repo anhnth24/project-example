@@ -46,6 +46,53 @@ relationships.
 The image uses a high-resolution landscape layout because the complete schema is
 too large for a conventional page-sized diagram.
 
+### PostgreSQL table purposes
+
+The purpose row in each entity uses the following explicit inventory:
+
+- Identity and RBAC: `orgs` stores tenants; `users` stores global user accounts;
+  `org_memberships` assigns users and basic roles to tenants; `permissions`
+  defines canonical actions; `roles` defines tenant RBAC roles;
+  `role_permissions` maps permissions to roles; `groups` defines tenant user
+  groups; `group_memberships` maps users to groups; `refresh_tokens` stores
+  refresh-token sessions and rotation lineage; and `org_invites` stores pending
+  tenant invitations.
+- Collection ACL: `collections` stores document libraries and their sharing
+  scope; `collection_user_access`, `collection_group_access`, and
+  `collection_role_access` grant collection access to a user, group, or role,
+  respectively.
+- Documents: `documents` stores logical documents and their current-version
+  pointer; `document_versions` stores immutable content snapshots and publication
+  lineage; and `derived_artifacts` stores immutable outputs generated from a
+  document version.
+- Indexing and retrieval: `index_metadata` identifies retrieval configurations
+  and index generations; `chunks` stores searchable, citable text units;
+  `claims` stores typed facts extracted from versions and chunks; `conflicts`
+  records detected claim conflicts; `conflict_evidence` stores immutable evidence
+  for those conflicts; `index_generation_backfills` tracks version backfill into
+  an index generation; `embedding_batches` records durable embedding work; and
+  `vector_cleanup_intents` coordinates recoverable Qdrant vector cleanup.
+- Jobs and events: `jobs` is the durable worker queue; `outbox_events` is the
+  transactional event outbox; and `event_log` is the tenant-sequenced event
+  history.
+- Quota and audit: `org_quotas` stores tenant resource limits;
+  `usage_counters` stores period usage; `quota_reservations` reserves capacity
+  for in-flight work; and `audit_log` is the append-only security and operations
+  audit trail.
+- Uploads and streaming: `upload_operations` stores upload idempotency and
+  MinIO/database reconciliation state; `download_capability_redemptions` records
+  single-use download capabilities; `ask_stream_sessions` stores resumable ask
+  SSE sessions and pinned snapshots; and `ask_stream_events` stores each
+  session's ordered SSE events.
+- Infrastructure: `ops_fences` stores global restore/reconcile safety fences,
+  and `markhand_schema_migrations` records the checksum and application time of
+  each immutable migration.
+
+Columns such as `upload_operations.collection_id`, `document_id`, `version_id`,
+and `job_id`, plus UUID arrays in `ask_stream_sessions`, are application-level
+references because the migrations do not declare foreign keys for them. They are
+shown as ordinary columns and are deliberately not connected by solid lines.
+
 ## SQLite diagram
 
 The SQLite ERD will show `documents`, `chunks`, `index_meta`, and the
