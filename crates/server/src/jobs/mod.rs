@@ -810,6 +810,9 @@ pub async fn append_event(
     payload: EventPayload,
 ) -> Result<EventLogEntry, JobError> {
     validate_event_type(event_type)?;
+    let job_id = payload.job_id;
+    let document_id = payload.document_id;
+    let version_id = payload.version_id;
     let payload = payload.to_validated()?;
     pool::with_org_txn_typed(db_pool, ctx, {
         let ctx = ctx.clone();
@@ -823,9 +826,9 @@ pub async fn append_event(
                         event_type: &event_type,
                         payload_version: CURRENT_EVENT_PAYLOAD_VERSION,
                         payload: &payload,
-                        job_id: None,
-                        document_id: None,
-                        version_id: None,
+                        job_id,
+                        document_id,
+                        version_id,
                     },
                 )
                 .await

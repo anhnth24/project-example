@@ -98,6 +98,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0023_expand_upload_operations.sql",
         include_str!("../migrations/0023_expand_upload_operations.sql"),
     ),
+    (
+        "0024_expand_ask_stream_sessions.sql",
+        include_str!("../migrations/0024_expand_ask_stream_sessions.sql"),
+    ),
+    (
+        "0025_backfill_event_log_ids_ask_stream_ops.sql",
+        include_str!("../migrations/0025_backfill_event_log_ids_ask_stream_ops.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

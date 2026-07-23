@@ -21,7 +21,7 @@ use crate::services::download::CapabilityKeys;
 use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::qa::provider::{ChatProvider, OpenAiCompatibleChat};
 use crate::services::quota;
-use crate::services::readiness::{self, ReadinessDeps};
+use crate::services::readiness::{self, ReadinessDeps, StartupState};
 use crate::state::RuntimeState;
 use crate::storage::{MinioClient, QdrantClient};
 
@@ -31,6 +31,7 @@ pub struct AppState {
     runtime: RuntimeState,
     http_client: reqwest::Client,
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
+    startup: StartupState,
     pool: Pool,
     auth_provider: Option<PasswordAuthProvider>,
     object_store: Option<MinioClient>,
@@ -110,10 +111,14 @@ impl AppState {
         let trusted_proxies = parse_trusted_proxies_env()?;
         let rate_config = RateLimitConfig::from_env()?;
         start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
+        start_ask_stream_maintenance(pool.clone());
+        let startup = StartupState::new();
+        startup.mark_completed();
         Ok(Self {
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
+            startup,
             pool,
             auth_provider,
             object_store,
@@ -156,10 +161,13 @@ impl AppState {
             .signing_key
             .as_ref()
             .and_then(|key| CapabilityKeys::from_auth_signing_key(key).ok());
+        let startup = StartupState::new();
+        startup.mark_completed();
         Ok(Self {
             runtime,
             http_client,
             readiness: tokio::sync::Mutex::new(None),
+            startup,
             pool,
             auth_provider,
             object_store,
@@ -217,6 +225,25 @@ impl AppState {
         self.qdrant = Some(qdrant);
         self.embedder = embedder;
         self
+    }
+
+    pub fn with_trusted_proxies(mut self, proxies: Vec<IpAddr>) -> Self {
+        self.trusted_proxies = proxies;
+        self
+    }
+
+    pub fn with_cors_origins(mut self, origins: Vec<String>) -> Self {
+        self.cors_origins = origins;
+        self
+    }
+
+    pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.rate_limiter = limiter;
+        self
+    }
+
+    pub fn startup(&self) -> &StartupState {
+        &self.startup
     }
 
     pub fn capability_keys(&self) -> Option<&CapabilityKeys> {
@@ -277,6 +304,7 @@ impl AppState {
             vector_client: self.vector_index(),
             object_client: self.object_store(),
             object_health_url: &object_health_url,
+            embedder: self.embedder(),
         })
         .await
         .map_err(|error| error.code())
@@ -284,7 +312,11 @@ impl AppState {
 }
 
 fn parse_trusted_proxies_env() -> Result<Vec<IpAddr>, String> {
-    let raw = std::env::var("MARKHAND_TRUSTED_PROXIES").unwrap_or_default();
+    parse_trusted_proxies(&std::env::var("MARKHAND_TRUSTED_PROXIES").unwrap_or_default())
+}
+
+/// Fail-fast trusted proxy parser (shared with tests).
+pub fn parse_trusted_proxies(raw: &str) -> Result<Vec<IpAddr>, String> {
     let mut out = Vec::new();
     for token in raw
         .split(',')
@@ -312,6 +344,38 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(target: "quota", code = error.code(), "quota expiry sweep failed");
+                }
+            }
+        }
+    });
+}
+
+fn start_ask_stream_maintenance(pool: Pool) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            match crate::db::ask_streams::run_maintenance(&pool, 100).await {
+                Ok((sessions, events, recovered)) if sessions > 0 || recovered > 0 => {
+                    tracing::info!(
+                        target: "ask_stream",
+                        sessions,
+                        events,
+                        recovered,
+                        metric_purged = crate::telemetry::metrics::METRIC_ASK_STREAM_PURGED,
+                        metric_recovered =
+                            crate::telemetry::metrics::METRIC_ASK_STREAM_PRODUCER_RECOVERED,
+                        "ask stream purge/recovery sweep"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        target: "ask_stream",
+                        code = error.code(),
+                        "ask stream maintenance failed"
+                    );
                 }
             }
         }

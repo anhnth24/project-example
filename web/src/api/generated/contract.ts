@@ -36,6 +36,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/health/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["healthStart"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -707,7 +723,28 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Fail-closed dependency readiness (DB/vector/object/signature/reconcile). */
+            /** @description Fail-closed dependency readiness (DB/vector/object/embedding/signature/reconcile). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Health"];
+                };
+            };
+            503: components["responses"]["ApiError"];
+        };
+    };
+    healthStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Startup latch completed (migrations/runtime boot finished). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -795,6 +832,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createUpload: {
@@ -864,6 +902,7 @@ export interface operations {
                     "application/json": components["schemas"]["CollectionPage"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     createCollection: {
@@ -883,6 +922,7 @@ export interface operations {
                 content?: never;
             };
             403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getCollection: {
@@ -904,6 +944,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     deleteCollection: {
@@ -925,6 +966,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     updateCollection: {
@@ -946,6 +988,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listDocuments: {
@@ -967,6 +1010,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     approveIntake: {
@@ -1009,6 +1053,7 @@ export interface operations {
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getDocument: {
@@ -1030,6 +1075,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     deleteDocument: {
@@ -1051,6 +1097,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     previewDocument: {
@@ -1075,6 +1122,7 @@ export interface operations {
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listDocumentVersions: {
@@ -1095,6 +1143,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     getDocumentVersion: {
@@ -1118,6 +1167,7 @@ export interface operations {
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     diffDocumentVersions: {
@@ -1143,6 +1193,7 @@ export interface operations {
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     publishDocumentVersion: {
@@ -1164,6 +1215,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     issueDownloadCapability: {
@@ -1187,6 +1239,7 @@ export interface operations {
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     redeemDownload: {
@@ -1208,6 +1261,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     reindexDocument: {
@@ -1249,6 +1303,7 @@ export interface operations {
             };
             400: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listConflicts: {
@@ -1267,6 +1322,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     getConflict: {
@@ -1288,6 +1344,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getConflictEvidence: {
@@ -1320,6 +1377,7 @@ export interface operations {
                 };
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     triageConflict: {
@@ -1349,6 +1407,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getJob: {
@@ -1370,6 +1429,7 @@ export interface operations {
                 content?: never;
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     jobEvents: {
@@ -1377,7 +1437,9 @@ export interface operations {
             query?: {
                 lastEventId?: number;
             };
-            header?: never;
+            header?: {
+                "Last-Event-ID"?: string;
+            };
             path: {
                 jobId: components["parameters"]["jobId"];
             };
@@ -1385,7 +1447,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Resumable SSE job events with live-tail + durable sequence. */
+            /** @description Resumable SSE job events with durable event_log sequence, live-tail across worker restart, heartbeats, and per-poll principal revalidation. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1394,7 +1456,10 @@ export interface operations {
                     "text/event-stream": components["schemas"]["SseEnvelope"];
                 };
             };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
         };
     };
     search: {
@@ -1455,8 +1520,14 @@ export interface operations {
     };
     askStream: {
         parameters: {
-            query?: never;
-            header?: never;
+            query?: {
+                /** @description Resume an existing durable ask stream against its pinned retrieval snapshot. When set, retrieval/provider are not re-run. */
+                streamSessionId?: string;
+                lastEventId?: number;
+            };
+            header?: {
+                "Last-Event-ID"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1466,7 +1537,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sequenced SSE answer stream with per-batch principal revalidation. */
+            /** @description Sequenced SSE answer stream with durable session id, provider-token or extractive chunk streaming, Last-Event-ID replay, and per-batch principal revalidation. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1477,6 +1548,8 @@ export interface operations {
             };
             400: components["responses"]["ApiError"];
             401: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
     };
@@ -1496,6 +1569,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
         };
     };
 }

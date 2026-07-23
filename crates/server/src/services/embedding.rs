@@ -154,6 +154,15 @@ impl ApprovedEmbeddingRuntime {
             .map_err(|_| EmbeddingError::InvalidResponse)?;
         validate_response(response, inputs.len(), &self.plan)
     }
+
+    /// Fail-closed readiness probe: one tiny embedding request must succeed.
+    pub async fn health_probe(&self) -> Result<(), EmbeddingError> {
+        let vectors = self.embed(&[String::from("markhand-ready")]).await?;
+        if vectors.len() != 1 {
+            return Err(EmbeddingError::InvalidResponse);
+        }
+        Ok(())
+    }
 }
 
 fn allow_cloud_embeddings_from_env() -> Result<bool, EmbeddingError> {

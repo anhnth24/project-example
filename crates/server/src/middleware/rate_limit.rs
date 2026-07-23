@@ -1,7 +1,7 @@
 //! In-process token-bucket rate limiter (P1B-R06). Not distributed.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const HARD_CAP_KEYS: usize = 10_000;
@@ -105,8 +105,7 @@ impl Bucket {
         self.last = now;
     }
 
-    fn take(&mut self) -> Result<(), Duration> {
-        let now = Instant::now();
+    fn take_at(&mut self, now: Instant) -> Result<(), Duration> {
         self.refill(now);
         if self.tokens >= 1.0 {
             self.tokens -= 1.0;
@@ -125,18 +124,43 @@ impl Bucket {
     }
 }
 
-#[derive(Debug, Default)]
+/// Optional deterministic clock for tests (shared body/header Retry-After math).
+pub type ClockFn = Arc<dyn Fn() -> Instant + Send + Sync>;
+
+#[derive(Clone)]
 pub struct RateLimiter {
-    inner: Mutex<HashMap<String, Bucket>>,
+    inner: Arc<Mutex<HashMap<String, Bucket>>>,
     config: RateLimitConfig,
+    clock: ClockFn,
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::new(RateLimitConfig::default())
+    }
+}
+
+impl std::fmt::Debug for RateLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RateLimiter {
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
-            inner: Mutex::new(HashMap::new()),
+            inner: Arc::new(Mutex::new(HashMap::new())),
             config,
+            clock: Arc::new(Instant::now),
         }
+    }
+
+    /// Test helper: inject a deterministic clock.
+    pub fn with_clock(mut self, clock: ClockFn) -> Self {
+        self.clock = clock;
+        self
     }
 
     pub fn config(&self) -> RateLimitConfig {
@@ -196,7 +220,7 @@ impl RateLimiter {
 
     fn check(&self, key: &str, capacity: u32) -> Result<(), Duration> {
         let mut guard = self.inner.lock().unwrap_or_else(|error| error.into_inner());
-        let now = Instant::now();
+        let now = (self.clock)();
         if guard.len() >= HARD_CAP_KEYS {
             Self::prune_locked(&mut guard, now);
         }
@@ -207,7 +231,7 @@ impl RateLimiter {
         let bucket = guard
             .entry(key.to_string())
             .or_insert_with(|| Bucket::new(capacity));
-        bucket.take()
+        bucket.take_at(now)
     }
 }
 

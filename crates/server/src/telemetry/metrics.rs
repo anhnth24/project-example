@@ -12,6 +12,9 @@ pub const METRIC_RETRIEVAL_LEG: &str = "markhand_retrieval_leg_duration_seconds"
 pub const METRIC_DRIFT: &str = "markhand_reconcile_drift_total";
 pub const METRIC_QUOTA: &str = "markhand_quota_reservation_total";
 pub const METRIC_BACKUP_AGE: &str = "markhand_backup_age_seconds";
+pub const METRIC_ASK_STREAM_PURGED: &str = "markhand_ask_stream_purged_total";
+pub const METRIC_ASK_STREAM_PRODUCER_RECOVERED: &str =
+    "markhand_ask_stream_producer_recovered_total";
 
 pub fn assert_safe_metric(name: &str, labels: &[&str]) -> Result<(), String> {
     validate_metric(name, labels)
@@ -28,6 +31,8 @@ mod tests {
         assert!(assert_safe_metric(METRIC_RETRIEVAL_LEG, &["leg", "outcome"]).is_ok());
         assert!(assert_safe_metric(METRIC_DRIFT, &["kind"]).is_ok());
         assert!(assert_safe_metric(METRIC_BACKUP_AGE, &["store"]).is_ok());
+        assert!(assert_safe_metric(METRIC_ASK_STREAM_PURGED, &["kind"]).is_ok());
+        assert!(assert_safe_metric(METRIC_ASK_STREAM_PRODUCER_RECOVERED, &[]).is_ok());
         assert!(assert_safe_metric(METRIC_QUEUE_DEPTH, &["org_id"]).is_err());
     }
 }

@@ -8,9 +8,11 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::http::{header, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use axum::middleware::Next;
+use axum::response::IntoResponse;
 use uuid::Uuid;
 
 use crate::http::AppState;
+use crate::routes::rate_limit_guard::RateLimitRejected;
 
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 
@@ -155,30 +157,13 @@ pub async fn baseline_ip_rate_limit(
         .map(|ip| ip.0.clone())
         .unwrap_or_else(|| "unknown".into());
     if let Err(retry_after) = state.rate_limiter().check_ip(&ip) {
-        let secs = retry_after.as_secs().max(1);
-        let mut response = Response::new(Body::from(
-            serde_json::json!({
-                "code": "rate_limited",
-                "message": "Too many requests",
-                "requestId": request_id,
-                "details": { "retryAfterSeconds": secs, "scope": "ip" }
-            })
-            .to_string(),
-        ));
-        *response.status_mut() = StatusCode::TOO_MANY_REQUESTS;
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        if let Ok(value) = HeaderValue::from_str(&secs.to_string()) {
-            response.headers_mut().insert(header::RETRY_AFTER, value);
+        // Shared ceil Retry-After + body/header/quota metadata with route guards.
+        return RateLimitRejected {
+            retry_after,
+            request_id,
+            scope: "ip",
         }
-        if let Ok(value) = HeaderValue::from_str(&request_id) {
-            response
-                .headers_mut()
-                .insert(HeaderName::from_static(REQUEST_ID_HEADER), value);
-        }
-        return response;
+        .into_response();
     }
     next.run(request).await
 }

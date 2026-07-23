@@ -289,36 +289,45 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
-- **Status:** In progress — job SSE revalidates JWT `exp`, session-family revoke,
-  user suspend/membership, and job/document auth from PG every poll; ask stream uses
-  the same principal guard each bounded batch (exp/session/membership + fresh
-  cited-document auth) with send-timeout + stable close reasons. Ask tokenization
-  remains POC snapshot (not provider token streaming). Gap: live PG
-  expiry/logout/membership-removal/delete-barrier + reconnect/order soak not run.
+- **Status:** In progress — Sol R3 hardening in flight. Implemented: ask/job
+  reserve-before-select on cap-1 channel (await client drain with no DB locks),
+  then family→principal→fresh OrgContext (permissions + collection ACL) → select
+  ≤1 event under fixed pull deadline → non-blocking permit enqueue; production
+  `/auth/logout` router barriers (≤1 in-flight, no buffered batch after commit);
+  concurrent delete trickle + `acl_mutate` role/collection barriers assert no new
+  sequenced content after commit. Gaps remaining for Done: delayed-producer
+  reconnect matrix green on CI agent; live purge/load bound evidence; production
+  ask still often extractive when entailment fail-closed.
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
-- **Files:** `routes/{search,ask,events}.rs`, `api/sse.rs`.
+- **Files:** `routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,
+  `db/ask_streams.rs`, `services/qa/{ask_stream,provider,stream}.rs`,
+  `services/stream_auth.rs`,
+  `migrations/0024_expand_ask_stream_sessions.sql`,
+  `migrations/0025_backfill_event_log_ids_ask_stream_ops.sql`.
 - **Depends:** F05/I03/R01/R03/R04.
 - **Acceptance/tests:** No lost acknowledged/duplicate sequence; bounded slow client;
-  reconnect/order/expiry/revoke/worker restart.
+  reconnect/order/expiry/revoke/worker restart; zero post-revoke content; durable
+  terminal/control; Last-Event-ID validation; retention purge; provider framing;
+  lifecycle lease/recovery.
 - **Security/migration:** Scoped per user/org/job, no cache. **Out:** WebSocket.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
-- **Status:** In progress — dual-role FORCE RLS evidence closed:
-  `tests/readiness_force_rls.rs` as `markhand_app` proves direct rows without
-  GUC = 0 and SECURITY DEFINER transitions (A=b/B=c → false; B→b → true;
-  missing active generation → false; fence/reconcile true/false). Also:
-  baseline `/api/v1` IP middleware (health exempt); hard-cap rejects unseen keys;
-  OpenAPI requestBody/response/multipart/SSE expanded + client regenerated.
-  Gap: trusted-proxy soak; full route schema parity still deepening.
+- **Status:** In progress — Sol R2 complete for rate/readiness/OpenAPI; kept open with
+  R05. Implemented: outer readiness timeout reports in-progress probe code; hanging
+  probe router matrix (code+deadline); baseline IP shares ceil `RateLimitRejected`;
+  OpenAPI `/openapi.yaml` 429. Gaps remaining for Done: Compose-stack hanging soak;
+  client regenerate/check after OpenAPI 429 sweep committed; concurrency/cardinality
+  rate evidence beyond unit hard-cap tests.
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,
-  `services/readiness.rs`.
+  `routes/rate_limit_guard.rs`, `services/readiness.rs`.
 - **Depends:** R04/R05/F05 + G0-SLO.
-- **Acceptance/tests:** Every route represented; readiness detects required deps/
-  signature/reconciliation; 429 metadata; snapshots/rate/trusted-proxy/outage tests.
+- **Acceptance/tests:** Every route represented two-way; readiness detects required
+  deps/signature/reconciliation with bounded deadlines; 429 metadata; trusted-proxy/
+  outage tests.
 - **Security/migration:** Conservative CORS/proxy trust. **Out:** distributed limiter.
 
 ## Operations và release
