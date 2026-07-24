@@ -1013,6 +1013,18 @@ mod imp {
         #[test]
         #[ignore = "requires a built fileconv binary and Tesseract"]
         fn live_png_ocr_runs_inside_production_sandbox() {
+            let tesseract_probe = run(
+                &shell_config("/usr/bin/tesseract --version", Duration::from_secs(5)),
+                input(),
+                &SandboxCancel::default(),
+            )
+            .expect("tesseract probe sandbox");
+            assert_eq!(
+                tesseract_probe.exit,
+                SandboxExit::Success,
+                "tesseract probe stderr={}",
+                String::from_utf8_lossy(&tesseract_probe.stderr)
+            );
             let fileconv = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../target/debug/fileconv")
                 .canonicalize()
