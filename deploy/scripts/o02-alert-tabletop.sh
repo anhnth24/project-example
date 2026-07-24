@@ -598,6 +598,10 @@ if [[ "$PG_INITIALLY_RUNNING" -eq 1 ]]; then
   # shellcheck disable=SC1090
   source "$ROOT/deploy/.env"
   set +a
+  # deploy/.env may carry its default project name; retain the qualified
+  # project/network selected by the caller for later provenance collection.
+  export MARKHAND_COMPOSE_PROJECT="$POC_PROJECT"
+  export MARKHAND_POC_PRIVATE_NETWORK="$POC_PRIVATE_NETWORK"
   export MARKHAND_TEST_DATABASE_URL="postgres://${MARKHAND_POSTGRES_USER}:${MARKHAND_POSTGRES_PASSWORD}@127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}/${MARKHAND_POSTGRES_DB}"
   export MARKHAND_TEST_MINIO_ENDPOINT="http://127.0.0.1:${MARKHAND_MINIO_API_PORT:-9010}"
   export MARKHAND_TEST_MINIO_URL="$MARKHAND_TEST_MINIO_ENDPOINT"
@@ -923,7 +927,7 @@ raise SystemExit(1 if findings else 0)
 PY
 prov_rc=$?
 set -e
-if [[ $prov_rc -eq 0 ]]; then ok "provenance + broad secret scan clean"; else bad "secret scan findings in evidence"; fi
+if [[ $prov_rc -eq 0 ]]; then ok "provenance + broad secret scan clean"; else bad "provenance or broad secret scan failed"; fi
 
 # Seal every raw artifact before the report binds the manifest digest.
 python3 - "$RAW" <<'PY'
