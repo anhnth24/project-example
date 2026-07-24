@@ -3,9 +3,9 @@
 - Status: `not_run`
 - Issue: `P1B-O05`
 - Canonical JSON: `o05-soak.json`
-- Profile: `bench/markhand_web/workloads/phase1b-mixed.yaml`
+- Profile: `/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml`
 - Smoke non-qualifying: `False`
-- Raw: `bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T003756Z`
+- Raw: `bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T004636Z`
 
 ## Notes
 

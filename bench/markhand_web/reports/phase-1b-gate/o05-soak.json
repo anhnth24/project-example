@@ -19,14 +19,14 @@
     "tempGrowth": "unknown",
     "unboundedGrowth": "unknown"
   },
-  "generatedAt": "2026-07-24T00:37:56Z",
+  "generatedAt": "2026-07-24T00:46:36Z",
   "issue": "P1B-O05",
   "markhandSoak": false,
   "metrics": {},
   "notes": "Stack not opted in; report records workload intent only",
   "outDir": "bench/markhand_web/reports/phase-1b-gate",
   "prerequisites": {},
-  "profile": "bench/markhand_web/workloads/phase1b-mixed.yaml",
+  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
   "profileParsed": {
     "durationSeconds": 1800,
     "formats": [
@@ -43,10 +43,10 @@
   },
   "provenance": {
     "composeProject": null,
-    "gitSha": "695255d",
-    "gitShaFull": "695255d8f1328d0a6887079094ea593c43d25814"
+    "gitSha": "e27b15d",
+    "gitShaFull": "e27b15d2dcc09e34bb7dad074537db154503dc37"
   },
-  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T003756Z",
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T004636Z",
   "redactionScan": {
     "findings": [],
     "passed": true
@@ -71,8 +71,8 @@
     "rpoMinutes": 15
   },
   "versions": {
-    "git": "695255d",
-    "gitShaFull": "695255d8f1328d0a6887079094ea593c43d25814",
+    "git": "e27b15d",
+    "gitShaFull": "e27b15d2dcc09e34bb7dad074537db154503dc37",
     "imageIds": {},
     "indexSignature": null,
     "migrationManifestSha256": null

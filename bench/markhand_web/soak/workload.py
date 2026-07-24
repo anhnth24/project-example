@@ -62,6 +62,9 @@ class RequestStats:
     not_ready: list[str] = field(default_factory=list)
     exceptions: list[str] = field(default_factory=list)
     injection_windows: list[tuple[float, float]] = field(default_factory=list)
+    compare_dataset: dict[str, str] | None = None
+    # Optional external window checker (InjectionPlan.in_window).
+    injection_window_fn: Callable[[float], bool] | None = None
 
     def mark_scheduled(self, kind: str, n: int = 1) -> None:
         with self.lock:
@@ -72,6 +75,8 @@ class RequestStats:
             self.submitted[kind] = self.submitted.get(kind, 0) + 1
 
     def in_injection_window(self, monotonic_offset: float) -> bool:
+        if self.injection_window_fn is not None:
+            return bool(self.injection_window_fn(monotonic_offset))
         with self.lock:
             windows = list(self.injection_windows)
         for start, end in windows:
@@ -268,11 +273,8 @@ def do_ingest(
         except (UnicodeDecodeError, json.JSONDecodeError):
             ok = False
     if ok and isinstance(doc_id, str) and isinstance(version_id, str):
+        # Each upload is a new documentId — never invent a second version pair.
         stats.record_version(doc_id, version_id, published=False)
-        # Seed a second synthetic version id slot when API returns only one —
-        # compare still needs a real pair; mark not-ready until second upload
-        # of same doc or publish+new version arrives. For soak we re-upload
-        # same format later; pair forms when len>=2 for a doc.
     in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     stats.add(
         "ingest",
@@ -304,14 +306,14 @@ def do_query(
             body_obj["asOf"] = "2026-07-01T00:00:00Z"
             body_obj["documentId"] = doc
     elif mode == "compare":
-        pair = stats.compare_pair()
-        if not pair:
-            not_ready = "compare_no_version_pair"
+        # Uploads always create new documentIds — never invent a version pair.
+        dataset = stats.compare_dataset
+        if not dataset:
+            not_ready = "compare_dataset_unavailable"
         else:
-            doc_id, ver_a, ver_b = pair
-            body_obj["documentId"] = doc_id
-            body_obj["versionA"] = ver_a
-            body_obj["versionB"] = ver_b
+            body_obj["documentId"] = dataset["documentId"]
+            body_obj["versionA"] = dataset["versionA"]
+            body_obj["versionB"] = dataset["versionB"]
     elif mode == "current":
         pass
     else:
@@ -331,7 +333,6 @@ def do_query(
     body = json.dumps(body_obj).encode("utf-8")
     status, _data, latency = client.request("POST", "/api/v1/search", body=body)
     ok = _http_success(status)
-    # Only successful (2xx) queries contribute latency samples.
     stats.add(
         "query",
         ok=ok,
@@ -436,19 +437,30 @@ def run_mixed_load(
     duration_seconds: int,
     compose_project: str,
     enable_reconcile: bool = True,
-    injection_callback: Callable[[float, str, RequestStats], None] | None = None,
+    injection_callback: Callable[[float, str], None] | None = None,
     injection_schedule: list[tuple[float, str]] | None = None,
+    compare_dataset: dict[str, str] | None = None,
+    injection_window_fn: Callable[[float], bool] | None = None,
+    retained_ids: list[str] | None = None,
     max_workers: int = 16,
+    skip_fixture_preflight: bool = False,
 ) -> RequestStats:
     """Execute scheduled ingest/query/delete/reconcile for ``duration_seconds``.
 
-    Sampler must run out-of-band; this loop only schedules work on monotonic time.
-    Futures are drained via ``result()`` so worker exceptions propagate.
+    Sampler and injection must run out-of-band (dedicated threads). This loop only
+    dispatches work on monotonic time. Injection callback must return immediately
+    (schedule onto an executor). Futures are drained via ``result()``.
     """
     formats = list(profile["actors"]["ingest"]["formats"])
-    preflight_fixtures(formats)
+    if not skip_fixture_preflight:
+        preflight_fixtures(formats)
 
     stats = RequestStats()
+    stats.compare_dataset = compare_dataset
+    stats.injection_window_fn = injection_window_fn
+    if retained_ids:
+        stats.retained_ids = list(retained_ids)
+        stats.document_ids = list(retained_ids)
     actors = profile["actors"]
     modes = list(actors["query"]["modes"])
     ingest_times = schedule_event_times(
@@ -497,7 +509,8 @@ def run_mixed_load(
                 idx += 1
                 if kind == "inject":
                     if injection_callback is not None:
-                        injection_callback(elapsed, str(arg), stats)
+                        # Must be non-blocking: schedule onto injection executor.
+                        injection_callback(elapsed, str(arg))
                     continue
                 if kind == "ingest":
                     stats.mark_submitted("ingest")
@@ -605,61 +618,8 @@ def completeness_ok(
     return {"passed": ok, "ratio": ratio, "actors": details}
 
 
-def post_restore_retrieval_check(
-    client: ApiClient,
-    *,
-    retained_ids: list[str],
-    deleted_ids: list[str],
-    same_run_restore: bool,
-) -> dict[str, Any]:
-    """After a same-run restore: retained authorized docs visible; deleted suppressed."""
-    if not same_run_restore:
-        return {
-            "passed": None,
-            "reason": "no_same_run_restore",
-            "gate": "unknown",
-        }
-    if not retained_ids:
-        return {"passed": False, "reason": "no_retained_ids", "gate": "fail"}
-    if not deleted_ids:
-        return {"passed": False, "reason": "no_deleted_ids", "gate": "fail"}
-    body = json.dumps(
-        {
-            "query": "markhand soak post-restore",
-            "mode": "current",
-            "limit": 20,
-            "collectionIds": [client.collection_id],
-        }
-    ).encode("utf-8")
-    status, data, _latency = client.request("POST", "/api/v1/search", body=body)
-    if not _http_success(status):
-        return {"passed": False, "reason": f"search_status_{status}", "gate": "fail"}
-    try:
-        payload = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return {"passed": False, "reason": "invalid_json", "gate": "fail"}
-    hits = payload.get("hits") or []
-    hit_docs: set[str] = set()
-    for hit in hits:
-        if isinstance(hit, dict):
-            for key in ("documentId", "document_id"):
-                if hit.get(key):
-                    hit_docs.add(str(hit.get(key)))
-    leaked = [d for d in deleted_ids if d in hit_docs]
-    retained_hit = any(r in hit_docs for r in retained_ids)
-    # Retained may not appear in top hits for weak embeddings — also GET document.
-    if not retained_hit:
-        for rid in retained_ids:
-            st, _b, _l = client.request("GET", f"/api/v1/documents/{rid}")
-            if _http_success(st):
-                retained_hit = True
-                break
-    passed = retained_hit and not leaked
-    return {
-        "passed": passed,
-        "gate": "pass" if passed else "fail",
-        "leakedDeletedIds": len(leaked),
-        "retainedVisible": retained_hit,
-        "hitCount": len(hits),
-        "sameRunRestore": True,
-    }
+def post_restore_retrieval_check(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Compatibility wrapper — real implementation lives in ``dataset``."""
+    from dataset import post_restore_retrieval_check as _impl
+
+    return _impl(*args, **kwargs)

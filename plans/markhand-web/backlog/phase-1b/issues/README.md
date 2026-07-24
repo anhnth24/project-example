@@ -443,11 +443,18 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
-- **Status:** In progress — measured harness Sol-hardened (fixtures preflight,
-  2xx-only query SLO, in-workload injection, background sampler, same-run
-  post-restore, provenance-based prereqs, completeness/error gates).
-  Default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`; smoke ≠ pass.
-  **Done only after official live 1800s run passes.** Qualification not claimed.
+- **Status:** In progress — measured harness Sol vòng-2 hardened (converter-accepted
+  fixtures + fileconv preflight, async injection executor with expected==observed,
+  seed/wait before timed load, green `restoredApiBase` post-restore with retained/
+  deleted/authz checks). Default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`;
+  smoke ≠ pass. **Done only after official live 1800s run passes.**
+  Qualification not claimed.
+- **Architectural blockers (honest non-pass until real APIs exist):**
+  (1) `compare_dataset_unavailable` — each upload creates a new documentId; no
+  public API to append versionB; require verified `MARKHAND_SOAK_COMPARE_DATASET`.
+  (2) `restored_api_base_missing` / `restored_api_same_as_blue` — O03 green restore
+  has promote/cutover disabled; blue API is not post-restore proof; need distinct
+  `restoredApiBase` / `MARKHAND_SOAK_RESTORED_API_BASE`.
 - **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
   `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
   evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.
@@ -455,10 +462,12 @@ ghi trong issue đã `Done`.
   `reports/phase-1b-gate/o05-soak.*`, `docs/runbooks/phase-1b/soak-o05.md`,
   `deploy/scripts/o05-soak.sh`.
 - **Depends:** O02/O03/O04 + G0-CAP/G0-SLO.
-- **Acceptance/tests:** Unit/self-test (percentiles, schedule, thresholds, prereqs,
-  smoke≠pass, injection allowlist, secret scan); live: query p95≤500 / p99≤1000,
-  ingest≥1200 docs/h, RSS≤256MB / temp≤512MB / queue≤100 / DB conn≤40, recovery +
-  post-restore retrieval; duration exactly 1800.
+- **Acceptance/tests:** Unit/self-test (fake OOXML/PDF/PNG fail preflight, compare
+  without dataset non-pass, async injection, partial injection counts fail,
+  restored==blue/missing non-pass, retained absent / unauthorized 2xx non-pass,
+  smoke≠pass); live: query p95≤500 / p99≤1000, ingest≥1200 docs/h, RSS≤256MB /
+  temp≤512MB / queue≤100 / DB conn≤40, recovery + green post-restore; duration
+  exactly 1800.
 - **Security/migration:** Synthetic/redacted, exact git/image/migration/index
   versions; injection only on expected POC project/services.
   **Out:** production/multi-org.

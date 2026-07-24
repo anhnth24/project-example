@@ -40,7 +40,45 @@ All required or status is non-pass:
    measured RPO ≤ 15m, query-ready RTO ≤ 60m, full-vector RTO ≤ 240m
 4. **O02** alerts evidence passed (`failCount=0`, live fault executed / `status=pass`)
 
-Missing/null/stale git SHA or compose project mismatch ⇒ non-pass.
+Missing/null/stale provenance or compose project mismatch ⇒ non-pass.
+
+## Architectural blockers (honest non-pass)
+
+These are **not** harness bugs; the harness refuses fiction:
+
+### Compare version pair (`compare_dataset_unavailable`)
+
+Each `POST /api/v1/uploads` creates a **new** `documentId`. Re-upload does **not**
+append a second version to the same document. There is no public soak API to
+create `versionB` on an existing doc. Therefore:
+
+- Set `MARKHAND_SOAK_COMPARE_DATASET` to JSON (or a path to JSON) containing real
+  `{documentId,versionA,versionB}` that the live API accepts with HTTP 2xx on
+  compare search **before** the timed schedule starts.
+- Never invent IDs or SQL-seed derived pairs.
+- Without a verified dataset, status stays non-pass with blocker
+  `compare_dataset_unavailable`.
+
+### Post-restore green endpoint (`restored_api_base_missing` / `restored_api_same_as_blue`)
+
+Same-run O03 restores an **isolated green** stack with promote/cutover disabled.
+The blue `MARKHAND_SOAK_API_BASE` is **not** post-restore proof. O03 script exit 0
+alone is not a pass.
+
+- O03 evidence must expose `restoredApiBase` / `greenApiBase`, **or** set
+  `MARKHAND_SOAK_RESTORED_API_BASE` to a reachable green host distinct from blue.
+- Post-restore checks (retained authorized hit, deleted suppression, unauthorized
+  denial) run **only** against that restored endpoint, using immutable document
+  IDs captured before backup.
+- If blue == restored or no reachable restored endpoint ⇒ gate `unknown`/`fail`.
+
+## Fixtures
+
+Synthetic fixtures under `bench/markhand_web/soak/fixtures/` are modeled on Rust
+`tiny_*_bytes` helpers and must be **converter-accepted** (real OOXML parts,
+valid PDF body, OCR-readable PNG). Preflight runs structural validation and, when
+`target/debug/fileconv` (or release) is present, `fileconv one` requiring each
+format’s marker in non-empty Markdown. Magic-only stubs fail closed.
 
 ## Binding thresholds
 
@@ -54,22 +92,30 @@ Missing/null/stale git SHA or compose project mismatch ⇒ non-pass.
 | Queue depth | ≤ 100 | profile `bounds` |
 | DB connections | ≤ 40 | profile `bounds` |
 
+## Preflight seed (before timed schedule)
+
+Official preflight uploads one fixture per format and waits until documents are
+indexed/visible so ingest/query/delete/reconcile actors are executable from t=0.
+Delete-before-doc and compare-not-ready are not silently tolerated as success.
+
 ## Failure injection (opt-in, during active workload)
 
-Requires `--enable-failure-injection`. Worker kill runs on the profile schedule
-(`killWorkerEverySeconds`); dependency blip runs mid-soak while load is active.
-Targets **only** expected POC Compose project/service names
+Requires `--enable-failure-injection`. Operations run on a **dedicated executor**
+so dependency blip sleep/recovery never pauses event dispatch. Every scheduled
+kill/blip must execute and recover (`expected==observed`, all recovered); partial
+counts fail closed. Targets **only** expected POC Compose project/service names
 (`worker-convert`/`worker-index` kill; `postgres`/`qdrant`/`minio` blip).
-Arbitrary container IDs are refused. Before/after IDs, recovery latency, and
-injection-window request errors are recorded under `raw/o05-<stamp>/`.
 
 ## Post-restore retrieval
 
-Baseline synthetic docs are created during load. Same-run O03 restore is a
-**qualification checkpoint after baseline** (`--invoke-o03-restore`). Only then
-does post-restore retrieval verify retained authorized docs and deleted-doc
-suppression. Without a same-run restore, `postRestoreRetrieval` stays
-`unknown`/`fail` — a plain deleted-id check is not post-restore evidence.
+Baseline IDs are captured before `--invoke-o03-restore`. Checks on the **green**
+endpoint require:
+
+1. Retained authorized hit (search or document GET 2xx)
+2. Deleted ID absent from hits
+3. Unauthorized token/context denied (must not 2xx)
+
+No document content is logged.
 
 ## Sampling
 
@@ -98,7 +144,7 @@ python3 bench/markhand_web/soak/run_soak.py \
   --out bench/markhand_web/reports/phase-1b-gate \
   --duration-seconds 30
 
-# Official live qualification (expected wall ~1800s + injection/recovery)
+# Official live qualification (expected wall ~1800s + injection/recovery + O03)
 export MARKHAND_SOAK=1
 export MARKHAND_SOAK_API_BASE=http://127.0.0.1:8788
 export MARKHAND_SOAK_EMAIL=admin@poc.example
@@ -106,7 +152,11 @@ export MARKHAND_SOAK_PASSWORD=...          # never committed
 export MARKHAND_SOAK_COLLECTION_ID=55555555-5555-5555-5555-555555555501
 export MARKHAND_COMPOSE_PROJECT=markhand-poc
 export MARKHAND_INDEX_SIGNATURE=...         # 64 lowercase hex
-bash deploy/scripts/o05-soak.sh --enable-failure-injection
+# Required for compare gate (real API-verified pair — no invented IDs):
+export MARKHAND_SOAK_COMPARE_DATASET='{"documentId":"...","versionA":"...","versionB":"..."}'
+# Required for post-restore when green ≠ blue (or from O03 restoredApiBase):
+export MARKHAND_SOAK_RESTORED_API_BASE=http://127.0.0.1:8789
+bash deploy/scripts/o05-soak.sh --enable-failure-injection --invoke-o03-restore
 ```
 
 ## Redaction
@@ -119,3 +169,5 @@ in the report JSON.
 
 Issue status stays **In progress** until an official live run produces
 `o05-soak.json` with `status=pass`. Harness completion alone is not Done.
+Compare version-pair creation and O03 promote/cutover remain architectural
+blockers until a real API/path exists.

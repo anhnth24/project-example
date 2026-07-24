@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit / hermetic tests for P1B-O05 measured soak harness (Sol-hardened)."""
+"""Unit / hermetic tests for P1B-O05 measured soak harness (Sol vòng 2)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from unittest import mock
 SOAK_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SOAK_DIR))
 
+import dataset  # noqa: E402
 import fixtures  # noqa: E402
 import gates_eval  # noqa: E402
 import injection  # noqa: E402
@@ -51,7 +52,7 @@ class RateScheduleTests(unittest.TestCase):
 
 
 class FixturePreflightTests(unittest.TestCase):
-    def test_all_eight_formats_resolve_with_magic(self) -> None:
+    def test_all_eight_formats_structural_and_converter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             info = fixtures.preflight_fixtures(FORMATS, base=base)
@@ -60,7 +61,12 @@ class FixturePreflightTests(unittest.TestCase):
             for fmt in FORMATS:
                 path = fixtures.fixture_path(fmt, base=base)
                 self.assertTrue(path.is_file(), fmt)
-                fixtures.validate_magic(fmt, path)
+                fixtures.validate_structure(fmt, path)
+            # When fileconv is present, converter must recover every marker.
+            if fixtures.resolve_fileconv() is not None:
+                self.assertTrue(info["converterChecked"])
+                for fmt in FORMATS:
+                    self.assertTrue(info["convertResults"][fmt]["ok"], fmt)
 
     def test_missing_fixture_fails_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,15 +76,31 @@ class FixturePreflightTests(unittest.TestCase):
             with self.assertRaises(fixtures.FixtureError):
                 fixtures.preflight_fixtures(FORMATS, base=base, generate=False)
 
+    def test_fake_ooxml_pdf_png_fail_structural_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            for fmt in ("docx", "pptx", "xlsx", "pdf", "png"):
+                path = base / f"soak-{fmt}.{fmt}"
+                path.write_bytes(fixtures.invalid_stub_bytes(fmt))
+                with self.assertRaises(fixtures.FixtureError, msg=fmt):
+                    fixtures.validate_structure(fmt, path)
+            # Full preflight with fake stubs must fail closed.
+            with self.assertRaises(fixtures.FixtureError):
+                fixtures.preflight_fixtures(
+                    ["docx", "pptx", "xlsx", "pdf", "png"],
+                    base=base,
+                    generate=False,
+                    require_converter=False,
+                )
+
 
 class QuerySuccessTests(unittest.TestCase):
-    def test_compare_400_is_not_success(self) -> None:
+    def test_compare_without_dataset_is_not_success(self) -> None:
         stats = workload.RequestStats()
         client = workload.ApiClient("http://127.0.0.1:9", token="t", collection_id="c")
-        # No version pair => not-ready, not success.
         workload.do_query(client, "compare", stats, start_mono=time.monotonic())
         self.assertEqual(stats.success.get("query", 0), 0)
-        self.assertTrue(any("compare_no_version_pair" in r for r in stats.not_ready))
+        self.assertTrue(any("compare_dataset_unavailable" in r for r in stats.not_ready))
         self.assertEqual(stats.query_success_latencies_ms, [])
 
     def test_only_2xx_count_latency(self) -> None:
@@ -86,7 +108,6 @@ class QuerySuccessTests(unittest.TestCase):
         client = mock.Mock()
         client.collection_id = "c"
         client.request.return_value = (400, b"{}", 12.0)
-        # current mode with 400
         workload.do_query(client, "current", stats, start_mono=time.monotonic())
         self.assertEqual(stats.success.get("query", 0), 0)
         self.assertEqual(stats.query_success_latencies_ms, [])
@@ -94,6 +115,34 @@ class QuerySuccessTests(unittest.TestCase):
         workload.do_query(client, "current", stats, start_mono=time.monotonic())
         self.assertEqual(stats.success.get("query", 0), 1)
         self.assertEqual(stats.query_success_latencies_ms, [15.0])
+
+
+class CompareDatasetTests(unittest.TestCase):
+    def test_compare_without_env_is_unavailable_non_pass(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop(dataset.COMPARE_ENV, None)
+            info = dataset.resolve_compare_or_block(None, modes=["current", "compare"])
+        self.assertTrue(info["required"])
+        self.assertFalse(info["available"])
+        self.assertEqual(info["blocker"], "compare_dataset_unavailable")
+
+    def test_compare_dataset_verified_when_api_2xx(self) -> None:
+        client = mock.Mock()
+        client.collection_id = "c"
+        client.request.return_value = (200, b'{"hits":[]}', 5.0)
+        raw = json.dumps(
+            {
+                "documentId": "doc-1",
+                "versionA": "ver-a",
+                "versionB": "ver-b",
+            }
+        )
+        with mock.patch.dict("os.environ", {dataset.COMPARE_ENV: raw}):
+            info = dataset.resolve_compare_or_block(client, modes=["compare"])
+        self.assertTrue(info["available"])
+        self.assertEqual(info["dataset"]["documentId"], "doc-1")
 
 
 class ZeroSamplesFailTests(unittest.TestCase):
@@ -185,30 +234,27 @@ class ExceptionPropagationTests(unittest.TestCase):
     def test_worker_exception_propagates(self) -> None:
         client = workload.ApiClient("http://127.0.0.1:9", token="t", collection_id="c")
         loaded = profile.load_workload_profile(WORKLOAD)
-        # Force fixture ok in temp dir by monkeypatching fixture_path used in preflight.
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            fixtures.preflight_fixtures(FORMATS, base=base)
-            with mock.patch.object(workload, "fixture_path", side_effect=RuntimeError("boom")):
-                with mock.patch.object(workload, "preflight_fixtures", return_value={"ok": True}):
-                    with self.assertRaises(RuntimeError):
-                        workload.run_mixed_load(
-                            client=client,
-                            profile={
-                                **loaded,
-                                "actors": {
-                                    **loaded["actors"],
-                                    "ingest": {"rps": 20.0, "formats": ["txt"]},
-                                    "query": {"rps": 0.0, "modes": ["current"]},
-                                    "delete": {"rps": 0.0},
-                                    "reconcile": {"intervalSeconds": 9999},
-                                },
+        with mock.patch.object(workload, "fixture_path", side_effect=RuntimeError("boom")):
+            with mock.patch.object(workload, "preflight_fixtures", return_value={"ok": True}):
+                with self.assertRaises(RuntimeError):
+                    workload.run_mixed_load(
+                        client=client,
+                        profile={
+                            **loaded,
+                            "actors": {
+                                **loaded["actors"],
+                                "ingest": {"rps": 20.0, "formats": ["txt"]},
+                                "query": {"rps": 0.0, "modes": ["current"]},
+                                "delete": {"rps": 0.0},
+                                "reconcile": {"intervalSeconds": 9999},
                             },
-                            duration_seconds=1,
-                            compose_project="markhand-poc",
-                            enable_reconcile=False,
-                            max_workers=2,
-                        )
+                        },
+                        duration_seconds=1,
+                        compose_project="markhand-poc",
+                        enable_reconcile=False,
+                        max_workers=2,
+                        skip_fixture_preflight=True,
+                    )
 
 
 class InjectionTimingTests(unittest.TestCase):
@@ -217,9 +263,8 @@ class InjectionTimingTests(unittest.TestCase):
         client = workload.ApiClient("http://127.0.0.1:9", token="t", collection_id="c")
         loaded = profile.load_workload_profile(WORKLOAD)
 
-        def cb(elapsed: float, kind: str, stats: workload.RequestStats) -> None:
+        def cb(elapsed: float, kind: str) -> None:
             calls.append((elapsed, kind))
-            stats.add_injection_window(elapsed, elapsed + 0.5)
 
         with mock.patch.object(workload, "preflight_fixtures", return_value={"ok": True}):
             with mock.patch.object(workload, "do_ingest", return_value=None):
@@ -241,24 +286,149 @@ class InjectionTimingTests(unittest.TestCase):
                             enable_reconcile=False,
                             injection_callback=cb,
                             injection_schedule=[(0.5, "kill_worker"), (1.0, "dependency_blip")],
+                            skip_fixture_preflight=True,
                         )
         kinds = [k for _t, k in calls]
         self.assertIn("kill_worker", kinds)
         self.assertIn("dependency_blip", kinds)
         self.assertTrue(all(0 <= t < 2 for t, _k in calls))
 
+    def test_async_injection_does_not_block_scheduler(self) -> None:
+        """Synchronous 15s blip must not masquerade as complete on the scheduler thread."""
+        plan = injection.InjectionPlan()
+        plan.workload_start_mono = time.monotonic()
+        plan.start_pool(max_workers=2)
+        started = time.monotonic()
+        barrier = threading.Event()
 
-class PostRestoreAbsentTests(unittest.TestCase):
+        def slow_blip() -> dict:
+            barrier.set()
+            time.sleep(0.4)
+            return {"action": "dependency_blip", "recovered": True}
+
+        # schedule returns immediately (non-blocking)
+        plan.schedule(kind="dependency_blip", scheduled_at=0.0, fn=slow_blip)
+        self.assertLess(time.monotonic() - started, 0.15)
+        self.assertTrue(barrier.wait(timeout=1.0))
+        summary = plan.join(timeout=2.0)
+        self.assertTrue(summary["ok"])
+        self.assertEqual(summary["expected"], 1)
+        self.assertEqual(summary["observed"], 1)
+
+    def test_partial_injection_counts_fail(self) -> None:
+        """2 scheduled / 1 observed must fail closed (no overwritten bool)."""
+        plan = injection.InjectionPlan()
+        plan.workload_start_mono = time.monotonic()
+        plan.start_pool(max_workers=2)
+
+        def ok() -> dict:
+            return {"action": "kill_worker", "recovered": True}
+
+        def boom() -> dict:
+            raise injection.InjectionError("forced")
+
+        plan.schedule(kind="kill_worker", scheduled_at=0.0, fn=ok)
+        plan.schedule(kind="kill_worker", scheduled_at=0.1, fn=boom)
+        with self.assertRaises(injection.InjectionError) as ctx:
+            plan.join(timeout=2.0)
+        self.assertIn("injection_incomplete", str(ctx.exception))
+
+
+class PostRestoreTests(unittest.TestCase):
     def test_without_same_run_restore_unknown(self) -> None:
         client = workload.ApiClient("http://127.0.0.1:9", token="t", collection_id="c")
-        result = workload.post_restore_retrieval_check(
+        result = dataset.post_restore_retrieval_check(
             client,
             retained_ids=["a"],
             deleted_ids=["b"],
+            unauthorized_client=None,
             same_run_restore=False,
+            restored_endpoint_ok=False,
         )
         self.assertIsNone(result["passed"])
         self.assertEqual(result["gate"], "unknown")
+
+    def test_restored_same_as_blue_non_pass(self) -> None:
+        info = dataset.resolve_restored_api_base(
+            blue_base="http://127.0.0.1:8788",
+            o03_report={"restoredApiBase": "http://127.0.0.1:8788"},
+        )
+        self.assertFalse(info["available"])
+        self.assertEqual(info["blocker"], "restored_api_same_as_blue")
+
+    def test_restored_missing_non_pass(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop(dataset.RESTORED_API_ENV, None)
+            info = dataset.resolve_restored_api_base(
+                blue_base="http://127.0.0.1:8788", o03_report={"status": "pass"}
+            )
+        self.assertFalse(info["available"])
+        self.assertEqual(info["blocker"], "restored_api_base_missing")
+
+    def test_retained_hit_absent_non_pass(self) -> None:
+        restored = mock.Mock()
+        restored.collection_id = "c"
+        # Search empty + document GET 404 ⇒ retained absent.
+        restored.request.side_effect = [
+            (200, b'{"hits":[]}', 5.0),
+            (404, b"", 1.0),
+        ]
+        unauthorized = mock.Mock()
+        unauthorized.request.return_value = (401, b"", 1.0)
+        result = dataset.post_restore_retrieval_check(
+            restored,
+            retained_ids=["ret-1"],
+            deleted_ids=["del-1"],
+            unauthorized_client=unauthorized,
+            same_run_restore=True,
+            restored_endpoint_ok=True,
+        )
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["reason"], "retained_hit_absent")
+
+    def test_unauthorized_2xx_non_pass(self) -> None:
+        restored = mock.Mock()
+        restored.collection_id = "c"
+        restored.request.return_value = (
+            200,
+            b'{"hits":[{"documentId":"ret-1"}]}',
+            5.0,
+        )
+        unauthorized = mock.Mock()
+        unauthorized.request.return_value = (200, b'{"id":"ret-1"}', 5.0)
+        result = dataset.post_restore_retrieval_check(
+            restored,
+            retained_ids=["ret-1"],
+            deleted_ids=["del-1"],
+            unauthorized_client=unauthorized,
+            same_run_restore=True,
+            restored_endpoint_ok=True,
+        )
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["reason"], "unauthorized_access_2xx")
+
+    def test_post_restore_pass_requires_retained_deleted_authz(self) -> None:
+        restored = mock.Mock()
+        restored.collection_id = "c"
+        restored.request.return_value = (
+            200,
+            b'{"hits":[{"documentId":"ret-1"}]}',
+            5.0,
+        )
+        unauthorized = mock.Mock()
+        unauthorized.request.return_value = (403, b"", 1.0)
+        result = dataset.post_restore_retrieval_check(
+            restored,
+            retained_ids=["ret-1"],
+            deleted_ids=["del-1"],
+            unauthorized_client=unauthorized,
+            same_run_restore=True,
+            restored_endpoint_ok=True,
+        )
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["unauthorizedDenied"])
 
 
 class SamplerThreadTests(unittest.TestCase):
@@ -275,7 +445,6 @@ class SamplerThreadTests(unittest.TestCase):
         started = time.monotonic()
         bg.start()
         time.sleep(0.05)
-        # Caller continues immediately.
         self.assertLess(time.monotonic() - started, 0.15)
         time.sleep(0.5)
         bg.stop()

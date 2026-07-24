@@ -171,7 +171,10 @@ def _cmd_text(args: list[str]) -> str | None:
     return text or None
 
 
+
 def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]:
+    import dataset as dataset_mod
+
     git_short = git_output("rev-parse", "--short", "HEAD")
     git_full = git_output("rev-parse", "HEAD")
     out = Path(args.out)
@@ -185,16 +188,21 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
     duration = int(args.duration_seconds) if args.duration_seconds is not None else official
     smoke = duration != official
     project = compose_project()
+    formats = list(loaded["actors"]["ingest"]["formats"])
+    modes = list(loaded["actors"]["query"]["modes"])
 
-    # Fixture preflight — fail closed before load.
+    architectural_blockers: list[str] = []
+
+    # 1) Converter-accepted fixture preflight (fail closed).
     try:
-        fixture_info = fixtures.preflight_fixtures(loaded["actors"]["ingest"]["formats"])
+        fixture_info = fixtures.preflight_fixtures(formats, generate=True)
         write_raw(raw_dir, "fixtures-preflight.json", json.dumps(fixture_info, indent=2) + "\n")
         fixture_ok = True
     except fixtures.FixtureError as exc:
         write_raw(raw_dir, "fixtures-preflight.txt", str(exc) + "\n")
         fixture_ok = False
         fixture_info = {"ok": False, "error": str(exc)}
+        architectural_blockers.append("fixtures_preflight_failed")
 
     container_ids: dict[str, str] = {}
     try:
@@ -204,7 +212,7 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
 
     image_ids: dict[str, str] = {}
     try:
-        image_ids, _digests, _missing = _collect_images(project)
+        image_ids, _d, _m = _collect_images(project)
     except Exception:  # noqa: BLE001
         image_ids = {}
 
@@ -221,7 +229,9 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
     )
     write_raw(raw_dir, "prerequisites.json", json.dumps(prereq, indent=2) + "\n")
 
-    base = api_base_url()
+    host = api_base_url()
+    if host.endswith("/api/v1"):
+        host = host[: -len("/api/v1")]
     email = os.environ.get("MARKHAND_SOAK_EMAIL", "admin@poc.example")
     password = os.environ.get("MARKHAND_SOAK_PASSWORD", "")
     collection_id = os.environ.get(
@@ -230,14 +240,11 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
     token = os.environ.get("MARKHAND_SOAK_TOKEN", "").strip() or None
     if not token and password:
         try:
-            token = workload.login(base, email, password)
+            token = workload.login(host, email, password)
         except Exception as exc:  # noqa: BLE001
             write_raw(raw_dir, "login-error.txt", f"{type(exc).__name__}\n")
             token = None
 
-    host = base
-    if host.endswith("/api/v1"):
-        host = host[: -len("/api/v1")]
     client = workload.ApiClient(
         host,
         token=token,
@@ -246,18 +253,95 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         max_in_flight=int(os.environ.get("MARKHAND_SOAK_MAX_IN_FLIGHT", "32")),
     )
 
+    # 2) Compare dataset — fail closed if profile includes compare.
+    compare_info = dataset_mod.resolve_compare_or_block(
+        client if token else None, modes=modes
+    )
+    write_raw(raw_dir, "compare-dataset.json", json.dumps(compare_info, indent=2) + "\n")
+    if compare_info.get("required") and not compare_info.get("available"):
+        architectural_blockers.append(
+            compare_info.get("blocker") or "compare_dataset_unavailable"
+        )
+
+    # Seed + wait indexed before timed schedule.
+    seed_info: dict[str, Any] = {"ok": False}
+    retained_ids: list[str] = []
+    baseline_ids: list[str] = []
+    can_seed = bool(token and fixture_ok and prereq["ok"] and compare_info.get("available", True))
+    if can_seed:
+        try:
+            seed_info = dataset_mod.seed_and_wait_indexed(
+                client,
+                formats=formats,
+                fixture_path_fn=fixtures.fixture_path,
+                timeout_seconds=float(os.environ.get("MARKHAND_SOAK_SEED_TIMEOUT", "180")),
+            )
+            retained_ids = list(seed_info.get("retainedDocumentIds") or [])
+            baseline_ids = list(retained_ids)
+            write_raw(raw_dir, "seed.json", json.dumps(seed_info, indent=2) + "\n")
+        except dataset_mod.DatasetError as exc:
+            seed_info = {"ok": False, "error": str(exc)}
+            write_raw(raw_dir, "seed-error.txt", str(exc) + "\n")
+            architectural_blockers.append("seed_index_unavailable")
+            can_seed = False
+    else:
+        write_raw(raw_dir, "seed-skipped.txt", "seed skipped: missing token/prereq/fixture/compare\n")
+
+    # Injection plan (async executor).
+    kill_every = int(loaded["failureInjection"].get("killWorkerEverySeconds") or 0)
+    blip_seconds = int(loaded["failureInjection"].get("dependencyBlipSeconds") or 0)
+    injection_schedule: list[tuple[float, str]] = []
+    if args.enable_failure_injection and kill_every > 0:
+        t = float(kill_every)
+        while t < duration:
+            injection_schedule.append((t, "kill_worker"))
+            t += float(kill_every)
+    if args.enable_failure_injection and blip_seconds > 0:
+        blip_at = min(float(duration) * 0.5, max(1.0, float(duration) - blip_seconds - 1))
+        injection_schedule.append((blip_at, "dependency_blip"))
+
+    plan = injection.InjectionPlan()
+    recovery_deadline = float(os.environ.get("MARKHAND_SOAK_RECOVERY_DEADLINE", "120"))
+    allowed_ids_holder: dict[str, str] = dict(container_ids)
+
+    def make_kill():
+        ids = dict(allowed_ids_holder)
+        return injection.kill_and_restart_worker(
+            compose_project=project,
+            service="worker-convert",
+            allowed_ids=ids,
+            recovery_deadline_seconds=recovery_deadline,
+        )
+
+    def make_blip():
+        ids = dict(allowed_ids_holder)
+        return injection.dependency_blip(
+            compose_project=project,
+            service="postgres",
+            allowed_ids=ids,
+            blip_seconds=blip_seconds,
+            recovery_deadline_seconds=recovery_deadline,
+        )
+
+    def injection_callback(elapsed: float, kind: str) -> None:
+        # Non-blocking: schedule onto dedicated executor.
+        if kind == "kill_worker":
+            plan.schedule(kind=kind, scheduled_at=elapsed, fn=make_kill)
+        elif kind == "dependency_blip":
+            plan.schedule(kind=kind, scheduled_at=elapsed, fn=make_blip)
+
     tracker = sampler.GrowthTracker()
     sample_interval = float(
         os.environ.get("MARKHAND_SOAK_SAMPLE_INTERVAL_SECONDS", str(DEFAULT_SAMPLE_INTERVAL))
     )
 
     def sample_once() -> None:
-        stats_s = sampler.sample_docker_stats(container_ids)
+        stats_s = sampler.sample_docker_stats(allowed_ids_holder)
         metrics_s = sampler.sample_api_metrics(host)
         pg = sampler.sample_pg_connections(
-            compose_project=project, container_ids=container_ids
+            compose_project=project, container_ids=allowed_ids_holder
         )
-        temp = sampler.sample_container_temp_bytes(container_ids)
+        temp = sampler.sample_container_temp_bytes(allowed_ids_holder)
         tracker.observe(
             rss_mb=stats_s.get("rssMbTotal"),
             temp_bytes=temp.get("tempBytes"),
@@ -268,87 +352,18 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
 
     bg = sampler.BackgroundSampler(interval_seconds=sample_interval, sample_fn=sample_once)
 
-    # Injection schedule during active workload.
-    kill_every = int(loaded["failureInjection"].get("killWorkerEverySeconds") or 0)
-    blip_seconds = int(loaded["failureInjection"].get("dependencyBlipSeconds") or 0)
-    injection_schedule: list[tuple[float, str]] = []
-    if args.enable_failure_injection and kill_every > 0:
-        t = float(kill_every)
-        while t < duration:
-            injection_schedule.append((t, "kill_worker"))
-            t += float(kill_every)
-    if args.enable_failure_injection and blip_seconds > 0:
-        # Single blip mid-soak (or at blip offset if duration short).
-        blip_at = min(float(duration) * 0.5, max(1.0, float(duration) - blip_seconds - 1))
-        injection_schedule.append((blip_at, "dependency_blip"))
-
-    injection_evidence: list[dict[str, Any]] = []
-    worker_recovery: bool | None = None
-    dependency_recovery: bool | None = None
-    recovery_deadline = float(os.environ.get("MARKHAND_SOAK_RECOVERY_DEADLINE", "120"))
-
-    def injection_callback(elapsed: float, kind: str, stats: workload.RequestStats) -> None:
-        nonlocal worker_recovery, dependency_recovery, container_ids
-        try:
-            if kind == "kill_worker":
-                service = "worker-convert"
-                if service not in container_ids:
-                    worker_recovery = False
-                    return
-                window_end = elapsed + recovery_deadline
-                stats.add_injection_window(elapsed, window_end)
-                started = time.monotonic()
-                ev = injection.kill_and_restart_worker(
-                    compose_project=project,
-                    service=service,
-                    allowed_ids=container_ids,
-                    recovery_deadline_seconds=recovery_deadline,
-                )
-                ev["scheduledAtSeconds"] = elapsed
-                ev["recoveryLatencySeconds"] = round(time.monotonic() - started, 3)
-                injection.write_injection_evidence(raw_dir, ev)
-                injection_evidence.append(ev)
-                worker_recovery = bool(ev.get("recovered"))
-                container_ids = injection.discover_poc_containers(project)
-            elif kind == "dependency_blip":
-                service = "postgres"
-                if service not in container_ids:
-                    dependency_recovery = False
-                    return
-                window_end = elapsed + blip_seconds + recovery_deadline
-                stats.add_injection_window(elapsed, window_end)
-                started = time.monotonic()
-                ev = injection.dependency_blip(
-                    compose_project=project,
-                    service=service,
-                    allowed_ids=container_ids,
-                    blip_seconds=blip_seconds,
-                    recovery_deadline_seconds=recovery_deadline,
-                )
-                ev["scheduledAtSeconds"] = elapsed
-                ev["recoveryLatencySeconds"] = round(time.monotonic() - started, 3)
-                injection.write_injection_evidence(raw_dir, ev)
-                injection_evidence.append(ev)
-                dependency_recovery = bool(ev.get("recovered"))
-                container_ids = injection.discover_poc_containers(project)
-        except injection.InjectionError as exc:
-            write_raw(raw_dir, "injection-error.txt", f"{elapsed}:{kind}:{exc}\n")
-            if kind == "kill_worker":
-                worker_recovery = False
-            if kind == "dependency_blip":
-                dependency_recovery = False
-
     measured = False
     stats = None
     load_error = None
-    o03_same_run: dict[str, Any] | None = None
-    same_run_restore = False
-
-    can_run = bool(token and prereq["ok"] and fixture_ok)
+    injection_summary: dict[str, Any] = {"ok": False}
+    can_run = bool(can_seed and seed_info.get("ok") and not architectural_blockers)
     if can_run:
         try:
             sample_once()
             bg.start()
+            plan.workload_start_mono = time.monotonic()
+            if args.enable_failure_injection:
+                plan.start_pool(max_workers=2)
             stats = workload.run_mixed_load(
                 client=client,
                 profile=loaded,
@@ -357,8 +372,30 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
                 enable_reconcile=not args.skip_reconcile,
                 injection_callback=injection_callback if args.enable_failure_injection else None,
                 injection_schedule=injection_schedule if args.enable_failure_injection else None,
+                compare_dataset=compare_info.get("dataset"),
+                injection_window_fn=plan.in_window,
+                retained_ids=retained_ids,
+                skip_fixture_preflight=True,
             )
             measured = True
+            if args.enable_failure_injection:
+                try:
+                    injection_summary = plan.join(timeout=recovery_deadline + blip_seconds + 60)
+                    write_raw(
+                        raw_dir,
+                        "injection-summary.json",
+                        json.dumps(injection_summary, indent=2) + "\n",
+                    )
+                    for ev in injection_summary.get("events") or []:
+                        injection.write_injection_evidence(raw_dir, ev)
+                    # Refresh container ids after mutations.
+                    try:
+                        allowed_ids_holder.update(injection.discover_poc_containers(project))
+                    except injection.InjectionError:
+                        pass
+                except injection.InjectionError as exc:
+                    injection_summary = {"ok": False, "error": str(exc)}
+                    write_raw(raw_dir, "injection-error.txt", str(exc) + "\n")
         except Exception as exc:  # noqa: BLE001
             load_error = f"{type(exc).__name__}:{exc}"
             write_raw(raw_dir, "workload-error.txt", load_error + "\n")
@@ -366,20 +403,40 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
             bg.stop()
             sample_once()
     else:
-        reasons = []
-        if not token:
-            reasons.append("missing_token")
-        if not prereq["ok"]:
-            reasons.append("prerequisites_incomplete")
-        if not fixture_ok:
-            reasons.append("fixtures_preflight_failed")
-        write_raw(raw_dir, "workload-skipped.txt", "skipped: " + ",".join(reasons) + "\n")
+        write_raw(
+            raw_dir,
+            "workload-skipped.txt",
+            "skipped: " + ",".join(architectural_blockers or ["not_ready"]) + "\n",
+        )
 
-    # Qualification checkpoint: same-run O03 restore AFTER baseline synthetic state.
+    injection_ok = bool(args.enable_failure_injection and injection_summary.get("ok"))
+    if not args.enable_failure_injection:
+        write_raw(
+            raw_dir,
+            "injection-skipped.txt",
+            "failure injection disabled; pass requires --enable-failure-injection\n",
+        )
+
+    # Same-run O03 checkpoint AFTER baseline (does not cut over blue API).
+    o03_same_run: dict[str, Any] | None = None
+    o03_report = None
+    if Path(args.o03).is_file():
+        try:
+            o03_report = json.loads(Path(args.o03).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            o03_report = None
+    same_run_restore = False
     if measured and args.invoke_o03_restore:
         if not O03_RUNNER.is_file():
             o03_same_run = {"invoked": False, "error": "runner_missing", "sameRun": False}
         else:
+            # Capture immutable baseline IDs before backup/restore.
+            write_raw(
+                raw_dir,
+                "baseline-dataset-ids.json",
+                json.dumps({"retained": baseline_ids, "seeded": seed_info.get("seeded")}, indent=2)
+                + "\n",
+            )
             proc = subprocess.run(
                 ["bash", str(O03_RUNNER)],
                 cwd=ROOT,
@@ -399,49 +456,66 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
                 "sameRun": same_run_restore,
                 "phase": "post_baseline_checkpoint",
             }
-            # Re-validate O03 report after runner.
-            prereq = prerequisites.validate_prerequisites(
-                f02_path=Path(args.f02),
-                o02_path=Path(args.o02),
-                o03_path=Path(args.o03),
-                o04_path=Path(args.o04),
-                current_git_full=git_full,
-                compose_project=project,
-                live_image_ids=image_ids or None,
-                live_index_signature=index_sig,
-            )
+            if Path(args.o03).is_file():
+                try:
+                    o03_report = json.loads(Path(args.o03).read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
 
-    injection_ok = False
-    if args.enable_failure_injection:
-        if measured:
-            injection_ok = worker_recovery is True and dependency_recovery is True
-        else:
-            injection_ok = False
-    else:
-        write_raw(
-            raw_dir,
-            "injection-skipped.txt",
-            "failure injection disabled; pass requires --enable-failure-injection\n",
-        )
+    restored_info = dataset_mod.resolve_restored_api_base(
+        blue_base=host, o03_report=o03_report if isinstance(o03_report, dict) else None
+    )
+    write_raw(raw_dir, "restored-api.json", json.dumps(restored_info, indent=2) + "\n")
+    # Post-restore proof requires a distinct green endpoint. O03 exit 0 alone
+    # is not enough; blue API must never masquerade as restored.
+    if args.invoke_o03_restore or same_run_restore:
+        if not restored_info.get("available"):
+            architectural_blockers.append(
+                restored_info.get("blocker") or "restored_api_base_missing"
+            )
 
     post_restore: dict[str, Any] = {
         "passed": None,
         "gate": "unknown",
-        "reason": "no_same_run_restore",
+        "reason": "no_reachable_restored_endpoint",
     }
     if measured and stats is not None:
-        post_restore = workload.post_restore_retrieval_check(
-            client,
-            retained_ids=list(stats.retained_ids),
+        restored_client = None
+        unauthorized_client = None
+        if restored_info.get("available"):
+            restored_host = restored_info["restoredApiBase"]
+            # Auth against restored endpoint (token may need re-login).
+            restored_token = token
+            if password:
+                try:
+                    restored_token = workload.login(restored_host, email, password)
+                except Exception:  # noqa: BLE001
+                    restored_token = token
+            restored_client = workload.ApiClient(
+                restored_host,
+                token=restored_token,
+                collection_id=collection_id,
+                timeout_seconds=float(os.environ.get("MARKHAND_SOAK_TIMEOUT_SECONDS", "30")),
+            )
+            unauthorized_client = workload.ApiClient(
+                restored_host,
+                token="invalid-unauthorized-token",
+                collection_id=collection_id,
+                timeout_seconds=10.0,
+            )
+        post_restore = dataset_mod.post_restore_retrieval_check(
+            restored_client or client,
+            retained_ids=list(stats.retained_ids or baseline_ids),
             deleted_ids=list(stats.deleted_ids),
+            unauthorized_client=unauthorized_client,
             same_run_restore=same_run_restore,
+            restored_endpoint_ok=bool(restored_info.get("available")),
         )
         write_raw(raw_dir, "post-restore-retrieval.json", json.dumps(post_restore, indent=2) + "\n")
 
     tracker.write_raw(raw_dir)
     growth = tracker.summary()
 
-    modes = list(loaded["actors"]["query"]["modes"])
     metrics: dict[str, Any] = {"measured": measured}
     completeness = {"passed": None}
     if stats is not None:
@@ -463,13 +537,29 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
             "queueAgeMaxSeconds": growth.get("queueAgeMaxSeconds"),
             "dbConnectionsMax": growth.get("dbConnectionsMax"),
             "smoke": smoke,
-            "workerRecoveryPass": worker_recovery,
-            "dependencyRecoveryPass": dependency_recovery,
+            "workerRecoveryPass": (
+                injection_summary.get("allRecovered")
+                if args.enable_failure_injection
+                else None
+            ),
+            "dependencyRecoveryPass": (
+                injection_summary.get("allRecovered")
+                if args.enable_failure_injection
+                else None
+            ),
             "postRestoreRetrievalPass": post_restore.get("passed"),
             "durationSeconds": duration,
             "samplerErrors": list(bg.errors),
+            "architecturalBlockers": architectural_blockers,
         }
     )
+    # Prefer kill/blip specific recovery flags when available.
+    if args.enable_failure_injection and injection_summary.get("events"):
+        kills = [e for e in injection_summary["events"] if e.get("action") == "kill_worker"]
+        blips = [e for e in injection_summary["events"] if e.get("action") == "dependency_blip"]
+        metrics["workerRecoveryPass"] = bool(kills) and all(e.get("recovered") for e in kills)
+        metrics["dependencyRecoveryPass"] = bool(blips) and all(e.get("recovered") for e in blips)
+
     write_raw(raw_dir, "metrics.json", json.dumps(metrics, indent=2) + "\n")
 
     gates = (
@@ -477,16 +567,20 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         if measured
         else report.unknown_gates()
     )
-    if not fixture_ok:
-        # Force non-pass when fixtures missing.
-        for key in list(gates):
-            if gates[key] == "pass":
-                gates[key] = "fail"
+    if architectural_blockers:
+        for key in ("queryP95", "queryP99", "postRestoreRetrieval", "completeness"):
+            if key in gates and gates[key] == "pass":
+                gates[key] = "fail" if measured else "unknown"
+        if "compare_dataset_unavailable" in architectural_blockers:
+            gates["queryP95"] = "fail" if measured else "unknown"
+            gates["queryP99"] = "fail" if measured else "unknown"
+        if any(b.startswith("restored_api") for b in architectural_blockers):
+            gates["postRestoreRetrieval"] = "unknown"
 
     redaction = redact.scan_raw_dir(raw_dir)
     status, blockers = report.evaluate_status(
         markhand_soak=True,
-        prerequisites_ok=bool(prereq["ok"]) and fixture_ok,
+        prerequisites_ok=bool(prereq["ok"]) and fixture_ok and not architectural_blockers,
         measured=measured,
         smoke=smoke,
         gates=gates,
@@ -495,24 +589,13 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         duration_seconds=duration,
         official_duration=official,
     )
+    blockers = list(blockers) + [f"arch:{b}" for b in architectural_blockers]
     if load_error:
-        blockers = list(blockers) + [f"workload_error:{load_error}"]
+        blockers.append(f"workload_error:{load_error}")
         if status == "pass":
             status = "fail"
-    if not fixture_ok:
-        blockers = list(blockers) + ["fixtures_preflight_failed"]
-        if status == "pass":
-            status = "fail"
-    if measured and not same_run_restore:
-        # Explicit: without same-run restore, postRestore cannot pass.
-        if gates.get("postRestoreRetrieval") == "pass":
-            gates["postRestoreRetrieval"] = "unknown"
-        if "gate:postRestoreRetrieval:pass" in blockers:
-            blockers = [b for b in blockers if b != "gate:postRestoreRetrieval:pass"]
-        if "gate:postRestoreRetrieval:unknown" not in blockers:
-            blockers.append("gate:postRestoreRetrieval:unknown")
-        if status == "pass":
-            status = "incomplete"
+    if status == "pass" and architectural_blockers:
+        status = "fail"
 
     notes = (
         "Smoke/non-qualifying duration; cannot pass official O05."
@@ -520,7 +603,8 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         else (
             "Live measured soak."
             if status == "pass"
-            else "Live soak opted in; see blockers — not a pass."
+            else "Live soak opted in; see blockers — not a pass. "
+            "Architectural compare/restore cutover blockers are documented in soak-o05.md."
         )
     )
 
@@ -535,19 +619,21 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         "canonicalReport": report.CANONICAL,
         "notes": notes,
         "blockers": blockers,
+        "architecturalBlockers": architectural_blockers,
         "gates": gates,
         "thresholds": thr,
         "metrics": metrics,
         "prerequisites": prereq,
         "fixturePreflight": fixture_info,
+        "compareDataset": compare_info,
+        "seed": seed_info,
         "failureInjection": {
             "enabled": bool(args.enable_failure_injection),
             "schedule": [{"at": t, "kind": k} for t, k in injection_schedule],
-            "events": injection_evidence,
-            "workerRecoveryPass": worker_recovery,
-            "dependencyRecoveryPass": dependency_recovery,
+            "summary": injection_summary,
         },
         "postRestoreRetrieval": post_restore,
+        "restoredApi": restored_info,
         "o03SameRun": o03_same_run,
         "versions": {
             "git": git_short,
@@ -576,6 +662,7 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         "officialDurationSeconds": official,
         "sampleIntervalSeconds": sample_interval,
     }
+
 
 
 def main() -> int:
