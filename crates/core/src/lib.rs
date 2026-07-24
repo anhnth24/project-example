@@ -360,6 +360,66 @@ fn title_from_markdown(markdown: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn assert_format(path: &str, expected: FormatKind) {
+        assert_eq!(
+            FormatKind::from_path(Path::new(path)),
+            expected,
+            "đường dẫn {path:?} phải map tới {expected:?}"
+        );
+    }
+
+    /// from_path phải khớp đuôi file với FormatKind
+    #[test]
+    fn format_kind_from_path_maps_extensions() {
+        let cases: &[(&str, FormatKind)] = &[
+            // Office
+            ("report.pdf", FormatKind::Pdf),
+            ("REPORT.PDF", FormatKind::Pdf),
+            ("slides.pptx", FormatKind::Pptx),
+            ("doc.docx", FormatKind::Docx),
+            // Spreadsheet
+            ("a.xlsx", FormatKind::Xlsx),
+            ("b.xls", FormatKind::Xlsx),
+            ("c.xlsb", FormatKind::Xlsx),
+            ("d.ods", FormatKind::Xlsx),
+            ("e.csv", FormatKind::Csv),
+            // Web / text
+            ("page.html", FormatKind::Html),
+            ("page.htm", FormatKind::Html),
+            ("notes.txt", FormatKind::Text),
+            ("readme.md", FormatKind::Text),
+            ("app.log", FormatKind::Text),
+            ("long.markdown", FormatKind::Text),
+            // Image / audio (mẫu)
+            ("scan.png", FormatKind::Image),
+            ("photo.JPG", FormatKind::Image),
+            ("clip.mp3", FormatKind::Audio),
+            ("voice.wav", FormatKind::Audio),
+            // Unknown
+            ("Makefile", FormatKind::Unknown),
+            ("legacy.doc", FormatKind::Unknown), // .doc chưa hỗ trợ — không sniff magic-byte
+            ("archive.zip", FormatKind::Unknown),
+            ("file.tar.gz", FormatKind::Unknown), // chỉ lấy đuôi cuối "gz"
+        ];
+        for (path, expected) in cases {
+            assert_format(path, *expected);
+        }
+    }
+
+    /// Mọi đuôi trong `supported_extensions` phải được `from_path` nhận (không Unknown).
+    #[test]
+    fn supported_extensions_matches_from_path() {
+        for ext in FormatKind::supported_extensions() {
+            let path = format!("file.{ext}");
+            assert_ne!(
+                FormatKind::from_path(Path::new(&path)),
+                FormatKind::Unknown,
+                "đuôi {ext:?} có trong supported_extensions nhưng from_path trả Unknown"
+            );
+        }
+    }
 
     #[test]
     fn legacy_converter_options_exhaustive_literal_still_compiles() {
