@@ -205,6 +205,67 @@ class CompareDatasetTests(unittest.TestCase):
         self.assertEqual(built["asOfA"], "2026-01-16T12:00:00Z")
         self.assertGreater(built["asOfB"], built["effectiveFromB"])
 
+    def test_create_compare_uses_published_not_upload_draft_version_ids(self) -> None:
+        client = mock.Mock()
+        client.request.side_effect = [
+            (
+                200,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "published-a",
+                                "effectiveFrom": "2026-01-01T00:00:00Z",
+                                "effectiveTo": None,
+                                "isCurrent": True,
+                            }
+                        ]
+                    }
+                ).encode(),
+                1.0,
+            ),
+            (
+                200,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": "published-b",
+                                "effectiveFrom": "2026-02-01T00:00:00Z",
+                                "effectiveTo": None,
+                                "isCurrent": True,
+                            },
+                            {
+                                "id": "published-a",
+                                "effectiveFrom": "2026-01-01T00:00:00Z",
+                                "effectiveTo": "2026-02-01T00:00:00Z",
+                                "isCurrent": False,
+                            },
+                        ]
+                    }
+                ).encode(),
+                1.0,
+            ),
+        ]
+        with (
+            mock.patch.object(
+                dataset,
+                "_upload_compare_version",
+                side_effect=[("doc-1", "draft-a"), ("doc-1", "draft-b")],
+            ),
+            mock.patch.object(
+                workload, "wait_until_indexed_visible", return_value=True
+            ) as wait,
+        ):
+            built = dataset.create_compare_dataset(client)
+        self.assertEqual(built["versionA"], "published-a")
+        self.assertEqual(built["versionB"], "published-b")
+        self.assertNotIn("draft-a", built.values())
+        self.assertNotIn("draft-b", built.values())
+        self.assertEqual(wait.call_count, 2)
+        for call in wait.call_args_list:
+            self.assertNotIn("expected_version", call.kwargs)
+
     def test_missing_env_can_create_real_public_revision_pair(self) -> None:
         generated = {
             "documentId": "doc-1",
@@ -1176,6 +1237,15 @@ class ThresholdBoundaryTests(unittest.TestCase):
         self.assertEqual(thr["queryP99Ms"], 1000)
         self.assertEqual(thr["ingestDocsPerHour"], 1200)
         self.assertEqual(thr["allowedErrorsOutsideInjection"], 0)
+        self.assertTrue(thr["canonicalBindingPass"])
+
+    def test_canonical_text_hash_is_checkout_line_ending_invariant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lf = Path(tmp) / "lf.yaml"
+            crlf = Path(tmp) / "crlf.yaml"
+            lf.write_bytes(b"key: value\nnested:\n  item: 1\n")
+            crlf.write_bytes(b"key: value\r\nnested:\r\n  item: 1\r\n")
+            self.assertEqual(gates_eval._sha256(lf), gates_eval._sha256(crlf))
 
     def test_evaluate_pass_at_exact_boundaries(self) -> None:
         thr = gates_eval.load_thresholds(profile.load_workload_profile(WORKLOAD), GATES)

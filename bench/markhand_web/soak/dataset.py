@@ -192,6 +192,33 @@ def _upload_compare_version(
     return got_document, got_version
 
 
+def _published_versions(client: Any, document_id: str) -> list[dict[str, Any]]:
+    status, data, _latency = client.request(
+        "GET", f"/api/v1/documents/{document_id}/versions"
+    )
+    if not 200 <= status < 300:
+        raise DatasetError(f"compare_dataset_history_failed:http_{status}")
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DatasetError("compare_dataset_history_invalid_json") from exc
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+        raise DatasetError("compare_dataset_history_items_missing")
+    return items
+
+
+def _current_published_version(versions: list[dict[str, Any]]) -> str:
+    current = [
+        str(row["id"])
+        for row in versions
+        if row.get("isCurrent") is True and isinstance(row.get("id"), str)
+    ]
+    if len(current) != 1:
+        raise DatasetError("compare_dataset_current_version_ambiguous")
+    return current[0]
+
+
 def create_compare_dataset(
     client: Any,
     *,
@@ -205,7 +232,7 @@ def create_compare_dataset(
     query = f"SOAKCOMPARE{nonce}"
     marker_a = f"SOAKOLDA{nonce}"
     marker_b = f"SOAKNEWB{nonce}"
-    document_id, version_a = _upload_compare_version(
+    document_id, draft_a = _upload_compare_version(
         client,
         query=query,
         marker=marker_a,
@@ -216,41 +243,32 @@ def create_compare_dataset(
         client,
         document_id=document_id,
         marker=marker_a,
-        expected_version=version_a,
         timeout_seconds=timeout_seconds,
         poll_seconds=poll_seconds,
     ):
         raise DatasetError("compare_dataset_version_a_index_timeout")
-    revision_document, version_b = _upload_compare_version(
+    version_a = _current_published_version(_published_versions(client, document_id))
+    revision_document, draft_b = _upload_compare_version(
         client,
         query=query,
         marker=marker_b,
         suffix="B",
         document_id=document_id,
     )
-    if revision_document != document_id or version_a == version_b:
+    if revision_document != document_id or draft_a == draft_b:
         raise DatasetError("compare_dataset_revision_lineage_invalid")
     if not wait_until_indexed_visible(
         client,
         document_id=document_id,
         marker=marker_b,
-        expected_version=version_b,
         timeout_seconds=timeout_seconds,
         poll_seconds=poll_seconds,
     ):
         raise DatasetError("compare_dataset_version_b_index_timeout")
-    status, data, _latency = client.request(
-        "GET", f"/api/v1/documents/{document_id}/versions"
-    )
-    if not 200 <= status < 300:
-        raise DatasetError(f"compare_dataset_history_failed:http_{status}")
-    try:
-        payload = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise DatasetError("compare_dataset_history_invalid_json") from exc
-    items = payload.get("items") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
-        raise DatasetError("compare_dataset_history_items_missing")
+    items = _published_versions(client, document_id)
+    version_b = _current_published_version(items)
+    if version_a == version_b:
+        raise DatasetError("compare_dataset_revision_lineage_invalid")
     return build_compare_dataset_from_versions(
         document_id=document_id,
         version_a=version_a,

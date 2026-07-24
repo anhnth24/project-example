@@ -14,8 +14,8 @@ GATE_QUERY_P99 = "G0-SLO-QUERY-P99"
 GATE_INGEST = "G0-CAP-INGEST-THROUGHPUT"
 
 OFFICIAL_DURATION_SECONDS = 1800
-CANONICAL_PROFILE_SHA256 = "08ffd236abf5ace8d33fa0fe15da97810a3a3ebc3db205659a36074f16670e67"
-CANONICAL_GATES_SHA256 = "ba41f237a1cba7db8cda87b94fdfafcdbce364f111c88e61f3f3f61901339df7"
+CANONICAL_PROFILE_SHA256 = "35658aca67dc649e5c0a094da5a06ce3b98c05d10155438a5641ae1a3b1badaf"
+CANONICAL_GATES_SHA256 = "953eb2ba54250af7e7e2e82e539c0f48858753f112874a2ee05e16c5fc905594"
 CANONICAL_THRESHOLDS = {
     "queryP95Ms": 500.0,
     "queryP99Ms": 1000.0,
@@ -35,7 +35,10 @@ MIN_QUERY_SUCCESS_SAMPLES = 100
 def _sha256(path: Path) -> str | None:
     if not path.is_file():
         return None
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Git may materialize YAML as CRLF on Windows and LF in Linux/CI. Bind the
+    # semantic text artifact, not the checkout-specific newline representation.
+    canonical = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _load_gates_doc(path: Path) -> dict[str, Any]:
