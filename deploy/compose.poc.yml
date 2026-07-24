@@ -516,7 +516,9 @@ services:
       MARKHAND_WORKER_KIND: convert
       MARKHAND_WORKER_ID: poc-convert-1
       MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
-      MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-536870912}
+      # RLIMIT_AS needs virtual headroom for PDFium/Tesseract; the container
+      # cgroup below still caps resident memory at MARKHAND_WORKER_MEM_LIMIT.
+      MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-1073741824}
       FILECONV_PDFIUM_LIB: /opt/pdfium/lib
       TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
     # No egress: only the internal `convert` network (Postgres + MinIO).

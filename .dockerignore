@@ -8,6 +8,7 @@
 **/target
 app/dist
 app/src-tauri/target
+.artifacts
 bench/corpus*
 bench/edge
 bench/markhand_web/reports
