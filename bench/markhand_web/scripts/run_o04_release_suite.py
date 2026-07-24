@@ -52,6 +52,7 @@ DEFAULT_COMPOSE_PROJECT = "markhand-poc"
 RAW_MANIFEST = "raw-manifest.json"
 DEFAULT_COMMAND_TIMEOUT_SECS = 15 * 60
 DEFAULT_MAX_CAPTURE_BYTES = 8 * 1024 * 1024
+SUITE_WORKER_SERVICES = ["worker-convert", "worker-index", "worker-embedding"]
 
 # POC services that must appear under the Compose project label for live pass.
 EXPECTED_POC_SERVICES = [
@@ -88,6 +89,7 @@ REQUIRED_TOP_LEVEL = [
     "f02Boot",
     "blackBoxApiProbes",
     "externalWorkerKill",
+    "suiteWorkerIsolation",
 ]
 
 REQUIRED_PROVENANCE = [
@@ -386,6 +388,24 @@ def run_bounded_command(
     reader.join(timeout=5)
     text = captured.decode("utf-8", errors="replace")
     return BoundedCommandResult(returncode, text, timed_out, truncated)
+
+
+def compose_worker_control_command(project: str, action: str) -> list[str]:
+    if action not in {"stop", "start"}:
+        raise ValueError(f"unsupported worker control action: {action}")
+    command = [
+        "docker",
+        "compose",
+        "-p",
+        project,
+        "-f",
+        str(COMPOSE_FILE),
+        action,
+    ]
+    if action == "stop":
+        command.extend(["--timeout", "15"])
+    command.extend(SUITE_WORKER_SERVICES)
+    return command
 
 
 def cmd_text(args: list[str]) -> str | None:
@@ -1205,6 +1225,16 @@ def evaluate_report(
         ):
             blockers.append(f"api_probe_failed:{name}")
 
+    worker_isolation = (
+        report.get("suiteWorkerIsolation")
+        if isinstance(report.get("suiteWorkerIsolation"), dict)
+        else {}
+    )
+    if worker_isolation.get("workersStopped") is not True:
+        blockers.append("suite_worker_isolation:stop")
+    if worker_isolation.get("workersRestarted") is not True:
+        blockers.append("suite_worker_isolation:start")
+
     f02 = report.get("f02Boot") or {}
     for blocker in f02.get("validatorBlockers") or []:
         blockers.append(f"f02_validator:{blocker}")
@@ -1432,6 +1462,11 @@ def base_not_run_report(
             "replacementReclaimed": False,
             "replayConsistent": False,
             "dbStateVerified": False,
+        },
+        "suiteWorkerIsolation": {
+            "services": list(SUITE_WORKER_SERVICES),
+            "workersStopped": False,
+            "workersRestarted": False,
         },
         "redactionScan": {"passed": True, "findings": []},
         "rawDir": repo_rel(raw_dir),
@@ -2458,6 +2493,21 @@ def self_test() -> None:
             validate_cargo_command_shape(cmd)
             assert len(filters_after_double_dash(cmd)) <= 1, (key, cmd)
     assert "--include-ignored" in suite_specs()["adversarial_upload"][0]
+    stop_command = compose_worker_control_command("poc-test", "stop")
+    start_command = compose_worker_control_command("poc-test", "start")
+    assert stop_command[-5:] == [
+        "--timeout",
+        "15",
+        "worker-convert",
+        "worker-index",
+        "worker-embedding",
+    ]
+    assert start_command[-3:] == SUITE_WORKER_SERVICES
+    try:
+        compose_worker_control_command("poc-test", "restart")
+        raise AssertionError("expected unsupported worker action to raise")
+    except ValueError:
+        pass
 
     # Negative: multiple filters must raise.
     bad_cmd = [
@@ -2544,6 +2594,11 @@ def self_test() -> None:
             "dbStateVerified": True,
             "killedContainerId": "old-worker",
             "replacementContainerId": "new-worker",
+        },
+        "suiteWorkerIsolation": {
+            "services": list(SUITE_WORKER_SERVICES),
+            "workersStopped": True,
+            "workersRestarted": True,
         },
         "suites": {k: dict(good_suite) for k in REQUIRED_SUITES},
         "findings": [],
@@ -2972,6 +3027,11 @@ def run_live(raw_dir: Path) -> dict[str, Any]:
         },
         "blackBoxApiProbes": api_probes,
         "externalWorkerKill": external_kill,
+        "suiteWorkerIsolation": {
+            "services": list(SUITE_WORKER_SERVICES),
+            "workersStopped": False,
+            "workersRestarted": False,
+        },
         "redactionScan": {"passed": False, "findings": []},
         "rawDir": repo_rel(raw_dir),
         "blockers": [],
@@ -3001,32 +3061,86 @@ def run_live(raw_dir: Path) -> dict[str, Any]:
         report["notes"] = "Live O04 release suite refused to run with a dirty git tree."
         return report
 
+    worker_isolation = report["suiteWorkerIsolation"]
+    stop_command = compose_worker_control_command(project, "stop")
+    stop_proc = run_bounded_command(
+        stop_command, env, timeout_secs=60, max_bytes=128 * 1024
+    )
+    worker_isolation.update(
+        {
+            "stopCommand": stop_command,
+            "stopExitCode": stop_proc.returncode,
+            "stopTimedOut": stop_proc.timed_out,
+            "workersStopped": stop_proc.returncode == 0 and not stop_proc.timed_out,
+        }
+    )
+
     observed: set[str] = set()
-    for key, commands in suite_specs().items():
-        logs: list[str] = []
-        codes: list[int] = []
-        raw_logs: list[str] = []
-        for idx, command in enumerate(commands):
-            proc = run_cargo(command, env)
-            log = (proc.stdout or "") + "\n" + (proc.stderr or "")
-            path = write_raw(raw_dir, f"{key}.{idx}.txt", log)
-            raw_artifacts.append(path)
-            raw_logs.append(path.relative_to(raw_dir).as_posix())
-            logs.append(log)
-            codes.append(proc.returncode)
-        suite = aggregate_suite_runs(commands, logs, codes)
-        suite["rawLogs"] = raw_logs
-        suite["rawLog"] = raw_logs[0] if raw_logs else None
-        report["suites"][key] = suite
-        observed.update(suite["formatsObserved"])
-        if not suite["passed"]:
-            report["findings"].append(
+    try:
+        for key, commands in suite_specs().items():
+            logs: list[str] = []
+            codes: list[int] = []
+            raw_logs: list[str] = []
+            for idx, command in enumerate(commands):
+                proc = run_cargo(command, env)
+                log = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                path = write_raw(raw_dir, f"{key}.{idx}.txt", log)
+                raw_artifacts.append(path)
+                raw_logs.append(path.relative_to(raw_dir).as_posix())
+                logs.append(log)
+                codes.append(proc.returncode)
+            suite = aggregate_suite_runs(commands, logs, codes)
+            suite["rawLogs"] = raw_logs
+            suite["rawLog"] = raw_logs[0] if raw_logs else None
+            report["suites"][key] = suite
+            observed.update(suite["formatsObserved"])
+            if not suite["passed"]:
+                report["findings"].append(
+                    {
+                        "severity": "high" if key == "adversarial_upload" else "medium",
+                        "suite": key,
+                        "id": f"suite_failed:{key}",
+                    }
+                )
+    finally:
+        start_command = compose_worker_control_command(project, "start")
+        start_proc = run_bounded_command(
+            start_command, env, timeout_secs=60, max_bytes=128 * 1024
+        )
+        worker_isolation.update(
+            {
+                "startCommand": start_command,
+                "startExitCode": start_proc.returncode,
+                "startTimedOut": start_proc.timed_out,
+                "workersRestarted": start_proc.returncode == 0
+                and not start_proc.timed_out,
+            }
+        )
+        isolation_log = write_raw(
+            raw_dir,
+            "suite-worker-isolation.json",
+            json.dumps(
                 {
-                    "severity": "high" if key == "adversarial_upload" else "medium",
-                    "suite": key,
-                    "id": f"suite_failed:{key}",
-                }
-            )
+                    **worker_isolation,
+                    "stopOutput": stop_proc.output,
+                    "startOutput": start_proc.output,
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+        )
+        raw_artifacts.append(isolation_log)
+
+    if (
+        worker_isolation["workersStopped"] is not True
+        or worker_isolation["workersRestarted"] is not True
+    ):
+        report["findings"].append(
+            {
+                "severity": "high",
+                "id": "suite_worker_isolation_failed",
+            }
+        )
 
     report["formatsObserved"] = sorted(observed)
     manifest_path = write_raw_manifest(raw_dir, raw_artifacts)
