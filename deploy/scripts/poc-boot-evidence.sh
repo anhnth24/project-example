@@ -226,14 +226,15 @@ CONVERT_NET=""
 if [[ -n "${convert_id:-}" ]]; then
   nets="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$convert_id")"
   echo "$nets" >"$RAW_DIR/worker-convert-networks.json"
-  echo "$nets" | grep -q '"convert"' && pass "worker-convert on convert network" || fail "worker-convert missing convert network"
-  if echo "$nets" | grep -Eq '"edge"|"private"'; then
+  CONVERT_NET="$(python3 -c 'import json,sys; nets=json.loads(sys.argv[1]);
+print(next((k for k in nets if k.endswith("_convert") or k=="convert"), ""))' "$nets")"
+  [[ -n "$CONVERT_NET" ]] && pass "worker-convert on convert network ($CONVERT_NET)" || fail "worker-convert missing convert network"
+  if python3 -c 'import json,sys; nets=json.loads(sys.argv[1]);
+raise SystemExit(0 if any(k == "edge" or k == "private" or k.endswith("_edge") or k.endswith("_private") for k in nets) else 1)' "$nets"; then
     fail "worker-convert attached to edge/private"
   else
     pass "worker-convert not on edge/private"
   fi
-  CONVERT_NET="$(python3 -c 'import json,sys; nets=json.loads(sys.argv[1]);
-print(next((k for k in nets if k.endswith("_convert") or k=="convert"), ""))' "$nets")"
 
   # Soft curl-in-worker check is informational only — not a pass for egress.
   if docker exec "$convert_id" /bin/sh -c 'command -v curl >/dev/null 2>&1'; then
@@ -371,14 +372,37 @@ mkdir -p "$SMOKE_DIR"
 printf 'Xin chào Markhand F02.\n' >"$SMOKE_DIR/sample.txt"
 printf '<html><body><h1>Markhand</h1><p>POC F02</p></body></html>\n' >"$SMOKE_DIR/sample.html"
 printf 'col_a,col_b\n1,hai\n' >"$SMOKE_DIR/sample.csv"
-printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82' \
-  >"$SMOKE_DIR/sample.png"
+python3 - "$SMOKE_DIR/sample.png" <<'PY'
+import pathlib, struct, sys, zlib
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+png = (
+    b"\x89PNG\r\n\x1a\n"
+    + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
+    + chunk(b"IEND", b"")
+)
+pathlib.Path(sys.argv[1]).write_bytes(png)
+PY
 
 worker_id="$(service_id worker-convert)"
-docker cp "$SMOKE_DIR/." "$worker_id:/tmp/format-smoke/"
+if ! docker exec -u 10001:10001 "$worker_id" mkdir -p /tmp/format-smoke; then
+  fail "cannot create worker tmpfs smoke directory"
+fi
+copy_smoke_file() {
+  local source="$1"
+  local destination="$2"
+  if docker exec -i -u 10001:10001 "$worker_id" /bin/sh -c 'cat > "$1"' _ "$destination" <"$source"; then
+    return 0
+  fi
+  fail "cannot stream $(basename "$source") into worker tmpfs"
+  return 1
+}
 for fmt in txt html csv png; do
   out="$RAW_DIR/format-$fmt.md"
-  if docker exec -u 10001:10001 "$worker_id" \
+  if ! copy_smoke_file "$SMOKE_DIR/sample.$fmt" "/tmp/format-smoke/sample.$fmt"; then
+    continue
+  elif docker exec -u 10001:10001 "$worker_id" \
     /usr/local/bin/fileconv one "/tmp/format-smoke/sample.$fmt" \
     >"$out" 2>"$RAW_DIR/format-$fmt.err"; then
     if [[ -s "$out" ]]; then
@@ -397,8 +421,9 @@ done
 
 GOLD_PDF="$ROOT/bench/markhand_web/golden/documents/gold-004.pdf"
 if [[ -f "$GOLD_PDF" ]]; then
-  docker cp "$GOLD_PDF" "$worker_id:/tmp/format-smoke/gold-004.pdf"
-  if docker exec -u 10001:10001 "$worker_id" \
+  if ! copy_smoke_file "$GOLD_PDF" "/tmp/format-smoke/gold-004.pdf"; then
+    fail "pdf smoke copy"
+  elif docker exec -u 10001:10001 "$worker_id" \
     /usr/local/bin/fileconv one /tmp/format-smoke/gold-004.pdf \
     >"$RAW_DIR/format-pdf.md" 2>"$RAW_DIR/format-pdf.err"; then
     [[ -s "$RAW_DIR/format-pdf.md" ]] && pass "native format smoke pdf (gold-004)" \

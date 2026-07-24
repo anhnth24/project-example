@@ -71,6 +71,31 @@ services:
       - no-new-privileges:true
     mem_limit: ${MARKHAND_QDRANT_MEM_LIMIT:-1g}
 
+  qdrant-init:
+    image: python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0
+    depends_on:
+      qdrant:
+        condition: service_started
+    environment:
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+    volumes:
+      - ./poc/qdrant-init.py:/scripts/qdrant-init.py:ro
+    command: ["python", "/scripts/qdrant-init.py"]
+    networks: [private]
+    restart: "no"
+    read_only: true
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    mem_limit: 128m
+    pids_limit: 32
+
   minio:
     image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b
     command: server /data --console-address ":9001"
@@ -260,6 +285,8 @@ services:
         condition: service_completed_successfully
       qdrant:
         condition: service_started
+      qdrant-init:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
     environment:
@@ -278,6 +305,13 @@ services:
       MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
       # Mock profile signature (print-index-signature.py --base-url http://mock-embedding:8080/v1 ...)
       MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
     ports:
