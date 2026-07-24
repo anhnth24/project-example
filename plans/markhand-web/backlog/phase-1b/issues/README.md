@@ -443,11 +443,11 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
-- **Status:** In progress — executable measured harness landed (`o05-soak.json`);
-  default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`; smoke
-  (`--duration-seconds` ≠ 1800) is non-qualifying and cannot pass.
-  **Done only after official live 1800s run passes** with F02/O02/O03/O04
-  prerequisites + numeric gates. Qualification not claimed yet.
+- **Status:** In progress — measured harness Sol-hardened (fixtures preflight,
+  2xx-only query SLO, in-workload injection, background sampler, same-run
+  post-restore, provenance-based prereqs, completeness/error gates).
+  Default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`; smoke ≠ pass.
+  **Done only after official live 1800s run passes.** Qualification not claimed.
 - **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
   `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
   evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.

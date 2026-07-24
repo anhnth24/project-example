@@ -4,7 +4,9 @@
   ],
   "canonicalReport": "o05-soak.json",
   "failureInjection": {},
+  "fixturePreflight": "fixtures_preflight_ok",
   "gates": {
+    "completeness": "unknown",
     "dbConnections": "unknown",
     "ingestThroughput": "unknown",
     "postRestoreRetrieval": "unknown",
@@ -12,18 +14,19 @@
     "queryP99": "unknown",
     "queueDepth": "unknown",
     "recovery": "unknown",
+    "requestErrors": "unknown",
     "rssGrowth": "unknown",
     "tempGrowth": "unknown",
     "unboundedGrowth": "unknown"
   },
-  "generatedAt": "2026-07-24T00:32:32Z",
+  "generatedAt": "2026-07-24T00:37:56Z",
   "issue": "P1B-O05",
   "markhandSoak": false,
   "metrics": {},
   "notes": "Stack not opted in; report records workload intent only",
-  "outDir": "/workspace/bench/markhand_web/reports/phase-1b-gate",
+  "outDir": "bench/markhand_web/reports/phase-1b-gate",
   "prerequisites": {},
-  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
+  "profile": "bench/markhand_web/workloads/phase1b-mixed.yaml",
   "profileParsed": {
     "durationSeconds": 1800,
     "formats": [
@@ -40,10 +43,10 @@
   },
   "provenance": {
     "composeProject": null,
-    "gitSha": "8650244",
-    "gitShaFull": "8650244ede9e8602833ecfe5eb01f7f7fad19657"
+    "gitSha": "695255d",
+    "gitShaFull": "695255d8f1328d0a6887079094ea593c43d25814"
   },
-  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T003232Z",
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T003756Z",
   "redactionScan": {
     "findings": [],
     "passed": true
@@ -52,6 +55,8 @@
   "smokeNonQualifying": false,
   "status": "not_run",
   "thresholds": {
+    "allowedErrorsOutsideInjection": 0,
+    "completenessRatio": 0.95,
     "fullVectorRtoMinutes": 240,
     "ingestDocsPerHour": 1200.0,
     "ingestGateBinding": true,
@@ -66,8 +71,8 @@
     "rpoMinutes": 15
   },
   "versions": {
-    "git": "8650244",
-    "gitShaFull": "8650244ede9e8602833ecfe5eb01f7f7fad19657",
+    "git": "695255d",
+    "gitShaFull": "695255d8f1328d0a6887079094ea593c43d25814",
     "imageIds": {},
     "indexSignature": null,
     "migrationManifestSha256": null

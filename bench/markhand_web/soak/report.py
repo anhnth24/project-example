@@ -24,6 +24,8 @@ def unknown_gates() -> dict[str, str]:
         "unboundedGrowth": "unknown",
         "recovery": "unknown",
         "postRestoreRetrieval": "unknown",
+        "requestErrors": "unknown",
+        "completeness": "unknown",
     }
 
 

@@ -12,11 +12,13 @@ GATE_QUERY_P99 = "G0-SLO-QUERY-P99"
 GATE_INGEST = "G0-CAP-INGEST-THROUGHPUT"
 
 OFFICIAL_DURATION_SECONDS = 1800
+# POC qualification: zero request errors outside the exact injection window.
+ALLOWED_ERRORS_OUTSIDE_INJECTION = 0
+COMPLETENESS_RATIO = 0.95
 
 
 def _load_gates_doc(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
-    # gates.yaml is JSON-shaped in this repository.
     return json.loads(text)
 
 
@@ -53,6 +55,8 @@ def load_thresholds(profile: dict[str, Any], gates_path: Path | str) -> dict[str
         "officialDurationSeconds": int(
             profile.get("durationSeconds") or OFFICIAL_DURATION_SECONDS
         ),
+        "allowedErrorsOutsideInjection": ALLOWED_ERRORS_OUTSIDE_INJECTION,
+        "completenessRatio": COMPLETENESS_RATIO,
         "rpoMinutes": 15,
         "queryReadyRtoMinutes": 60,
         "fullVectorRtoMinutes": 240,
@@ -78,25 +82,54 @@ def evaluate_numeric_gates(
     """Evaluate measured metrics against exact binding thresholds.
 
     Returns gate name → pass|fail|unknown. Never invents pass for missing numbers.
+    Zero successful query samples ⇒ query latency gates unknown/fail (not pass).
     """
-    query_p95 = _cmp_le(metrics.get("queryP95Ms"), float(thresholds["queryP95Ms"]))
-    query_p99 = _cmp_le(metrics.get("queryP99Ms"), float(thresholds["queryP99Ms"]))
+    modes_ready = metrics.get("queryModesReady")
+    query_samples = metrics.get("querySuccessSamples")
+    if query_samples is None:
+        query_samples = 0
+    if not modes_ready or int(query_samples) <= 0:
+        query_p95 = "fail" if metrics.get("measured") else "unknown"
+        query_p99 = query_p95
+        # When measured but zero samples: fail. When not measured: unknown.
+        if metrics.get("measured") is True:
+            query_p95 = "fail"
+            query_p99 = "fail"
+        else:
+            query_p95 = "unknown"
+            query_p99 = "unknown"
+    else:
+        query_p95 = _cmp_le(metrics.get("queryP95Ms"), float(thresholds["queryP95Ms"]))
+        query_p99 = _cmp_le(metrics.get("queryP99Ms"), float(thresholds["queryP99Ms"]))
+
+    completeness = metrics.get("completenessPassed")
+    if completeness is False:
+        # Completeness shortfall fails throughput/latency qualification.
+        if query_p95 == "pass":
+            query_p95 = "fail"
+        if query_p99 == "pass":
+            query_p99 = "fail"
 
     if thresholds.get("ingestGateBinding"):
-        ingest = _cmp_ge(
-            metrics.get("ingestDocsPerHour"), float(thresholds["ingestDocsPerHour"])
-        )
+        if metrics.get("ingestOk") in (None, 0) and metrics.get("measured") is True:
+            ingest = "fail"
+        else:
+            ingest = _cmp_ge(
+                metrics.get("ingestDocsPerHour"), float(thresholds["ingestDocsPerHour"])
+            )
+        if completeness is False and ingest == "pass":
+            ingest = "fail"
     else:
         ingest = "unknown"
 
     rss = _cmp_le(metrics.get("rssGrowthMb"), float(thresholds["maxRssGrowthMb"]))
     temp = _cmp_le(metrics.get("tempGrowthMb"), float(thresholds["maxTempGrowthMb"]))
     queue = _cmp_le(
-        float(metrics["queueDepthMax"]) if metrics.get("queueDepthMax") is not None else None,
+        metrics.get("queueDepthMax") if metrics.get("queueDepthMax") is not None else None,
         float(thresholds["maxQueueDepth"]),
     )
     dbconn = _cmp_le(
-        float(metrics["dbConnectionsMax"])
+        metrics.get("dbConnectionsMax")
         if metrics.get("dbConnectionsMax") is not None
         else None,
         float(thresholds["maxDbConnections"]),
@@ -127,6 +160,23 @@ def evaluate_numeric_gates(
     else:
         post_restore = "unknown"
 
+    # Request error gate (outside injection window).
+    allowed = int(thresholds.get("allowedErrorsOutsideInjection", 0))
+    err_out = metrics.get("requestErrorsOutsideInjection")
+    if err_out is None:
+        errors_gate = "unknown"
+    elif int(err_out) > allowed:
+        errors_gate = "fail"
+    else:
+        errors_gate = "pass"
+
+    if completeness is True:
+        completeness_gate = "pass"
+    elif completeness is False:
+        completeness_gate = "fail"
+    else:
+        completeness_gate = "unknown"
+
     return {
         "queryP95": query_p95,
         "queryP99": query_p99,
@@ -138,4 +188,6 @@ def evaluate_numeric_gates(
         "unboundedGrowth": unbounded,
         "recovery": recovery,
         "postRestoreRetrieval": post_restore,
+        "requestErrors": errors_gate,
+        "completeness": completeness_gate,
     }

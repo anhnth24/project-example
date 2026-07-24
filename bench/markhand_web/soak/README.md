@@ -3,6 +3,12 @@
 Measured fail-closed soak harness. Default is honest `not_run`.
 `MARKHAND_SOAK=1` alone without prerequisites/metrics cannot pass.
 
+Synthetic fixtures for all 8 profile formats live under `soak/fixtures/`
+(stdlib-generated; preflight fails closed if any format is missing/invalid).
+Query SLO samples are **2xx-only**; compare requires real version pairs.
+Failure injection runs **during** the active workload; sampler is a separate
+thread (default 5s).
+
 ## Commands
 
 ```bash

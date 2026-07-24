@@ -54,15 +54,29 @@ Missing/null/stale git SHA or compose project mismatch ⇒ non-pass.
 | Queue depth | ≤ 100 | profile `bounds` |
 | DB connections | ≤ 40 | profile `bounds` |
 
-## Failure injection (opt-in)
+## Failure injection (opt-in, during active workload)
 
-Requires `--enable-failure-injection`. Targets **only** expected POC Compose
-project/service names (`worker-convert`/`worker-index` kill; `postgres`/`qdrant`/`minio`
-blip). Arbitrary container IDs are refused. Before/after IDs and health recovery
-deadlines are recorded under `raw/o05-<stamp>/`.
+Requires `--enable-failure-injection`. Worker kill runs on the profile schedule
+(`killWorkerEverySeconds`); dependency blip runs mid-soak while load is active.
+Targets **only** expected POC Compose project/service names
+(`worker-convert`/`worker-index` kill; `postgres`/`qdrant`/`minio` blip).
+Arbitrary container IDs are refused. Before/after IDs, recovery latency, and
+injection-window request errors are recorded under `raw/o05-<stamp>/`.
 
-Restore attestation may consume the O03 report or invoke
-`deploy/scripts/o03-bluegreen-restore-drill.sh` via `--invoke-o03-restore`.
+## Post-restore retrieval
+
+Baseline synthetic docs are created during load. Same-run O03 restore is a
+**qualification checkpoint after baseline** (`--invoke-o03-restore`). Only then
+does post-restore retrieval verify retained authorized docs and deleted-doc
+suppression. Without a same-run restore, `postRestoreRetrieval` stays
+`unknown`/`fail` — a plain deleted-id check is not post-restore evidence.
+
+## Sampling
+
+Docker stats / API `/metrics` / PG connections / container temp (`du` on
+allowlisted tmp paths) run on a **background sampler thread** (default 5s;
+`MARKHAND_SOAK_SAMPLE_INTERVAL_SECONDS`). Missing metric series stay `null`
+(unknown), never fabricated zeros.
 
 ## Run
 
