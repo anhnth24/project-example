@@ -305,10 +305,11 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     // One embedding plan/signature for the whole matrix — swapping mock URLs
     // mid-collection produces index signature mismatch against the active generation.
     let mock = MockEmbedding::start();
+    let embedding_revision = format!("r1-{}", Uuid::new_v4().simple());
     let embedding_plan = EmbeddingPlan::provider(
         "test",
         "test-embedding",
-        "r1",
+        embedding_revision.clone(),
         ProviderDeployment::from_base_url(Some(mock.base_url())).expect("deployment"),
         Some(8),
         RUNTIME_VLLM_LOCAL,
@@ -343,7 +344,7 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         "test-api-key".into(),
         "test".into(),
         "test-embedding".into(),
-        "r1".into(),
+        embedding_revision,
         8,
         RUNTIME_VLLM_LOCAL.into(),
         Profile::Test,
@@ -945,27 +946,60 @@ impl MockEmbedding {
             while !thread_stopping.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(5)))
+                            .expect("read timeout");
                         let mut buf = Vec::new();
                         let mut tmp = [0u8; 1024];
-                        loop {
+                        let body_start = loop {
+                            if let Some(offset) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break Some(offset + 4);
+                            }
+                            match stream.read(&mut tmp) {
+                                Ok(0) => break None,
+                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                Err(_) => break None,
+                            }
+                        };
+                        let Some(body_start) = body_start else {
+                            continue;
+                        };
+                        let headers = String::from_utf8_lossy(&buf[..body_start]);
+                        let content_length = headers
+                            .lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        while buf.len() < body_start + content_length {
                             match stream.read(&mut tmp) {
                                 Ok(0) => break,
-                                Ok(n) => {
-                                    buf.extend_from_slice(&tmp[..n]);
-                                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-                                        break;
-                                    }
-                                }
+                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
                                 Err(_) => break,
                             }
                         }
-                        let body = br#"{"data":[{"index":0,"embedding":[1,0,0,0,0,0,0,0]}]}"#;
+                        let input_count = serde_json::from_slice::<serde_json::Value>(
+                            &buf[body_start..buf.len().min(body_start + content_length)],
+                        )
+                        .ok()
+                        .and_then(|value| value["input"].as_array().map(Vec::len))
+                        .unwrap_or(1);
+                        let data = (0..input_count)
+                            .map(|index| {
+                                serde_json::json!({
+                                    "index": index,
+                                    "embedding": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let body = serde_json::to_vec(&serde_json::json!({ "data": data }))
+                            .expect("embedding response");
                         let headers = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             body.len()
                         );
                         let _ = stream.write_all(headers.as_bytes());
-                        let _ = stream.write_all(body);
+                        let _ = stream.write_all(&body);
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -984,6 +1018,31 @@ impl MockEmbedding {
     fn base_url(&self) -> &str {
         &self.base_url
     }
+}
+
+#[tokio::test]
+async fn mock_embedding_reads_complete_batched_requests() {
+    let mock = MockEmbedding::start();
+    let runtime = ApprovedEmbeddingRuntime::new(
+        mock.base_url().to_string(),
+        "test-api-key".into(),
+        "test".into(),
+        "test-embedding".into(),
+        "r1".into(),
+        8,
+        RUNTIME_VLLM_LOCAL.into(),
+        Profile::Test,
+        false,
+        None,
+    )
+    .expect("embedding runtime");
+
+    let vectors = runtime
+        .embed(&["first".into(), "second".into()])
+        .await
+        .expect("batched mock response");
+    assert_eq!(vectors.len(), 2);
+    assert!(vectors.iter().all(|vector| vector.len() == 8));
 }
 
 impl Drop for MockEmbedding {
