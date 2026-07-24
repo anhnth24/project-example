@@ -420,11 +420,16 @@ async fn live_http_collection_document_job_contract_matrix() {
     )
     .await;
     assert!(
-        status == StatusCode::OK
-            || status == StatusCode::ACCEPTED
-            || status == StatusCode::CREATED
-            || status == StatusCode::CONFLICT,
+        status == StatusCode::OK || status == StatusCode::ACCEPTED || status == StatusCode::CREATED,
         "reindex status {status}: {reindex1}"
+    );
+    let job_id_1 = reindex1["jobId"]
+        .as_str()
+        .expect("reindex must return jobId");
+    assert_eq!(
+        reindex1["created"].as_bool(),
+        Some(true),
+        "first reindex must create a job: {reindex1}"
     );
     let (status, reindex2, _) = json_request(
         app.clone(),
@@ -436,11 +441,18 @@ async fn live_http_collection_document_job_contract_matrix() {
     )
     .await;
     assert!(
-        status == StatusCode::OK
-            || status == StatusCode::ACCEPTED
-            || status == StatusCode::CREATED
-            || status == StatusCode::CONFLICT,
+        status == StatusCode::OK || status == StatusCode::ACCEPTED || status == StatusCode::CREATED,
         "idempotent reindex status {status}: {reindex2}"
+    );
+    assert_eq!(
+        reindex2["jobId"].as_str(),
+        Some(job_id_1),
+        "idempotent reindex must return the same jobId: {reindex1} vs {reindex2}"
+    );
+    assert_eq!(
+        reindex2["created"].as_bool(),
+        Some(false),
+        "idempotent reindex replay must set created=false: {reindex2}"
     );
 
     // Conflicts list/detail/triage + dual-leg evidence authorization.
@@ -820,6 +832,457 @@ async fn live_http_collection_document_job_contract_matrix() {
     .await
     .expect("audit count");
     assert!(audit_count >= 1, "collection.create must be audited in-txn");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+async fn live_central_write_gate_matrix_refuses_business_side_effects() {
+    use fileconv_server::middleware::write_gate::acquire_background_mutation_guard;
+    use fileconv_server::services::ops_fence::{self, FENCE_RESTORE};
+
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    let Some(store) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let (org, user, token) = seed_http_principal(&pool).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, Some(store.clone()));
+
+    // Seed a published doc before fencing so GET/search/ask side-effect paths exist.
+    let (collection_id, document_id, _version_id) =
+        seed_published_doc(&pool, &store, org, user).await;
+
+    let audit_before: i64 = with_org_txn(
+        &pool,
+        &OrgContext::try_new(
+            org,
+            user,
+            [
+                "qa.query",
+                "qa.history",
+                "doc.upload",
+                "doc.delete",
+                "doc.publish",
+                "jobs.system",
+            ],
+            [collection_id],
+        )
+        .unwrap(),
+        {
+            let org = org;
+            move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_one(
+                            "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
+                            &[&org],
+                        )
+                        .await?;
+                    Ok(row.get(0))
+                })
+            }
+        },
+    )
+    .await
+    .expect("audit before");
+
+    ops_fence::set_fence(&pool, FENCE_RESTORE, "p1b-write-gate-matrix", Some("test"))
+        .await
+        .expect("set restore fence");
+    assert!(
+        acquire_background_mutation_guard(&pool).await.is_err(),
+        "background gate must observe active fence"
+    );
+
+    // Ops surfaces remain available.
+    for path in [
+        "/api/v1/health/live",
+        "/api/v1/health/start",
+        "/api/v1/openapi.yaml",
+    ] {
+        let (status, _, _) = json_request(app.clone(), "GET", path, None, None, &[]).await;
+        assert_eq!(status, StatusCode::OK, "exempt {path} must stay up");
+    }
+
+    // Unauthenticated auth mutation.
+    let (status, err, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/auth/login",
+        None,
+        Some(serde_json::json!({
+            "email": format!("{user}@http.test"),
+            "password": "correct-password-1"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    assert_eq!(err["code"], "ops_fence_active");
+
+    // Authenticated collection + document mutations.
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/v1/collections".to_string(),
+            Some(serde_json::json!({
+                "name": "Fenced",
+                "slug": format!("fenced-{}", Uuid::new_v4().simple()),
+                "visibility": "org"
+            })),
+        ),
+        (
+            "POST",
+            format!("/api/v1/documents/{document_id}/reindex"),
+            Some(serde_json::json!({})),
+        ),
+        ("DELETE", format!("/api/v1/documents/{document_id}"), None),
+        (
+            "POST",
+            "/api/v1/ask".to_string(),
+            Some(serde_json::json!({
+                "question": "Kinh phí?",
+                "mode": "current",
+                "limit": 3
+            })),
+        ),
+        (
+            "POST",
+            "/api/v1/ask/stream".to_string(),
+            Some(serde_json::json!({
+                "question": "Kinh phí?",
+                "mode": "current",
+                "limit": 3
+            })),
+        ),
+        (
+            "POST",
+            "/api/v1/search".to_string(),
+            Some(serde_json::json!({
+                "query": "Kinh phí",
+                "mode": "current",
+                "limit": 3
+            })),
+        ),
+        (
+            "GET",
+            format!("/api/v1/documents/{document_id}/preview"),
+            None,
+        ),
+    ] {
+        let (status, err, _) = json_request(
+            app.clone(),
+            method,
+            &uri,
+            Some(&token),
+            body,
+            if method == "POST" && uri.contains("reindex") {
+                &[("idempotency-key", "fenced-reindex")]
+            } else {
+                &[]
+            },
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{method} {uri} => {err}"
+        );
+        assert_eq!(err["code"], "ops_fence_active", "{method} {uri}");
+    }
+
+    // Upload multipart mutation.
+    let upload = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header("idempotency-key", "fenced-upload")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(multipart_body(
+                    "fenced.txt",
+                    b"should not land\n",
+                    collection_id,
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let upload_body = upload.into_body().collect().await.unwrap().to_bytes();
+    let upload_json: serde_json::Value = serde_json::from_slice(&upload_body).unwrap();
+    assert_eq!(upload_json["code"], "ops_fence_active");
+
+    // No new audit side effects while fenced; ask/stream must not init sessions.
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        [
+            "qa.query",
+            "qa.history",
+            "doc.upload",
+            "doc.delete",
+            "doc.publish",
+            "jobs.system",
+        ],
+        [collection_id],
+    )
+    .unwrap();
+    let audit_after: i64 = with_org_txn(&pool, &ctx, {
+        let org = org;
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
+                        &[&org],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
+        }
+    })
+    .await
+    .expect("audit after");
+    assert_eq!(
+        audit_after, audit_before,
+        "fenced business traffic must not append audit rows"
+    );
+    let ask_sessions: i64 = {
+        let client = pool.get().await.expect("client");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM ask_stream_sessions WHERE org_id = $1",
+                &[&org],
+            )
+            .await
+            .expect("ask session count")
+            .get(0)
+    };
+    assert_eq!(
+        ask_sessions, 0,
+        "ask/stream handler init must be covered by write-gate (no session rows)"
+    );
+
+    let attestation = "a".repeat(64);
+    ops_fence::clear_fence_with_attestation(&pool, FENCE_RESTORE, &attestation)
+        .await
+        .expect("clear fence");
+
+    let (status, created, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "Unfenced",
+            "slug": format!("unfenced-{}", Uuid::new_v4().simple()),
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+async fn live_write_gate_advisory_lock_concurrency_contract() {
+    use fileconv_server::middleware::write_gate::{
+        acquire_background_mutation_guard, BACKUP_ADVISORY_LOCK_KEY,
+    };
+
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    let Some(store) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let (org, user, token) = seed_http_principal(&pool).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, Some(store.clone()));
+
+    // 1) Shared request/background guard held ⇒ exclusive try on other conn is false.
+    let shared = acquire_background_mutation_guard(&pool)
+        .await
+        .expect("shared background guard");
+    {
+        let other = pool.get().await.expect("other conn");
+        let exclusive: bool = other
+            .query_one(
+                "SELECT pg_try_advisory_lock($1)",
+                &[&BACKUP_ADVISORY_LOCK_KEY],
+            )
+            .await
+            .expect("try exclusive")
+            .get(0);
+        assert!(
+            !exclusive,
+            "pg_try_advisory_lock(7303003) must be false while shared guard held"
+        );
+    }
+    shared.release().await;
+
+    // 2) Exclusive held ⇒ business + background acquire fail closed, no side effects.
+    let holder = pool.get().await.expect("exclusive holder");
+    let got_exclusive: bool = holder
+        .query_one(
+            "SELECT pg_try_advisory_lock($1)",
+            &[&BACKUP_ADVISORY_LOCK_KEY],
+        )
+        .await
+        .expect("take exclusive")
+        .get(0);
+    assert!(
+        got_exclusive,
+        "exclusive lock must be acquirable after shared release"
+    );
+
+    assert!(
+        acquire_background_mutation_guard(&pool).await.is_err(),
+        "background acquire must fail closed under exclusive lock"
+    );
+
+    let slug = format!("exclusive-blocked-{}", Uuid::new_v4().simple());
+    let (status, err, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "Blocked",
+            "slug": slug,
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    assert_eq!(err["code"], "ops_fence_active");
+
+    let sessions_before: i64 = {
+        let client = pool.get().await.expect("count conn");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM ask_stream_sessions WHERE org_id = $1",
+                &[&org],
+            )
+            .await
+            .expect("sessions before")
+            .get(0)
+    };
+    let (status, err, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/ask/stream",
+        Some(&token),
+        Some(serde_json::json!({
+            "question": "Kinh phí?",
+            "mode": "current",
+            "limit": 3
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{err}");
+    assert_eq!(err["code"], "ops_fence_active");
+    let sessions_after: i64 = {
+        let client = pool.get().await.expect("count conn");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM ask_stream_sessions WHERE org_id = $1",
+                &[&org],
+            )
+            .await
+            .expect("sessions after")
+            .get(0)
+    };
+    assert_eq!(
+        sessions_after, sessions_before,
+        "exclusive lock must cover ask/stream init (no session side effects)"
+    );
+
+    let collections_named: i64 = {
+        let client = pool.get().await.expect("collection count");
+        client
+            .query_one(
+                "SELECT COUNT(*)::bigint FROM collections WHERE org_id = $1 AND slug = $2",
+                &[&org, &slug],
+            )
+            .await
+            .expect("slug count")
+            .get(0)
+    };
+    assert_eq!(collections_named, 0, "refused collection must not persist");
+
+    holder
+        .execute(
+            "SELECT pg_advisory_unlock($1)",
+            &[&BACKUP_ADVISORY_LOCK_KEY],
+        )
+        .await
+        .expect("unlock exclusive");
+    drop(holder);
+
+    // 3) After release, lock can be acquired again; no session advisory leak into pool.
+    for _ in 0..4 {
+        let probe = pool.get().await.expect("pool probe");
+        let ok: bool = probe
+            .query_one(
+                "SELECT pg_try_advisory_lock($1)",
+                &[&BACKUP_ADVISORY_LOCK_KEY],
+            )
+            .await
+            .expect("reacquire")
+            .get(0);
+        assert!(
+            ok,
+            "advisory lock must be free on pooled connections after release (no leak)"
+        );
+        probe
+            .execute(
+                "SELECT pg_advisory_unlock($1)",
+                &[&BACKUP_ADVISORY_LOCK_KEY],
+            )
+            .await
+            .expect("unlock probe");
+        drop(probe);
+    }
+
+    let (status, created, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(serde_json::json!({
+            "name": "AfterUnlock",
+            "slug": format!("after-unlock-{}", Uuid::new_v4().simple()),
+            "visibility": "org"
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let _ = (org, user);
 
     ephemeral.drop().await;
 }

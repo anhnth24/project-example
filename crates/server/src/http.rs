@@ -15,6 +15,7 @@ use crate::auth::provider::PasswordAuthProvider;
 use crate::config::QuotaSweepConfig;
 use crate::db::pool::create_pool;
 use crate::middleware::rate_limit::{RateLimitConfig, RateLimiter};
+use crate::middleware::write_gate::{acquire_background_mutation_guard, mutation_write_gate};
 use crate::middleware::{baseline_ip_rate_limit, cors_middleware, inject_request_id};
 use crate::routes;
 use crate::services::download::CapabilityKeys;
@@ -339,6 +340,10 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
+                tracing::debug!(target: "quota", "quota sweep skipped: ops fence / backup lock active");
+                continue;
+            };
             match quota::sweep_expired_all_orgs(&pool, config.batch_size).await {
                 Ok(expired) if expired > 0 => {
                     tracing::info!(target: "quota", expired, "quota expiry sweep marked reservations");
@@ -348,6 +353,7 @@ fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
                     tracing::warn!(target: "quota", code = error.code(), "quota expiry sweep failed");
                 }
             }
+            guard.release().await;
         }
     });
 }
@@ -400,7 +406,16 @@ fn start_ask_stream_maintenance(pool: Pool) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            match crate::db::ask_streams::run_maintenance(&pool, 100).await {
+            let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
+                tracing::debug!(
+                    target: "ask_stream",
+                    "ask stream maintenance skipped: ops fence / backup lock active"
+                );
+                continue;
+            };
+            let maintenance = crate::db::ask_streams::run_maintenance(&pool, 100).await;
+            guard.release().await;
+            match maintenance {
                 Ok((sessions, events, recovered)) if sessions > 0 || recovered > 0 => {
                     tracing::info!(
                         target: "ask_stream",
@@ -429,6 +444,8 @@ fn start_ask_stream_maintenance(pool: Pool) {
 pub fn router(state: AppState) -> Router {
     let max_upload_bytes = state.runtime.config().upload().limits.max_upload_bytes as usize;
     let state = Arc::new(state);
+    // Layer order (outer → inner): request-id → write-gate → cors → rate-limit → handler.
+    // `mutation_write_gate` is the central O03 contract (see middleware/write_gate.rs).
     Router::new()
         .merge(routes::health::router())
         .merge(routes::auth::router())
@@ -442,6 +459,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/openapi.yaml", axum::routing::get(openapi_yaml))
         .layer(from_fn_with_state(state.clone(), baseline_ip_rate_limit))
         .layer(from_fn_with_state(state.clone(), cors_middleware))
+        .layer(from_fn_with_state(state.clone(), mutation_write_gate))
         .layer(from_fn_with_state(state.clone(), inject_request_id))
         .with_state(state)
 }

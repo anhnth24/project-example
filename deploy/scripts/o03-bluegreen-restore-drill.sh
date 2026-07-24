@@ -396,14 +396,37 @@ log "== P1B-O03 drill $STAMP (restore-green; promote disabled; external mktemp) 
 [[ "$BASELINE_READY" == "200" ]] || gap "baseline ready not 200 (got $BASELINE_READY)"
 [[ "$BASELINE_READY" == "200" ]] && pass "baseline ready 200"
 
-set +e
-MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=1 MARKHAND_BACKUP_STAMP="${STAMP}WG" \
-  bash "$ROOT/deploy/backup/backup.sh" >"$RAW/inject-write-gate-refuse.out" 2>&1
-WG_RC=$?
-set -e
-[[ "$WG_RC" -ne 0 ]] && grep -q 'REFUSING_CONSISTENCY_BACKUP_WRITE_GATE_UNAVAILABLE' "$RAW/inject-write-gate-refuse.out" \
-  && pass "consistency backup refused when app write gate unavailable" \
-  || gap "write-gate refuse path failed (rc=$WG_RC)"
+# Write-gate presence is proven by static scan + hermetic refuse-when-absent unit test.
+# When integrated, REQUIRE=1 must NOT refuse for write-gate-unavailable (backup may still
+# fail later for live-stack reasons; we only assert the unavailable reason is absent).
+WRITE_GATE_OK="$(
+  PYTHONPATH="$ROOT/deploy/backup/lib${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+from pipeline import app_mutation_write_gate_sufficient
+print("1" if app_mutation_write_gate_sufficient() else "0")
+PY
+)"
+if [[ "$WRITE_GATE_OK" == "1" ]]; then
+  pass "app mutation write-gate integrated (ops_fence consulted outside readiness)"
+  set +e
+  MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=1 MARKHAND_BACKUP_STAMP="${STAMP}WG" \
+    bash "$ROOT/deploy/backup/backup.sh" >"$RAW/inject-write-gate-require.out" 2>&1
+  WG_RC=$?
+  set -e
+  if grep -q 'REFUSING_CONSISTENCY_BACKUP_WRITE_GATE_UNAVAILABLE' "$RAW/inject-write-gate-require.out"; then
+    gap "write-gate still reported unavailable under REQUIRE=1 (rc=$WG_RC)"
+  else
+    pass "REQUIRE=1 does not refuse for write-gate-unavailable (rc=$WG_RC)"
+  fi
+else
+  set +e
+  MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=1 MARKHAND_BACKUP_STAMP="${STAMP}WG" \
+    bash "$ROOT/deploy/backup/backup.sh" >"$RAW/inject-write-gate-refuse.out" 2>&1
+  WG_RC=$?
+  set -e
+  [[ "$WG_RC" -ne 0 ]] && grep -q 'REFUSING_CONSISTENCY_BACKUP_WRITE_GATE_UNAVAILABLE' "$RAW/inject-write-gate-refuse.out" \
+    && pass "consistency backup refused when app write gate unavailable" \
+    || gap "write-gate refuse path failed (rc=$WG_RC)"
+fi
 
 python3 "$ROOT/deploy/backup/test_restore_guards.py" >"$RAW/hermetic-guards.txt" 2>&1
 pass "hermetic auth/schema/symlink/traversal/malformed/pgpass/mc guards"
@@ -654,7 +677,9 @@ else
   pass "no raw dumps in evidence"
 fi
 
-gap "app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)"
+if [[ "$WRITE_GATE_OK" != "1" ]]; then
+  gap "app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)"
+fi
 gap "promote/cutover disabled: API does not consume durable routing + independent reconcile target-state attestation"
 gap "encrypted backup destination not exercised (POC explicit_poc_tmp_only policy)"
 

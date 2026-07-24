@@ -40,9 +40,17 @@
 
 ## Exact gaps
 
-- app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)
 - promote/cutover disabled: API does not consume durable routing + independent reconcile target-state attestation
 - encrypted backup destination not exercised (POC explicit_poc_tmp_only policy)
+
+## Code-closed since last drill (not re-proven by this raw stamp)
+
+- Central write-gate middleware (`mutation_write_gate`) holds shared advisory
+  lock `7303003` through `next.run`; RAII
+  `acquire_background_mutation_guard` covers quota/ask maintenance/ask append.
+  Hermetic: `test_app_mutation_write_gate_is_integrated`. Live matrix +
+  `live_write_gate_advisory_lock_concurrency_contract`. Re-run
+  `o03-bluegreen-restore-drill.sh` on a Docker host to refresh raw passes.txt.
 
 ## Notes
 

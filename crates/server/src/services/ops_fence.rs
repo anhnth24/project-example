@@ -18,7 +18,15 @@ pub enum FenceError {
     AttestationRequired,
     #[error("fence not active")]
     NotActive,
+    #[error("ops fence active; mutations paused")]
+    Active,
 }
+
+/// Stable API/error code when mutations are refused due to an ops fence.
+pub const MUTATIONS_PAUSED_CODE: &str = "ops_fence_active";
+
+/// Stable API/error code when the fence check itself fails (DB/unavailable).
+pub const OPS_FENCE_CHECK_FAILED_CODE: &str = "ops_fence_check_failed";
 
 impl From<crate::db::error::DbError> for FenceError {
     fn from(_: crate::db::error::DbError) -> Self {
@@ -29,12 +37,44 @@ impl From<crate::db::error::DbError> for FenceError {
 /// True when restore or reconcile fence is active (SECURITY DEFINER aggregate).
 pub async fn any_blocking_fence_active(pool: &Pool) -> Result<bool, FenceError> {
     let client = pool.get().await.map_err(|_| FenceError::Database)?;
+    any_blocking_fence_active_on(&client).await
+}
+
+/// Fence probe on an already-checked-out connection (shared-lock windows).
+pub async fn any_blocking_fence_active_on(
+    client: &tokio_postgres::Client,
+) -> Result<bool, FenceError> {
     let active: bool = client
         .query_one("SELECT markhand_any_blocking_fence_active()", &[])
         .await
         .map_err(|_| FenceError::Database)?
         .get(0);
     Ok(active)
+}
+
+/// Fail-closed gate for app mutation routes during restore/reconcile fences.
+pub async fn ensure_mutations_allowed(pool: &Pool) -> Result<(), FenceError> {
+    let client = pool.get().await.map_err(|_| FenceError::Database)?;
+    ensure_mutations_allowed_on(&client).await
+}
+
+/// Fail-closed gate using a borrowed connection.
+pub async fn ensure_mutations_allowed_on(
+    client: &tokio_postgres::Client,
+) -> Result<(), FenceError> {
+    if any_blocking_fence_active_on(client).await? {
+        return Err(FenceError::Active);
+    }
+    Ok(())
+}
+
+/// Maps fence check outcomes to a stable HTTP error code for mutation routes.
+pub fn mutation_pause_code(error: &FenceError) -> &'static str {
+    match error {
+        FenceError::Active => MUTATIONS_PAUSED_CODE,
+        FenceError::Database => OPS_FENCE_CHECK_FAILED_CODE,
+        FenceError::AttestationRequired | FenceError::NotActive => OPS_FENCE_CHECK_FAILED_CODE,
+    }
 }
 
 /// True when any org has an in-flight reconcile job (SECURITY DEFINER; all orgs).
@@ -112,5 +152,15 @@ mod tests {
     fn fence_names_are_stable() {
         assert_eq!(FENCE_RESTORE, "restore");
         assert_eq!(FENCE_RECONCILE, "reconcile");
+    }
+
+    #[test]
+    fn mutation_pause_code_is_stable_and_fail_closed() {
+        assert_eq!(mutation_pause_code(&FenceError::Active), "ops_fence_active");
+        assert_eq!(
+            mutation_pause_code(&FenceError::Database),
+            "ops_fence_check_failed"
+        );
+        assert_eq!(MUTATIONS_PAUSED_CODE, "ops_fence_active");
     }
 }
