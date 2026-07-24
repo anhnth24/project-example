@@ -552,6 +552,60 @@ class ManifestGuardTests(unittest.TestCase):
             ],
         )
 
+    def test_inventory_uses_version_ordinal_when_replay_timestamps_tie(self) -> None:
+        import sys
+
+        sys.path.insert(0, str(LIB))
+        from pipeline import build_normalized_history, minio_inventory_events
+
+        rows = [
+            {
+                "key": "trusted/a",
+                "versionId": "delete-final",
+                "versionOrdinal": 4,
+                "lastModified": "2026-07-24T21:33:05Z",
+                "isDeleteMarker": True,
+            },
+            {
+                "key": "trusted/a",
+                "versionId": "put-second",
+                "versionOrdinal": 3,
+                "lastModified": "2026-07-24T21:33:05Z",
+            },
+            {
+                "key": "trusted/a",
+                "versionId": "delete-middle",
+                "versionOrdinal": 2,
+                "lastModified": "2026-07-24T21:33:05Z",
+                "isDeleteMarker": True,
+            },
+            {
+                "key": "trusted/a",
+                "versionId": "put-first",
+                "versionOrdinal": 1,
+                "lastModified": "2026-07-24T21:33:05Z",
+            },
+        ]
+        inventory = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+        events = minio_inventory_events(inventory)
+        history = build_normalized_history(
+            events,
+            content_by_version={
+                ("trusted/a", "put-first"): (1, "a" * 64),
+                ("trusted/a", "put-second"): (2, "b" * 64),
+            },
+        )
+
+        self.assertEqual(
+            history[0]["events"],
+            [
+                {"type": "put", "size": 1, "contentSha256": "a" * 64},
+                {"type": "delete", "size": None, "contentSha256": None},
+                {"type": "put", "size": 2, "contentSha256": "b" * 64},
+                {"type": "delete", "size": None, "contentSha256": None},
+            ],
+        )
+
     def test_replay_delete_defers_already_absent_check_to_history_attestation(
         self,
     ) -> None:

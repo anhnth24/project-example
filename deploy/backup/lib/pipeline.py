@@ -275,8 +275,17 @@ def minio_inventory_events(inv_jsonl: bytes) -> dict[str, list[dict[str, Any]]]:
             continue
         by_key.setdefault(str(key), []).append(row)
 
-    def sort_key(r: dict[str, Any]) -> tuple[str, str]:
+    def sort_key(r: dict[str, Any]) -> tuple[int, int, str, str]:
+        raw_ordinal = r.get("versionOrdinal") or r.get("version_ordinal")
+        try:
+            ordinal = int(raw_ordinal)
+        except (TypeError, ValueError):
+            ordinal = 0
+        if ordinal > 0:
+            return (0, ordinal, "", "")
         return (
+            1,
+            0,
             str(r.get("lastModified") or r.get("last_modified") or ""),
             str(r.get("versionId") or r.get("version_id") or ""),
         )
