@@ -385,10 +385,6 @@ def run_bounded_command(
         returncode = proc.wait()
     reader.join(timeout=5)
     text = captured.decode("utf-8", errors="replace")
-    if truncated:
-        text += "\nO04_COMMAND_OUTPUT_TRUNCATED\ttrue\n"
-    else:
-        text += "\nO04_COMMAND_OUTPUT_TRUNCATED\tfalse\n"
     return BoundedCommandResult(returncode, text, timed_out, truncated)
 
 
@@ -545,13 +541,12 @@ def collect_poc_image_metadata(
         cid, service = parts[0].strip(), parts[1].strip()
         if not service:
             continue
-        containers[service] = cid
         insp = run_bounded_command(
             [
                 "docker",
                 "inspect",
                 "--format",
-                "{{.Image}}",
+                "{{.Id}}\t{{.Image}}",
                 cid,
             ],
             os.environ.copy(),
@@ -560,8 +555,12 @@ def collect_poc_image_metadata(
         )
         if insp.returncode != 0:
             continue
-        image_id = (insp.output or "").strip()
-        if image_id:
+        inspected = (insp.output or "").strip().split("\t", 1)
+        if len(inspected) != 2:
+            continue
+        full_cid, image_id = (part.strip() for part in inspected)
+        if full_cid and image_id:
+            containers[service] = full_cid
             ids[service] = image_id
             # RepoDigests live on the image object, not the container.
             img = run_bounded_command(
@@ -642,7 +641,7 @@ def collect_compose_service_map(project: str) -> dict[str, Any]:
         )
         labels = config.get("Labels") if isinstance(config.get("Labels"), dict) else {}
         service_map[service] = {
-            "containerId": cid,
+            "containerId": payload.get("Id"),
             "imageId": payload.get("Image"),
             "health": state.get("Health", {}).get("Status")
             if isinstance(state.get("Health"), dict)
@@ -937,8 +936,8 @@ def load_f02_boot() -> dict[str, Any]:
         "containerIds": data.get("containerIds") or data.get("container_ids") or {},
         "imageIds": data.get("imageIds") or data.get("image_ids") or {},
         "composeFileSha256": data.get("composeFileSha256"),
-        "effectiveComposeSha256": data.get("composeBlobSha256")
-        or data.get("effectiveComposeSha256"),
+        "composeBlobSha256": data.get("composeBlobSha256"),
+        "effectiveComposeSha256": data.get("effectiveComposeSha256"),
         "stamp_utc": data.get("stamp_utc"),
     }
 
@@ -1242,7 +1241,9 @@ def evaluate_report(
             blockers.append("f02_manifest_hash_mismatch")
         if f02.get("composeFileSha256") != prov.get("composeFileSha256"):
             blockers.append("f02_compose_file_hash_mismatch")
-        if f02.get("effectiveComposeSha256") != prov.get("effectiveComposeSha256"):
+        if f02.get("effectiveComposeSha256") and f02.get(
+            "effectiveComposeSha256"
+        ) != prov.get("effectiveComposeSha256"):
             blockers.append("f02_effective_compose_hash_mismatch")
 
     kill = (
@@ -1253,6 +1254,7 @@ def evaluate_report(
     kill_required = {
         "harnessControlled": True,
         "stdoutProofAccepted": False,
+        "restartPolicyDisabled": True,
         "deathVerified": True,
         "leaseExpired": True,
         "replacementWorkerVerified": True,
@@ -1341,6 +1343,7 @@ def suite_specs() -> dict[str, list[list[str]]]:
                 "--test",
                 "uploads",
                 "--",
+                "--include-ignored",
                 "--nocapture",
                 "reject",
             ]
@@ -1422,6 +1425,7 @@ def base_not_run_report(
         "externalWorkerKill": {
             "harnessControlled": True,
             "stdoutProofAccepted": False,
+            "restartPolicyDisabled": False,
             "deathVerified": False,
             "leaseExpired": False,
             "replacementWorkerVerified": False,
@@ -1524,7 +1528,9 @@ def run_cargo(args: list[str], env: dict[str, str]) -> subprocess.CompletedProce
         max_bytes=max_capture_bytes(),
     )
     marker = (
-        f"\nO04_COMMAND_EXIT_CODE\t{bounded.returncode}\n"
+        "\nO04_COMMAND_OUTPUT_TRUNCATED\t"
+        f"{str(bounded.truncated).lower()}\n"
+        f"O04_COMMAND_EXIT_CODE\t{bounded.returncode}\n"
         f"O04_COMMAND_TIMED_OUT\t{str(bounded.timed_out).lower()}\n"
         "O04_COMMAND_EOF\ttrue\n"
     )
@@ -1757,6 +1763,12 @@ SELECT COALESCE((
         END,
         'leaseExpired', j.lease_expires_at IS NOT NULL
             AND j.lease_expires_at < clock_timestamp(),
+        'observedAtUnixMs',
+            floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint,
+        'leaseExpiresAtUnixMs', CASE
+            WHEN j.lease_expires_at IS NULL THEN NULL
+            ELSE floor(extract(epoch FROM j.lease_expires_at) * 1000)::bigint
+        END,
         'eventCounts', COALESCE((
             SELECT jsonb_object_agg(event_type, n)
             FROM (
@@ -1791,6 +1803,27 @@ def _event_count(state: dict[str, Any] | None, event_type: str) -> int:
         return int(raw)
     except (TypeError, ValueError):
         return 0
+
+
+def _lease_expiry_proof(
+    state: dict[str, Any],
+    *,
+    lease_owner_fingerprint: str,
+    lease_deadline_ms: int,
+    reclaimed_before: int,
+) -> str | None:
+    if (
+        state.get("status") == "leased"
+        and state.get("leaseExpired") is True
+        and state.get("leaseOwnerFingerprint") == lease_owner_fingerprint
+    ):
+        return "expired_lease_observed"
+    if (
+        int(state.get("observedAtUnixMs") or 0) >= lease_deadline_ms
+        and _event_count(state, "job.reclaimed") > reclaimed_before
+    ):
+        return "durable_reclaim_after_captured_deadline"
+    return None
 
 
 def _poll_job_state(
@@ -1902,19 +1935,36 @@ def finish_api_http_probes(
         _record_api_probe(evidence, "vertical_job", False, 0, {"error": "missing_job"})
 
     if isinstance(token, str):
-        status, body, _ = _http_json(
-            "POST",
-            base,
-            "/api/v1/search",
-            token=token,
-            body={"query": query_marker, "collectionIds": [collection_id], "limit": 5},
+        status = 0
+        body: dict[str, Any] = {}
+        item_count = 0
+        search_attempts = (
+            int(os.environ.get("MARKHAND_O04_SEARCH_POLL_ATTEMPTS", "60"))
+            if job_terminal
+            else 1
         )
+        for _ in range(max(1, search_attempts)):
+            status, body, _ = _http_json(
+                "POST",
+                base,
+                "/api/v1/search",
+                token=token,
+                body={
+                    "query": query_marker,
+                    "collectionIds": [collection_id],
+                    "limit": 5,
+                },
+            )
+            item_count = len(body.get("items") or body.get("hits") or [])
+            if status == 200 and item_count > 0:
+                break
+            time.sleep(2)
         _record_api_probe(
             evidence,
             "vertical_search",
-            status == 200,
+            status == 200 and item_count > 0,
             status,
-            {"items": len(body.get("items") or body.get("hits") or [])},
+            {"items": item_count},
         )
         status, body, _ = _http_json(
             "POST",
@@ -1927,12 +1977,24 @@ def finish_api_http_probes(
                 "limit": 5,
             },
         )
+        citations = body.get("citations") or []
+        try:
+            citation_count = max(
+                len(citations), int(body.get("citationCount") or 0)
+            )
+        except (TypeError, ValueError):
+            citation_count = len(citations)
+        grounded = citation_count > 0
         _record_api_probe(
             evidence,
             "vertical_ask",
-            status == 200,
+            status == 200 and bool(body.get("answer")) and grounded,
             status,
-            {"hasAnswer": bool(body.get("answer"))},
+            {
+                "hasAnswer": bool(body.get("answer")),
+                "citationCount": citation_count,
+                "grounded": grounded,
+            },
         )
     else:
         _record_api_probe(
@@ -2085,6 +2147,7 @@ def run_external_worker_kill_probe(
         "replacementReclaimed": False,
         "replayConsistent": False,
         "dbStateVerified": False,
+        "restartPolicyDisabled": False,
         "candidateWorkerStopped": candidate_worker_stopped,
     }
     if os.environ.get("MARKHAND_O04_EXTERNAL_WORKER_KILL") != "1":
@@ -2153,7 +2216,10 @@ def run_external_worker_kill_probe(
         postgres,
         job_id,
         lambda state: state.get("status") == "leased"
-        and state.get("leaseOwnerPrefix") == expected_worker_id,
+        and state.get("leaseOwnerPrefix") == expected_worker_id
+        and isinstance(state.get("leaseOwnerFingerprint"), str)
+        and bool(state.get("leaseOwnerFingerprint"))
+        and isinstance(state.get("leaseExpiresAtUnixMs"), int),
         attempts=int(
             os.environ.get("MARKHAND_O04_WORKER_KILL_LEASE_POLL_ATTEMPTS", "30")
         ),
@@ -2163,6 +2229,22 @@ def run_external_worker_kill_probe(
     evidence["dbBeforeKillObservations"] = before_observations[-3:]
     if not before:
         evidence["blocker"] = "job_not_leased_by_target_worker_before_kill"
+        path = write_raw(
+            raw_dir,
+            "external-worker-kill.json",
+            json.dumps(evidence, indent=2, sort_keys=True),
+        )
+        evidence["rawLog"] = path.relative_to(raw_dir).as_posix()
+        return evidence
+    restart_policy = run_bounded_command(
+        ["docker", "update", "--restart=no", killed],
+        os.environ.copy(),
+        timeout_secs=30,
+        max_bytes=64 * 1024,
+    )
+    evidence["restartPolicyDisabled"] = restart_policy.returncode == 0
+    if restart_policy.returncode != 0:
+        evidence["blocker"] = "candidate_worker_restart_policy_disable_failed"
         path = write_raw(
             raw_dir,
             "external-worker-kill.json",
@@ -2187,12 +2269,25 @@ def run_external_worker_kill_probe(
     evidence["deathVerified"] = (
         dead.returncode == 0 and bool(dead_lines) and dead_lines[0] == "false"
     )
+    lease_deadline_ms = int(before["leaseExpiresAtUnixMs"])
+    lease_owner_fingerprint = before["leaseOwnerFingerprint"]
+    reclaimed_before = _event_count(before, "job.reclaimed")
+
+    def lease_expiry_proven(state: dict[str, Any]) -> bool:
+        return (
+            _lease_expiry_proof(
+                state,
+                lease_owner_fingerprint=lease_owner_fingerprint,
+                lease_deadline_ms=lease_deadline_ms,
+                reclaimed_before=reclaimed_before,
+            )
+            is not None
+        )
+
     expired, expired_observations = _poll_job_state(
         postgres,
         job_id,
-        lambda state: state.get("status") == "leased"
-        and state.get("leaseExpired") is True
-        and state.get("leaseOwnerFingerprint") == before.get("leaseOwnerFingerprint"),
+        lease_expiry_proven,
         attempts=int(
             os.environ.get("MARKHAND_O04_WORKER_KILL_EXPIRY_POLL_ATTEMPTS", "90")
         ),
@@ -2201,6 +2296,16 @@ def run_external_worker_kill_probe(
     evidence["dbExpiredLease"] = expired
     evidence["dbExpiredLeaseObservations"] = expired_observations[-3:]
     evidence["leaseExpired"] = expired is not None
+    evidence["leaseExpiryProof"] = (
+        _lease_expiry_proof(
+            expired,
+            lease_owner_fingerprint=lease_owner_fingerprint,
+            lease_deadline_ms=lease_deadline_ms,
+            reclaimed_before=reclaimed_before,
+        )
+        if expired is not None
+        else None
+    )
     recreate = run_bounded_command(
         [
             "docker",
@@ -2277,6 +2382,48 @@ def self_test() -> None:
     temp = tempfile.TemporaryDirectory(prefix="o04-self-test-", dir=RAW_ROOT)
     raw = Path(temp.name)
     raw_artifacts: list[Path] = []
+    direct_expiry = {
+        "status": "leased",
+        "leaseExpired": True,
+        "leaseOwnerFingerprint": "owner-a",
+        "observedAtUnixMs": 99,
+        "eventCounts": {},
+    }
+    assert (
+        _lease_expiry_proof(
+            direct_expiry,
+            lease_owner_fingerprint="owner-a",
+            lease_deadline_ms=100,
+            reclaimed_before=0,
+        )
+        == "expired_lease_observed"
+    )
+    durable_reclaim = {
+        "status": "pending",
+        "leaseExpired": False,
+        "leaseOwnerFingerprint": None,
+        "observedAtUnixMs": 101,
+        "eventCounts": {"job.reclaimed": 1},
+    }
+    assert (
+        _lease_expiry_proof(
+            durable_reclaim,
+            lease_owner_fingerprint="owner-a",
+            lease_deadline_ms=100,
+            reclaimed_before=0,
+        )
+        == "durable_reclaim_after_captured_deadline"
+    )
+    durable_reclaim["observedAtUnixMs"] = 99
+    assert (
+        _lease_expiry_proof(
+            durable_reclaim,
+            lease_owner_fingerprint="owner-a",
+            lease_deadline_ms=100,
+            reclaimed_before=0,
+        )
+        is None
+    )
 
     def cargo_log(
         test_names: str | list[str],
@@ -2310,6 +2457,7 @@ def self_test() -> None:
         for cmd in commands:
             validate_cargo_command_shape(cmd)
             assert len(filters_after_double_dash(cmd)) <= 1, (key, cmd)
+    assert "--include-ignored" in suite_specs()["adversarial_upload"][0]
 
     # Negative: multiple filters must raise.
     bad_cmd = [
@@ -2387,6 +2535,7 @@ def self_test() -> None:
         "externalWorkerKill": {
             "harnessControlled": True,
             "stdoutProofAccepted": False,
+            "restartPolicyDisabled": True,
             "deathVerified": True,
             "leaseExpired": True,
             "replacementWorkerVerified": True,
