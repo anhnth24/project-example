@@ -1,0 +1,29 @@
+{
+  "measured": false,
+  "rssGrowthMb": null,
+  "tempGrowthMb": null,
+  "rss": {
+    "start": null,
+    "peak": null,
+    "end": null,
+    "growth": null
+  },
+  "tempBytes": {
+    "start": null,
+    "peak": null,
+    "end": null,
+    "growth": null
+  },
+  "queueDepthMax": null,
+  "queueAgeMaxSeconds": null,
+  "dbConnectionsMax": null,
+  "smoke": true,
+  "workerRecoveryPass": null,
+  "dependencyRecoveryPass": null,
+  "postRestoreRetrievalPass": null,
+  "durationSeconds": 5,
+  "samplerErrors": [],
+  "architecturalBlockers": [
+    "compare_dataset_unavailable"
+  ]
+}

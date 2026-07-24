@@ -1,0 +1,55 @@
+== P1B-F02 Docker boot evidence ==
+stamp=20260724T031535Z
+compose_profiles=mock
+compose_project=markhand-poc
+2026-07-24T03:15:35Z
+NOTE: storageDriver=vfs
+NOTE: nolimit compose fallback active — cannot qualify F02 Done
+PASS: command docker
+PASS: command curl
+PASS: poc-health
+PASS: api user=10001:10001
+PASS: api read_only
+PASS: api cap_drop ALL
+PASS: api no-new-privileges
+FAIL: api memory limit missing/zero (HostConfig.Memory=0) — nested no-limit cannot Done
+FAIL: api cpu limit missing/zero (HostConfig.NanoCpus=0)
+FAIL: api pids limit missing/zero (HostConfig.PidsLimit=<nil>)
+PASS: worker-convert user=10001:10001
+PASS: worker-convert read_only
+PASS: worker-convert cap_drop ALL
+PASS: worker-convert no-new-privileges
+FAIL: worker-convert memory limit missing/zero (HostConfig.Memory=0) — nested no-limit cannot Done
+FAIL: worker-convert cpu limit missing/zero (HostConfig.NanoCpus=0)
+FAIL: worker-convert pids limit missing/zero (HostConfig.PidsLimit=<nil>)
+PASS: worker-index user=10001:10001
+PASS: worker-index read_only
+PASS: worker-index cap_drop ALL
+PASS: worker-index no-new-privileges
+FAIL: worker-index memory limit missing/zero (HostConfig.Memory=0) — nested no-limit cannot Done
+FAIL: worker-index cpu limit missing/zero (HostConfig.NanoCpus=0)
+FAIL: worker-index pids limit missing/zero (HostConfig.PidsLimit=<nil>)
+PASS: worker-embedding user=10001:10001
+PASS: worker-embedding read_only
+PASS: worker-embedding cap_drop ALL
+PASS: worker-embedding no-new-privileges
+FAIL: worker-embedding memory limit missing/zero (HostConfig.Memory=0) — nested no-limit cannot Done
+FAIL: worker-embedding cpu limit missing/zero (HostConfig.NanoCpus=0)
+FAIL: worker-embedding pids limit missing/zero (HostConfig.PidsLimit=<nil>)
+FAIL: storage driver vfs is nested/nonstandard — F02 Done requires standard host (e.g. overlay2)
+PASS: worker-convert on convert network (markhand-poc_convert)
+PASS: worker-convert not on edge/private
+NOTE: worker-convert image lacks curl — using external probe image on convert network
+PASS: convert --sandbox-preflight
+PASS: convert network Internal=true
+PASS: convert network external egress blocked (probe exit=1)
+PASS: api /health/ready
+PASS: api/worker images distinct (markhand-api:poc vs markhand-worker:poc)
+PASS: api image lacks fileconv converter
+PASS: worker image has fileconv + fileconv-worker
+PASS: worker excludes PhoWhisper model path
+PASS: native format smoke txt
+PASS: native format smoke html
+PASS: native format smoke csv
+PASS: native format smoke png
+PASS: native format smoke pdf (gold-004)

@@ -12,8 +12,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, seed_user_with_permissions, test_minio_client, tiny_pdf_bytes,
-    tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
+    login_access_token, seed_user_with_permissions, take_live, test_minio_client, tiny_docx_bytes,
+    tiny_pdf_bytes, tiny_png_ocr_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
 };
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
@@ -65,13 +65,55 @@ fn multipart(filename: &str, content_type: &str, bytes: &[u8], collection_id: Uu
     body
 }
 
+/// Source of truth for expected formats: `bench/markhand_web/workloads/phase1b-mixed.yaml`.
+fn expected_formats_from_workload() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bench/markhand_web/workloads/phase1b-mixed.yaml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read workload {}: {error}", path.display()));
+    let line = text
+        .lines()
+        .find(|line| line.contains("formats:"))
+        .unwrap_or_else(|| panic!("formats: missing in {}", path.display()));
+    let start = line
+        .find('[')
+        .and_then(|i| line[i + 1..].find(']').map(|j| (i + 1, i + 1 + j)))
+        .unwrap_or_else(|| panic!("formats list missing in {}", path.display()));
+    let mut formats: Vec<String> = line[start.0..start.1]
+        .split(',')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .filter(|part| !part.is_empty())
+        .collect();
+    formats.sort();
+    formats.dedup();
+    assert!(
+        !formats.is_empty(),
+        "empty formats list in {}",
+        path.display()
+    );
+    formats
+}
+
+/// Fixture matrix keyed by workload formats (must cover every expected format).
 fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec<u8>)> {
     vec![
         (
-            "txt",
-            "budget.txt",
-            "text/plain",
-            b"Kinh phi du an la 15 trieu dong.\n".to_vec(),
+            "csv",
+            "budget.csv",
+            "text/csv",
+            b"item,amount\nKinh phi CSV 15 trieu,15000000\n".to_vec(),
+        ),
+        (
+            "docx",
+            "budget.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            tiny_docx_bytes("Kinh phi DOCX 15 trieu"),
+        ),
+        (
+            "html",
+            "budget.html",
+            "text/html",
+            b"<html><body><p>Kinh phi HTML 15 trieu</p></body></html>".to_vec(),
         ),
         (
             "pdf",
@@ -80,10 +122,23 @@ fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec
             tiny_pdf_bytes("Kinh phi PDF 15 trieu"),
         ),
         (
+            "png",
+            "budget.png",
+            "image/png",
+            // ASCII marker for Tesseract; missing OCR runtime must fail the live suite.
+            tiny_png_ocr_bytes("SOAK15"),
+        ),
+        (
             "pptx",
             "budget.pptx",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             tiny_pptx_bytes("Kinh phi PPTX 15 trieu"),
+        ),
+        (
+            "txt",
+            "budget.txt",
+            "text/plain",
+            b"Kinh phi du an la 15 trieu dong.\n".to_vec(),
         ),
         (
             "xlsx",
@@ -122,20 +177,20 @@ async fn json_post(
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MINIO + QDRANT + built fileconv"]
 async fn live_upload_convert_index_citation_vertical_slice() {
-    let Some(admin) = admin_database_url() else {
+    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
     };
-    let Some(app_url) = app_database_url() else {
+    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
         return;
     };
-    let Some(store) = test_minio_client() else {
+    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
-    let Some(qdrant) = test_qdrant() else {
+    let Some(qdrant) = take_live(test_qdrant(), "MARKHAND_TEST_QDRANT_URL") else {
         eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
         return;
     };
-    let Some(fileconv) = fileconv_binary() else {
+    let Some(fileconv) = take_live(fileconv_binary(), "target/debug/fileconv") else {
         panic!("target/debug/fileconv missing — build fileconv-cli for vertical slice evidence");
     };
     let cleanup = MinioCleanupGuard::new(store.clone());
@@ -217,7 +272,16 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     )
     .expect("index worker");
 
-    for (ext, filename, content_type, source) in vertical_format_cases() {
+    let expected_formats = expected_formats_from_workload();
+    let cases = vertical_format_cases();
+    let case_exts: Vec<String> = cases.iter().map(|(ext, ..)| (*ext).to_string()).collect();
+    assert_eq!(
+        case_exts, expected_formats,
+        "vertical_format_cases must match phase1b-mixed.yaml ingest formats exactly"
+    );
+    let mut observed_formats: Vec<String> = Vec::new();
+
+    for (ext, filename, content_type, source) in cases {
         let upload_response = app
             .clone()
             .oneshot(
@@ -282,12 +346,29 @@ async fn live_upload_convert_index_citation_vertical_slice() {
             .run_once(&worker_ctx)
             .await
             .unwrap_or_else(|error| panic!("{ext} convert run: {error}"));
+        let worker_org_id = worker_ctx.org_id();
+        let convert_last_error = with_org_txn(&pool, &worker_ctx, move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT last_error FROM jobs WHERE org_id = $1 AND id = $2",
+                        &[&worker_org_id, &convert_job_id],
+                    )
+                    .await?;
+                Ok::<_, fileconv_server::db::error::DbError>(
+                    row.get::<_, Option<String>>("last_error"),
+                )
+            })
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{ext} load convert job: {error}"));
         assert!(
             matches!(
                 convert_run,
                 ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
             ),
-            "{ext} unexpected convert outcome: {convert_run:?}"
+            "{ext} unexpected convert outcome: {convert_run:?}; last_error={:?}",
+            convert_last_error
         );
 
         let (published_version_id, markdown_sha, source_sha) =
@@ -336,7 +417,26 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         assert_eq!(resolved.version_id, published_version_id);
         assert_eq!(resolved.chunk_id, chunk.id);
         assert!(resolved.is_current, "{ext} citation must be current");
+        if ext == "png" {
+            assert!(
+                resolved.quote.to_ascii_uppercase().contains("SOAK15")
+                    || chunk.body.to_ascii_uppercase().contains("SOAK15"),
+                "png OCR must recover marker SOAK15; missing tesseract/vie must fail this suite"
+            );
+        }
+        observed_formats.push(ext.to_string());
     }
+
+    observed_formats.sort();
+    assert_eq!(
+        observed_formats, expected_formats,
+        "vertical slice must cover every expected format"
+    );
+    // Machine-readable coverage line consumed by O04 release harness.
+    eprintln!(
+        "O04_FORMAT_COVERAGE\t{}",
+        serde_json::to_string(&observed_formats).expect("format json")
+    );
 
     cleanup.cleanup().await.expect("minio bucket cleanup");
     ephemeral.drop().await;

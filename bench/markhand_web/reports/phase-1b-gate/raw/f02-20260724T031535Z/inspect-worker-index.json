@@ -1,0 +1,48 @@
+[
+  {
+    "Id": "19cf27b771be337cff27ec4afbeddfb44f1f7ac3f6774230f9012fa1da41bb68",
+    "Name": "/markhand-poc-worker-index-1",
+    "Created": "2026-07-24T03:14:08.974616449Z",
+    "Image": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+    "Config": {
+      "User": "10001:10001",
+      "Image": "markhand-worker:poc"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": null
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc_private": {
+          "IPAddress": "172.20.0.8",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "5d7d332cc9a903f46af95df40875a6fb99333f46d1f6c06c26c77b62b66946f9",
+          "EndpointID": "912ad531665a03790a7ac889844e34a1740cc2c16e740df5e518782a1b8c1271",
+          "MacAddress": "76:55:f5:8e:5b:4a",
+          "Aliases": [
+            "markhand-poc-worker-index-1",
+            "worker-index"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 268383
+    }
+  }
+]

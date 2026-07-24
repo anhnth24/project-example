@@ -1,0 +1,63 @@
+[
+  {
+    "Id": "96b7b3ac57a3c993887450717f60dcc7a8661eefe20fa950e2b3851cb9ed320d",
+    "Name": "/markhand-poc-api-1",
+    "Created": "2026-07-24T03:14:07.857638462Z",
+    "Image": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+    "Config": {
+      "User": "10001:10001",
+      "Image": "markhand-api:poc"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": null
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc_edge": {
+          "IPAddress": "172.19.0.2",
+          "Gateway": "172.19.0.1",
+          "NetworkID": "d8f572402c7e6c18b19d0b5768d64a208f5d0a3bc9559f717271d3b9aa10fd03",
+          "EndpointID": "7bb03f12203128e94f5b8103538eb2572d8780b59e55dd281de7100c199e93a7",
+          "MacAddress": "a6:c8:5a:43:c3:c3",
+          "Aliases": [
+            "markhand-poc-api-1",
+            "api"
+          ]
+        },
+        "markhand-poc_private": {
+          "IPAddress": "172.20.0.6",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "5d7d332cc9a903f46af95df40875a6fb99333f46d1f6c06c26c77b62b66946f9",
+          "EndpointID": "3f554aae9a439bca7801323e9426029e1ecae12d13463a1a66f729b3446e9105",
+          "MacAddress": "7a:62:9d:fc:e7:f4",
+          "Aliases": [
+            "markhand-poc-api-1",
+            "api"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0
+      },
+      "OOMKilled": false,
+      "Pid": 268207
+    }
+  }
+]

@@ -1,0 +1,10 @@
+healthy: postgres
+healthy: qdrant
+healthy: minio
+healthy: mock-embedding
+healthy: api-live
+healthy: api-ready
+healthy: worker-convert (running, health=healthy)
+healthy: worker-index (running, health=none)
+healthy: worker-embedding (running, health=none)
+POC health OK

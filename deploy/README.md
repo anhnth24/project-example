@@ -89,14 +89,27 @@ python deploy/scripts/print-index-signature.py \
 
 ```bash
 deploy/scripts/poc-isolation-smoke.sh   # offline; no GPU required
-# With Docker:
+deploy/scripts/poc-boot-evidence.sh --self-test   # hermetic F02 evidence validator
+# With Docker (standard host for Done):
 deploy/scripts/poc-up.sh
-deploy/scripts/poc-boot-evidence.sh
+POC_EVIDENCE_RAW_DIR=bench/markhand_web/reports/phase-1b-gate/raw/f02-$(git rev-parse --short HEAD) \
+  deploy/scripts/poc-boot-evidence.sh
 docker compose -f deploy/compose.poc.yml exec worker-convert \
   /usr/local/bin/fileconv-worker --sandbox-preflight
 ```
 
-Boot evidence: [`bench/markhand_web/reports/poc-f02-boot.md`](../bench/markhand_web/reports/poc-f02-boot.md).
+Boot evidence: [`bench/markhand_web/reports/poc-f02-boot.md`](../bench/markhand_web/reports/poc-f02-boot.md)
+(+ machine JSON `poc-f02-boot.json` with `composeProject` / `imageIds` for O04).
+
+Harness notes:
+
+- Inspect artifacts are **allowlisted** (identity/image/user/readOnly/securityOpt/
+  capDrop/limits/networks/health/status) — never raw `Config.Env`.
+- Convert egress requires `Internal=true` **and** an executable probe on the convert
+  network (pinned alpine from `images.lock.json`); missing probe tooling fails.
+- Nonzero memory/CPU/pids limits are required for `passed=true`. Nested hosts that
+  strip limits (`poc-compose.sh` nolimit fallback) or use `vfs` may boot for
+  debugging but **cannot** qualify F02 Done.
 
 On nested hosts where cgroup v2 is stuck in `threaded` mode, `poc-up.sh`
 auto-strips `mem_limit`/`cpus`/`pids_limit` for boot only; the canonical

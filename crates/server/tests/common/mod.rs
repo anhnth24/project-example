@@ -26,6 +26,20 @@ use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
+/// When `MARKHAND_E2E=1`, soft-skips are forbidden — missing live deps must panic.
+pub fn markhand_e2e_required() -> bool {
+    std::env::var("MARKHAND_E2E").ok().as_deref() == Some("1")
+}
+
+/// Pass through `Some`, panic under `MARKHAND_E2E=1` when missing, else `None` (soft-skip).
+pub fn take_live<T>(value: Option<T>, name: &str) -> Option<T> {
+    match value {
+        Some(value) => Some(value),
+        None if markhand_e2e_required() => panic!("MARKHAND_E2E=1 requires {name}"),
+        None => None,
+    }
+}
+
 pub fn admin_database_url() -> Option<String> {
     match std::env::var("MARKHAND_TEST_DATABASE_URL") {
         Ok(url) if !url.trim().is_empty() => Some(url),
@@ -461,5 +475,6 @@ pub async fn put_bytes(
 pub use fileconv_server::storage::keys::{quarantine_key, trusted_key};
 #[allow(unused_imports)]
 pub use fixtures::{
-    convert_to_markdown, sha256_hex, tiny_pdf_bytes, tiny_pptx_bytes, tiny_xlsx_bytes,
+    convert_to_markdown, sha256_hex, tiny_docx_bytes, tiny_pdf_bytes, tiny_png_ocr_bytes,
+    tiny_pptx_bytes, tiny_xlsx_bytes,
 };

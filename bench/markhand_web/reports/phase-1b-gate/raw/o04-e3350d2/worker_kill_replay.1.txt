@@ -1,0 +1,9 @@
+
+running 1 test
+test live_convert_worker_fault_injection_rolls_back_and_retries_promotion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.93s
+
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.26s
+     Running tests/worker.rs (target/debug/deps/worker-b664f8faccd34fc8)

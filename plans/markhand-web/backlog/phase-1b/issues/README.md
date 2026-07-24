@@ -37,19 +37,21 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** In progress — #281 fixed the broken `python-slim-bookworm` digest in
-  `deploy/poc/images.lock.json` and added digest-length guards; compose/Dockerfiles
-  remain on master. Gap: `bench/markhand_web/reports/poc-f02-boot.md` is explicitly
-  **hand-authored / [Unverified]** (no machine-captured logs or `docker inspect`
-  artifacts). Do not claim Done until `deploy/scripts/poc-boot-evidence.sh` is
-  re-run on a standard Docker host and raw evidence is committed.
+- **Status:** In progress — boot-evidence **harness hardened**
+  (`deploy/scripts/poc-boot-evidence.sh` + `poc_f02_boot_evidence.py --self-test`):
+  O04-consumable JSON (`composeProject` / `containerIds` / `imageIds` / digests),
+  allowlisted inspect (no `Config.Env`), fail-closed secret scan, executable convert
+  egress probe (tool-missing ≠ pass), nonzero mem/cpu/pids required (nested nolimit/vfs
+  cannot Done). Committed `poc-f02-boot.*` still awaiting **live** regeneration on a
+  standard Docker host after `poc-up.sh`; do not mark Done until that evidence passes.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
-  `deploy/scripts/poc-*.sh`, `deploy/poc/*`, `deploy/README.md`.
+  `deploy/scripts/poc-*.sh`, `deploy/scripts/poc_f02_boot_evidence.py`, `deploy/poc/*`,
+  `deploy/README.md`.
 - **Depends:** F01 + G0-CAP/G0-SEC/G0-LIC.
 - **Acceptance/tests:** Clean host boot tự động; API/worker image tách; isolation/
-  UID/cap/egress/native format smoke tests.
+  UID/cap/egress/native format smoke tests; `poc-boot-evidence.sh --self-test`.
 - **Security/migration:** Narrow MinIO credentials, no bundled unlicensed model.
   **Out:** Kubernetes/HA.
 
@@ -226,9 +228,11 @@ ghi trong issue đã `Done`.
 
 - **Status:** In progress — multi-format vertical slice green on live PG/MinIO/
   Qdrant: `live_upload_convert_index_citation_vertical_slice` covers
-  txt/pdf/pptx/xlsx (HTTP upload → ConvertWorker/`fileconv` → IndexWorker →
-  citation resolve on worker-produced IDs/artifacts/chunks; no SQL seed of
-  versions/artifacts/chunks; shared embedding plan/signature). Concurrent
+  all `phase1b-mixed.yaml` ingest formats
+  (csv/docx/html/pdf/png/pptx/txt/xlsx) via HTTP upload →
+  ConvertWorker/`fileconv` → IndexWorker → citation resolve on
+  worker-produced IDs/artifacts/chunks; no SQL seed of
+  versions/artifacts/chunks; shared embedding plan/signature. Concurrent
   redemption barrier + expiry/IDOR/delete/suspend/membership deny covered by
   `live_citation_authz_expiry_replay_idor_and_immediate_deny` (still SQL-seeds
   derived artifacts for history ACL paths). Remaining for Done: history
@@ -412,32 +416,60 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
-- **Status:** In progress — hermetic contracts + e2e gate that defaults to
-  `not_run` / `#[ignore]` live suite (no fake green). Full per-format
-  upload→citation against Compose POC still requires `--ignored` + `MARKHAND_E2E=1`
-  evidence under `bench/markhand_web/reports/phase-1b-gate/`.
+- **Status:** In progress — harness complete (`run_o04_release_suite.py` is
+  evaluate source of truth; Rust `e2e_release_suite` calls
+  `--validate-report`). Default evidence honest `not_run` in
+  `o04-release.json` (never O05 `summary.json`). Suites are **in-process**
+  workers against PG/MinIO/Qdrant endpoints — not Compose API HTTP.
+  Live `pass` still blocked. Exact blockers: (1) `MARKHAND_E2E!=1` / no POC
+  Compose project containers in this environment; (2) F02
+  `poc-f02-boot.json` must be live-regenerated `passed=true` **with** matching
+  `composeProject` + `imageIds` (harness emits those fields; committed JSON is
+  still pre-harness); (3) `MARKHAND_INDEX_SIGNATURE` 64-hex; (4) full workload
+  format matrix including PNG OCR (`phase1b-mixed.yaml`).
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
-- **Files:** `crates/server/tests/phase1b_api_contracts.rs`,
-  `crates/server/tests/e2e_release_suite.rs`,
-  `bench/markhand_web/reports/phase-1b-gate/*`.
+- **Files:** `bench/markhand_web/scripts/run_o04_release_suite.py`,
+  `deploy/scripts/o04-release-suite.sh`,
+  `crates/server/tests/{e2e_release_suite,retrieval_vertical_slice}.rs`,
+  `docs/runbooks/phase-1b/release-suite-o04.md`,
+  `bench/markhand_web/reports/phase-1b-gate/o04-release.*`.
 - **Depends:** F01–R06 + G0-SEC/G1A.
-- **Acceptance/tests:** All formats pass; unauthorized gets no text; malicious
-  rejected/contained; worker kill consistent; evidence redacted.
+- **Acceptance/tests:** All workload formats pass; unauthorized gets no text;
+  malicious rejected/contained; worker kill consistent; evidence redacted;
+  self-test rejects multi-filter command shapes +
+  missing/skipped/ignored/zero-test/partial/high-critical/F02 mismatch.
 - **Security/migration:** High/critical blocks release. **Out:** full 1C matrix.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
-- **Status:** In progress — soak harness never emits `pass` unless every numeric
-  gate is explicitly `pass`; default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`.
-  Numeric soak/restore qualification not claimed.
-- **Plan:** Ingest/query/delete/reconcile mixed load + failures; monitor leaks/queue;
-  restore; aggregate gate report.
-- **Files:** `bench/markhand_web/{soak,workloads,reports/phase-1b-gate}*`.
+- **Status:** In progress — measured harness Sol vòng-2 hardened (converter-accepted
+  fixtures + fileconv preflight, async injection executor with expected==observed,
+  seed/wait before timed load, green `restoredApiBase` post-restore with retained/
+  deleted/authz checks). Default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`;
+  smoke ≠ pass. **Done only after official live 1800s run passes.**
+  Qualification not claimed.
+- **Architectural blockers (honest non-pass until real APIs exist):**
+  (1) `compare_dataset_unavailable` — each upload creates a new documentId; no
+  public API to append versionB; require verified `MARKHAND_SOAK_COMPARE_DATASET`.
+  (2) `restored_api_base_missing` / `restored_api_same_as_blue` — O03 green restore
+  has promote/cutover disabled; blue API is not post-restore proof; need distinct
+  `restoredApiBase` / `MARKHAND_SOAK_RESTORED_API_BASE`.
+- **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
+  `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
+  evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.
+- **Files:** `bench/markhand_web/soak/*`, `workloads/phase1b-mixed.yaml`,
+  `reports/phase-1b-gate/o05-soak.*`, `docs/runbooks/phase-1b/soak-o05.md`,
+  `deploy/scripts/o05-soak.sh`.
 - **Depends:** O02/O03/O04 + G0-CAP/G0-SLO.
-- **Acceptance/tests:** Numeric gates pass; no unbounded memory/temp/connection/queue;
-  recovery/worker/dependency/restore/post-restore retrieval evidence.
-- **Security/migration:** Synthetic/redacted, exact versions recorded.
+- **Acceptance/tests:** Unit/self-test (fake OOXML/PDF/PNG fail preflight, compare
+  without dataset non-pass, async injection, partial injection counts fail,
+  restored==blue/missing non-pass, retained absent / unauthorized 2xx non-pass,
+  smoke≠pass); live: query p95≤500 / p99≤1000, ingest≥1200 docs/h, RSS≤256MB /
+  temp≤512MB / queue≤100 / DB conn≤40, recovery + green post-restore; duration
+  exactly 1800.
+- **Security/migration:** Synthetic/redacted, exact git/image/migration/index
+  versions; injection only on expected POC project/services.
   **Out:** production/multi-org.
 
 ## Critical path và release gate

@@ -1,0 +1,48 @@
+[
+  {
+    "Id": "f76f0aa89912486f136a5d05179cdf1debe19476270617175ecb621124a241c5",
+    "Name": "/markhand-poc-worker-embedding-1",
+    "Created": "2026-07-24T03:14:08.974645525Z",
+    "Image": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+    "Config": {
+      "User": "10001:10001",
+      "Image": "markhand-worker:poc"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": null
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc_private": {
+          "IPAddress": "172.20.0.7",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "5d7d332cc9a903f46af95df40875a6fb99333f46d1f6c06c26c77b62b66946f9",
+          "EndpointID": "ccf852551fd90ab115be783e6359373f9034f24458ebb2578b3e37226232b3ae",
+          "MacAddress": "3e:69:24:bf:c2:65",
+          "Aliases": [
+            "markhand-poc-worker-embedding-1",
+            "worker-embedding"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 268385
+    }
+  }
+]

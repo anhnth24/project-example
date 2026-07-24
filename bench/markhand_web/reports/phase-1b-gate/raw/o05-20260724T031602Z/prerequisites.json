@@ -1,0 +1,31 @@
+{
+  "ok": false,
+  "blockers": [
+    "f02_not_passed",
+    "o03_consistencyRpoPass_not_true",
+    "o03_queryReadyRtoPass_not_true",
+    "o03_full_vector_rto_measured_missing",
+    "o04_not_passed"
+  ],
+  "fingerprint": {
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
+    "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f"
+  },
+  "f02": {
+    "path": "/workspace/bench/markhand_web/reports/poc-f02-boot.json",
+    "passed": false
+  },
+  "o02": {
+    "path": "/workspace/bench/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+    "status": "incomplete"
+  },
+  "o03": {
+    "path": "/workspace/bench/markhand_web/reports/phase-1b-gate/o03-restore.json",
+    "consistencyRpoPass": null,
+    "queryReadyRtoPass": null
+  },
+  "o04": {
+    "path": "/workspace/bench/markhand_web/reports/phase-1b-gate/o04-release.json",
+    "status": "fail"
+  }
+}

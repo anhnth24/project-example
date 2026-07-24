@@ -1,0 +1,7 @@
+NETWORK ID     NAME                   DRIVER    SCOPE
+7446c69f62c6   bridge                 bridge    local
+b39fba33de45   host                   host      local
+ac13f780d822   markhand-poc_convert   bridge    local
+d8f572402c7e   markhand-poc_edge      bridge    local
+5d7d332cc9a9   markhand-poc_private   bridge    local
+4e13e814ec19   none                   null      local

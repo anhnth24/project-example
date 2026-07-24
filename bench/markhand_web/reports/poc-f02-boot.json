@@ -1,22 +1,180 @@
 {
   "issue": "P1B-F02",
-  "stamp_utc": "2026-07-21T14:45:00Z",
-  "passed": true,
-  "api_live": true,
-  "api_ready": true,
-  "minio_init_exit": 0,
-  "sandbox_preflight": true,
-  "convert_network_internal": true,
-  "format_smoke": ["txt", "html", "csv"],
-  "isolation": {
-    "uid": "10001:10001",
-    "read_only": true,
-    "cap_drop": ["ALL"],
-    "no_new_privileges": true
-  },
+  "stamp_utc": "20260724T031535Z",
+  "generatedAt": "2026-07-24T03:15:42.185115+00:00",
+  "passed": false,
+  "pass_count": 34,
+  "fail_count": 13,
+  "passes": [
+    "command docker",
+    "command curl",
+    "poc-health",
+    "api user=10001:10001",
+    "api read_only",
+    "api cap_drop ALL",
+    "api no-new-privileges",
+    "worker-convert user=10001:10001",
+    "worker-convert read_only",
+    "worker-convert cap_drop ALL",
+    "worker-convert no-new-privileges",
+    "worker-index user=10001:10001",
+    "worker-index read_only",
+    "worker-index cap_drop ALL",
+    "worker-index no-new-privileges",
+    "worker-embedding user=10001:10001",
+    "worker-embedding read_only",
+    "worker-embedding cap_drop ALL",
+    "worker-embedding no-new-privileges",
+    "worker-convert on convert network (markhand-poc_convert)",
+    "worker-convert not on edge/private",
+    "convert --sandbox-preflight",
+    "convert network Internal=true",
+    "convert network external egress blocked (probe exit=1)",
+    "api /health/ready",
+    "api/worker images distinct (markhand-api:poc vs markhand-worker:poc)",
+    "api image lacks fileconv converter",
+    "worker image has fileconv + fileconv-worker",
+    "worker excludes PhoWhisper model path",
+    "native format smoke txt",
+    "native format smoke html",
+    "native format smoke csv",
+    "native format smoke png",
+    "native format smoke pdf (gold-004)"
+  ],
+  "fails": [
+    "api memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
+    "api cpu limit missing/zero (HostConfig.NanoCpus=0)",
+    "api pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
+    "worker-convert memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
+    "worker-convert cpu limit missing/zero (HostConfig.NanoCpus=0)",
+    "worker-convert pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
+    "worker-index memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
+    "worker-index cpu limit missing/zero (HostConfig.NanoCpus=0)",
+    "worker-index pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
+    "worker-embedding memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
+    "worker-embedding cpu limit missing/zero (HostConfig.NanoCpus=0)",
+    "worker-embedding pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
+    "storage driver vfs is nested/nonstandard \u2014 F02 Done requires standard host (e.g. overlay2)"
+  ],
   "notes": [
-    "Nested host used vfs storage driver when overlayfs mount failed.",
-    "Cgroup v2 threaded mode blocked mem_limit application; limits remain declared in compose.poc.yml for normal hosts.",
-    "minio-init fixed for read-only mc image (MC_CONFIG_DIR on tmpfs; bash template expand)."
+    "storageDriver=vfs",
+    "nolimit compose fallback active \u2014 cannot qualify F02 Done",
+    "worker-convert image lacks curl \u2014 using external probe image on convert network"
+  ],
+  "composeProject": "markhand-poc",
+  "containerIds": {
+    "api": "96b7b3ac57a3c993887450717f60dcc7a8661eefe20fa950e2b3851cb9ed320d",
+    "minio": "967ae4dee0020e9e75bf08b7059cf609362fbc51551abcd1e3020848c7cd972f",
+    "postgres": "1fa173a5fe458f136d4fe401df9801b926f6afc2aa15807a80d245497571c2cf",
+    "qdrant": "54cb3ae0c7cecf6970f65f4f1c48ed2260d06f7ad6bc7a70325618412d1ca46d",
+    "worker-convert": "00e813ecb25b60fa90b312346ff11080e3d5499afba4e6e4c0585126aa0768eb",
+    "worker-index": "19cf27b771be337cff27ec4afbeddfb44f1f7ac3f6774230f9012fa1da41bb68",
+    "worker-embedding": "f76f0aa89912486f136a5d05179cdf1debe19476270617175ecb621124a241c5"
+  },
+  "imageIds": {
+    "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+    "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
+    "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+    "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
+    "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+    "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+    "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+  },
+  "imageDigests": {
+    "minio": "pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "postgres": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "qdrant": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c"
+  },
+  "gitSha": "e3350d2",
+  "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
+  "dockerVersion": "29.1.3",
+  "composeVersion": "2.40.3+ds1-0ubuntu1~24.04.1",
+  "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f",
+  "storageDriver": "vfs",
+  "nolimitComposeUsed": true,
+  "cgroupLimitsEnforced": false,
+  "standardHostQualification": false,
+  "egressProbe": {
+    "executed": true,
+    "blocked": true,
+    "toolMissing": false,
+    "exitCode": 1,
+    "network": "markhand-poc_convert",
+    "probeImage": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "raw": "exit=1\nwget: can't connect to remote host (1.1.1.1): Network unreachable\n"
+  },
+  "resourceLimits": {
+    "api": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "minio": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "postgres": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "qdrant": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "worker-convert": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "worker-index": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "worker-embedding": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    }
+  },
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/f02-20260724T031535Z",
+  "redactionScan": {
+    "passed": true,
+    "findings": []
+  },
+  "evaluationBlockers": [
+    "nolimit_compose",
+    "resource_limit_zero:api:memory",
+    "resource_limit_zero:api:cpu",
+    "resource_limit_zero:api:pids",
+    "resource_limit_zero:worker-convert:memory",
+    "resource_limit_zero:worker-convert:cpu",
+    "resource_limit_zero:worker-convert:pids",
+    "resource_limit_zero:worker-index:memory",
+    "resource_limit_zero:worker-index:cpu",
+    "resource_limit_zero:worker-index:pids",
+    "resource_limit_zero:worker-embedding:memory",
+    "resource_limit_zero:worker-embedding:cpu",
+    "resource_limit_zero:worker-embedding:pids",
+    "nonstandard_storage:vfs",
+    "fail_count_nonzero",
+    "passed_false"
   ]
 }

@@ -226,6 +226,9 @@ mod imp {
             .env_clear()
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("LC_ALL", "C")
+            // Landlock grants writes only inside this per-job workspace. Keep
+            // converter/OCR temporary files there instead of denied host /tmp.
+            .env("TMPDIR", workspace.path())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -550,6 +553,13 @@ mod imp {
                 (cstring_path("/usr/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
+                // std::process::Command::output() opens /dev/null for child
+                // stdin. Without this exact device rule nested OCR spawn gets
+                // EACCES before exec, even though tesseract itself is allowed.
+                (
+                    cstring_path("/dev/null")?,
+                    ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE,
+                ),
                 // Pinned PDFium + Debian Tesseract tessdata locations.
                 (
                     cstring_path("/opt/pdfium")?,
@@ -1005,6 +1015,60 @@ mod imp {
                 bytes: b"hello".to_vec(),
                 canonical_extension: "txt".into(),
             }
+        }
+
+        #[test]
+        #[ignore = "requires a built fileconv binary and Tesseract"]
+        fn live_png_ocr_runs_inside_production_sandbox() {
+            let tesseract_probe = run(
+                &shell_config("/usr/bin/tesseract --version", Duration::from_secs(5)),
+                input(),
+                &SandboxCancel::default(),
+            )
+            .expect("tesseract probe sandbox");
+            assert_eq!(
+                tesseract_probe.exit,
+                SandboxExit::Success,
+                "tesseract probe stderr={}",
+                String::from_utf8_lossy(&tesseract_probe.stderr)
+            );
+            let fileconv = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/fileconv")
+                .canonicalize()
+                .expect("build target/debug/fileconv first");
+            let output = run(
+                &SandboxConfig {
+                    argv_template: vec![
+                        fileconv.display().to_string(),
+                        "one".into(),
+                        INPUT_PLACEHOLDER.into(),
+                    ],
+                    limits: ResourceLimits {
+                        wall_timeout: Duration::from_secs(30),
+                        ..ResourceLimits::default()
+                    },
+                },
+                SandboxInput {
+                    bytes: include_bytes!(
+                        "../../../../bench/markhand_web/soak/fixtures/soak-png.png"
+                    )
+                    .to_vec(),
+                    canonical_extension: "png".into(),
+                },
+                &SandboxCancel::default(),
+            )
+            .expect("sandbox run");
+            assert_eq!(
+                output.exit,
+                SandboxExit::Success,
+                "stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("SOAK15"),
+                "stdout={}",
+                String::from_utf8_lossy(&output.stdout)
+            );
         }
 
         #[test]

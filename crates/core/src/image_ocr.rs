@@ -95,8 +95,9 @@ pub enum OcrAttemptError {
 impl std::fmt::Display for OcrAttemptError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TesseractNotFound { message, .. } | Self::Failed { message, .. } => {
-                f.write_str(message)
+            Self::TesseractNotFound { stage, message, .. }
+            | Self::Failed { stage, message, .. } => {
+                write!(f, "OCR {}: {message}", stage.as_str())
             }
         }
     }
@@ -125,26 +126,35 @@ impl OcrAttemptError {
 
     pub fn to_detailed(self) -> DetailedConvertError {
         match self {
-            Self::TesseractNotFound { message, .. } => {
-                DetailedConvertError::dependency_missing(message)
+            Self::TesseractNotFound { stage, message, .. } => {
+                DetailedConvertError::dependency_missing(format!(
+                    "OCR {}: {message}",
+                    stage.as_str()
+                ))
             }
-            Self::Failed { message, .. } => DetailedConvertError::failed(message),
+            Self::Failed { stage, message, .. } => {
+                DetailedConvertError::failed(format!("OCR {}: {message}", stage.as_str()))
+            }
         }
     }
 
     pub fn into_io(self) -> io::Error {
         match self {
             Self::TesseractNotFound {
-                message, binary, ..
+                stage,
+                message,
+                binary,
             } => io::Error::new(
                 io::ErrorKind::NotFound,
                 TesseractNotFoundError {
-                    message: format!("{message} ({})", binary.display()),
+                    message: format!("OCR {}: {message} ({})", stage.as_str(), binary.display()),
                 },
             ),
             Self::Failed {
-                message, io_kind, ..
-            } => io::Error::new(io_kind, message),
+                stage,
+                message,
+                io_kind,
+            } => io::Error::new(io_kind, format!("OCR {}: {message}", stage.as_str())),
         }
     }
 

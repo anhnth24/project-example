@@ -2,6 +2,7 @@
 
 use std::io::{Cursor, Write};
 
+use image::{ImageBuffer, Luma};
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
@@ -98,6 +99,170 @@ pub fn tiny_pptx_bytes(marker: &str) -> Vec<u8> {
             presentation_rels.as_slice(),
         ),
         ("ppt/slides/slide1.xml", slide.as_bytes()),
+    ])
+}
+
+/// Deterministic PNG with high-contrast bitmap text for OCR (Tesseract).
+///
+/// Renders uppercase A–Z / 0–9 / space from a 5×7 font, scaled for OCR. If
+/// Tesseract/`vie+eng` is missing at convert time, the vertical-slice live
+/// test must fail (no soft-skip).
+pub fn tiny_png_ocr_bytes(marker: &str) -> Vec<u8> {
+    if marker.eq_ignore_ascii_case("SOAK15") {
+        return include_bytes!("../../../../bench/markhand_web/soak/fixtures/soak-png.png")
+            .to_vec();
+    }
+    const SCALE: u32 = 6;
+    const PAD: u32 = 16;
+    let text: String = marker
+        .chars()
+        .map(|c| c.to_ascii_uppercase())
+        .filter(|c| matches!(c, 'A'..='Z' | '0'..='9' | ' '))
+        .collect();
+    let text = if text.is_empty() {
+        "OCR15".to_string()
+    } else {
+        text
+    };
+    let glyph_w = 6u32; // 5 px + 1 gap
+    let glyph_h = 7u32;
+    let width = PAD * 2 + glyph_w * text.len() as u32 * SCALE;
+    let height = PAD * 2 + glyph_h * SCALE;
+    let mut img: ImageBuffer<Luma<u8>, Vec<u8>> =
+        ImageBuffer::from_pixel(width, height, Luma([255]));
+    for (i, ch) in text.chars().enumerate() {
+        let Some(bits) = bitmap_glyph(ch) else {
+            continue;
+        };
+        let ox = PAD + i as u32 * glyph_w * SCALE;
+        let oy = PAD;
+        for row in 0..7u32 {
+            for col in 0..5u32 {
+                if bits[row as usize] & (1 << (4 - col)) != 0 {
+                    for dy in 0..SCALE {
+                        for dx in 0..SCALE {
+                            img.put_pixel(ox + col * SCALE + dx, oy + row * SCALE + dy, Luma([0]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut png = Cursor::new(Vec::new());
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .expect("encode png");
+    png.into_inner()
+}
+
+fn bitmap_glyph(ch: char) -> Option<[u8; 7]> {
+    // 5-bit rows, MSB = left pixel.
+    Some(match ch {
+        ' ' => [0, 0, 0, 0, 0, 0, 0],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ],
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        _ => return None,
+    })
+}
+
+/// Minimal DOCX with one paragraph containing `marker` text.
+pub fn tiny_docx_bytes(marker: &str) -> Vec<u8> {
+    let content_types = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+    let rels = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+    let document = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>{marker}</w:t></w:r></w:p></w:body>
+</w:document>"#
+    );
+    zip_parts(&[
+        ("[Content_Types].xml", content_types.as_slice()),
+        ("_rels/.rels", rels.as_slice()),
+        ("word/document.xml", document.as_bytes()),
     ])
 }
 

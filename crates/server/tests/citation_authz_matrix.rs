@@ -30,7 +30,7 @@ use uuid::Uuid;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
     convert_to_markdown, login_access_token, put_bytes, quarantine_key, seed_user_with_permissions,
-    sha256_hex, test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes,
+    sha256_hex, take_live, test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes,
     tiny_xlsx_bytes, trusted_key,
 };
 
@@ -530,13 +530,13 @@ async fn live_pdf_pptx_xlsx_citation_preview_download_matrix() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
 async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
-    let Some(admin) = admin_database_url() else {
+    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
     };
-    let Some(app) = app_database_url() else {
+    let Some(app) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
         return;
     };
-    let Some(store) = test_minio_client() else {
+    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
     let (ephemeral, pool) = boot_app_pool(&admin, &app).await;

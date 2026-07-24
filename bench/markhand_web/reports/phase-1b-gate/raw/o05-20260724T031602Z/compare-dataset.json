@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "available": false,
+  "blocker": "compare_dataset_unavailable",
+  "dataset": null,
+  "notes": "MARKHAND_SOAK_COMPARE_DATASET unset. Architectural blocker: upload always creates a new document; harness will not invent version pairs."
+}
