@@ -24,25 +24,25 @@ wait_http() {
 
 require_running() {
   local service="$1"
-  local id
-  id="$("${COMPOSE[@]}" ps -q "$service" || true)"
-  if [[ -z "$id" ]]; then
+  local id status health
+  for _ in $(seq 1 60); do
+    id="$("${COMPOSE[@]}" ps -q "$service" || true)"
+    if [[ -n "$id" ]]; then
+      status="$(docker inspect --format '{{.State.Status}}' "$id")"
+      health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
+      if [[ "$status" == "running" && ("$health" == "none" || "$health" == "healthy") ]]; then
+        echo "healthy: $service (running${health:+, health=$health})"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  if [[ -z "${id:-}" ]]; then
     echo "unhealthy: $service (not running)" >&2
-    return 1
+  else
+    echo "unhealthy: $service (state=$status, health=$health)" >&2
   fi
-  local status
-  status="$(docker inspect --format '{{.State.Status}}' "$id")"
-  if [[ "$status" != "running" ]]; then
-    echo "unhealthy: $service (state=$status)" >&2
-    return 1
-  fi
-  local health
-  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")"
-  if [[ "$health" != "none" && "$health" != "healthy" ]]; then
-    echo "unhealthy: $service (health=$health)" >&2
-    return 1
-  fi
-  echo "healthy: $service (running${health:+, health=$health})"
+  return 1
 }
 
 for _ in $(seq 1 60); do
