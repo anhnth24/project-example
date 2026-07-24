@@ -18,6 +18,7 @@ use common::{
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
+use fileconv_server::db::jobs as jobs_repo;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs::{self};
 use fileconv_server::services::citation::{resolve_citation, ResolveCitationRequest};
@@ -346,12 +347,18 @@ async fn live_upload_convert_index_citation_vertical_slice() {
             .run_once(&worker_ctx)
             .await
             .unwrap_or_else(|error| panic!("{ext} convert run: {error}"));
+        let convert_job = with_org_txn(&pool, &worker_ctx, |txn| {
+            Box::pin(jobs_repo::get_by_id(txn, &worker_ctx, convert_job_id))
+        })
+        .await
+        .unwrap_or_else(|error| panic!("{ext} load convert job: {error}"));
         assert!(
             matches!(
                 convert_run,
                 ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
             ),
-            "{ext} unexpected convert outcome: {convert_run:?}"
+            "{ext} unexpected convert outcome: {convert_run:?}; last_error={:?}",
+            convert_job.last_error
         );
 
         let (published_version_id, markdown_sha, source_sha) =
