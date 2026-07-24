@@ -1008,6 +1008,48 @@ mod imp {
         }
 
         #[test]
+        #[ignore = "requires a built fileconv binary and Tesseract"]
+        fn live_png_ocr_runs_inside_production_sandbox() {
+            let fileconv = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/fileconv")
+                .canonicalize()
+                .expect("build target/debug/fileconv first");
+            let output = run(
+                &SandboxConfig {
+                    argv_template: vec![
+                        fileconv.display().to_string(),
+                        "one".into(),
+                        INPUT_PLACEHOLDER.into(),
+                    ],
+                    limits: ResourceLimits {
+                        wall_timeout: Duration::from_secs(30),
+                        ..ResourceLimits::default()
+                    },
+                },
+                SandboxInput {
+                    bytes: include_bytes!(
+                        "../../../../bench/markhand_web/soak/fixtures/soak-png.png"
+                    )
+                    .to_vec(),
+                    canonical_extension: "png".into(),
+                },
+                &SandboxCancel::default(),
+            )
+            .expect("sandbox run");
+            assert_eq!(
+                output.exit,
+                SandboxExit::Success,
+                "stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("SOAK15"),
+                "stdout={}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+
+        #[test]
         fn sandbox_cleans_workspace_after_success() {
             if preflight().is_err() {
                 eprintln!("skipped: sandbox isolation unavailable");
