@@ -267,7 +267,7 @@ def collect_poc_image_metadata(project: str) -> tuple[dict[str, str], dict[str, 
                 "docker",
                 "inspect",
                 "--format",
-                "{{.Id}}\t{{json .RepoDigests}}",
+                "{{.Image}}",
                 cid,
             ],
             capture_output=True,
@@ -276,17 +276,32 @@ def collect_poc_image_metadata(project: str) -> tuple[dict[str, str], dict[str, 
         )
         if insp.returncode != 0:
             continue
-        image_id, repo_json = (insp.stdout.strip().split("\t", 1) + [""])[:2]
+        image_id = (insp.stdout or "").strip()
         if image_id:
             ids[service] = image_id
-        try:
-            repo = json.loads(repo_json) if repo_json else []
-        except json.JSONDecodeError:
-            repo = []
-        if isinstance(repo, list):
-            real = [d for d in repo if isinstance(d, str) and "@sha256:" in d]
-            if real:
-                digests[service] = real[0]
+            # RepoDigests live on the image object, not the container.
+            img = subprocess.run(
+                [
+                    "docker",
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{json .RepoDigests}}",
+                    image_id,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            repo_json = (img.stdout or "").strip() if img.returncode == 0 else "[]"
+            try:
+                repo = json.loads(repo_json) if repo_json else []
+            except json.JSONDecodeError:
+                repo = []
+            if isinstance(repo, list):
+                real = [d for d in repo if isinstance(d, str) and "@sha256:" in d]
+                if real:
+                    digests[service] = real[0]
     missing = [svc for svc in EXPECTED_POC_SERVICES if svc not in ids]
     return ids, digests, missing
 

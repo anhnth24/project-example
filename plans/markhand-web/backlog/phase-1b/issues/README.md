@@ -37,19 +37,21 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** In progress — #281 fixed the broken `python-slim-bookworm` digest in
-  `deploy/poc/images.lock.json` and added digest-length guards; compose/Dockerfiles
-  remain on master. Gap: `bench/markhand_web/reports/poc-f02-boot.md` is explicitly
-  **hand-authored / [Unverified]** (no machine-captured logs or `docker inspect`
-  artifacts). Do not claim Done until `deploy/scripts/poc-boot-evidence.sh` is
-  re-run on a standard Docker host and raw evidence is committed.
+- **Status:** In progress — boot-evidence **harness hardened**
+  (`deploy/scripts/poc-boot-evidence.sh` + `poc_f02_boot_evidence.py --self-test`):
+  O04-consumable JSON (`composeProject` / `containerIds` / `imageIds` / digests),
+  allowlisted inspect (no `Config.Env`), fail-closed secret scan, executable convert
+  egress probe (tool-missing ≠ pass), nonzero mem/cpu/pids required (nested nolimit/vfs
+  cannot Done). Committed `poc-f02-boot.*` still awaiting **live** regeneration on a
+  standard Docker host after `poc-up.sh`; do not mark Done until that evidence passes.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
-  `deploy/scripts/poc-*.sh`, `deploy/poc/*`, `deploy/README.md`.
+  `deploy/scripts/poc-*.sh`, `deploy/scripts/poc_f02_boot_evidence.py`, `deploy/poc/*`,
+  `deploy/README.md`.
 - **Depends:** F01 + G0-CAP/G0-SEC/G0-LIC.
 - **Acceptance/tests:** Clean host boot tự động; API/worker image tách; isolation/
-  UID/cap/egress/native format smoke tests.
+  UID/cap/egress/native format smoke tests; `poc-boot-evidence.sh --self-test`.
 - **Security/migration:** Narrow MinIO credentials, no bundled unlicensed model.
   **Out:** Kubernetes/HA.
 
@@ -421,10 +423,10 @@ ghi trong issue đã `Done`.
   workers against PG/MinIO/Qdrant endpoints — not Compose API HTTP.
   Live `pass` still blocked. Exact blockers: (1) `MARKHAND_E2E!=1` / no POC
   Compose project containers in this environment; (2) F02
-  `poc-f02-boot.json` must be `passed=true` **with** matching
-  `composeProject` + `imageIds` (current committed F02 JSON lacks those
-  fields); (3) `MARKHAND_INDEX_SIGNATURE` 64-hex; (4) full workload format
-  matrix including PNG OCR (`phase1b-mixed.yaml`).
+  `poc-f02-boot.json` must be live-regenerated `passed=true` **with** matching
+  `composeProject` + `imageIds` (harness emits those fields; committed JSON is
+  still pre-harness); (3) `MARKHAND_INDEX_SIGNATURE` 64-hex; (4) full workload
+  format matrix including PNG OCR (`phase1b-mixed.yaml`).
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `bench/markhand_web/scripts/run_o04_release_suite.py`,

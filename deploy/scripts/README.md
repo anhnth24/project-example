@@ -10,6 +10,9 @@ POC:
 cp deploy/.env.example deploy/.env
 deploy/scripts/poc-up.sh
 deploy/scripts/poc-isolation-smoke.sh
+deploy/scripts/poc-boot-evidence.sh --self-test
+POC_EVIDENCE_RAW_DIR=bench/markhand_web/reports/phase-1b-gate/raw/f02-$(git rev-parse --short HEAD) \
+  deploy/scripts/poc-boot-evidence.sh
 ```
 
 See [`deploy/README.md`](../README.md).
