@@ -435,6 +435,26 @@ def wait_until_indexed_visible(
     return False
 
 
+def current_published_version(client: ApiClient, document_id: str) -> str | None:
+    status, data, _latency = client.request(
+        "GET", f"/api/v1/documents/{document_id}/versions"
+    )
+    if not _http_success(status):
+        return None
+    payload = _json_payload(data)
+    items = payload.get("items") if payload is not None else None
+    if not isinstance(items, list):
+        return None
+    current = [
+        str(row["id"])
+        for row in items
+        if isinstance(row, dict)
+        and row.get("isCurrent") is True
+        and isinstance(row.get("id"), str)
+    ]
+    return current[0] if len(current) == 1 else None
+
+
 def do_ingest(
     client: ApiClient,
     fmt: str,
@@ -464,15 +484,18 @@ def do_ingest(
             version_id = payload.get("versionId")
     if ok and isinstance(doc_id, str) and isinstance(version_id, str):
         # Each upload is a new documentId — never invent a second version pair.
-        stats.record_version(doc_id, version_id, published=False)
-        stats.record_marker(doc_id, marker)
-        stats.record_expected_version(doc_id, version_id)
         ok = wait_until_indexed_visible(
             client,
             document_id=doc_id,
             marker=marker,
             timeout_seconds=float(os.environ.get("MARKHAND_SOAK_INGEST_TERMINAL_TIMEOUT", "180")),
         )
+        published_version = current_published_version(client, doc_id) if ok else None
+        ok = published_version is not None
+        if published_version is not None:
+            stats.record_version(doc_id, published_version, published=True)
+            stats.record_marker(doc_id, marker)
+            stats.record_expected_version(doc_id, published_version)
     elif ok:
         ok = False
     in_inj = stats.in_injection_window(time.monotonic() - start_mono)

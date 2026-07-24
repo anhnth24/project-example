@@ -522,6 +522,12 @@ def seed_and_wait_indexed(
     while time.monotonic() < deadline:
         ready = []
         for row in seeded:
+            try:
+                row["versionId"] = _current_published_version(
+                    _published_versions(client, row["documentId"])
+                )
+            except DatasetError:
+                continue
             body = json.dumps(
                 {
                     "query": row["marker"],

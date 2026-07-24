@@ -116,6 +116,102 @@ class FixturePreflightTests(unittest.TestCase):
                 )
 
 
+class PublishedVersionCompletionTests(unittest.TestCase):
+    def test_seed_uses_published_not_upload_draft_version_id(self) -> None:
+        marker = fixtures.marker_for("txt")
+        client = mock.Mock()
+        client.collection_id = "collection-1"
+        client._headers.return_value = {}
+        client.request.side_effect = [
+            (
+                200,
+                b'{"documentId":"doc-1","versionId":"draft-1"}',
+                1.0,
+            ),
+            (
+                200,
+                b'{"items":[{"id":"published-1","isCurrent":true}]}',
+                1.0,
+            ),
+            (
+                200,
+                json.dumps(
+                    {
+                        "hits": [
+                            {
+                                "documentId": "doc-1",
+                                "versionId": "published-1",
+                                "snippet": marker,
+                            }
+                        ],
+                        "citations": [
+                            {
+                                "logicalDocumentId": "doc-1",
+                                "versionId": "published-1",
+                                "quote": marker,
+                            }
+                        ],
+                    }
+                ).encode(),
+                1.0,
+            ),
+        ]
+        with mock.patch.object(
+            workload,
+            "_multipart",
+            return_value=(b"body", "multipart/form-data; boundary=test"),
+        ):
+            result = dataset.seed_and_wait_indexed(
+                client,
+                formats=["txt"],
+                fixture_path_fn=lambda _fmt: Path("ignored.txt"),
+                timeout_seconds=1,
+                poll_seconds=0,
+            )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["seeded"][0]["versionId"], "published-1")
+        self.assertNotIn("draft-1", json.dumps(result))
+
+    def test_timed_ingest_records_published_version(self) -> None:
+        client = mock.Mock()
+        client.collection_id = "collection-1"
+        client._headers.return_value = {}
+        client.request.side_effect = [
+            (
+                200,
+                b'{"documentId":"doc-1","versionId":"draft-1"}',
+                1.0,
+            ),
+            (
+                200,
+                b'{"items":[{"id":"published-1","isCurrent":true}]}',
+                1.0,
+            ),
+        ]
+        stats = workload.RequestStats()
+        with (
+            mock.patch.object(workload, "fixture_path", return_value=Path("ignored.txt")),
+            mock.patch.object(
+                workload,
+                "_multipart",
+                return_value=(b"body", "multipart/form-data; boundary=test"),
+            ),
+            mock.patch.object(
+                workload, "wait_until_indexed_visible", return_value=True
+            ),
+        ):
+            workload.do_ingest(
+                client,
+                "txt",
+                stats,
+                start_mono=time.monotonic(),
+            )
+        self.assertEqual(stats.success["ingest"], 1)
+        self.assertEqual(stats.doc_versions["doc-1"], "published-1")
+        self.assertEqual(stats.versions["doc-1"][0].version_id, "published-1")
+        self.assertTrue(stats.versions["doc-1"][0].published)
+
+
 class QuerySuccessTests(unittest.TestCase):
     def test_compare_without_dataset_is_not_success(self) -> None:
         stats = workload.RequestStats()
