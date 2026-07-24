@@ -346,12 +346,13 @@ async fn live_upload_convert_index_citation_vertical_slice() {
             .run_once(&worker_ctx)
             .await
             .unwrap_or_else(|error| panic!("{ext} convert run: {error}"));
-        let convert_last_error = with_org_txn(&pool, &worker_ctx, |txn| {
+        let worker_org_id = worker_ctx.org_id();
+        let convert_last_error = with_org_txn(&pool, &worker_ctx, move |txn| {
             Box::pin(async move {
                 let row = txn
                     .query_one(
                         "SELECT last_error FROM jobs WHERE org_id = $1 AND id = $2",
-                        &[&worker_ctx.org_id(), &convert_job_id],
+                        &[&worker_org_id, &convert_job_id],
                     )
                     .await?;
                 Ok::<_, fileconv_server::db::error::DbError>(
