@@ -17,6 +17,7 @@ bodies, prompts, or embeddings into tickets.
 | Vector rebuild | (follows Qdrant/embed loss) | [vector-rebuild.md](vector-rebuild.md) |
 | Key rotation | (auth/leak procedures) | [key-rotation.md](key-rotation.md) |
 | Release suite (O04) | (vertical-slice / security) | [release-suite-o04.md](release-suite-o04.md) |
+| Mixed-load soak (O05) | (qualification / growth / recovery) | [soak-o05.md](soak-o05.md) |
 
 Rule + tabletop evidence:
 

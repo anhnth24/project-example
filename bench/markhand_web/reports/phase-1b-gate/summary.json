@@ -1,15 +1,24 @@
 {
-  "generatedAt": "2026-07-22T12:30:00Z",
-  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
-  "live": false,
-  "status": "not_run",
-  "notes": "Stack not opted in; report records workload intent only",
-  "versions": {
-    "git": "a89a500"
-  },
+  "blockers": [
+    "MARKHAND_SOAK!=1"
+  ],
+  "canonicalReport": "o05-soak.json",
   "gates": {
-    "unboundedGrowth": "unknown",
+    "postRestoreRetrieval": "unknown",
     "recovery": "unknown",
-    "postRestoreRetrieval": "unknown"
+    "unboundedGrowth": "unknown"
+  },
+  "generatedAt": "2026-07-24T00:32:32Z",
+  "issue": "P1B-O05",
+  "live": false,
+  "notes": "Stack not opted in; report records workload intent only",
+  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
+  "status": "not_run",
+  "versions": {
+    "git": "8650244",
+    "gitShaFull": "8650244ede9e8602833ecfe5eb01f7f7fad19657",
+    "imageIds": {},
+    "indexSignature": null,
+    "migrationManifestSha256": null
   }
 }

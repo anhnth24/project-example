@@ -1,0 +1,75 @@
+{
+  "blockers": [
+    "MARKHAND_SOAK!=1"
+  ],
+  "canonicalReport": "o05-soak.json",
+  "failureInjection": {},
+  "gates": {
+    "dbConnections": "unknown",
+    "ingestThroughput": "unknown",
+    "postRestoreRetrieval": "unknown",
+    "queryP95": "unknown",
+    "queryP99": "unknown",
+    "queueDepth": "unknown",
+    "recovery": "unknown",
+    "rssGrowth": "unknown",
+    "tempGrowth": "unknown",
+    "unboundedGrowth": "unknown"
+  },
+  "generatedAt": "2026-07-24T00:32:32Z",
+  "issue": "P1B-O05",
+  "markhandSoak": false,
+  "metrics": {},
+  "notes": "Stack not opted in; report records workload intent only",
+  "outDir": "/workspace/bench/markhand_web/reports/phase-1b-gate",
+  "prerequisites": {},
+  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
+  "profileParsed": {
+    "durationSeconds": 1800,
+    "formats": [
+      "pdf",
+      "docx",
+      "pptx",
+      "xlsx",
+      "csv",
+      "html",
+      "txt",
+      "png"
+    ],
+    "name": "phase1b-mixed"
+  },
+  "provenance": {
+    "composeProject": null,
+    "gitSha": "8650244",
+    "gitShaFull": "8650244ede9e8602833ecfe5eb01f7f7fad19657"
+  },
+  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T003232Z",
+  "redactionScan": {
+    "findings": [],
+    "passed": true
+  },
+  "smoke": false,
+  "smokeNonQualifying": false,
+  "status": "not_run",
+  "thresholds": {
+    "fullVectorRtoMinutes": 240,
+    "ingestDocsPerHour": 1200.0,
+    "ingestGateBinding": true,
+    "maxDbConnections": 40,
+    "maxQueueDepth": 100,
+    "maxRssGrowthMb": 256.0,
+    "maxTempGrowthMb": 512.0,
+    "officialDurationSeconds": 1800,
+    "queryP95Ms": 500.0,
+    "queryP99Ms": 1000.0,
+    "queryReadyRtoMinutes": 60,
+    "rpoMinutes": 15
+  },
+  "versions": {
+    "git": "8650244",
+    "gitShaFull": "8650244ede9e8602833ecfe5eb01f7f7fad19657",
+    "imageIds": {},
+    "indexSignature": null,
+    "migrationManifestSha256": null
+  }
+}

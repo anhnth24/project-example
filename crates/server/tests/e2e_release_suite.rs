@@ -3,7 +3,7 @@
 //! Python harness (`run_o04_release_suite.py`) is the source of truth for
 //! evaluate_report. This Rust binary:
 //! - asserts default evidence is honest `not_run` / non-pass
-//! - refuses to treat O05 `summary.json` as O04 evidence
+//! - refuses to treat O05 `o05-soak.json` / `summary.json` as O04 evidence
 //! - under `MARKHAND_E2E=1` + `--ignored`, invokes Python `--validate-report`
 //!
 //! Integration CI that uses `--include-ignored` must `--skip e2e_live_vertical_slice`.
@@ -14,8 +14,10 @@ use std::process::Command;
 use serde_json::Value;
 
 const O04_REPORT: &str = "bench/markhand_web/reports/phase-1b-gate/o04-release.json";
+const O05_REPORT: &str = "bench/markhand_web/reports/phase-1b-gate/o05-soak.json";
 const O05_SUMMARY: &str = "bench/markhand_web/reports/phase-1b-gate/summary.json";
 const O04_HARNESS: &str = "bench/markhand_web/scripts/run_o04_release_suite.py";
+const O05_HARNESS: &str = "bench/markhand_web/soak/run_soak.py";
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -74,14 +76,38 @@ fn e2e_suite_default_is_not_run() {
         Some("P1B-O04"),
         "O04 report issue field"
     );
-    // Must not treat O05 soak summary as O04 evidence.
+    // Must not treat O05 soak artifacts as O04 evidence.
+    let o05 = load_json(O05_REPORT).expect("o05-soak.json must exist");
+    assert_eq!(
+        o05.get("issue").and_then(|v| v.as_str()),
+        Some("P1B-O05"),
+        "canonical O05 report issue field"
+    );
+    assert_ne!(
+        status_of(&o05),
+        Some("pass"),
+        "default committed O05 evidence must not claim pass without live soak"
+    );
+    assert_eq!(
+        status_of(&o05),
+        Some("not_run"),
+        "default O05 evidence must remain honest not_run"
+    );
     if let Some(summary) = load_json(O05_SUMMARY) {
         assert_ne!(
             summary.get("issue").and_then(|v| v.as_str()),
             Some("P1B-O04"),
             "O05 summary.json must not be used as O04 release evidence"
         );
+        assert_eq!(
+            summary.get("issue").and_then(|v| v.as_str()),
+            Some("P1B-O05"),
+            "summary.json pointer must remain O05-owned"
+        );
     }
+    // O05 harness must exist and refuse pass without MARKHAND_SOAK=1.
+    let o05_harness = workspace_root().join(O05_HARNESS);
+    assert!(o05_harness.is_file(), "missing O05 harness {O05_HARNESS}");
     let path = workspace_root().join(O04_REPORT);
     let (status, blockers, _code) = validate_report_via_python(&path);
     match status.as_str() {

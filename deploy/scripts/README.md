@@ -17,6 +17,14 @@ POC_EVIDENCE_RAW_DIR=bench/markhand_web/reports/phase-1b-gate/raw/f02-$(git rev-
 
 See [`deploy/README.md`](../README.md).
 
+Phase 1B gate harnesses:
+
+```bash
+bash deploy/scripts/o04-release-suite.sh --self-test
+bash deploy/scripts/o05-soak.sh --self-test
+# Official O05 live (MARKHAND_SOAK=1, ~1800s): see docs/runbooks/phase-1b/soak-o05.md
+```
+
 Full runbook: [`docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md).
 
 ## Recommended first-time flow

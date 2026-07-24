@@ -443,16 +443,24 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
-- **Status:** In progress — soak harness never emits `pass` unless every numeric
-  gate is explicitly `pass`; default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`.
-  Numeric soak/restore qualification not claimed.
-- **Plan:** Ingest/query/delete/reconcile mixed load + failures; monitor leaks/queue;
-  restore; aggregate gate report.
-- **Files:** `bench/markhand_web/{soak,workloads,reports/phase-1b-gate}*`.
+- **Status:** In progress — executable measured harness landed (`o05-soak.json`);
+  default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`; smoke
+  (`--duration-seconds` ≠ 1800) is non-qualifying and cannot pass.
+  **Done only after official live 1800s run passes** with F02/O02/O03/O04
+  prerequisites + numeric gates. Qualification not claimed yet.
+- **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
+  `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
+  evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.
+- **Files:** `bench/markhand_web/soak/*`, `workloads/phase1b-mixed.yaml`,
+  `reports/phase-1b-gate/o05-soak.*`, `docs/runbooks/phase-1b/soak-o05.md`,
+  `deploy/scripts/o05-soak.sh`.
 - **Depends:** O02/O03/O04 + G0-CAP/G0-SLO.
-- **Acceptance/tests:** Numeric gates pass; no unbounded memory/temp/connection/queue;
-  recovery/worker/dependency/restore/post-restore retrieval evidence.
-- **Security/migration:** Synthetic/redacted, exact versions recorded.
+- **Acceptance/tests:** Unit/self-test (percentiles, schedule, thresholds, prereqs,
+  smoke≠pass, injection allowlist, secret scan); live: query p95≤500 / p99≤1000,
+  ingest≥1200 docs/h, RSS≤256MB / temp≤512MB / queue≤100 / DB conn≤40, recovery +
+  post-restore retrieval; duration exactly 1800.
+- **Security/migration:** Synthetic/redacted, exact git/image/migration/index
+  versions; injection only on expected POC project/services.
   **Out:** production/multi-org.
 
 ## Critical path và release gate

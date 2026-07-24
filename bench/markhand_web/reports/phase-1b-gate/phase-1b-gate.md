@@ -2,4 +2,6 @@
 
 Status: **not_run**
 
-Numeric gates must be filled from a live mixed-load run before O05 Done.
+Stack not opted in; report records workload intent only
+
+Canonical evidence: `o05-soak.json` (issue `P1B-O05`).
