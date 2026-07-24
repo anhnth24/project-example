@@ -126,10 +126,15 @@ impl OcrAttemptError {
 
     pub fn to_detailed(self) -> DetailedConvertError {
         match self {
-            Self::TesseractNotFound { message, .. } => {
-                DetailedConvertError::dependency_missing(message)
+            Self::TesseractNotFound { stage, message, .. } => {
+                DetailedConvertError::dependency_missing(format!(
+                    "OCR {}: {message}",
+                    stage.as_str()
+                ))
             }
-            Self::Failed { message, .. } => DetailedConvertError::failed(message),
+            Self::Failed { stage, message, .. } => {
+                DetailedConvertError::failed(format!("OCR {}: {message}", stage.as_str()))
+            }
         }
     }
 
