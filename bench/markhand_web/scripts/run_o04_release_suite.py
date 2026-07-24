@@ -1630,21 +1630,33 @@ def _http_multipart_upload(
     collection_id: str,
     marker: str,
     *,
+    filename: str = "o04-http-probe.txt",
+    content_type: str = "text/plain",
+    file_bytes: bytes | None = None,
     timeout: int = 30,
 ) -> tuple[int, dict[str, Any], str]:
     import urllib.error
     import urllib.request
 
     boundary = "----markhandO04HttpProbeBoundary"
-    body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="collectionId"\r\n\r\n{collection_id}\r\n'
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="o04-http-probe.txt"\r\n'
-        "Content-Type: text/plain\r\n\r\n"
-        f"{marker}\n"
-        f"\r\n--{boundary}--\r\n"
-    ).encode("utf-8")
+    payload = file_bytes if file_bytes is not None else f"{marker}\n".encode()
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode(),
+            (
+                'Content-Disposition: form-data; name="collectionId"\r\n\r\n'
+                f"{collection_id}\r\n"
+            ).encode(),
+            f"--{boundary}\r\n".encode(),
+            (
+                'Content-Disposition: form-data; name="file"; '
+                f'filename="{filename}"\r\n'
+            ).encode(),
+            f"Content-Type: {content_type}\r\n\r\n".encode(),
+            payload,
+            f"\r\n--{boundary}--\r\n".encode(),
+        ]
+    )
     req = urllib.request.Request(
         urljoin(base_url.rstrip("/") + "/", "api/v1/uploads"),
         data=body,
@@ -1668,6 +1680,14 @@ def _http_multipart_upload(
         return exc.code, parsed, raw
     except Exception as exc:  # noqa: BLE001
         return 0, {"error": str(exc)}, str(exc)
+
+
+def _bounded_payload_lines(output: str) -> list[str]:
+    return [
+        line
+        for line in output.splitlines()
+        if line.strip() and not line.startswith("O04_COMMAND_OUTPUT_TRUNCATED\t")
+    ]
 
 
 def _psql_json(
@@ -1703,7 +1723,7 @@ def _psql_json(
     if result.returncode != 0 or result.timed_out or result.truncated:
         meta["error"] = redact(result.output[-2000:])
         return None, meta
-    lines = [line for line in result.output.splitlines() if line.strip()]
+    lines = _bounded_payload_lines(result.output)
     if not lines:
         meta["error"] = "empty_psql_output"
         return None, meta
@@ -1819,7 +1839,115 @@ def _bearer_token(base_url: str, evidence: dict[str, Any]) -> str | None:
     return access if isinstance(access, str) and access else None
 
 
-def run_api_http_probes(raw_dir: Path) -> dict[str, Any]:
+def _record_api_probe(
+    evidence: dict[str, Any],
+    name: str,
+    passed: bool,
+    status: int,
+    details: dict[str, Any] | None = None,
+) -> None:
+    evidence["probes"][name] = {
+        "passed": bool(passed),
+        "status": status,
+        "details": details or {},
+    }
+
+
+def _write_api_probe_evidence(
+    raw_dir: Path, evidence: dict[str, Any]
+) -> dict[str, Any]:
+    evidence["apiHttpExercised"] = True
+    evidence["passed"] = all(
+        probe.get("passed") is True for probe in evidence["probes"].values()
+    )
+    path = write_raw(
+        raw_dir, "api-http-probes.json", json.dumps(evidence, indent=2, sort_keys=True)
+    )
+    evidence["rawLog"] = path.relative_to(raw_dir).as_posix()
+    return evidence
+
+
+def finish_api_http_probes(
+    raw_dir: Path,
+    evidence: dict[str, Any],
+    continuation: dict[str, Any],
+) -> dict[str, Any]:
+    base = str(continuation.get("base") or "")
+    token = continuation.get("token")
+    job_id = continuation.get("jobId")
+    query_marker = str(continuation.get("queryMarker") or "")
+    collection_id = str(continuation.get("collectionId") or "")
+
+    job_terminal = False
+    if isinstance(token, str) and isinstance(job_id, str):
+        last_status = 0
+        last_body: dict[str, Any] = {}
+        for _ in range(int(os.environ.get("MARKHAND_O04_JOB_POLL_ATTEMPTS", "30"))):
+            last_status, last_body, _ = _http_json(
+                "GET", base, f"/api/v1/jobs/{job_id}", token=token
+            )
+            state = str(last_body.get("status") or last_body.get("state") or "").lower()
+            if state in {"succeeded", "failed", "cancelled"}:
+                job_terminal = state == "succeeded"
+                break
+            time.sleep(2)
+        _record_api_probe(
+            evidence,
+            "vertical_job",
+            last_status == 200 and job_terminal,
+            last_status,
+            {"terminalSucceeded": job_terminal},
+        )
+    else:
+        _record_api_probe(evidence, "vertical_job", False, 0, {"error": "missing_job"})
+
+    if isinstance(token, str):
+        status, body, _ = _http_json(
+            "POST",
+            base,
+            "/api/v1/search",
+            token=token,
+            body={"query": query_marker, "collectionIds": [collection_id], "limit": 5},
+        )
+        _record_api_probe(
+            evidence,
+            "vertical_search",
+            status == 200,
+            status,
+            {"items": len(body.get("items") or body.get("hits") or [])},
+        )
+        status, body, _ = _http_json(
+            "POST",
+            base,
+            "/api/v1/ask",
+            token=token,
+            body={
+                "question": f"Kinh phi {query_marker}?",
+                "collectionIds": [collection_id],
+                "limit": 5,
+            },
+        )
+        _record_api_probe(
+            evidence,
+            "vertical_ask",
+            status == 200,
+            status,
+            {"hasAnswer": bool(body.get("answer"))},
+        )
+    else:
+        _record_api_probe(
+            evidence, "vertical_search", False, 0, {"error": "missing_token"}
+        )
+        _record_api_probe(
+            evidence, "vertical_ask", False, 0, {"error": "missing_token"}
+        )
+
+    return _write_api_probe_evidence(raw_dir, evidence)
+
+
+def run_api_http_probes(
+    raw_dir: Path, *, defer_job_completion: bool = False
+) -> tuple[dict[str, Any], dict[str, Any]]:
     base = live_api_endpoint()
     evidence: dict[str, Any] = {
         "apiHttpExercised": False,
@@ -1829,28 +1957,30 @@ def run_api_http_probes(raw_dir: Path) -> dict[str, Any]:
     }
     if not base:
         evidence["blocker"] = "api_endpoint_missing"
-        return evidence
-
-    def record(
-        name: str, passed: bool, status: int, details: dict[str, Any] | None = None
-    ) -> None:
-        evidence["probes"][name] = {
-            "passed": bool(passed),
-            "status": status,
-            "details": details or {},
-        }
+        return _write_api_probe_evidence(raw_dir, evidence), {}
 
     status, body, _ = _http_json("GET", base, "/api/v1/health/live")
-    record("health_live", status == 200, status, {"status": body.get("status")})
+    _record_api_probe(
+        evidence, "health_live", status == 200, status, {"status": body.get("status")}
+    )
     status, body, _ = _http_json("GET", base, "/api/v1/health/ready")
-    record("health_ready", status == 200, status, {"status": body.get("status")})
+    _record_api_probe(
+        evidence,
+        "health_ready",
+        status == 200,
+        status,
+        {"status": body.get("status")},
+    )
 
     token = _bearer_token(base, evidence)
     if not token:
-        record("auth_me", False, 0, {"error": "missing_token_or_login"})
+        _record_api_probe(
+            evidence, "auth_me", False, 0, {"error": "missing_token_or_login"}
+        )
     else:
         status, body, _ = _http_json("GET", base, "/api/v1/auth/me", token=token)
-        record(
+        _record_api_probe(
+            evidence,
             "auth_me",
             status == 200 and bool(body.get("orgId") or body.get("org_id")),
             status,
@@ -1869,7 +1999,8 @@ def run_api_http_probes(raw_dir: Path) -> dict[str, Any]:
             "GET", base, f"/api/v1/documents/{foreign_document}", token=token
         )
         leaked = str(c_body) + str(d_body)
-        record(
+        _record_api_probe(
+            evidence,
             "existing_resource_cross_tenant",
             c_status == 404
             and d_status == 404
@@ -1878,7 +2009,8 @@ def run_api_http_probes(raw_dir: Path) -> dict[str, Any]:
             max(c_status, d_status),
         )
     else:
-        record(
+        _record_api_probe(
+            evidence,
             "existing_resource_cross_tenant",
             False,
             0,
@@ -1887,87 +2019,62 @@ def run_api_http_probes(raw_dir: Path) -> dict[str, Any]:
 
     marker = f"O04HTTP{int(time.time())}"
     job_id = None
+    query_marker = marker
     if token:
-        status, body, _ = _http_multipart_upload(
-            base, token, collection_id, f"Kinh phi {marker} la 15 trieu dong"
-        )
+        if defer_job_completion:
+            fixture = (
+                ROOT / "bench/markhand_web/golden/documents/gold-004.pdf"
+            ).read_bytes()
+            query_marker = "HS-2026-004"
+            status, body, _ = _http_multipart_upload(
+                base,
+                token,
+                collection_id,
+                marker,
+                filename="o04-worker-kill.pdf",
+                content_type="application/pdf",
+                file_bytes=fixture,
+            )
+        else:
+            status, body, _ = _http_multipart_upload(
+                base, token, collection_id, f"Kinh phi {marker} la 15 trieu dong"
+            )
         job_id = body.get("jobId") or body.get("job_id")
         evidence["documentId"] = body.get("documentId") or body.get("document_id")
         evidence["jobId"] = job_id
-        record("vertical_upload", status == 201 and isinstance(job_id, str), status)
-    else:
-        record("vertical_upload", False, 0, {"error": "missing_token"})
-
-    job_terminal = False
-    if token and isinstance(job_id, str):
-        last_status = 0
-        last_body: dict[str, Any] = {}
-        for _ in range(int(os.environ.get("MARKHAND_O04_JOB_POLL_ATTEMPTS", "30"))):
-            last_status, last_body, _ = _http_json(
-                "GET", base, f"/api/v1/jobs/{job_id}", token=token
-            )
-            state = str(last_body.get("status") or last_body.get("state") or "").lower()
-            if state in {"succeeded", "failed", "cancelled"}:
-                job_terminal = state == "succeeded"
-                break
-            time.sleep(2)
-        record(
-            "vertical_job",
-            last_status == 200 and job_terminal,
-            last_status,
-            {"terminalSucceeded": job_terminal},
-        )
-    else:
-        record("vertical_job", False, 0, {"error": "missing_job"})
-
-    if token:
-        status, body, _ = _http_json(
-            "POST",
-            base,
-            "/api/v1/search",
-            token=token,
-            body={"query": marker, "collectionIds": [collection_id], "limit": 5},
-        )
-        record(
-            "vertical_search",
-            status == 200,
+        _record_api_probe(
+            evidence,
+            "vertical_upload",
+            status == 201 and isinstance(job_id, str),
             status,
-            {"items": len(body.get("items") or body.get("hits") or [])},
-        )
-        status, body, _ = _http_json(
-            "POST",
-            base,
-            "/api/v1/ask",
-            token=token,
-            body={
-                "question": f"Kinh phi {marker}?",
-                "collectionIds": [collection_id],
-                "limit": 5,
-            },
-        )
-        record(
-            "vertical_ask",
-            status == 200,
-            status,
-            {"hasAnswer": bool(body.get("answer"))},
         )
     else:
-        record("vertical_search", False, 0, {"error": "missing_token"})
-        record("vertical_ask", False, 0, {"error": "missing_token"})
+        _record_api_probe(
+            evidence, "vertical_upload", False, 0, {"error": "missing_token"}
+        )
 
-    evidence["apiHttpExercised"] = True
-    evidence["passed"] = all(
-        probe.get("passed") is True for probe in evidence["probes"].values()
-    )
-    path = write_raw(
-        raw_dir, "api-http-probes.json", json.dumps(evidence, indent=2, sort_keys=True)
-    )
-    evidence["rawLog"] = path.relative_to(raw_dir).as_posix()
-    return evidence
+    continuation = {
+        "base": base,
+        "token": token,
+        "jobId": job_id,
+        "queryMarker": query_marker,
+        "collectionId": collection_id,
+    }
+    if defer_job_completion:
+        evidence["apiHttpExercised"] = True
+        return evidence, continuation
+    return finish_api_http_probes(raw_dir, evidence, continuation), {}
 
 
 def run_external_worker_kill_probe(
-    raw_dir: Path, project: str, api_job_id: str | None = None
+    raw_dir: Path,
+    project: str,
+    api_job_id: str | None = None,
+    *,
+    target_worker_id: str | None = None,
+    postgres_container_id: str | None = None,
+    start_target_worker: bool = False,
+    candidate_worker_stopped: bool = False,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "harnessControlled": True,
@@ -1978,6 +2085,7 @@ def run_external_worker_kill_probe(
         "replacementReclaimed": False,
         "replayConsistent": False,
         "dbStateVerified": False,
+        "candidateWorkerStopped": candidate_worker_stopped,
     }
     if os.environ.get("MARKHAND_O04_EXTERNAL_WORKER_KILL") != "1":
         evidence["blocker"] = "MARKHAND_O04_EXTERNAL_WORKER_KILL!=1"
@@ -1988,9 +2096,14 @@ def run_external_worker_kill_probe(
         )
         evidence["rawLog"] = path.relative_to(raw_dir).as_posix()
         return evidence
-    ids, _digests, containers, missing = collect_poc_image_metadata(project)
-    killed = containers.get("worker-convert")
-    postgres = containers.get("postgres")
+    if target_worker_id and postgres_container_id:
+        killed = target_worker_id
+        postgres = postgres_container_id
+        missing: list[str] = []
+    else:
+        _ids, _digests, containers, missing = collect_poc_image_metadata(project)
+        killed = containers.get("worker-convert")
+        postgres = containers.get("postgres")
     job_id = (
         os.environ.get("MARKHAND_O04_WORKER_KILL_JOB_ID") or api_job_id or ""
     ).strip()
@@ -2019,6 +2132,23 @@ def run_external_worker_kill_probe(
         )
         evidence["rawLog"] = path.relative_to(raw_dir).as_posix()
         return evidence
+    if start_target_worker:
+        start = run_bounded_command(
+            ["docker", "start", killed],
+            os.environ.copy(),
+            timeout_secs=30,
+            max_bytes=64 * 1024,
+        )
+        evidence["candidateWorkerStartExitCode"] = start.returncode
+        if start.returncode != 0:
+            evidence["blocker"] = "candidate_worker_start_failed"
+            path = write_raw(
+                raw_dir,
+                "external-worker-kill.json",
+                json.dumps(evidence, indent=2, sort_keys=True),
+            )
+            evidence["rawLog"] = path.relative_to(raw_dir).as_posix()
+            return evidence
     before, before_observations = _poll_job_state(
         postgres,
         job_id,
@@ -2600,6 +2730,10 @@ def self_test() -> None:
         agg_ignored
     )
 
+    assert _bounded_payload_lines(
+        '{"found":true}\nO04_COMMAND_OUTPUT_TRUNCATED\tfalse\n'
+    ) == ['{"found":true}']
+
     print("self-test ok")
 
 
@@ -2615,14 +2749,38 @@ def run_live(raw_dir: Path) -> dict[str, Any]:
     compose_service_map = collect_compose_service_map(project)
     index_sig = resolve_index_signature()
     f02 = load_f02_boot()
-    api_probes = run_api_http_probes(raw_dir)
+    integrated_kill = (
+        os.environ.get("MARKHAND_O04_EXTERNAL_WORKER_KILL") == "1"
+        and not os.environ.get("MARKHAND_O04_WORKER_KILL_JOB_ID", "").strip()
+    )
+    target_worker_id = container_ids.get("worker-convert")
+    postgres_container_id = container_ids.get("postgres")
+    candidate_worker_stopped = False
+    if integrated_kill and target_worker_id:
+        stop = run_bounded_command(
+            ["docker", "stop", "--time", "15", target_worker_id],
+            env,
+            timeout_secs=30,
+            max_bytes=64 * 1024,
+        )
+        candidate_worker_stopped = stop.returncode == 0
+    defer_job_completion = integrated_kill and candidate_worker_stopped
+    api_probes, api_continuation = run_api_http_probes(
+        raw_dir, defer_job_completion=defer_job_completion
+    )
     external_kill = run_external_worker_kill_probe(
         raw_dir,
         project,
         api_job_id=api_probes.get("jobId")
         if isinstance(api_probes.get("jobId"), str)
         else None,
+        target_worker_id=target_worker_id if defer_job_completion else None,
+        postgres_container_id=postgres_container_id if defer_job_completion else None,
+        start_target_worker=defer_job_completion,
+        candidate_worker_stopped=candidate_worker_stopped,
     )
+    if api_continuation:
+        api_probes = finish_api_http_probes(raw_dir, api_probes, api_continuation)
     raw_artifacts: list[Path] = [
         raw_dir / api_probes["rawLog"],
         raw_dir / external_kill["rawLog"],
