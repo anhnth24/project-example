@@ -475,6 +475,6 @@ pub async fn put_bytes(
 pub use fileconv_server::storage::keys::{quarantine_key, trusted_key};
 #[allow(unused_imports)]
 pub use fixtures::{
-    convert_to_markdown, sha256_hex, tiny_docx_bytes, tiny_pdf_bytes, tiny_pptx_bytes,
-    tiny_xlsx_bytes,
+    convert_to_markdown, sha256_hex, tiny_docx_bytes, tiny_pdf_bytes, tiny_png_ocr_bytes,
+    tiny_pptx_bytes, tiny_xlsx_bytes,
 };

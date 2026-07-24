@@ -226,9 +226,11 @@ ghi trong issue đã `Done`.
 
 - **Status:** In progress — multi-format vertical slice green on live PG/MinIO/
   Qdrant: `live_upload_convert_index_citation_vertical_slice` covers
-  csv/docx/html/pdf/pptx/txt/xlsx (HTTP upload → ConvertWorker/`fileconv` →
-  IndexWorker → citation resolve on worker-produced IDs/artifacts/chunks; no
-  SQL seed of versions/artifacts/chunks; shared embedding plan/signature). Concurrent
+  all `phase1b-mixed.yaml` ingest formats
+  (csv/docx/html/pdf/png/pptx/txt/xlsx) via HTTP upload →
+  ConvertWorker/`fileconv` → IndexWorker → citation resolve on
+  worker-produced IDs/artifacts/chunks; no SQL seed of
+  versions/artifacts/chunks; shared embedding plan/signature. Concurrent
   redemption barrier + expiry/IDOR/delete/suspend/membership deny covered by
   `live_citation_authz_expiry_replay_idor_and_immediate_deny` (still SQL-seeds
   derived artifacts for history ACL paths). Remaining for Done: history
@@ -412,14 +414,17 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
-- **Status:** In progress — harness complete (`run_o04_release_suite.py` +
-  `e2e_release_suite` validator). Default evidence is honest `not_run` in
-  `o04-release.json` (never O05 `summary.json`). Live `pass` still blocked:
-  requires `MARKHAND_E2E=1` against running POC/dev PG+MinIO+Qdrant with
-  `target/debug/fileconv`, full format matrix
-  `csv/docx/html/pdf/pptx/txt/xlsx`, and redacted raw logs under
-  `raw/o04-<git>/`. Exact live blocker: Compose/dev stack services not running
-  in this agent environment (no markhand containers; harness not opted in).
+- **Status:** In progress — harness complete (`run_o04_release_suite.py` is
+  evaluate source of truth; Rust `e2e_release_suite` calls
+  `--validate-report`). Default evidence honest `not_run` in
+  `o04-release.json` (never O05 `summary.json`). Suites are **in-process**
+  workers against PG/MinIO/Qdrant endpoints — not Compose API HTTP.
+  Live `pass` still blocked. Exact blockers: (1) `MARKHAND_E2E!=1` / no POC
+  Compose project containers in this environment; (2) F02
+  `poc-f02-boot.json` must be `passed=true` **with** matching
+  `composeProject` + `imageIds` (current committed F02 JSON lacks those
+  fields); (3) `MARKHAND_INDEX_SIGNATURE` 64-hex; (4) full workload format
+  matrix including PNG OCR (`phase1b-mixed.yaml`).
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `bench/markhand_web/scripts/run_o04_release_suite.py`,
@@ -428,9 +433,10 @@ ghi trong issue đã `Done`.
   `docs/runbooks/phase-1b/release-suite-o04.md`,
   `bench/markhand_web/reports/phase-1b-gate/o04-release.*`.
 - **Depends:** F01–R06 + G0-SEC/G1A.
-- **Acceptance/tests:** All expected formats pass; unauthorized gets no text;
+- **Acceptance/tests:** All workload formats pass; unauthorized gets no text;
   malicious rejected/contained; worker kill consistent; evidence redacted;
-  schema self-test rejects missing/skipped/ignored/zero-test/partial/high-critical.
+  self-test rejects multi-filter command shapes +
+  missing/skipped/ignored/zero-test/partial/high-critical/F02 mismatch.
 - **Security/migration:** High/critical blocks release. **Out:** full 1C matrix.
 
 ### P1B-O05 — Mixed-load soak và POC qualification

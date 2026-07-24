@@ -13,7 +13,7 @@ use axum::http::{Request, StatusCode};
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
     login_access_token, seed_user_with_permissions, take_live, test_minio_client, tiny_docx_bytes,
-    tiny_pdf_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
+    tiny_pdf_bytes, tiny_png_ocr_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
 };
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
@@ -65,7 +65,36 @@ fn multipart(filename: &str, content_type: &str, bytes: &[u8], collection_id: Uu
     body
 }
 
-/// Explicit O04 expected document formats (fixtures available without OCR/audio models).
+/// Source of truth for expected formats: `bench/markhand_web/workloads/phase1b-mixed.yaml`.
+fn expected_formats_from_workload() -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bench/markhand_web/workloads/phase1b-mixed.yaml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read workload {}: {error}", path.display()));
+    let line = text
+        .lines()
+        .find(|line| line.contains("formats:"))
+        .unwrap_or_else(|| panic!("formats: missing in {}", path.display()));
+    let start = line
+        .find('[')
+        .and_then(|i| line[i + 1..].find(']').map(|j| (i + 1, i + 1 + j)))
+        .unwrap_or_else(|| panic!("formats list missing in {}", path.display()));
+    let mut formats: Vec<String> = line[start.0..start.1]
+        .split(',')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .filter(|part| !part.is_empty())
+        .collect();
+    formats.sort();
+    formats.dedup();
+    assert!(
+        !formats.is_empty(),
+        "empty formats list in {}",
+        path.display()
+    );
+    formats
+}
+
+/// Fixture matrix keyed by workload formats (must cover every expected format).
 fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec<u8>)> {
     vec![
         (
@@ -91,6 +120,13 @@ fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec
             "budget.pdf",
             "application/pdf",
             tiny_pdf_bytes("Kinh phi PDF 15 trieu"),
+        ),
+        (
+            "png",
+            "budget.png",
+            "image/png",
+            // ASCII marker for Tesseract; missing OCR runtime must fail the live suite.
+            tiny_png_ocr_bytes("OCR15"),
         ),
         (
             "pptx",
@@ -236,14 +272,14 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     )
     .expect("index worker");
 
+    let expected_formats = expected_formats_from_workload();
     let cases = vertical_format_cases();
-    let expected_formats: Vec<&str> = cases.iter().map(|(ext, ..)| *ext).collect();
+    let case_exts: Vec<String> = cases.iter().map(|(ext, ..)| (*ext).to_string()).collect();
     assert_eq!(
-        expected_formats,
-        ["csv", "docx", "html", "pdf", "pptx", "txt", "xlsx"],
-        "O04 expected format set must stay explicit and sorted"
+        case_exts, expected_formats,
+        "vertical_format_cases must match phase1b-mixed.yaml ingest formats exactly"
     );
-    let mut observed_formats: Vec<&str> = Vec::new();
+    let mut observed_formats: Vec<String> = Vec::new();
 
     for (ext, filename, content_type, source) in cases {
         let upload_response = app
@@ -364,10 +400,17 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         assert_eq!(resolved.version_id, published_version_id);
         assert_eq!(resolved.chunk_id, chunk.id);
         assert!(resolved.is_current, "{ext} citation must be current");
-        observed_formats.push(ext);
+        if ext == "png" {
+            assert!(
+                resolved.quote.to_ascii_uppercase().contains("OCR15")
+                    || chunk.body.to_ascii_uppercase().contains("OCR15"),
+                "png OCR must recover marker OCR15; missing tesseract/vie must fail this suite"
+            );
+        }
+        observed_formats.push(ext.to_string());
     }
 
-    observed_formats.sort_unstable();
+    observed_formats.sort();
     assert_eq!(
         observed_formats, expected_formats,
         "vertical slice must cover every expected format"

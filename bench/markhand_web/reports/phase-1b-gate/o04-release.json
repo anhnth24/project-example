@@ -1,4 +1,9 @@
 {
+  "architecture": {
+    "apiHttpExercised": false,
+    "description": "Cargo #[ignore] integration tests boot in-process axum + ConvertWorker/IndexWorker against live PG/MinIO/Qdrant endpoints from MARKHAND_TEST_*; they do not send HTTP to the Compose API container.",
+    "kind": "in_process_workers_against_poc_services"
+  },
   "blockers": [
     "MARKHAND_E2E!=1"
   ],
@@ -7,27 +12,37 @@
     "docx",
     "html",
     "pdf",
+    "png",
     "pptx",
     "txt",
     "xlsx"
   ],
+  "f02Boot": {
+    "composeProject": null,
+    "imageIds": {},
+    "issue": "P1B-F02",
+    "passed": true,
+    "path": "/workspace/bench/markhand_web/reports/poc-f02-boot.json",
+    "stamp_utc": "2026-07-21T14:45:00Z"
+  },
   "findings": [],
   "formatsObserved": [],
-  "generatedAt": "2026-07-24T00:16:17Z",
+  "generatedAt": "2026-07-24T00:21:21Z",
   "issue": "P1B-O04",
   "markhandE2e": false,
-  "notes": "Harness complete; live release suite not opted in. Set MARKHAND_E2E=1 with POC DB/MinIO/Qdrant + built fileconv, then re-run.",
+  "notes": "Harness complete; live release suite not opted in. Set MARKHAND_E2E=1 with POC PG/MinIO/Qdrant + built fileconv + F02 poc-f02-boot.json passed=true (with composeProject/imageIds), then re-run. Suites are in-process workers against service endpoints \u2014 not Compose API HTTP.",
   "provenance": {
+    "composeProject": "markhand-poc",
     "composeVersion": null,
     "dockerVersion": null,
-    "gitSha": "60ae6a9",
-    "gitShaFull": "60ae6a98744de2377ad8ac30278f499f13835516",
+    "gitSha": "57a31ea",
+    "gitShaFull": "57a31ea0709690467478ea655be518aee42cbe03",
     "imageDigests": {},
     "imageIds": {},
     "indexSignature": null,
     "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
   },
-  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o04-60ae6a9",
+  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o04-57a31ea",
   "redactionScan": {
     "findings": [],
     "passed": true
@@ -36,6 +51,7 @@
   "suites": {
     "adversarial_upload": {
       "command": [],
+      "commands": [],
       "exitCode": null,
       "ignored": false,
       "passed": false,
@@ -47,6 +63,7 @@
     },
     "suspend_membership_delete_deny": {
       "command": [],
+      "commands": [],
       "exitCode": null,
       "ignored": false,
       "passed": false,
@@ -58,6 +75,7 @@
     },
     "unauthorized_cross_tenant": {
       "command": [],
+      "commands": [],
       "exitCode": null,
       "ignored": false,
       "passed": false,
@@ -69,6 +87,7 @@
     },
     "vertical_slice_formats": {
       "command": [],
+      "commands": [],
       "exitCode": null,
       "ignored": false,
       "passed": false,
@@ -80,6 +99,7 @@
     },
     "worker_kill_replay": {
       "command": [],
+      "commands": [],
       "exitCode": null,
       "ignored": false,
       "passed": false,
@@ -89,5 +109,6 @@
       "testsPassed": 0,
       "testsRun": 0
     }
-  }
+  },
+  "workload": "bench/markhand_web/workloads/phase1b-mixed.yaml"
 }
