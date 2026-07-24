@@ -108,6 +108,18 @@ fn run(config: &SandboxConfig) -> fileconv_server::workers::sandbox::SandboxOutp
     sandbox::run(config, input("txt", b"hello"), &SandboxCancel::default()).expect("sandbox run")
 }
 
+fn markhand_e2e_required() -> bool {
+    std::env::var("MARKHAND_E2E").ok().as_deref() == Some("1")
+}
+
+fn take_live<T>(value: Option<T>, name: &str) -> Option<T> {
+    match value {
+        Some(value) => Some(value),
+        None if markhand_e2e_required() => panic!("MARKHAND_E2E=1 requires {name}"),
+        None => None,
+    }
+}
+
 fn test_database_url() -> Option<String> {
     match std::env::var("MARKHAND_TEST_DATABASE_URL") {
         Ok(url) if !url.trim().is_empty() => Some(url),
@@ -1379,10 +1391,10 @@ async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = take_live(test_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2606,10 +2618,10 @@ async fn live_convert_worker_converter_error_retries_job() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_cancel_loses_lease_and_kills_sandbox() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = take_live(test_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;

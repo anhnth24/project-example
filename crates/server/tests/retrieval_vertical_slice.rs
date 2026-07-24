@@ -12,8 +12,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, seed_user_with_permissions, test_minio_client, tiny_pdf_bytes,
-    tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
+    login_access_token, seed_user_with_permissions, take_live, test_minio_client, tiny_docx_bytes,
+    tiny_pdf_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
 };
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
@@ -65,13 +65,26 @@ fn multipart(filename: &str, content_type: &str, bytes: &[u8], collection_id: Uu
     body
 }
 
+/// Explicit O04 expected document formats (fixtures available without OCR/audio models).
 fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec<u8>)> {
     vec![
         (
-            "txt",
-            "budget.txt",
-            "text/plain",
-            b"Kinh phi du an la 15 trieu dong.\n".to_vec(),
+            "csv",
+            "budget.csv",
+            "text/csv",
+            b"item,amount\nKinh phi CSV 15 trieu,15000000\n".to_vec(),
+        ),
+        (
+            "docx",
+            "budget.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            tiny_docx_bytes("Kinh phi DOCX 15 trieu"),
+        ),
+        (
+            "html",
+            "budget.html",
+            "text/html",
+            b"<html><body><p>Kinh phi HTML 15 trieu</p></body></html>".to_vec(),
         ),
         (
             "pdf",
@@ -84,6 +97,12 @@ fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec
             "budget.pptx",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             tiny_pptx_bytes("Kinh phi PPTX 15 trieu"),
+        ),
+        (
+            "txt",
+            "budget.txt",
+            "text/plain",
+            b"Kinh phi du an la 15 trieu dong.\n".to_vec(),
         ),
         (
             "xlsx",
@@ -122,20 +141,20 @@ async fn json_post(
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MINIO + QDRANT + built fileconv"]
 async fn live_upload_convert_index_citation_vertical_slice() {
-    let Some(admin) = admin_database_url() else {
+    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
     };
-    let Some(app_url) = app_database_url() else {
+    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
         return;
     };
-    let Some(store) = test_minio_client() else {
+    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
-    let Some(qdrant) = test_qdrant() else {
+    let Some(qdrant) = take_live(test_qdrant(), "MARKHAND_TEST_QDRANT_URL") else {
         eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
         return;
     };
-    let Some(fileconv) = fileconv_binary() else {
+    let Some(fileconv) = take_live(fileconv_binary(), "target/debug/fileconv") else {
         panic!("target/debug/fileconv missing — build fileconv-cli for vertical slice evidence");
     };
     let cleanup = MinioCleanupGuard::new(store.clone());
@@ -217,7 +236,16 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     )
     .expect("index worker");
 
-    for (ext, filename, content_type, source) in vertical_format_cases() {
+    let cases = vertical_format_cases();
+    let expected_formats: Vec<&str> = cases.iter().map(|(ext, ..)| *ext).collect();
+    assert_eq!(
+        expected_formats,
+        ["csv", "docx", "html", "pdf", "pptx", "txt", "xlsx"],
+        "O04 expected format set must stay explicit and sorted"
+    );
+    let mut observed_formats: Vec<&str> = Vec::new();
+
+    for (ext, filename, content_type, source) in cases {
         let upload_response = app
             .clone()
             .oneshot(
@@ -336,7 +364,19 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         assert_eq!(resolved.version_id, published_version_id);
         assert_eq!(resolved.chunk_id, chunk.id);
         assert!(resolved.is_current, "{ext} citation must be current");
+        observed_formats.push(ext);
     }
+
+    observed_formats.sort_unstable();
+    assert_eq!(
+        observed_formats, expected_formats,
+        "vertical slice must cover every expected format"
+    );
+    // Machine-readable coverage line consumed by O04 release harness.
+    eprintln!(
+        "O04_FORMAT_COVERAGE\t{}",
+        serde_json::to_string(&observed_formats).expect("format json")
+    );
 
     cleanup.cleanup().await.expect("minio bucket cleanup");
     ephemeral.drop().await;

@@ -16,6 +16,7 @@ bodies, prompts, or embeddings into tickets.
 | Backup / restore | `MarkhandBackupStale` | [backup-restore.md](backup-restore.md) |
 | Vector rebuild | (follows Qdrant/embed loss) | [vector-rebuild.md](vector-rebuild.md) |
 | Key rotation | (auth/leak procedures) | [key-rotation.md](key-rotation.md) |
+| Release suite (O04) | (vertical-slice / security) | [release-suite-o04.md](release-suite-o04.md) |
 
 Rule + tabletop evidence:
 

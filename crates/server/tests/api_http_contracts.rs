@@ -19,8 +19,8 @@ use uuid::Uuid;
 
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, test_minio_client,
-    trusted_key,
+    login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, take_live,
+    test_minio_client, trusted_key,
 };
 
 const BOUNDARY: &str = "----markhandHttpContractBoundary";
@@ -1290,10 +1290,10 @@ async fn live_write_gate_advisory_lock_concurrency_contract() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
 async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
-    let Some(admin) = admin_database_url() else {
+    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
     };
-    let Some(app_url) = app_database_url() else {
+    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
         return;
     };
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;

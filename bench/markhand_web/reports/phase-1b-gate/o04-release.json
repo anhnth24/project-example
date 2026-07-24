@@ -1,0 +1,93 @@
+{
+  "blockers": [
+    "MARKHAND_E2E!=1"
+  ],
+  "expectedFormats": [
+    "csv",
+    "docx",
+    "html",
+    "pdf",
+    "pptx",
+    "txt",
+    "xlsx"
+  ],
+  "findings": [],
+  "formatsObserved": [],
+  "generatedAt": "2026-07-24T00:16:17Z",
+  "issue": "P1B-O04",
+  "markhandE2e": false,
+  "notes": "Harness complete; live release suite not opted in. Set MARKHAND_E2E=1 with POC DB/MinIO/Qdrant + built fileconv, then re-run.",
+  "provenance": {
+    "composeVersion": null,
+    "dockerVersion": null,
+    "gitSha": "60ae6a9",
+    "gitShaFull": "60ae6a98744de2377ad8ac30278f499f13835516",
+    "imageDigests": {},
+    "imageIds": {},
+    "indexSignature": null,
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
+  },
+  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o04-60ae6a9",
+  "redactionScan": {
+    "findings": [],
+    "passed": true
+  },
+  "status": "not_run",
+  "suites": {
+    "adversarial_upload": {
+      "command": [],
+      "exitCode": null,
+      "ignored": false,
+      "passed": false,
+      "rawLog": null,
+      "skipped": false,
+      "testsFailed": 0,
+      "testsPassed": 0,
+      "testsRun": 0
+    },
+    "suspend_membership_delete_deny": {
+      "command": [],
+      "exitCode": null,
+      "ignored": false,
+      "passed": false,
+      "rawLog": null,
+      "skipped": false,
+      "testsFailed": 0,
+      "testsPassed": 0,
+      "testsRun": 0
+    },
+    "unauthorized_cross_tenant": {
+      "command": [],
+      "exitCode": null,
+      "ignored": false,
+      "passed": false,
+      "rawLog": null,
+      "skipped": false,
+      "testsFailed": 0,
+      "testsPassed": 0,
+      "testsRun": 0
+    },
+    "vertical_slice_formats": {
+      "command": [],
+      "exitCode": null,
+      "ignored": false,
+      "passed": false,
+      "rawLog": null,
+      "skipped": false,
+      "testsFailed": 0,
+      "testsPassed": 0,
+      "testsRun": 0
+    },
+    "worker_kill_replay": {
+      "command": [],
+      "exitCode": null,
+      "ignored": false,
+      "passed": false,
+      "rawLog": null,
+      "skipped": false,
+      "testsFailed": 0,
+      "testsPassed": 0,
+      "testsRun": 0
+    }
+  }
+}
