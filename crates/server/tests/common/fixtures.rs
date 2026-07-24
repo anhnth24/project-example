@@ -109,10 +109,8 @@ pub fn tiny_pptx_bytes(marker: &str) -> Vec<u8> {
 /// test must fail (no soft-skip).
 pub fn tiny_png_ocr_bytes(marker: &str) -> Vec<u8> {
     if marker.eq_ignore_ascii_case("SOAK15") {
-        return include_bytes!(
-            "../../../../bench/markhand_web/soak/fixtures/soak-png.png"
-        )
-        .to_vec();
+        return include_bytes!("../../../../bench/markhand_web/soak/fixtures/soak-png.png")
+            .to_vec();
     }
     const SCALE: u32 = 6;
     const PAD: u32 = 16;
