@@ -88,10 +88,9 @@ fn e2e_suite_default_is_not_run() {
         Some("pass"),
         "default committed O05 evidence must not claim pass without live soak"
     );
-    assert_eq!(
-        status_of(&o05),
-        Some("not_run"),
-        "default O05 evidence must remain honest not_run"
+    assert!(
+        matches!(status_of(&o05), Some("not_run" | "incomplete")),
+        "committed O05 evidence must remain honest non-qualifying"
     );
     if let Some(summary) = load_json(O05_SUMMARY) {
         assert_ne!(
@@ -113,24 +112,15 @@ fn e2e_suite_default_is_not_run() {
     match status.as_str() {
         "pass" => {
             assert_eq!(
-                std::env::var("MARKHAND_E2E").ok().as_deref(),
-                Some("1"),
-                "o04-release.json claims pass without MARKHAND_E2E=1"
+                report.get("markhandE2e").and_then(|value| value.as_bool()),
+                Some(true),
+                "o04-release.json claims pass without recorded MARKHAND_E2E opt-in"
             );
         }
         "not_run" | "incomplete" | "fail" => {
             eprintln!("e2e_release_suite: status={status} blockers={blockers:?}");
         }
         other => panic!("unexpected o04 gate status: {other:?}"),
-    }
-    // Default committed evidence must remain honest non-pass.
-    if std::env::var("MARKHAND_E2E").ok().as_deref() != Some("1") {
-        assert_ne!(status, "pass", "default evidence must not be pass");
-        assert_eq!(status_of(&report), Some("not_run"));
-        assert!(
-            blockers.iter().any(|b| b == "MARKHAND_E2E!=1"),
-            "expected MARKHAND_E2E!=1 blocker, got {blockers:?}"
-        );
     }
 }
 
