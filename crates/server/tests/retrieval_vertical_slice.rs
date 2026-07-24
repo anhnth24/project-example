@@ -422,8 +422,11 @@ async fn live_upload_convert_index_citation_vertical_slice() {
                 },
             },
         );
-        convert_config.heartbeat_interval = Duration::from_millis(50);
-        convert_config.lease_ttl = Duration::from_secs(5);
+        // This matrix validates format/history behavior, not lease expiry. Keep
+        // the lease above the sandbox's 30-second wall timeout so a valid but
+        // cold converter cannot be misclassified as reconciliation-needed.
+        convert_config.heartbeat_interval = Duration::from_secs(5);
+        convert_config.lease_ttl = Duration::from_secs(60);
         let convert_worker = ConvertWorker::new(pool.clone(), store.clone(), convert_config)
             .expect("convert worker");
         let convert_run = convert_worker
