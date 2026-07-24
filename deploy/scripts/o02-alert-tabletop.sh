@@ -75,7 +75,7 @@ restore_postgres() {
 }
 cleanup_observe() {
   if [[ "${OBS_STARTED}" -eq 1 ]]; then
-    note "EXIT trap: tearing down observe stack"
+    echo "EXIT trap: tearing down observe stack"
     "${COMPOSE_OBS[@]}" down --remove-orphans >/dev/null 2>&1 || true
   fi
 }
