@@ -126,7 +126,7 @@ fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec
             "budget.png",
             "image/png",
             // ASCII marker for Tesseract; missing OCR runtime must fail the live suite.
-            tiny_png_ocr_bytes("OCR15"),
+            tiny_png_ocr_bytes("SOAK15"),
         ),
         (
             "pptx",
@@ -402,9 +402,9 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         assert!(resolved.is_current, "{ext} citation must be current");
         if ext == "png" {
             assert!(
-                resolved.quote.to_ascii_uppercase().contains("OCR15")
-                    || chunk.body.to_ascii_uppercase().contains("OCR15"),
-                "png OCR must recover marker OCR15; missing tesseract/vie must fail this suite"
+                resolved.quote.to_ascii_uppercase().contains("SOAK15")
+                    || chunk.body.to_ascii_uppercase().contains("SOAK15"),
+                "png OCR must recover marker SOAK15; missing tesseract/vie must fail this suite"
             );
         }
         observed_formats.push(ext.to_string());
