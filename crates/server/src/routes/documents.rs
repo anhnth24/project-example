@@ -146,6 +146,9 @@ async fn approve_intake(
     Path((collection_id, document_id)): Path<(Uuid, Uuid)>,
     body: Option<Json<ApproveIntakeBody>>,
 ) -> Result<Json<serde_json::Value>, RouteError> {
+    if !auth.context.allows_collection(collection_id) {
+        return Err(RouteError::NotFound(auth.request_id));
+    }
     let reason = body.and_then(|Json(b)| b.reason);
     let registered = approve_quarantined_upload(
         state.pool(),
@@ -189,7 +192,7 @@ async fn list_documents(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<DocumentDto>>, RouteError> {
     if !auth.context.allows_collection(collection_id) {
-        return Err(RouteError::Denied(auth.request_id));
+        return Err(RouteError::NotFound(auth.request_id));
     }
     let pagination = Pagination::from_query(query.limit);
     let (after_at, after_id) = match query.cursor.as_deref() {
@@ -287,6 +290,17 @@ async fn preview_document(
     Path(document_id): Path<Uuid>,
     Query(query): Query<PreviewQuery>,
 ) -> Result<Json<serde_json::Value>, RouteError> {
+    // Authorize the resource before exposing object-store availability. This
+    // keeps foreign and nonexistent document IDs indistinguishable even when
+    // the preview dependency is degraded or absent.
+    let _ = access::resolve_published_version(
+        state.pool(),
+        &auth.context,
+        document_id,
+        query.version_id,
+    )
+    .await
+    .map_err(|error| RouteError::from_access(error, &auth.request_id))?;
     let store = state
         .object_store()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
@@ -438,6 +452,14 @@ async fn issue_download(
     Path((document_id, version_id)): Path<(Uuid, Uuid)>,
     Json(body): Json<DownloadCapabilityRequest>,
 ) -> Result<Json<serde_json::Value>, RouteError> {
+    let _ = access::resolve_published_version(
+        state.pool(),
+        &auth.context,
+        document_id,
+        Some(version_id),
+    )
+    .await
+    .map_err(|error| RouteError::from_access(error, &auth.request_id))?;
     let keys = state
         .capability_keys()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
@@ -619,6 +641,16 @@ async fn resolve_citation_route(
     auth: AuthenticatedOrg,
     Json(body): Json<ResolveBody>,
 ) -> Result<Json<serde_json::Value>, RouteError> {
+    // Keep cross-tenant document IDs hidden before dependency availability and
+    // citation-integrity validation are observable.
+    let _ = access::resolve_published_version(
+        state.pool(),
+        &auth.context,
+        body.logical_document_id,
+        Some(body.version_id),
+    )
+    .await
+    .map_err(|error| RouteError::from_access(error, &auth.request_id))?;
     let store = state
         .object_store()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;

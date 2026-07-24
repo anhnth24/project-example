@@ -220,7 +220,7 @@ fn image_error_to_io(error: image::ImageError) -> io::Error {
         image::ImageError::Limits(_) => {
             io::Error::new(io::ErrorKind::InvalidData, error.to_string())
         }
-        other => io::Error::new(io::ErrorKind::Other, other.to_string()),
+        other => io::Error::other(other.to_string()),
     }
 }
 
@@ -570,8 +570,7 @@ fn run_paddle(path: &Path, langs: &str) -> io::Result<String> {
         .env("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         .output()?;
     if !output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "PaddleOCR lỗi; kiểm tra paddleocr/paddlepaddle và model local",
         ));
     }
@@ -731,7 +730,7 @@ fn apply_ocr_runtime_env(command: &mut Command) {
         }
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = runtime_lib;
+    let _ = (command, runtime_lib);
 }
 
 /// Kiểm tra Tesseract hệ thống hoặc runtime desktop đi kèm có sẵn không.

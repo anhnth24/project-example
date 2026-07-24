@@ -13,20 +13,23 @@ use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{ArtifactKind, DocumentState};
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::services::chunking::prepare_chunks;
-use fileconv_server::services::qa::provider::{ChatProvider, StaticChatProvider};
+use fileconv_server::services::qa::provider::{
+    ChatProvider, StaticChatProvider, StreamingStaticProvider,
+};
 use fileconv_server::services::qa::stream::{ask_response_events, auth_closed_envelope};
 use fileconv_server::services::qa::{ask, structured_entailment_available, AskRequest};
 use fileconv_server::services::retrieval::VersionMode;
 use fileconv_server::services::stream_auth::revalidate_ask_stream;
 use fileconv_server::storage::minio::ObjectIdentityMeta;
+use futures::StreamExt;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 use uuid::Uuid;
 
 use common::{
-    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
+    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_app_state,
     login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, test_auth_config,
-    test_minio_client, trusted_key,
+    test_minio_client, trusted_key, MinioCleanupGuard,
 };
 
 #[test]
@@ -234,6 +237,7 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     let Some(store) = test_minio_client() else {
         return;
     };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let qdrant_url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
         Ok(url) if !url.trim().is_empty() => url,
         _ => {
@@ -285,6 +289,56 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
         .await
         .expect("stream auth before delete");
 
+    // Consume the production router SSE path. The first durable event must
+    // reflect a naturally retrieved citation; no SQL pinning is allowed.
+    let stream_provider = ChatProvider::StreamingStatic(StreamingStaticProvider::new(
+        (0..40).map(|index| format!("token-{index} ")).collect(),
+        AnswerMode::LocalLlm,
+    ));
+    let state = build_app_state(pool.clone(), &ephemeral.app_url, Some(store.clone()))
+        .with_retrieval_backends(qdrant.clone(), None)
+        .with_chat_provider(stream_provider);
+    let router = fileconv_server::http::router(state);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ask/stream")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "question": "Kinh phí được phê duyệt là bao nhiêu?",
+                        "mode": "current",
+                        "limit": 5,
+                        "collectionIds": ctx.allowed_collection_ids()
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream_body = response.into_body().into_data_stream();
+    let first_chunk = tokio::time::timeout(std::time::Duration::from_secs(5), stream_body.next())
+        .await
+        .expect("router SSE first event deadline")
+        .expect("router SSE body")
+        .expect("router SSE chunk");
+    let first_text = String::from_utf8_lossy(&first_chunk);
+    let citation_count = first_text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data.trim()).ok())
+        .find_map(|event| event["data"]["citationCount"].as_u64())
+        .unwrap_or(0);
+    assert!(
+        citation_count > 0,
+        "router ask stream must naturally retrieve and pin citations: {first_text}"
+    );
+
     with_org_txn(&pool, &ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -311,8 +365,30 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     let closed = auth_closed_envelope(9, "req", denied.close_reason());
     assert_eq!(closed.event, "stream.closed");
 
+    let mut post_delete = String::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(500), stream_body.next()).await
+        {
+            Ok(Some(Ok(chunk))) => {
+                post_delete.push_str(&String::from_utf8_lossy(&chunk));
+                if post_delete.contains("stream.closed") {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    assert!(
+        post_delete.contains("stream.closed") && post_delete.contains("citation_revoked"),
+        "router SSE must close with citation_revoked after delete: {post_delete}"
+    );
+    assert!(
+        !post_delete.contains("ask.completed"),
+        "router SSE must not deliver completion after cited document delete: {post_delete}"
+    );
+
     // HTTP ask route also stays extractive-only.
-    let router = build_router(pool.clone(), &ephemeral.app_url, Some(store));
     // Document is tombstoned; ask may return empty extractive but must not 500 claiming grounded GLM.
     let response = router
         .oneshot(
@@ -367,5 +443,6 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     );
     assert!(events.iter().any(|e| e.event == "ask.warning"));
 
+    cleanup.cleanup().await.expect("clean ask grounding bucket");
     ephemeral.drop().await;
 }

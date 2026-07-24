@@ -21,3 +21,4 @@ plans
 deploy/dev/.env
 deploy/spike/.env
 deploy/.env
+deploy/scripts

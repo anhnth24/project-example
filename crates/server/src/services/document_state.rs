@@ -4,17 +4,19 @@
 //!
 //! | From        | Allowed targets                         |
 //! |-------------|-----------------------------------------|
-//! | uploaded    | converting, failed                      |
-//! | converting  | converted, failed                       |
-//! | converted   | indexing, failed                        |
-//! | indexing    | indexed, failed                         |
-//! | indexed     | tombstoned, failed                      |
-//! | failed      | converting _(only)_                     |
+//! | uploaded    | converting, tombstoned, failed          |
+//! | converting  | converted, tombstoned, failed           |
+//! | converted   | indexing, tombstoned, failed            |
+//! | indexing    | indexed, tombstoned, failed              |
+//! | indexed     | uploaded _(new revision)_, tombstoned, failed |
+//! | failed      | converting, tombstoned                  |
 //! | tombstoned  | purged                                  |
 //! | purged      | _(terminal)_                            |
 //!
 //! Happy path: `uploaded → converting → converted → indexing → indexed`.
-//! Any active state may fail. Soft-delete is `indexed → tombstoned → purged`.
+//! A new revision restarts that cycle through `indexed → uploaded`.
+//! Any active state may fail or be tombstoned. Purge remains
+//! `tombstoned → purged`.
 //!
 //! ## Failed retry policy (no failure-stage column in F03 schema)
 //!
@@ -43,17 +45,23 @@ pub fn is_legal_transition(from: DocumentState, to: DocumentState) -> bool {
     matches!(
         (from, to),
         (Uploaded, Converting)
+            | (Uploaded, Tombstoned)
             | (Uploaded, Failed)
             | (Converting, Converted)
+            | (Converting, Tombstoned)
             | (Converting, Failed)
             | (Converted, Indexing)
+            | (Converted, Tombstoned)
             | (Converted, Failed)
             | (Indexing, Indexed)
+            | (Indexing, Tombstoned)
             | (Indexing, Failed)
+            | (Indexed, Uploaded)
             | (Indexed, Tombstoned)
             | (Indexed, Failed)
             // No failure-stage provenance in schema: only full convert retry.
             | (Failed, Converting)
+            | (Failed, Tombstoned)
             | (Tombstoned, Purged)
     )
 }
@@ -127,8 +135,21 @@ mod tests {
         ));
         assert!(is_legal_transition(
             DocumentState::Indexed,
+            DocumentState::Uploaded
+        ));
+        assert!(is_legal_transition(
+            DocumentState::Indexed,
             DocumentState::Tombstoned
         ));
+        for active in [
+            DocumentState::Uploaded,
+            DocumentState::Converting,
+            DocumentState::Converted,
+            DocumentState::Indexing,
+            DocumentState::Failed,
+        ] {
+            assert!(is_legal_transition(active, DocumentState::Tombstoned));
+        }
         assert!(is_legal_transition(
             DocumentState::Tombstoned,
             DocumentState::Purged

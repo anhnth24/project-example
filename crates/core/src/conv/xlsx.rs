@@ -32,7 +32,7 @@ pub fn to_markdown(path: &Path, sheet: Option<&str>) -> Result<String, ConvertEr
         if range.is_empty() {
             continue;
         }
-        out.push_str(&format!("## {}\n\n", name));
+        out.push_str(&format!("## {name}\n\n"));
         let rows: Vec<Vec<String>> = range
             .rows()
             .map(|row| row.iter().map(cell_to_string).collect())

@@ -18,15 +18,24 @@ use common::{
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
+use fileconv_server::config::{Profile, SecretString};
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs::{self};
-use fileconv_server::services::citation::{resolve_citation, ResolveCitationRequest};
+use fileconv_server::services::citation::{
+    resolve_citation, CitationError, ResolveCitationRequest,
+};
+use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
+use fileconv_server::services::index_signature::collection_name_for_signature;
 use fileconv_server::services::indexing::IndexingOutboxSink;
-use fileconv_server::storage::qdrant::QdrantClient;
+use fileconv_server::storage::parse_key_for_org;
+use fileconv_server::storage::qdrant::{QdrantAdminApiKey, QdrantAdminClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
+use fileconv_server::workers::embedding::{
+    EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
+};
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
-use fileconv_server::workers::sandbox::SandboxConfig;
+use fileconv_server::workers::sandbox::{self, SandboxCancel, SandboxConfig, SandboxInput};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -34,6 +43,12 @@ use uuid::Uuid;
 const BOUNDARY: &str = "----markhandVerticalSliceBoundary";
 
 fn fileconv_binary() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("MARKHAND_TEST_FILECONV_BIN") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Some(path);
+        }
+    }
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv");
     path.exists().then_some(path)
 }
@@ -46,7 +61,23 @@ fn test_qdrant() -> Option<QdrantClient> {
     QdrantClient::with_api_key(url, None).ok()
 }
 
-fn multipart(filename: &str, content_type: &str, bytes: &[u8], collection_id: Uuid) -> Vec<u8> {
+fn test_qdrant_admin() -> Option<QdrantAdminClient> {
+    let url = std::env::var("MARKHAND_TEST_QDRANT_URL").ok()?;
+    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY").ok()?;
+    QdrantAdminClient::new(
+        url,
+        QdrantAdminApiKey::new(SecretString::new(key)).expect("admin key"),
+    )
+    .ok()
+}
+
+fn multipart(
+    filename: &str,
+    content_type: &str,
+    bytes: &[u8],
+    collection_id: Uuid,
+    document_id: Option<Uuid>,
+) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(
         format!(
@@ -54,6 +85,14 @@ fn multipart(filename: &str, content_type: &str, bytes: &[u8], collection_id: Uu
         )
         .as_bytes(),
     );
+    if let Some(document_id) = document_id {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"documentId\"\r\n\r\n{document_id}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
     body.extend_from_slice(
         format!(
             "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
@@ -95,56 +134,70 @@ fn expected_formats_from_workload() -> Vec<String> {
 }
 
 /// Fixture matrix keyed by workload formats (must cover every expected format).
-fn vertical_format_cases() -> Vec<(&'static str, &'static str, &'static str, Vec<u8>)> {
+fn vertical_format_cases() -> Vec<(
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    Vec<u8>,
+)> {
     vec![
         (
             "csv",
             "budget.csv",
             "text/csv",
-            b"item,amount\nKinh phi CSV 15 trieu,15000000\n".to_vec(),
+            "O04CSV15",
+            b"item,amount\nKinh phi CSV O04CSV15 la 15000000\n".to_vec(),
         ),
         (
             "docx",
             "budget.docx",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            tiny_docx_bytes("Kinh phi DOCX 15 trieu"),
+            "O04DOCX15",
+            tiny_docx_bytes("Kinh phi DOCX O04DOCX15"),
         ),
         (
             "html",
             "budget.html",
             "text/html",
-            b"<html><body><p>Kinh phi HTML 15 trieu</p></body></html>".to_vec(),
+            "O04HTML15",
+            b"<html><body><p>Kinh phi HTML O04HTML15</p></body></html>".to_vec(),
         ),
         (
             "pdf",
             "budget.pdf",
             "application/pdf",
-            tiny_pdf_bytes("Kinh phi PDF 15 trieu"),
+            "O04PDF15",
+            tiny_pdf_bytes("Kinh phi PDF O04PDF15"),
         ),
         (
             "png",
             "budget.png",
             "image/png",
-            // ASCII marker for Tesseract; missing OCR runtime must fail the live suite.
+            "SOAK15",
+            // Shared real OCR fixture; missing OCR runtime must fail the live suite.
             tiny_png_ocr_bytes("SOAK15"),
         ),
         (
             "pptx",
             "budget.pptx",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            tiny_pptx_bytes("Kinh phi PPTX 15 trieu"),
+            "O04PPTX15",
+            tiny_pptx_bytes("Kinh phi PPTX O04PPTX15"),
         ),
         (
             "txt",
             "budget.txt",
             "text/plain",
-            b"Kinh phi du an la 15 trieu dong.\n".to_vec(),
+            "O04TXT15",
+            b"Kinh phi du an O04TXT15 la 15 trieu dong.\n".to_vec(),
         ),
         (
             "xlsx",
             "budget.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            tiny_xlsx_bytes("Kinh phi XLSX 15 trieu"),
+            "O04XLSX15",
+            tiny_xlsx_bytes("Kinh phi XLSX O04XLSX15"),
         ),
     ]
 }
@@ -188,6 +241,11 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     };
     let Some(qdrant) = take_live(test_qdrant(), "MARKHAND_TEST_QDRANT_URL") else {
         eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
+        return;
+    };
+    let Some(qdrant_admin) = take_live(test_qdrant_admin(), "MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
+    else {
+        eprintln!("skipped: MARKHAND_TEST_QDRANT_ADMIN_API_KEY unset");
         return;
     };
     let Some(fileconv) = take_live(fileconv_binary(), "target/debug/fileconv") else {
@@ -256,6 +314,10 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         RUNTIME_VLLM_LOCAL,
     )
     .expect("plan");
+    let qdrant_collection = {
+        let signature = embedding_plan.index_signature(8).expect("index signature");
+        collection_name_for_signature(&signature).expect("qdrant collection name")
+    };
     let sink = Arc::new(IndexingOutboxSink::new(&embedding_plan).expect("sink"));
     let mut index_config = IndexWorkerConfig::new(format!("vertical-index-{}", Uuid::new_v4()));
     index_config.lease_ttl = Duration::from_secs(30);
@@ -265,12 +327,33 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     let index_worker = IndexWorker::new_with_plan(
         pool.clone(),
         store.clone(),
-        qdrant,
+        qdrant.clone(),
         index_config,
         None,
         embedding_plan,
     )
     .expect("index worker");
+    let mut embedding_config =
+        EmbeddingWorkerConfig::new(format!("vertical-embedding-{}", Uuid::new_v4()));
+    embedding_config.lease_ttl = Duration::from_secs(30);
+    embedding_config.heartbeat_interval = Duration::from_secs(5);
+    embedding_config.max_job_duration = Duration::from_secs(60);
+    let embedding_runtime = ApprovedEmbeddingRuntime::new(
+        mock.base_url().to_string(),
+        "test-api-key".into(),
+        "test".into(),
+        "test-embedding".into(),
+        "r1".into(),
+        8,
+        RUNTIME_VLLM_LOCAL.into(),
+        Profile::Test,
+        false,
+        None,
+    )
+    .expect("embedding runtime");
+    let embedding_worker =
+        EmbeddingWorker::new(pool.clone(), qdrant, embedding_config, embedding_runtime)
+            .expect("embedding worker");
 
     let expected_formats = expected_formats_from_workload();
     let cases = vertical_format_cases();
@@ -281,7 +364,7 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     );
     let mut observed_formats: Vec<String> = Vec::new();
 
-    for (ext, filename, content_type, source) in cases {
+    for (ext, filename, content_type, source_marker, source) in cases {
         let upload_response = app
             .clone()
             .oneshot(
@@ -302,6 +385,7 @@ async fn live_upload_convert_index_citation_vertical_slice() {
                         content_type,
                         &source,
                         collection_id,
+                        None,
                     )))
                     .unwrap(),
             )
@@ -367,8 +451,7 @@ async fn live_upload_convert_index_citation_vertical_slice() {
                 convert_run,
                 ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
             ),
-            "{ext} unexpected convert outcome: {convert_run:?}; last_error={:?}",
-            convert_last_error
+            "{ext} unexpected convert outcome: {convert_run:?}; last_error={convert_last_error:?}"
         );
 
         let (published_version_id, markdown_sha, source_sha) =
@@ -382,13 +465,15 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         jobs::relay_outbox_with_sink(&pool, &worker_ctx, 32, &sink)
             .await
             .unwrap_or_else(|error| panic!("{ext} relay: {error}"));
-        let index_run = index_worker
-            .run_once(&worker_ctx)
-            .await
-            .unwrap_or_else(|error| panic!("{ext} index run: {error}"));
+        let index_runs = drain_index_jobs(&index_worker, &worker_ctx).await;
         assert!(
-            matches!(index_run, IndexWorkerRun::Completed { .. }),
-            "{ext} unexpected index outcome: {index_run:?}"
+            index_runs > 0,
+            "{ext} must complete at least one index/lifecycle job"
+        );
+        let embedding_runs = drain_embedding_jobs(&embedding_worker, &worker_ctx).await;
+        assert!(
+            embedding_runs > 0,
+            "{ext} must complete at least one embedding batch"
         );
 
         let chunk = load_first_chunk(&pool, &worker_ctx, document_id, published_version_id).await;
@@ -400,8 +485,8 @@ async fn live_upload_convert_index_citation_vertical_slice() {
             ResolveCitationRequest {
                 logical_document_id: document_id,
                 version_id: published_version_id,
-                source_content_sha256: source_sha,
-                canonical_markdown_sha256: markdown_sha,
+                source_content_sha256: source_sha.clone(),
+                canonical_markdown_sha256: markdown_sha.clone(),
                 chunk_id: chunk.id,
                 source_span_start: chunk.span_start.unwrap_or(0) as usize,
                 source_span_end: chunk.span_end.unwrap_or(quote.len() as i32) as usize,
@@ -417,12 +502,304 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         assert_eq!(resolved.version_id, published_version_id);
         assert_eq!(resolved.chunk_id, chunk.id);
         assert!(resolved.is_current, "{ext} citation must be current");
-        if ext == "png" {
-            assert!(
-                resolved.quote.to_ascii_uppercase().contains("SOAK15")
-                    || chunk.body.to_ascii_uppercase().contains("SOAK15"),
-                "png OCR must recover marker SOAK15; missing tesseract/vie must fail this suite"
+        let marker = source_marker.to_ascii_uppercase();
+        assert!(
+            resolved.quote.to_ascii_uppercase().contains(&marker)
+                || chunk.body.to_ascii_uppercase().contains(&marker),
+            "{ext} conversion/index/citation path must recover source marker {source_marker}"
+        );
+
+        if ext == "txt" {
+            let revision_source = b"Kinh phi du an O04TXT20 la 20 trieu dong.\n".to_vec();
+            let revision_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/v1/uploads")
+                        .header("authorization", format!("Bearer {token}"))
+                        .header(
+                            "idempotency-key",
+                            format!("vertical-slice-revision-{}", Uuid::new_v4().simple()),
+                        )
+                        .header(
+                            "content-type",
+                            format!("multipart/form-data; boundary={BOUNDARY}"),
+                        )
+                        .body(Body::from(multipart(
+                            "budget-v2.txt",
+                            "text/plain",
+                            &revision_source,
+                            collection_id,
+                            Some(document_id),
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(revision_response.status(), StatusCode::CREATED);
+            let revision: serde_json::Value = serde_json::from_slice(
+                &revision_response
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes(),
+            )
+            .unwrap();
+            assert_eq!(revision["documentId"], document_id.to_string());
+            let revision_source_version_id =
+                Uuid::parse_str(revision["versionId"].as_str().unwrap()).unwrap();
+            let revision_convert_job_id =
+                Uuid::parse_str(revision["jobId"].as_str().unwrap()).unwrap();
+            let revision_key =
+                parse_key_for_org(revision["objectKey"].as_str().unwrap(), org).unwrap();
+            let stored_revision = store
+                .get_object(org, &revision_key)
+                .await
+                .expect("read stored revision");
+            assert_eq!(
+                stored_revision.as_ref(),
+                revision_source.as_slice(),
+                "revision upload must preserve exact source bytes"
             );
+
+            let revision_convert = convert_worker
+                .run_once(&worker_ctx)
+                .await
+                .expect("convert revision");
+            let revision_worker_org_id = worker_ctx.org_id();
+            let revision_last_error = with_org_txn(&pool, &worker_ctx, move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_one(
+                            "SELECT last_error FROM jobs WHERE org_id = $1 AND id = $2",
+                            &[&revision_worker_org_id, &revision_convert_job_id],
+                        )
+                        .await?;
+                    Ok::<_, fileconv_server::db::error::DbError>(
+                        row.get::<_, Option<String>>("last_error"),
+                    )
+                })
+            })
+            .await
+            .expect("load revision convert job");
+            if !matches!(
+                revision_convert,
+                ConvertWorkerRun::Completed { job_id, .. }
+                    if job_id == revision_convert_job_id
+            ) {
+                let diagnostic_fileconv = fileconv.clone();
+                let diagnostic_input = stored_revision.to_vec();
+                let diagnostic = tokio::task::spawn_blocking(move || {
+                    sandbox::run(
+                        &SandboxConfig {
+                            argv_template: vec![
+                                diagnostic_fileconv.display().to_string(),
+                                "one".into(),
+                                "{input}".into(),
+                            ],
+                            limits: ResourceLimits {
+                                wall_timeout: Duration::from_secs(30),
+                                ..ResourceLimits::default()
+                            },
+                        },
+                        SandboxInput {
+                            bytes: diagnostic_input,
+                            canonical_extension: "txt".into(),
+                        },
+                        &SandboxCancel::default(),
+                    )
+                })
+                .await
+                .expect("join revision diagnostic")
+                .expect("run revision diagnostic");
+                panic!(
+                    "revision must run through ConvertWorker: {revision_convert:?}; \
+                     last_error={revision_last_error:?}; direct_exit={:?}; direct_stderr={}",
+                    diagnostic.exit,
+                    String::from_utf8_lossy(&diagnostic.stderr)
+                );
+            }
+            let (revision_version_id, revision_markdown_sha, revision_source_sha) =
+                load_published_version(&pool, &worker_ctx, document_id).await;
+            assert_ne!(revision_version_id, published_version_id);
+
+            jobs::relay_outbox_with_sink(&pool, &worker_ctx, 32, &sink)
+                .await
+                .expect("relay revision index");
+            let revision_index_runs = drain_index_jobs(&index_worker, &worker_ctx).await;
+            assert!(
+                revision_index_runs >= 2,
+                "revision must process lifecycle refresh and new index; completed {revision_index_runs}"
+            );
+            let revision_embedding_runs =
+                drain_embedding_jobs(&embedding_worker, &worker_ctx).await;
+            assert!(
+                revision_embedding_runs > 0,
+                "revision must complete at least one embedding batch"
+            );
+            let revision_chunk =
+                load_first_chunk(&pool, &worker_ctx, document_id, revision_version_id).await;
+            assert!(revision_chunk
+                .body
+                .to_ascii_uppercase()
+                .contains("O04TXT20"));
+
+            let history_ctx =
+                OrgContext::try_new(org, user, ["qa.query", "qa.history"], [collection_id])
+                    .unwrap();
+            let no_history_ctx =
+                OrgContext::try_new(org, user, ["qa.query"], [collection_id]).unwrap();
+            let historical = resolve_citation(
+                &pool,
+                &history_ctx,
+                &store,
+                ResolveCitationRequest {
+                    logical_document_id: document_id,
+                    version_id: published_version_id,
+                    source_content_sha256: source_sha.clone(),
+                    canonical_markdown_sha256: markdown_sha.clone(),
+                    chunk_id: chunk.id,
+                    source_span_start: chunk.span_start.unwrap_or(0) as usize,
+                    source_span_end: chunk.span_end.unwrap_or(quote.len() as i32) as usize,
+                    quote_local_start: 0,
+                    quote_local_end: quote.len(),
+                    quote: quote.clone(),
+                    require_current: false,
+                },
+            )
+            .await
+            .expect("historical citation with qa.history");
+            assert_eq!(historical.version_id, published_version_id);
+            assert!(!historical.is_current);
+            let denied = resolve_citation(
+                &pool,
+                &no_history_ctx,
+                &store,
+                ResolveCitationRequest {
+                    logical_document_id: document_id,
+                    version_id: published_version_id,
+                    source_content_sha256: source_sha.clone(),
+                    canonical_markdown_sha256: markdown_sha.clone(),
+                    chunk_id: chunk.id,
+                    source_span_start: chunk.span_start.unwrap_or(0) as usize,
+                    source_span_end: chunk.span_end.unwrap_or(quote.len() as i32) as usize,
+                    quote_local_start: 0,
+                    quote_local_end: quote.len(),
+                    quote: quote.clone(),
+                    require_current: false,
+                },
+            )
+            .await
+            .expect_err("historical citation without qa.history must fail");
+            assert!(matches!(denied, CitationError::HistoryDenied));
+
+            let revision_quote = revision_chunk.body.clone();
+            let current = resolve_citation(
+                &pool,
+                &history_ctx,
+                &store,
+                ResolveCitationRequest {
+                    logical_document_id: document_id,
+                    version_id: revision_version_id,
+                    source_content_sha256: revision_source_sha,
+                    canonical_markdown_sha256: revision_markdown_sha,
+                    chunk_id: revision_chunk.id,
+                    source_span_start: revision_chunk.span_start.unwrap_or(0) as usize,
+                    source_span_end: revision_chunk
+                        .span_end
+                        .unwrap_or(revision_quote.len() as i32)
+                        as usize,
+                    quote_local_start: 0,
+                    quote_local_end: revision_quote.len(),
+                    quote: revision_quote,
+                    require_current: true,
+                },
+            )
+            .await
+            .expect("current revision citation");
+            assert!(current.is_current);
+            assert_eq!(current.version_id, revision_version_id);
+
+            let (old_current, old_effective_to, source_parent, new_current, new_parent): (
+                bool,
+                Option<chrono::DateTime<chrono::Utc>>,
+                Option<Uuid>,
+                bool,
+                Option<Uuid>,
+            ) = with_org_txn(&pool, &history_ctx, {
+                let ctx = history_ctx.clone();
+                move |txn| {
+                    Box::pin(async move {
+                        let old = txn
+                            .query_one(
+                                "SELECT is_current, effective_to
+                                 FROM document_versions
+                                 WHERE org_id=$1 AND id=$2",
+                                &[&ctx.org_id(), &published_version_id],
+                            )
+                            .await?;
+                        let source = txn
+                            .query_one(
+                                "SELECT parent_version_id
+                                 FROM document_versions
+                                 WHERE org_id=$1 AND id=$2",
+                                &[&ctx.org_id(), &revision_source_version_id],
+                            )
+                            .await?;
+                        let new = txn
+                            .query_one(
+                                "SELECT is_current, parent_version_id
+                                 FROM document_versions
+                                 WHERE org_id=$1 AND id=$2",
+                                &[&ctx.org_id(), &revision_version_id],
+                            )
+                            .await?;
+                        Ok((
+                            old.get(0),
+                            old.get(1),
+                            source.get(0),
+                            new.get(0),
+                            new.get(1),
+                        ))
+                    })
+                }
+            })
+            .await
+            .expect("load revision lineage");
+            assert!(!old_current);
+            assert!(old_effective_to.is_some());
+            assert_eq!(source_parent, Some(published_version_id));
+            assert!(new_current);
+            assert_eq!(new_parent, Some(revision_source_version_id));
+
+            let diff_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(format!(
+                            "/api/v1/documents/{document_id}/versions/{published_version_id}/diff?against={revision_version_id}"
+                        ))
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(diff_response.status(), StatusCode::OK);
+            let diff: serde_json::Value = serde_json::from_slice(
+                &diff_response
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes(),
+            )
+            .unwrap();
+            assert_eq!(diff["left"]["id"], published_version_id.to_string());
+            assert_eq!(diff["right"]["id"], revision_version_id.to_string());
         }
         observed_formats.push(ext.to_string());
     }
@@ -438,8 +815,36 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         serde_json::to_string(&observed_formats).expect("format json")
     );
 
+    qdrant_admin
+        .delete_collection(&qdrant_collection)
+        .await
+        .expect("qdrant collection cleanup");
     cleanup.cleanup().await.expect("minio bucket cleanup");
     ephemeral.drop().await;
+}
+
+async fn drain_index_jobs(worker: &IndexWorker, ctx: &OrgContext) -> usize {
+    let mut completed = 0;
+    for _ in 0..32 {
+        match worker.run_once(ctx).await.expect("index/lifecycle run") {
+            IndexWorkerRun::Completed { .. } => completed += 1,
+            IndexWorkerRun::NoJob => return completed,
+            outcome => panic!("unexpected index/lifecycle outcome: {outcome:?}"),
+        }
+    }
+    panic!("index/lifecycle queue did not drain within 32 jobs");
+}
+
+async fn drain_embedding_jobs(worker: &EmbeddingWorker, ctx: &OrgContext) -> usize {
+    let mut completed = 0;
+    for _ in 0..32 {
+        match worker.run_once(ctx).await.expect("embedding run") {
+            EmbeddingWorkerRun::Completed { .. } => completed += 1,
+            EmbeddingWorkerRun::NoJob => return completed,
+            outcome => panic!("unexpected embedding outcome: {outcome:?}"),
+        }
+    }
+    panic!("embedding queue did not drain within 32 jobs");
 }
 
 async fn load_published_version(

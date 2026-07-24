@@ -21,6 +21,7 @@ use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::{create_pool, create_pool_with_max_size, with_org_txn};
 use fileconv_server::http::{router, AppState};
+use fileconv_server::services::download::CapabilityKeys;
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use tokio_postgres::NoTls;
@@ -445,7 +446,12 @@ pub fn build_app_state(pool: Pool, app_database_url: &str, store: Option<MinioCl
         test_auth_config(),
         JwtKeys::from_auth(&test_auth_config()).unwrap(),
     );
-    AppState::from_parts_with_store(runtime, pool, Some(auth), store).expect("app state")
+    let capability_keys =
+        CapabilityKeys::from_auth_signing_key(test_auth_config().signing_key.as_ref().unwrap())
+            .expect("test capability keys");
+    AppState::from_parts_with_store(runtime, pool, Some(auth), store)
+        .expect("app state")
+        .with_capability_keys(capability_keys)
 }
 
 pub fn build_router(

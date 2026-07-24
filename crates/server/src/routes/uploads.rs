@@ -19,6 +19,10 @@ use sha2::{Digest, Sha256};
 use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
+use crate::db::documents;
+use crate::db::error::DbError;
+use crate::db::models::DocumentState;
+use crate::db::pool::with_org_txn;
 use crate::http::AppState;
 use crate::services::quota::{self, QuotaError, QuotaSnapshot};
 use uuid::Uuid;
@@ -140,6 +144,39 @@ async fn create_upload(
         ));
     }
 
+    let document_id = if let Some(document_id) = pending.document_id {
+        let document = with_org_txn(state.pool(), &auth.context, {
+            let ctx = auth.context.clone();
+            move |txn| Box::pin(async move { documents::get_by_id(txn, &ctx, document_id).await })
+        })
+        .await;
+        match document {
+            Ok(document)
+                if document.collection_id != collection_id || document.deleted_at.is_some() =>
+            {
+                return Err(UploadRouteError::NotFound(request_id.clone()));
+            }
+            Ok(document)
+                if document.state != DocumentState::Indexed
+                    || document.current_version_id.is_none() =>
+            {
+                return Err(UploadRouteError::RevisionConflict(request_id.clone()));
+            }
+            Ok(_) => document_id,
+            Err(DbError::NotFound) => {
+                return Err(UploadRouteError::NotFound(request_id.clone()));
+            }
+            Err(_) => {
+                return Err(UploadRouteError::Upload(
+                    UploadError::Internal,
+                    request_id.clone(),
+                ));
+            }
+        }
+    } else {
+        Uuid::new_v4()
+    };
+
     let storage = state.object_store().ok_or_else(|| {
         UploadRouteError::Upload(UploadError::StorageUnavailable, request_id.clone())
     })?;
@@ -149,7 +186,7 @@ async fn create_upload(
     let identity = QuarantineIdentity {
         object_id: Uuid::new_v4(),
         collection_id,
-        document_id: Uuid::new_v4(),
+        document_id,
         version_id: Uuid::new_v4(),
     };
 
@@ -213,6 +250,7 @@ async fn read_multipart(
     let mut saw_file = false;
     let mut pending: Option<PendingUpload> = None;
     let mut collection_id = None;
+    let mut document_id = None;
     let mut parts_seen = 0_u32;
     let idle_timeout = Duration::from_secs(limits.upload_idle_timeout_secs);
 
@@ -243,6 +281,13 @@ async fn read_multipart(
                         reason: ReasonCode::MultipartMissingFile,
                     }
                 })?);
+            } else if matches!(field_name.as_str(), "documentId" | "document_id") {
+                let raw = read_text_field(field, &limits, idle_timeout).await?;
+                document_id = Some(Uuid::parse_str(raw.trim()).map_err(|_| {
+                    UploadError::MultipartInvalid {
+                        reason: ReasonCode::MultipartMissingFile,
+                    }
+                })?);
             } else {
                 drain_non_file_field(field, &limits, idle_timeout).await?;
             }
@@ -262,6 +307,7 @@ async fn read_multipart(
             declared_filename: declared,
             declared_content_type,
             collection_id: None,
+            document_id: None,
         });
     }
 
@@ -269,6 +315,7 @@ async fn read_multipart(
         reason: ReasonCode::MultipartMissingFile,
     })?;
     pending.collection_id = collection_id;
+    pending.document_id = document_id;
     Ok(pending)
 }
 
@@ -308,6 +355,7 @@ struct PendingUpload {
     declared_filename: Option<String>,
     declared_content_type: Option<String>,
     collection_id: Option<Uuid>,
+    document_id: Option<Uuid>,
 }
 
 fn enforce_part_header_limit(field: &Field<'_>, limits: &LimitsConfig) -> Result<(), UploadError> {
@@ -396,7 +444,9 @@ enum UploadRouteError {
     Upload(UploadError, String),
     Quota(QuotaError, String),
     Validation(String, String),
+    NotFound(String),
     Conflict(String, String),
+    RevisionConflict(String),
     RateLimited(crate::routes::rate_limit_guard::RateLimitRejected),
 }
 
@@ -414,6 +464,7 @@ impl UploadRouteError {
                 "Upload with this Idempotency-Key is already in progress".into(),
                 request_id,
             ),
+            SagaError::RevisionConflict => Self::RevisionConflict(request_id),
             SagaError::NotFound => Self::Upload(UploadError::Internal, request_id),
             SagaError::Database(_) | SagaError::Job(_) | SagaError::Internal => {
                 Self::Upload(UploadError::Internal, request_id)
@@ -437,11 +488,31 @@ impl IntoResponse for UploadRouteError {
                 }),
             )
                 .into_response(),
+            Self::NotFound(request_id) => (
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    code: "not_found".into(),
+                    message: "Resource not found".into(),
+                    request_id,
+                    details: None,
+                }),
+            )
+                .into_response(),
             Self::Conflict(message, request_id) => (
                 StatusCode::CONFLICT,
                 Json(ApiError {
                     code: "idempotency_conflict".into(),
                     message,
+                    request_id,
+                    details: None,
+                }),
+            )
+                .into_response(),
+            Self::RevisionConflict(request_id) => (
+                StatusCode::CONFLICT,
+                Json(ApiError {
+                    code: "document_not_revisionable".into(),
+                    message: "Document must be indexed before uploading a new version".into(),
                     request_id,
                     details: None,
                 }),

@@ -47,6 +47,7 @@ def discover_poc_containers(
     compose_project: str,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    timeout_seconds: float = 15.0,
 ) -> dict[str, str]:
     run = runner or subprocess.run
     try:
@@ -63,6 +64,7 @@ def discover_poc_containers(
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout_seconds,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise InjectionError(f"docker_ps_failed:{exc}") from exc
@@ -82,9 +84,16 @@ def _docker(
     args: list[str],
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    timeout_seconds: float = 30.0,
 ) -> subprocess.CompletedProcess[str]:
     run = runner or subprocess.run
-    return run(["docker", *args], capture_output=True, text=True, check=False)
+    return run(
+        ["docker", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout_seconds,
+    )
 
 
 def wait_healthy(
@@ -103,7 +112,11 @@ def wait_healthy(
                 container_id,
             ],
             runner=runner,
+            timeout_seconds=10.0,
         )
+        if proc.returncode != 0:
+            time.sleep(1.0)
+            continue
         text = (proc.stdout or "").strip().lower()
         if text.startswith("true") and "unhealthy" not in text:
             return True
@@ -140,8 +153,14 @@ def kill_and_restart_worker(
     evidence["windowStartMono"] = started
     kill = _docker(["kill", before], runner=runner)
     evidence["killExit"] = kill.returncode
+    if kill.returncode != 0:
+        evidence["windowEndMono"] = time.monotonic()
+        raise InjectionError(f"worker_kill_failed:{service}:exit_{kill.returncode}")
     start = _docker(["start", before], runner=runner)
     evidence["startExit"] = start.returncode
+    if start.returncode != 0:
+        evidence["windowEndMono"] = time.monotonic()
+        raise InjectionError(f"worker_start_failed:{service}:exit_{start.returncode}")
     mapping = discover_poc_containers(compose_project, runner=runner)
     after = mapping.get(service) or before
     evidence["afterId"] = after
@@ -188,9 +207,15 @@ def dependency_blip(
     evidence["windowStartMono"] = started
     stop = _docker(["stop", before], runner=runner)
     evidence["stopExit"] = stop.returncode
+    if stop.returncode != 0:
+        evidence["windowEndMono"] = time.monotonic()
+        raise InjectionError(f"dependency_stop_failed:{service}:exit_{stop.returncode}")
     sleep(max(0, int(blip_seconds)))
     start = _docker(["start", before], runner=runner)
     evidence["startExit"] = start.returncode
+    if start.returncode != 0:
+        evidence["windowEndMono"] = time.monotonic()
+        raise InjectionError(f"dependency_start_failed:{service}:exit_{start.returncode}")
     mapping = discover_poc_containers(compose_project, runner=runner)
     after = mapping.get(service) or before
     evidence["afterId"] = after
@@ -218,12 +243,27 @@ class InjectionPlan:
 
     expected: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
-    windows: list[tuple[float, float]] = field(default_factory=list)
+    windows: list[tuple[float, float | None]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     _pool: concurrent.futures.ThreadPoolExecutor | None = None
     _futures: list[concurrent.futures.Future[dict[str, Any]]] = field(default_factory=list)
     workload_start_mono: float = 0.0
+
+    def preregister(self, schedule: list[tuple[float, str]], *, duration_seconds: float) -> None:
+        with self.lock:
+            self.expected = []
+            for idx, (scheduled_at, kind) in enumerate(schedule):
+                if scheduled_at < 0 or scheduled_at >= duration_seconds:
+                    raise InjectionError(f"injection_schedule_out_of_window:{kind}:{scheduled_at}")
+                self.expected.append(
+                    {
+                        "eventId": f"{kind}-{idx}",
+                        "kind": kind,
+                        "scheduledAtSeconds": float(scheduled_at),
+                        "dispatched": False,
+                    }
+                )
 
     def start_pool(self, max_workers: int = 2) -> None:
         self._pool = concurrent.futures.ThreadPoolExecutor(
@@ -239,21 +279,43 @@ class InjectionPlan:
     ) -> None:
         if self._pool is None:
             raise InjectionError("injection_pool_not_started")
-        event_id = f"{kind}-{len(self.expected)}"
         with self.lock:
-            self.expected.append(
-                {"eventId": event_id, "kind": kind, "scheduledAtSeconds": scheduled_at}
-            )
+            event = None
+            for row in self.expected:
+                if (
+                    row.get("kind") == kind
+                    and abs(float(row.get("scheduledAtSeconds", -1.0)) - float(scheduled_at)) <= 1.0
+                    and not row.get("dispatched")
+                ):
+                    event = row
+                    break
+            if event is None:
+                event = {
+                    "eventId": f"{kind}-{len(self.expected)}",
+                    "kind": kind,
+                    "scheduledAtSeconds": float(scheduled_at),
+                    "dispatched": False,
+                }
+                self.expected.append(event)
+            event["dispatched"] = True
+            event_id = str(event["eventId"])
 
         def _run() -> dict[str, Any]:
             wall_start = time.monotonic()
             # Window relative to workload start for error classification.
             rel_start = wall_start - self.workload_start_mono
+            window_idx = -1
+            with self.lock:
+                self.windows.append((rel_start, None))
+                window_idx = len(self.windows) - 1
             try:
                 evidence = fn()
             except Exception as exc:  # noqa: BLE001
+                rel_end = time.monotonic() - self.workload_start_mono
                 with self.lock:
                     self.errors.append(f"{event_id}:{type(exc).__name__}:{exc}")
+                    if 0 <= window_idx < len(self.windows):
+                        self.windows[window_idx] = (rel_start, rel_end)
                 raise
             evidence = dict(evidence)
             evidence["eventId"] = event_id
@@ -264,7 +326,8 @@ class InjectionPlan:
             evidence["windowEndRel"] = rel_end
             with self.lock:
                 self.events.append(evidence)
-                self.windows.append((rel_start, rel_end))
+                if 0 <= window_idx < len(self.windows):
+                    self.windows[window_idx] = (rel_start, rel_end)
             return evidence
 
         assert self._pool is not None
@@ -274,7 +337,7 @@ class InjectionPlan:
         with self.lock:
             windows = list(self.windows)
         for start, end in windows:
-            if start <= rel_offset <= end:
+            if start <= rel_offset and (end is None or rel_offset <= end):
                 return True
         return False
 
@@ -297,10 +360,15 @@ class InjectionPlan:
             blips_expected = sum(1 for e in self.expected if e["kind"] == "dependency_blip")
             blips_observed = sum(1 for e in self.events if e.get("action") == "dependency_blip")
             all_recovered = bool(recovered) and all(recovered) and not errors and not self.errors
+            observed_ids = {str(e.get("eventId")) for e in self.events}
+            expected_ids = {str(e.get("eventId")) for e in self.expected}
             counts_ok = (
                 expected_n == observed_n
                 and kills_expected == kills_observed
                 and blips_expected == blips_observed
+                and observed_ids == expected_ids
+                and all(e.get("dispatched") for e in self.expected)
+                and all(e.get("windowStartRel") is not None and e.get("windowEndRel") is not None for e in self.events)
             )
             ok = counts_ok and all_recovered and expected_n > 0
             summary = {

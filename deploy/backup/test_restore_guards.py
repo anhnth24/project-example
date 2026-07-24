@@ -381,6 +381,69 @@ class ManifestGuardTests(unittest.TestCase):
                 green_qdrant="http://127.0.0.1:6343",
             )
 
+    def test_same_resource_names_are_safe_on_distinct_green_endpoints(self) -> None:
+        import sys
+
+        sys.path.insert(0, str(LIB))
+        from targets import assert_not_blue_alias
+
+        assert_not_blue_alias(
+            blue_bucket="markhand-documents",
+            green_bucket="markhand-documents",
+            blue_collection="markhand-chunks",
+            green_collection="markhand-chunks",
+            blue_endpoint="http://127.0.0.1:9010",
+            green_endpoint="http://127.0.0.1:9020",
+            blue_qdrant="http://127.0.0.1:6343",
+            green_qdrant="http://127.0.0.1:6443",
+        )
+
+    def test_restore_endpoint_selection_prefers_isolated_green_targets(self) -> None:
+        import sys
+        from unittest import mock
+
+        sys.path.insert(0, str(LIB))
+        from pipeline import restore_target_endpoints
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MINIO_ENDPOINT": "http://blue-minio:9000",
+                "QDRANT_URL": "http://blue-qdrant:6333",
+                "MARKHAND_GREEN_MINIO_ENDPOINT": "http://green-minio:9000/",
+                "MARKHAND_GREEN_QDRANT_URL": "http://green-qdrant:6333/",
+            },
+            clear=False,
+        ):
+            self.assertEqual(
+                restore_target_endpoints(),
+                ("http://green-minio:9000", "http://green-qdrant:6333"),
+            )
+
+    def test_green_minio_credentials_are_env_only_and_target_specific(self) -> None:
+        import sys
+        from unittest import mock
+
+        sys.path.insert(0, str(LIB))
+        from pipeline import green_mc_env_for
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "MINIO_ACCESS_KEY": "blue-root",
+                "MINIO_SECRET_KEY": "blue-secret",
+                "MARKHAND_GREEN_MINIO_ACCESS_KEY": "green-app",
+                "MARKHAND_GREEN_MINIO_SECRET_KEY": "green-secret",
+            },
+            clear=False,
+        ):
+            env = green_mc_env_for("http://green-minio:9000")
+
+        self.assertEqual(
+            env["MC_HOST_markhand"],
+            "http://green-app:green-secret@green-minio:9000",
+        )
+
     def test_mandatory_minio_qdrant_allowlists(self) -> None:
         import sys
 
@@ -458,6 +521,56 @@ class ManifestGuardTests(unittest.TestCase):
         with self.assertRaises(PipelineError) as ctx:
             compare_normalized_history(exp, act)
         self.assertIn("mismatch", str(ctx.exception).lower())
+
+    def test_normalized_history_collapses_redundant_delete_markers(self) -> None:
+        import sys
+
+        sys.path.insert(0, str(LIB))
+        from pipeline import build_normalized_history
+
+        history = build_normalized_history(
+            {
+                "trusted/a": [
+                    {"versionId": "v1"},
+                    {"versionId": "d1", "deleteMarker": True},
+                    {"versionId": "d2", "deleteMarker": True},
+                    {"versionId": "v2"},
+                ]
+            },
+            content_by_version={
+                ("trusted/a", "v1"): (1, "a" * 64),
+                ("trusted/a", "v2"): (2, "b" * 64),
+            },
+        )
+
+        self.assertEqual(
+            history[0]["events"],
+            [
+                {"type": "put", "size": 1, "contentSha256": "a" * 64},
+                {"type": "delete", "size": None, "contentSha256": None},
+                {"type": "put", "size": 2, "contentSha256": "b" * 64},
+            ],
+        )
+
+    def test_replay_delete_defers_already_absent_check_to_history_attestation(
+        self,
+    ) -> None:
+        import sys
+        from unittest import mock
+
+        sys.path.insert(0, str(LIB))
+        import pipeline
+
+        absent = pipeline.PipelineError(
+            "command failed: mc rc=1 err='Object does not exist'"
+        )
+        with mock.patch.object(pipeline, "run", side_effect=absent):
+            pipeline.replay_minio_delete("markhand/bucket/trusted/a", {})
+
+        denied = pipeline.PipelineError("command failed: mc rc=1 err='Access Denied'")
+        with mock.patch.object(pipeline, "run", side_effect=denied):
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.replay_minio_delete("markhand/bucket/trusted/a", {})
 
     def test_app_mutation_write_gate_is_integrated(self) -> None:
         """Central write-gate contract must be complete; negatives prove each part."""

@@ -53,12 +53,13 @@ deploy/scripts/poc-up.sh
 | `no-new-privileges` | yes | yes | yes |
 | mem/cpu/pids limits | yes | yes | yes |
 | network | `edge`+`private` | **`convert` only (`internal: true`)** | `private` |
-| seccomp | default | **`unconfined` (sandbox preflight)** | default |
+| seccomp | default | **custom default-deny sandbox profile** | default |
 
 Convert path has no external egress: the `convert` network is `internal: true` and
-only shares Postgres + MinIO. Default Docker seccomp blocks landlock/unshare
-sequences used by the in-process convert sandbox, so convert alone sets
-`seccomp=unconfined` while keeping `cap_drop: ALL` and no-egress networking.
+only shares Postgres + MinIO. Docker's default seccomp profile blocks the
+`mount`/`unshare` sequence used by the in-process convert sandbox. Convert uses
+`deploy/poc/worker-sandbox-seccomp.json`, which retains a default-deny allowlist
+and adds only those sandbox syscalls; `seccomp=unconfined` remains forbidden.
 Landlock allowlists PDFium (`/opt/pdfium`) and Tesseract tessdata paths.
 
 ### Index signatures

@@ -10,6 +10,7 @@ ENV_EXAMPLE="$ROOT/deploy/.env.example"
 DOCKERFILE_SERVER="$ROOT/deploy/Dockerfile.server"
 DOCKERFILE_WORKER="$ROOT/deploy/Dockerfile.worker"
 IMAGES_LOCK="$ROOT/deploy/poc/images.lock.json"
+WORKER_SECCOMP="$ROOT/deploy/poc/worker-sandbox-seccomp.json"
 FAIL=0
 
 MOCK_SIG="72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874"
@@ -124,8 +125,15 @@ if awk '
 else
   fail "worker-convert must use networks: [convert] only"
 fi
-require_regex "$COMPOSE_FILE" 'seccomp=unconfined' \
-  "convert worker relaxes seccomp for sandbox preflight (keeps cap_drop/no-egress)"
+require_file "$WORKER_SECCOMP"
+require_regex "$COMPOSE_FILE" 'seccomp=.*worker-sandbox-seccomp\.json' \
+  "convert worker uses the sandbox-specific seccomp allowlist"
+forbid_regex "$COMPOSE_FILE" 'seccomp=unconfined' \
+  "convert worker must not disable seccomp"
+require_regex "$WORKER_SECCOMP" '"defaultAction":[[:space:]]*"SCMP_ACT_ERRNO"' \
+  "sandbox seccomp fails closed by default"
+require_regex "$WORKER_SECCOMP" '"names":[[:space:]]*\["mount",[[:space:]]*"unshare"\]' \
+  "sandbox seccomp permits required mount/unshare calls"
 require_regex "$COMPOSE_FILE" '--sandbox-preflight' "convert worker healthcheck probes sandbox preflight"
 require_regex "$ROOT/crates/server/src/workers/sandbox.rs" '/opt/pdfium' "sandbox landlock allows PDFium"
 require_regex "$ROOT/crates/server/src/workers/sandbox.rs" 'tesseract-ocr|tessdata' \

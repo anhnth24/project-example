@@ -24,6 +24,7 @@ def cargo_policy(root: Path) -> list[str]:
         cwd=root,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if result.returncode:
@@ -35,16 +36,22 @@ def cargo_policy(root: Path) -> list[str]:
         if source and source.startswith("git+"):
             errors.append(f"unapproved Cargo git dependency: {package['name']}")
         if source and not package.get("license"):
-            errors.append(f"Cargo dependency missing license metadata: {package['name']}")
+            errors.append(
+                f"Cargo dependency missing license metadata: {package['name']}"
+            )
         manifest = Path(package["manifest_path"]).resolve()
         if source is None and not manifest.is_relative_to(root.resolve()):
-            errors.append(f"Cargo path dependency escapes repository: {package['name']}")
+            errors.append(
+                f"Cargo path dependency escapes repository: {package['name']}"
+            )
     return errors
 
 
 def static_policy(root: Path) -> list[str]:
     errors: list[str] = []
-    lockfiles = sorted(path.relative_to(root).as_posix() for path in root.rglob("pnpm-lock.yaml"))
+    lockfiles = sorted(
+        path.relative_to(root).as_posix() for path in root.rglob("pnpm-lock.yaml")
+    )
     if lockfiles != ["pnpm-lock.yaml"]:
         errors.append(f"expected only root pnpm-lock.yaml, found: {lockfiles}")
     lock = (root / "pnpm-lock.yaml").read_text(encoding="utf-8")
@@ -64,10 +71,14 @@ def static_policy(root: Path) -> list[str]:
 
 
 class DependencyPolicyTests(unittest.TestCase):
-    def test_rejects_nested_lock_git_source_mutable_action_and_latest_image(self) -> None:
+    def test_rejects_nested_lock_git_source_mutable_action_and_latest_image(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            (root / "pnpm-lock.yaml").write_text("resolution: git+https://example.test/a.git\n")
+            (root / "pnpm-lock.yaml").write_text(
+                "resolution: git+https://example.test/a.git\n"
+            )
             nested = root / "app/pnpm-lock.yaml"
             nested.parent.mkdir()
             nested.write_text("lockfileVersion: '9.0'\n")
@@ -87,7 +98,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.self_test:
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(DependencyPolicyTests)
-        return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+        return (
+            0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+        )
     errors = static_policy(ROOT) + cargo_policy(ROOT)
     if errors:
         print("dependency policy failed:", file=sys.stderr)

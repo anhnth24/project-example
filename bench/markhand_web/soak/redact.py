@@ -5,14 +5,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 REDACT_PATTERNS = [
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-+=/]+"), r"\1[REDACTED]"),
-    (re.compile(r"(postgres(?:ql)?://)[^@\s]+@"), r"\1[REDACTED]@"),
+    (re.compile(r"([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^@\s/]+@"), r"\1[REDACTED]@"),
     (
         re.compile(
-            r"(?i)(password|passwd|secret|token|authorization|api[_-]?key)"
+            r"(?i)(password|passwd|secret|token|authorization|api[_-]?key|"
+            r"[a-z0-9_]*secret_key|[a-z0-9_]*access_key)"
             r"\"?\s*[:=]\s*\"?[^\s\",}]+"
         ),
         r"\1:[REDACTED]",
@@ -21,17 +23,20 @@ REDACT_PATTERNS = [
         re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
         "[REDACTED_JWT]",
     ),
+    (re.compile(r"\bSOAK[0-9A-Z_:-]{2,}\b"), "[REDACTED_CONTENT_MARKER]"),
 ]
 
 RESIDUAL_PATTERNS = [
     # Ignore already-redacted placeholders.
     re.compile(r"(?i)password\s*[:=]\s*\"?(?!\[REDACTED\])[^\s\",}]{4,}"),
     re.compile(
-        r"(?i)(api[_-]?key|secret|token)\s*[:=]\s*\"?(?!\[REDACTED\])[^\s\",}]{6,}"
+        r"(?i)(api[_-]?key|secret|token|[a-z0-9_]*secret_key|[a-z0-9_]*access_key)"
+        r"\s*[:=]\s*\"?(?!\[REDACTED\])[^\s\",}]{6,}"
     ),
-    re.compile(r"postgres(?:ql)?://[^:\s\[\]]+:[^@\s\[\]]+@"),
+    re.compile(r"[a-z][a-z0-9+.-]*://[^:\s/\[\]]+:[^@\s/\[\]]+@"),
     re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
     re.compile(r"(?i)bearer\s+(?!\[REDACTED\])[a-z0-9\-_\.=]{20,}"),
+    re.compile(r"\bSOAK[0-9A-Z_:-]{2,}\b"),
 ]
 
 
@@ -67,3 +72,8 @@ def scan_raw_dir(raw_dir: Path) -> dict[str, Any]:
         for hit in scan_text(text):
             findings.append({"path": str(path.relative_to(raw_dir)), "reason": hit})
     return {"passed": not findings, "findings": findings}
+
+
+def url_has_credentials(value: str) -> bool:
+    parsed = urlparse(value)
+    return bool(parsed.scheme and (parsed.username or parsed.password))

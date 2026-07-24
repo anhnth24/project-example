@@ -7,11 +7,13 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use fileconv_knowledge::identity::BODY_TEXT_VERSION;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{ArtifactKind, DocumentState};
 use fileconv_server::db::pool::with_org_txn;
+use fileconv_server::services::chunking::prepare_chunks;
 use fileconv_server::storage::minio::ObjectIdentityMeta;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -20,12 +22,17 @@ use uuid::Uuid;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
     login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, take_live,
-    test_minio_client, trusted_key,
+    test_minio_client, trusted_key, MinioCleanupGuard,
 };
 
 const BOUNDARY: &str = "----markhandHttpContractBoundary";
 
-fn multipart_body(filename: &str, bytes: &[u8], collection_id: Uuid) -> Vec<u8> {
+fn multipart_body(
+    filename: &str,
+    bytes: &[u8],
+    collection_id: Uuid,
+    document_id: Option<Uuid>,
+) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(
         format!(
@@ -33,6 +40,14 @@ fn multipart_body(filename: &str, bytes: &[u8], collection_id: Uuid) -> Vec<u8> 
         )
         .as_bytes(),
     );
+    if let Some(document_id) = document_id {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"documentId\"\r\n\r\n{document_id}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
     body.extend_from_slice(
         format!(
             "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
@@ -76,6 +91,27 @@ async fn json_request(
     (status, json, bytes)
 }
 
+async fn assert_foreign_not_found(
+    app: axum::Router,
+    method: &str,
+    uri: String,
+    token: &str,
+    body: Option<serde_json::Value>,
+    marker: &str,
+) {
+    let (status, error, _) = json_request(app, method, &uri, Some(token), body, &[]).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "{method} {uri} exposed a distinguishable foreign resource response: {error}"
+    );
+    assert_eq!(error["code"], "not_found", "{method} {uri}: {error}");
+    assert!(
+        !error.to_string().contains(marker),
+        "{method} {uri} leaked foreign marker: {error}"
+    );
+}
+
 async fn seed_http_principal(pool: &deadpool_postgres::Pool) -> (Uuid, Uuid, String) {
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
@@ -109,8 +145,11 @@ async fn seed_published_doc(
     let document_id = Uuid::new_v4();
     let version_id = Uuid::new_v4();
     let artifact_id = Uuid::new_v4();
+    let index_metadata_id = Uuid::new_v4();
     let markdown = "# Contract\n\nKinh phí là 15 triệu đồng.\n";
     let sha = sha256_hex(markdown.as_bytes());
+    let index_signature = sha256_hex(format!("http-contract-index-{index_metadata_id}").as_bytes());
+    let chunks = prepare_chunks(document_id, version_id, markdown, "md");
     let key = trusted_key(org, version_id, Uuid::new_v4(), None).unwrap();
     let ctx = OrgContext::try_new(
         org,
@@ -150,6 +189,8 @@ async fn seed_published_doc(
     with_org_txn(pool, &ctx, {
         let ctx = ctx.clone();
         let sha = sha.clone();
+        let chunks = chunks.clone();
+        let index_signature = index_signature.clone();
         move |txn| {
             Box::pin(async move {
                 collections::insert(
@@ -209,6 +250,43 @@ async fn seed_published_doc(
                     ],
                 )
                 .await?;
+                txn.execute(
+                    "INSERT INTO index_metadata (
+                        id, org_id, collection_id, index_signature_sha256, embedding_family,
+                        embedding_revision, dimensions, runtime_path, generation, is_active, state
+                     ) VALUES ($1,$2,$3,$4,'test','r1',8,'local-hash',1,true,'active')",
+                    &[
+                        &index_metadata_id,
+                        &ctx.org_id(),
+                        &collection_id,
+                        &index_signature,
+                    ],
+                )
+                .await?;
+                for chunk in chunks {
+                    fileconv_server::db::chunks::insert(
+                        txn,
+                        &ctx,
+                        fileconv_server::db::chunks::NewChunk {
+                            id: Uuid::new_v4(),
+                            document_id,
+                            version_id,
+                            ordinal: chunk.ordinal,
+                            heading_path: &chunk.heading_path,
+                            body: &chunk.body,
+                            body_text_version: BODY_TEXT_VERSION,
+                            chunk_identity_sha256: &chunk.chunk_identity,
+                            index_metadata_id,
+                            index_signature: &index_signature,
+                            page: chunk.page,
+                            slide: chunk.slide,
+                            sheet: chunk.sheet.as_deref(),
+                            span_start: Some(chunk.span_start),
+                            span_end: Some(chunk.span_end),
+                        },
+                    )
+                    .await?;
+                }
                 let indexed = DocumentState::Indexed.as_str();
                 txn.execute(
                     "UPDATE documents SET state=$3, current_version_id=$4 WHERE org_id=$1 AND id=$2",
@@ -224,6 +302,159 @@ async fn seed_published_doc(
     (collection_id, document_id, version_id)
 }
 
+async fn seed_foreign_collection_document(
+    pool: &deadpool_postgres::Pool,
+    marker: &str,
+) -> (Uuid, Uuid, Uuid, Uuid, Uuid) {
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = Uuid::new_v4();
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let job_id = Uuid::new_v4();
+    let conflict_id = Uuid::new_v4();
+    let claim_a = Uuid::new_v4();
+    let claim_b = Uuid::new_v4();
+    let (claim_low, claim_high) = if claim_a < claim_b {
+        (claim_a, claim_b)
+    } else {
+        (claim_b, claim_a)
+    };
+    seed_user_with_permissions(
+        pool,
+        org,
+        user,
+        &format!("{user}@foreign-http.test"),
+        "correct-password-1",
+        &["doc.upload", "doc.publish", "qa.query", "jobs.system"],
+    )
+    .await;
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        ["doc.upload", "doc.publish", "qa.query", "jobs.system"],
+        [collection_id],
+    )
+    .unwrap();
+    let collection_name = format!("Foreign {marker}");
+    let collection_description = marker.to_string();
+    let document_title = format!("Foreign document {marker}");
+    let content_sha = sha256_hex(marker.as_bytes());
+    let content_length = marker.len() as i64;
+    let object_key = trusted_key(org, version_id, Uuid::new_v4(), None)
+        .expect("foreign trusted key")
+        .as_str()
+        .to_string();
+    with_org_txn(pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                collections::insert(
+                    txn,
+                    &ctx,
+                    NewCollection {
+                        id: collection_id,
+                        name: &collection_name,
+                        slug: &format!("foreign-{}", collection_id.simple()),
+                        description: Some(&collection_description),
+                        visibility: fileconv_server::db::models::CollectionVisibility::Org,
+                    },
+                )
+                .await?;
+                documents::insert(
+                    txn,
+                    &ctx,
+                    NewDocument {
+                        id: document_id,
+                        collection_id,
+                        title: &document_title,
+                    },
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO document_versions (
+                        id, org_id, document_id, version_number, publication_state,
+                        is_current, content_sha256, original_object_key, markdown_object_key,
+                        source_content_type, byte_size, created_by_user_id
+                     ) VALUES ($1,$2,$3,1,'published',true,$4,$5,$5,'text/plain',$6,$7)",
+                    &[
+                        &version_id,
+                        &ctx.org_id(),
+                        &document_id,
+                        &content_sha,
+                        &object_key,
+                        &content_length,
+                        &ctx.user_id(),
+                    ],
+                )
+                .await?;
+                let indexed = DocumentState::Indexed.as_str();
+                txn.execute(
+                    "UPDATE documents SET state=$3, current_version_id=$4
+                     WHERE org_id=$1 AND id=$2",
+                    &[&ctx.org_id(), &document_id, &indexed, &version_id],
+                )
+                .await?;
+                let payload = serde_json::json!({
+                    "document_id": document_id,
+                    "version_id": version_id,
+                    "marker": collection_description.clone(),
+                });
+                txn.execute(
+                    "INSERT INTO jobs (
+                        id, org_id, job_type, status, payload_version, payload,
+                        idempotency_key, document_id, version_id, attempts, max_attempts
+                     ) VALUES ($1,$2,'index','pending',1,$6::jsonb,$3,$4,$5,0,5)",
+                    &[
+                        &job_id,
+                        &ctx.org_id(),
+                        &format!("foreign-job-{}", job_id.simple()),
+                        &document_id,
+                        &version_id,
+                        &payload,
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO claims (
+                        id, org_id, document_id, version_id, claim_key, subject, predicate,
+                        value_type, value_money, unit, scope, effective_from, citation_quote
+                     ) VALUES
+                        ($1,$2,$3,$4,$5,$5,'is','money',15,'triệu','',now(),$5),
+                        ($6,$2,$3,$4,$5,$5,'is','money',20,'triệu','',now(),$5)",
+                    &[
+                        &claim_low,
+                        &ctx.org_id(),
+                        &document_id,
+                        &version_id,
+                        &collection_description,
+                        &claim_high,
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO conflicts (
+                        id, org_id, status, severity, conflict_type, claim_a_id, claim_b_id,
+                        first_detected_version_id
+                     ) VALUES ($1,$2,'open','warning','numeric',$3,$4,$5)",
+                    &[
+                        &conflict_id,
+                        &ctx.org_id(),
+                        &claim_low,
+                        &claim_high,
+                        &version_id,
+                    ],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed foreign collection/document");
+    (collection_id, document_id, version_id, job_id, conflict_id)
+}
+
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
 async fn live_http_collection_document_job_contract_matrix() {
@@ -236,6 +467,7 @@ async fn live_http_collection_document_job_contract_matrix() {
     let Some(store) = test_minio_client() else {
         return;
     };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (org, user, token) = seed_http_principal(&pool).await;
@@ -334,6 +566,44 @@ async fn live_http_collection_document_job_contract_matrix() {
     // Upload → list/get/preview/reindex/delete.
     let (collection_id, document_id, version_id) =
         seed_published_doc(&pool, &store, org, user).await;
+    let revision_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .header("idempotency-key", "http-contract-existing-document-version")
+                .body(Body::from(multipart_body(
+                    "contract-v2.txt",
+                    b"Kinh phi phien ban hai la 20 trieu dong.\n",
+                    collection_id,
+                    Some(document_id),
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revision_response.status(), StatusCode::CREATED);
+    let revision: serde_json::Value = serde_json::from_slice(
+        &revision_response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(revision["documentId"], document_id.to_string());
+    let revision_version_id =
+        Uuid::parse_str(revision["versionId"].as_str().expect("revision version id")).unwrap();
+    let revision_job_id =
+        Uuid::parse_str(revision["jobId"].as_str().expect("revision convert job id")).unwrap();
+    assert_ne!(revision_version_id, version_id);
 
     let (status, docs, _) = json_request(
         app.clone(),
@@ -374,6 +644,117 @@ async fn live_http_collection_document_job_contract_matrix() {
         64
     );
 
+    let citation_ctx = OrgContext::try_new(
+        org,
+        user,
+        [
+            "qa.query",
+            "qa.history",
+            "doc.upload",
+            "doc.delete",
+            "doc.publish",
+            "jobs.system",
+        ],
+        [collection_id],
+    )
+    .unwrap();
+    let (revision_number, revision_parent, revision_state, revision_current, revision_job_type): (
+        i32,
+        Option<Uuid>,
+        String,
+        bool,
+        String,
+    ) = with_org_txn(&pool, &citation_ctx, {
+        let ctx = citation_ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let version = txn
+                    .query_one(
+                        "SELECT version_number, parent_version_id, publication_state, is_current
+                         FROM document_versions
+                         WHERE org_id=$1 AND document_id=$2 AND id=$3",
+                        &[&ctx.org_id(), &document_id, &revision_version_id],
+                    )
+                    .await?;
+                let job = txn
+                    .query_one(
+                        "SELECT job_type FROM jobs WHERE org_id=$1 AND id=$2",
+                        &[&ctx.org_id(), &revision_job_id],
+                    )
+                    .await?;
+                Ok((
+                    version.get(0),
+                    version.get(1),
+                    version.get(2),
+                    version.get(3),
+                    job.get(0),
+                ))
+            })
+        }
+    })
+    .await
+    .expect("load uploaded revision");
+    assert_eq!(revision_number, 2);
+    assert_eq!(revision_parent, Some(version_id));
+    assert_eq!(revision_state, "draft");
+    assert!(!revision_current);
+    assert_eq!(revision_job_type, "convert");
+
+    let (chunk_id, quote, span_start, span_end): (Uuid, String, i32, i32) =
+        with_org_txn(&pool, &citation_ctx, {
+            let ctx = citation_ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_one(
+                            "SELECT id, body, span_start, span_end
+                             FROM chunks
+                             WHERE org_id=$1 AND document_id=$2 AND version_id=$3
+                             ORDER BY ordinal
+                             LIMIT 1",
+                            &[&ctx.org_id(), &document_id, &version_id],
+                        )
+                        .await?;
+                    Ok((
+                        row.get(0),
+                        row.get(1),
+                        row.get::<_, Option<i32>>(2).expect("chunk span start"),
+                        row.get::<_, Option<i32>>(3).expect("chunk span end"),
+                    ))
+                })
+            }
+        })
+        .await
+        .expect("load citation chunk");
+    let (status, citation, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/citations/resolve",
+        Some(&token),
+        Some(serde_json::json!({
+            "logicalDocumentId": document_id,
+            "versionId": version_id,
+            "sourceContentSha256": preview["sourceContentSha256"],
+            "canonicalMarkdownSha256": preview["canonicalMarkdownSha256"],
+            "chunkId": chunk_id,
+            "sourceSpanStart": span_start,
+            "sourceSpanEnd": span_end,
+            "quoteLocalStart": 0,
+            "quoteLocalEnd": quote.len(),
+            "quote": quote,
+            "requireCurrent": true
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{citation}");
+    assert_eq!(
+        citation["citation"]["logicalDocumentId"],
+        document_id.to_string()
+    );
+    assert_eq!(citation["citation"]["versionId"], version_id.to_string());
+    assert_eq!(citation["citation"]["chunkId"], chunk_id.to_string());
+
     let (status, versions, _) = json_request(
         app.clone(),
         "GET",
@@ -409,6 +790,60 @@ async fn live_http_collection_document_job_contract_matrix() {
         status == StatusCode::OK || status == StatusCode::BAD_REQUEST,
         "diff route must respond stably, got {status}: {diff}"
     );
+
+    let (status, publish, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/v1/documents/{document_id}/versions/{version_id}/publish"),
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "publish route must be idempotent for current version: {publish}"
+    );
+
+    let (status, issued, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!("/api/v1/documents/{document_id}/versions/{version_id}/download-capability"),
+        Some(&token),
+        Some(serde_json::json!({ "purpose": "markdown" })),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
+    let capability = issued["capability"]
+        .as_str()
+        .expect("download capability")
+        .to_string();
+    let (status, _, downloaded) = json_request(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/downloads/{capability}"),
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        String::from_utf8_lossy(&downloaded).contains("Kinh phí"),
+        "downloaded markdown must match the authorized version"
+    );
+    let (status, replay, _) = json_request(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/downloads/{capability}"),
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{replay}");
 
     let (status, reindex1, _) = json_request(
         app.clone(),
@@ -756,6 +1191,7 @@ async fn live_http_collection_document_job_contract_matrix() {
                     "note.txt",
                     upload_bytes,
                     collection_id,
+                    None,
                 )))
                 .unwrap(),
         )
@@ -833,11 +1269,12 @@ async fn live_http_collection_document_job_contract_matrix() {
     .expect("audit count");
     assert!(audit_count >= 1, "collection.create must be audited in-txn");
 
+    cleanup.cleanup().await.expect("clean HTTP contract bucket");
     ephemeral.drop().await;
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
 async fn live_central_write_gate_matrix_refuses_business_side_effects() {
     use fileconv_server::middleware::write_gate::acquire_background_mutation_guard;
     use fileconv_server::services::ops_fence::{self, FENCE_RESTORE};
@@ -851,6 +1288,7 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
     let Some(store) = test_minio_client() else {
         return;
     };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (org, user, token) = seed_http_principal(&pool).await;
@@ -876,19 +1314,16 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
             [collection_id],
         )
         .unwrap(),
-        {
-            let org = org;
-            move |txn| {
-                Box::pin(async move {
-                    let row = txn
-                        .query_one(
-                            "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
-                            &[&org],
-                        )
-                        .await?;
-                    Ok(row.get(0))
-                })
-            }
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
+                        &[&org],
+                    )
+                    .await?;
+                Ok(row.get(0))
+            })
         },
     )
     .await
@@ -1016,6 +1451,7 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
                     "fenced.txt",
                     b"should not land\n",
                     collection_id,
+                    None,
                 )))
                 .unwrap(),
         )
@@ -1041,19 +1477,16 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
         [collection_id],
     )
     .unwrap();
-    let audit_after: i64 = with_org_txn(&pool, &ctx, {
-        let org = org;
-        move |txn| {
-            Box::pin(async move {
-                let row = txn
-                    .query_one(
-                        "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
-                        &[&org],
-                    )
-                    .await?;
-                Ok(row.get(0))
-            })
-        }
+    let audit_after: i64 = with_org_txn(&pool, &ctx, move |txn| {
+        Box::pin(async move {
+            let row = txn
+                .query_one(
+                    "SELECT COUNT(*)::bigint FROM audit_log WHERE org_id = $1",
+                    &[&org],
+                )
+                .await?;
+            Ok(row.get(0))
+        })
     })
     .await
     .expect("audit after");
@@ -1097,11 +1530,12 @@ async fn live_central_write_gate_matrix_refuses_business_side_effects() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
 
+    cleanup.cleanup().await.expect("clean write-gate bucket");
     ephemeral.drop().await;
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
 async fn live_write_gate_advisory_lock_concurrency_contract() {
     use fileconv_server::middleware::write_gate::{
         acquire_background_mutation_guard, BACKUP_ADVISORY_LOCK_KEY,
@@ -1116,6 +1550,7 @@ async fn live_write_gate_advisory_lock_concurrency_contract() {
     let Some(store) = test_minio_client() else {
         return;
     };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (org, user, token) = seed_http_principal(&pool).await;
@@ -1284,6 +1719,7 @@ async fn live_write_gate_advisory_lock_concurrency_contract() {
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let _ = (org, user);
 
+    cleanup.cleanup().await.expect("clean advisory-lock bucket");
     ephemeral.drop().await;
 }
 
@@ -1299,6 +1735,9 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (_org, _user, token) = seed_http_principal(&pool).await;
+    let foreign_marker = format!("foreign-marker-{}", Uuid::new_v4().simple());
+    let (foreign_collection, foreign_document, foreign_version, foreign_job, foreign_conflict) =
+        seed_foreign_collection_document(&pool, &foreign_marker).await;
     let app = build_router(pool, &ephemeral.app_url, None);
 
     let (status, err, _) =
@@ -1316,18 +1755,226 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
 
-    let missing = Uuid::new_v4();
-    let (status, err, _) = json_request(
-        app,
-        "GET",
-        &format!("/api/v1/collections/{missing}"),
+    let (status, own_collection, _) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/collections",
         Some(&token),
-        None,
+        Some(serde_json::json!({
+            "name": "Version upload IDOR owner",
+            "slug": format!("version-upload-idor-{}", Uuid::new_v4().simple()),
+            "visibility": "org"
+        })),
         &[],
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{err}");
-    assert_eq!(err["code"], "not_found");
+    assert_eq!(status, StatusCode::CREATED, "{own_collection}");
+    let own_collection_id =
+        Uuid::parse_str(own_collection["id"].as_str().expect("own collection id")).unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/uploads")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .header("idempotency-key", "foreign-document-version-upload")
+                .body(Body::from(multipart_body(
+                    "foreign-version.txt",
+                    foreign_marker.as_bytes(),
+                    own_collection_id,
+                    Some(foreign_document),
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let denied = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        !String::from_utf8_lossy(&denied).contains(&foreign_marker),
+        "version upload denial leaked foreign marker"
+    );
+
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/collections/{foreign_collection}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/collections/{foreign_collection}/documents"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "POST",
+        format!(
+            "/api/v1/collections/{foreign_collection}/documents/{foreign_document}/approve-intake"
+        ),
+        &token,
+        Some(serde_json::json!({ "reason": "foreign denial probe" })),
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/documents/{foreign_document}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "DELETE",
+        format!("/api/v1/documents/{foreign_document}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/documents/{foreign_document}/preview?version_id={foreign_version}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/documents/{foreign_document}/versions"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/documents/{foreign_document}/versions/{foreign_version}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!(
+            "/api/v1/documents/{foreign_document}/versions/{foreign_version}/diff?against={foreign_version}"
+        ),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "POST",
+        format!("/api/v1/documents/{foreign_document}/versions/{foreign_version}/publish"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "POST",
+        format!(
+            "/api/v1/documents/{foreign_document}/versions/{foreign_version}/download-capability"
+        ),
+        &token,
+        Some(serde_json::json!({ "purpose": "markdown" })),
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "POST",
+        format!("/api/v1/documents/{foreign_document}/reindex"),
+        &token,
+        Some(serde_json::json!({})),
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/jobs/{foreign_job}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/conflicts/{foreign_conflict}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "GET",
+        format!("/api/v1/conflicts/{foreign_conflict}/evidence"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "POST",
+        format!("/api/v1/conflicts/{foreign_conflict}/triage"),
+        &token,
+        Some(serde_json::json!({
+            "status": "false_positive",
+            "resolutionNote": "foreign denial probe"
+        })),
+        &foreign_marker,
+    )
+    .await;
+    let foreign_sha = sha256_hex(foreign_marker.as_bytes());
+    assert_foreign_not_found(
+        app,
+        "POST",
+        "/api/v1/citations/resolve".to_string(),
+        &token,
+        Some(serde_json::json!({
+            "logicalDocumentId": foreign_document,
+            "versionId": foreign_version,
+            "sourceContentSha256": foreign_sha.clone(),
+            "canonicalMarkdownSha256": foreign_sha,
+            "chunkId": Uuid::new_v4(),
+            "sourceSpanStart": 0,
+            "sourceSpanEnd": foreign_marker.len(),
+            "quoteLocalStart": 0,
+            "quoteLocalEnd": foreign_marker.len(),
+            "quote": foreign_marker.clone(),
+            "requireCurrent": true
+        })),
+        &foreign_marker,
+    )
+    .await;
 
     ephemeral.drop().await;
 }

@@ -133,6 +133,18 @@ def run(
     return proc.stdout
 
 
+def replay_minio_delete(target: str, env: dict[str, str]) -> None:
+    """Replay a tombstone while deferring ambiguous absence to exact attestation."""
+    try:
+        run(["mc", "rm", "--force", target], env=env)
+    except PipelineError as exc:
+        # mc can report absence after the delete marker was committed. The
+        # normalized-history comparison still fails closed unless the expected
+        # ordered tombstone is actually present.
+        if "Object does not exist" not in str(exc):
+            raise
+
+
 def psql(url: str, sql: str) -> str:
     with private_pg_env(url) as (safe_url, env):
         out = run(["psql", safe_url, "-v", "ON_ERROR_STOP=1", "-Atc", sql], env=env)
@@ -224,16 +236,31 @@ def set_fence(session: PgSession, stamp: str, epoch: str) -> str:
     return parse_returning_timestamptz(raw)
 
 
-def mc_env_for(endpoint: str) -> dict[str, str]:
+def _mc_env_for_credentials(endpoint: str, access_key: str, secret_key: str) -> dict[str, str]:
     parsed = urlparse(endpoint)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     env = os.environ.copy()
     env["MC_HOST_markhand"] = (
-        f"{parsed.scheme}://{os.environ['MINIO_ACCESS_KEY']}:"
-        f"{os.environ['MINIO_SECRET_KEY']}@{host}:{port}"
+        f"{parsed.scheme}://{access_key}:{secret_key}@{host}:{port}"
     )
     return env
+
+
+def mc_env_for(endpoint: str) -> dict[str, str]:
+    return _mc_env_for_credentials(
+        endpoint,
+        os.environ["MINIO_ACCESS_KEY"],
+        os.environ["MINIO_SECRET_KEY"],
+    )
+
+
+def green_mc_env_for(endpoint: str) -> dict[str, str]:
+    return _mc_env_for_credentials(
+        endpoint,
+        os.environ["MARKHAND_GREEN_MINIO_ACCESS_KEY"],
+        os.environ["MARKHAND_GREEN_MINIO_SECRET_KEY"],
+    )
 
 
 def minio_inventory_events(inv_jsonl: bytes) -> dict[str, list[dict[str, Any]]]:
@@ -270,7 +297,13 @@ def build_normalized_history(
             version = str(row.get("versionId") or row.get("version_id") or "null")
             is_delete = bool(row.get("deleteMarker") or row.get("isDeleteMarker"))
             if is_delete:
-                hist.append({"type": "delete", "size": None, "contentSha256": None})
+                # Multiple adjacent delete markers have the same observable
+                # object state once provider-specific version ids/timestamps
+                # are intentionally removed. Keep one semantic tombstone so a
+                # restore does not depend on vendor behavior for deleting an
+                # already-absent key.
+                if not hist or hist[-1]["type"] != "delete":
+                    hist.append({"type": "delete", "size": None, "contentSha256": None})
                 continue
             meta = content_by_version.get((key, version))
             if meta is None:
@@ -656,6 +689,13 @@ def _qdrant_collection_exists(qurl: str, collection: str) -> bool:
         return False
 
 
+def restore_target_endpoints() -> tuple[str, str]:
+    """Resolve isolated green object/vector endpoints, falling back to source endpoints."""
+    minio = os.environ.get("MARKHAND_GREEN_MINIO_ENDPOINT") or os.environ["MINIO_ENDPOINT"]
+    qdrant = os.environ.get("MARKHAND_GREEN_QDRANT_URL") or os.environ["QDRANT_URL"]
+    return minio.rstrip("/"), qdrant.rstrip("/")
+
+
 def restore_green(backup_dir: Path) -> None:
     """Restore only to isolated green targets. Promote/cutover is disabled."""
     old_umask = _umask_secure()
@@ -665,8 +705,7 @@ def restore_green(backup_dir: Path) -> None:
         green_url = os.environ["MARKHAND_GREEN_DATABASE_URL"]
         green_bucket = os.environ["MARKHAND_GREEN_MINIO_BUCKET"]
         green_coll = os.environ["MARKHAND_GREEN_QDRANT_COLLECTION"]
-        endpoint = os.environ["MINIO_ENDPOINT"]
-        qurl = os.environ["QDRANT_URL"].rstrip("/")
+        endpoint, qurl = restore_target_endpoints()
         green_db = db_name_from_url(green_url)
 
         # Auth + schema before any mutation.
@@ -695,7 +734,7 @@ def restore_green(backup_dir: Path) -> None:
         if GreenAllowlists.load_from_env().digest != allowlist_digest:
             raise PipelineError("allowlists mutated during preflight; refuse")
 
-        env_mc = mc_env_for(endpoint)
+        env_mc = green_mc_env_for(endpoint)
         # Existing allowlisted targets must fail BEFORE any mutation.
         exists_db = psql(
             maintenance_url(blue_url),
@@ -794,10 +833,7 @@ def restore_green(backup_dir: Path) -> None:
             key = key_entry["key"]
             for ev in key_entry["events"]:
                 if ev["type"] == "delete":
-                    run(
-                        ["mc", "rm", "--force", f"markhand/{green_bucket}/{key}"],
-                        env=env_mc,
-                    )
+                    replay_minio_delete(f"markhand/{green_bucket}/{key}", env_mc)
                     continue
                 if ev["type"] != "put":
                     raise PipelineError(f"unknown MinIO event type {ev.get('type')}")

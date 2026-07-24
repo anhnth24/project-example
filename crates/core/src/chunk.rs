@@ -134,7 +134,7 @@ pub fn chunk_markdown(md: &str, max_chars: usize) -> Vec<Chunk> {
     for line in md.lines() {
         let trimmed = line.trim_start();
         let hashes = trimmed.bytes().take_while(|&b| b == b'#').count();
-        if hashes >= 1 && hashes <= 6 && trimmed.as_bytes().get(hashes) == Some(&b' ') {
+        if (1..=6).contains(&hashes) && trimmed.as_bytes().get(hashes) == Some(&b' ') {
             flush(&mut sections, &path, &mut body);
             let title = trimmed[hashes + 1..].trim().to_string();
             while matches!(path.last(), Some((l, _)) if *l >= hashes) {

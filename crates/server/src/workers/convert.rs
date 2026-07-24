@@ -1464,7 +1464,7 @@ impl ConvertWorkerError {
             Self::Db(_) => "convert database error",
             Self::Storage(_) => "convert storage error",
             Self::ArtifactStage(_) => "convert artifact staging error",
-            Self::Promotion(_) => "convert promotion error",
+            Self::Promotion(error) => error.safe_code(),
             Self::Quota(_) => "convert quota error",
             Self::CompensationDeferred => "convert compensation deferred",
             Self::Sandbox(_) => "convert sandbox error",

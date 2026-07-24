@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import math
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +14,28 @@ GATE_QUERY_P99 = "G0-SLO-QUERY-P99"
 GATE_INGEST = "G0-CAP-INGEST-THROUGHPUT"
 
 OFFICIAL_DURATION_SECONDS = 1800
+CANONICAL_PROFILE_SHA256 = "08ffd236abf5ace8d33fa0fe15da97810a3a3ebc3db205659a36074f16670e67"
+CANONICAL_GATES_SHA256 = "ba41f237a1cba7db8cda87b94fdfafcdbce364f111c88e61f3f3f61901339df7"
+CANONICAL_THRESHOLDS = {
+    "queryP95Ms": 500.0,
+    "queryP99Ms": 1000.0,
+    "ingestDocsPerHour": 1200.0,
+    "maxRssGrowthMb": 256.0,
+    "maxTempGrowthMb": 512.0,
+    "maxQueueDepth": 100,
+    "maxDbConnections": 40,
+}
 # POC qualification: zero request errors outside the exact injection window.
 ALLOWED_ERRORS_OUTSIDE_INJECTION = 0
 COMPLETENESS_RATIO = 0.95
+MIN_RESOURCE_COVERAGE_RATIO = 0.90
+MIN_QUERY_SUCCESS_SAMPLES = 100
+
+
+def _sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _load_gates_doc(path: Path) -> dict[str, Any]:
@@ -30,33 +51,58 @@ def _threshold_value(gates_doc: dict[str, Any], gate_id: str) -> float | None:
             continue
         thr = gate.get("threshold") or {}
         if isinstance(thr, dict) and "value" in thr:
+            if isinstance(thr["value"], bool) or not isinstance(thr["value"], (int, float)):
+                raise RuntimeError(f"threshold {gate_id} must be finite nonnegative numeric")
+            if not math.isfinite(float(thr["value"])) or float(thr["value"]) < 0.0:
+                raise RuntimeError(f"threshold {gate_id} must be finite nonnegative numeric")
             return float(thr["value"])
     return None
 
 
 def load_thresholds(profile: dict[str, Any], gates_path: Path | str) -> dict[str, Any]:
     """Combine profile bounds + gates.yaml + SLA targets into binding thresholds."""
-    gates_doc = _load_gates_doc(Path(gates_path))
+    gates_path = Path(gates_path)
+    gates_doc = _load_gates_doc(gates_path)
     bounds = profile.get("bounds") or {}
     p95 = _threshold_value(gates_doc, GATE_QUERY_P95)
     p99 = _threshold_value(gates_doc, GATE_QUERY_P99)
     ingest = _threshold_value(gates_doc, GATE_INGEST)
     if p95 is None or p99 is None or ingest is None:
         raise RuntimeError("binding SLO/CAP thresholds missing from gates.yaml")
-    return {
+    profile_path = Path(str(profile.get("sourcePath") or ""))
+    profile_sha = _sha256(profile_path)
+    gates_sha = _sha256(gates_path)
+    duration = int(profile.get("durationSeconds") or 0)
+    values = {
         "queryP95Ms": p95,
         "queryP99Ms": p99,
         "ingestDocsPerHour": ingest,
-        "ingestGateBinding": True,
         "maxRssGrowthMb": float(bounds.get("maxRssGrowthMb", 256)),
         "maxTempGrowthMb": float(bounds.get("maxTempGrowthMb", 512)),
         "maxQueueDepth": int(bounds.get("maxQueueDepth", 100)),
         "maxDbConnections": int(bounds.get("maxDbConnections", 40)),
-        "officialDurationSeconds": int(
-            profile.get("durationSeconds") or OFFICIAL_DURATION_SECONDS
+    }
+    canonical_values = all(values[k] == v for k, v in CANONICAL_THRESHOLDS.items())
+    return {
+        **values,
+        "ingestGateBinding": True,
+        "officialDurationSeconds": OFFICIAL_DURATION_SECONDS,
+        "profileDurationSeconds": duration,
+        "profileSha256": profile_sha,
+        "gatesSha256": gates_sha,
+        "canonicalProfileSha256": CANONICAL_PROFILE_SHA256,
+        "canonicalGatesSha256": CANONICAL_GATES_SHA256,
+        "canonicalThresholdValues": dict(CANONICAL_THRESHOLDS),
+        "canonicalBindingPass": bool(
+            duration == OFFICIAL_DURATION_SECONDS
+            and profile_sha == CANONICAL_PROFILE_SHA256
+            and gates_sha == CANONICAL_GATES_SHA256
+            and canonical_values
         ),
         "allowedErrorsOutsideInjection": ALLOWED_ERRORS_OUTSIDE_INJECTION,
         "completenessRatio": COMPLETENESS_RATIO,
+        "minResourceCoverageRatio": MIN_RESOURCE_COVERAGE_RATIO,
+        "minQuerySuccessSamples": MIN_QUERY_SUCCESS_SAMPLES,
         "rpoMinutes": 15,
         "queryReadyRtoMinutes": 60,
         "fullVectorRtoMinutes": 240,
@@ -66,12 +112,20 @@ def load_thresholds(profile: dict[str, Any], gates_path: Path | str) -> dict[str
 def _cmp_le(actual: float | None, limit: float) -> str:
     if actual is None:
         return "unknown"
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        return "fail"
+    if not math.isfinite(float(actual)) or float(actual) < 0.0:
+        return "fail"
     return "pass" if actual <= limit else "fail"
 
 
 def _cmp_ge(actual: float | None, limit: float) -> str:
     if actual is None:
         return "unknown"
+    if isinstance(actual, bool) or not isinstance(actual, (int, float)):
+        return "fail"
+    if not math.isfinite(float(actual)) or float(actual) < 0.0:
+        return "fail"
     return "pass" if actual >= limit else "fail"
 
 
@@ -88,7 +142,8 @@ def evaluate_numeric_gates(
     query_samples = metrics.get("querySuccessSamples")
     if query_samples is None:
         query_samples = 0
-    if not modes_ready or int(query_samples) <= 0:
+    min_query_samples = int(thresholds.get("minQuerySuccessSamples", 1))
+    if not modes_ready or int(query_samples) < min_query_samples:
         query_p95 = "fail" if metrics.get("measured") else "unknown"
         query_p99 = query_p95
         # When measured but zero samples: fail. When not measured: unknown.
@@ -101,6 +156,8 @@ def evaluate_numeric_gates(
     else:
         query_p95 = _cmp_le(metrics.get("queryP95Ms"), float(thresholds["queryP95Ms"]))
         query_p99 = _cmp_le(metrics.get("queryP99Ms"), float(thresholds["queryP99Ms"]))
+
+    canonical = "pass" if thresholds.get("canonicalBindingPass") else "fail"
 
     completeness = metrics.get("completenessPassed")
     if completeness is False:
@@ -177,7 +234,32 @@ def evaluate_numeric_gates(
     else:
         completeness_gate = "unknown"
 
+    drain = metrics.get("workloadDrainPassed")
+    if drain is True:
+        drain_gate = "pass"
+    elif drain is False:
+        drain_gate = "fail"
+    else:
+        drain_gate = "unknown"
+
+    reconcile = metrics.get("reconcilePassed")
+    if reconcile is True:
+        reconcile_gate = "pass"
+    elif reconcile is False:
+        reconcile_gate = "fail"
+    else:
+        reconcile_gate = "unknown"
+
+    resource = metrics.get("resourceCoveragePassed")
+    if resource is True:
+        resource_gate = "pass"
+    elif resource is False:
+        resource_gate = "fail"
+    else:
+        resource_gate = "unknown"
+
     return {
+        "canonicalBinding": canonical,
         "queryP95": query_p95,
         "queryP99": query_p99,
         "ingestThroughput": ingest,
@@ -190,4 +272,7 @@ def evaluate_numeric_gates(
         "postRestoreRetrieval": post_restore,
         "requestErrors": errors_gate,
         "completeness": completeness_gate,
+        "workloadDrain": drain_gate,
+        "reconcile": reconcile_gate,
+        "resourceCoverage": resource_gate,
     }

@@ -18,7 +18,7 @@ use fileconv_server::config::{
 };
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;
-use fileconv_server::db::pool::{create_pool, with_org_txn};
+use fileconv_server::db::pool::{create_pool, create_pool_with_max_size, with_org_txn};
 use fileconv_server::http::{router, AppState};
 use fileconv_server::state::RuntimeState;
 use http_body_util::BodyExt;
@@ -135,11 +135,22 @@ fn test_runtime(database_url: &str) -> RuntimeState {
 }
 
 async fn boot(base_url: &str) -> (EphemeralDb, Pool, PasswordAuthProvider, Arc<AppState>) {
+    boot_with_pool_size(base_url, None).await
+}
+
+async fn boot_with_pool_size(
+    base_url: &str,
+    max_size: Option<usize>,
+) -> (EphemeralDb, Pool, PasswordAuthProvider, Arc<AppState>) {
     let ephemeral = EphemeralDb::create(base_url).await;
     apply_migrations(&ephemeral.url)
         .await
         .expect("apply migrations");
-    let pool = create_pool(&ephemeral.url).expect("pool");
+    let pool = match max_size {
+        Some(max_size) => create_pool_with_max_size(&ephemeral.url, max_size),
+        None => create_pool(&ephemeral.url),
+    }
+    .expect("pool");
     let auth = test_auth_config();
     let keys = JwtKeys::from_auth(&auth).expect("jwt keys");
     let provider = PasswordAuthProvider::new(pool.clone(), auth, keys);
@@ -253,6 +264,55 @@ fn assert_no_secrets(value: &Value, password: &str, refresh: Option<&str>, acces
         // Response bodies intentionally include tokens; audit metadata must not.
     }
     let _ = access;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn successful_login_completes_with_two_connection_pool() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let (ephemeral, pool, provider, state) = boot_with_pool_size(&base_url, Some(2)).await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let email = format!("bounded-pool-{}@example.com", user.simple());
+    let password = "correct-horse-battery";
+    seed_user(&pool, org, user, &email, password).await;
+
+    // The write gate holds one pooled connection for the full request. The
+    // login flow must release each short-lived connection before opening its
+    // tenant-context and refresh-family transactions.
+    let app = router(
+        AppState::from_parts(
+            state.runtime().clone(),
+            pool.clone(),
+            Some(PasswordAuthProvider::new(
+                pool.clone(),
+                test_auth_config(),
+                JwtKeys::from_auth(&test_auth_config()).unwrap(),
+            )),
+        )
+        .unwrap(),
+    );
+    let (status, body) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        json_request(
+            app.clone(),
+            "POST",
+            "/api/v1/auth/login",
+            Some(serde_json::json!({ "email": email, "password": password })),
+            None,
+        ),
+    )
+    .await
+    .expect("successful login must not deadlock a two-connection pool");
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    drop(app);
+    drop(state);
+    drop(provider);
+    drop(pool);
+    ephemeral.drop().await;
 }
 
 #[tokio::test]

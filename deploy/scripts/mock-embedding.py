@@ -1,7 +1,9 @@
-"""Deterministic CPU-only OpenAI-compatible embedding stub for local development.
+"""Deterministic CPU-only OpenAI-compatible inference stub for local development.
 
 Returns L2-normalized, non-zero vectors. The Markhand server rejects zero and
-non-normalized embeddings (see fileconv_server::services::embedding).
+non-normalized embeddings (see fileconv_server::services::embedding). A minimal
+chat endpoint exercises provider telemetry while grounded answers still follow
+the server's fail-closed extractive policy.
 """
 
 from __future__ import annotations
@@ -48,11 +50,36 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": {"code": "not_found"}})
 
     def do_POST(self):
-        if self.path != "/v1/embeddings":
+        if self.path not in ("/v1/embeddings", "/v1/chat/completions"):
             self._send(404, {"error": {"code": "not_found"}})
             return
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/v1/chat/completions":
+            self._send(
+                200,
+                {
+                    "id": "markhand-mock-chat",
+                    "object": "chat.completion",
+                    "model": payload.get("model", "markhand-mock-chat"),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "Câu trả lời kiểm thử có căn cứ [1].",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                },
+            )
+            return
         inputs = payload.get("input", [])
         if isinstance(inputs, str):
             inputs = [inputs]

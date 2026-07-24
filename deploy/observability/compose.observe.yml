@@ -37,4 +37,4 @@ services:
 networks:
   poc_private:
     external: true
-    name: markhand-poc_private
+    name: ${MARKHAND_POC_PRIVATE_NETWORK:-markhand-poc_private}

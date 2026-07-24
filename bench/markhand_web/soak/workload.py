@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import math
 import mimetypes
 import os
 import threading
@@ -15,7 +16,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fixtures import fixture_path, preflight_fixtures
+from fixtures import fixture_path, marker_for, preflight_fixtures
 from mathutil import percentile, schedule_event_times
 
 
@@ -59,12 +60,17 @@ class RequestStats:
     deleted_ids: list[str] = field(default_factory=list)
     retained_ids: list[str] = field(default_factory=list)
     versions: dict[str, list[DocVersion]] = field(default_factory=dict)
+    doc_markers: dict[str, str] = field(default_factory=dict)
+    doc_versions: dict[str, str] = field(default_factory=dict)
+    doc_effective_from: dict[str, str] = field(default_factory=dict)
     not_ready: list[str] = field(default_factory=list)
     exceptions: list[str] = field(default_factory=list)
     injection_windows: list[tuple[float, float]] = field(default_factory=list)
     compare_dataset: dict[str, str] | None = None
     # Optional external window checker (InjectionPlan.in_window).
     injection_window_fn: Callable[[float], bool] | None = None
+    workload_start_mono: float | None = None
+    workload_end_mono: float | None = None
 
     def mark_scheduled(self, kind: str, n: int = 1) -> None:
         with self.lock:
@@ -135,6 +141,18 @@ class RequestStats:
                 DocVersion(document_id, version_id, published=published)
             )
 
+    def record_marker(self, document_id: str, marker: str) -> None:
+        with self.lock:
+            self.doc_markers[document_id] = marker
+
+    def record_expected_version(self, document_id: str, version_id: str) -> None:
+        with self.lock:
+            self.doc_versions[document_id] = version_id
+
+    def record_effective_from(self, document_id: str, effective_from: str) -> None:
+        with self.lock:
+            self.doc_effective_from[document_id] = effective_from
+
     def compare_pair(self) -> tuple[str, str, str] | None:
         """Return (documentId, versionA, versionB) when two versions exist."""
         with self.lock:
@@ -149,6 +167,16 @@ class RequestStats:
                 if vers:
                     return doc_id
             return self.document_ids[0] if self.document_ids else None
+
+    def current_doc_marker(self) -> tuple[str, str] | None:
+        with self.lock:
+            for doc_id in self.retained_ids + self.document_ids:
+                marker = self.doc_markers.get(doc_id)
+                if marker:
+                    return doc_id, marker
+            if self.document_ids:
+                return self.document_ids[0], ""
+        return None
 
 
 class ApiClient:
@@ -221,14 +249,19 @@ def login(base_url: str, email: str, password: str, *, timeout: float = 15.0) ->
     return token
 
 
-def _multipart(file_path: Path, collection_id: str) -> tuple[bytes, str]:
+def _multipart_bytes(
+    *,
+    filename: str,
+    file_bytes: bytes,
+    collection_id: str,
+    document_id: str | None = None,
+) -> tuple[bytes, str]:
     boundary = f"----markhandsoak{uuid.uuid4().hex}"
-    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    file_bytes = file_path.read_bytes()
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     chunks = [
         f"--{boundary}\r\n".encode(),
         (
-            f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             f"Content-Type: {content_type}\r\n\r\n"
         ).encode(),
         file_bytes,
@@ -238,13 +271,168 @@ def _multipart(file_path: Path, collection_id: str) -> tuple[bytes, str]:
             f'Content-Disposition: form-data; name="collectionId"\r\n\r\n'
             f"{collection_id}\r\n"
         ).encode(),
-        f"--{boundary}--\r\n".encode(),
     ]
+    if document_id is not None:
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                (
+                    f'Content-Disposition: form-data; name="documentId"\r\n\r\n'
+                    f"{document_id}\r\n"
+                ).encode(),
+            ]
+        )
+    chunks.append(f"--{boundary}--\r\n".encode())
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _multipart(
+    file_path: Path,
+    collection_id: str,
+    document_id: str | None = None,
+) -> tuple[bytes, str]:
+    return _multipart_bytes(
+        filename=file_path.name,
+        file_bytes=file_path.read_bytes(),
+        collection_id=collection_id,
+        document_id=document_id,
+    )
 
 
 def _http_success(status: int) -> bool:
     return 200 <= status < 300
+
+
+def _json_payload(data: bytes) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _hit_doc_ids(payload: dict[str, Any]) -> set[str]:
+    hits = payload.get("hits") or []
+    docs: set[str] = set()
+    for hit in hits:
+        if isinstance(hit, dict):
+            doc = hit.get("documentId") or hit.get("document_id") or hit.get("id")
+            if doc:
+                docs.add(str(doc))
+    return docs
+
+
+def _has_citation_for(
+    payload: dict[str, Any],
+    doc_id: str | None,
+    *,
+    version_id: str | None = None,
+    marker: str | None = None,
+) -> bool:
+    citations = payload.get("citations") or []
+    if not citations:
+        return False
+    if doc_id is None:
+        return True
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        ref = (
+            citation.get("logicalDocumentId")
+            or citation.get("documentId")
+            or citation.get("document_id")
+            or citation.get("docId")
+        )
+        cite_version = citation.get("versionId") or citation.get("version_id")
+        quote = citation.get("quote")
+        if ref is not None and str(ref) != doc_id:
+            continue
+        if version_id is not None and str(cite_version) != version_id:
+            continue
+        if marker is not None and (not isinstance(quote, str) or marker not in quote):
+            continue
+        if ref is not None:
+            return True
+    return False
+
+
+def _payload_contains_marker(payload: dict[str, Any], marker: str | None) -> bool:
+    if not marker:
+        return True
+    text = json.dumps(payload, ensure_ascii=False)
+    return marker in text
+
+
+def search_matches_expected(
+    data: bytes,
+    *,
+    expected_doc: str | None,
+    expected_version: str | None = None,
+    expected_marker: str | None,
+    require_citation: bool = True,
+) -> bool:
+    payload = _json_payload(data)
+    if payload is None:
+        return False
+    if expected_doc:
+        matching_hits = []
+        for hit in payload.get("hits") or []:
+            if not isinstance(hit, dict):
+                continue
+            doc = hit.get("documentId") or hit.get("document_id") or hit.get("id")
+            version = hit.get("versionId") or hit.get("version_id")
+            snippet = hit.get("snippet") or hit.get("quote") or hit.get("body")
+            if str(doc) != expected_doc:
+                continue
+            if expected_version is not None and str(version) != expected_version:
+                continue
+            if expected_marker is not None and (
+                not isinstance(snippet, str) or expected_marker not in snippet
+            ):
+                continue
+            matching_hits.append(hit)
+        if not matching_hits:
+            return False
+    else:
+        if not _hit_doc_ids(payload):
+            return False
+    if require_citation and not _has_citation_for(
+        payload, expected_doc, version_id=expected_version, marker=expected_marker
+    ):
+        return False
+    return True
+
+
+def wait_until_indexed_visible(
+    client: ApiClient,
+    *,
+    document_id: str,
+    marker: str,
+    timeout_seconds: float,
+    poll_seconds: float = 2.0,
+    expected_version: str | None = None,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        body = json.dumps(
+            {
+                "query": marker,
+                "mode": "current",
+                "limit": 5,
+                "collectionIds": [client.collection_id],
+            }
+        ).encode("utf-8")
+        status, data, _latency = client.request("POST", "/api/v1/search", body=body)
+        if _http_success(status) and search_matches_expected(
+            data,
+            expected_doc=document_id,
+            expected_version=expected_version,
+            expected_marker=marker,
+            require_citation=True,
+        ):
+            return True
+        time.sleep(poll_seconds)
+    return False
 
 
 def do_ingest(
@@ -253,6 +441,7 @@ def do_ingest(
     stats: RequestStats,
     *,
     start_mono: float,
+    scheduled_mono: float | None = None,
 ) -> None:
     path = fixture_path(fmt)
     body, content_type = _multipart(path, client.collection_id)
@@ -264,17 +453,28 @@ def do_ingest(
     )
     doc_id = None
     version_id = None
+    marker = marker_for(fmt)
     ok = _http_success(status)
     if ok:
-        try:
-            payload = json.loads(data.decode("utf-8"))
+        payload = _json_payload(data)
+        if payload is None:
+            ok = False
+        else:
             doc_id = payload.get("documentId")
             version_id = payload.get("versionId")
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            ok = False
     if ok and isinstance(doc_id, str) and isinstance(version_id, str):
         # Each upload is a new documentId — never invent a second version pair.
         stats.record_version(doc_id, version_id, published=False)
+        stats.record_marker(doc_id, marker)
+        stats.record_expected_version(doc_id, version_id)
+        ok = wait_until_indexed_visible(
+            client,
+            document_id=doc_id,
+            marker=marker,
+            timeout_seconds=float(os.environ.get("MARKHAND_SOAK_INGEST_TERMINAL_TIMEOUT", "180")),
+        )
+    elif ok:
+        ok = False
     in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     stats.add(
         "ingest",
@@ -290,6 +490,7 @@ def do_query(
     stats: RequestStats,
     *,
     start_mono: float,
+    scheduled_mono: float | None = None,
 ) -> None:
     body_obj: dict[str, Any] = {
         "query": "markhand soak synthetic query",
@@ -298,15 +499,23 @@ def do_query(
         "collectionIds": [client.collection_id],
     }
     not_ready = None
+    expected_doc = None
+    expected_version = None
+    expected_marker = None
     if mode == "as_of":
-        doc = stats.as_of_doc()
-        if not doc:
-            not_ready = "as_of_no_document"
+        dataset = stats.compare_dataset
+        if not dataset:
+            not_ready = "as_of_dataset_unavailable"
         else:
-            body_obj["asOf"] = "2026-07-01T00:00:00Z"
+            doc = dataset["documentId"]
+            body_obj["asOf"] = dataset["asOfA"]
             body_obj["documentId"] = doc
+            expected_doc = doc
+            expected_version = dataset["versionA"]
+            expected_marker = dataset["markerA"]
+            body_obj["query"] = expected_marker
+            body_obj["expectedSeededEffectiveFrom"] = dataset["effectiveFromA"]
     elif mode == "compare":
-        # Uploads always create new documentIds — never invent a version pair.
         dataset = stats.compare_dataset
         if not dataset:
             not_ready = "compare_dataset_unavailable"
@@ -314,8 +523,19 @@ def do_query(
             body_obj["documentId"] = dataset["documentId"]
             body_obj["versionA"] = dataset["versionA"]
             body_obj["versionB"] = dataset["versionB"]
+            expected_doc = dataset["documentId"]
+            body_obj["query"] = dataset["query"]
+            # Compare is verified separately against both versions; this request
+            # must at least bind to the supplied logical document.
     elif mode == "current":
-        pass
+        current = stats.current_doc_marker()
+        if not current:
+            not_ready = "current_no_indexed_document"
+        else:
+            expected_doc, expected_marker = current
+            expected_version = stats.doc_versions.get(expected_doc)
+            if expected_marker:
+                body_obj["query"] = expected_marker
     else:
         not_ready = f"unsupported_mode:{mode}"
 
@@ -331,18 +551,30 @@ def do_query(
         return
 
     body = json.dumps(body_obj).encode("utf-8")
-    status, _data, latency = client.request("POST", "/api/v1/search", body=body)
-    ok = _http_success(status)
+    status, data, _latency = client.request("POST", "/api/v1/search", body=body)
+    ok = _http_success(status) and search_matches_expected(
+        data,
+        expected_doc=expected_doc,
+        expected_version=locals().get("expected_version"),
+        expected_marker=expected_marker,
+        require_citation=True,
+    )
     stats.add(
         "query",
         ok=ok,
-        latency_ms=latency if ok else None,
+        latency_ms=((time.monotonic() - (scheduled_mono or start_mono)) * 1000.0) if ok else None,
         mode=mode,
         in_injection=in_inj,
     )
 
 
-def do_delete(client: ApiClient, stats: RequestStats, *, start_mono: float) -> None:
+def do_delete(
+    client: ApiClient,
+    stats: RequestStats,
+    *,
+    start_mono: float,
+    scheduled_mono: float | None = None,
+) -> None:
     with stats.lock:
         if not stats.document_ids:
             doc_id = None
@@ -370,6 +602,7 @@ def do_reconcile(
     stats: RequestStats,
     start_mono: float,
     runner: Callable[..., Any] | None = None,
+    scheduled_mono: float | None = None,
 ) -> None:
     import subprocess
 
@@ -442,6 +675,7 @@ def run_mixed_load(
     compare_dataset: dict[str, str] | None = None,
     injection_window_fn: Callable[[float], bool] | None = None,
     retained_ids: list[str] | None = None,
+    retained_markers: dict[str, str] | None = None,
     max_workers: int = 16,
     skip_fixture_preflight: bool = False,
 ) -> RequestStats:
@@ -461,6 +695,8 @@ def run_mixed_load(
     if retained_ids:
         stats.retained_ids = list(retained_ids)
         stats.document_ids = list(retained_ids)
+    if retained_markers:
+        stats.doc_markers.update({str(k): str(v) for k, v in retained_markers.items()})
     actors = profile["actors"]
     modes = list(actors["query"]["modes"])
     ingest_times = schedule_event_times(
@@ -496,10 +732,17 @@ def run_mixed_load(
     events.sort(key=lambda row: row[0])
 
     start = time.monotonic()
+    stats.workload_start_mono = start
     idx = 0
     pending: list[concurrent.futures.Future[None]] = []
+    per_actor_workers = max(1, max_workers // 4)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+    with (
+        concurrent.futures.ThreadPoolExecutor(max_workers=per_actor_workers, thread_name_prefix="o05-ingest") as ingest_pool,
+        concurrent.futures.ThreadPoolExecutor(max_workers=per_actor_workers, thread_name_prefix="o05-query") as query_pool,
+        concurrent.futures.ThreadPoolExecutor(max_workers=per_actor_workers, thread_name_prefix="o05-delete") as delete_pool,
+        concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="o05-reconcile") as reconcile_pool,
+    ):
         while True:
             elapsed = time.monotonic() - start
             if elapsed >= duration_seconds:
@@ -514,23 +757,50 @@ def run_mixed_load(
                     continue
                 if kind == "ingest":
                     stats.mark_submitted("ingest")
-                    pending.append(pool.submit(do_ingest, client, str(arg), stats, start_mono=start))
+                    pending.append(
+                        ingest_pool.submit(
+                            do_ingest,
+                            client,
+                            str(arg),
+                            stats,
+                            start_mono=start,
+                            scheduled_mono=start + float(_t),
+                        )
+                    )
                 elif kind == "query":
                     stats.mark_submitted("query")
-                    pending.append(pool.submit(do_query, client, str(arg), stats, start_mono=start))
+                    pending.append(
+                        query_pool.submit(
+                            do_query,
+                            client,
+                            str(arg),
+                            stats,
+                            start_mono=start,
+                            scheduled_mono=start + float(_t),
+                        )
+                    )
                 elif kind == "delete":
                     stats.mark_submitted("delete")
-                    pending.append(pool.submit(do_delete, client, stats, start_mono=start))
+                    pending.append(
+                        delete_pool.submit(
+                            do_delete,
+                            client,
+                            stats,
+                            start_mono=start,
+                            scheduled_mono=start + float(_t),
+                        )
+                    )
                 elif kind == "reconcile":
                     doc = stats.document_ids[-1] if stats.document_ids else None
                     stats.mark_submitted("reconcile")
                     pending.append(
-                        pool.submit(
+                        reconcile_pool.submit(
                             do_reconcile,
                             compose_project=compose_project,
                             document_id=doc,
                             stats=stats,
                             start_mono=start,
+                            scheduled_mono=start + float(_t),
                         )
                     )
             # Bound in-flight: collect completed and propagate exceptions.
@@ -555,6 +825,7 @@ def run_mixed_load(
         for fut in pending:
             fut.result(timeout=client.timeout_seconds + 5)
 
+    stats.workload_end_mono = time.monotonic()
     return stats
 
 
@@ -591,6 +862,11 @@ def metrics_from_stats(
         "retainedCount": len(stats.retained_ids),
         "notReady": list(stats.not_ready),
         "durationSeconds": duration_seconds,
+        "actualElapsedSeconds": (
+            None
+            if stats.workload_start_mono is None or stats.workload_end_mono is None
+            else round(stats.workload_end_mono - stats.workload_start_mono, 3)
+        ),
     }
 
 
@@ -599,23 +875,38 @@ def completeness_ok(
     *,
     ratio: float = COMPLETENESS_RATIO,
 ) -> dict[str, Any]:
-    """Require >= ratio of scheduled successes per actor (query/ingest), outside errors."""
+    """Require scheduled work to drain and actor success to meet qualification minima."""
     details: dict[str, Any] = {}
     ok = True
-    for kind in ("ingest", "query"):
+    for kind in ("ingest", "query", "delete", "reconcile"):
         scheduled = int(stats.scheduled.get(kind, 0))
+        submitted = int(stats.submitted.get(kind, 0))
+        completed = int(stats.completed.get(kind, 0))
         success = int(stats.success.get(kind, 0))
-        need = int(scheduled * ratio) if scheduled else 0
-        passed = success >= need if scheduled else False
+        if kind == "reconcile":
+            need = scheduled
+        else:
+            need = math.ceil(scheduled * ratio) if scheduled else 0
+        drained = scheduled == submitted == completed
+        passed = bool(scheduled and drained and success >= need)
         details[kind] = {
             "scheduled": scheduled,
+            "submitted": submitted,
+            "completed": completed,
             "success": success,
             "required": need,
+            "drained": drained,
             "passed": passed,
         }
-        if scheduled and not passed:
+        if not passed:
             ok = False
-    return {"passed": ok, "ratio": ratio, "actors": details}
+    return {
+        "passed": ok,
+        "drainPassed": all(v["drained"] and v["scheduled"] > 0 for v in details.values()),
+        "reconcilePassed": details["reconcile"]["passed"],
+        "ratio": ratio,
+        "actors": details,
+    }
 
 
 def post_restore_retrieval_check(*args: Any, **kwargs: Any) -> dict[str, Any]:

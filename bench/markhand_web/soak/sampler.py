@@ -27,9 +27,16 @@ def _run(
     args: list[str],
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    timeout_seconds: float = 15.0,
 ) -> subprocess.CompletedProcess[str]:
     run = runner or subprocess.run
-    return run(args, capture_output=True, text=True, check=False)
+    return run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout_seconds,
+    )
 
 
 def sample_docker_stats(
@@ -44,7 +51,10 @@ def sample_docker_stats(
     proc = _run(
         ["docker", "stats", "--no-stream", "--format", "{{.ID}}\t{{.MemUsage}}", *ids],
         runner=runner,
+        timeout_seconds=15.0,
     )
+    if proc.returncode != 0:
+        return {"services": {}, "rssMbTotal": None, "error": "docker_stats_failed"}
     by_id: dict[str, float] = {}
     for line in (proc.stdout or "").splitlines():
         if "\t" not in line:
@@ -149,6 +159,7 @@ def sample_pg_connections(
             "SELECT count(*) FROM pg_stat_activity",
         ],
         runner=runner,
+        timeout_seconds=15.0,
     )
     text = (proc.stdout or "").strip()
     if proc.returncode != 0:
@@ -166,6 +177,7 @@ def sample_pg_connections(
                 "SELECT count(*) FROM pg_stat_activity",
             ],
             runner=runner,
+            timeout_seconds=15.0,
         )
         text = (proc2.stdout or "").strip()
         if proc2.returncode != 0:
@@ -205,6 +217,7 @@ def sample_container_temp_bytes(
             proc = _run(
                 ["docker", "exec", cid, "du", "-sb", path],
                 runner=runner,
+                timeout_seconds=10.0,
             )
             if proc.returncode != 0:
                 continue
@@ -229,6 +242,7 @@ class GrowthTracker:
     """Track RSS / temp start-peak-end growth. Unobserved metrics stay None."""
 
     def __init__(self) -> None:
+        self.started_mono = time.monotonic()
         self.rss_start: float | None = None
         self.rss_peak: float | None = None
         self.rss_end: float | None = None
@@ -239,6 +253,7 @@ class GrowthTracker:
         self.queue_age_max: float | None = None
         self.db_conn_max: int | None = None
         self.queue_observations = 0
+        self.rss_observations = 0
         self.db_observations = 0
         self.temp_observations = 0
         self.samples: list[dict[str, Any]] = []
@@ -253,7 +268,9 @@ class GrowthTracker:
         db_conn: int | None,
     ) -> None:
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        offset = round(time.monotonic() - self.started_mono, 3)
         if rss_mb is not None:
+            self.rss_observations += 1
             if self.rss_start is None:
                 self.rss_start = rss_mb
             self.rss_peak = rss_mb if self.rss_peak is None else max(self.rss_peak, rss_mb)
@@ -287,6 +304,7 @@ class GrowthTracker:
         self.samples.append(
             {
                 "at": now,
+                "offsetSeconds": offset,
                 "rssMb": rss_mb,
                 "tempBytes": temp_bytes,
                 "queueDepth": queue_depth,
@@ -302,6 +320,16 @@ class GrowthTracker:
         temp_growth = None
         if self.temp_start is not None and self.temp_peak is not None:
             temp_growth = max(0, self.temp_peak - self.temp_start)
+        offsets = [
+            float(sample["offsetSeconds"])
+            for sample in self.samples
+            if isinstance(sample.get("offsetSeconds"), (int, float))
+        ]
+        span = max(offsets) - min(offsets) if len(offsets) >= 2 else 0.0
+        max_gap = 0.0
+        if len(offsets) >= 2:
+            ordered = sorted(offsets)
+            max_gap = max(b - a for a, b in zip(ordered, ordered[1:]))
         return {
             "rssMb": {
                 "start": self.rss_start,
@@ -319,9 +347,12 @@ class GrowthTracker:
             "queueAgeMaxSeconds": self.queue_age_max if self.queue_observations else None,
             "dbConnectionsMax": self.db_conn_max if self.db_observations else None,
             "queueObservations": self.queue_observations,
+            "rssObservations": self.rss_observations,
             "dbObservations": self.db_observations,
             "tempObservations": self.temp_observations,
             "sampleCount": len(self.samples),
+            "sampleSpanSeconds": round(span, 3),
+            "sampleMaxGapSeconds": round(max_gap, 3),
         }
 
     def write_raw(self, raw_dir: Path) -> None:
@@ -355,6 +386,8 @@ class BackgroundSampler:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                raise RuntimeError("sampler_thread_alive_after_stop")
 
     def _loop(self) -> None:
         while not self._stop.is_set():

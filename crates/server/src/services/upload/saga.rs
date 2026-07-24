@@ -12,7 +12,7 @@ use crate::auth::context::OrgContext;
 use crate::auth::permissions::require_permission;
 use crate::db::documents::{self, NewDocument};
 use crate::db::error::DbError;
-use crate::db::models::{AuditOutcome, JobType};
+use crate::db::models::{AuditOutcome, DocumentState, JobType};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::upload_operations::{
     self, NewUploadOperation, UploadOperation, UploadOperationState,
@@ -20,6 +20,7 @@ use crate::db::upload_operations::{
 use crate::jobs::{self, EnqueueJob, JobError, JobPayload};
 use crate::services::audit::{self, AuditRecord};
 use crate::services::authz_lock;
+use crate::services::document_state;
 use crate::services::quota::{self, QuotaError, QuotaSnapshot};
 use crate::storage::keys::quarantine_key;
 use crate::storage::minio::MinioClient;
@@ -85,6 +86,8 @@ pub enum SagaError {
     IdempotencyConflict,
     #[error("idempotency in progress")]
     IdempotencyInProgress,
+    #[error("document is not ready for a new revision")]
+    RevisionConflict,
     #[error("database error")]
     Database(#[from] DbError),
     #[error("job error")]
@@ -993,28 +996,80 @@ async fn register_rows(
     let filename = outcome.original_filename.clone();
     let upload_id = outcome.object_id;
 
-    documents::insert(
-        txn,
-        ctx,
-        NewDocument {
-            id: document_id,
-            collection_id,
-            title: &title,
-        },
-    )
-    .await?;
+    let existing = txn
+        .query_opt(
+            "SELECT collection_id, state, current_version_id, deleted_at
+             FROM documents
+             WHERE org_id = $1 AND id = $2
+             FOR UPDATE",
+            &[&ctx.org_id(), &document_id],
+        )
+        .await
+        .map_err(DbError::from)?;
+    let (version_number, parent_version_id) = if let Some(row) = existing {
+        let existing_collection: Uuid = row.get("collection_id");
+        let deleted_at: Option<chrono::DateTime<chrono::Utc>> = row.get("deleted_at");
+        if existing_collection != collection_id || deleted_at.is_some() {
+            return Err(SagaError::PermissionDenied);
+        }
+        let state = DocumentState::parse(row.get::<_, String>("state").as_str())
+            .map_err(DbError::Config)?;
+        let current_version_id = row.get::<_, Option<Uuid>>("current_version_id");
+        if state != DocumentState::Indexed || current_version_id.is_none() {
+            return Err(SagaError::RevisionConflict);
+        }
+        document_state::apply_transition(
+            txn,
+            ctx,
+            document_id,
+            DocumentState::Indexed,
+            DocumentState::Uploaded,
+        )
+        .await
+        .map_err(|error| match error {
+            DbError::IllegalTransition { .. } | DbError::StaleState { .. } => {
+                SagaError::RevisionConflict
+            }
+            other => SagaError::Database(other),
+        })?;
+        let version_number: i32 = txn
+            .query_one(
+                "SELECT COALESCE(MAX(version_number), 0)::integer + 1
+                 FROM document_versions
+                 WHERE org_id = $1 AND document_id = $2",
+                &[&ctx.org_id(), &document_id],
+            )
+            .await
+            .map_err(DbError::from)?
+            .get(0);
+        (version_number, current_version_id)
+    } else {
+        documents::insert(
+            txn,
+            ctx,
+            NewDocument {
+                id: document_id,
+                collection_id,
+                title: &title,
+            },
+        )
+        .await?;
+        (1, None)
+    };
     txn.execute(
         "INSERT INTO document_versions (
-            id, org_id, document_id, version_number, publication_state,
+            id, org_id, document_id, version_number, parent_version_id, publication_state,
             is_current, content_sha256, original_object_key,
             source_filename, source_content_type, byte_size, created_by_user_id
          ) VALUES (
-            $1, $2, $3, 1, 'draft', false, $4, $5, $6, $7, $8, $9
+            $1, $2, $3, $4, $5, 'draft', false, $6, $7, $8, $9, $10, $11
          )",
         &[
             &version_id,
             &ctx.org_id(),
             &document_id,
+            &version_number,
+            &parent_version_id,
             &sha,
             &object_key,
             &filename,
@@ -1362,6 +1417,7 @@ fn error_code_for(error: &SagaError) -> &'static str {
         SagaError::Job(_) => "job_enqueue_failed",
         SagaError::IdempotencyConflict => "idempotency_conflict",
         SagaError::IdempotencyInProgress => "idempotency_in_progress",
+        SagaError::RevisionConflict => "revision_conflict",
         SagaError::Upload(_) => "upload_error",
         SagaError::Internal => "internal",
     }

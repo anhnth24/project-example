@@ -122,10 +122,20 @@ pub(crate) fn rows_to_html_table(rows: &[Vec<String>], merges: &[MergeRange]) ->
             (merge.start_row, merge.start_col),
             (end_row - merge.start_row + 1, end_col - merge.start_col + 1),
         );
-        for row in merge.start_row..=end_row {
-            for column in merge.start_col..=end_col {
+        for (row, covered_row) in covered
+            .iter_mut()
+            .enumerate()
+            .take(end_row + 1)
+            .skip(merge.start_row)
+        {
+            for (column, cell) in covered_row
+                .iter_mut()
+                .enumerate()
+                .take(end_col + 1)
+                .skip(merge.start_col)
+            {
                 if (row, column) != (merge.start_row, merge.start_col) {
-                    covered[row][column] = true;
+                    *cell = true;
                 }
             }
         }

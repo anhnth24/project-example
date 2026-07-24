@@ -718,9 +718,17 @@ impl QdrantClient {
             .send()
             .await
             .map_err(|_| StorageError::Transport)?;
-        if response.status().is_success() {
+        let status = response.status();
+        // Drain the small response so Hyper can return this connection to the
+        // pool before the signature-specific collection probe immediately
+        // reuses the same Qdrant client.
+        response
+            .bytes()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if status.is_success() {
             Ok(())
-        } else if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
+        } else if status.as_u16() == 401 || status.as_u16() == 403 {
             Err(StorageError::ConfigMissingCredentials)
         } else {
             Err(StorageError::Backend)

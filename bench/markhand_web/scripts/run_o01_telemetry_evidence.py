@@ -14,14 +14,18 @@ import json
 import os
 import re
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT = ROOT / "bench/markhand_web/reports/phase-1b-gate"
+OUT = Path(
+    os.environ.get(
+        "MARKHAND_O01_OUT_DIR",
+        ROOT / "bench/markhand_web/reports/phase-1b-gate",
+    )
+)
 # Deterministic raw dir keyed by git short SHA (not wall-clock).
 GIT_SHORT = subprocess.check_output(
     ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True
@@ -38,10 +42,17 @@ CANARIES = [
 REDACT_PATTERNS = [
     (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+"), r"\1[REDACTED]"),
     (re.compile(r"(postgres://)[^@\s]+@"), r"\1[REDACTED]@"),
-    (re.compile(r"(" + "|".join(re.escape(c) for c in CANARIES) + ")"), "[REDACTED_CANARY]"),
-    (re.compile(r"(?i)(password|secret|token|authorization)\"?\s*[:=]\s*\"?[^\s\",}]+"), r"\1:[REDACTED]"),
+    (
+        re.compile(r"(" + "|".join(re.escape(c) for c in CANARIES) + ")"),
+        "[REDACTED_CANARY]",
+    ),
+    (
+        re.compile(
+            r"(?i)(password|secret|token|authorization)\"?\s*[:=]\s*\"?[^\s\",}]+"
+        ),
+        r"\1:[REDACTED]",
+    ),
 ]
-
 
 
 def sql_query(db_url: str, query: str) -> subprocess.CompletedProcess[str]:
@@ -54,7 +65,9 @@ def sql_query(db_url: str, query: str) -> subprocess.CompletedProcess[str]:
             check=False,
         )
     # Container fallback for Cloud VMs without host psql.
-    container = os.environ.get("MARKHAND_O01_POSTGRES_CONTAINER", "markhand-poc-postgres-1")
+    container = os.environ.get(
+        "MARKHAND_O01_POSTGRES_CONTAINER", "markhand-poc-postgres-1"
+    )
     user = os.environ.get("POSTGRES_USER", "markhand")
     db = os.environ.get("POSTGRES_DB", "markhand")
     return subprocess.run(
@@ -75,6 +88,7 @@ def sql_query(db_url: str, query: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
 
 def redact(text: str) -> str:
     out = text
@@ -102,7 +116,9 @@ def http(method: str, url: str, *, headers=None, body: bytes | None = None, time
         return err.code, dict(err.headers.items()), err.read()
 
 
-def run_cmd(args: list[str], env: dict | None = None) -> subprocess.CompletedProcess[str]:
+def run_cmd(
+    args: list[str], env: dict | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=ROOT,
@@ -110,6 +126,123 @@ def run_cmd(args: list[str], env: dict | None = None) -> subprocess.CompletedPro
         text=True,
         env=env,
     )
+
+
+def collector_trace_evidence(
+    collector: str,
+    request_id: str | None,
+    required_span_names: tuple[str, ...],
+    raw_name: str,
+) -> dict:
+    """Poll one request trace until all required real spans are exported."""
+    result = {
+        "sameTrace": False,
+        "namedSpansPresent": False,
+        "uniqueSpanIds": False,
+        "canonicalOtlpKinds": False,
+        "parentGraphValid": False,
+        "spanNames": [],
+        "traceIds": [],
+    }
+    if not collector or not request_id:
+        write_raw(
+            raw_name,
+            "MARKHAND_OTEL_COLLECTOR_QUERY unset or request_id missing",
+        )
+        return result
+
+    for _ in range(45):
+        try:
+            st, _, body = http(
+                "GET",
+                f"{collector}/api/v1/traces?request_id={request_id}",
+                timeout=5,
+            )
+            write_raw(raw_name, body)
+            if st != 200:
+                time.sleep(1)
+                continue
+            parsed = json.loads(body)
+            spans = parsed.get("spans") if isinstance(parsed, dict) else None
+            if not isinstance(spans, list) or not spans:
+                time.sleep(1)
+                continue
+            trace_ids = [
+                str(span.get("traceId") or span.get("trace_id") or "")
+                for span in spans
+                if isinstance(span, dict)
+            ]
+            span_names = [
+                str(span.get("name") or span.get("spanName") or "")
+                for span in spans
+                if isinstance(span, dict)
+            ]
+            ids = [
+                str(span.get("spanId") or span.get("span_id") or "")
+                for span in spans
+                if isinstance(span, dict)
+            ]
+            kinds = []
+            for span in spans:
+                if not isinstance(span, dict):
+                    continue
+                kind = span.get("kind")
+                if kind is None:
+                    kind = span.get("spanKind") or span.get("span_kind")
+                if isinstance(kind, str):
+                    kind = {
+                        "INTERNAL": 1,
+                        "SERVER": 2,
+                        "CLIENT": 3,
+                        "PRODUCER": 4,
+                        "CONSUMER": 5,
+                    }.get(kind.upper())
+                kinds.append(kind)
+            id_set = set(ids)
+            parent_graph_ok = True
+            for span, kind in zip(spans, kinds):
+                if not isinstance(span, dict):
+                    parent_graph_ok = False
+                    break
+                span_id = str(span.get("spanId") or span.get("span_id") or "")
+                parent = span.get("parentSpanId") or span.get("parent_span_id")
+                if not parent:
+                    continue
+                # A SERVER span may continue a caller-owned remote parent. Every
+                # local/async child must point to a span captured in this trace.
+                if parent == span_id or (parent not in id_set and kind != 2):
+                    parent_graph_ok = False
+                    break
+            result = {
+                "sameTrace": bool(trace_ids)
+                and len(set(trace_ids)) == 1
+                and bool(parsed.get("sameTrace", True)),
+                "namedSpansPresent": all(
+                    any(required in name for name in span_names)
+                    for required in required_span_names
+                ),
+                "uniqueSpanIds": bool(ids) and all(ids) and len(ids) == len(set(ids)),
+                "canonicalOtlpKinds": bool(kinds)
+                and all(isinstance(kind, int) and 1 <= kind <= 5 for kind in kinds),
+                "parentGraphValid": parent_graph_ok,
+                "spanNames": span_names,
+                "traceIds": sorted(set(trace_ids)),
+            }
+            if all(
+                result[key]
+                for key in (
+                    "sameTrace",
+                    "namedSpansPresent",
+                    "uniqueSpanIds",
+                    "canonicalOtlpKinds",
+                    "parentGraphValid",
+                )
+            ):
+                return result
+        except Exception as exc:  # noqa: BLE001 — evidence path
+            write_raw(raw_name, str(exc))
+        time.sleep(1)
+    return result
 
 
 def run_async_canary(base: str, canaries: list[str]) -> dict:
@@ -155,10 +288,10 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
     )
     boundary = f"----o01{GIT_SHORT}"
     parts = [
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"collectionId\"\r\n\r\n{collection_id}\r\n".encode(),
+        f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n{collection_id}\r\n'.encode(),
         (
-            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
-            f"filename=\"o01-canary.txt\"\r\nContent-Type: text/plain\r\n\r\n"
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+            f'filename="o01-canary.txt"\r\nContent-Type: text/plain\r\n\r\n'
         ).encode(),
         canary_text.encode(),
         f"\r\n--{boundary}--\r\n".encode(),
@@ -209,11 +342,11 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
             time.sleep(1)
 
     if job_id and not job_request_id:
-        db_url = os.environ.get("MARKHAND_TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        db_url = os.environ.get("MARKHAND_TEST_DATABASE_URL") or os.environ.get(
+            "DATABASE_URL"
+        )
         if db_url:
             try:
-                import subprocess as sp
-
                 q = (
                     "SELECT COALESCE(payload->>'request_id', payload->>'requestId') "
                     "FROM jobs WHERE id = '%s'" % str(job_id).replace("'", "")
@@ -243,7 +376,9 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
     )
     write_raw("async-deny.json", deny_body)
     deny_ok = deny_status in (401, 403, 404)
-    deny_request_id = deny_headers.get("x-request-id") or deny_headers.get("X-Request-Id")
+    deny_request_id = deny_headers.get("x-request-id") or deny_headers.get(
+        "X-Request-Id"
+    )
     deny_action = "search.query"
 
     metrics_status, _, metrics = http("GET", f"{base}/metrics")
@@ -255,121 +390,58 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
         for label in ("org_id=", "user_id=", "document_id=", "filename=")
         if label in text
     ]
-    # Ask/provider path (must not leak canaries into metrics).
-    ask_status, ask_headers, ask_body = http(
-        "POST",
-        f"{base}/api/v1/ask",
-        headers={
-            "authorization": f"Bearer {token}",
-            "content-type": "application/json",
-        },
-        body=json.dumps(
-            {
-                "question": "O01 telemetry ask probe",
-                "collectionIds": [collection_id],
-                "limit": 3,
-            }
-        ).encode(),
-        timeout=60,
-    )
-    write_raw("async-ask.json", ask_body)
-    ask_request_id = ask_headers.get("x-request-id") or ask_headers.get("X-Request-Id")
-    ask_ok = ask_status in (200, 503, 422, 400)
-
-    # Same-trace collector proof (required for async canary pass).
-    collector = os.environ.get("MARKHAND_OTEL_COLLECTOR_QUERY", "").rstrip("/")
-    collector_hit = False
-    named_spans_ok = False
-    unique_ids_ok = False
-    canonical_kinds_ok = False
-    parent_graph_ok = False
-    span_names_found: list[str] = []
-    required_span_names = (
-        "api.request",
-        "worker.convert",
-        "worker.index",
-        "worker.embed",
-        "retrieval",
-        "provider.chat",
-    )
-    if collector and request_id:
-        try:
-            st, _, body = http(
-                "GET", f"{collector}/api/v1/traces?request_id={request_id}", timeout=5
-            )
-            write_raw("async-collector.json", body)
-            collector_hit = st == 200 and request_id.encode() in body
-            try:
-                parsed = json.loads(body)
-                spans = []
-                if isinstance(parsed, dict) and "spans" in parsed:
-                    spans = parsed.get("spans") or []
-                elif isinstance(parsed, dict) and "resourceSpans" in parsed:
-                    for rs in parsed.get("resourceSpans") or []:
-                        for ss in rs.get("scopeSpans") or []:
-                            spans.extend(ss.get("spans") or [])
-                if spans:
-                    trace_ids = [
-                        (s.get("traceId") or s.get("trace_id") or "") for s in spans
-                    ]
-                    collector_hit = bool(trace_ids) and len(set(trace_ids)) == 1
-                    span_names_found = [
-                        (s.get("name") or s.get("spanName") or "") for s in spans
-                    ]
-                    named_spans_ok = all(
-                        any(req in name for name in span_names_found)
-                        for req in required_span_names
-                    )
-                    ids = [(s.get("spanId") or s.get("span_id") or "") for s in spans]
-                    unique_ids_ok = bool(ids) and len(ids) == len(set(ids)) and all(ids)
-                    kinds = []
-                    for s in spans:
-                        kind = s.get("kind")
-                        if kind is None:
-                            kind = s.get("spanKind") or s.get("span_kind")
-                        if isinstance(kind, str):
-                            kind = {
-                                "INTERNAL": 1,
-                                "SERVER": 2,
-                                "CLIENT": 3,
-                                "PRODUCER": 4,
-                                "CONSUMER": 5,
-                            }.get(kind.upper())
-                        kinds.append(kind)
-                    canonical_kinds_ok = bool(kinds) and all(
-                        isinstance(k, int) and 1 <= k <= 5 for k in kinds
-                    )
-                    id_set = set(ids)
-                    # SERVER/CONSUMER parents may be remote W3C roots.
-                    remote_ok = set()
-                    for s, kind in zip(spans, kinds):
-                        if kind in (2, 5):
-                            parent = s.get("parentSpanId") or s.get("parent_span_id")
-                            if parent:
-                                remote_ok.add(parent)
-                    parent_graph_ok = True
-                    for s in spans:
-                        sid = s.get("spanId") or s.get("span_id") or ""
-                        parent = s.get("parentSpanId") or s.get("parent_span_id")
-                        if not parent:
-                            continue
-                        if parent == sid or (
-                            parent not in id_set and parent not in remote_ok
-                        ):
-                            parent_graph_ok = False
-                            break
-                if isinstance(parsed, dict) and "sameTrace" in parsed:
-                    collector_hit = bool(parsed.get("sameTrace"))
-            except Exception:  # noqa: BLE001
-                pass
-        except Exception as exc:  # noqa: BLE001
-            collector_hit = False
-            write_raw("async-collector.json", str(exc))
-    else:
-        write_raw(
-            "async-collector.json",
-            "MARKHAND_OTEL_COLLECTOR_QUERY unset or request_id missing — same-trace proof required",
+    # Wait until the async index/embedding chain makes the canary retrievable,
+    # then exercise the separate ask→retrieval→provider trace.
+    ask_status = 0
+    ask_headers: dict[str, str] = {}
+    ask_body = b""
+    ask_grounded = False
+    for _ in range(45):
+        ask_status, ask_headers, ask_body = http(
+            "POST",
+            f"{base}/api/v1/ask",
+            headers={
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+            },
+            body=json.dumps(
+                {
+                    "question": "O01 async canary",
+                    "collectionIds": [collection_id],
+                    "limit": 3,
+                }
+            ).encode(),
+            timeout=60,
         )
+        write_raw("async-ask.json", ask_body)
+        try:
+            parsed_ask = json.loads(ask_body)
+            citations = parsed_ask.get("citations") or []
+            ask_grounded = (
+                bool(citations) or int(parsed_ask.get("citationCount") or 0) > 0
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            ask_grounded = False
+        if ask_status == 200 and ask_grounded:
+            break
+        time.sleep(1)
+    ask_request_id = ask_headers.get("x-request-id") or ask_headers.get("X-Request-Id")
+    ask_ok = ask_status == 200 and ask_grounded
+
+    # HTTP upload and HTTP ask are distinct distributed traces by design.
+    collector = os.environ.get("MARKHAND_OTEL_COLLECTOR_QUERY", "").rstrip("/")
+    ingest_trace = collector_trace_evidence(
+        collector,
+        request_id,
+        ("api.request", "worker.convert", "worker.index", "worker.embed"),
+        "async-collector-ingest.json",
+    )
+    ask_trace = collector_trace_evidence(
+        collector,
+        ask_request_id,
+        ("api.request", "retrieval", "provider.chat"),
+        "async-collector-ask.json",
+    )
 
     db_url = (
         os.environ.get("MARKHAND_TEST_DATABASE_URL")
@@ -386,7 +458,9 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
             )
             proc = sql_query(db_url, q)
             write_raw("async-db-audit.txt", proc.stdout + proc.stderr)
-            db_audit_ok = proc.returncode == 0 and int((proc.stdout or "0").strip() or "0") >= 1
+            db_audit_ok = (
+                proc.returncode == 0 and int((proc.stdout or "0").strip() or "0") >= 1
+            )
         except Exception as exc:  # noqa: BLE001
             db_audit_ok = False
             write_raw("async-db-audit.txt", str(exc))
@@ -408,6 +482,26 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
             write_raw("async-deny-audit.txt", str(exc))
 
     terminal_ok = job_status in ("succeeded", "failed", "dead_letter", "completed")
+    collector_hit = bool(ingest_trace["sameTrace"] and ask_trace["sameTrace"])
+    named_spans_ok = bool(
+        ingest_trace["namedSpansPresent"] and ask_trace["namedSpansPresent"]
+    )
+    unique_ids_ok = bool(ingest_trace["uniqueSpanIds"] and ask_trace["uniqueSpanIds"])
+    canonical_kinds_ok = bool(
+        ingest_trace["canonicalOtlpKinds"] and ask_trace["canonicalOtlpKinds"]
+    )
+    parent_graph_ok = bool(
+        ingest_trace["parentGraphValid"] and ask_trace["parentGraphValid"]
+    )
+    span_names_found = list(ingest_trace["spanNames"]) + list(ask_trace["spanNames"])
+    required_span_names = (
+        "api.request",
+        "worker.convert",
+        "worker.index",
+        "worker.embed",
+        "retrieval",
+        "provider.chat",
+    )
     # R3 #5: every proof is mandatory — missing any exits nonzero via passed=False.
     proofs = {
         "jobIdPresent": bool(job_id),
@@ -424,6 +518,7 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
         "metricsClean": metrics_status == 200 and not canary_hits and not forbidden,
         "denyOk": deny_ok,
         "askOk": ask_ok,
+        "askGrounded": ask_grounded,
         "documentPresent": bool(upload.get("documentId") or upload.get("document_id")),
     }
     missing = [name for name, ok in proofs.items() if not ok]
@@ -436,6 +531,7 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
         "askRequestId": ask_request_id,
         "askHttpStatus": ask_status,
         "askOk": ask_ok,
+        "askGrounded": ask_grounded,
         "jobId": job_id,
         "jobStatus": job_status,
         "jobPayloadRequestIdPresent": bool(job_request_id),
@@ -444,6 +540,8 @@ def run_async_canary(base: str, canaries: list[str]) -> dict:
         "dbAuditOk": db_audit_ok,
         "denyAuditExact": deny_audit_ok,
         "collectorSameTrace": collector_hit,
+        "ingestTrace": ingest_trace,
+        "askTrace": ask_trace,
         "namedSpans": span_names_found,
         "requiredSpanNames": list(required_span_names),
         "canaryHits": canary_hits,
@@ -477,6 +575,7 @@ def run_negative_proof_fixtures() -> dict:
             "metricsClean": True,
             "denyOk": True,
             "askOk": True,
+            "askGrounded": True,
             "documentPresent": True,
         },
         "missing_named_spans": {
@@ -494,6 +593,7 @@ def run_negative_proof_fixtures() -> dict:
             "metricsClean": True,
             "denyOk": True,
             "askOk": True,
+            "askGrounded": True,
             "documentPresent": True,
         },
         "missing_parent_graph": {
@@ -511,6 +611,7 @@ def run_negative_proof_fixtures() -> dict:
             "metricsClean": True,
             "denyOk": True,
             "askOk": True,
+            "askGrounded": True,
             "documentPresent": True,
         },
         "missing_same_trace": {
@@ -528,6 +629,7 @@ def run_negative_proof_fixtures() -> dict:
             "metricsClean": True,
             "denyOk": True,
             "askOk": True,
+            "askGrounded": True,
             "documentPresent": True,
         },
         "missing_canonical_kinds": {
@@ -545,6 +647,25 @@ def run_negative_proof_fixtures() -> dict:
             "metricsClean": True,
             "denyOk": True,
             "askOk": True,
+            "askGrounded": True,
+            "documentPresent": True,
+        },
+        "missing_grounded_ask": {
+            "jobIdPresent": True,
+            "requestIdPresent": True,
+            "jobTerminal": True,
+            "jobPayloadRequestIdPresent": True,
+            "dbAuditOk": True,
+            "denyAuditExact": True,
+            "collectorSameTrace": True,
+            "namedSpansPresent": True,
+            "uniqueSpanIds": True,
+            "canonicalOtlpKinds": True,
+            "parentGraphValid": True,
+            "metricsClean": True,
+            "denyOk": True,
+            "askOk": True,
+            "askGrounded": False,
             "documentPresent": True,
         },
     }
@@ -599,6 +720,10 @@ def main() -> int:
                 "--ignored",
                 "--nocapture",
             ],
+            "capture_unit": [
+                "python3",
+                "deploy/scripts/test_otel_capture.py",
+            ],
             "evidence": [
                 "python3",
                 "bench/markhand_web/scripts/run_o01_telemetry_evidence.py",
@@ -619,6 +744,19 @@ def main() -> int:
     if cargo.returncode != 0:
         evidence["blockers"].append("cargo telemetry tests failed")
 
+    capture_unit = run_cmd(evidence["commands"]["capture_unit"])
+    write_raw(
+        "otel-capture-unit.txt",
+        capture_unit.stdout + "\n" + capture_unit.stderr,
+    )
+    evidence["checks"]["otel_capture_unit"] = {
+        "exit": capture_unit.returncode,
+        "passed": capture_unit.returncode == 0,
+        "command": evidence["commands"]["capture_unit"],
+    }
+    if capture_unit.returncode != 0:
+        evidence["blockers"].append("OTLP capture unit tests failed")
+
     # Live ignored test (app-role DB) when URLs present.
     if os.environ.get("MARKHAND_TEST_DATABASE_URL") and os.environ.get(
         "MARKHAND_TEST_APP_DATABASE_URL"
@@ -638,7 +776,9 @@ def main() -> int:
             "status": "not_run",
             "note": "MARKHAND_TEST_DATABASE_URL / MARKHAND_TEST_APP_DATABASE_URL unset",
         }
-        evidence["blockers"].append("live app-role DB evidence not run (test DB URLs unset)")
+        evidence["blockers"].append(
+            "live app-role DB evidence not run (test DB URLs unset)"
+        )
 
     try:
         status, headers, body = http("GET", f"{base}/metrics")
@@ -648,7 +788,13 @@ def main() -> int:
         has_queue = "markhand_exporter_queue_depth" in text
         forbidden = [
             label
-            for label in ("org_id=", "user_id=", "document_id=", "request_id=", "filename=")
+            for label in (
+                "org_id=",
+                "user_id=",
+                "document_id=",
+                "request_id=",
+                "filename=",
+            )
             if label in text
         ]
         canary_hits = [c for c in CANARIES if c in text]
@@ -657,7 +803,8 @@ def main() -> int:
             "bytes": len(body),
             "hasExporter": has_build,
             "hasExportQueueGauge": has_queue,
-            "hasLatencyOrBuild": "markhand_http_request_duration_seconds" in text or has_build,
+            "hasLatencyOrBuild": "markhand_http_request_duration_seconds" in text
+            or has_build,
             "forbiddenLabels": forbidden,
             "canaryHits": canary_hits,
             "passed": status == 200
@@ -669,11 +816,15 @@ def main() -> int:
         if status != 200:
             evidence["blockers"].append(f"/metrics HTTP {status}")
         if not has_build:
-            evidence["blockers"].append("metrics exporter body missing markhand_metrics_build")
+            evidence["blockers"].append(
+                "metrics exporter body missing markhand_metrics_build"
+            )
         if not has_queue:
             evidence["blockers"].append("metrics missing markhand_exporter_queue_depth")
         if forbidden:
-            evidence["blockers"].append(f"high-cardinality labels in metrics: {forbidden}")
+            evidence["blockers"].append(
+                f"high-cardinality labels in metrics: {forbidden}"
+            )
         if canary_hits:
             evidence["blockers"].append(f"canary leaked into metrics: {canary_hits}")
     except Exception as exc:  # noqa: BLE001 — evidence path
@@ -693,7 +844,9 @@ def main() -> int:
             hits = [c for c in CANARIES if c in text]
             if hits:
                 evidence["blockers"].append(f"canary in {path}")
-                evidence["checks"][path]["canaryHits"] = ["[REDACTED_CANARY]"] * len(hits)
+                evidence["checks"][path]["canaryHits"] = ["[REDACTED_CANARY]"] * len(
+                    hits
+                )
         except Exception as exc:  # noqa: BLE001
             evidence["checks"][path] = {"passed": False, "error": str(exc)}
             evidence["blockers"].append(f"{path} unreachable: {exc}")
@@ -713,12 +866,17 @@ def main() -> int:
                     "HTTP histogram not emitted after health probes (exporter middleware may be missing)"
                 )
         except Exception as exc:  # noqa: BLE001
-            evidence["checks"]["http_histogram_emitted"] = {"passed": False, "error": str(exc)}
+            evidence["checks"]["http_histogram_emitted"] = {
+                "passed": False,
+                "error": str(exc),
+            }
 
     neg = run_negative_proof_fixtures()
     evidence["checks"]["negative_proof_fixtures"] = neg
     if not neg.get("passed"):
-        evidence["blockers"].append("negative proof fixtures did not hard-fail missing proofs")
+        evidence["blockers"].append(
+            "negative proof fixtures did not hard-fail missing proofs"
+        )
 
     if os.environ.get("MARKHAND_O01_ASYNC") != "1":
         evidence["checks"]["async_api_worker_provider_canary"] = {
@@ -737,7 +895,9 @@ def main() -> int:
                 async_check.get("error") or "async API→worker→provider canary failed"
             )
 
-    checks = [c for c in evidence["checks"].values() if isinstance(c, dict) and "passed" in c]
+    checks = [
+        c for c in evidence["checks"].values() if isinstance(c, dict) and "passed" in c
+    ]
     if checks and all(c.get("passed") for c in checks) and not evidence["blockers"]:
         evidence["status"] = "pass"
     elif any(c.get("passed") for c in checks):
@@ -765,7 +925,9 @@ def main() -> int:
     md.append("")
     for b in evidence["blockers"]:
         md.append(f"- BLOCKER: {redact(b)}")
-    (OUT / "o01-telemetry.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    (OUT / "o01-telemetry.md").write_text(
+        "\n".join(md).rstrip() + "\n", encoding="utf-8"
+    )
     print(OUT / "o01-telemetry.json")
     return 0 if evidence["status"] == "pass" else 1
 

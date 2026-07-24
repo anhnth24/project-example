@@ -7,8 +7,14 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT/deploy/scripts/poc-compose.sh"
 poc_compose_init
 
-echo "building API + worker images..."
-"${COMPOSE[@]}" build api worker-convert worker-index worker-embedding
+if [[ "${POC_SKIP_BUILD:-0}" == "1" ]]; then
+  echo "reusing prebuilt API + worker images..."
+else
+  echo "building API + worker images..."
+  # All worker services share MARKHAND_WORKER_IMAGE and the same build definition.
+  # Build it once through worker-convert; `up` reuses that image for index/embedding.
+  "${COMPOSE[@]}" build api worker-convert
+fi
 
 echo "starting POC stack (profiles=${COMPOSE_PROFILES})..."
 "${COMPOSE[@]}" up -d

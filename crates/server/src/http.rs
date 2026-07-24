@@ -112,8 +112,16 @@ impl AppState {
             .unwrap_or_default();
         let trusted_proxies = parse_trusted_proxies_env()?;
         let rate_config = RateLimitConfig::from_env()?;
-        start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
-        start_ask_stream_maintenance(pool.clone());
+        // Both jobs hold one pooled connection for the backup advisory lock and
+        // acquire another for their mutation. The default pool has two slots, so
+        // concurrent startup ticks would otherwise deadlock each other.
+        let maintenance_lock = Arc::new(tokio::sync::Mutex::new(()));
+        start_quota_sweep(
+            pool.clone(),
+            runtime.config().quota_sweep(),
+            Arc::clone(&maintenance_lock),
+        );
+        start_ask_stream_maintenance(pool.clone(), maintenance_lock);
         start_telemetry_observers(pool.clone());
         let startup = StartupState::new();
         startup.mark_completed();
@@ -230,6 +238,12 @@ impl AppState {
         self
     }
 
+    /// Test helper: inject download-capability signing keys into app state.
+    pub fn with_capability_keys(mut self, keys: CapabilityKeys) -> Self {
+        self.capability_keys = Some(keys);
+        self
+    }
+
     pub fn with_trusted_proxies(mut self, proxies: Vec<IpAddr>) -> Self {
         self.trusted_proxies = proxies;
         self
@@ -334,12 +348,17 @@ pub fn parse_trusted_proxies(raw: &str) -> Result<Vec<IpAddr>, String> {
     Ok(out)
 }
 
-fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
+fn start_quota_sweep(
+    pool: Pool,
+    config: QuotaSweepConfig,
+    maintenance_lock: Arc<tokio::sync::Mutex<()>>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            let _maintenance = maintenance_lock.lock().await;
             let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
                 tracing::debug!(target: "quota", "quota sweep skipped: ops fence / backup lock active");
                 continue;
@@ -400,12 +419,13 @@ fn observe_backup_age_from_env() {
     }
 }
 
-fn start_ask_stream_maintenance(pool: Pool) {
+fn start_ask_stream_maintenance(pool: Pool, maintenance_lock: Arc<tokio::sync::Mutex<()>>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            let _maintenance = maintenance_lock.lock().await;
             let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
                 tracing::debug!(
                     target: "ask_stream",
