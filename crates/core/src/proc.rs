@@ -11,18 +11,6 @@ use std::process::Command;
 pub(crate) fn background_command(program: impl AsRef<OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(program);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // The converter itself can run as PID 1 inside the worker's user/PID
-        // namespace. Some outer seccomp profiles reject clone3/posix_spawn
-        // there with EPERM while allowing fork+exec. A no-op pre_exec keeps
-        // child creation on the compatible fork path; the callback performs
-        // no allocation or other non-async-signal-safe work.
-        unsafe {
-            command.pre_exec(|| Ok(()));
-        }
-    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
