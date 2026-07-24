@@ -138,10 +138,15 @@ def build_compare_dataset_from_versions(
     start_a = _parse_timestamp(row_a.get("effectiveFrom"), "effective_from_a")
     end_a = _parse_timestamp(row_a.get("effectiveTo"), "effective_to_a")
     start_b = _parse_timestamp(row_b.get("effectiveFrom"), "effective_from_b")
-    if not start_a < end_a <= start_b:
+    # The publish transaction can create the new immutable row immediately
+    # before it closes the previous row, yielding a millisecond-scale overlap.
+    # Choose probes outside either overlap or gap instead of assuming adjacent
+    # windows have bit-identical boundaries.
+    upper_a = min(end_a, start_b)
+    if not start_a < upper_a:
         raise DatasetError("compare_dataset_effective_window_invalid")
-    as_of_a = start_a + (end_a - start_a) / 2
-    as_of_b = start_b + timedelta(seconds=1)
+    as_of_a = start_a + (upper_a - start_a) / 2
+    as_of_b = max(start_b, end_a) + timedelta(seconds=1)
     return {
         "documentId": document_id,
         "versionA": version_a,

@@ -205,6 +205,40 @@ class CompareDatasetTests(unittest.TestCase):
         self.assertEqual(built["asOfA"], "2026-01-16T12:00:00Z")
         self.assertGreater(built["asOfB"], built["effectiveFromB"])
 
+    def test_build_compare_dataset_avoids_publish_window_overlap(self) -> None:
+        built = dataset.build_compare_dataset_from_versions(
+            document_id="doc-1",
+            version_a="ver-a",
+            version_b="ver-b",
+            query="SOAKCOMPARE15",
+            marker_a="SOAKCOMPARE15A",
+            marker_b="SOAKCOMPARE15B",
+            versions=[
+                {
+                    "id": "ver-b",
+                    "effectiveFrom": "2026-02-01T00:00:00.000000Z",
+                    "effectiveTo": None,
+                    "isCurrent": True,
+                },
+                {
+                    "id": "ver-a",
+                    "effectiveFrom": "2026-01-01T00:00:00Z",
+                    "effectiveTo": "2026-02-01T00:00:00.006000Z",
+                    "isCurrent": False,
+                },
+            ],
+        )
+        self.assertLess(
+            dataset._parse_timestamp(built["asOfA"], "as_of_a"),
+            dataset._parse_timestamp(built["effectiveFromB"], "effective_from_b"),
+        )
+        self.assertGreater(
+            dataset._parse_timestamp(built["asOfB"], "as_of_b"),
+            dataset._parse_timestamp(
+                "2026-02-01T00:00:00.006000Z", "effective_to_a"
+            ),
+        )
+
     def test_create_compare_uses_published_not_upload_draft_version_ids(self) -> None:
         client = mock.Mock()
         client.request.side_effect = [
