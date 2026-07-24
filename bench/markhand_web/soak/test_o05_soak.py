@@ -52,6 +52,14 @@ class RateScheduleTests(unittest.TestCase):
 
 
 class FixturePreflightTests(unittest.TestCase):
+    def test_generated_fixtures_are_byte_deterministic(self) -> None:
+        for fmt in FORMATS:
+            self.assertEqual(
+                fixtures.generate_bytes(fmt),
+                fixtures.generate_bytes(fmt),
+                fmt,
+            )
+
     def test_all_eight_formats_structural_and_converter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

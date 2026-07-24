@@ -14,7 +14,7 @@ import subprocess
 import zlib
 from pathlib import Path
 from typing import Any
-from zipfile import ZIP_STORED, ZipFile
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -72,7 +72,11 @@ def _zip_parts(parts: list[tuple[str, bytes]]) -> bytes:
     buf = io.BytesIO()
     with ZipFile(buf, "w", compression=ZIP_STORED) as zf:
         for name, data in parts:
-            zf.writestr(name, data)
+            info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = ZIP_STORED
+            info.create_system = 3
+            info.external_attr = 0o100644 << 16
+            zf.writestr(info, data)
     return buf.getvalue()
 
 
