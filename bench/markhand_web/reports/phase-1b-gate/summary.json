@@ -1,6 +1,22 @@
 {
   "blockers": [
-    "MARKHAND_SOAK!=1"
+    "smoke_non_qualifying_duration",
+    "prerequisites_incomplete",
+    "metrics_not_measured",
+    "injection_or_recovery_failed",
+    "gate:queryP95:unknown",
+    "gate:queryP99:unknown",
+    "gate:ingestThroughput:unknown",
+    "gate:rssGrowth:unknown",
+    "gate:tempGrowth:unknown",
+    "gate:queueDepth:unknown",
+    "gate:dbConnections:unknown",
+    "gate:unboundedGrowth:unknown",
+    "gate:recovery:unknown",
+    "gate:postRestoreRetrieval:unknown",
+    "gate:requestErrors:unknown",
+    "gate:completeness:unknown",
+    "arch:compare_dataset_unavailable"
   ],
   "canonicalReport": "o05-soak.json",
   "gates": {
@@ -8,17 +24,33 @@
     "recovery": "unknown",
     "unboundedGrowth": "unknown"
   },
-  "generatedAt": "2026-07-24T00:46:36Z",
+  "generatedAt": "2026-07-24T03:16:03Z",
   "issue": "P1B-O05",
-  "live": false,
-  "notes": "Stack not opted in; report records workload intent only",
+  "live": true,
+  "notes": "Smoke/non-qualifying duration; cannot pass official O05.",
   "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
-  "status": "not_run",
+  "status": "incomplete",
   "versions": {
-    "git": "e27b15d",
-    "gitShaFull": "e27b15d2dcc09e34bb7dad074537db154503dc37",
-    "imageIds": {},
-    "indexSignature": null,
-    "migrationManifestSha256": null
+    "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f",
+    "composeVersion": "Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1",
+    "dockerVersion": "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2",
+    "git": "e3350d2",
+    "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
+    "imageIds": {
+      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+      "db-bootstrap": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+      "migrate": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
+      "minio-init": "sha256:c2ad77420d33bb4ad8694457d3edf7188076428582bd24e3dd4d09d6a1d52872",
+      "mock-embedding": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
+      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
+      "qdrant-init": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
+      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+    },
+    "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
   }
 }

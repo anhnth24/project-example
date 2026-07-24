@@ -5,8 +5,90 @@
     "kind": "in_process_workers_against_poc_services"
   },
   "blockers": [
-    "MARKHAND_E2E!=1"
+    "f02_boot_not_passed"
   ],
+  "commands": {
+    "adversarial_upload": [
+      [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "uploads",
+        "--",
+        "--nocapture"
+      ]
+    ],
+    "suspend_membership_delete_deny": [
+      [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "citation_authz_matrix",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_citation_authz_expiry_replay_idor_and_immediate_deny"
+      ]
+    ],
+    "unauthorized_cross_tenant": [
+      [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "api_http_contracts",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_http_unauthenticated_and_cross_tenant_are_consistent"
+      ]
+    ],
+    "vertical_slice_formats": [
+      [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "retrieval_vertical_slice",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_upload_convert_index_citation_vertical_slice"
+      ]
+    ],
+    "worker_kill_replay": [
+      [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "worker",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_convert_worker_cancel_loses_lease_and_kills_sandbox"
+      ],
+      [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "worker",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_convert_worker_fault_injection_rolls_back_and_retries_promotion"
+      ]
+    ]
+  },
   "expectedFormats": [
     "csv",
     "docx",
@@ -18,96 +100,277 @@
     "xlsx"
   ],
   "f02Boot": {
-    "composeProject": null,
-    "imageIds": {},
+    "composeProject": "markhand-poc",
+    "imageIds": {
+      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
+      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
+      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+    },
     "issue": "P1B-F02",
-    "passed": true,
+    "passed": false,
     "path": "/workspace/bench/markhand_web/reports/poc-f02-boot.json",
-    "stamp_utc": "2026-07-21T14:45:00Z"
+    "stamp_utc": "20260724T031535Z"
   },
   "findings": [],
-  "formatsObserved": [],
-  "generatedAt": "2026-07-24T00:21:21Z",
+  "formatsObserved": [
+    "csv",
+    "docx",
+    "html",
+    "pdf",
+    "png",
+    "pptx",
+    "txt",
+    "xlsx"
+  ],
+  "generatedAt": "2026-07-24T03:15:46Z",
   "issue": "P1B-O04",
-  "markhandE2e": false,
-  "notes": "Harness complete; live release suite not opted in. Set MARKHAND_E2E=1 with POC PG/MinIO/Qdrant + built fileconv + F02 poc-f02-boot.json passed=true (with composeProject/imageIds), then re-run. Suites are in-process workers against service endpoints \u2014 not Compose API HTTP.",
+  "markhandE2e": true,
+  "notes": "Live run did not meet O04 pass gates; see blockers. Architecture remains in-process workers against service endpoints.",
   "provenance": {
     "composeProject": "markhand-poc",
-    "composeVersion": null,
-    "dockerVersion": null,
-    "gitSha": "57a31ea",
-    "gitShaFull": "57a31ea0709690467478ea655be518aee42cbe03",
-    "imageDigests": {},
-    "imageIds": {},
-    "indexSignature": null,
-    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
+    "composeVersion": "Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1",
+    "dockerVersion": "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2",
+    "gitSha": "e3350d2",
+    "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
+    "imageDigests": {
+      "db-bootstrap": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "minio": "pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "minio-init": "minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+      "mock-embedding": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "postgres": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "qdrant-init": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0"
+    },
+    "imageIds": {
+      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+      "db-bootstrap": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+      "migrate": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
+      "minio-init": "sha256:c2ad77420d33bb4ad8694457d3edf7188076428582bd24e3dd4d09d6a1d52872",
+      "mock-embedding": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
+      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
+      "qdrant-init": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
+      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+    },
+    "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
+    "missingPocServices": []
   },
-  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o04-57a31ea",
+  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o04-e3350d2",
   "redactionScan": {
     "findings": [],
     "passed": true
   },
-  "status": "not_run",
+  "status": "fail",
   "suites": {
     "adversarial_upload": {
-      "command": [],
-      "commands": [],
-      "exitCode": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "uploads",
+        "--",
+        "--nocapture"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "-p",
+          "fileconv-server",
+          "--test",
+          "uploads",
+          "--",
+          "--nocapture"
+        ]
+      ],
+      "exitCode": 0,
+      "formatsObserved": [],
       "ignored": false,
-      "passed": false,
-      "rawLog": null,
+      "passed": true,
+      "rawLog": "adversarial_upload.*.txt",
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 0,
-      "testsRun": 0
+      "testsPassed": 19,
+      "testsRun": 19
     },
     "suspend_membership_delete_deny": {
-      "command": [],
-      "commands": [],
-      "exitCode": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "citation_authz_matrix",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_citation_authz_expiry_replay_idor_and_immediate_deny"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "-p",
+          "fileconv-server",
+          "--test",
+          "citation_authz_matrix",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "live_citation_authz_expiry_replay_idor_and_immediate_deny"
+        ]
+      ],
+      "exitCode": 0,
+      "formatsObserved": [],
       "ignored": false,
-      "passed": false,
-      "rawLog": null,
+      "passed": true,
+      "rawLog": "suspend_membership_delete_deny.*.txt",
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 0,
-      "testsRun": 0
+      "testsPassed": 1,
+      "testsRun": 1
     },
     "unauthorized_cross_tenant": {
-      "command": [],
-      "commands": [],
-      "exitCode": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "api_http_contracts",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_http_unauthenticated_and_cross_tenant_are_consistent"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "-p",
+          "fileconv-server",
+          "--test",
+          "api_http_contracts",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "live_http_unauthenticated_and_cross_tenant_are_consistent"
+        ]
+      ],
+      "exitCode": 0,
+      "formatsObserved": [],
       "ignored": false,
-      "passed": false,
-      "rawLog": null,
+      "passed": true,
+      "rawLog": "unauthorized_cross_tenant.*.txt",
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 0,
-      "testsRun": 0
+      "testsPassed": 1,
+      "testsRun": 1
     },
     "vertical_slice_formats": {
-      "command": [],
-      "commands": [],
-      "exitCode": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "retrieval_vertical_slice",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_upload_convert_index_citation_vertical_slice"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "-p",
+          "fileconv-server",
+          "--test",
+          "retrieval_vertical_slice",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "live_upload_convert_index_citation_vertical_slice"
+        ]
+      ],
+      "exitCode": 0,
+      "formatsObserved": [
+        "csv",
+        "docx",
+        "html",
+        "pdf",
+        "png",
+        "pptx",
+        "txt",
+        "xlsx"
+      ],
       "ignored": false,
-      "passed": false,
-      "rawLog": null,
+      "passed": true,
+      "rawLog": "vertical_slice_formats.*.txt",
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 0,
-      "testsRun": 0
+      "testsPassed": 1,
+      "testsRun": 1
     },
     "worker_kill_replay": {
-      "command": [],
-      "commands": [],
-      "exitCode": null,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        "worker",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "live_convert_worker_cancel_loses_lease_and_kills_sandbox"
+      ],
+      "commands": [
+        [
+          "cargo",
+          "test",
+          "-p",
+          "fileconv-server",
+          "--test",
+          "worker",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "live_convert_worker_cancel_loses_lease_and_kills_sandbox"
+        ],
+        [
+          "cargo",
+          "test",
+          "-p",
+          "fileconv-server",
+          "--test",
+          "worker",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "live_convert_worker_fault_injection_rolls_back_and_retries_promotion"
+        ]
+      ],
+      "exitCode": 0,
+      "formatsObserved": [],
       "ignored": false,
-      "passed": false,
-      "rawLog": null,
+      "passed": true,
+      "rawLog": "worker_kill_replay.*.txt",
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 0,
-      "testsRun": 0
+      "testsPassed": 2,
+      "testsRun": 2
     }
   },
   "workload": "bench/markhand_web/workloads/phase1b-mixed.yaml"

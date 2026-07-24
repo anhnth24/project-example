@@ -1,0 +1,8 @@
+service=api
+user=10001:10001
+readonly=true
+security_opt=["no-new-privileges:true"]
+cap_drop=["ALL"]
+memory=0
+nano_cpus=0
+pids_limit=<nil>

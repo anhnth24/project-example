@@ -1,0 +1,88 @@
+{
+  "storageDriver": "vfs",
+  "composeProject": "markhand-poc",
+  "nolimitComposeUsed": true,
+  "containerIds": {
+    "api": "96b7b3ac57a3c993887450717f60dcc7a8661eefe20fa950e2b3851cb9ed320d",
+    "minio": "967ae4dee0020e9e75bf08b7059cf609362fbc51551abcd1e3020848c7cd972f",
+    "postgres": "1fa173a5fe458f136d4fe401df9801b926f6afc2aa15807a80d245497571c2cf",
+    "qdrant": "54cb3ae0c7cecf6970f65f4f1c48ed2260d06f7ad6bc7a70325618412d1ca46d",
+    "worker-convert": "00e813ecb25b60fa90b312346ff11080e3d5499afba4e6e4c0585126aa0768eb",
+    "worker-index": "19cf27b771be337cff27ec4afbeddfb44f1f7ac3f6774230f9012fa1da41bb68",
+    "worker-embedding": "f76f0aa89912486f136a5d05179cdf1debe19476270617175ecb621124a241c5"
+  },
+  "imageIds": {
+    "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
+    "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
+    "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+    "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
+    "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+    "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
+    "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+  },
+  "imageDigests": {
+    "minio": "pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "postgres": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "qdrant": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c"
+  },
+  "resourceLimits": {
+    "api": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "minio": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "postgres": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "qdrant": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "worker-convert": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "worker-index": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    },
+    "worker-embedding": {
+      "memory": 0,
+      "nanoCpus": 0,
+      "pidsLimit": 0,
+      "cpuQuota": 0,
+      "cpuPeriod": 0
+    }
+  },
+  "egressProbe": {
+    "executed": true,
+    "blocked": true,
+    "toolMissing": false,
+    "exitCode": 1,
+    "network": "markhand-poc_convert",
+    "probeImage": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "raw": "exit=1\nwget: can't connect to remote host (1.1.1.1): Network unreachable\n"
+  }
+}

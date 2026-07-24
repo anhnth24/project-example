@@ -1,0 +1,9 @@
+
+running 1 test
+test live_citation_authz_expiry_replay_idor_and_immediate_deny ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 2.43s
+
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.28s
+     Running tests/citation_authz_matrix.rs (target/debug/deps/citation_authz_matrix-68f9df2429440a4a)

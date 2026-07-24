@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "paths": {
+    "pdf": "/workspace/bench/markhand_web/soak/fixtures/soak-pdf.pdf",
+    "docx": "/workspace/bench/markhand_web/soak/fixtures/soak-docx.docx",
+    "pptx": "/workspace/bench/markhand_web/soak/fixtures/soak-pptx.pptx",
+    "xlsx": "/workspace/bench/markhand_web/soak/fixtures/soak-xlsx.xlsx",
+    "csv": "/workspace/bench/markhand_web/soak/fixtures/soak-csv.csv",
+    "html": "/workspace/bench/markhand_web/soak/fixtures/soak-html.html",
+    "txt": "/workspace/bench/markhand_web/soak/fixtures/soak-txt.txt",
+    "png": "/workspace/bench/markhand_web/soak/fixtures/soak-png.png"
+  },
+  "formats": [
+    "csv",
+    "docx",
+    "html",
+    "pdf",
+    "png",
+    "pptx",
+    "txt",
+    "xlsx"
+  ],
+  "fileconv": "/workspace/target/debug/fileconv",
+  "converterChecked": true,
+  "convertResults": {
+    "pdf": {
+      "ok": true,
+      "marker": "SOAKPDF15",
+      "outputChars": 10
+    },
+    "docx": {
+      "ok": true,
+      "marker": "SOAKDOCX15",
+      "outputChars": 13
+    },
+    "pptx": {
+      "ok": true,
+      "marker": "SOAKPPTX15",
+      "outputChars": 25
+    },
+    "xlsx": {
+      "ok": true,
+      "marker": "SOAKXLSX15",
+      "outputChars": 36
+    },
+    "csv": {
+      "ok": true,
+      "marker": "SOAKCSV15",
+      "outputChars": 48
+    },
+    "html": {
+      "ok": true,
+      "marker": "SOAKHTML15",
+      "outputChars": 11
+    },
+    "txt": {
+      "ok": true,
+      "marker": "SOAKTXT15",
+      "outputChars": 11
+    },
+    "png": {
+      "ok": true,
+      "marker": "SOAK15",
+      "outputChars": 8
+    }
+  },
+  "markers": {
+    "pdf": "SOAKPDF15",
+    "docx": "SOAKDOCX15",
+    "pptx": "SOAKPPTX15",
+    "xlsx": "SOAKXLSX15",
+    "csv": "SOAKCSV15",
+    "html": "SOAKHTML15",
+    "txt": "SOAKTXT15",
+    "png": "SOAK15"
+  }
+}

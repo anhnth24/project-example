@@ -1,0 +1,46 @@
+[
+  {
+    "Id": "54cb3ae0c7cecf6970f65f4f1c48ed2260d06f7ad6bc7a70325618412d1ca46d",
+    "Name": "/markhand-poc-qdrant-1",
+    "Created": "2026-07-24T00:46:53.792397093Z",
+    "Image": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
+    "Config": {
+      "User": "0:0",
+      "Image": "qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": null,
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": null
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc_private": {
+          "IPAddress": "172.20.0.2",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "5d7d332cc9a903f46af95df40875a6fb99333f46d1f6c06c26c77b62b66946f9",
+          "EndpointID": "d815b8b3a7c3eff658e878ff34b290f8ace5ddc405c9ddc9af86b448473d7728",
+          "MacAddress": "ca:34:25:c5:fb:df",
+          "Aliases": [
+            "markhand-poc-qdrant-1",
+            "qdrant"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 139306
+    }
+  }
+]

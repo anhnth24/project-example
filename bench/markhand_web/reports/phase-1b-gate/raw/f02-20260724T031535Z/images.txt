@@ -1,0 +1,2 @@
+api_image=markhand-api:poc
+worker_image=markhand-worker:poc

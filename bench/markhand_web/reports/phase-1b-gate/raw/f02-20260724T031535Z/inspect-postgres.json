@@ -1,0 +1,61 @@
+[
+  {
+    "Id": "1fa173a5fe458f136d4fe401df9801b926f6afc2aa15807a80d245497571c2cf",
+    "Name": "/markhand-poc-postgres-1",
+    "Created": "2026-07-24T00:46:53.792807811Z",
+    "Image": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
+    "Config": {
+      "User": "",
+      "Image": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": null,
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": null
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc_convert": {
+          "IPAddress": "172.18.0.2",
+          "Gateway": "",
+          "NetworkID": "ac13f780d822285cf29e6e1d58e75472842acebb16e95257eda94db087beb0e0",
+          "EndpointID": "6e7e0bca45b525f620b05ce5fe2cdcc27aea0295a0c46e8a16275d3d14aa22b5",
+          "MacAddress": "e2:2b:b4:6b:4b:ca",
+          "Aliases": [
+            "markhand-poc-postgres-1",
+            "postgres"
+          ]
+        },
+        "markhand-poc_private": {
+          "IPAddress": "172.20.0.5",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "5d7d332cc9a903f46af95df40875a6fb99333f46d1f6c06c26c77b62b66946f9",
+          "EndpointID": "3bb92a3b6ee3b09700624d81575568e0a80153ed31f323d822222d564b35415d",
+          "MacAddress": "f6:0b:56:93:26:3a",
+          "Aliases": [
+            "markhand-poc-postgres-1",
+            "postgres"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0
+      },
+      "OOMKilled": false,
+      "Pid": 139375
+    }
+  }
+]

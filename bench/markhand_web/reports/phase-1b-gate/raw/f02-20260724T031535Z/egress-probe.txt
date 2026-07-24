@@ -1,0 +1,2 @@
+exit=1
+wget: can't connect to remote host (1.1.1.1): Network unreachable

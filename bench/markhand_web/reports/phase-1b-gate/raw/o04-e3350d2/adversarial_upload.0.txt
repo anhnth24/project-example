@@ -1,0 +1,36 @@
+
+running 28 tests
+test cancelled_http_upload_settles_quota_consistently ... ignored, requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*
+test cancelled_stream_upload_finishes_verify_or_cleanup ... ignored, requires MARKHAND_TEST_MINIO_*
+test envelope_binds_collection_and_stable_replay_deep_equality ... ignored, requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*
+test happy_path_persists_to_quarantine_with_metadata ... ignored, requires MARKHAND_TEST_MINIO_*
+test http_upload_happy_and_spoof ... ignored, requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*
+test declared_entry_count_rejects_before_name_allocation ... ok
+test formula_csv_and_prompt_html_quarantine ... ok
+test malicious_filename_never_enters_object_key ... ok
+test corrupt_and_page_bomb_pdf_reject ... ok
+test forged_central_directory_size_rejects_during_inflation ... ok
+test mime_mismatch_and_malformed_audio_reject ... ok
+test quarantined_review_requires_approval_for_single_job ... ignored, requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_* + test-hooks
+test quota_hook_is_callable ... ignored, requires MARKHAND_TEST_DATABASE_URL
+test rejected_upload_is_not_stored ... ignored, requires MARKHAND_TEST_MINIO_*
+test malformed_and_traversal_docx_reject ... ok
+test oversize_stream_rejects_early ... ok
+test truncated_stream_is_not_accepted ... ok
+test upload_error_redacts_and_maps_status ... ok
+test hidden_nested_polyglot_duplicate_and_symlink_reject ... ok
+test spoof_pdf_and_html_pdf_reject ... ok
+test verification_failed_upload_is_cleaned_by_generated_key ... ignored, requires MARKHAND_TEST_MINIO_*
+test unparseable_compressed_span_rejects_closed ... ok
+test valid_zip_based_xlsb_is_accepted ... ok
+test zip_bomb_rejects_without_unbounded_decompress ... ok
+test happy_path_small_fixtures_accepted ... ok
+test property_filename_and_magic_never_panic ... ok
+test entry_count_bomb_rejects ... ok
+test large_lazy_stream_keeps_memory_bounded ... ok
+
+test result: ok. 19 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.24s
+     Running tests/uploads.rs (target/debug/deps/uploads-376d3b0fac8cd2c7)

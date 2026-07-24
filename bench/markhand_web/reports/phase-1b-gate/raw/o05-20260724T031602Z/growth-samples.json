@@ -1,0 +1,24 @@
+{
+  "samples": [],
+  "summary": {
+    "rssMb": {
+      "start": null,
+      "peak": null,
+      "end": null,
+      "growth": null
+    },
+    "tempBytes": {
+      "start": null,
+      "peak": null,
+      "end": null,
+      "growth": null
+    },
+    "queueDepthMax": null,
+    "queueAgeMaxSeconds": null,
+    "dbConnectionsMax": null,
+    "queueObservations": 0,
+    "dbObservations": 0,
+    "tempObservations": 0,
+    "sampleCount": 0
+  }
+}

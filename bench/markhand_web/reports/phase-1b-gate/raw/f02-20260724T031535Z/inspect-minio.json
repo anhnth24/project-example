@@ -1,0 +1,57 @@
+[
+  {
+    "Id": "967ae4dee0020e9e75bf08b7059cf609362fbc51551abcd1e3020848c7cd972f",
+    "Name": "/markhand-poc-minio-1",
+    "Created": "2026-07-24T00:46:53.792140624Z",
+    "Image": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
+    "Config": {
+      "User": "",
+      "Image": "pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": null,
+      "Memory": 0,
+      "NanoCpus": 0,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": null
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc_convert": {
+          "IPAddress": "172.18.0.3",
+          "Gateway": "",
+          "NetworkID": "ac13f780d822285cf29e6e1d58e75472842acebb16e95257eda94db087beb0e0",
+          "EndpointID": "7cb2cd25b17af16a90e1817ee5b1c446813e4c1a78433422f133b64c1c725915",
+          "MacAddress": "de:5d:f9:ea:58:b5",
+          "Aliases": [
+            "markhand-poc-minio-1",
+            "minio"
+          ]
+        },
+        "markhand-poc_private": {
+          "IPAddress": "172.20.0.3",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "5d7d332cc9a903f46af95df40875a6fb99333f46d1f6c06c26c77b62b66946f9",
+          "EndpointID": "f519c3178e158688ab80b64fe1c5736d9d57ca3f64a5a67de8bda92517b58a16",
+          "MacAddress": "62:35:37:0e:15:3c",
+          "Aliases": [
+            "markhand-poc-minio-1",
+            "minio"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 139333
+    }
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "available": false,
+  "blocker": "restored_api_base_missing",
+  "notes": "O03 restores an isolated green stack with promote/cutover disabled; the blue MARKHAND_SOAK_API_BASE is not post-restore proof. Set MARKHAND_SOAK_RESTORED_API_BASE or have O03 evidence expose restoredApiBase for a reachable green endpoint.",
+  "restoredApiBase": null,
+  "blueApiBase": "http://127.0.0.1:8788"
+}
