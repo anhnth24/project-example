@@ -226,6 +226,9 @@ mod imp {
             .env_clear()
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("LC_ALL", "C")
+            // Landlock grants writes only inside this per-job workspace. Keep
+            // converter/OCR temporary files there instead of denied host /tmp.
+            .env("TMPDIR", workspace.path())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
