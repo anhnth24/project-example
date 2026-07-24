@@ -553,6 +553,13 @@ mod imp {
                 (cstring_path("/usr/lib")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
+                // std::process::Command::output() opens /dev/null for child
+                // stdin. Without this exact device rule nested OCR spawn gets
+                // EACCES before exec, even though tesseract itself is allowed.
+                (
+                    cstring_path("/dev/null")?,
+                    ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE,
+                ),
                 // Pinned PDFium + Debian Tesseract tessdata locations.
                 (
                     cstring_path("/opt/pdfium")?,
