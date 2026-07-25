@@ -3176,6 +3176,19 @@ def run_live(raw_dir: Path) -> dict[str, Any]:
     return report
 
 
+def validation_output_dir(report_path: Path) -> Path:
+    """Evidence root a report must be validated against.
+
+    `--release-gate` generates evidence outside the source tree, so validation
+    binds to that run's own output directory instead of the in-tree default.
+    The raw directory still has to resolve inside this root.
+    """
+    env_dir = os.environ.get("O04_OUTPUT_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir)
+    return report_path.parent
+
+
 def validate_report_cli(path: Path) -> int:
     report = json.loads(path.read_text(encoding="utf-8"))
     status, blockers = evaluate_report(
@@ -3213,7 +3226,10 @@ def main() -> int:
         self_test()
         return 0
     if args.validate_report is not None:
-        return validate_report_cli(args.validate_report.resolve())
+        report_path = args.validate_report.resolve()
+        if args.output_dir is None:
+            configure_output_dir(validation_output_dir(report_path))
+        return validate_report_cli(report_path)
 
     git_short, git_full, _git_dirty = current_git_state()
     raw_dir = (args.raw_dir or (RAW_ROOT / f"o04-{git_full}")).resolve()

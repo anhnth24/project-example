@@ -283,6 +283,31 @@ class O04ReleaseSuiteHardeningTest(unittest.TestCase):
             self.assertIn("api_http_not_exercised", blockers)
             self.assertIn("api_probe_failed:vertical_ask", blockers)
 
+    def test_release_gate_validates_evidence_generated_outside_source_tree(self):
+        with tempfile.TemporaryDirectory(prefix="o04-out-") as out:
+            out_dir = Path(out)
+            raw = out_dir / "raw" / "o04-abc"
+            raw.mkdir(parents=True)
+            previous_out = o04.OUT
+            o04.configure_output_dir(out_dir)
+            try:
+                report = self.make_report(raw)
+                # A separate validation process only receives the report path.
+                o04.configure_output_dir(
+                    o04.validation_output_dir(out_dir / "o04-release.json")
+                )
+                status, blockers = o04.evaluate_report(report)
+
+                escaped = dict(report, rawDir="../escape")
+                escaped_status, escaped_blockers = o04.evaluate_report(escaped)
+            finally:
+                o04.configure_output_dir(previous_out)
+
+            self.assertNotIn("raw_dir_outside_evidence_root", blockers)
+            self.assertNotIn("raw_dir_missing", blockers)
+            self.assertNotEqual(escaped_status, "pass")
+            self.assertIn("raw_dir_not_repo_relative", escaped_blockers)
+
     def test_expanded_redaction_blocks_cookie_basic_and_cloud_keys(self):
         with tempfile.TemporaryDirectory(prefix="o04-test-", dir=o04.RAW_ROOT) as tmp:
             raw = Path(tmp)
