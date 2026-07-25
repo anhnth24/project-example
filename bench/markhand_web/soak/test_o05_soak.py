@@ -1403,7 +1403,9 @@ class ThresholdBoundaryTests(unittest.TestCase):
         thr = gates_eval.load_thresholds(loaded, GATES)
         self.assertEqual(thr["queryP95Ms"], 500)
         self.assertEqual(thr["queryP99Ms"], 1000)
-        self.assertEqual(thr["ingestDocsPerHour"], 1200)
+        # POC qualification binds the SLA normal tier; the 1200/hour peak tier
+        # belongs to G0-CAP-INGEST-THROUGHPUT on on-prem-reference.
+        self.assertEqual(thr["ingestDocsPerHour"], 300)
         self.assertEqual(thr["allowedErrorsOutsideInjection"], 0)
         self.assertTrue(thr["canonicalBindingPass"])
 
@@ -1424,7 +1426,7 @@ class ThresholdBoundaryTests(unittest.TestCase):
             "queryP50Ms": 100.0,
             "queryP95Ms": 500.0,
             "queryP99Ms": 1000.0,
-            "ingestDocsPerHour": 1200.0,
+            "ingestDocsPerHour": 300.0,
             "ingestOk": 100,
             "rssGrowthMb": 256.0,
             "tempGrowthMb": 512.0,

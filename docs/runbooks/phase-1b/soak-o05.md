@@ -94,11 +94,19 @@ format’s marker in non-empty Markdown. Magic-only stubs fail closed.
 |---|---:|---|
 | Query p95 | ≤ 500 ms | `G0-SLO-QUERY-P95` |
 | Query p99 | ≤ 1000 ms | `G0-SLO-QUERY-P99` |
-| Ingest | ≥ 1200 docs/hour | `G0-CAP-INGEST-THROUGHPUT` (binding) |
+| Ingest | ≥ 300 docs/hour | `G0-CAP-INGEST-THROUGHPUT-POC` (binding) |
 | RSS growth | ≤ 256 MB | profile `bounds` |
 | Temp growth | ≤ 512 MB | profile `bounds` |
 | Queue depth | ≤ 100 | profile `bounds` |
 | DB connections | ≤ 40 | profile `bounds` |
+
+The ingest gate deliberately binds the SLA **normal** tier on the `poc-compose`
+environment, and the profile applies 0.1 ingest/second (360 docs/hour) so a pass
+demonstrates the target with headroom. The **peak** tier of 1200 docs/hour lives
+in `G0-CAP-INGEST-THROUGHPUT` against `on-prem-reference` (32 cores, 256 GB,
+NVMe, accelerator) and is not measurable here: `compose.poc.yml` caps every
+worker at 1 CPU and embeddings come from the mock service. Passing O05 qualifies
+the single-org POC; it makes no Profile B capacity claim.
 
 ## Preflight seed (before timed schedule)
 

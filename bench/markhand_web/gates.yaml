@@ -267,6 +267,32 @@
       "notes": "P0-08 interim harness/report is local-cpu smoke evidence with targetMatch=false and productionCapacityBlocked=true. Profile B on-prem-reference measurement is still required for a real G0-CAP pass."
     },
     {
+      "id": "G0-CAP-INGEST-THROUGHPUT-POC",
+      "externalGate": "G0-CAP",
+      "metric": {
+        "name": "ingest_documents_per_hour",
+        "unit": "count_per_hour",
+        "statistic": "min"
+      },
+      "workload": "loads.normal",
+      "corpus": "soak/fixtures",
+      "threshold": {
+        "operator": ">=",
+        "value": 300
+      },
+      "command": "bash deploy/scripts/o05-soak.sh --enable-failure-injection --invoke-o03-restore",
+      "environmentId": "poc-compose",
+      "owner": "worker-owner",
+      "approver": "project-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1b",
+      "evidence": "bench/markhand_web/reports/phase-1b-gate/o05-soak.json",
+      "blocksIssues": [
+        "P1B-O05"
+      ],
+      "notes": "Single-org POC qualification target, bound to the SLA normal load tier on the poc-compose environment. The peak tier (G0-CAP-INGEST-THROUGHPUT, 1200/hour on on-prem-reference) is deliberately not applied here: the POC stack caps each worker at 1 CPU and serves embeddings from a mock, so it cannot represent Profile B capacity. Passing this gate does not claim the production peak target."
+    },
+    {
       "id": "G0-SLO-QUERY-P95",
       "externalGate": "G0-SLO",
       "metric": {

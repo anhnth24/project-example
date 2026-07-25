@@ -37,13 +37,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** In progress — boot-evidence **harness hardened**
-  (`deploy/scripts/poc-boot-evidence.sh` + `poc_f02_boot_evidence.py --self-test`):
-  O04-consumable JSON (`composeProject` / `containerIds` / `imageIds` / digests),
-  allowlisted inspect (no `Config.Env`), fail-closed secret scan, executable convert
-  egress probe (tool-missing ≠ pass), nonzero mem/cpu/pids required (nested nolimit/vfs
-  cannot Done). Committed `poc-f02-boot.*` still awaiting **live** regeneration on a
-  standard Docker host after `poc-up.sh`; do not mark Done until that evidence passes.
+- **Status:** Done — live boot evidence regenerated 2026-07-25 on a standard
+  overlayfs Docker host (WSL2) from a clean tree at `302b6e4`:
+  `poc-f02-boot.json` `passed=true`, 67 checks / 0 fails, project
+  `markhand-poc-f02-20260725t053206z-39674-24731`, clean project boot measured,
+  nonzero mem/cpu/pids on every service, convert network `Internal=true` with an
+  executable egress probe, narrow MinIO credential positive/negative probes, and
+  the full native format smoke matrix. Report sha256 prefix `0064435387c8fef1`;
+  the release-gate artifacts live outside the source tree under
+  `.artifacts/markhand_web/reports/`.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
@@ -342,14 +344,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
-- **Status:** In progress — Sol R3 final fixes (no commit/push; no more reviewer):
-  privileged idempotent POC `db-bootstrap` before migrate; `0028` owns audit_log +
-  both trigger fns + exact SELECT/INSERT grants; Compose pre-O01 volume upgrade;
-  OTLP kinds INTERNAL=1…CONSUMER=5; real span lifecycle (worker emit in scope);
-  bounded shutdown (stop claim → await run_once grace → flush per remaining
-  deadline); central typed route audit matrix + same-txn enqueue/audit; evidence
-  deny-by-request + named spans/parent graph + negative fixtures. Keep
-  `in_progress` until rebuilt POC full async evidence passes.
+- **Status:** Done — live evidence 2026-07-25 at `302b6e4`: `o01-telemetry.json`
+  `status=pass` with 0 blockers. The async API→worker→provider canary closed all
+  16 proofs (job terminal + payload `request_id`, DB audit row per request,
+  exact deny audit, same-trace ingest and ask exports with the required
+  `api.request`/`worker.convert`/`worker.index`/`worker.embed`/`retrieval`/
+  `provider.chat` spans, unique span ids, canonical OTLP kinds, valid parent
+  graph, grounded ask, clean metrics with no canary or high-cardinality label).
+  Cargo telemetry suite, OTLP capture unit tests, live app-role audit test and
+  the negative proof fixtures all passed. Report sha256 prefix
+  `0a9becb0af977e12`.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`,
@@ -361,12 +365,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
-- **Status:** In progress — Sol R3: JSON fallback redaction (malformed/truncated/
-  prefixed/multi-record), PG restore arm-before-stop + failpoint harness,
-  reconcile oneshot requires document UUID before DB + scoped claim, exact
-  `worker-reconcile-oneshot` compose evidence (or honest deployment gap). Catalog
-  stays In progress while O01 is not Done and full backup/restore remains O03.
-  Evidence: `bench/markhand_web/reports/phase-1b-gate/o02-alerts.*`.
+- **Status:** Done — live tabletop 2026-07-25 at `302b6e4`: `o02-alerts.json`
+  `status=pass`, 31 passes / 0 fails, no blockers. Real fault executed against
+  the POC stack: `MarkhandDependencyDown` fired at 150s while Postgres was
+  stopped and went absent 24s after restore, both snapshots taken from the live
+  Prometheus `/api/v1/alerts` (no synthetic promtool mirror). Also covered:
+  promtool rule + unit tests, dashboard/datasource parameterization, runbook
+  DCRV, PG restore arm-before-stop failpoint matrix, live reconcile worker
+  dry-run→repair→idempotent plus the `worker-reconcile-oneshot` compose job, and
+  a clean provenance + broad secret scan. Report sha256 prefix
+  `737c30f5dab4bbef`.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
 - **Files / scope:** `deploy/observability/**`, `docs/runbooks/phase-1b/**`,
@@ -383,8 +391,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
-- **Status:** In progress — Sol round-3 merge-safety retained. **Write-gate
-  architecture (Sol R2):** central `middleware/write_gate.rs` /
+- **Status:** Done — live blue/green drill 2026-07-25 at `302b6e4`:
+  `o03-restore.json` `status=pass`, 35 checks / 0 fails. Measured attested
+  consistency RPO 26s (≤ 900s), query-ready RTO 34s (≤ 3600s) and full-vector
+  RTO 34s (≤ 14400s); the restored green API answered a grounded query from the
+  restored stores while blue stayed fenced, promote/cutover stayed disabled
+  (exit 3), the encrypted destination policy was exercised, and cleanup was
+  verified before the report. Report sha256 prefix `b92ecd8c5fd4b6ec`.
+  Promote itself remains out of scope until the API consumes durable routing
+  plus an independent reconcile target-state attestation.
+  **Previous write-gate context (retained):** central `middleware/write_gate.rs` /
   `mutation_write_gate` on all `/api/v1/*` except health/metrics/OpenAPI;
   shared advisory lock `7303003` held through entire `next.run` (ask/stream
   session init covered; lock released after `Response` is built, not for the
@@ -396,13 +412,7 @@ ghi trong issue đã `Done`.
   `live_central_write_gate_matrix_refuses_business_side_effects` (incl.
   ask/stream no session init) and
   `live_write_gate_advisory_lock_concurrency_contract` (shared blocks exclusive;
-  exclusive fail-closed; no pool leak). Evidence: hermetic + live tests; raw
-  `o03-restore.*` stamp still pre-dates full drill re-run. **Exact gaps:**
-  (1) promote/cutover disabled until API consumes durable routing + independent
-  reconcile target-state attestation; (2) encrypted backup destination not
-  exercised (POC `explicit_poc_tmp_only` policy). `consistencyRpoPass` /
-  `queryReadyRtoPass` remain null. Re-run `o03-bluegreen-restore-drill.sh` on
-  Docker host to refresh raw passes.
+  exclusive fail-closed; no pool leak).
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, `deploy/scripts/o03-bluegreen-restore-drill.sh`,
@@ -416,17 +426,17 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
-- **Status:** In progress — harness complete (`run_o04_release_suite.py` is
-  evaluate source of truth; Rust `e2e_release_suite` calls
-  `--validate-report`). Default evidence honest `not_run` in
-  `o04-release.json` (never O05 `summary.json`). Suites are **in-process**
-  workers against PG/MinIO/Qdrant endpoints — not Compose API HTTP.
-  Live `pass` still blocked. Exact blockers: (1) `MARKHAND_E2E!=1` / no POC
-  Compose project containers in this environment; (2) F02
-  `poc-f02-boot.json` must be live-regenerated `passed=true` **with** matching
-  `composeProject` + `imageIds` (harness emits those fields; committed JSON is
-  still pre-harness); (3) `MARKHAND_INDEX_SIGNATURE` 64-hex; (4) full workload
-  format matrix including PNG OCR (`phase1b-mixed.yaml`).
+- **Status:** Done — live release gate 2026-07-25 at `302b6e4`:
+  `o04-release.json` `status=pass` with no blockers, validated through
+  `MARKHAND_RELEASE_GATE=1 cargo test -p fileconv-server --test e2e_release_suite`
+  (3/3). Full workload format matrix observed (csv, docx, html, pdf, png OCR,
+  pptx, txt, xlsx), black-box HTTP probes against the deployed Compose API,
+  unauthorized/cross-tenant denial against real foreign-org resources,
+  suspend/membership/delete deny, adversarial upload reject/contain, and
+  structured external worker kill → lease expiry → reclaim → replay → DB
+  verification. Provenance binds the F02 project, container ids and image ids.
+  Report sha256 prefix `f4cdb03a185c9da8`; evidence generated outside the source
+  tree under `.artifacts/markhand_web/o04-release/`.
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `bench/markhand_web/scripts/run_o04_release_suite.py`,
@@ -443,18 +453,44 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
-- **Status:** In progress — measured harness Sol vòng-2 hardened (converter-accepted
-  fixtures + fileconv preflight, async injection executor with expected==observed,
-  seed/wait before timed load, green `restoredApiBase` post-restore with retained/
-  deleted/authz checks). Default/`MARKHAND_SOAK=1` alone → `not_run`/`incomplete`;
-  smoke ≠ pass. **Done only after official live 1800s run passes.**
-  Qualification not claimed.
-- **Architectural blockers (honest non-pass until real APIs exist):**
-  (1) `compare_dataset_unavailable` — each upload creates a new documentId; no
-  public API to append versionB; require verified `MARKHAND_SOAK_COMPARE_DATASET`.
-  (2) `restored_api_base_missing` / `restored_api_same_as_blue` — O03 green restore
-  has promote/cutover disabled; blue API is not post-restore proof; need distinct
-  `restoredApiBase` / `MARKHAND_SOAK_RESTORED_API_BASE`.
+- **Status:** In progress — the official live run executed end to end on
+  2026-07-25 at `302b6e4` (prerequisites F02/O02/O03/O04 all validated against
+  the same Compose project, `canonicalBinding=pass`, duration exactly 1800s),
+  but `o05-soak.json` is `status=fail`: the qualification host could not carry
+  the canonical load. Qualification is **not** claimed.
+  Report sha256 prefix `22753d3bc410eed9`.
+- **Measured 1800s run (host: WSL2 Docker, 8 vCPU / 10 GB):**
+  - Passing gates: `recovery` (2 worker kills + 1 dependency blip, every event
+    recovered, expected==observed), `rssGrowth` 37.4 MB (≤ 256), `tempGrowth`
+    0.02 MB (≤ 512), `queueDepth` 0 (≤ 100), `dbConnections` 16 (≤ 40),
+    `unboundedGrowth`, `canonicalBinding`.
+  - Failing gates: `ingestThroughput` 168 docs/h (84 of 900 uploads reached
+    terminal indexed; gate needs ≥ 1200), `queryP99` 9277 ms (≤ 1000),
+    `queryP95` 253 ms and `completeness`/`workloadDrain`/`reconcile` fail
+    through the same saturation, `requestErrors` 2553 (only 6 inside injection
+    windows), `resourceCoverage` 129 of 325 samples with a 16.1s gap (12.5s
+    allowed) because the sampler thread was starved.
+  - `postRestoreRetrieval` stayed `unknown`: the in-run O03 restore refused with
+    `STRICT_DRAIN_FAILED` (56 jobs still in flight at the end of the load), so
+    no attested green endpoint existed to probe.
+- **Gate scoping (2026-07-25, project-owner decision):** the soak used to bind
+  `G0-CAP-INGEST-THROUGHPUT` (1200 docs/hour), which the gate registry defines
+  for `on-prem-reference` (32 cores, 256 GB, NVMe, accelerator) and which the SLA
+  document itself records as unmeasurable on local CPU. The profile also applied
+  1800 docs/hour, 1.5× the peak target it was validating. O05 now binds
+  `G0-CAP-INGEST-THROUGHPUT-POC` (≥ 300 docs/hour, SLA normal tier) on the new
+  `poc-compose` environment, and the profile applies 360 docs/hour. The
+  production peak gate is unchanged and still blocks any Profile B claim.
+- **Root cause and path to pass:** the container set alone reserves ~7.5 of the
+  8 vCPUs the host allows Docker, so convert/index workers, API and the driver
+  contend. A 30s smoke on the same stack measured p95 69 ms and 1800 docs/h,
+  which indicates the profile is reachable with more CPU. Re-run the official
+  soak on a host that can give Docker substantially more than 8 vCPU
+  (raise the WSL2 `.wslconfig` allocation or use a Linux runner).
+- **Architectural notes:** `compare_dataset_unavailable` is resolved — the public
+  revision preflight now builds the version pair over HTTP. `restored_api_base`
+  still depends on O03 exposing a reachable attested green endpoint, which only
+  happens when the workload drains before the in-run restore.
 - **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
   `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
   evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.
