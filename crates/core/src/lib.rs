@@ -360,6 +360,98 @@ fn title_from_markdown(markdown: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    /// Bảng đuôi → FormatKind; phải khớp `FormatKind::from_path` và `supported_extensions`.
+    const FROM_PATH_EXTENSION_CASES: &[(&str, FormatKind)] = &[
+        ("pdf", FormatKind::Pdf),
+        ("docx", FormatKind::Docx),
+        ("pptx", FormatKind::Pptx),
+        ("xlsx", FormatKind::Xlsx),
+        ("xls", FormatKind::Xlsx),
+        ("xlsb", FormatKind::Xlsx),
+        ("ods", FormatKind::Xlsx),
+        ("csv", FormatKind::Csv),
+        ("html", FormatKind::Html),
+        ("htm", FormatKind::Html),
+        ("txt", FormatKind::Text),
+        ("log", FormatKind::Text),
+        ("md", FormatKind::Text),
+        ("markdown", FormatKind::Text),
+        ("png", FormatKind::Image),
+        ("jpg", FormatKind::Image),
+        ("jpeg", FormatKind::Image),
+        ("webp", FormatKind::Image),
+        ("bmp", FormatKind::Image),
+        ("tif", FormatKind::Image),
+        ("tiff", FormatKind::Image),
+        ("gif", FormatKind::Image),
+        ("wav", FormatKind::Audio),
+        ("mp3", FormatKind::Audio),
+        ("m4a", FormatKind::Audio),
+        ("flac", FormatKind::Audio),
+        ("ogg", FormatKind::Audio),
+    ];
+
+    fn expected_kind_for_ext(ext: &str) -> FormatKind {
+        FROM_PATH_EXTENSION_CASES
+            .iter()
+            .find(|(e, _)| *e == ext)
+            .map(|(_, k)| *k)
+            .unwrap_or_else(|| {
+                panic!("thiếu entry cho đuôi {ext:?} trong FROM_PATH_EXTENSION_CASES")
+            })
+    }
+
+    fn assert_format(path: &str, expected: FormatKind) {
+        assert_eq!(
+            FormatKind::from_path(Path::new(path)),
+            expected,
+            "đường dẫn {path:?} phải map tới {expected:?}"
+        );
+    }
+
+    /// from_path phải khớp đuôi file với FormatKind
+    #[test]
+    fn format_kind_from_path_maps_extensions() {
+        for (ext, expected) in FROM_PATH_EXTENSION_CASES {
+            assert_format(&format!("file.{ext}"), *expected);
+        }
+
+        // Case insensitivity (to_ascii_lowercase trên đuôi)
+        assert_format("REPORT.PDF", FormatKind::Pdf);
+        assert_format("photo.JPG", FormatKind::Image);
+
+        // Path::extension chỉ nhìn tên file cuối, không phụ thuộc thư mục
+        assert_format("docs/a/report.pdf", FormatKind::Pdf);
+
+        // Unknown / đuôi lạ
+        assert_format("Makefile", FormatKind::Unknown);
+        assert_format("legacy.doc", FormatKind::Unknown); // .doc chưa hỗ trợ — không sniff magic-byte
+        assert_format("archive.zip", FormatKind::Unknown);
+        assert_format("file.tar.gz", FormatKind::Unknown); // chỉ lấy đuôi cuối "gz"
+        assert_format("file.", FormatKind::Unknown); // Path::extension → None
+    }
+
+    /// Mọi đuôi trong `supported_extensions` phải map đúng FormatKind (không chỉ ≠ Unknown).
+    #[test]
+    fn supported_extensions_matches_from_path() {
+        for ext in FormatKind::supported_extensions() {
+            let expected = expected_kind_for_ext(ext);
+            assert_eq!(
+                FormatKind::from_path(Path::new(&format!("file.{ext}"))),
+                expected,
+                "đuôi {ext:?} phải map tới {expected:?}"
+            );
+        }
+
+        for (ext, _) in FROM_PATH_EXTENSION_CASES {
+            assert!(
+                FormatKind::supported_extensions().contains(ext),
+                "đuôi {ext:?} có trong FROM_PATH_EXTENSION_CASES nhưng thiếu trong supported_extensions"
+            );
+        }
+    }
 
     #[test]
     fn legacy_converter_options_exhaustive_literal_still_compiles() {
