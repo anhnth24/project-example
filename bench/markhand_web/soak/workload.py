@@ -601,14 +601,27 @@ def do_delete(
     with stats.lock:
         if not stats.document_ids:
             doc_id = None
+        elif stats.retained_ids:
+            retained = set(stats.retained_ids)
+            candidate = next(
+                (
+                    index
+                    for index, document_id in enumerate(stats.document_ids)
+                    if document_id not in retained
+                ),
+                None,
+            )
+            doc_id = (
+                None if candidate is None else stats.document_ids.pop(candidate)
+            )
         else:
             # Keep at least one retained doc for post-restore authorized retrieval.
-            if len(stats.document_ids) <= 1 and not stats.retained_ids:
+            if len(stats.document_ids) <= 1:
                 stats.retained_ids.append(stats.document_ids[0])
                 doc_id = None
             else:
                 doc_id = stats.document_ids.pop(0)
-                if not stats.retained_ids and stats.document_ids:
+                if stats.document_ids:
                     stats.retained_ids.append(stats.document_ids[0])
     in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     if not doc_id:

@@ -212,6 +212,24 @@ class PublishedVersionCompletionTests(unittest.TestCase):
         self.assertTrue(stats.versions["doc-1"][0].published)
 
 
+class DeleteRetentionTests(unittest.TestCase):
+    def test_delete_never_selects_retained_baseline_document(self) -> None:
+        client = mock.Mock()
+        client.request.return_value = (204, b"", 1.0)
+        stats = workload.RequestStats()
+        stats.retained_ids = ["retained-1"]
+        stats.document_ids = ["retained-1", "deletable-1"]
+
+        workload.do_delete(client, stats, start_mono=time.monotonic())
+
+        client.request.assert_called_once_with(
+            "DELETE", "/api/v1/documents/deletable-1"
+        )
+        self.assertEqual(stats.retained_ids, ["retained-1"])
+        self.assertEqual(stats.document_ids, ["retained-1"])
+        self.assertEqual(stats.deleted_ids, ["deletable-1"])
+
+
 class QuerySuccessTests(unittest.TestCase):
     def test_compare_without_dataset_is_not_success(self) -> None:
         stats = workload.RequestStats()
