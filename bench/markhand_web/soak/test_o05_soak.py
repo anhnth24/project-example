@@ -32,6 +32,7 @@ import workload  # noqa: E402
 ROOT = Path(__file__).resolve().parents[3]
 WORKLOAD = ROOT / "bench/markhand_web/workloads/phase1b-mixed.yaml"
 GATES = ROOT / "bench/markhand_web/gates.yaml"
+POC_COMPOSE = ROOT / "deploy/compose.poc.yml"
 FORMATS = ["pdf", "docx", "pptx", "xlsx", "csv", "html", "txt", "png"]
 
 
@@ -63,6 +64,25 @@ class RateScheduleTests(unittest.TestCase):
         times = mathutil.schedule_event_times(rps=2.0, duration_seconds=5.0, seed=7)
         self.assertGreaterEqual(len(times), 9)
         self.assertLessEqual(len(times), 11)
+
+
+class PocQualificationRateLimitTests(unittest.TestCase):
+    def test_api_limits_cover_canonical_mixed_load(self) -> None:
+        compose = POC_COMPOSE.read_text(encoding="utf-8")
+        api = compose.split("\n  api:\n", 1)[1].split("\n  api-restore-green:\n", 1)[0]
+
+        self.assertIn(
+            "MARKHAND_RATE_USER_PER_MINUTE: ${MARKHAND_RATE_USER_PER_MINUTE:-600}",
+            api,
+        )
+        self.assertIn(
+            "MARKHAND_RATE_IP_PER_MINUTE: ${MARKHAND_RATE_IP_PER_MINUTE:-1200}",
+            api,
+        )
+        self.assertIn(
+            "MARKHAND_RATE_ROUTE_PER_MINUTE: ${MARKHAND_RATE_ROUTE_PER_MINUTE:-600}",
+            api,
+        )
 
 
 class FixturePreflightTests(unittest.TestCase):

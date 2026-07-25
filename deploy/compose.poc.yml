@@ -388,6 +388,11 @@ services:
       MARKHAND_AUTH_AUDIENCE: ${MARKHAND_AUTH_AUDIENCE:-markhand-poc}
       MARKHAND_AUTH_SIGNING_KEY: ${MARKHAND_AUTH_SIGNING_KEY:-poc-only-signing-key-at-least-32-bytes}
       MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
+      # Canonical O05 runs 2 query rps plus ingest visibility polling; the
+      # production defaults (120 user / 60 route rpm) intentionally throttle it.
+      MARKHAND_RATE_USER_PER_MINUTE: ${MARKHAND_RATE_USER_PER_MINUTE:-600}
+      MARKHAND_RATE_IP_PER_MINUTE: ${MARKHAND_RATE_IP_PER_MINUTE:-1200}
+      MARKHAND_RATE_ROUTE_PER_MINUTE: ${MARKHAND_RATE_ROUTE_PER_MINUTE:-600}
       # Mock profile signature (print-index-signature.py --base-url http://mock-embedding:8080/v1 ...)
       MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
