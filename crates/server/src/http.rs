@@ -34,6 +34,7 @@ pub struct AppState {
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
     startup: StartupState,
     pool: Pool,
+    write_gate_pool: Pool,
     auth_provider: Option<PasswordAuthProvider>,
     object_store: Option<MinioClient>,
     qdrant: Option<QdrantClient>,
@@ -62,6 +63,8 @@ impl AppState {
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
         let pool = create_pool(runtime.endpoints().database_url.expose())
             .map_err(|error| format!("cannot create database pool: {error}"))?;
+        let write_gate_pool = create_pool(runtime.endpoints().database_url.expose())
+            .map_err(|error| format!("cannot create write-gate database pool: {error}"))?;
         let auth_provider = match JwtKeys::from_auth(runtime.config().auth()) {
             Ok(keys) => Some(PasswordAuthProvider::new(
                 pool.clone(),
@@ -131,6 +134,7 @@ impl AppState {
             readiness: tokio::sync::Mutex::new(None),
             startup,
             pool,
+            write_gate_pool,
             auth_provider,
             object_store,
             qdrant,
@@ -166,6 +170,7 @@ impl AppState {
             .timeout(Duration::from_secs(3))
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        let write_gate_pool = pool.clone();
         let capability_keys = runtime
             .config()
             .auth()
@@ -180,6 +185,7 @@ impl AppState {
             readiness: tokio::sync::Mutex::new(None),
             startup,
             pool,
+            write_gate_pool,
             auth_provider,
             object_store,
             qdrant: None,
@@ -198,6 +204,10 @@ impl AppState {
 
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    pub fn write_gate_pool(&self) -> &Pool {
+        &self.write_gate_pool
     }
 
     pub fn runtime(&self) -> &RuntimeState {
@@ -256,6 +266,12 @@ impl AppState {
 
     pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
         self.rate_limiter = limiter;
+        self
+    }
+
+    /// Test helper: use a pool independent from route/auth transactions.
+    pub fn with_write_gate_pool(mut self, pool: Pool) -> Self {
+        self.write_gate_pool = pool;
         self
     }
 

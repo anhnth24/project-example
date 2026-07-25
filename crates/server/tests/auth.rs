@@ -268,7 +268,7 @@ fn assert_no_secrets(value: &Value, password: &str, refresh: Option<&str>, acces
 
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
-async fn successful_login_completes_with_two_connection_pool() {
+async fn concurrent_authenticated_requests_complete_with_two_connection_pool() {
     let Some(base_url) = test_database_url() else {
         return;
     };
@@ -279,9 +279,8 @@ async fn successful_login_completes_with_two_connection_pool() {
     let password = "correct-horse-battery";
     seed_user(&pool, org, user, &email, password).await;
 
-    // The write gate holds one pooled connection for the full request. The
-    // login flow must release each short-lived connection before opening its
-    // tenant-context and refresh-family transactions.
+    // Match production's independent two-slot gate and business pools. Two
+    // concurrent guards may fill the former without starving route/auth work.
     let app = router(
         AppState::from_parts(
             state.runtime().clone(),
@@ -292,7 +291,10 @@ async fn successful_login_completes_with_two_connection_pool() {
                 JwtKeys::from_auth(&test_auth_config()).unwrap(),
             )),
         )
-        .unwrap(),
+        .unwrap()
+        .with_write_gate_pool(
+            create_pool_with_max_size(&ephemeral.url, 2).expect("write-gate pool"),
+        ),
     );
     let (status, body) = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -307,6 +309,22 @@ async fn successful_login_completes_with_two_connection_pool() {
     .await
     .expect("successful login must not deadlock a two-connection pool");
     assert_eq!(status, StatusCode::OK, "{body}");
+    let access = body["accessToken"]
+        .as_str()
+        .expect("login access token")
+        .to_string();
+
+    let ((first_status, first_body), (second_status, second_body)) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                json_request(app.clone(), "GET", "/api/v1/auth/me", None, Some(&access),),
+                json_request(app.clone(), "GET", "/api/v1/auth/me", None, Some(&access),),
+            )
+        })
+        .await
+        .expect("concurrent authenticated requests must not exhaust the business pool");
+    assert_eq!(first_status, StatusCode::OK, "{first_body}");
+    assert_eq!(second_status, StatusCode::OK, "{second_body}");
 
     drop(app);
     drop(state);
