@@ -405,9 +405,20 @@ class BackgroundSampler:
                 raise RuntimeError("sampler_thread_alive_after_stop")
 
     def _loop(self) -> None:
+        # Wait out the remainder of the interval rather than the whole of it:
+        # collecting a sample costs seconds, and sleeping the full interval on
+        # top of that stretched the period past what resource coverage expects.
+        next_due = time.monotonic()
         while not self._stop.is_set():
             try:
                 self._sample_fn()
             except Exception as exc:  # noqa: BLE001 — recorded; does not kill soak
                 self.errors.append(f"{type(exc).__name__}:{exc}")
-            self._stop.wait(self.interval_seconds)
+            next_due += self.interval_seconds
+            remaining = next_due - time.monotonic()
+            if remaining <= 0.0:
+                # Sampling outran the interval. Start the next one now instead of
+                # queueing catch-up samples that would arrive as a burst.
+                next_due = time.monotonic()
+                continue
+            self._stop.wait(remaining)

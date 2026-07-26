@@ -250,6 +250,26 @@ class DeleteRetentionTests(unittest.TestCase):
         self.assertEqual(stats.deleted_ids, ["deletable-1"])
 
 
+class SamplerCadenceTests(unittest.TestCase):
+    def test_sample_cost_is_absorbed_by_the_interval(self) -> None:
+        starts: list[float] = []
+
+        def slow_sample() -> None:
+            starts.append(time.monotonic())
+            time.sleep(0.3)
+
+        # 0.5s is the sampler's minimum interval.
+        bg = sampler.BackgroundSampler(interval_seconds=0.5, sample_fn=slow_sample)
+        bg.start()
+        time.sleep(1.85)
+        bg.stop()
+        self.assertGreaterEqual(len(starts), 4)
+        periods = [b - a for a, b in zip(starts, starts[1:])]
+        # A full-interval sleep after each sample would space these 0.8s apart.
+        self.assertLess(max(periods), 0.7)
+        self.assertFalse(bg.errors)
+
+
 class TokenRefreshTests(unittest.TestCase):
     def _client(self, statuses: list[int]) -> tuple[workload.ApiClient, list[Any]]:
         client = workload.ApiClient(
