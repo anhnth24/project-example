@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
 import subprocess
@@ -200,15 +201,18 @@ def sample_container_temp_bytes(
     paths: tuple[str, ...] = TEMP_PATH_ALLOWLIST,
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> dict[str, Any]:
-    """Sum allowlisted temp paths inside expected POC containers via `du -sb`."""
+    """Sum allowlisted temp paths inside expected POC containers via `du -sb`.
+
+    One `docker exec` costs about a second, so walking every service in sequence
+    took longer than the sample interval and starved resource coverage. Services
+    are independent, so measure them concurrently.
+    """
     target_services = services or tuple(container_ids.keys())
-    total = 0
-    observed = 0
-    per_service: dict[str, int] = {}
-    for service in target_services:
+
+    def measure(service: str) -> tuple[str, int | None]:
         cid = container_ids.get(service)
         if not cid:
-            continue
+            return service, None
         service_total = 0
         service_ok = False
         for path in paths:
@@ -229,10 +233,21 @@ def sample_container_temp_bytes(
                 service_ok = True
             except ValueError:
                 continue
-        if service_ok:
-            per_service[service] = service_total
-            total += service_total
-            observed += 1
+        return service, (service_total if service_ok else None)
+
+    total = 0
+    observed = 0
+    per_service: dict[str, int] = {}
+    if target_services:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(8, len(target_services)), thread_name_prefix="o05-temp"
+        ) as pool:
+            for service, value in pool.map(measure, target_services):
+                if value is None:
+                    continue
+                per_service[service] = value
+                total += value
+                observed += 1
     if observed == 0:
         return {"ok": False, "tempBytes": None, "services": per_service}
     return {"ok": True, "tempBytes": total, "services": per_service}
