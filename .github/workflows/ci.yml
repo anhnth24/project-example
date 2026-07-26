@@ -243,8 +243,11 @@ jobs:
       MARKHAND_E2E: "1"
       MARKHAND_O04_API_PASSWORD: markhand-dev
       MARKHAND_O04_EXTERNAL_WORKER_KILL: "1"
-      O04_OUTPUT_DIR: ${{ runner.temp }}/markhand-o04-release
     steps:
+      # `runner` context không dùng được ở job-level `env` (chỉ github/needs/vars/...),
+      # đặt ở đó làm cả workflow bị từ chối lúc startup. Export trong step.
+      - name: Resolve O04 output dir
+        run: echo "O04_OUTPUT_DIR=$RUNNER_TEMP/markhand-o04-release" >> "$GITHUB_ENV"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install O04 native dependencies
         run: |
