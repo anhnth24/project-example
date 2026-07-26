@@ -85,8 +85,12 @@ pub async fn request_delete(
                     DocumentState::Tombstoned | DocumentState::Purged => {
                         Ok(DeleteRequestOutcome::AlreadyRequested(document))
                     }
-                    DocumentState::Indexed => {
-                        // POC limitation: deletion is currently defined after successful indexing.
+                    active_state @ (DocumentState::Uploaded
+                    | DocumentState::Converting
+                    | DocumentState::Converted
+                    | DocumentState::Indexing
+                    | DocumentState::Indexed
+                    | DocumentState::Failed) => {
                         // Tombstone holds the document row lock, then cancels any pending/leased
                         // writer jobs with I06 terminal compensation. Persist/finalize paths also
                         // lock this row, so a racing writer serializes behind the tombstone and
@@ -105,7 +109,7 @@ pub async fn request_delete(
                             txn,
                             &ctx,
                             document_id,
-                            DocumentState::Indexed,
+                            active_state,
                             DocumentState::Tombstoned,
                         )
                         .await?;
@@ -159,7 +163,6 @@ pub async fn request_delete(
                         .await?;
                         Ok(DeleteRequestOutcome::Requested(tombstoned))
                     }
-                    other => Err(DeletionError::UnexpectedState(other)),
                 }
             })
         }

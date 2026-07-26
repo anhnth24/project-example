@@ -103,6 +103,25 @@ pub fn index_generation_visible_for_retrieval(
     is_active && state == IndexGenerationState::Active
 }
 
+fn normalize_fts_query(query: &str) -> String {
+    const QUESTION_STOP_WORDS: &[&str] = &["bao", "nhieu", "la", "gi", "nao"];
+    let normalized = fileconv_core::intelligence::normalize_search_text(query);
+    let tokens: Vec<&str> = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|token| token.chars().count() >= 2)
+        .collect();
+    let meaningful: Vec<&str> = tokens
+        .iter()
+        .copied()
+        .filter(|token| !QUESTION_STOP_WORDS.contains(token))
+        .collect();
+    if meaningful.is_empty() {
+        tokens.join(" ")
+    } else {
+        meaningful.join(" ")
+    }
+}
+
 /// Resolves the published version effective at `as_of` for each in-scope document.
 pub async fn resolve_as_of_version_ids(
     txn: &Transaction<'_>,
@@ -211,7 +230,7 @@ pub async fn fts_search(
     if collection_ids.is_empty() || limit == 0 || query.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let folded = fileconv_core::intelligence::normalize_search_text(query);
+    let folded = normalize_fts_query(query);
     if folded.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -869,5 +888,18 @@ mod tests {
         // Compile-time contract: retrieval must decode REAL as f32, not f64.
         let value: f32 = 0.75;
         assert!((value - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn fts_query_removes_vietnamese_question_scaffolding() {
+        assert_eq!(
+            normalize_fts_query("Kinh phí được phê duyệt là bao nhiêu?"),
+            "kinh phi duoc phe duyet"
+        );
+        assert_eq!(
+            normalize_fts_query("Bao nhiêu?"),
+            "bao nhieu",
+            "all-stop-word questions must retain a non-empty fallback"
+        );
     }
 }

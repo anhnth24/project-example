@@ -1,0 +1,72 @@
+[
+  {
+    "Id": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-api-1",
+    "Created": "2026-07-26T12:18:51.92086601Z",
+    "Image": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+    "Config": {
+      "User": "10001:10001",
+      "Image": "markhand-api:poc"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": null,
+      "Devices": null,
+      "Tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "Memory": 536870912,
+      "NanoCpus": 1000000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 256
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_edge": {
+          "IPAddress": "172.19.0.2",
+          "Gateway": "172.19.0.1",
+          "NetworkID": "6e7a42fc8ba873ebbb7917aaa4634a33c8480330aa1bef39bb1f138e50aa8064",
+          "EndpointID": "0e45abdff362ee72eaa5c3fca2d836b180a7c87f1e813a70a33dc1b01ba4ffef",
+          "MacAddress": "2a:31:31:d4:7d:d6",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-api-1",
+            "api"
+          ]
+        },
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.7",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "4a3c95067903528cc38064d0861522bcb1fa014d3f041a897a5bd587eb7ad695",
+          "MacAddress": "22:42:ea:03:19:b0",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-api-1",
+            "api"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0
+      },
+      "OOMKilled": false,
+      "Pid": 1816958
+    }
+  }
+]

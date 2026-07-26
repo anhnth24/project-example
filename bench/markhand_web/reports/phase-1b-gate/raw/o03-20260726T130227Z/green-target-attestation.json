@@ -1,0 +1,22 @@
+{
+  "checks": {
+    "crossStoreRefsConsistent": true,
+    "manifestAuthenticated": true,
+    "minioConsistent": true,
+    "postgresConsistent": true,
+    "qdrantConsistent": true,
+    "restoreFenceMatches": true
+  },
+  "fenceEpoch": "29410ae7-a42f-4428-a6ff-6da8c5641bfb",
+  "kind": "markhand.green-target-state",
+  "manifestSha256": "9416179dc2e2ec4ae6cbac60a7693dfa90182b1176e2e046312b4ea1a44311a9",
+  "schemaVersion": 1,
+  "target": {
+    "minioBucket": "markhand-documents",
+    "minioEndpoint": "http://127.0.0.1:19020",
+    "pgDatabase": "markhand_o03_green_20260726130227",
+    "qdrantCollection": "markhand_chunks_72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
+    "qdrantUrl": "http://127.0.0.1:6443"
+  },
+  "verifiedAtEpoch": 1785072685
+}

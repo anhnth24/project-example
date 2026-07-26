@@ -1,4 +1,6 @@
 use std::future::Future;
+use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 
 use fileconv_server::auth::context::OrgContext;
@@ -17,7 +19,7 @@ use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::reconcile::{
     ReconcileWorker, ReconcileWorkerConfig, ReconcileWorkerRun,
 };
-use fileconv_server::workers::sandbox::SandboxConfig;
+use fileconv_server::workers::sandbox::{SandboxCancel, SandboxConfig, SandboxInput};
 use uuid::Uuid;
 
 const RECLAIM_LIMIT: u32 = 32;
@@ -34,9 +36,17 @@ async fn main() {
         .any(|argument| argument == "--help" || argument == "-h")
     {
         println!(
-            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config         Validate worker env/config and exit\n  --sandbox-preflight    Probe convert sandbox isolation and exit"
+            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config                    Validate worker env/config and exit\n  --sandbox-preflight               Probe convert sandbox isolation and exit\n  --sandbox-convert-probe <file>    Convert one file through the production sandbox and exit"
         );
         return;
+    }
+    match sandbox_convert_probe_arg(&args) {
+        Ok(Some(path)) => match run_sandbox_convert_probe(Path::new(path)) {
+            Ok(()) => return,
+            Err(error) => exit_with_error(format!("sandbox conversion probe failed: {error}")),
+        },
+        Ok(None) => {}
+        Err(error) => exit_with_error(error),
     }
     if args
         .iter()
@@ -76,6 +86,65 @@ async fn main() {
             exit_with_error(format!("invalid worker configuration: {error}"));
         }
     }
+}
+
+fn sandbox_convert_probe_arg(args: &[String]) -> Result<Option<&str>, String> {
+    let matches = args
+        .iter()
+        .enumerate()
+        .filter(|(_, argument)| argument.as_str() == "--sandbox-convert-probe")
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Ok(None),
+        [index] => {
+            let path = args
+                .get(index + 1)
+                .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                .ok_or_else(|| "--sandbox-convert-probe requires one file path".to_string())?;
+            if args.len() != index + 2 {
+                return Err(
+                    "--sandbox-convert-probe cannot be combined with other arguments".to_string(),
+                );
+            }
+            Ok(Some(path))
+        }
+        _ => Err("--sandbox-convert-probe may be specified only once".to_string()),
+    }
+}
+
+fn run_sandbox_convert_probe(path: &Path) -> Result<(), String> {
+    let canonical_extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "input file must have an extension".to_string())?
+        .to_ascii_lowercase();
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("cannot read probe input {}: {error}", path.display()))?;
+    let output = fileconv_server::workers::sandbox::run(
+        &sandbox_config_from_env()?,
+        SandboxInput {
+            bytes,
+            canonical_extension,
+        },
+        &SandboxCancel::default(),
+    )
+    .map_err(|error| error.to_string())?;
+    if !output.exit.success() {
+        return Err(format!(
+            "converter exit={:?}; stderr={}",
+            output.exit,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    if output.stdout_truncated || output.stderr_truncated {
+        return Err("converter output was truncated".to_string());
+    }
+    std::io::stdout()
+        .write_all(&output.stdout)
+        .map_err(|error| format!("cannot write probe output: {error}"))?;
+    Ok(())
 }
 
 async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), String> {
@@ -719,6 +788,36 @@ mod shutdown_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn sandbox_convert_probe_accepts_exactly_one_input() {
+        let args = [
+            "fileconv-worker".to_string(),
+            "--sandbox-convert-probe".to_string(),
+            "/tmp/input.txt".to_string(),
+        ];
+        assert_eq!(
+            sandbox_convert_probe_arg(&args).expect("valid probe args"),
+            Some("/tmp/input.txt")
+        );
+    }
+
+    #[test]
+    fn sandbox_convert_probe_rejects_missing_or_extra_inputs() {
+        let missing = [
+            "fileconv-worker".to_string(),
+            "--sandbox-convert-probe".to_string(),
+        ];
+        assert!(sandbox_convert_probe_arg(&missing).is_err());
+
+        let extra = [
+            "fileconv-worker".to_string(),
+            "--sandbox-convert-probe".to_string(),
+            "/tmp/input.txt".to_string(),
+            "--check-config".to_string(),
+        ];
+        assert!(sandbox_convert_probe_arg(&extra).is_err());
+    }
 
     #[tokio::test]
     async fn stop_claim_awaits_active_cycle_within_grace_then_returns() {

@@ -8,13 +8,19 @@ OBS="$ROOT/deploy/observability"
 PROM_DIR="$OBS/prometheus"
 RULES="$PROM_DIR/markhand-rules.yml"
 RULE_TESTS="$PROM_DIR/markhand-rules-test.yml"
-COMPOSE_POC=(docker compose -f "$ROOT/deploy/compose.poc.yml" --env-file "$ROOT/deploy/.env")
+POC_PROJECT="${MARKHAND_COMPOSE_PROJECT:-markhand-poc}"
+POC_PRIVATE_NETWORK="${MARKHAND_POC_PRIVATE_NETWORK:-${POC_PROJECT}_private}"
+export MARKHAND_COMPOSE_PROJECT="$POC_PROJECT"
+export MARKHAND_POC_PRIVATE_NETWORK="$POC_PRIVATE_NETWORK"
+COMPOSE_POC=(docker compose -p "$POC_PROJECT" -f "$ROOT/deploy/compose.poc.yml" --env-file "$ROOT/deploy/.env")
 COMPOSE_OBS=(docker compose -f "$OBS/compose.observe.yml")
 PROM_URL="${MARKHAND_O02_PROM_URL:-http://127.0.0.1:9095}"
 API_URL="${MARKHAND_O02_API_URL:-http://127.0.0.1:8788}"
 PROM_IMAGE="${MARKHAND_PROM_IMAGE:-prom/prometheus:v2.54.1}"
 GRAFANA_IMAGE="${MARKHAND_GRAFANA_IMAGE:-grafana/grafana:11.1.4}"
-OUT_DIR="$ROOT/bench/markhand_web/reports/phase-1b-gate"
+DISPOSABLE_IMAGE="${MARKHAND_O02_DISPOSABLE_IMAGE:-python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0}"
+WORKER_IMAGE="${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}"
+OUT_DIR="${MARKHAND_O02_OUT_DIR:-$ROOT/bench/markhand_web/reports/phase-1b-gate}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RAW="$OUT_DIR/raw/o02-$STAMP"
 mkdir -p "$RAW" "$OUT_DIR"
@@ -24,6 +30,24 @@ fail=0
 note() { echo "$*" | tee -a "$RAW/summary.txt"; }
 ok() { note "PASS: $*"; pass=$((pass + 1)); }
 bad() { note "FAIL: $*"; fail=$((fail + 1)); }
+capture_prom_alerts() {
+  local output="$1"
+  local raw_output="${output}.raw"
+  local attempt
+  for attempt in $(seq 1 10); do
+    if curl -sf --connect-timeout 2 --max-time 5 \
+      "$PROM_URL/api/v1/alerts" >"$raw_output"; then
+      python3 "$ROOT/deploy/scripts/redact_secrets.py" \
+        -o "$output" "$raw_output"
+      rm -f "$raw_output"
+      return 0
+    fi
+    sleep 1
+  done
+  rm -f "$raw_output"
+  printf '{"status":"error","data":{"alerts":[]}}\n' >"$output"
+  bad "Prometheus alert API unavailable after retries"
+}
 
 # --- restore helpers (compose postgres) ---
 # Arm BEFORE stop; disarm only after confirmed restart. Never start initially-stopped PG.
@@ -51,7 +75,7 @@ restore_postgres() {
 }
 cleanup_observe() {
   if [[ "${OBS_STARTED}" -eq 1 ]]; then
-    note "EXIT trap: tearing down observe stack"
+    echo "EXIT trap: tearing down observe stack"
     "${COMPOSE_OBS[@]}" down --remove-orphans >/dev/null 2>&1 || true
   fi
 }
@@ -134,16 +158,19 @@ python3 - <<'PY' "$RULES" "$ROOT/docs/runbooks/phase-1b" "$RAW" "$ROOT"
 import pathlib, re, sys
 rules=pathlib.Path(sys.argv[1]).read_text(); rb=pathlib.Path(sys.argv[2]); raw=pathlib.Path(sys.argv[3]); repo=pathlib.Path(sys.argv[4])
 errors=[]
+referenced=[]
 for m in re.finditer(r"runbook:\s*(\S+)", rules):
-    if not (repo/m.group(1)).is_file():
+    path=repo/m.group(1)
+    if not path.is_file():
         errors.append(f"missing {m.group(1)}")
-for path in rb.glob("*.md"):
-    if path.name=="README.md": continue
+    else:
+        referenced.append(path)
+for path in sorted(set(referenced)):
     text=path.read_text()
     for sec in ("## Detect","## Contain","## Recover","## Verify"):
         if sec not in text: errors.append(f"{path.name}: missing {sec}")
     uses_redact = "redact_secrets.py" in text
-    allowlisted = path.name in {"key-rotation.md","vector-rebuild.md","backup-restore.md","README.md"}
+    allowlisted = path.name in {"key-rotation.md","vector-rebuild.md","backup-restore.md"}
     if "logs" in text and not uses_redact and not allowlisted:
         # soft: only fail if docker logs without redact helper
         if re.search(r"docker compose.*logs", text) and "redact_secrets.py" not in text:
@@ -181,11 +208,27 @@ tr_rc=$?
 set -e
 if [[ $tr_rc -eq 0 ]]; then ok "unit-test fire→resolve transitions present"; else bad "unit-test transitions incomplete"; fi
 
-# --- Grafana API import/query (best-effort; record gap if unavailable) ---
+# Start Prometheus before the Grafana proxy proof. The previous ordering imported
+# the dashboard before its datasource existed, so a guaranteed query failure was
+# incorrectly recorded as an acceptable gap.
+if docker network inspect "$POC_PRIVATE_NETWORK" >/dev/null 2>&1; then
+  "${COMPOSE_OBS[@]}" up -d 2>&1 | tee "$RAW/observe-up-pre-grafana.txt"
+  OBS_STARTED=1
+  for _ in $(seq 1 60); do
+    curl -sf "$PROM_URL/-/ready" >/dev/null && break
+    sleep 1
+  done
+else
+  bad "$POC_PRIVATE_NETWORK network missing — start compose.poc first"
+fi
+
+# --- Grafana API import/query ---
 grafana_status="gap"
 set +e
-if docker pull "$GRAFANA_IMAGE" >/dev/null 2>&1; then
+if docker image inspect "$GRAFANA_IMAGE" >/dev/null 2>&1 \
+  || docker pull "$GRAFANA_IMAGE" >/dev/null 2>&1; then
   GRAFANA_CID=$(docker run -d --rm \
+    --network "$POC_PRIVATE_NETWORK" \
     -e GF_AUTH_ANONYMOUS_ENABLED=true \
     -e GF_AUTH_ANONYMOUS_ORG_ROLE=Admin \
     -e GF_AUTH_BASIC_ENABLED=false \
@@ -195,8 +238,9 @@ if docker pull "$GRAFANA_IMAGE" >/dev/null 2>&1; then
       if curl -sf "http://127.0.0.1:3005/api/health" >/dev/null; then break; fi
       sleep 1
     done
-    # provision prometheus datasource pointing at host prom if up later; import dashboard JSON
-    DS_PAYLOAD='{"name":"Prometheus","type":"prometheus","url":"http://host.docker.internal:9095","access":"proxy","isDefault":true}'
+    # Both containers share the POC private network; query through Grafana's
+    # datasource proxy to prove dashboard datasource reachability.
+    DS_PAYLOAD='{"name":"Prometheus","type":"prometheus","url":"http://prometheus:9090","access":"proxy","isDefault":true}'
     curl -sf -X POST -H 'Content-Type: application/json' \
       -d "$DS_PAYLOAD" "http://127.0.0.1:3005/api/datasources" >"$RAW/grafana-datasource.json" 2>"$RAW/grafana-datasource.err"
     # Import dashboard
@@ -234,19 +278,16 @@ echo "$grafana_status" | tee "$RAW/grafana-status.txt"
 if [[ "$grafana_status" == "pass" ]]; then
   ok "Grafana API import + query"
 elif [[ "$grafana_status" == "import_ok_query_gap" ]]; then
-  note "NOTE: Grafana dashboard import OK; query proxy gap (Prometheus may be down during Grafana phase)"
-  ok "Grafana API import (query deferred/gap)"
+  bad "Grafana dashboard imported but datasource query failed"
 else
-  note "NOTE: Grafana API import/query gap status=$grafana_status"
-  # Honest gap — do not fail the whole O02 tabletop solely on Grafana ephemeral bring-up
-  ok "Grafana honest gap recorded ($grafana_status)"
+  bad "Grafana API import/query failed status=$grafana_status"
 fi
 
 # --- Live Prometheus observe stack ---
 rules_loaded=0
-note "Starting observe Prometheus/blackbox on markhand-poc_private"
-if ! docker network inspect markhand-poc_private >/dev/null 2>&1; then
-  bad "markhand-poc_private network missing — start compose.poc first"
+note "Starting observe Prometheus/blackbox on $POC_PRIVATE_NETWORK"
+if ! docker network inspect "$POC_PRIVATE_NETWORK" >/dev/null 2>&1; then
+  bad "$POC_PRIVATE_NETWORK network missing — start compose.poc first"
 else
   "${COMPOSE_OBS[@]}" up -d 2>&1 | tee "$RAW/observe-up.txt"
   OBS_STARTED=1
@@ -297,7 +338,7 @@ GUARD="$ROOT/deploy/scripts/o02-pg-restore-guard.sh"
 chmod +x "$GUARD" 2>/dev/null || true
 
 # Disposable container: before/during/after stop + initially_stopped (no real PG churn).
-DISP_CID="$(docker run -d --name "o02-pg-guard-disp-$STAMP" alpine:3.20 sleep 3600 2>"$RAW/disp-run.err" || true)"
+DISP_CID="$(docker run -d --name "o02-pg-guard-disp-$STAMP" "$DISPOSABLE_IMAGE" sleep 3600 2>"$RAW/disp-run.err" || true)"
 if [[ -n "$DISP_CID" ]]; then
   ok "disposable guard container ${DISP_CID:0:12}"
   for mode in before_stop during_stop after_stop initially_stopped normal; do
@@ -424,7 +465,7 @@ if [[ -n "$PG_CID" && "$rules_loaded" -eq 1 && "$PG_INITIALLY_RUNNING" -eq 1 ]] 
   && docker inspect -f '{{.State.Running}}' "$PG_CID" | grep -qi true; then
   note "LIVE: stop postgres >2m; poll Prometheus /api/v1/alerts for MarkhandDependencyDown"
   # ensure inactive first
-  curl -sf "$PROM_URL/api/v1/alerts" | python3 "$ROOT/deploy/scripts/redact_secrets.py" -o "$RAW/alerts-pre.json"
+  capture_prom_alerts "$RAW/alerts-pre.json"
   TS="$(date -u +%Y%m%dT%H%M%SZ)"
   cp "$RAW/alerts-pre.json" "$RAW/alerts-pre-$TS.json"
 
@@ -441,7 +482,7 @@ if [[ -n "$PG_CID" && "$rules_loaded" -eq 1 && "$PG_INITIALLY_RUNNING" -eq 1 ]] 
     now="$(date -u +%s)"
     elapsed=$((now - STOP_AT))
     TS="$(date -u +%Y%m%dT%H%M%SZ)"
-    curl -sf "$PROM_URL/api/v1/alerts" | python3 "$ROOT/deploy/scripts/redact_secrets.py" -o "$RAW/alerts-during-$TS.json"
+    capture_prom_alerts "$RAW/alerts-during-$TS.json"
     cp "$RAW/alerts-during-$TS.json" "$RAW/alerts-latest-during.json"
     state="$(python3 - <<'PY' "$RAW/alerts-latest-during.json"
 import json,sys
@@ -512,7 +553,7 @@ PY
     now="$(date -u +%s)"
     elapsed=$((now - START_AT))
     TS="$(date -u +%Y%m%dT%H%M%SZ)"
-    curl -sf "$PROM_URL/api/v1/alerts" | python3 "$ROOT/deploy/scripts/redact_secrets.py" -o "$RAW/alerts-after-$TS.json"
+    capture_prom_alerts "$RAW/alerts-after-$TS.json"
     cp "$RAW/alerts-after-$TS.json" "$RAW/alerts-latest-after.json"
     state="$(python3 - <<'PY' "$RAW/alerts-latest-after.json"
 import json,sys
@@ -557,6 +598,10 @@ if [[ "$PG_INITIALLY_RUNNING" -eq 1 ]]; then
   # shellcheck disable=SC1090
   source "$ROOT/deploy/.env"
   set +a
+  # deploy/.env may carry its default project name; retain the qualified
+  # project/network selected by the caller for later provenance collection.
+  export MARKHAND_COMPOSE_PROJECT="$POC_PROJECT"
+  export MARKHAND_POC_PRIVATE_NETWORK="$POC_PRIVATE_NETWORK"
   export MARKHAND_TEST_DATABASE_URL="postgres://${MARKHAND_POSTGRES_USER}:${MARKHAND_POSTGRES_PASSWORD}@127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}/${MARKHAND_POSTGRES_DB}"
   export MARKHAND_TEST_MINIO_ENDPOINT="http://127.0.0.1:${MARKHAND_MINIO_API_PORT:-9010}"
   export MARKHAND_TEST_MINIO_URL="$MARKHAND_TEST_MINIO_ENDPOINT"
@@ -569,11 +614,13 @@ if [[ "$PG_INITIALLY_RUNNING" -eq 1 ]]; then
   unset MARKHAND_TEST_QDRANT_API_KEY || true
   : >"$RAW/reconcile-live-drill.raw.txt"
   # Filters after -- are OR'd by libtest; --exact avoids accidental partial matches.
-  cargo test -p fileconv-server --test deletion_reconcile -- \
-    --ignored --nocapture --exact \
-    live_reconcile_worker_dry_run_then_repair_idempotent \
-    live_reconcile_scoped_worker_cannot_claim_other_document \
-    >>"$RAW/reconcile-live-drill.raw.txt" 2>&1
+  (
+    cd "$ROOT"
+    cargo test -p fileconv-server --test deletion_reconcile -- \
+      --ignored --nocapture --exact \
+      live_reconcile_worker_dry_run_then_repair_idempotent \
+      live_reconcile_scoped_worker_cannot_claim_other_document
+  ) >>"$RAW/reconcile-live-drill.raw.txt" 2>&1
   rec_rc=$?
   python3 "$ROOT/deploy/scripts/redact_secrets.py" \
     -o "$RAW/reconcile-live-drill.txt" "$RAW/reconcile-live-drill.raw.txt" \
@@ -623,19 +670,26 @@ EOSQL
     echo "$RECONCILE_COMPOSE_GAP" | tee "$RAW/reconcile-compose-gap.txt"
   else
 
-  note "Building worker image for oneshot binary (best effort)"
-  set +e
-  "${COMPOSE_POC[@]}" --profile reconcile-oneshot build worker-reconcile-oneshot \
-    >"$RAW/reconcile-compose-build.txt" 2>&1
-  build_rc=$?
-  set -e
-  if [[ "$build_rc" -ne 0 ]]; then
-    RECONCILE_COMPOSE_GAP="${RECONCILE_COMPOSE_GAP:+$RECONCILE_COMPOSE_GAP; }worker image build failed"
-    note "NOTE: worker-reconcile-oneshot build failed"
+  build_rc=0
+  if [[ "${MARKHAND_O02_REBUILD_WORKER:-0}" == "1" ]] \
+    || ! docker image inspect "$WORKER_IMAGE" >/dev/null 2>&1; then
+    note "Building worker image for oneshot binary"
+    set +e
+    "${COMPOSE_POC[@]}" --profile reconcile-oneshot build worker-reconcile-oneshot \
+      >"$RAW/reconcile-compose-build.txt" 2>&1
+    build_rc=$?
+    set -e
+    if [[ "$build_rc" -ne 0 ]]; then
+      RECONCILE_COMPOSE_GAP="${RECONCILE_COMPOSE_GAP:+$RECONCILE_COMPOSE_GAP; }worker image build failed"
+      note "NOTE: worker-reconcile-oneshot build failed"
+    fi
+  else
+    note "Reusing existing worker image $WORKER_IMAGE for oneshot binary"
+    printf 'reused=%s\n' "$WORKER_IMAGE" >"$RAW/reconcile-compose-build.txt"
   fi
 
   # Prefer exact compose run --no-deps; on cgroupv2 use runbook docker run fallback
-  # (--cgroupns=host --network markhand-poc_private, same image/env/oneshot knobs).
+  # (--cgroupns=host on the effective POC private network, same image/env/oneshot knobs).
   compose_cgroup=0
   run_oneshot_exact() {
     local mode="$1" doc="$2" out="$3"
@@ -690,9 +744,9 @@ EOSQL
         echo "MARKHAND_RECONCILE_MODE=$mode"
         echo "MARKHAND_RECONCILE_DOCUMENT_ID=$doc"
       } >>"$ENV_FILE"
-      timeout 180s docker run --rm --cgroupns=host --network markhand-poc_private \
+      timeout 180s docker run --rm --cgroupns=host --network "$POC_PRIVATE_NETWORK" \
         --env-file "$ENV_FILE" \
-        "${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}" \
+        "$WORKER_IMAGE" \
         >"${out}.raw" 2>&1
       drc=$?
       python3 "$ROOT/deploy/scripts/redact_secrets.py" -o "$out" "${out}.raw" 2>/dev/null || cp "${out}.raw" "$out"
@@ -747,7 +801,7 @@ EOSQL
   } | tee "$RAW/reconcile-compose-exits.txt"
 
   if [[ "$compose_cgroup" -eq 1 ]]; then
-    note "NOTE: DEPLOYMENT GAP — exact docker compose run blocked by cgroupv2; used runbook docker run --cgroupns=host --network markhand-poc_private fallback (same image/env). Compose attempt outputs retained as *.compose.txt"
+    note "NOTE: DEPLOYMENT GAP — exact docker compose run blocked by cgroupv2; used runbook docker run --cgroupns=host --network $POC_PRIVATE_NETWORK fallback (same image/env). Compose attempt outputs retained as *.compose.txt"
     RECONCILE_COMPOSE_GAP="docker compose run cgroupv2; finite exits proven via docker run fallback"
   fi
 
@@ -768,7 +822,7 @@ fi
 # Provenance + broad secret scan
 set +e
 python3 - <<PY
-import json, os, pathlib, subprocess, datetime, importlib.util
+import hashlib, json, os, pathlib, subprocess, datetime, importlib.util
 root = pathlib.Path("$ROOT")
 raw = pathlib.Path("$RAW")
 stamp = "$STAMP"
@@ -782,6 +836,25 @@ def sh(*args):
 commit = sh("git", "-C", str(root), "rev-parse", "HEAD")
 dirty = sh("git", "-C", str(root), "status", "--porcelain")
 diff_stat = subprocess.check_output(["git", "-C", str(root), "diff", "--stat"], text=True)
+compose_project = os.environ.get("MARKHAND_COMPOSE_PROJECT", "markhand-poc")
+compose_file = root / "deploy/compose.poc.yml"
+env_file = root / "deploy/.env"
+image_ids = {}
+container_ids = {}
+for service in ("api", "minio", "postgres", "qdrant", "worker-convert", "worker-index"):
+    cid = sh(
+        "docker", "compose", "-p", compose_project, "-f", str(compose_file),
+        "--env-file", str(env_file), "ps", "-q", service
+    )
+    if not cid:
+        raise RuntimeError(f"missing compose service {service}")
+    container_ids[service] = cid
+    image_ids[service] = sh("docker", "inspect", "--format", "{{.Image}}", cid)
+api_cid = container_ids["api"]
+index_signature = sh(
+    "docker", "exec", api_cid, "/bin/sh", "-c",
+    'printf %s "$MARKHAND_INDEX_SIGNATURE"'
+)
 digests = {}
 for img in (prom_image, grafana_image, "quay.io/prometheus/blackbox-exporter:v0.25.0"):
     try:
@@ -810,6 +883,16 @@ prov = {
     "issue": "P1B-O02",
     "stamp": stamp,
     "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    "gitShaFull": commit,
+    "gitDirty": bool(dirty.strip()),
+    "composeProject": compose_project,
+    "migrationManifestSha256": hashlib.sha256(
+        (root / "crates/server/migrations/manifest.json").read_bytes()
+    ).hexdigest(),
+    "composeFileSha256": hashlib.sha256(compose_file.read_bytes()).hexdigest(),
+    "indexSignature": index_signature,
+    "containerIds": container_ids,
+    "imageIds": image_ids,
     "git": {
         "commit": commit,
         "dirty": bool(dirty.strip()),
@@ -820,7 +903,10 @@ prov = {
     "env": {
         "PROM_URL": os.environ.get("MARKHAND_O02_PROM_URL", "http://127.0.0.1:9095"),
         "API_URL": os.environ.get("MARKHAND_O02_API_URL", "http://127.0.0.1:8788"),
-        "composeProject": "markhand-poc",
+        "composeProject": compose_project,
+        "privateNetwork": os.environ.get(
+            "MARKHAND_POC_PRIVATE_NETWORK", "markhand-poc_private"
+        ),
     },
     "grafanaStatus": grafana_status,
     "observations": {
@@ -841,12 +927,38 @@ raise SystemExit(1 if findings else 0)
 PY
 prov_rc=$?
 set -e
-if [[ $prov_rc -eq 0 ]]; then ok "provenance + broad secret scan clean"; else bad "secret scan findings in evidence"; fi
+if [[ $prov_rc -eq 0 ]]; then ok "provenance + broad secret scan clean"; else bad "provenance or broad secret scan failed"; fi
+
+# Seal every raw artifact before the report binds the manifest digest.
+python3 - "$RAW" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+raw = pathlib.Path(sys.argv[1]).resolve()
+files = []
+for path in sorted(raw.rglob("*")):
+    if not path.is_file() or path.name == "raw-manifest.json":
+        continue
+    data = path.read_bytes()
+    files.append(
+        {
+            "path": path.relative_to(raw).as_posix(),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "sizeBytes": len(data),
+        }
+    )
+(raw / "raw-manifest.json").write_text(
+    json.dumps({"schemaVersion": 1, "files": files}, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
 
 # Final report
 export O02_RAW="$RAW" O02_OUT="$OUT_DIR" O02_STAMP="$STAMP" O02_RULES="$RULES" O02_OBS="$OBS" O02_PROM_IMAGE="$PROM_IMAGE"
 python3 - <<'PY'
-import json, pathlib, datetime, os, re
+import datetime, hashlib, json, os, pathlib, re
 raw = pathlib.Path(os.environ["O02_RAW"])
 out = pathlib.Path(os.environ["O02_OUT"])
 stamp = os.environ["O02_STAMP"]
@@ -861,7 +973,6 @@ plan_alerts = (
 )
 if not plan_alerts:
     plan_alerts = re.findall(r"- alert:\s*(\S+)", pathlib.Path(os.environ["O02_RULES"]).read_text())
-    (raw / "alerts-list.txt").write_text("\n".join(plan_alerts) + "\n")
 transitions = (
     json.loads((raw / "transitions.json").read_text())
     if (raw / "transitions.json").exists()
@@ -878,17 +989,23 @@ if fails:
     blockers.append("checks failed: " + "; ".join(fails))
 if not live:
     blockers.append("live Prometheus alert fire/resolve evidence missing")
-blockers.append("O01 not Done — O02 remains in_progress per dependency policy")
-blockers.append(
-    "Backup alert uses O01-as-shipped series when present; O02 does not claim "
-    "always-present live backup metrics; capture/restore drill owned by P1B-O03"
+o01_path = out / "o01-telemetry.json"
+try:
+    o01_status = json.loads(o01_path.read_text()).get("status")
+except (OSError, json.JSONDecodeError):
+    o01_status = None
+if o01_status != "pass":
+    blockers.append("O01 evidence is not pass — O02 dependency remains open")
+notes.append(
+    "Backup alert uses the O01 metric contract; capture/restore execution is "
+    "owned independently by P1B-O03."
 )
 gap_path = raw / "reconcile-compose-gap.txt"
 if gap_path.exists():
     gap = gap_path.read_text().strip()
     if gap and gap != "none":
         blockers.append("Compose worker-reconcile-oneshot deployment gap: " + gap)
-status = "fail" if fails else "incomplete"
+status = "pass" if not blockers else ("fail" if fails else "incomplete")
 payload = {
     "issue": "P1B-O02",
     "stamp": stamp,
@@ -907,6 +1024,10 @@ payload = {
         str(p) for p in pathlib.Path(os.environ["O02_OBS"]).joinpath("dashboards").glob("*.json")
     ],
     "rawDir": str(raw),
+    "rawArtifactManifest": {
+        "path": str(raw / "raw-manifest.json"),
+        "sha256": hashlib.sha256((raw / "raw-manifest.json").read_bytes()).hexdigest(),
+    },
     "promtoolImage": os.environ["O02_PROM_IMAGE"],
     "provenance": prov,
     "generatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),

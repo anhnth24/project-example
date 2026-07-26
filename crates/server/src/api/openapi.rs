@@ -190,47 +190,60 @@ fn openapi_paths(yaml: &str) -> Vec<&str> {
 }
 
 fn method_present(path_block: &str, method: &str) -> bool {
-    path_block
-        .lines()
-        .any(|line| line == format!("    {method}:"))
+    exact_line_span(path_block, &format!("    {method}:")).is_some()
 }
 
 fn extract_path_block<'a>(yaml: &'a str, path: &str) -> Option<&'a str> {
-    let header = format!("  {path}:\n");
-    let start = yaml.find(&header)?;
-    let rest = &yaml[start + header.len()..];
+    let header = format!("  {path}:");
+    let (_, after_header) = exact_line_span(yaml, &header)?;
+    let rest = &yaml[after_header..];
     let mut offset = 0usize;
-    for line in rest.lines() {
+    for raw_line in rest.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
         if (line.starts_with("  /") && line.ends_with(':')) || line == "components:" {
-            return Some(&rest[..offset.saturating_sub(1).min(rest.len())]);
+            return Some(&rest[..offset]);
         }
-        offset += line.len() + 1;
+        offset += raw_line.len();
     }
     Some(rest)
 }
 
 fn extract_method_block<'a>(path_block: &'a str, method: &str) -> Option<&'a str> {
-    let header = format!("    {method}:\n");
-    let start = path_block.find(&header)?;
+    let header = format!("    {method}:");
+    let (start, _) = exact_line_span(path_block, &header)?;
     let rest = &path_block[start..];
     let mut offset = 0usize;
-    for (idx, line) in rest.lines().enumerate() {
+    for (idx, raw_line) in rest.split_inclusive('\n').enumerate() {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
         if idx == 0 {
-            offset += line.len() + 1;
+            offset += raw_line.len();
             continue;
         }
         if line.starts_with("    ")
             && !line.starts_with("     ")
             && matches!(
-                line.trim_end_matches(':'),
+                line[4..].trim_end_matches(':'),
                 "get" | "post" | "put" | "patch" | "delete" | "head" | "options" | "parameters"
             )
         {
-            return Some(&rest[..offset.saturating_sub(1)]);
+            return Some(&rest[..offset]);
         }
-        offset += line.len() + 1;
+        offset += raw_line.len();
     }
     Some(rest)
+}
+
+fn exact_line_span(input: &str, expected: &str) -> Option<(usize, usize)> {
+    let mut offset = 0usize;
+    for raw_line in input.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        let after = offset + raw_line.len();
+        if line == expected {
+            return Some((offset, after));
+        }
+        offset = after;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -249,5 +262,36 @@ mod tests {
         assert!(openapi_path_count() >= 20);
         assert!(yaml.contains("sourceContentSha256"));
         assert!(!yaml.contains("contentSha256:"));
+    }
+
+    #[test]
+    fn openapi_inventory_is_newline_independent() {
+        let lf = embedded_openapi_yaml().replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        let gaps = router_openapi_parity_gaps(&crlf);
+        assert!(
+            gaps.is_empty(),
+            "CRLF OpenAPI/router parity gaps: {}",
+            gaps.join("; ")
+        );
+    }
+
+    #[test]
+    fn method_blocks_do_not_borrow_adjacent_statuses() {
+        let yaml = concat!(
+            "  /example:\r\n",
+            "    get:\r\n",
+            "      responses:\r\n",
+            "        \"200\": {}\r\n",
+            "    post:\r\n",
+            "      responses:\r\n",
+            "        \"201\": {}\r\n",
+        );
+        let path = extract_path_block(yaml, "/example").expect("path block");
+        let get = extract_method_block(path, "get").expect("GET block");
+        let post = extract_method_block(path, "post").expect("POST block");
+        assert!(get.contains("\"200\":"));
+        assert!(!get.contains("\"201\":"));
+        assert!(post.contains("\"201\":"));
     }
 }

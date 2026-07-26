@@ -1032,10 +1032,13 @@ mod imp {
                 "tesseract probe stderr={}",
                 String::from_utf8_lossy(&tesseract_probe.stderr)
             );
-            let fileconv = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/debug/fileconv")
+            let fileconv = std::env::var_os("MARKHAND_TEST_FILECONV_BIN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv")
+                })
                 .canonicalize()
-                .expect("build target/debug/fileconv first");
+                .expect("build fileconv first or set MARKHAND_TEST_FILECONV_BIN");
             let output = run(
                 &SandboxConfig {
                     argv_template: vec![

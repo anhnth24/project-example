@@ -1,0 +1,8 @@
+service=worker-reconcile
+user=10001:10001
+readonly=true
+security_opt=["no-new-privileges:true"]
+cap_drop=["ALL"]
+memory=536870912
+nano_cpus=500000000
+pids_limit=512

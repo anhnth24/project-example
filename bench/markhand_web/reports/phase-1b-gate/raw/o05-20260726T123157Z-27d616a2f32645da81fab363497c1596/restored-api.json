@@ -1,0 +1,10 @@
+{
+  "available": true,
+  "blueApiBase": "http://127.0.0.1:8788",
+  "blueDeploymentIdentity": "markhand-poc-f02-20260726t121843z-1815269-17292:blue:f4f33cd1b476e07d69594dec269002f1159f1b70",
+  "blueStorageSignature": "d53c0f18d2a1ab8333cf60431134d8fc8db13fb7582309eb7ac77f898dd1fab4",
+  "restoredApiBase": "http://127.0.0.1:8790",
+  "restoredDeploymentIdentity": "markhand-poc-f02-20260726t121843z-1815269-17292:restore-green:markhand_o03_green_20260726130227:20260726T130227Z",
+  "restoredStorageSignature": "fbfb5d4578b7ed96ad2014b7953cf1e1bdf462732ddbfdeb3b423171cf39650b",
+  "source": "o03_live_external_probe"
+}

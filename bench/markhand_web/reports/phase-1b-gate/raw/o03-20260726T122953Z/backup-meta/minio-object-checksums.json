@@ -1,0 +1,61 @@
+{
+  "bundled": true,
+  "objects": [
+    {
+      "key": "quarantine/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/e4282e0f0b374a29bbc5587e4d889b98",
+      "versionId": "null",
+      "objectSha256": "4b1e983e579a0e4b3424d492f6809ade43bd6aed2deed74c89da07aa74c719bf",
+      "byteLength": 106,
+      "bundleFile": "objects/5ffe16b8bfd6056581cf3a74b16e24e7d55f0e265f10154319650b536e73dd75.bin"
+    },
+    {
+      "key": "quarantine/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/f2cc685e1b454ad0b20e42d9f59220e7",
+      "versionId": "null",
+      "objectSha256": "91b08350e8dbc31cdbbf8bd8644605d6fc146c55da0bd0f6b7c2ada1aebd2a78",
+      "byteLength": 63325,
+      "bundleFile": "objects/a5310b544d9a1bd5fcc286842261956a6b82cd5d37afc20a1830505d3453e208.bin"
+    },
+    {
+      "key": "trusted/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/0e1be2ff107de7ffa16d419d696219cb42582aa100e36f90d03e2a5f16862feb/3dfadef74cf9594abc1ac7d2b981e9c1",
+      "versionId": "null",
+      "objectSha256": "a3163669a6312bb02168f12c8655d530eff251039e88598938229c7c9de5d0e1",
+      "byteLength": 290,
+      "bundleFile": "objects/9668424174603dd054eeb248f31782a31b59674fca6723cd2644e87ede02854b.bin"
+    },
+    {
+      "key": "trusted/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/84591cbd9555575223db4066b86ba0dd66683e5b3da1b8df49dd47aef548279f/5baca741207ffe2bf51c81300feb6f78",
+      "versionId": "null",
+      "objectSha256": "da27c012b532ff2c46f2ab42c946cba56fac283a2bc240c6dd785c8ceb598702",
+      "byteLength": 107,
+      "bundleFile": "objects/dadd31ac0b2b0880cf9695b740540b06d6bf5f448acd4cd462535f422950271a.bin"
+    },
+    {
+      "key": "trusted/o03-seed-20260726t122953z.txt",
+      "versionId": "60b6b639-a18e-4f05-af00-8009d3a9dcbf",
+      "objectSha256": "9e2f90cab11e1f25768c291fdda61150e4e85ad2ca962d6ba303f726a5842dff",
+      "byteLength": 47,
+      "bundleFile": "objects/e8d792a2b500d3f6c953cd8b5259be22b9e14d806dcdf3044acf6df568ab440c.bin"
+    },
+    {
+      "key": "trusted/o03-seed-20260726t122953z.txt",
+      "versionId": "8480caf8-8e32-41ef-a3c9-b0f94514dd35",
+      "objectSha256": "8fe685feb37855d09d33d0e5dc391b68ef24c662af71181a87a1216c66174faf",
+      "byteLength": 50,
+      "bundleFile": "objects/d6c668091270c7e4c409007fb7e4ff67c3ad37fbd5667207edeb71ce4e83d8cb.bin"
+    },
+    {
+      "key": "trusted/o03-tomb-20260726t122953z.txt",
+      "versionId": "6e5f7b49-6bb9-4acc-8011-6d69714dabc9",
+      "objectSha256": "52b7002f79e5a21916ad3e14c2e33ea53b938ba11b753c738afb70fe658e9efe",
+      "byteLength": 25,
+      "bundleFile": "objects/62ad133ccf76db4759d55e2f43d7299d55aedfddeee8cf2fc00ec9cf7dc163a4.bin"
+    },
+    {
+      "key": "trusted/o03-tomb-20260726t122953z.txt",
+      "versionId": "ed7f1594-8c97-4ccb-aa07-b7e1ccdfa2fb",
+      "objectSha256": "3ef0811f343a48bf20c0380e5304bbbe1504c2f15b7975c6f7f92555dbb59239",
+      "byteLength": 35,
+      "bundleFile": "objects/9d36f40b8ae5edce1f1e71b47a56df02f83429f740885b7e33cc74a1caa3985d.bin"
+    }
+  ]
+}

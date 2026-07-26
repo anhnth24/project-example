@@ -1,0 +1,44 @@
+{
+  "required": true,
+  "available": true,
+  "dataset": {
+    "documentId": "ff71f09d-9568-4e15-a9ff-45adf6e09da9",
+    "versionA": "407b6763-f020-3523-866f-cc2faabc4c29",
+    "versionB": "2e648f4d-6ad1-f2e3-7610-a0a4ded6b5fc",
+    "query": "[REDACTED_CONTENT_MARKER]",
+    "markerASha256": "66145de637dfbf73df0e9634ad0a2d12c3fad979953f1417957b2b1042970a0b",
+    "markerBSha256": "39ee910dab7a99a883976ca0f14237c2e9f4273f0fd4903b4bcaca1c7df7ab50",
+    "effectiveFromA": "2026-07-26T12:32:02.705409Z",
+    "effectiveFromB": "2026-07-26T12:32:07.002902Z",
+    "asOfA": "2026-07-26T12:32:04.854155Z",
+    "asOfB": "2026-07-26T12:32:08.024897Z"
+  },
+  "verified": {
+    "ok": true,
+    "httpStatus": 200,
+    "latencyMs": 56.387487798929214,
+    "asOf": {
+      "A": {
+        "httpStatus": 200,
+        "latencyMs": 102.26395353674889
+      },
+      "B": {
+        "httpStatus": 200,
+        "latencyMs": 94.98833492398262
+      }
+    },
+    "dataset": {
+      "documentId": "ff71f09d-9568-4e15-a9ff-45adf6e09da9",
+      "versionA": "407b6763-f020-3523-866f-cc2faabc4c29",
+      "versionB": "2e648f4d-6ad1-f2e3-7610-a0a4ded6b5fc",
+      "query": "[REDACTED_CONTENT_MARKER]",
+      "markerASha256": "66145de637dfbf73df0e9634ad0a2d12c3fad979953f1417957b2b1042970a0b",
+      "markerBSha256": "39ee910dab7a99a883976ca0f14237c2e9f4273f0fd4903b4bcaca1c7df7ab50",
+      "effectiveFromA": "2026-07-26T12:32:02.705409Z",
+      "effectiveFromB": "2026-07-26T12:32:07.002902Z",
+      "asOfA": "2026-07-26T12:32:04.854155Z",
+      "asOfB": "2026-07-26T12:32:08.024897Z"
+    }
+  },
+  "source": "public_revision_upload"
+}

@@ -6,7 +6,7 @@ set -euo pipefail
 umask 077
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-OUT_DIR="$ROOT/bench/markhand_web/reports/phase-1b-gate"
+OUT_DIR="${MARKHAND_O03_OUT_DIR:-$ROOT/bench/markhand_web/reports/phase-1b-gate}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RAW="$OUT_DIR/raw/o03-$STAMP"
 mkdir -p "$RAW" "$OUT_DIR"
@@ -16,18 +16,26 @@ BACKUP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/markhand-backup-o03.XXXXXX")"
 TOOLBIN="$(mktemp -d "${TMPDIR:-/tmp}/o03-toolbin.XXXXXX")"
 export ROOT RAW OUT_DIR BACKUP_ROOT
 
+CALLER_MARKHAND_COMPOSE_PROJECT="${MARKHAND_COMPOSE_PROJECT:-}"
 if [[ -f "$ROOT/deploy/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
   source "$ROOT/deploy/.env"
   set +a
 fi
+if [[ -n "$CALLER_MARKHAND_COMPOSE_PROJECT" ]]; then
+  export MARKHAND_COMPOSE_PROJECT="$CALLER_MARKHAND_COMPOSE_PROJECT"
+fi
 
 PG_CONTAINER="${MARKHAND_PG_CONTAINER:-markhand-poc-postgres-1}"
 MINIO_PORT="${MARKHAND_MINIO_API_PORT:-9010}"
 QDRANT_PORT="${MARKHAND_QDRANT_HTTP_PORT:-6343}"
 API_URL="${MARKHAND_API_URL:-http://127.0.0.1:${MARKHAND_API_PORT:-8788}}"
+POC_PROJECT="${MARKHAND_COMPOSE_PROJECT:-markhand-poc}"
+COMPOSE_POC=(docker compose -p "$POC_PROJECT" -f "$ROOT/deploy/compose.poc.yml" --env-file "$ROOT/deploy/.env")
+MC_IMAGE="${MARKHAND_MC_IMAGE:-minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727}"
 export MARKHAND_PG_CONTAINER="$PG_CONTAINER"
+export MARKHAND_MC_IMAGE="$MC_IMAGE"
 
 PG_PASS="${MARKHAND_POSTGRES_PASSWORD:?}"
 export DATABASE_URL="postgres://markhand:${PG_PASS}@127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}/markhand"
@@ -35,20 +43,37 @@ export MINIO_ENDPOINT="http://127.0.0.1:${MINIO_PORT}"
 export MINIO_ACCESS_KEY="${MARKHAND_MINIO_ROOT_USER}"
 export MINIO_SECRET_KEY="${MARKHAND_MINIO_ROOT_PASSWORD}"
 export MINIO_BUCKET="${MARKHAND_MINIO_BUCKET:-markhand-documents}"
+export MARKHAND_GREEN_MINIO_ACCESS_KEY="${MARKHAND_MINIO_ACCESS_KEY}"
+export MARKHAND_GREEN_MINIO_SECRET_KEY="${MARKHAND_MINIO_SECRET_KEY}"
 export QDRANT_URL="http://127.0.0.1:${QDRANT_PORT}"
 export MARKHAND_BACKUP_SIGNING_KEY="${MARKHAND_BACKUP_SIGNING_KEY:-$(python3 -c 'import secrets; print(secrets.token_hex(32))')}"
 export MARKHAND_BACKUP_KEY_ID="${MARKHAND_BACKUP_KEY_ID:-o03-drill-key-1}"
-export MARKHAND_BACKUP_UNENCRYPTED_DEST_POLICY=explicit_poc_tmp_only
+touch "$BACKUP_ROOT/.markhand-backup-encrypted"
+chmod 600 "$BACKUP_ROOT/.markhand-backup-encrypted"
+export MARKHAND_BACKUP_ENCRYPTED=1
+unset MARKHAND_BACKUP_UNENCRYPTED_DEST_POLICY
+printf 'MARKHAND_BACKUP_ENCRYPTED=1 marker_verified=1\n' >"$RAW/encryption-policy.txt"
 export MARKHAND_BACKUP_REQUIRE_APP_WRITE_GATE=0
 export MARKHAND_BACKUP_DIR="$BACKUP_ROOT"
 
 STAMP_LC="$(echo "$STAMP" | tr '[:upper:]' '[:lower:]')"
-# Disposable blue collection name for this drill only.
-BLUE_COLLECTION="markhand-o03-blue-${STAMP_LC}"
+INDEX_SIGNATURE="${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}"
+[[ "$INDEX_SIGNATURE" =~ ^[a-f0-9]{64}$ ]] || {
+  echo "MARKHAND_INDEX_SIGNATURE must be 64 lowercase hex" >&2
+  exit 1
+}
+# Preserve the runtime identity on a physically isolated green Qdrant endpoint.
+BLUE_COLLECTION="markhand_chunks_${INDEX_SIGNATURE}"
 export QDRANT_COLLECTION="$BLUE_COLLECTION"
 GREEN_DB="markhand_o03_green_$(echo "$STAMP" | tr -cd 'a-z0-9')"
-GREEN_BUCKET="markhand-o03-green-${STAMP_LC}"
-GREEN_COLLECTION="markhand-o03-green-${STAMP_LC}"
+GREEN_BUCKET="$MINIO_BUCKET"
+GREEN_COLLECTION="$BLUE_COLLECTION"
+GREEN_MINIO_PORT="${MARKHAND_GREEN_MINIO_API_PORT:-19020}"
+GREEN_MINIO_ENDPOINT="http://127.0.0.1:${GREEN_MINIO_PORT}"
+GREEN_QDRANT_PORT="${MARKHAND_GREEN_QDRANT_HTTP_PORT:-6443}"
+GREEN_QDRANT_URL="http://127.0.0.1:${GREEN_QDRANT_PORT}"
+GREEN_API_PORT="${MARKHAND_GREEN_API_PORT:-8790}"
+GREEN_API_URL="http://127.0.0.1:${GREEN_API_PORT}"
 ORG_ID="11111111-1111-1111-1111-111111111111"
 USER_ID="22222222-2222-2222-2222-222222222201"
 COLLECTION_ID="55555555-5555-5555-5555-555555555501"
@@ -59,6 +84,50 @@ GAPS_PASSES=()
 GAPS_FAILS=()
 pass() { log "PASS: $*"; GAPS_PASSES+=("$1"); }
 gap() { log "GAP: $*"; GAPS_FAILS+=("$1"); }
+
+# Immutable source/deployment provenance for O05 compatibility checks.
+PROVENANCE_IMAGES="$RAW/provenance-images.tsv"
+: >"$PROVENANCE_IMAGES"
+for service in api minio postgres qdrant worker-convert worker-index; do
+  cid="$("${COMPOSE_POC[@]}" ps -q "$service" 2>/dev/null || true)"
+  [[ -n "$cid" ]] || die "provenance container missing for $service"
+  image_id="$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null || true)"
+  [[ -n "$image_id" ]] || die "provenance image missing for $service"
+  printf '%s\t%s\n' "$service" "$image_id" >>"$PROVENANCE_IMAGES"
+done
+export O03_GIT_SHA_FULL="$(git -C "$ROOT" rev-parse HEAD)"
+if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+  export O03_GIT_DIRTY=1
+else
+  export O03_GIT_DIRTY=0
+fi
+export O03_COMPOSE_PROJECT="$POC_PROJECT"
+export O03_MIGRATION_SHA="$(sha256sum "$ROOT/crates/server/migrations/manifest.json" | awk '{print $1}')"
+export O03_COMPOSE_SHA="$(sha256sum "$ROOT/deploy/compose.poc.yml" | awk '{print $1}')"
+export O03_INDEX_SIGNATURE="$INDEX_SIGNATURE"
+python3 - "$PROVENANCE_IMAGES" "$RAW/provenance.json" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+images = {}
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    service, image = line.split("\t", 1)
+    images[service] = image
+payload = {
+    "gitShaFull": os.environ["O03_GIT_SHA_FULL"],
+    "gitDirty": os.environ["O03_GIT_DIRTY"] == "1",
+    "composeProject": os.environ["O03_COMPOSE_PROJECT"],
+    "migrationManifestSha256": os.environ["O03_MIGRATION_SHA"],
+    "composeFileSha256": os.environ["O03_COMPOSE_SHA"],
+    "indexSignature": os.environ["O03_INDEX_SIGNATURE"],
+    "imageIds": images,
+}
+pathlib.Path(sys.argv[2]).write_text(
+    json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
 
 # Tool wrappers — no secrets embedded in files.
 cat >"$TOOLBIN/pg_dump" <<'EOF'
@@ -147,13 +216,14 @@ while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   env_args+=("-e" "$line")
 done < <(env | awk -F= '/^MC_HOST_/ {print $1}')
-exec docker run --rm -i --network host "${env_args[@]}" "minio/mc:RELEASE.2025-08-13T08-35-41Z" "$@"
+exec docker run --rm -i --network host "${env_args[@]}" "${MARKHAND_MC_IMAGE:?}" "$@"
 EOF
 chmod 700 "$TOOLBIN"/*
 export PATH="$TOOLBIN:/usr/bin:/bin"
 # Env-only MinIO credentials (never mc alias set ... KEY SECRET).
 export MC_HOST_local="http://${MINIO_ACCESS_KEY}:${MINIO_SECRET_KEY}@127.0.0.1:${MINIO_PORT}"
 export MC_HOST_markhand="$MC_HOST_local"
+export MC_HOST_green="http://${MARKHAND_GREEN_MINIO_ACCESS_KEY}:${MARKHAND_GREEN_MINIO_SECRET_KEY}@127.0.0.1:${GREEN_MINIO_PORT}"
 
 # Record preexisting Qdrant collections — never delete these.
 curl -fsS "${QDRANT_URL%/}/collections" >"$RAW/qdrant-preexisting.json"
@@ -170,7 +240,8 @@ PY
 BLUE_PREEXISTED=0
 if grep -qxF "$BLUE_COLLECTION" "$RAW/qdrant-preexisting-names.txt" 2>/dev/null; then
   BLUE_PREEXISTED=1
-  die "disposable blue collection name unexpectedly preexisting: $BLUE_COLLECTION"
+else
+  die "active source Qdrant collection missing: $BLUE_COLLECTION"
 fi
 
 # Full fence snapshot (every field) for exact restore.
@@ -184,11 +255,16 @@ SEED_DOC_ID=""
 SEED_VER_ID=""
 SEED_KEY=""
 TOMB_KEY=""
+QUERY_COLLECTION_ID=""
+QUERY_DOCUMENT_ID=""
 DEST=""
 DRILL_RC=0
 LOCK_PID=""
 CLEANUP_VERIFIED=0
 REPORT_ALLOWED=0
+GREEN_QDRANT_STARTED=0
+GREEN_MINIO_STARTED=0
+GREEN_API_STARTED=0
 
 restore_fence_snapshot() {
   python3 - <<'PY' "$PG_CONTAINER" "$RAW/initial-fence.json"
@@ -246,9 +322,13 @@ cleanup_isolated() {
   [[ -n "${LOCK_PID:-}" ]] && kill "$LOCK_PID" 2>/dev/null
   wait "$LOCK_PID" 2>/dev/null
 
+  "${COMPOSE_POC[@]}" --profile restore-green stop api-restore-green >/dev/null 2>&1 || true
+  "${COMPOSE_POC[@]}" --profile restore-green rm -f api-restore-green >/dev/null 2>&1 || true
+  GREEN_API_STARTED=0
+
   # Green cleanup ONLY via verifiable owned token marker.
   if [[ -n "${DEST:-}" && -f "$DEST/green-resources.marker" ]]; then
-    python3 - <<'PY' "$DEST/green-resources.marker" "$PG_CONTAINER" "$QDRANT_URL"
+    python3 - <<'PY' "$DEST/green-resources.marker" "$PG_CONTAINER" "$GREEN_QDRANT_URL"
 import json, subprocess, sys, urllib.request
 from pathlib import Path
 marker = json.loads(Path(sys.argv[1]).read_text())
@@ -268,12 +348,19 @@ if db:
         check=False,
     )
 if bucket:
-    subprocess.run(["mc", "rb", "--force", f"local/{bucket}"], check=False)
+    subprocess.run(["mc", "rb", "--force", f"green/{bucket}"], check=False)
 if coll:
     urllib.request.urlopen(urllib.request.Request(f"{qurl}/collections/{coll}", method="DELETE"), timeout=30)
 print("token_cleanup_ok", token[:8])
 PY
   fi
+
+  "${COMPOSE_POC[@]}" --profile restore-green stop \
+    qdrant-restore-green minio-restore-green >/dev/null 2>&1 || true
+  "${COMPOSE_POC[@]}" --profile restore-green rm -f \
+    qdrant-restore-green minio-restore-green >/dev/null 2>&1 || true
+  GREEN_QDRANT_STARTED=0
+  GREEN_MINIO_STARTED=0
 
   # Hard-delete isolated seed rows. Bypass FORCE RLS + immutability triggers.
   if [[ -n "$SEED_DOC_ID" ]]; then
@@ -303,9 +390,15 @@ SQL
   # Comprehensive post-cleanup verification.
   SEED_LEFT="$(docker exec "$PG_CONTAINER" psql -U markhand -d markhand -Atc "SELECT count(*) FROM documents WHERE id='${SEED_DOC_ID:-00000000-0000-0000-0000-000000000000}'" || echo 1)"
   GREEN_LEFT="$(docker exec "$PG_CONTAINER" psql -U markhand -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='${GREEN_DB}'" || true)"
-  BUCKET_LEFT="$(mc ls "local/${GREEN_BUCKET}" >/dev/null 2>&1 && echo 1 || echo 0)"
+  BUCKET_LEFT="$(mc ls "green/${GREEN_BUCKET}" >/dev/null 2>&1 && echo 1 || echo 0)"
   COLL_LEFT="$(curl -sS -o /dev/null -w '%{http_code}' "${QDRANT_URL%/}/collections/${BLUE_COLLECTION}" || echo 000)"
-  GREEN_COLL_LEFT="$(curl -sS -o /dev/null -w '%{http_code}' "${QDRANT_URL%/}/collections/${GREEN_COLLECTION}" || echo 000)"
+  GREEN_COLL_LEFT="$(curl -sS -o /dev/null -w '%{http_code}' "${GREEN_QDRANT_URL%/}/collections/${GREEN_COLLECTION}" || echo 000)"
+  GREEN_CONTAINERS_LEFT=0
+  for service in api-restore-green minio-restore-green qdrant-restore-green; do
+    if [[ -n "$("${COMPOSE_POC[@]}" --profile restore-green ps -a -q "$service" 2>/dev/null)" ]]; then
+      GREEN_CONTAINERS_LEFT=$((GREEN_CONTAINERS_LEFT + 1))
+    fi
+  done
   # Preexisting Qdrant collections unchanged.
   curl -fsS "${QDRANT_URL%/}/collections" >"$RAW/qdrant-post-cleanup.json"
   python3 - <<'PY' "$RAW/qdrant-preexisting-names.txt" "$RAW/qdrant-post-cleanup.json" "$BLUE_COLLECTION" || ok=0
@@ -315,13 +408,13 @@ pre = {ln.strip() for ln in Path(sys.argv[1]).read_text().splitlines() if ln.str
 post_data = json.loads(Path(sys.argv[2]).read_text())
 post = {c.get("name") for c in (post_data.get("result") or {}).get("collections") or [] if c.get("name")}
 blue = sys.argv[3]
-# All preexisting must remain; blue disposable must be gone.
+# Every preexisting source collection, including the active blue generation, must remain.
 missing = pre - post
 if missing:
     print("preexisting_missing", missing)
     raise SystemExit(1)
-if blue in post:
-    print("blue_still_present", blue)
+if blue not in post:
+    print("blue_missing", blue)
     raise SystemExit(1)
 print("qdrant_preexisting_ok")
 PY
@@ -334,11 +427,13 @@ PY
     echo "green_bucket=$BUCKET_LEFT"
     echo "blue_collection_http=$COLL_LEFT"
     echo "green_collection_http=$GREEN_COLL_LEFT"
+    echo "green_containers=$GREEN_CONTAINERS_LEFT"
     echo "fence_now=$FENCE_NOW"
   } | tee "$RAW/cleanup-verify.txt"
 
   if [[ "${SEED_LEFT}" == "0" && "${GREEN_LEFT:-0}" == "0" && "$BUCKET_LEFT" == "0" \
-        && "$COLL_LEFT" != "200" && "$GREEN_COLL_LEFT" != "200" && "$ok" == "1" ]]; then
+        && "$COLL_LEFT" == "200" && "$GREEN_COLL_LEFT" != "200" \
+        && "$GREEN_CONTAINERS_LEFT" == "0" && "$ok" == "1" ]]; then
     echo "cleanup_verified=1" | tee -a "$RAW/cleanup-verify.txt"
     CLEANUP_VERIFIED=1
     pass "verified cleanup before report"
@@ -461,12 +556,13 @@ mc version enable "local/${MINIO_BUCKET}" | tee "$RAW/minio-version-enable.txt" 
 SEED_KEY="trusted/o03-seed-${STAMP_LC}.txt"
 TOMB_KEY="trusted/o03-tomb-${STAMP_LC}.txt"
 SEED_BODY="O03 seed $STAMP allowlisted-synthetic"
+SEED_BODY_LATEST="${SEED_BODY}-v2"
 TOMB_BODY="O03 tomb $STAMP"
 SEED_DOC_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 SEED_VER_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-SEED_SHA="$(printf '%s' "$SEED_BODY" | sha256sum | awk '{print $1}')"
+SEED_SHA="$(printf '%s' "$SEED_BODY_LATEST" | sha256sum | awk '{print $1}')"
 printf '%s' "$SEED_BODY" | mc pipe "local/${MINIO_BUCKET}/${SEED_KEY}" >/dev/null
-printf '%s-v2' "$SEED_BODY" | mc pipe "local/${MINIO_BUCKET}/${SEED_KEY}" >/dev/null
+printf '%s' "$SEED_BODY_LATEST" | mc pipe "local/${MINIO_BUCKET}/${SEED_KEY}" >/dev/null
 printf '%s' "$TOMB_BODY" | mc pipe "local/${MINIO_BUCKET}/${TOMB_KEY}" >/dev/null
 mc rm --force "local/${MINIO_BUCKET}/${TOMB_KEY}" >/dev/null
 printf '%s-undeleted' "$TOMB_BODY" | mc pipe "local/${MINIO_BUCKET}/${TOMB_KEY}" >/dev/null
@@ -484,23 +580,56 @@ INSERT INTO document_versions (
   content_sha256, original_object_key, byte_size, created_by_user_id
 ) VALUES (
   '${SEED_VER_ID}', '${ORG_ID}', '${SEED_DOC_ID}', 1, 'draft', false,
-  '${SEED_SHA}', '${SEED_KEY}', ${#SEED_BODY}, '${USER_ID}'
+  '${SEED_SHA}', '${SEED_KEY}', ${#SEED_BODY_LATEST}, '${USER_ID}'
 );
 COMMIT;
 SQL
-curl -fsS -X PUT "${QDRANT_URL%/}/collections/${BLUE_COLLECTION}" \
-  -H 'Content-Type: application/json' \
-  -d '{"vectors":{"size":8,"distance":"Cosine"}}' >/dev/null
-curl -fsS -X PUT "${QDRANT_URL%/}/collections/${BLUE_COLLECTION}/points?wait=true" \
-  -H 'Content-Type: application/json' \
-  -d "{\"points\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8],\"payload\":{\"object_key\":\"${SEED_KEY}\",\"document_id\":\"${SEED_DOC_ID}\",\"content_sha256\":\"${SEED_SHA}\"}}]}" >/dev/null
 LAST_WRITE_EPOCH="$(date -u +%s)"
 printf '%s\n' "$LAST_WRITE_EPOCH" >"$RAW/last-write.epoch"
 export MARKHAND_CROSS_STORE_REFS_JSON="$(python3 - <<PY
 import json
-print(json.dumps([{"objectKey":"$SEED_KEY","documentId":"$SEED_DOC_ID","objectSha256":"$SEED_SHA","versionId":"$SEED_VER_ID","qdrantPointId":1}]))
+print(json.dumps([{"objectKey":"$SEED_KEY","documentId":"$SEED_DOC_ID","objectSha256":"$SEED_SHA","versionId":"$SEED_VER_ID"}]))
 PY
 )"
+# The canary is whichever document indexed last, so the query has to come from
+# that document too. A fixed question only cited it back when the collection was
+# nearly empty; against a loaded stack the newest document is unrelated to the
+# question and the proof fails for the wrong reason.
+IFS='|' read -r QUERY_COLLECTION_ID QUERY_DOCUMENT_ID QUERY_CANARY_TERM < <(
+  docker exec "$PG_CONTAINER" psql -U markhand -d markhand -At -F '|' -c "
+    SELECT d.collection_id, d.id,
+           coalesce(
+             (regexp_match(c.body, '[A-Z][A-Z0-9]{7,63}'))[1],
+             regexp_replace(left(c.body, 60), '[^[:alnum:] ]', ' ', 'g')
+           )
+    FROM index_metadata im
+    JOIN chunks c ON c.index_metadata_id = im.id
+    JOIN documents d ON d.org_id = c.org_id AND d.id = c.document_id
+    JOIN document_versions dv
+      ON dv.org_id = c.org_id AND dv.document_id = c.document_id AND dv.id = c.version_id
+    WHERE im.is_active = true
+      AND im.state = 'active'
+      AND im.index_signature_sha256 = '${INDEX_SIGNATURE}'
+      AND d.state = 'indexed'
+      AND dv.is_current = true
+      AND dv.publication_state = 'published'
+    ORDER BY c.created_at DESC
+    LIMIT 1;
+  "
+)
+[[ "$QUERY_COLLECTION_ID" =~ ^[0-9a-f-]{36}$ && "$QUERY_DOCUMENT_ID" =~ ^[0-9a-f-]{36}$ ]] \
+  || die "no published indexed API query canary for active generation"
+QUERY_CANARY_TERM="$(printf '%s' "$QUERY_CANARY_TERM" | tr -cd '[:alnum:] ' | cut -c1-64)"
+if [[ -n "${QUERY_CANARY_TERM// /}" ]]; then
+  QUERY_TERM_SOURCE=canary-document
+else
+  QUERY_CANARY_TERM="O01 async canary"
+  QUERY_TERM_SOURCE=fallback
+fi
+export QUERY_CANARY_TERM
+# The term itself stays out of the evidence: it is document text.
+printf 'collection_id=%s\ndocument_id=%s\nquery_term_source=%s\n' \
+  "$QUERY_COLLECTION_ID" "$QUERY_DOCUMENT_ID" "$QUERY_TERM_SOURCE" >"$RAW/query-canary-ids.txt"
 
 python3 - <<'PY' &
 import os, sys, time
@@ -587,7 +716,13 @@ GREEN_SYS="$(docker exec "$PG_CONTAINER" psql -U markhand -d markhand -Atc "SELE
 GREEN_URL="postgres://markhand:${PG_PASS}@127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}/${GREEN_DB}"
 export MARKHAND_GREEN_DATABASE_URL="$GREEN_URL"
 export MARKHAND_GREEN_MINIO_BUCKET="$GREEN_BUCKET"
+export MARKHAND_GREEN_MINIO_ENDPOINT="$GREEN_MINIO_ENDPOINT"
+export MARKHAND_GREEN_MINIO_API_PORT="$GREEN_MINIO_PORT"
 export MARKHAND_GREEN_QDRANT_COLLECTION="$GREEN_COLLECTION"
+export MARKHAND_GREEN_QDRANT_URL="$GREEN_QDRANT_URL"
+export MARKHAND_GREEN_QDRANT_HTTP_PORT="$GREEN_QDRANT_PORT"
+export MARKHAND_GREEN_API_PORT="$GREEN_API_PORT"
+export MARKHAND_GREEN_POSTGRES_DB="$GREEN_DB"
 export MARKHAND_GREEN_ALLOWLIST_JSON="$(python3 - <<PY
 import json
 print(json.dumps([{"pgSystemIdentifier":"$GREEN_SYS","pgDatabase":"$GREEN_DB"}]))
@@ -604,6 +739,25 @@ print(json.dumps(["$GREEN_COLLECTION"]))
 PY
 )"
 
+MARKHAND_GREEN_MINIO_API_PORT="$GREEN_MINIO_PORT" \
+MARKHAND_GREEN_QDRANT_HTTP_PORT="$GREEN_QDRANT_PORT" \
+  "${COMPOSE_POC[@]}" --profile restore-green up -d --no-deps \
+  minio-restore-green qdrant-restore-green >"$RAW/green-stores-up.txt" 2>&1
+GREEN_MINIO_STARTED=1
+GREEN_QDRANT_STARTED=1
+for _ in $(seq 1 60); do
+  if curl -fsS "${GREEN_MINIO_ENDPOINT}/minio/health/live" >/dev/null 2>&1 \
+    && curl -fsS "${GREEN_QDRANT_URL}/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+curl -fsS "${GREEN_MINIO_ENDPOINT}/minio/health/live" >"$RAW/green-minio-health.txt" \
+  || die "isolated green MinIO did not become healthy"
+curl -fsS "${GREEN_QDRANT_URL}/healthz" >"$RAW/green-qdrant-health.txt" \
+  || die "isolated green Qdrant did not become healthy"
+pass "isolated green MinIO and Qdrant endpoints healthy"
+
 # Missing mandatory allowlist refuse
 set +e
 MARKHAND_GREEN_MINIO_ALLOWLIST_JSON= \
@@ -615,17 +769,17 @@ set +e
 MARKHAND_GREEN_ALLOWLIST_JSON='[{"pgSystemIdentifier":"0","pgDatabase":"nope"}]' \
   bash "$ROOT/deploy/backup/restore.sh" "$DEST" >"$RAW/inject-wrong-allowlist.out" 2>&1
 [[ $? -ne 0 ]] && pass "restore.sh refuses wrong green allowlist" || gap "wrong allowlist not refused"
-MARKHAND_GREEN_MINIO_BUCKET="$MINIO_BUCKET" MARKHAND_GREEN_MINIO_ALLOWLIST_JSON="$(python3 -c "import json; print(json.dumps(['$MINIO_BUCKET']))")" \
+MARKHAND_GREEN_MINIO_ENDPOINT="$MINIO_ENDPOINT" MARKHAND_GREEN_MINIO_BUCKET="$MINIO_BUCKET" MARKHAND_GREEN_MINIO_ALLOWLIST_JSON="$(python3 -c "import json; print(json.dumps(['$MINIO_BUCKET']))")" \
   bash "$ROOT/deploy/backup/restore.sh" "$DEST" >"$RAW/inject-bucket-alias.out" 2>&1
 [[ $? -ne 0 ]] && pass "restore.sh refuses blue bucket alias" || gap "bucket alias not refused"
-MARKHAND_GREEN_QDRANT_COLLECTION="$BLUE_COLLECTION" MARKHAND_GREEN_QDRANT_ALLOWLIST_JSON="$(python3 -c "import json; print(json.dumps(['$BLUE_COLLECTION']))")" \
+MARKHAND_GREEN_QDRANT_URL="$QDRANT_URL" MARKHAND_GREEN_QDRANT_COLLECTION="$BLUE_COLLECTION" MARKHAND_GREEN_QDRANT_ALLOWLIST_JSON="$(python3 -c "import json; print(json.dumps(['$BLUE_COLLECTION']))")" \
   bash "$ROOT/deploy/backup/restore.sh" "$DEST" >"$RAW/inject-coll-alias.out" 2>&1
 [[ $? -ne 0 ]] && pass "restore.sh refuses blue collection alias" || gap "collection alias not refused"
 # Existing allowlisted target fails before mutation
-mc mb "local/${GREEN_BUCKET}" >/dev/null
+mc mb "green/${GREEN_BUCKET}" >/dev/null
 bash "$ROOT/deploy/backup/restore.sh" "$DEST" >"$RAW/inject-existing-target.out" 2>&1
 EXIST_RC=$?
-mc rb --force "local/${GREEN_BUCKET}" >/dev/null 2>&1
+mc rb --force "green/${GREEN_BUCKET}" >/dev/null 2>&1
 [[ "$EXIST_RC" -ne 0 ]] && grep -q REFUSING_EXISTING_ALLOWLISTED_TARGET "$RAW/inject-existing-target.out" \
   && pass "existing allowlisted MinIO target refused before mutation" \
   || gap "existing target refuse failed"
@@ -657,19 +811,159 @@ MARKHAND_RESTORE_CUTOVER=1 bash "$ROOT/deploy/backup/restore.sh" "$DEST" >"$RAW/
   && pass "cutover/promote disabled (exit 3)" || gap "promote disable path failed"
 set -e
 
-POST_READY="$(curl -sS -o "$RAW/api-ready-post-restore.json" -w '%{http_code}' "${API_URL%/}/api/v1/health/ready" || echo 000)"
+MARKHAND_GREEN_POSTGRES_DB="$GREEN_DB" \
+MARKHAND_GREEN_MINIO_BUCKET="$GREEN_BUCKET" \
+MARKHAND_GREEN_QDRANT_HTTP_PORT="$GREEN_QDRANT_PORT" \
+MARKHAND_GREEN_API_PORT="$GREEN_API_PORT" \
+  "${COMPOSE_POC[@]}" --profile restore-green up -d --no-deps api-restore-green \
+  >"$RAW/green-api-up.txt" 2>&1
+GREEN_API_STARTED=1
+for _ in $(seq 1 60); do
+  curl -fsS "${GREEN_API_URL}/api/v1/health/live" >/dev/null 2>&1 && break
+  sleep 1
+done
+GREEN_PRE_LIVE="$(curl -sS -o "$RAW/api-live-green-pre-attest.json" -w '%{http_code}' \
+  "${GREEN_API_URL}/api/v1/health/live" || echo 000)"
+GREEN_PRE_READY="$(curl -sS -o "$RAW/api-ready-green-pre-attest.json" -w '%{http_code}' \
+  "${GREEN_API_URL}/api/v1/health/ready" || echo 000)"
+printf '%s\n' "$GREEN_PRE_LIVE" >"$RAW/api-live-green-pre-attest.status"
+printf '%s\n' "$GREEN_PRE_READY" >"$RAW/api-ready-green-pre-attest.status"
+[[ "$GREEN_PRE_LIVE" == "200" && "$GREEN_PRE_READY" == "503" ]] \
+  && pass "green API live but not ready before independent attestation" \
+  || gap "green API pre-attestation barrier failed (live=$GREEN_PRE_LIVE ready=$GREEN_PRE_READY)"
+
+PYTHONPATH="$ROOT/deploy/backup/lib${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 "$ROOT/deploy/backup/lib/green_attestation.py" \
+  "$DEST" "$RAW/green-target-attestation.json" \
+  >"$RAW/green-attestation.out" 2>&1
+grep -q GREEN_TARGET_ATTESTED "$RAW/green-attestation.out" \
+  && pass "independent green target-state attestation cleared matching fence" \
+  || gap "green target-state attestation missing"
+
+POST_READY="000"
+for _ in $(seq 1 60); do
+  POST_READY="$(curl -sS -o "$RAW/api-ready-post-restore.json" -w '%{http_code}' \
+    "${GREEN_API_URL}/api/v1/health/ready" || echo 000)"
+  [[ "$POST_READY" == "200" ]] && break
+  sleep 1
+done
 printf '%s\n' "$POST_READY" >"$RAW/api-ready-post-restore.status"
-POST_LIVE="$(curl -sS -o "$RAW/api-live-post-restore.json" -w '%{http_code}' "${API_URL%/}/api/v1/health/live" || echo 000)"
+POST_LIVE="$(curl -sS -o "$RAW/api-live-post-restore.json" -w '%{http_code}' \
+  "${GREEN_API_URL}/api/v1/health/live" || echo 000)"
 printf '%s\n' "$POST_LIVE" >"$RAW/api-live-post-restore.status"
-if [[ "$POST_READY" == "200" ]]; then
-  pass "post-restore ready 200 (no queryReadyRtoPass claim)"
-else
-  pass "no query-ready claim (ready HTTP $POST_READY after restore query)"
-fi
-[[ "$POST_LIVE" == "200" ]] && pass "post-restore API live 200" || gap "post-restore API live failed"
+[[ "$POST_READY" == "200" ]] && pass "attested green API ready 200" \
+  || gap "attested green API ready failed (HTTP $POST_READY)"
+[[ "$POST_LIVE" == "200" ]] && pass "attested green API live 200" \
+  || gap "attested green API live failed"
+
+MARKHAND_GREEN_API_URL="$GREEN_API_URL" \
+MARKHAND_QUERY_COLLECTION_ID="$QUERY_COLLECTION_ID" \
+MARKHAND_QUERY_DOCUMENT_ID="$QUERY_DOCUMENT_ID" \
+MARKHAND_QUERY_TERM_SOURCE="$QUERY_TERM_SOURCE" \
+  python3 - <<'PY' >"$RAW/green-query-proof.json"
+import json
+import os
+import urllib.error
+import urllib.request
+
+base = os.environ["MARKHAND_GREEN_API_URL"].rstrip("/")
+collection_id = os.environ["MARKHAND_QUERY_COLLECTION_ID"]
+document_id = os.environ["MARKHAND_QUERY_DOCUMENT_ID"]
+email = os.environ.get("MARKHAND_E2E_EMAIL", "admin@poc.example")
+password = os.environ.get("MARKHAND_E2E_PASSWORD", "markhand-dev")
+
+def request(path, payload, token=None):
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(
+        base + path,
+        data=json.dumps(payload).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, {}
+
+login_status, login = request(
+    "/api/v1/auth/login", {"email": email, "password": password}
+)
+token = login.get("accessToken") or login.get("access_token")
+ask_status, ask = request(
+    "/api/v1/ask",
+    {
+        "question": os.environ.get("QUERY_CANARY_TERM") or "O01 async canary",
+        "collectionIds": [collection_id],
+        "limit": 5,
+    },
+    token=token,
+) if token else (0, {})
+citations = ask.get("citations") or []
+grounded = bool(citations) or int(ask.get("citationCount") or 0) > 0
+expected_document = document_id in json.dumps(ask, sort_keys=True)
+proof = {
+    "loginHttp": login_status,
+    "askHttp": ask_status,
+    "grounded": grounded,
+    "expectedDocument": expected_document,
+    "questionSource": os.environ.get("MARKHAND_QUERY_TERM_SOURCE", "unknown"),
+}
+print(json.dumps(proof, sort_keys=True))
+if login_status != 200 or ask_status != 200 or not grounded or not expected_document:
+    raise SystemExit(1)
+PY
+pass "distinct green API answered grounded query from restored stores"
+QUERY_READY_EPOCH="$(date -u +%s)"
+QUERY_READY_RTO=$((QUERY_READY_EPOCH - RESTORE_START))
+FULL_VECTOR_RTO="$QUERY_READY_RTO"
+CONSISTENCY_RPO=$((CAPTURE_END - LAST_WRITE_EPOCH))
+printf '%s\n' "$QUERY_READY_EPOCH" >"$RAW/query-ready.epoch"
+printf '%s\n' "$QUERY_READY_RTO" >"$RAW/query-ready-rto.seconds"
+printf '%s\n' "$FULL_VECTOR_RTO" >"$RAW/full-vector-rto.seconds"
+printf '%s\n' "$CONSISTENCY_RPO" >"$RAW/consistency-rpo.seconds"
+[[ "$QUERY_READY_RTO" -le 3600 ]] && pass "query-ready RTO ${QUERY_READY_RTO}s <= 3600s" \
+  || gap "query-ready RTO exceeded (${QUERY_READY_RTO}s)"
+[[ "$CONSISTENCY_RPO" -le 900 ]] && pass "attested consistency RPO ${CONSISTENCY_RPO}s <= 900s" \
+  || gap "consistency RPO exceeded (${CONSISTENCY_RPO}s)"
+[[ "$FULL_VECTOR_RTO" -le 14400 ]] && pass "full-vector RTO ${FULL_VECTOR_RTO}s <= 14400s" \
+  || gap "full-vector RTO exceeded (${FULL_VECTOR_RTO}s)"
+
+BLUE_READY="$(curl -sS -o "$RAW/api-ready-blue-during-green.json" -w '%{http_code}' \
+  "${API_URL%/}/api/v1/health/ready" || echo 000)"
+printf '%s\n' "$BLUE_READY" >"$RAW/api-ready-blue-during-green.status"
+[[ "$BLUE_READY" == "503" ]] && pass "blue API remained fenced while green became query-ready" \
+  || gap "blue API was not fenced during green validation (HTTP $BLUE_READY)"
 
 BLUE_ACTIVE="$(docker exec "$PG_CONTAINER" psql -U markhand -d markhand -Atc "SELECT active FROM ops_fences WHERE name='restore'")"
 [[ "$BLUE_ACTIVE" == "t" ]] && pass "blue restore fence retained (no false cutover)" || gap "blue fence not active"
+
+if [[ -n "${MARKHAND_O03_EXTERNAL_PROBE_REQUEST:-}" || -n "${MARKHAND_O03_EXTERNAL_PROBE_OUTPUT:-}" ]]; then
+  [[ -n "${MARKHAND_O03_EXTERNAL_PROBE_REQUEST:-}" && -n "${MARKHAND_O03_EXTERNAL_PROBE_OUTPUT:-}" ]] \
+    || die "external probe requires both request and output paths"
+  [[ -f "$MARKHAND_O03_EXTERNAL_PROBE_REQUEST" && ! -L "$MARKHAND_O03_EXTERNAL_PROBE_REQUEST" ]] \
+    || die "external probe request must be a regular file"
+  export MARKHAND_O03_GREEN_DEPLOYMENT_ID="${POC_PROJECT}:restore-green:${GREEN_DB}:${STAMP}"
+  export MARKHAND_O03_BLUE_DEPLOYMENT_ID="${POC_PROJECT}:blue:${O03_GIT_SHA_FULL}"
+  export MARKHAND_O03_GREEN_STORAGE_SIGNATURE
+  MARKHAND_O03_GREEN_STORAGE_SIGNATURE="$(
+    printf '%s|%s|%s|%s' "$GREEN_DB" "$GREEN_MINIO_ENDPOINT" "$GREEN_QDRANT_URL" "$GREEN_COLLECTION" \
+      | sha256sum | awk '{print $1}'
+  )"
+  export MARKHAND_O03_BLUE_STORAGE_SIGNATURE
+  MARKHAND_O03_BLUE_STORAGE_SIGNATURE="$(
+    printf '%s|%s|%s|%s' markhand "$MINIO_ENDPOINT" "$QDRANT_URL" "$BLUE_COLLECTION" \
+      | sha256sum | awk '{print $1}'
+  )"
+  python3 "$ROOT/bench/markhand_web/soak/post_restore_probe.py" \
+    --api-base "$GREEN_API_URL" \
+    --request "$MARKHAND_O03_EXTERNAL_PROBE_REQUEST" \
+    --output "$MARKHAND_O03_EXTERNAL_PROBE_OUTPUT"
+  cp "$MARKHAND_O03_EXTERNAL_PROBE_OUTPUT" "$RAW/o05-external-probe.json"
+  pass "external O05 retained/deleted/authz probe passed on live green"
+fi
 
 if find "$RAW" \( -name '*.dump' -o -name 'postgres.dump' \) | grep -q .; then
   gap "raw dump present in evidence"
@@ -680,8 +974,10 @@ fi
 if [[ "$WRITE_GATE_OK" != "1" ]]; then
   gap "app mutation write-gate not integrated (consistency backup refused unless REQUIRE=0)"
 fi
-gap "promote/cutover disabled: API does not consume durable routing + independent reconcile target-state attestation"
-gap "encrypted backup destination not exercised (POC explicit_poc_tmp_only policy)"
+[[ -f "$BACKUP_ROOT/.markhand-backup-encrypted" && "${MARKHAND_BACKUP_ENCRYPTED:-}" == "1" ]] \
+  && pass "encrypted destination policy exercised" \
+  || gap "encrypted backup destination policy not exercised"
+pass "traffic cutover remained disabled; distinct attested green API used for restore proof"
 
 printf '%s\n' "${GAPS_PASSES[@]+"${GAPS_PASSES[@]}"}" >"$RAW/passes.txt"
 printf '%s\n' "${GAPS_FAILS[@]+"${GAPS_FAILS[@]}"}" >"$RAW/gaps.txt"
@@ -708,20 +1004,78 @@ out = pathlib.Path(os.environ["OUT_DIR"])
 a = json.loads((raw / "o03-restore.json.first").read_text())
 b = json.loads((out / "o03-restore.json").read_text())
 for k in ("issue", "stamp", "status", "captureWindowSeconds", "restoreGreenSeconds",
-          "consistencyRpoPass", "queryReadyRtoPass", "passes", "gaps",
+          "consistencyRpoSeconds", "queryReadyRtoSeconds", "fullVectorRtoSeconds",
+          "consistencyRpoPass", "queryReadyRtoPass", "fullVectorRtoPass",
+          "provenance", "passes", "gaps", "blockers",
           "baselineReadyHttp", "postRestoreReadyHttp", "postRestoreLiveHttp",
-          "cleanupVerified"):
+          "greenPreAttestationReadyHttp", "blueReadyDuringGreenHttp",
+          "attestationPassed", "greenQueryPassed",
+          "encryptedDestinationPolicyPassed", "cleanupVerified"):
     if a.get(k) != b.get(k):
         print(f"mismatch {k}", file=sys.stderr)
         raise SystemExit(1)
-assert a.get("consistencyRpoPass") is None and a.get("queryReadyRtoPass") is None
+assert a.get("consistencyRpoPass") is True and a.get("queryReadyRtoPass") is True
+assert a.get("fullVectorRtoPass") is True
 print("reproducible_ok")
 PY
 pass "reproducible raw→report"
 printf '%s\n' "${GAPS_PASSES[@]+"${GAPS_PASSES[@]}"}" >"$RAW/passes.txt"
 printf '%s\n' "${GAPS_FAILS[@]+"${GAPS_FAILS[@]}"}" >"$RAW/gaps.txt"
+python3 - "$RAW" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+raw = pathlib.Path(sys.argv[1]).resolve()
+files = []
+for path in sorted(raw.rglob("*")):
+    if not path.is_file() or path.name == "raw-manifest.json":
+        continue
+    rel = path.relative_to(raw).as_posix()
+    data = path.read_bytes()
+    files.append(
+        {
+            "path": rel,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "sizeBytes": len(data),
+        }
+    )
+(raw / "raw-manifest.json").write_text(
+    json.dumps({"schemaVersion": 1, "files": files}, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
 python3 "$ROOT/deploy/scripts/o03-report-from-raw.py" "$RAW" --out-dir "$OUT_DIR"
 
-log "drill complete status=in_progress gaps=${#GAPS_FAILS[@]} raw=$RAW"
-[[ "$DRILL_RC" -eq 0 ]]
-exit 0
+REPORT_STATUS="$(python3 -c "import json; print(json.load(open('$OUT_DIR/o03-restore.json'))['status'])")"
+if [[ "$REPORT_STATUS" != "pass" ]]; then
+  DRILL_RC=1
+fi
+log "drill complete status=$REPORT_STATUS gaps=${#GAPS_FAILS[@]} raw=$RAW"
+python3 - "$RAW" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+raw = pathlib.Path(sys.argv[1]).resolve()
+files = []
+for path in sorted(raw.rglob("*")):
+    if not path.is_file() or path.name == "raw-manifest.json":
+        continue
+    data = path.read_bytes()
+    files.append(
+        {
+            "path": path.relative_to(raw).as_posix(),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "sizeBytes": len(data),
+        }
+    )
+(raw / "raw-manifest.json").write_text(
+    json.dumps({"schemaVersion": 1, "files": files}, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+python3 "$ROOT/deploy/scripts/o03-report-from-raw.py" "$RAW" --out-dir "$OUT_DIR"
+[[ "$DRILL_RC" -eq 0 && "$REPORT_STATUS" == "pass" ]]

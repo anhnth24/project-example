@@ -1,0 +1,63 @@
+{
+  "apiHttpExercised": true,
+  "authSource": "password_login",
+  "documentId": "cf674f2c-ee15-472c-b9f9-13f34d433a33",
+  "endpoint": "http://127.0.0.1:8788",
+  "jobId": "dcca4414-bb71-4880-b836-3479755c422a",
+  "loginStatus": 200,
+  "passed": true,
+  "probes": {
+    "auth_me": {
+      "details": {},
+      "passed": true,
+      "status": 200
+    },
+    "existing_resource_cross_tenant": {
+      "details": {},
+      "passed": true,
+      "status": 404
+    },
+    "health_live": {
+      "details": {
+        "status": "ok"
+      },
+      "passed": true,
+      "status": 200
+    },
+    "health_ready": {
+      "details": {
+        "status": "ok"
+      },
+      "passed": true,
+      "status": 200
+    },
+    "vertical_ask": {
+      "details": {
+        "citationCount": 1,
+        "grounded": true,
+        "hasAnswer": true
+      },
+      "passed": true,
+      "status": 200
+    },
+    "vertical_job": {
+      "details": {
+        "terminalSucceeded": true
+      },
+      "passed": true,
+      "status": 200
+    },
+    "vertical_search": {
+      "details": {
+        "items": 1
+      },
+      "passed": true,
+      "status": 200
+    },
+    "vertical_upload": {
+      "details": {},
+      "passed": true,
+      "status": 201
+    }
+  }
+}

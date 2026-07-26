@@ -309,6 +309,12 @@ pub async fn login_with_password(
             .map_err(|_| SessionError::Database)?;
     }
 
+    // The request write gate already holds one pooled connection. Release the
+    // credential lookup connection before the tenant-context and session-family
+    // transactions below; otherwise a two-connection pool deadlocks on every
+    // successful login while failed logins continue to return normally.
+    drop(client);
+
     // Current-state authorization before minting tokens.
     let _ctx = resolve_org_context_in_txn(pool, org_id, user_id).await?;
 

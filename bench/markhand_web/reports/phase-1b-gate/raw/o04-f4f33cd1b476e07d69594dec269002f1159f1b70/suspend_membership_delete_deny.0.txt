@@ -1,0 +1,14 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 1.09s
+     Running tests/citation_authz_matrix.rs (target/debug/deps/citation_authz_matrix-b8e376adade32aa6)
+
+running 1 test
+test live_citation_authz_expiry_replay_idor_and_immediate_deny ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 4.09s
+
+
+O04_COMMAND_OUTPUT_TRUNCATED	false
+O04_COMMAND_EXIT_CODE	0
+O04_COMMAND_TIMED_OUT	false
+O04_COMMAND_EOF	true
+

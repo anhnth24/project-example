@@ -1,0 +1,8 @@
+{
+  "code": "dependency_unavailable",
+  "message": "A required service is unavailable (ready_reconcile_fence)",
+  "requestId": "fbbcf2fc-7d67-41c9-b8cb-95186f7d02f0",
+  "details": {
+    "probe": "ready_reconcile_fence"
+  }
+}

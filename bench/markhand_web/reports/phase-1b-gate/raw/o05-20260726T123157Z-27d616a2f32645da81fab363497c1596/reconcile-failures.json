@@ -1,0 +1,7 @@
+[
+  {
+    "returncode": 1,
+    "stdout": "\u001b[2m2026-07-26T12:47:22.722101Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mtelemetry\u001b[0m\u001b[2m:\u001b[0m telemetry exporter configured \u001b[3mservice\u001b[0m\u001b[2m=\u001b[0mmarkhand-worker-reconcile \u001b[3mmetrics_enabled\u001b[0m\u001b[2m=\u001b[0mtrue \u001b[3mqueue_capacity\u001b[0m\u001b[2m=\u001b[0m1024\n",
+    "stderr": " Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-d15b1d30bfa3 Creating \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-d15b1d30bfa3 Created \nfileconv-worker: reconcile oneshot enqueue failed: database error\n\n"
+  }
+]

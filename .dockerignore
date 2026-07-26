@@ -1,4 +1,7 @@
-# Keep Docker build context lean (deploy POC images).
+# Keep the Docker build context to what `cargo build --release` actually reads
+# (Cargo manifests, crates/**, toolchain files). Anything else in the context
+# invalidates the image layer cache on unrelated commits and forces a full
+# release rebuild, which costs ~20 minutes per gate run.
 .git
 .github
 .cursor
@@ -6,18 +9,28 @@
 **/.DS_Store
 **/node_modules
 **/target
-app/dist
-app/src-tauri/target
-bench/corpus*
-bench/edge
-bench/markhand_web/reports
+.artifacts
+bench
 models
 pdfium
 tessdata_best
 vendor
 web
 plans
+docs
+app
+tests
+scripts
+re-design
 *.log
-deploy/dev/.env
-deploy/spike/.env
+# Only the Dockerfiles are build inputs; compose files, env files, deploy
+# scripts and service assets are runtime concerns and must not bust the cache.
+deploy/compose*.yml
+deploy/dev
+deploy/spike
+deploy/poc
+deploy/backup
+deploy/observability
+deploy/scripts
+deploy/README.md
 deploy/.env

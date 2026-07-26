@@ -1,11 +1,8 @@
 # P1B-O02 dashboards/alerts/runbooks evidence
 
-- Status: `incomplete`
-- Raw: `/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T110541Z`
+- Status: `pass`
+- Raw: `/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o02-20260726T122352Z`
 
-- BLOCKER: O01 not Done — O02 remains in_progress per dependency policy
-- BLOCKER: Backup alert uses O01-as-shipped series when present; O02 does not claim always-present live backup metrics; capture/restore drill owned by P1B-O03
-- BLOCKER: Compose worker-reconcile-oneshot deployment gap: docker compose run cgroupv2; finite exits proven via docker run fallback
 - PASS: promtool check rules
 - PASS: histogram fixture invariants
 - PASS: promtool test rules (fire/resolve)
@@ -14,10 +11,10 @@
 - PASS: dashboard JSON + datasource parameterization
 - PASS: runbooks DCRV + redact/allowlist
 - PASS: unit-test fire→resolve transitions present
-- PASS: Grafana API import (query deferred/gap)
+- PASS: Grafana API import + query
 - PASS: live Prometheus loaded markhand rules
-- PASS: compose resolved postgres cid=6cad89f62d43
-- PASS: disposable guard container 6f272e62fb5a
+- PASS: compose resolved postgres cid=edbbdc9fce68
+- PASS: disposable guard container 64cc982db9b8
 - PASS: failpoint disposable before_stop: armed; EXIT left/kept running
 - PASS: failpoint disposable during_stop: EXIT restored armed stop
 - PASS: failpoint disposable after_stop: EXIT restored armed stop
@@ -26,12 +23,12 @@
 - PASS: failpoint real compose after_stop: EXIT restored
 - PASS: failpoint real compose normal: confirmed restart disarmed
 - PASS: failpoint real compose initially_stopped: preserved stopped
-- PASS: live MarkhandDependencyDown firing at 140s (saved alerts-during-20260723T110903Z.json)
+- PASS: live MarkhandDependencyDown firing at 133s (saved alerts-during-20260726T122723Z.json)
 - PASS: postgres container healthy after restore (disarm on confirm)
 - PASS: app-role DB select current_user=markhand_app
 - PASS: API live status matches baseline (200)
-- PASS: API ready status matches baseline (503)
-- PASS: live MarkhandDependencyDown inactive/absent at 15s after restore
+- PASS: API ready status matches baseline (200)
+- PASS: live MarkhandDependencyDown inactive/absent at 16s after restore
 - PASS: live reconcile worker dry-run→repair→idempotent + scope isolation
 - PASS: oneshot missing DOCUMENT_ID exits non-zero before DB work
 - PASS: oneshot malformed DOCUMENT_ID exits non-zero

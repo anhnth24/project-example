@@ -1,0 +1,71 @@
+[
+  {
+    "Id": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-minio-1",
+    "Created": "2026-07-26T12:18:51.46301975Z",
+    "Image": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "Config": {
+      "User": "",
+      "Image": "pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": null,
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": [],
+      "Devices": null,
+      "Memory": 536870912,
+      "NanoCpus": 1000000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 256
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292_minio_data",
+        "Destination": "/data",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": ""
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert": {
+          "IPAddress": "172.18.0.3",
+          "Gateway": "",
+          "NetworkID": "a9396d74ba3f84c9b2206f48e9fd9377846a1fef432f4429c2aa95c0ca293faa",
+          "EndpointID": "05fd5a6103c2384c4101ae9789293d27a22955cd773718a61173a96696f611e5",
+          "MacAddress": "ee:5e:be:38:d4:b2",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-minio-1",
+            "minio"
+          ]
+        },
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.3",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "f59bfe70c95099863d080b93fd66f86a4c50ce3a0a3db9d949b7eae4e52cbe16",
+          "MacAddress": "b2:c5:f7:72:4d:fe",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-minio-1",
+            "minio"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 1816005
+    }
+  }
+]

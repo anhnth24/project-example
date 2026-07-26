@@ -7,11 +7,12 @@ by structural + converter preflight.
 
 from __future__ import annotations
 
-import json
+import secrets
 import shutil
 import struct
 import subprocess
 import zlib
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
@@ -401,9 +402,57 @@ def invalid_stub_bytes(fmt: str) -> bytes:
     return b"invalid"
 
 
-def generate_bytes(fmt: str) -> bytes:
+# A PNG marker has to survive OCR, and random character strings are what OCR is
+# worst at: measured on the target host, hex tokens lost one upload in six to
+# 0/O and 1/l, and restricting the alphabet made it worse because Tesseract also
+# inserts glyphs into strings it cannot read as words. Words carry the engine's
+# language model, so markers are built from a wordlist instead. Four words out of
+# 64 give 16 million combinations, which is unique enough for a 180-upload run.
+_MARKER_WORDS = (
+    "ALPHA BRAVO CEDAR DELTA EAGLE FALCON GARNET HARBOR INDIGO JASPER KETTLE "
+    "LANTERN MARBLE NECTAR ORCHID PEBBLE QUARTZ RIVER SUMMIT TANGO UMBER VELVET "
+    "WALNUT XENON YARROW ZEPHYR ANCHOR BASALT CANYON DAHLIA EMBER FOSSIL GLACIER "
+    "HOLLOW IVORY JUNIPER KRYPTON LEDGER MAGNET NIMBUS OPAL PRISM QUIVER RAVEN "
+    "SABLE TIMBER URCHIN VESSEL WILLOW XYLEM YONDER ZODIAC AMBER BEACON CIPHER "
+    "DUNE ELDER FLINT GROTTO HERON IRIS JETTY KELP LUMEN MESA"
+).split()
+
+
+def unique_token(words: int = 4) -> str:
+    """Marker suffix built from words, so OCR can read it back."""
+    return " ".join(secrets.choice(_MARKER_WORDS) for _ in range(words))
+
+
+def unique_marker(fmt: str, token: str) -> str:
+    """Per-upload marker so retrieval can target one exact document.
+
+    The soak used one marker per format, so every upload of that format shared a
+    search term. With the mock embedding every document matches every query, so
+    the wanted document had to win a ranking race against the whole collection
+    and dropped out of the top hits as the corpus grew. A unique suffix makes the
+    keyword side of the hybrid search rank the intended document first.
+
+    PNG carries the words alone: its marker is recovered by OCR, and the digits
+    in the per-format prefix come back as letters often enough to lose the match.
+    """
+    if fmt.lower() == "png":
+        return token
+    return f"{marker_for(fmt)}U{token}"
+
+
+@lru_cache(maxsize=1)
+def unique_png_marker_supported() -> bool:
+    """PNG markers are OCR'd back, so they need the TrueType render path.
+
+    Without Pillow the builder falls back to a 5x7 bitmap that Tesseract cannot
+    read, and a unique marker would fail conversion instead of proving anything.
+    """
+    return _truetype_png_bytes("SOAKPROBE1") is not None
+
+
+def generate_bytes(fmt: str, marker: str | None = None) -> bytes:
     key = fmt.lower()
-    marker = marker_for(key)
+    marker = marker or marker_for(key)
     if key == "pdf":
         return tiny_pdf_bytes(marker)
     if key == "docx":

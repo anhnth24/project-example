@@ -1,0 +1,60 @@
+[
+  {
+    "Id": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1",
+    "Created": "2026-07-26T12:18:51.49870841Z",
+    "Image": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "Config": {
+      "User": "0:0",
+      "Image": "qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": null,
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": [],
+      "Devices": null,
+      "Memory": 1073741824,
+      "NanoCpus": 1000000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 256
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292_qdrant_data",
+        "Destination": "/qdrant/storage",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": ""
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.4",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "9fa8004985ff18084f9c47dc2cd317decfc121f71d2e1f32e5868f6ac1c99ff8",
+          "MacAddress": "2a:7c:79:b1:45:fa",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1",
+            "qdrant"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 1816012
+    }
+  }
+]

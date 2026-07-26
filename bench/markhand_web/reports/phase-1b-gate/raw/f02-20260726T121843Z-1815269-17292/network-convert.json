@@ -1,0 +1,23 @@
+[
+  {
+    "Id": "a9396d74ba3f84c9b2206f48e9fd9377846a1fef432f4429c2aa95c0ca293faa",
+    "Name": "markhand-poc-f02-20260726t121843z-1815269-17292_convert",
+    "Driver": "bridge",
+    "Internal": true,
+    "Options": {},
+    "Containers": {
+      "136aea576d47f6ba438311fb0b0d76b2c2f6bf39bef8df501ec50e86dde23513": {
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292-otel-capture-1"
+      },
+      "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954": {
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1"
+      },
+      "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626": {
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292-minio-1"
+      },
+      "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d": {
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1"
+      }
+    }
+  }
+]

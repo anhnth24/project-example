@@ -27,6 +27,7 @@ These targets apply to the Markhand Web Phase 1B service envelope:
 | Change answers | Change accuracy | >= 0.95 | `G0-RET-CHANGE-ACCURACY` | `bench/markhand_web/retrieval/summary.json` | Phase 1B quality track accepted |
 | Version citations | Precision/recall | 1.0 / 1.0 | `G0-RET-VERSION-CITATION-*` | `bench/markhand_web/retrieval/summary.json` | Phase 1B quality track accepted |
 | Ingest throughput | Peak documents/hour | >= 1200 | `G0-CAP-INGEST-THROUGHPUT` | P0-08 local-cpu smoke has `targetMatch=false`; not a pass | Blocked |
+| Ingest throughput (POC) | Normal documents/hour | >= 300 | `G0-CAP-INGEST-THROUGHPUT-POC` | `bench/markhand_web/reports/phase-1b-gate/o05-soak.json` | Phase 1B POC scope on `poc-compose` |
 | Queue age | Oldest ingest queue age under recovery load | <= 120 minutes and bounded | Capacity/recovery operational target | P0-08 deterministic simulation only | Blocked |
 | DR RPO | Recovery point objective | <= 15 minutes | `G0-DR-RPO` | P0-10 restore smoke only; `targetMatch=false`; not a pass | Blocked |
 | DR query-ready RTO | Query-ready recovery time | <= 60 minutes | `G0-DR-QUERY-READY-RTO` | P0-10 restore smoke only; `targetMatch=false`; not a pass | Blocked |

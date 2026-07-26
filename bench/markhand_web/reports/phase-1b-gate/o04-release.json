@@ -1,12 +1,74 @@
 {
   "architecture": {
-    "apiHttpExercised": false,
-    "description": "Cargo #[ignore] integration tests boot in-process axum + ConvertWorker/IndexWorker against live PG/MinIO/Qdrant endpoints from MARKHAND_TEST_*; they do not send HTTP to the Compose API container.",
-    "kind": "in_process_workers_against_poc_services"
+    "apiHttpExercised": true,
+    "description": "O04 pass requires black-box probes against the deployed Compose API over its host-published HTTP endpoint plus cargo integration suites.",
+    "kind": "compose_api_public_http"
   },
-  "blockers": [
-    "f02_boot_not_passed"
-  ],
+  "blackBoxApiProbes": {
+    "apiHttpExercised": true,
+    "authSource": "password_login",
+    "documentId": "cf674f2c-ee15-472c-b9f9-13f34d433a33",
+    "endpoint": "http://127.0.0.1:8788",
+    "jobId": "dcca4414-bb71-4880-b836-3479755c422a",
+    "loginStatus": 200,
+    "passed": true,
+    "probes": {
+      "auth_me": {
+        "details": {},
+        "passed": true,
+        "status": 200
+      },
+      "existing_resource_cross_tenant": {
+        "details": {},
+        "passed": true,
+        "status": 404
+      },
+      "health_live": {
+        "details": {
+          "status": "ok"
+        },
+        "passed": true,
+        "status": 200
+      },
+      "health_ready": {
+        "details": {
+          "status": "ok"
+        },
+        "passed": true,
+        "status": 200
+      },
+      "vertical_ask": {
+        "details": {
+          "citationCount": 1,
+          "grounded": true,
+          "hasAnswer": true
+        },
+        "passed": true,
+        "status": 200
+      },
+      "vertical_job": {
+        "details": {
+          "terminalSucceeded": true
+        },
+        "passed": true,
+        "status": 200
+      },
+      "vertical_search": {
+        "details": {
+          "items": 1
+        },
+        "passed": true,
+        "status": 200
+      },
+      "vertical_upload": {
+        "details": {},
+        "passed": true,
+        "status": 201
+      }
+    },
+    "rawLog": "api-http-probes.json"
+  },
+  "blockers": [],
   "commands": {
     "adversarial_upload": [
       [
@@ -17,7 +79,9 @@
         "--test",
         "uploads",
         "--",
-        "--nocapture"
+        "--include-ignored",
+        "--nocapture",
+        "reject"
       ]
     ],
     "suspend_membership_delete_deny": [
@@ -74,18 +138,6 @@
         "--ignored",
         "--nocapture",
         "live_convert_worker_cancel_loses_lease_and_kills_sandbox"
-      ],
-      [
-        "cargo",
-        "test",
-        "-p",
-        "fileconv-server",
-        "--test",
-        "worker",
-        "--",
-        "--ignored",
-        "--nocapture",
-        "live_convert_worker_fault_injection_rolls_back_and_retries_promotion"
       ]
     ]
   },
@@ -99,21 +151,289 @@
     "txt",
     "xlsx"
   ],
+  "externalWorkerKill": {
+    "candidateWorkerStartExitCode": 0,
+    "candidateWorkerStopped": true,
+    "dbBeforeKill": {
+      "attempts": 1,
+      "eventCounts": {
+        "outbox.published": 1
+      },
+      "found": true,
+      "id": "dcca4414-bb71-4880-b836-3479755c422a",
+      "jobType": "convert",
+      "leaseExpired": false,
+      "leaseExpiresAtUnixMs": 1785068949968,
+      "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+      "leaseOwnerPrefix": "poc-convert-1",
+      "leaseOwnerPresent": true,
+      "maxAttempts": 5,
+      "observedAtUnixMs": 1785068890110,
+      "orgId": "11111111-1111-1111-1111-111111111111",
+      "outboxCounts": {
+        "job.enqueued": 1
+      },
+      "status": "leased"
+    },
+    "dbBeforeKillObservations": [
+      {
+        "query": {
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        "state": {
+          "attempts": 1,
+          "eventCounts": {
+            "outbox.published": 1
+          },
+          "found": true,
+          "id": "dcca4414-bb71-4880-b836-3479755c422a",
+          "jobType": "convert",
+          "leaseExpired": false,
+          "leaseExpiresAtUnixMs": 1785068949968,
+          "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+          "leaseOwnerPrefix": "poc-convert-1",
+          "leaseOwnerPresent": true,
+          "maxAttempts": 5,
+          "observedAtUnixMs": 1785068890110,
+          "orgId": "11111111-1111-1111-1111-111111111111",
+          "outboxCounts": {
+            "job.enqueued": 1
+          },
+          "status": "leased"
+        }
+      }
+    ],
+    "dbExpiredLease": {
+      "attempts": 1,
+      "eventCounts": {
+        "job.reclaimed": 1,
+        "outbox.published": 2
+      },
+      "found": true,
+      "id": "dcca4414-bb71-4880-b836-3479755c422a",
+      "jobType": "convert",
+      "leaseExpired": false,
+      "leaseExpiresAtUnixMs": null,
+      "leaseOwnerFingerprint": null,
+      "leaseOwnerPrefix": "",
+      "leaseOwnerPresent": false,
+      "maxAttempts": 5,
+      "observedAtUnixMs": 1785068950391,
+      "orgId": "11111111-1111-1111-1111-111111111111",
+      "outboxCounts": {
+        "job.enqueued": 1,
+        "job.reclaimed": 1
+      },
+      "status": "pending"
+    },
+    "dbExpiredLeaseObservations": [
+      {
+        "query": {
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        "state": {
+          "attempts": 1,
+          "eventCounts": {
+            "outbox.published": 1
+          },
+          "found": true,
+          "id": "dcca4414-bb71-4880-b836-3479755c422a",
+          "jobType": "convert",
+          "leaseExpired": false,
+          "leaseExpiresAtUnixMs": 1785068949968,
+          "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+          "leaseOwnerPrefix": "poc-convert-1",
+          "leaseOwnerPresent": true,
+          "maxAttempts": 5,
+          "observedAtUnixMs": 1785068947770,
+          "orgId": "11111111-1111-1111-1111-111111111111",
+          "outboxCounts": {
+            "job.enqueued": 1
+          },
+          "status": "leased"
+        }
+      },
+      {
+        "query": {
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        "state": {
+          "attempts": 1,
+          "eventCounts": {
+            "outbox.published": 1
+          },
+          "found": true,
+          "id": "dcca4414-bb71-4880-b836-3479755c422a",
+          "jobType": "convert",
+          "leaseExpired": false,
+          "leaseExpiresAtUnixMs": 1785068949968,
+          "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+          "leaseOwnerPrefix": "poc-convert-1",
+          "leaseOwnerPresent": true,
+          "maxAttempts": 5,
+          "observedAtUnixMs": 1785068949092,
+          "orgId": "11111111-1111-1111-1111-111111111111",
+          "outboxCounts": {
+            "job.enqueued": 1
+          },
+          "status": "leased"
+        }
+      },
+      {
+        "query": {
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        "state": {
+          "attempts": 1,
+          "eventCounts": {
+            "job.reclaimed": 1,
+            "outbox.published": 2
+          },
+          "found": true,
+          "id": "dcca4414-bb71-4880-b836-3479755c422a",
+          "jobType": "convert",
+          "leaseExpired": false,
+          "leaseExpiresAtUnixMs": null,
+          "leaseOwnerFingerprint": null,
+          "leaseOwnerPrefix": "",
+          "leaseOwnerPresent": false,
+          "maxAttempts": 5,
+          "observedAtUnixMs": 1785068950391,
+          "orgId": "11111111-1111-1111-1111-111111111111",
+          "outboxCounts": {
+            "job.enqueued": 1,
+            "job.reclaimed": 1
+          },
+          "status": "pending"
+        }
+      }
+    ],
+    "dbFinal": {
+      "attempts": 2,
+      "eventCounts": {
+        "job.reclaimed": 1,
+        "job.succeeded": 1,
+        "outbox.published": 2
+      },
+      "found": true,
+      "id": "dcca4414-bb71-4880-b836-3479755c422a",
+      "jobType": "convert",
+      "leaseExpired": false,
+      "leaseExpiresAtUnixMs": null,
+      "leaseOwnerFingerprint": null,
+      "leaseOwnerPrefix": "",
+      "leaseOwnerPresent": false,
+      "maxAttempts": 5,
+      "observedAtUnixMs": 1785068956068,
+      "orgId": "11111111-1111-1111-1111-111111111111",
+      "outboxCounts": {
+        "document.index_requested": 1,
+        "job.enqueued": 1,
+        "job.reclaimed": 1,
+        "job.succeeded": 1
+      },
+      "status": "succeeded"
+    },
+    "dbFinalObservations": [
+      {
+        "query": {
+          "exitCode": 0,
+          "timedOut": false,
+          "truncated": false
+        },
+        "state": {
+          "attempts": 2,
+          "eventCounts": {
+            "job.reclaimed": 1,
+            "job.succeeded": 1,
+            "outbox.published": 2
+          },
+          "found": true,
+          "id": "dcca4414-bb71-4880-b836-3479755c422a",
+          "jobType": "convert",
+          "leaseExpired": false,
+          "leaseExpiresAtUnixMs": null,
+          "leaseOwnerFingerprint": null,
+          "leaseOwnerPrefix": "",
+          "leaseOwnerPresent": false,
+          "maxAttempts": 5,
+          "observedAtUnixMs": 1785068956068,
+          "orgId": "11111111-1111-1111-1111-111111111111",
+          "outboxCounts": {
+            "document.index_requested": 1,
+            "job.enqueued": 1,
+            "job.reclaimed": 1,
+            "job.succeeded": 1
+          },
+          "status": "succeeded"
+        }
+      }
+    ],
+    "dbStateVerified": true,
+    "deathVerified": true,
+    "harnessControlled": true,
+    "killExitCode": 0,
+    "killedContainerId": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+    "leaseExpired": true,
+    "leaseExpiryProof": "durable_reclaim_after_captured_deadline",
+    "missingServices": [],
+    "observedJobId": "dcca4414-bb71-4880-b836-3479755c422a",
+    "postgresContainerId": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+    "rawLog": "external-worker-kill.json",
+    "replacementCommandExitCode": 0,
+    "replacementContainerId": "4af8b2f246a561159a8170765a088217369b231064d4bf9d94aeda02be467bbe",
+    "replacementReclaimed": true,
+    "replacementWorkerVerified": true,
+    "replayConsistent": true,
+    "restartPolicyDisabled": true,
+    "stdoutProofAccepted": false
+  },
   "f02Boot": {
-    "composeProject": "markhand-poc",
+    "composeBlobSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "containerIds": {
+      "api": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+      "minio": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+      "mock-embedding": "6afd129754f484ba2e606f1fa33521d8c6d32d8413bffec32157f0f232242838",
+      "postgres": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+      "qdrant": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+      "worker-convert": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+      "worker-delete": "1d72fa068e9a9315794eb8ea76c71b1a37a00ca5eaac215a31cde907ef0d6ef6",
+      "worker-embedding": "22bfad486294a45aff9b60d555a90632d6a8e9ce37f05567934e65a579ab4ef2",
+      "worker-index": "a9eaa04a11e811b38a45df1a62b543220675ed8ca15859356e6f7c26208681fa",
+      "worker-reconcile": "3bf20d5259f6103a7ec85123a7560fff7435d555a59dfba43892a0da561c5aeb"
+    },
+    "effectiveComposeSha256": null,
     "imageIds": {
-      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
-      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
-      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+      "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "mock-embedding": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-delete": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-embedding": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-reconcile": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
     },
     "issue": "P1B-F02",
-    "passed": false,
-    "path": "/workspace/bench/markhand_web/reports/poc-f02-boot.json",
-    "stamp_utc": "20260724T031535Z"
+    "manifestPath": ".artifacts/markhand_web/reports/phase-1b-gate/raw/f02-20260726T121843Z-1815269-17292/manifest.json",
+    "manifestSha256": "796918633abd1f25a735034163eb6f9dbf1e399a3846ac08dd52d3d06dc2d0b2",
+    "passed": true,
+    "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json",
+    "reportSha256": "6d7a1acfeac0d1f70ff43dda07a7820964c4a6e23531120c6829435711a35c1b",
+    "stamp_utc": "20260726T121843Z",
+    "validatorBlockers": [],
+    "validatorStatus": "pass"
   },
   "findings": [],
   "formatsObserved": [
@@ -126,49 +446,390 @@
     "txt",
     "xlsx"
   ],
-  "generatedAt": "2026-07-24T03:15:46Z",
+  "generatedAt": "2026-07-26T12:29:18Z",
   "issue": "P1B-O04",
   "markhandE2e": true,
-  "notes": "Live run did not meet O04 pass gates; see blockers. Architecture remains in-process workers against service endpoints.",
+  "notes": "All required O04 suites passed with complete format matrix.",
   "provenance": {
-    "composeProject": "markhand-poc",
-    "composeVersion": "Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1",
-    "dockerVersion": "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2",
-    "gitSha": "e3350d2",
-    "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
+    "apiEndpoint": "http://127.0.0.1:8788",
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "composeServiceMap": {
+      "api": {
+        "containerId": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+        "health": "healthy",
+        "imageId": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+        "labels": {
+          "com.docker.compose.config-hash": "1c40803569480b2cf420498042a13d0a8b69dd587d16c37e94758898ff6a84b7",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "api"
+        },
+        "ports": {
+          "8787/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "8788"
+            }
+          ]
+        },
+        "running": true
+      },
+      "db-bootstrap": {
+        "containerId": "61cdc2b9c6057ae770f4a67fed0fbbb64ce4487bf42e54b0f45edae693b91cde",
+        "health": "exited",
+        "imageId": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+        "labels": {
+          "com.docker.compose.config-hash": "da2a47dd91e673cb708963b3e98d8e2c3c86e8ff27a70822f1f94a200496f114",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "db-bootstrap"
+        },
+        "ports": {},
+        "running": false
+      },
+      "migrate": {
+        "containerId": "8446cf4485dc14d5969ca9121f5ddfdc6f33c5e92f691fa3de2a23be4c4f89a4",
+        "health": "exited",
+        "imageId": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+        "labels": {
+          "com.docker.compose.config-hash": "62bedd4b9312f3c2fc2bababddfc42fe47e4f05777ca4c2538810baa02bb137a",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "migrate"
+        },
+        "ports": {},
+        "running": false
+      },
+      "minio": {
+        "containerId": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+        "health": "running",
+        "imageId": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+        "labels": {
+          "com.docker.compose.config-hash": "13bf97bf7c29ba49f86c6a67840988116015b6acb3fcc597b8e46bbb9374affa",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "minio"
+        },
+        "ports": {
+          "9000/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "9010"
+            }
+          ],
+          "9001/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "9011"
+            }
+          ]
+        },
+        "running": true
+      },
+      "minio-init": {
+        "containerId": "b52cc253cec40c3a2261193e87543831d94891607b9fd37f6b916d18a7c15055",
+        "health": "exited",
+        "imageId": "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+        "labels": {
+          "com.docker.compose.config-hash": "9c43ad82c41f8717f9ea79d7b8c46d3e40c00915d72ac2e430177042f6786341",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "minio-init"
+        },
+        "ports": {},
+        "running": false
+      },
+      "mock-embedding": {
+        "containerId": "6afd129754f484ba2e606f1fa33521d8c6d32d8413bffec32157f0f232242838",
+        "health": "healthy",
+        "imageId": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+        "labels": {
+          "com.docker.compose.config-hash": "64c88228d227dec4774db5f8bbde1d37da37ad5c6f7c845948335ca53051f7aa",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "mock-embedding"
+        },
+        "ports": {
+          "8080/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "8090"
+            }
+          ]
+        },
+        "running": true
+      },
+      "otel-capture": {
+        "containerId": "136aea576d47f6ba438311fb0b0d76b2c2f6bf39bef8df501ec50e86dde23513",
+        "health": "unhealthy",
+        "imageId": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+        "labels": {
+          "com.docker.compose.config-hash": "e7963ac3415ea688bb3d5823c60a6603cc246d9aad0b126638f43030ac4374ed",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "otel-capture"
+        },
+        "ports": {
+          "4318/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "14318"
+            }
+          ]
+        },
+        "running": true
+      },
+      "postgres": {
+        "containerId": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+        "health": "healthy",
+        "imageId": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+        "labels": {
+          "com.docker.compose.config-hash": "b079cb08d493b032bd152fd3f83f5064c6b8144feae352c532bdfc56de9b3411",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "postgres"
+        },
+        "ports": {
+          "5432/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "54330"
+            }
+          ]
+        },
+        "running": true
+      },
+      "qdrant": {
+        "containerId": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+        "health": "running",
+        "imageId": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+        "labels": {
+          "com.docker.compose.config-hash": "a74254fa0fc04eaca517c7e4f90748392259ccd5c2ea5b0bc5e142256bd22d21",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "qdrant"
+        },
+        "ports": {
+          "6333/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "6343"
+            }
+          ],
+          "6334/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "6344"
+            }
+          ]
+        },
+        "running": true
+      },
+      "qdrant-init": {
+        "containerId": "932b750b38a8e4210d9d2781133c3162fcd0278a7160807a0a98310cfd37a9e6",
+        "health": "exited",
+        "imageId": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+        "labels": {
+          "com.docker.compose.config-hash": "1ceed0b81d08472c984f04c4a44903e511befcd70b619b7d3cba5ceeb19a5e3c",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "qdrant-init"
+        },
+        "ports": {},
+        "running": false
+      },
+      "worker-convert": {
+        "containerId": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+        "health": "healthy",
+        "imageId": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+        "labels": {
+          "com.docker.compose.config-hash": "745c3fa0d524b88cbf50954108abe5d6722be5c5bba4df89b1db1dc681e109f2",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "worker-convert"
+        },
+        "ports": {},
+        "running": true
+      },
+      "worker-delete": {
+        "containerId": "1d72fa068e9a9315794eb8ea76c71b1a37a00ca5eaac215a31cde907ef0d6ef6",
+        "health": "running",
+        "imageId": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+        "labels": {
+          "com.docker.compose.config-hash": "8f934ab52f9eb571beba1d38ffaae9cee4e1cf7d6e17592df26fe69048d442ce",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "worker-delete"
+        },
+        "ports": {},
+        "running": true
+      },
+      "worker-embedding": {
+        "containerId": "22bfad486294a45aff9b60d555a90632d6a8e9ce37f05567934e65a579ab4ef2",
+        "health": "running",
+        "imageId": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+        "labels": {
+          "com.docker.compose.config-hash": "1c9ae6123a22c229b7bae1ef2991125f561f050f4c95f9a8a5e6723a411a9fd3",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "worker-embedding"
+        },
+        "ports": {},
+        "running": true
+      },
+      "worker-index": {
+        "containerId": "a9eaa04a11e811b38a45df1a62b543220675ed8ca15859356e6f7c26208681fa",
+        "health": "running",
+        "imageId": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+        "labels": {
+          "com.docker.compose.config-hash": "7c6dd92cd2f5a12015600f01b44f2de75f03e16c758814b3eb189461478cd374",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "worker-index"
+        },
+        "ports": {},
+        "running": true
+      },
+      "worker-reconcile": {
+        "containerId": "3bf20d5259f6103a7ec85123a7560fff7435d555a59dfba43892a0da561c5aeb",
+        "health": "running",
+        "imageId": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+        "labels": {
+          "com.docker.compose.config-hash": "52213462ff716ff843126ac07ff26064e49c8aee4af205239192cb7ab27208d5",
+          "com.docker.compose.container-number": "1",
+          "com.docker.compose.project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "com.docker.compose.service": "worker-reconcile"
+        },
+        "ports": {},
+        "running": true
+      }
+    },
+    "composeVersion": "Docker Compose version v5.3.1",
+    "containerIds": {
+      "api": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+      "db-bootstrap": "61cdc2b9c6057ae770f4a67fed0fbbb64ce4487bf42e54b0f45edae693b91cde",
+      "migrate": "8446cf4485dc14d5969ca9121f5ddfdc6f33c5e92f691fa3de2a23be4c4f89a4",
+      "minio": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+      "minio-init": "b52cc253cec40c3a2261193e87543831d94891607b9fd37f6b916d18a7c15055",
+      "mock-embedding": "6afd129754f484ba2e606f1fa33521d8c6d32d8413bffec32157f0f232242838",
+      "otel-capture": "136aea576d47f6ba438311fb0b0d76b2c2f6bf39bef8df501ec50e86dde23513",
+      "postgres": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+      "qdrant": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+      "qdrant-init": "932b750b38a8e4210d9d2781133c3162fcd0278a7160807a0a98310cfd37a9e6",
+      "worker-convert": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+      "worker-delete": "1d72fa068e9a9315794eb8ea76c71b1a37a00ca5eaac215a31cde907ef0d6ef6",
+      "worker-embedding": "22bfad486294a45aff9b60d555a90632d6a8e9ce37f05567934e65a579ab4ef2",
+      "worker-index": "a9eaa04a11e811b38a45df1a62b543220675ed8ca15859356e6f7c26208681fa",
+      "worker-reconcile": "3bf20d5259f6103a7ec85123a7560fff7435d555a59dfba43892a0da561c5aeb"
+    },
+    "dockerVersion": "Docker version 29.6.2, build dfc4efb",
+    "effectiveComposeSha256": "d3f8e273fbd1a1643683a6403f5cab433ee412fb457dab2f8e67e36a3cc7f4ff",
+    "f02ManifestSha256": "796918633abd1f25a735034163eb6f9dbf1e399a3846ac08dd52d3d06dc2d0b2",
+    "f02ReportSha256": "6d7a1acfeac0d1f70ff43dda07a7820964c4a6e23531120c6829435711a35c1b",
+    "gitDirty": false,
+    "gitSha": "f4f33cd1b",
+    "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
     "imageDigests": {
+      "api": "markhand-api@sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
       "db-bootstrap": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "migrate": "markhand-api@sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
       "minio": "pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
       "minio-init": "minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
       "mock-embedding": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "otel-capture": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
       "postgres": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
       "qdrant": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
-      "qdrant-init": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0"
+      "qdrant-init": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "worker-convert": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-delete": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-embedding": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-reconcile": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
     },
     "imageIds": {
-      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "db-bootstrap": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "migrate": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
-      "minio-init": "sha256:c2ad77420d33bb4ad8694457d3edf7188076428582bd24e3dd4d09d6a1d52872",
-      "mock-embedding": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
-      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
-      "qdrant-init": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
-      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+      "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "db-bootstrap": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "migrate": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "minio-init": "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+      "mock-embedding": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "otel-capture": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "qdrant-init": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-delete": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-embedding": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-reconcile": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
     },
     "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
     "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
-    "missingPocServices": []
+    "missingPocServices": [],
+    "testEndpoints": {
+      "appDatabase": "postgresql://127.0.0.1:54330/markhand",
+      "database": "postgresql://127.0.0.1:54330/markhand",
+      "minio": "http://127.0.0.1:9010",
+      "qdrant": "http://127.0.0.1:6343"
+    }
   },
-  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o04-e3350d2",
+  "rawArtifactManifest": {
+    "path": "bench/markhand_web/reports/phase-1b-gate/raw/o04-f4f33cd1b476e07d69594dec269002f1159f1b70/raw-manifest.json",
+    "sha256": "fffdce6a0206809620b49d25f3103afb91a134f7c70e4f35d0bac69901f4cdd3"
+  },
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o04-f4f33cd1b476e07d69594dec269002f1159f1b70",
   "redactionScan": {
     "findings": [],
     "passed": true
   },
-  "status": "fail",
+  "schemaVersion": 2,
+  "status": "pass",
+  "suiteWorkerIsolation": {
+    "services": [
+      "worker-convert",
+      "worker-index",
+      "worker-embedding",
+      "worker-delete",
+      "worker-reconcile"
+    ],
+    "startCommand": [
+      "docker",
+      "compose",
+      "-p",
+      "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "-f",
+      "/home/administrator/markhand/deploy/compose.poc.yml",
+      "start",
+      "worker-convert",
+      "worker-index",
+      "worker-embedding",
+      "worker-delete",
+      "worker-reconcile"
+    ],
+    "startExitCode": 0,
+    "startTimedOut": false,
+    "stopCommand": [
+      "docker",
+      "compose",
+      "-p",
+      "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "-f",
+      "/home/administrator/markhand/deploy/compose.poc.yml",
+      "stop",
+      "--timeout",
+      "15",
+      "worker-convert",
+      "worker-index",
+      "worker-embedding",
+      "worker-delete",
+      "worker-reconcile"
+    ],
+    "stopExitCode": 0,
+    "stopTimedOut": false,
+    "workersRestarted": true,
+    "workersStopped": true
+  },
   "suites": {
     "adversarial_upload": {
       "command": [
@@ -179,7 +840,9 @@
         "--test",
         "uploads",
         "--",
-        "--nocapture"
+        "--include-ignored",
+        "--nocapture",
+        "reject"
       ],
       "commands": [
         [
@@ -190,18 +853,25 @@
           "--test",
           "uploads",
           "--",
-          "--nocapture"
+          "--include-ignored",
+          "--nocapture",
+          "reject"
         ]
       ],
       "exitCode": 0,
       "formatsObserved": [],
       "ignored": false,
+      "ignoredCount": 0,
       "passed": true,
-      "rawLog": "adversarial_upload.*.txt",
+      "rawLog": "adversarial_upload.0.txt",
+      "rawLogs": [
+        "adversarial_upload.0.txt"
+      ],
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 19,
-      "testsRun": 19
+      "testsPassed": 12,
+      "testsRun": 12,
+      "timedOut": false
     },
     "suspend_membership_delete_deny": {
       "command": [
@@ -233,12 +903,17 @@
       "exitCode": 0,
       "formatsObserved": [],
       "ignored": false,
+      "ignoredCount": 0,
       "passed": true,
-      "rawLog": "suspend_membership_delete_deny.*.txt",
+      "rawLog": "suspend_membership_delete_deny.0.txt",
+      "rawLogs": [
+        "suspend_membership_delete_deny.0.txt"
+      ],
       "skipped": false,
       "testsFailed": 0,
       "testsPassed": 1,
-      "testsRun": 1
+      "testsRun": 1,
+      "timedOut": false
     },
     "unauthorized_cross_tenant": {
       "command": [
@@ -270,12 +945,17 @@
       "exitCode": 0,
       "formatsObserved": [],
       "ignored": false,
+      "ignoredCount": 0,
       "passed": true,
-      "rawLog": "unauthorized_cross_tenant.*.txt",
+      "rawLog": "unauthorized_cross_tenant.0.txt",
+      "rawLogs": [
+        "unauthorized_cross_tenant.0.txt"
+      ],
       "skipped": false,
       "testsFailed": 0,
       "testsPassed": 1,
-      "testsRun": 1
+      "testsRun": 1,
+      "timedOut": false
     },
     "vertical_slice_formats": {
       "command": [
@@ -316,12 +996,17 @@
         "xlsx"
       ],
       "ignored": false,
+      "ignoredCount": 0,
       "passed": true,
-      "rawLog": "vertical_slice_formats.*.txt",
+      "rawLog": "vertical_slice_formats.0.txt",
+      "rawLogs": [
+        "vertical_slice_formats.0.txt"
+      ],
       "skipped": false,
       "testsFailed": 0,
       "testsPassed": 1,
-      "testsRun": 1
+      "testsRun": 1,
+      "timedOut": false
     },
     "worker_kill_replay": {
       "command": [
@@ -348,29 +1033,22 @@
           "--ignored",
           "--nocapture",
           "live_convert_worker_cancel_loses_lease_and_kills_sandbox"
-        ],
-        [
-          "cargo",
-          "test",
-          "-p",
-          "fileconv-server",
-          "--test",
-          "worker",
-          "--",
-          "--ignored",
-          "--nocapture",
-          "live_convert_worker_fault_injection_rolls_back_and_retries_promotion"
         ]
       ],
       "exitCode": 0,
       "formatsObserved": [],
       "ignored": false,
+      "ignoredCount": 0,
       "passed": true,
-      "rawLog": "worker_kill_replay.*.txt",
+      "rawLog": "worker_kill_replay.0.txt",
+      "rawLogs": [
+        "worker_kill_replay.0.txt"
+      ],
       "skipped": false,
       "testsFailed": 0,
-      "testsPassed": 2,
-      "testsRun": 2
+      "testsPassed": 1,
+      "testsRun": 1,
+      "timedOut": false
     }
   },
   "workload": "bench/markhand_web/workloads/phase1b-mixed.yaml"

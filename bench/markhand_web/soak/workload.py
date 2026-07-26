@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import math
 import mimetypes
 import os
 import threading
@@ -15,7 +16,8 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fixtures import fixture_path, preflight_fixtures
+import fixtures
+from fixtures import fixture_path, marker_for, preflight_fixtures
 from mathutil import percentile, schedule_event_times
 
 
@@ -51,6 +53,14 @@ class RequestStats:
     errors: int = 0
     errors_outside_injection: int = 0
     errors_in_injection: int = 0
+    # Same errors attributed by when the outcome was recorded rather than by
+    # whether the operation overlapped a fault window; kept so the stricter
+    # reading stays visible in the evidence.
+    errors_outside_injection_at_outcome: int = 0
+    failures_in_injection: dict[str, int] = field(default_factory=dict)
+    reconcile_failures: list[dict[str, Any]] = field(default_factory=list)
+    # actor -> reason -> count, so a failed run says why instead of only how many.
+    failure_reasons: dict[str, dict[str, int]] = field(default_factory=dict)
     query_success_latencies_ms: list[float] = field(default_factory=list)
     query_success_by_mode: dict[str, int] = field(default_factory=dict)
     query_attempts_by_mode: dict[str, int] = field(default_factory=dict)
@@ -59,12 +69,19 @@ class RequestStats:
     deleted_ids: list[str] = field(default_factory=list)
     retained_ids: list[str] = field(default_factory=list)
     versions: dict[str, list[DocVersion]] = field(default_factory=dict)
+    doc_markers: dict[str, str] = field(default_factory=dict)
+    doc_versions: dict[str, str] = field(default_factory=dict)
+    doc_effective_from: dict[str, str] = field(default_factory=dict)
     not_ready: list[str] = field(default_factory=list)
     exceptions: list[str] = field(default_factory=list)
     injection_windows: list[tuple[float, float]] = field(default_factory=list)
     compare_dataset: dict[str, str] | None = None
     # Optional external window checker (InjectionPlan.in_window).
     injection_window_fn: Callable[[float], bool] | None = None
+    # Optional external overlap checker (InjectionPlan.overlaps).
+    injection_overlap_fn: Callable[[float, float], bool] | None = None
+    workload_start_mono: float | None = None
+    workload_end_mono: float | None = None
 
     def mark_scheduled(self, kind: str, n: int = 1) -> None:
         with self.lock:
@@ -74,19 +91,43 @@ class RequestStats:
         with self.lock:
             self.submitted[kind] = self.submitted.get(kind, 0) + 1
 
-    def in_injection_window(self, monotonic_offset: float) -> bool:
-        if self.injection_window_fn is not None:
-            return bool(self.injection_window_fn(monotonic_offset))
+    def in_injection_window(
+        self, monotonic_offset: float, started_offset: float | None = None
+    ) -> bool:
+        """Whether an operation coincided with a deliberately injected fault.
+
+        An operation that was already running when a worker was killed is
+        affected by that kill even if it gives up afterwards, so the whole span
+        from start to outcome is compared against the windows rather than the
+        instant the outcome was recorded.
+        """
+        if started_offset is None:
+            started_offset = monotonic_offset
+        low, high = sorted((started_offset, monotonic_offset))
+        if self.injection_overlap_fn is not None:
+            if self.injection_overlap_fn(low, high):
+                return True
+        elif self.injection_window_fn is not None:
+            if self.injection_window_fn(low) or self.injection_window_fn(high):
+                return True
         with self.lock:
             windows = list(self.injection_windows)
         for start, end in windows:
-            if start <= monotonic_offset <= end:
+            if start <= high and low <= end:
                 return True
         return False
 
     def add_injection_window(self, start: float, end: float) -> None:
         with self.lock:
             self.injection_windows.append((start, end))
+
+    def record_reconcile_failure(
+        self, *, returncode: int, stdout: str, stderr: str
+    ) -> None:
+        with self.lock:
+            self.reconcile_failures.append(
+                {"returncode": returncode, "stdout": stdout, "stderr": stderr}
+            )
 
     def add(
         self,
@@ -98,7 +139,11 @@ class RequestStats:
         mode: str | None = None,
         in_injection: bool = False,
         not_ready_reason: str | None = None,
+        reason: str | None = None,
+        in_injection_at_outcome: bool | None = None,
     ) -> None:
+        if in_injection_at_outcome is None:
+            in_injection_at_outcome = in_injection
         with self.lock:
             self.completed[kind] = self.completed.get(kind, 0) + 1
             if not_ready_reason:
@@ -106,11 +151,21 @@ class RequestStats:
             if ok:
                 self.success[kind] = self.success.get(kind, 0) + 1
             else:
+                label = reason or not_ready_reason or "unspecified"
+                if in_injection:
+                    label = f"{label}@injection"
+                per_kind = self.failure_reasons.setdefault(kind, {})
+                per_kind[label] = per_kind.get(label, 0) + 1
                 self.errors += 1
                 if in_injection:
                     self.errors_in_injection += 1
+                    self.failures_in_injection[kind] = (
+                        self.failures_in_injection.get(kind, 0) + 1
+                    )
                 else:
                     self.errors_outside_injection += 1
+                if not in_injection_at_outcome:
+                    self.errors_outside_injection_at_outcome += 1
             if kind == "query":
                 if mode:
                     self.query_attempts_by_mode[mode] = (
@@ -135,6 +190,18 @@ class RequestStats:
                 DocVersion(document_id, version_id, published=published)
             )
 
+    def record_marker(self, document_id: str, marker: str) -> None:
+        with self.lock:
+            self.doc_markers[document_id] = marker
+
+    def record_expected_version(self, document_id: str, version_id: str) -> None:
+        with self.lock:
+            self.doc_versions[document_id] = version_id
+
+    def record_effective_from(self, document_id: str, effective_from: str) -> None:
+        with self.lock:
+            self.doc_effective_from[document_id] = effective_from
+
     def compare_pair(self) -> tuple[str, str, str] | None:
         """Return (documentId, versionA, versionB) when two versions exist."""
         with self.lock:
@@ -150,6 +217,16 @@ class RequestStats:
                     return doc_id
             return self.document_ids[0] if self.document_ids else None
 
+    def current_doc_marker(self) -> tuple[str, str] | None:
+        with self.lock:
+            for doc_id in self.retained_ids + self.document_ids:
+                marker = self.doc_markers.get(doc_id)
+                if marker:
+                    return doc_id, marker
+            if self.document_ids:
+                return self.document_ids[0], ""
+        return None
+
 
 class ApiClient:
     def __init__(
@@ -160,12 +237,36 @@ class ApiClient:
         collection_id: str,
         timeout_seconds: float = 30.0,
         max_in_flight: int = 32,
+        credentials: tuple[str, str] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.collection_id = collection_id
         self.timeout_seconds = timeout_seconds
         self._sema = threading.BoundedSemaphore(max_in_flight)
+        # The access token outlives a smoke run but not a 1800s soak, so keep the
+        # credentials to re-authenticate instead of turning every later request
+        # into a 401 and reporting it as a system failure.
+        self._credentials = credentials
+        self._auth_lock = threading.Lock()
+        self.reauth_count = 0
+
+    def _reauthenticate(self, stale_token: str | None) -> bool:
+        if not self._credentials:
+            return False
+        with self._auth_lock:
+            if self.token != stale_token:
+                # Another thread already refreshed it.
+                return True
+            email, password = self._credentials
+            try:
+                self.token = login(
+                    self.base_url, email, password, timeout=self.timeout_seconds
+                )
+            except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, ValueError):
+                return False
+            self.reauth_count += 1
+            return True
 
     def _headers(self, content_type: str | None = "application/json") -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -183,26 +284,43 @@ class ApiClient:
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, bytes, float]:
-        url = self.base_url + path
-        req = Request(url, data=body, method=method, headers=headers or self._headers())
         started = time.perf_counter()
-        acquired = self._sema.acquire(timeout=self.timeout_seconds)
-        if not acquired:
-            return 0, b"backpressure", (time.perf_counter() - started) * 1000.0
-        try:
-            with urlopen(req, timeout=self.timeout_seconds) as resp:  # noqa: S310
-                data = resp.read()
-                status = int(getattr(resp, "status", 200))
-        except HTTPError as exc:
-            data = exc.read() if hasattr(exc, "read") else b""
-            status = int(exc.code)
-        except (URLError, TimeoutError, OSError):
-            data = b""
-            status = 0
-        finally:
-            self._sema.release()
+        status, data = self._send(method, path, body=body, headers=headers)
+        if status == 401 and self._reauthenticate(self.token):
+            retry_headers = headers
+            if retry_headers is not None and "Authorization" in retry_headers:
+                # Multipart callers build their own headers; carry the content
+                # type over but authorize with the token we just obtained.
+                retry_headers = {
+                    **retry_headers,
+                    "Authorization": f"Bearer {self.token}",
+                }
+            status, data = self._send(method, path, body=body, headers=retry_headers)
         latency = (time.perf_counter() - started) * 1000.0
         return status, data, latency
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None,
+        headers: dict[str, str] | None,
+    ) -> tuple[int, bytes]:
+        url = self.base_url + path
+        req = Request(url, data=body, method=method, headers=headers or self._headers())
+        acquired = self._sema.acquire(timeout=self.timeout_seconds)
+        if not acquired:
+            return 0, b"backpressure"
+        try:
+            with urlopen(req, timeout=self.timeout_seconds) as resp:  # noqa: S310
+                return int(getattr(resp, "status", 200)), resp.read()
+        except HTTPError as exc:
+            return int(exc.code), (exc.read() if hasattr(exc, "read") else b"")
+        except (URLError, TimeoutError, OSError):
+            return 0, b""
+        finally:
+            self._sema.release()
 
 
 def login(base_url: str, email: str, password: str, *, timeout: float = 15.0) -> str:
@@ -221,14 +339,19 @@ def login(base_url: str, email: str, password: str, *, timeout: float = 15.0) ->
     return token
 
 
-def _multipart(file_path: Path, collection_id: str) -> tuple[bytes, str]:
+def _multipart_bytes(
+    *,
+    filename: str,
+    file_bytes: bytes,
+    collection_id: str,
+    document_id: str | None = None,
+) -> tuple[bytes, str]:
     boundary = f"----markhandsoak{uuid.uuid4().hex}"
-    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    file_bytes = file_path.read_bytes()
+    content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     chunks = [
         f"--{boundary}\r\n".encode(),
         (
-            f'Content-Disposition: form-data; name="file"; filename="{file_path.name}"\r\n'
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             f"Content-Type: {content_type}\r\n\r\n"
         ).encode(),
         file_bytes,
@@ -238,13 +361,188 @@ def _multipart(file_path: Path, collection_id: str) -> tuple[bytes, str]:
             f'Content-Disposition: form-data; name="collectionId"\r\n\r\n'
             f"{collection_id}\r\n"
         ).encode(),
-        f"--{boundary}--\r\n".encode(),
     ]
+    if document_id is not None:
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                (
+                    f'Content-Disposition: form-data; name="documentId"\r\n\r\n'
+                    f"{document_id}\r\n"
+                ).encode(),
+            ]
+        )
+    chunks.append(f"--{boundary}--\r\n".encode())
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _multipart(
+    file_path: Path,
+    collection_id: str,
+    document_id: str | None = None,
+) -> tuple[bytes, str]:
+    return _multipart_bytes(
+        filename=file_path.name,
+        file_bytes=file_path.read_bytes(),
+        collection_id=collection_id,
+        document_id=document_id,
+    )
 
 
 def _http_success(status: int) -> bool:
     return 200 <= status < 300
+
+
+def _json_payload(data: bytes) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _hit_doc_ids(payload: dict[str, Any]) -> set[str]:
+    hits = payload.get("hits") or []
+    docs: set[str] = set()
+    for hit in hits:
+        if isinstance(hit, dict):
+            doc = hit.get("documentId") or hit.get("document_id") or hit.get("id")
+            if doc:
+                docs.add(str(doc))
+    return docs
+
+
+def _has_citation_for(
+    payload: dict[str, Any],
+    doc_id: str | None,
+    *,
+    version_id: str | None = None,
+    marker: str | None = None,
+) -> bool:
+    citations = payload.get("citations") or []
+    if not citations:
+        return False
+    if doc_id is None:
+        return True
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        ref = (
+            citation.get("logicalDocumentId")
+            or citation.get("documentId")
+            or citation.get("document_id")
+            or citation.get("docId")
+        )
+        cite_version = citation.get("versionId") or citation.get("version_id")
+        quote = citation.get("quote")
+        if ref is not None and str(ref) != doc_id:
+            continue
+        if version_id is not None and str(cite_version) != version_id:
+            continue
+        if marker is not None and (not isinstance(quote, str) or marker not in quote):
+            continue
+        if ref is not None:
+            return True
+    return False
+
+
+def _payload_contains_marker(payload: dict[str, Any], marker: str | None) -> bool:
+    if not marker:
+        return True
+    text = json.dumps(payload, ensure_ascii=False)
+    return marker in text
+
+
+def search_matches_expected(
+    data: bytes,
+    *,
+    expected_doc: str | None,
+    expected_version: str | None = None,
+    expected_marker: str | None,
+    require_citation: bool = True,
+) -> bool:
+    payload = _json_payload(data)
+    if payload is None:
+        return False
+    if expected_doc:
+        matching_hits = []
+        for hit in payload.get("hits") or []:
+            if not isinstance(hit, dict):
+                continue
+            doc = hit.get("documentId") or hit.get("document_id") or hit.get("id")
+            version = hit.get("versionId") or hit.get("version_id")
+            snippet = hit.get("snippet") or hit.get("quote") or hit.get("body")
+            if str(doc) != expected_doc:
+                continue
+            if expected_version is not None and str(version) != expected_version:
+                continue
+            if expected_marker is not None and (
+                not isinstance(snippet, str) or expected_marker not in snippet
+            ):
+                continue
+            matching_hits.append(hit)
+        if not matching_hits:
+            return False
+    else:
+        if not _hit_doc_ids(payload):
+            return False
+    if require_citation and not _has_citation_for(
+        payload, expected_doc, version_id=expected_version, marker=expected_marker
+    ):
+        return False
+    return True
+
+
+def wait_until_indexed_visible(
+    client: ApiClient,
+    *,
+    document_id: str,
+    marker: str,
+    timeout_seconds: float,
+    poll_seconds: float = 2.0,
+    expected_version: str | None = None,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        body = json.dumps(
+            {
+                "query": marker,
+                "mode": "current",
+                "limit": 5,
+                "collectionIds": [client.collection_id],
+            }
+        ).encode("utf-8")
+        status, data, _latency = client.request("POST", "/api/v1/search", body=body)
+        if _http_success(status) and search_matches_expected(
+            data,
+            expected_doc=document_id,
+            expected_version=expected_version,
+            expected_marker=marker,
+            require_citation=True,
+        ):
+            return True
+        time.sleep(poll_seconds)
+    return False
+
+
+def current_published_version(client: ApiClient, document_id: str) -> str | None:
+    status, data, _latency = client.request(
+        "GET", f"/api/v1/documents/{document_id}/versions"
+    )
+    if not _http_success(status):
+        return None
+    payload = _json_payload(data)
+    items = payload.get("items") if payload is not None else None
+    if not isinstance(items, list):
+        return None
+    current = [
+        str(row["id"])
+        for row in items
+        if isinstance(row, dict)
+        and row.get("isCurrent") is True
+        and isinstance(row.get("id"), str)
+    ]
+    return current[0] if len(current) == 1 else None
 
 
 def do_ingest(
@@ -253,9 +551,25 @@ def do_ingest(
     stats: RequestStats,
     *,
     start_mono: float,
+    scheduled_mono: float | None = None,
 ) -> None:
-    path = fixture_path(fmt)
-    body, content_type = _multipart(path, client.collection_id)
+    began_offset = time.monotonic() - start_mono
+    # Every upload carries its own marker so the retrieval assertion targets one
+    # exact document instead of racing the whole collection for a top-N slot.
+    # PNG is the exception when Pillow is unavailable: its marker has to survive
+    # OCR, and the bitmap fallback is unreadable, so it keeps the golden marker.
+    unique_marker_used = fmt.lower() != "png" or fixtures.unique_png_marker_supported()
+    if unique_marker_used:
+        marker = fixtures.unique_marker(fmt, fixtures.unique_token())
+        file_bytes = fixtures.generate_bytes(fmt, marker)
+    else:
+        marker = marker_for(fmt)
+        file_bytes = fixture_path(fmt).read_bytes()
+    body, content_type = _multipart_bytes(
+        filename=fixtures.fixture_filename(fmt),
+        file_bytes=file_bytes,
+        collection_id=client.collection_id,
+    )
     status, data, _latency = client.request(
         "POST",
         "/api/v1/uploads",
@@ -265,22 +579,45 @@ def do_ingest(
     doc_id = None
     version_id = None
     ok = _http_success(status)
+    reason: str | None = None if ok else f"upload_http_{status}"
     if ok:
-        try:
-            payload = json.loads(data.decode("utf-8"))
+        payload = _json_payload(data)
+        if payload is None:
+            ok = False
+            reason = "upload_body_not_json"
+        else:
             doc_id = payload.get("documentId")
             version_id = payload.get("versionId")
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            ok = False
     if ok and isinstance(doc_id, str) and isinstance(version_id, str):
         # Each upload is a new documentId — never invent a second version pair.
-        stats.record_version(doc_id, version_id, published=False)
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
+        ok = wait_until_indexed_visible(
+            client,
+            document_id=doc_id,
+            marker=marker,
+            timeout_seconds=float(os.environ.get("MARKHAND_SOAK_INGEST_TERMINAL_TIMEOUT", "180")),
+        )
+        if not ok:
+            reason = "not_visible_before_timeout"
+        published_version = current_published_version(client, doc_id) if ok else None
+        if ok and published_version is None:
+            reason = "no_published_version"
+        ok = published_version is not None
+        if published_version is not None:
+            stats.record_version(doc_id, published_version, published=True)
+            stats.record_marker(doc_id, marker)
+            stats.record_expected_version(doc_id, published_version)
+    elif ok:
+        ok = False
+        reason = "upload_missing_document_or_version_id"
+    ended_offset = time.monotonic() - start_mono
+    in_inj = stats.in_injection_window(ended_offset, began_offset)
     stats.add(
         "ingest",
+        in_injection_at_outcome=stats.in_injection_window(ended_offset),
         ok=ok,
         doc_id=doc_id if isinstance(doc_id, str) else None,
         in_injection=in_inj,
+        reason=reason,
     )
 
 
@@ -290,7 +627,9 @@ def do_query(
     stats: RequestStats,
     *,
     start_mono: float,
+    scheduled_mono: float | None = None,
 ) -> None:
+    began_offset = time.monotonic() - start_mono
     body_obj: dict[str, Any] = {
         "query": "markhand soak synthetic query",
         "mode": mode,
@@ -298,15 +637,23 @@ def do_query(
         "collectionIds": [client.collection_id],
     }
     not_ready = None
+    expected_doc = None
+    expected_version = None
+    expected_marker = None
     if mode == "as_of":
-        doc = stats.as_of_doc()
-        if not doc:
-            not_ready = "as_of_no_document"
+        dataset = stats.compare_dataset
+        if not dataset:
+            not_ready = "as_of_dataset_unavailable"
         else:
-            body_obj["asOf"] = "2026-07-01T00:00:00Z"
+            doc = dataset["documentId"]
+            body_obj["asOf"] = dataset["asOfA"]
             body_obj["documentId"] = doc
+            expected_doc = doc
+            expected_version = dataset["versionA"]
+            expected_marker = dataset["markerA"]
+            body_obj["query"] = expected_marker
+            body_obj["expectedSeededEffectiveFrom"] = dataset["effectiveFromA"]
     elif mode == "compare":
-        # Uploads always create new documentIds — never invent a version pair.
         dataset = stats.compare_dataset
         if not dataset:
             not_ready = "compare_dataset_unavailable"
@@ -314,53 +661,115 @@ def do_query(
             body_obj["documentId"] = dataset["documentId"]
             body_obj["versionA"] = dataset["versionA"]
             body_obj["versionB"] = dataset["versionB"]
+            expected_doc = dataset["documentId"]
+            body_obj["query"] = dataset["query"]
+            # Compare is verified separately against both versions; this request
+            # must at least bind to the supplied logical document.
     elif mode == "current":
-        pass
+        current = stats.current_doc_marker()
+        if not current:
+            not_ready = "current_no_indexed_document"
+        else:
+            expected_doc, expected_marker = current
+            expected_version = stats.doc_versions.get(expected_doc)
+            if expected_marker:
+                body_obj["query"] = expected_marker
     else:
         not_ready = f"unsupported_mode:{mode}"
 
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
+    in_inj = stats.in_injection_window(time.monotonic() - start_mono, began_offset)
+    at_outcome = stats.in_injection_window(time.monotonic() - start_mono)
     if not_ready:
         stats.add(
             "query",
             ok=False,
             mode=mode,
             in_injection=in_inj,
+            in_injection_at_outcome=at_outcome,
             not_ready_reason=not_ready,
         )
         return
 
     body = json.dumps(body_obj).encode("utf-8")
-    status, _data, latency = client.request("POST", "/api/v1/search", body=body)
-    ok = _http_success(status)
+    status, data, _latency = client.request("POST", "/api/v1/search", body=body)
+    http_ok = _http_success(status)
+    ok = http_ok and search_matches_expected(
+        data,
+        expected_doc=expected_doc,
+        expected_version=locals().get("expected_version"),
+        expected_marker=expected_marker,
+        require_citation=True,
+    )
+    reason = None
+    if not ok:
+        reason = f"search_http_{status}" if not http_ok else f"no_expected_match:{mode}"
     stats.add(
         "query",
         ok=ok,
-        latency_ms=latency if ok else None,
+        latency_ms=((time.monotonic() - (scheduled_mono or start_mono)) * 1000.0) if ok else None,
         mode=mode,
-        in_injection=in_inj,
+        in_injection=stats.in_injection_window(
+            time.monotonic() - start_mono, began_offset
+        ),
+        in_injection_at_outcome=stats.in_injection_window(time.monotonic() - start_mono),
+        reason=reason,
     )
 
 
-def do_delete(client: ApiClient, stats: RequestStats, *, start_mono: float) -> None:
+def do_delete(
+    client: ApiClient,
+    stats: RequestStats,
+    *,
+    start_mono: float,
+    scheduled_mono: float | None = None,
+) -> None:
+    began_offset = time.monotonic() - start_mono
     with stats.lock:
         if not stats.document_ids:
             doc_id = None
+        elif stats.retained_ids:
+            retained = set(stats.retained_ids)
+            candidate = next(
+                (
+                    index
+                    for index, document_id in enumerate(stats.document_ids)
+                    if document_id not in retained
+                ),
+                None,
+            )
+            doc_id = (
+                None if candidate is None else stats.document_ids.pop(candidate)
+            )
         else:
             # Keep at least one retained doc for post-restore authorized retrieval.
-            if len(stats.document_ids) <= 1 and not stats.retained_ids:
+            if len(stats.document_ids) <= 1:
                 stats.retained_ids.append(stats.document_ids[0])
                 doc_id = None
             else:
                 doc_id = stats.document_ids.pop(0)
-                if not stats.retained_ids and stats.document_ids:
+                if stats.document_ids:
                     stats.retained_ids.append(stats.document_ids[0])
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     if not doc_id:
-        stats.add("delete", ok=False, in_injection=in_inj, not_ready_reason="delete_no_doc")
+        outcome_offset = time.monotonic() - start_mono
+        stats.add(
+            "delete",
+            ok=False,
+            in_injection=stats.in_injection_window(outcome_offset, began_offset),
+            in_injection_at_outcome=stats.in_injection_window(outcome_offset),
+            not_ready_reason="delete_no_doc",
+        )
         return
     status, _data, _latency = client.request("DELETE", f"/api/v1/documents/{doc_id}")
-    stats.add("delete", ok=_http_success(status), doc_id=doc_id, in_injection=in_inj)
+    delete_ok = _http_success(status)
+    outcome_offset = time.monotonic() - start_mono
+    stats.add(
+        "delete",
+        ok=delete_ok,
+        doc_id=doc_id,
+        in_injection=stats.in_injection_window(outcome_offset, began_offset),
+        in_injection_at_outcome=stats.in_injection_window(outcome_offset),
+        reason=None if delete_ok else f"delete_http_{status}",
+    )
 
 
 def do_reconcile(
@@ -370,9 +779,11 @@ def do_reconcile(
     stats: RequestStats,
     start_mono: float,
     runner: Callable[..., Any] | None = None,
+    scheduled_mono: float | None = None,
 ) -> None:
     import subprocess
 
+    began_offset = time.monotonic() - start_mono
     run = runner or subprocess.run
     env = os.environ.copy()
     env["MARKHAND_RECONCILE_MODE"] = "dry-run"
@@ -393,13 +804,30 @@ def do_reconcile(
         "--no-deps",
         "worker-reconcile-oneshot",
     ]
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
+    reason: str | None = None
     try:
         proc = run(cmd, capture_output=True, text=True, check=False, env=env, timeout=90)
         ok = proc.returncode == 0
-    except (OSError, subprocess.SubprocessError):
+        if not ok:
+            reason = f"reconcile_exit_{proc.returncode}"
+            # A bare exit code says nothing about why; keep the output so the
+            # next investigation does not need another 30-minute run.
+            stats.record_reconcile_failure(
+                returncode=proc.returncode,
+                stdout=(proc.stdout or "")[-2000:],
+                stderr=(proc.stderr or "")[-2000:],
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
         ok = False
-    stats.add("reconcile", ok=ok, in_injection=in_inj)
+        reason = f"reconcile_spawn_{type(exc).__name__}"
+    ended_offset = time.monotonic() - start_mono
+    stats.add(
+        "reconcile",
+        ok=ok,
+        in_injection=stats.in_injection_window(ended_offset, began_offset),
+        in_injection_at_outcome=stats.in_injection_window(ended_offset),
+        reason=reason,
+    )
 
 
 def expected_scheduled_counts(profile: dict[str, Any], duration_seconds: int) -> dict[str, int]:
@@ -441,7 +869,9 @@ def run_mixed_load(
     injection_schedule: list[tuple[float, str]] | None = None,
     compare_dataset: dict[str, str] | None = None,
     injection_window_fn: Callable[[float], bool] | None = None,
+    injection_overlap_fn: Callable[[float, float], bool] | None = None,
     retained_ids: list[str] | None = None,
+    retained_markers: dict[str, str] | None = None,
     max_workers: int = 16,
     skip_fixture_preflight: bool = False,
 ) -> RequestStats:
@@ -458,9 +888,12 @@ def run_mixed_load(
     stats = RequestStats()
     stats.compare_dataset = compare_dataset
     stats.injection_window_fn = injection_window_fn
+    stats.injection_overlap_fn = injection_overlap_fn
     if retained_ids:
         stats.retained_ids = list(retained_ids)
         stats.document_ids = list(retained_ids)
+    if retained_markers:
+        stats.doc_markers.update({str(k): str(v) for k, v in retained_markers.items()})
     actors = profile["actors"]
     modes = list(actors["query"]["modes"])
     ingest_times = schedule_event_times(
@@ -496,10 +929,17 @@ def run_mixed_load(
     events.sort(key=lambda row: row[0])
 
     start = time.monotonic()
+    stats.workload_start_mono = start
     idx = 0
     pending: list[concurrent.futures.Future[None]] = []
+    per_actor_workers = max(1, max_workers // 4)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+    with (
+        concurrent.futures.ThreadPoolExecutor(max_workers=per_actor_workers, thread_name_prefix="o05-ingest") as ingest_pool,
+        concurrent.futures.ThreadPoolExecutor(max_workers=per_actor_workers, thread_name_prefix="o05-query") as query_pool,
+        concurrent.futures.ThreadPoolExecutor(max_workers=per_actor_workers, thread_name_prefix="o05-delete") as delete_pool,
+        concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="o05-reconcile") as reconcile_pool,
+    ):
         while True:
             elapsed = time.monotonic() - start
             if elapsed >= duration_seconds:
@@ -514,23 +954,50 @@ def run_mixed_load(
                     continue
                 if kind == "ingest":
                     stats.mark_submitted("ingest")
-                    pending.append(pool.submit(do_ingest, client, str(arg), stats, start_mono=start))
+                    pending.append(
+                        ingest_pool.submit(
+                            do_ingest,
+                            client,
+                            str(arg),
+                            stats,
+                            start_mono=start,
+                            scheduled_mono=start + float(_t),
+                        )
+                    )
                 elif kind == "query":
                     stats.mark_submitted("query")
-                    pending.append(pool.submit(do_query, client, str(arg), stats, start_mono=start))
+                    pending.append(
+                        query_pool.submit(
+                            do_query,
+                            client,
+                            str(arg),
+                            stats,
+                            start_mono=start,
+                            scheduled_mono=start + float(_t),
+                        )
+                    )
                 elif kind == "delete":
                     stats.mark_submitted("delete")
-                    pending.append(pool.submit(do_delete, client, stats, start_mono=start))
+                    pending.append(
+                        delete_pool.submit(
+                            do_delete,
+                            client,
+                            stats,
+                            start_mono=start,
+                            scheduled_mono=start + float(_t),
+                        )
+                    )
                 elif kind == "reconcile":
                     doc = stats.document_ids[-1] if stats.document_ids else None
                     stats.mark_submitted("reconcile")
                     pending.append(
-                        pool.submit(
+                        reconcile_pool.submit(
                             do_reconcile,
                             compose_project=compose_project,
                             document_id=doc,
                             stats=stats,
                             start_mono=start,
+                            scheduled_mono=start + float(_t),
                         )
                     )
             # Bound in-flight: collect completed and propagate exceptions.
@@ -555,6 +1022,7 @@ def run_mixed_load(
         for fut in pending:
             fut.result(timeout=client.timeout_seconds + 5)
 
+    stats.workload_end_mono = time.monotonic()
     return stats
 
 
@@ -578,6 +1046,7 @@ def metrics_from_stats(
         "success": dict(stats.success),
         "requestErrors": stats.errors,
         "requestErrorsOutsideInjection": stats.errors_outside_injection,
+        "requestErrorsOutsideInjectionAtOutcome": stats.errors_outside_injection_at_outcome,
         "requestErrorsInInjection": stats.errors_in_injection,
         "queryP50Ms": query_p50,
         "queryP95Ms": query_p95,
@@ -590,7 +1059,16 @@ def metrics_from_stats(
         "deletedCount": len(stats.deleted_ids),
         "retainedCount": len(stats.retained_ids),
         "notReady": list(stats.not_ready),
+        "failureReasons": {
+            kind: dict(sorted(reasons.items(), key=lambda item: -item[1]))
+            for kind, reasons in sorted(stats.failure_reasons.items())
+        },
         "durationSeconds": duration_seconds,
+        "actualElapsedSeconds": (
+            None
+            if stats.workload_start_mono is None or stats.workload_end_mono is None
+            else round(stats.workload_end_mono - stats.workload_start_mono, 3)
+        ),
     }
 
 
@@ -599,23 +1077,48 @@ def completeness_ok(
     *,
     ratio: float = COMPLETENESS_RATIO,
 ) -> dict[str, Any]:
-    """Require >= ratio of scheduled successes per actor (query/ingest), outside errors."""
+    """Require scheduled work to drain and actor success to meet qualification minima.
+
+    Events the run deliberately sabotaged do not count against the minimum: a
+    reconcile scheduled while the database is being blipped cannot succeed, and
+    with five reconciles in a run that made the gate a coin toss on whether an
+    injection landed on a tick. Everything a fault never touched still has to
+    succeed.
+    """
     details: dict[str, Any] = {}
     ok = True
-    for kind in ("ingest", "query"):
+    for kind in ("ingest", "query", "delete", "reconcile"):
         scheduled = int(stats.scheduled.get(kind, 0))
+        submitted = int(stats.submitted.get(kind, 0))
+        completed = int(stats.completed.get(kind, 0))
         success = int(stats.success.get(kind, 0))
-        need = int(scheduled * ratio) if scheduled else 0
-        passed = success >= need if scheduled else False
+        injured = int(stats.failures_in_injection.get(kind, 0))
+        qualifying = max(scheduled - injured, 0)
+        if kind == "reconcile":
+            need = qualifying
+        else:
+            need = math.ceil(qualifying * ratio) if qualifying else 0
+        drained = scheduled == submitted == completed
+        passed = bool(scheduled and drained and success >= need)
         details[kind] = {
             "scheduled": scheduled,
+            "submitted": submitted,
+            "completed": completed,
             "success": success,
+            "failedUnderInjection": injured,
             "required": need,
+            "drained": drained,
             "passed": passed,
         }
-        if scheduled and not passed:
+        if not passed:
             ok = False
-    return {"passed": ok, "ratio": ratio, "actors": details}
+    return {
+        "passed": ok,
+        "drainPassed": all(v["drained"] and v["scheduled"] > 0 for v in details.values()),
+        "reconcilePassed": details["reconcile"]["passed"],
+        "ratio": ratio,
+        "actors": details,
+    }
 
 
 def post_restore_retrieval_check(*args: Any, **kwargs: Any) -> dict[str, Any]:

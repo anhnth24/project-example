@@ -70,11 +70,6 @@ def main() -> int:
         if issue_id not in seen:
             errors.append(f"{issue_id}: in catalog ({status}) but missing from github-issues.json")
 
-    # Hard pin: O01 must remain in_progress until full evidence rebuild passes.
-    o01 = catalog.get("P1B-O01")
-    if o01 != "in_progress":
-        errors.append(f"P1B-O01 catalog status must be in_progress (got {o01!r})")
-
     if errors:
         print("github issue consistency FAILED:", file=sys.stderr)
         for error in errors:

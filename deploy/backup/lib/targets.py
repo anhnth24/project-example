@@ -138,10 +138,6 @@ def assert_not_blue_alias(
     blue_qdrant: str,
     green_qdrant: str | None,
 ) -> None:
-    if green_bucket == blue_bucket:
-        raise TargetError("green bucket equals blue source bucket")
-    if green_collection == blue_collection:
-        raise TargetError("green collection equals blue source collection")
     gep = green_endpoint or blue_endpoint
     gq = green_qdrant or blue_qdrant
     if endpoint_alias(gep, blue_endpoint) and green_bucket == blue_bucket:

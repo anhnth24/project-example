@@ -1,0 +1,4 @@
+armed=1
+stopped=1
+confirmed_restart=1 disarmed=1
+restore_skipped armed=0

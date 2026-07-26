@@ -19,7 +19,8 @@
 4. Update Compose/ops env from the secret store; restart dependents:
 
 ```bash
-docker compose -f deploy/compose.poc.yml up -d api worker-convert worker-embedding worker-index
+docker compose -f deploy/compose.poc.yml up -d \
+  api worker-convert worker-embedding worker-index worker-delete worker-reconcile
 curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/api/v1/health/live
 ```
 

@@ -1,23 +1,111 @@
 {
   "apiBase": "http://127.0.0.1:8788",
-  "blockers": [
-    "async API\u2192worker\u2192provider canary not opted in (MARKHAND_O01_ASYNC!=1)"
-  ],
+  "blockers": [],
   "checks": {
     "/api/v1/health/live": {
       "httpStatus": 200,
       "passed": true,
-      "requestId": "e11d96e9-0625-41fd-801a-b0e3065522ae"
+      "requestId": "efed4396-71aa-475a-898b-cfc68723e5d5"
     },
     "/api/v1/health/ready": {
       "httpStatus": 200,
       "passed": true,
-      "requestId": "06c80e43-5fde-4ff7-87c9-9b07729ac35e"
+      "requestId": "0158d17d-d379-430d-a74d-58460174cc0e"
     },
     "async_api_worker_provider_canary": {
-      "note": "Set MARKHAND_O01_ASYNC=1 with full convert/index/chat stack to close async canary",
-      "passed": false,
-      "status": "not_run"
+      "askGrounded": true,
+      "askHttpStatus": 200,
+      "askOk": true,
+      "askRequestId": "a21c5613-0063-4686-bdbd-cee36388e557",
+      "askTrace": {
+        "canonicalOtlpKinds": true,
+        "namedSpansPresent": true,
+        "parentGraphValid": true,
+        "sameTrace": true,
+        "spanNames": [
+          "api.request",
+          "retrieval",
+          "retrieval.embedding",
+          "retrieval.fts",
+          "retrieval.vector",
+          "provider.chat"
+        ],
+        "traceIds": [
+          "8651e7a03bd14b34a39d5ef678e52aa2"
+        ],
+        "uniqueSpanIds": true
+      },
+      "canaryHits": [],
+      "collectorSameTrace": true,
+      "dbAuditOk": true,
+      "denyAuditExact": true,
+      "denyHttpStatus": 403,
+      "denyOk": true,
+      "denyRequestId": "2fc9f865-f6fa-4876-a356-fc49d8945305",
+      "error": null,
+      "forbiddenLabels": [],
+      "ingestTrace": {
+        "canonicalOtlpKinds": true,
+        "namedSpansPresent": true,
+        "parentGraphValid": true,
+        "sameTrace": true,
+        "spanNames": [
+          "api.request",
+          "worker.convert",
+          "worker.index",
+          "worker.embed"
+        ],
+        "traceIds": [
+          "613ad1a59bd847fb8876ef9fe264a283"
+        ],
+        "uniqueSpanIds": true
+      },
+      "jobId": "acc1eeac-64e9-425b-9d18-3f19cb46096d",
+      "jobPayloadRequestIdPresent": true,
+      "jobStatus": "succeeded",
+      "missingProofs": [],
+      "namedSpans": [
+        "api.request",
+        "worker.convert",
+        "worker.index",
+        "worker.embed",
+        "api.request",
+        "retrieval",
+        "retrieval.embedding",
+        "retrieval.fts",
+        "retrieval.vector",
+        "provider.chat"
+      ],
+      "passed": true,
+      "proofs": {
+        "askGrounded": true,
+        "askOk": true,
+        "canonicalOtlpKinds": true,
+        "collectorSameTrace": true,
+        "dbAuditOk": true,
+        "denyAuditExact": true,
+        "denyOk": true,
+        "documentPresent": true,
+        "jobIdPresent": true,
+        "jobPayloadRequestIdPresent": true,
+        "jobTerminal": true,
+        "metricsClean": true,
+        "namedSpansPresent": true,
+        "parentGraphValid": true,
+        "requestIdPresent": true,
+        "uniqueSpanIds": true
+      },
+      "requestId": "51888565-1891-4836-99ce-36ece0514802",
+      "requiredSpanNames": [
+        "api.request",
+        "worker.convert",
+        "worker.index",
+        "worker.embed",
+        "retrieval",
+        "provider.chat"
+      ],
+      "status": "pass",
+      "uploadDisposition": "accepted"
     },
     "cargo_telemetry": {
       "command": [
@@ -52,7 +140,7 @@
       "passed": true
     },
     "metrics_scrape": {
-      "bytes": 16210,
+      "bytes": 5348,
       "canaryHits": [],
       "forbiddenLabels": [],
       "hasExportQueueGauge": true,
@@ -75,6 +163,10 @@
           "exit": 1,
           "passed": true
         },
+        "missing_grounded_ask": {
+          "exit": 1,
+          "passed": true
+        },
         "missing_named_spans": {
           "exit": 1,
           "passed": true
@@ -89,9 +181,21 @@
         }
       },
       "passed": true
+    },
+    "otel_capture_unit": {
+      "command": [
+        "python3",
+        "deploy/scripts/test_otel_capture.py"
+      ],
+      "exit": 0,
+      "passed": true
     }
   },
   "commands": {
+    "capture_unit": [
+      "python3",
+      "deploy/scripts/test_otel_capture.py"
+    ],
     "cargo_live_o01": [
       "cargo",
       "test",
@@ -118,9 +222,9 @@
     ]
   },
   "commitStampStrategy": "git_rev_parse_short_head_precommit_may_be_not_run",
-  "generatedAt": "2026-07-23T08:14:32Z",
-  "git": "cf1384d",
+  "generatedAt": "2026-07-26T12:20:02Z",
+  "git": "f4f33cd1b",
   "issue": "P1B-O01",
-  "status": "incomplete",
-  "version": "cf1384d-dirty"
+  "status": "pass",
+  "version": "f4f33cd1b"
 }

@@ -1,0 +1,43 @@
+#include <tunables/global>
+
+# Docker's docker-default profile with one deliberate change: mount is allowed.
+#
+# The convert worker builds a nested sandbox per job — it unshares user, network,
+# mount and pid namespaces, remounts / as MS_REC|MS_PRIVATE so nothing propagates
+# back to the host, then applies a Landlock ruleset before exec. docker-default
+# carries `deny mount,`, so that remount fails and the worker refuses to start.
+# Everything else below mirrors docker-default, including the /proc and /sys
+# write denials.
+#
+# Load once per host:  sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
+# Referenced from compose.poc.yml as `apparmor=markhand-convert`.
+
+profile markhand-convert flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  umount,
+  mount,
+
+  signal (receive) peer=unconfined,
+  signal (send,receive) peer=markhand-convert,
+
+  deny @{PROC}/* w,
+  deny @{PROC}/{[^1-9],[^1-9][^1-9],[^1-9s][^1-9y][^1-9s],[^1-9][^1-9][^1-9][^1-9]*}/** w,
+  deny @{PROC}/sys/[^k]** w,
+  deny @{PROC}/sys/kernel/{?,??,[^s][^h][^m]**} w,
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/kcore rwklx,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  ptrace (trace,read,tracedby,readby) peer=markhand-convert,
+}

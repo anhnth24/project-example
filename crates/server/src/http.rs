@@ -34,6 +34,7 @@ pub struct AppState {
     readiness: tokio::sync::Mutex<Option<CachedReadiness>>,
     startup: StartupState,
     pool: Pool,
+    write_gate_pool: Pool,
     auth_provider: Option<PasswordAuthProvider>,
     object_store: Option<MinioClient>,
     qdrant: Option<QdrantClient>,
@@ -62,6 +63,8 @@ impl AppState {
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
         let pool = create_pool(runtime.endpoints().database_url.expose())
             .map_err(|error| format!("cannot create database pool: {error}"))?;
+        let write_gate_pool = create_pool(runtime.endpoints().database_url.expose())
+            .map_err(|error| format!("cannot create write-gate database pool: {error}"))?;
         let auth_provider = match JwtKeys::from_auth(runtime.config().auth()) {
             Ok(keys) => Some(PasswordAuthProvider::new(
                 pool.clone(),
@@ -112,8 +115,16 @@ impl AppState {
             .unwrap_or_default();
         let trusted_proxies = parse_trusted_proxies_env()?;
         let rate_config = RateLimitConfig::from_env()?;
-        start_quota_sweep(pool.clone(), runtime.config().quota_sweep());
-        start_ask_stream_maintenance(pool.clone());
+        // Both jobs hold one pooled connection for the backup advisory lock and
+        // acquire another for their mutation. The default pool has two slots, so
+        // concurrent startup ticks would otherwise deadlock each other.
+        let maintenance_lock = Arc::new(tokio::sync::Mutex::new(()));
+        start_quota_sweep(
+            pool.clone(),
+            runtime.config().quota_sweep(),
+            Arc::clone(&maintenance_lock),
+        );
+        start_ask_stream_maintenance(pool.clone(), maintenance_lock);
         start_telemetry_observers(pool.clone());
         let startup = StartupState::new();
         startup.mark_completed();
@@ -123,6 +134,7 @@ impl AppState {
             readiness: tokio::sync::Mutex::new(None),
             startup,
             pool,
+            write_gate_pool,
             auth_provider,
             object_store,
             qdrant,
@@ -158,6 +170,7 @@ impl AppState {
             .timeout(Duration::from_secs(3))
             .build()
             .map_err(|error| format!("cannot configure HTTP client: {error}"))?;
+        let write_gate_pool = pool.clone();
         let capability_keys = runtime
             .config()
             .auth()
@@ -172,6 +185,7 @@ impl AppState {
             readiness: tokio::sync::Mutex::new(None),
             startup,
             pool,
+            write_gate_pool,
             auth_provider,
             object_store,
             qdrant: None,
@@ -190,6 +204,10 @@ impl AppState {
 
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    pub fn write_gate_pool(&self) -> &Pool {
+        &self.write_gate_pool
     }
 
     pub fn runtime(&self) -> &RuntimeState {
@@ -230,6 +248,12 @@ impl AppState {
         self
     }
 
+    /// Test helper: inject download-capability signing keys into app state.
+    pub fn with_capability_keys(mut self, keys: CapabilityKeys) -> Self {
+        self.capability_keys = Some(keys);
+        self
+    }
+
     pub fn with_trusted_proxies(mut self, proxies: Vec<IpAddr>) -> Self {
         self.trusted_proxies = proxies;
         self
@@ -242,6 +266,12 @@ impl AppState {
 
     pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
         self.rate_limiter = limiter;
+        self
+    }
+
+    /// Test helper: use a pool independent from route/auth transactions.
+    pub fn with_write_gate_pool(mut self, pool: Pool) -> Self {
+        self.write_gate_pool = pool;
         self
     }
 
@@ -334,12 +364,17 @@ pub fn parse_trusted_proxies(raw: &str) -> Result<Vec<IpAddr>, String> {
     Ok(out)
 }
 
-fn start_quota_sweep(pool: Pool, config: QuotaSweepConfig) {
+fn start_quota_sweep(
+    pool: Pool,
+    config: QuotaSweepConfig,
+    maintenance_lock: Arc<tokio::sync::Mutex<()>>,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(config.interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            let _maintenance = maintenance_lock.lock().await;
             let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
                 tracing::debug!(target: "quota", "quota sweep skipped: ops fence / backup lock active");
                 continue;
@@ -400,12 +435,13 @@ fn observe_backup_age_from_env() {
     }
 }
 
-fn start_ask_stream_maintenance(pool: Pool) {
+fn start_ask_stream_maintenance(pool: Pool, maintenance_lock: Arc<tokio::sync::Mutex<()>>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
+            let _maintenance = maintenance_lock.lock().await;
             let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
                 tracing::debug!(
                     target: "ask_stream",

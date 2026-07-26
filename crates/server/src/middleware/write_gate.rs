@@ -6,6 +6,8 @@
 //! - Business API traffic takes a shared session lock for the full handler
 //!   invocation (through `next.run`; Axum returns `Response` before the body
 //!   is consumed, so SSE producers must re-acquire around each DB append).
+//!   Request guards use a dedicated pool so concurrent guards cannot consume
+//!   every connection needed by authentication and route transactions.
 //! - Active `ops_fences` rows fail closed with `ops_fence_active`.
 //! - DB errors while checking fail closed with `ops_fence_check_failed`.
 //!
@@ -68,7 +70,7 @@ pub async fn mutation_write_gate(
         .map(|id| id.0.clone())
         .unwrap_or_else(|| "missing-middleware-request-id".into());
 
-    match begin_request_write_gate(state.pool()).await {
+    match begin_request_write_gate(state.write_gate_pool()).await {
         Ok(mut guard) => {
             let response = next.run(request).await;
             guard.release().await;

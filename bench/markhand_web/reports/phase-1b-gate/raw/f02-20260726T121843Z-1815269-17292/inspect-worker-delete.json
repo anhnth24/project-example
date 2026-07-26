@@ -1,0 +1,57 @@
+[
+  {
+    "Id": "1d72fa068e9a9315794eb8ea76c71b1a37a00ca5eaac215a31cde907ef0d6ef6",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1",
+    "Created": "2026-07-26T12:18:52.00550663Z",
+    "Image": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "Config": {
+      "User": "10001:10001",
+      "Image": "markhand-worker:poc"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": null,
+      "Devices": null,
+      "Tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "Memory": 536870912,
+      "NanoCpus": 500000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 512
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.11",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "319998f5b122a69c81bde5a8a0abf8c742f4fefe43693aad231c67c73eba73e9",
+          "MacAddress": "8e:e2:c7:76:46:0b",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1",
+            "worker-delete"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 1817201
+    }
+  }
+]

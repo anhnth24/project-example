@@ -2216,7 +2216,7 @@ pub fn watch_pattern_matches(pattern: &str, file_name: &str) -> bool {
             b'?' => !text.is_empty() && matches(&pattern[1..], &text[1..]),
             ch => {
                 !text.is_empty()
-                    && ch.to_ascii_lowercase() == text[0].to_ascii_lowercase()
+                    && ch.eq_ignore_ascii_case(&text[0])
                     && matches(&pattern[1..], &text[1..])
             }
         }
@@ -2238,16 +2238,29 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| folded.contains(needle))
 }
 
+fn handoff_item_prefix(kind: &HandoffItemKind) -> &'static str {
+    match kind {
+        HandoffItemKind::BusinessRequirement => "BR",
+        HandoffItemKind::FunctionalRequirement => "FR",
+        HandoffItemKind::UserStory => "US",
+        HandoffItemKind::AcceptanceCriterion => "AC",
+        HandoffItemKind::TestCase => "TC",
+        HandoffItemKind::Glossary => "TERM",
+        HandoffItemKind::Assumption => "AS",
+        HandoffItemKind::OpenQuestion => "Q",
+    }
+}
+
 fn push_item(
     items: &mut Vec<HandoffItem>,
     counters: &mut HashMap<&'static str, usize>,
-    prefix: &'static str,
     kind: HandoffItemKind,
     text: String,
     citation: String,
     status: &str,
     parent_id: Option<String>,
 ) -> String {
+    let prefix = handoff_item_prefix(&kind);
     let count = counters.entry(prefix).or_default();
     *count += 1;
     let id = format!("{prefix}-{:03}", *count);
@@ -2310,15 +2323,14 @@ fn extract_handoff_items(
                         "chuc nang",
                     ],
                 );
-                let (prefix, kind) = if functional {
-                    ("FR", HandoffItemKind::FunctionalRequirement)
+                let kind = if functional {
+                    HandoffItemKind::FunctionalRequirement
                 } else {
-                    ("BR", HandoffItemKind::BusinessRequirement)
+                    HandoffItemKind::BusinessRequirement
                 };
                 let id = push_item(
                     &mut items,
                     &mut counters,
-                    prefix,
                     kind,
                     clean.to_string(),
                     citation.id.clone(),
@@ -2331,7 +2343,6 @@ fn extract_handoff_items(
                 push_item(
                     &mut items,
                     &mut counters,
-                    "AS",
                     HandoffItemKind::Assumption,
                     clean.to_string(),
                     citation.id.clone(),
@@ -2344,7 +2355,6 @@ fn extract_handoff_items(
                 push_item(
                     &mut items,
                     &mut counters,
-                    "Q",
                     HandoffItemKind::OpenQuestion,
                     clean.to_string(),
                     citation.id.clone(),
@@ -2358,7 +2368,6 @@ fn extract_handoff_items(
                 push_item(
                     &mut items,
                     &mut counters,
-                    "US",
                     HandoffItemKind::UserStory,
                     clean.to_string(),
                     citation.id.clone(),
@@ -2373,7 +2382,6 @@ fn extract_handoff_items(
                 push_item(
                     &mut items,
                     &mut counters,
-                    "AC",
                     HandoffItemKind::AcceptanceCriterion,
                     clean.to_string(),
                     citation.id.clone(),
@@ -2387,7 +2395,6 @@ fn extract_handoff_items(
             push_item(
                 &mut items,
                 &mut counters,
-                "TERM",
                 HandoffItemKind::Glossary,
                 format!(
                     "{} — {}",
@@ -2418,7 +2425,6 @@ fn extract_handoff_items(
         let user_story = push_item(
             &mut items,
             &mut counters,
-            "US",
             HandoffItemKind::UserStory,
             format!(
                 "Là người dùng liên quan, tôi muốn {}, để đáp ứng yêu cầu nghiệp vụ.",
@@ -2431,7 +2437,6 @@ fn extract_handoff_items(
         let acceptance = push_item(
             &mut items,
             &mut counters,
-            "AC",
             HandoffItemKind::AcceptanceCriterion,
             format!(
                 "Given bối cảnh nguồn, When thực hiện yêu cầu {}, Then kết quả phải khớp trích dẫn.",
@@ -2444,12 +2449,8 @@ fn extract_handoff_items(
         let test_case = push_item(
             &mut items,
             &mut counters,
-            "TC",
             HandoffItemKind::TestCase,
-            format!(
-                "Xác minh {} bằng dữ liệu và kết quả mong đợi trong nguồn.",
-                acceptance
-            ),
+            format!("Xác minh {acceptance} bằng dữ liệu và kết quả mong đợi trong nguồn."),
             citation.clone(),
             "needs_elaboration",
             Some(acceptance.clone()),
@@ -2468,7 +2469,7 @@ fn extract_handoff_items(
     (items, traceability)
 }
 
-fn items_of<'a>(items: &'a [HandoffItem], kind: HandoffItemKind) -> Vec<&'a HandoffItem> {
+fn items_of(items: &[HandoffItem], kind: HandoffItemKind) -> Vec<&HandoffItem> {
     items.iter().filter(|item| item.kind == kind).collect()
 }
 

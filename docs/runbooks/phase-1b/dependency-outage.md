@@ -24,7 +24,7 @@ docker compose -f deploy/compose.poc.yml --env-file deploy/.env ps postgres qdra
 
 ```bash
 docker compose -f deploy/compose.poc.yml --env-file deploy/.env stop \
-  worker-convert worker-embedding worker-index
+  worker-convert worker-embedding worker-index worker-delete worker-reconcile
 ```
 
 - Redact any log capture:

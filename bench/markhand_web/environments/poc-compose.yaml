@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "environmentId": "poc-compose",
+  "role": "benchmark-target",
+  "status": "approved",
+  "approver": "project-owner",
+  "approvedAt": "2026-07-25T10:30:00Z",
+  "cpu": {
+    "vendor": "reference",
+    "model": "single-host-x86_64",
+    "cores": 8,
+    "threads": 8
+  },
+  "ramGb": 16,
+  "disk": {
+    "type": "ssd",
+    "capacityGb": 60,
+    "iopsNote": ">=5k random-read IOPS"
+  },
+  "gpu": {
+    "model": "none",
+    "vramGb": 0,
+    "count": 0
+  },
+  "network": {
+    "bandwidthGbps": 1,
+    "latencyMsAssumed": 1
+  },
+  "os": {
+    "distro": "ubuntu-22.04",
+    "arch": "x86_64"
+  },
+  "fingerprintRequiredFields": [
+    "gitCommit",
+    "workloadProfileId",
+    "composeFileSha256",
+    "imageIds",
+    "indexSignature",
+    "migrationManifestSha256",
+    "hardware"
+  ],
+  "notes": "Single-host Docker Compose POC stack from deploy/compose.poc.yml. Per-service caps bound the stack to roughly 8.5 CPU regardless of host size (api/postgres/qdrant/minio 1.0 each, convert/index/embedding workers 1.0 each, delete/reconcile workers 0.5 each, mock-embedding 0.5), and embeddings come from the deterministic mock service, not a production embedding runtime. This environment qualifies the single-org POC only; Profile B production capacity is measured on on-prem-reference. Capacity fields are minimums in decimal GB (10^9 bytes)."
+}

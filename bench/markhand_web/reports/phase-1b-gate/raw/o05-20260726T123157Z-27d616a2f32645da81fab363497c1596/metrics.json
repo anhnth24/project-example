@@ -1,0 +1,155 @@
+{
+  "measured": true,
+  "scheduled": {
+    "ingest": 180,
+    "query": 3600,
+    "delete": 90,
+    "reconcile": 5
+  },
+  "submitted": {
+    "ingest": 180,
+    "query": 3600,
+    "delete": 90,
+    "reconcile": 5
+  },
+  "completed": {
+    "ingest": 180,
+    "query": 3600,
+    "delete": 90,
+    "reconcile": 5
+  },
+  "success": {
+    "ingest": 178,
+    "query": 3566,
+    "delete": 89,
+    "reconcile": 4
+  },
+  "requestErrors": 38,
+  "requestErrorsOutsideInjection": 0,
+  "requestErrorsOutsideInjectionAtOutcome": 0,
+  "requestErrorsInInjection": 38,
+  "queryP50Ms": 139.51432425528765,
+  "queryP95Ms": 301.81284388527274,
+  "queryP99Ms": 418.48446382209653,
+  "querySuccessSamples": 3566,
+  "querySuccessByMode": {
+    "current": 1188,
+    "as_of": 1189,
+    "compare": 1189
+  },
+  "queryModesReady": true,
+  "ingestDocsPerHour": 356.0,
+  "ingestOk": 178,
+  "deletedCount": 89,
+  "retainedCount": 8,
+  "notReady": [],
+  "failureReasons": {
+    "delete": {
+      "delete_http_503@injection": 1
+    },
+    "ingest": {
+      "upload_http_503@injection": 2
+    },
+    "query": {
+      "search_http_503@injection": 34
+    },
+    "reconcile": {
+      "reconcile_exit_1@injection": 1
+    }
+  },
+  "durationSeconds": 1800,
+  "actualElapsedSeconds": 1801.426,
+  "reauthCount": 1,
+  "completenessPassed": true,
+  "workloadDrainPassed": true,
+  "reconcilePassed": true,
+  "completeness": {
+    "passed": true,
+    "drainPassed": true,
+    "reconcilePassed": true,
+    "ratio": 0.95,
+    "actors": {
+      "ingest": {
+        "scheduled": 180,
+        "submitted": 180,
+        "completed": 180,
+        "success": 178,
+        "failedUnderInjection": 2,
+        "required": 170,
+        "drained": true,
+        "passed": true
+      },
+      "query": {
+        "scheduled": 3600,
+        "submitted": 3600,
+        "completed": 3600,
+        "success": 3566,
+        "failedUnderInjection": 34,
+        "required": 3388,
+        "drained": true,
+        "passed": true
+      },
+      "delete": {
+        "scheduled": 90,
+        "submitted": 90,
+        "completed": 90,
+        "success": 89,
+        "failedUnderInjection": 1,
+        "required": 85,
+        "drained": true,
+        "passed": true
+      },
+      "reconcile": {
+        "scheduled": 5,
+        "submitted": 5,
+        "completed": 5,
+        "success": 4,
+        "failedUnderInjection": 1,
+        "required": 4,
+        "drained": true,
+        "passed": true
+      }
+    }
+  },
+  "rssGrowthMb": 15.576999999999998,
+  "tempGrowthMb": 0.058,
+  "rss": {
+    "start": 337.906,
+    "peak": 353.483,
+    "end": 314.602,
+    "growth": 15.576999999999998
+  },
+  "tempBytes": {
+    "start": 49472,
+    "peak": 110748,
+    "end": 49472,
+    "growth": 61276
+  },
+  "queueDepthMax": 0.0,
+  "queueAgeMaxSeconds": 0.0,
+  "dbConnectionsMax": 19,
+  "smoke": false,
+  "workerRecoveryPass": true,
+  "dependencyRecoveryPass": true,
+  "postRestoreRetrievalPass": true,
+  "samplerErrors": [],
+  "resourceCoverage": {
+    "passed": true,
+    "expectedSamples": 362,
+    "minimumSamples": 325,
+    "observedCounts": {
+      "rss": 362,
+      "temp": 362,
+      "queue": 362,
+      "db": 359
+    },
+    "sampleCount": 362,
+    "sampleIntervalCanonical": true,
+    "sampleSpanSeconds": 1806.595,
+    "sampleMaxGapSeconds": 7.303,
+    "maxAllowedGapSeconds": 12.5,
+    "errors": []
+  },
+  "resourceCoveragePassed": true,
+  "architecturalBlockers": []
+}

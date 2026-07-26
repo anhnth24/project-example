@@ -1,0 +1,7 @@
+{
+  "askHttp": 200,
+  "expectedDocument": true,
+  "grounded": true,
+  "loginHttp": 200,
+  "questionSource": "canary-document"
+}

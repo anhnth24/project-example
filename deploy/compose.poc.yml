@@ -28,6 +28,12 @@ x-worker-build: &worker-build
   context: ..
   dockerfile: deploy/Dockerfile.worker
 
+x-telemetry-environment: &telemetry-environment
+  MARKHAND_OTEL_EXPORTER: ${MARKHAND_OTEL_EXPORTER:-none}
+  MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT: ${MARKHAND_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  MARKHAND_OTEL_TRACES_SAMPLER_ARG: ${MARKHAND_OTEL_TRACES_SAMPLER_ARG:-1.0}
+  MARKHAND_OTEL_EXPORT_QUEUE_CAPACITY: ${MARKHAND_OTEL_EXPORT_QUEUE_CAPACITY:-1024}
+
 services:
   postgres:
     image: postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
@@ -54,6 +60,8 @@ services:
     security_opt:
       - no-new-privileges:true
     mem_limit: ${MARKHAND_POSTGRES_MEM_LIMIT:-1g}
+    cpus: ${MARKHAND_POSTGRES_CPUS:-1.0}
+    pids_limit: ${MARKHAND_POSTGRES_PIDS_LIMIT:-256}
     shm_size: 256mb
 
   qdrant:
@@ -70,6 +78,25 @@ services:
     security_opt:
       - no-new-privileges:true
     mem_limit: ${MARKHAND_QDRANT_MEM_LIMIT:-1g}
+    cpus: ${MARKHAND_QDRANT_CPUS:-1.0}
+    pids_limit: ${MARKHAND_QDRANT_PIDS_LIMIT:-256}
+
+  qdrant-restore-green:
+    profiles: ["restore-green"]
+    image: qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c
+    environment:
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports:
+      - "127.0.0.1:${MARKHAND_GREEN_QDRANT_HTTP_PORT:-6443}:6333"
+    networks: [private]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /qdrant/storage:rw,nosuid,nodev,size=256m
+    mem_limit: ${MARKHAND_GREEN_QDRANT_MEM_LIMIT:-512m}
+    cpus: ${MARKHAND_GREEN_QDRANT_CPUS:-0.5}
+    pids_limit: ${MARKHAND_GREEN_QDRANT_PIDS_LIMIT:-128}
 
   qdrant-init:
     image: python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0
@@ -113,6 +140,30 @@ services:
     security_opt:
       - no-new-privileges:true
     mem_limit: ${MARKHAND_MINIO_MEM_LIMIT:-512m}
+    cpus: ${MARKHAND_MINIO_CPUS:-1.0}
+    pids_limit: ${MARKHAND_MINIO_PIDS_LIMIT:-256}
+
+  minio-restore-green:
+    profiles: ["restore-green"]
+    image: pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b
+    command: server /data --console-address ":9001"
+    environment:
+      # Dedicated restored endpoint contains one allowlisted bucket only. Reuse
+      # the app credential as this isolated endpoint's root so no secret is
+      # passed on an mc argv while the API keeps its normal credential pair.
+      MINIO_ROOT_USER: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+    ports:
+      - "127.0.0.1:${MARKHAND_GREEN_MINIO_API_PORT:-19020}:9000"
+    networks: [private]
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /data:rw,nosuid,nodev,size=256m
+    mem_limit: ${MARKHAND_GREEN_MINIO_MEM_LIMIT:-512m}
+    cpus: ${MARKHAND_GREEN_MINIO_CPUS:-0.5}
+    pids_limit: ${MARKHAND_GREEN_MINIO_PIDS_LIMIT:-128}
 
   minio-init:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
@@ -160,6 +211,7 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     mem_limit: 256m
+    cpus: 0.5
     pids_limit: 64
     healthcheck:
       test:
@@ -216,6 +268,37 @@ services:
       timeout: 10s
       retries: 40
       start_period: 600s
+
+  otel-capture:
+    profiles: ["telemetry"]
+    image: python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0
+    command: ["python", "/opt/otel-capture.py"]
+    volumes:
+      - ./poc/otel-capture.py:/opt/otel-capture.py:ro
+    ports:
+      - "127.0.0.1:${MARKHAND_OTEL_CAPTURE_PORT:-14318}:4318"
+    networks: [private, convert]
+    restart: unless-stopped
+    read_only: true
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 32
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:4318/health')\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   # Privileged idempotent bootstrap for existing volumes (initdb.d is fresh-only).
   # Creates migrator/app roles + GRANT app TO migrator WITH INHERIT TRUE before migrate.
@@ -290,7 +373,9 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
+      <<: *telemetry-environment
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-api
       MARKHAND_BIND_ADDR: 0.0.0.0:8787
       MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
@@ -303,6 +388,11 @@ services:
       MARKHAND_AUTH_AUDIENCE: ${MARKHAND_AUTH_AUDIENCE:-markhand-poc}
       MARKHAND_AUTH_SIGNING_KEY: ${MARKHAND_AUTH_SIGNING_KEY:-poc-only-signing-key-at-least-32-bytes}
       MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
+      # Canonical O05 runs 2 query rps plus ingest visibility polling; the
+      # production defaults (120 user / 60 route rpm) intentionally throttle it.
+      MARKHAND_RATE_USER_PER_MINUTE: ${MARKHAND_RATE_USER_PER_MINUTE:-600}
+      MARKHAND_RATE_IP_PER_MINUTE: ${MARKHAND_RATE_IP_PER_MINUTE:-1200}
+      MARKHAND_RATE_ROUTE_PER_MINUTE: ${MARKHAND_RATE_ROUTE_PER_MINUTE:-600}
       # Mock profile signature (print-index-signature.py --base-url http://mock-embedding:8080/v1 ...)
       MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
@@ -312,6 +402,9 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      MARKHAND_CHAT_BASE_URL: ${MARKHAND_CHAT_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_CHAT_API_KEY: ${MARKHAND_CHAT_API_KEY:-poc-chat-key}
+      MARKHAND_CHAT_MODEL: ${MARKHAND_CHAT_MODEL:-markhand-mock-chat}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
     ports:
@@ -335,6 +428,60 @@ services:
       start_period: 45s
     restart: unless-stopped
 
+  api-restore-green:
+    profiles: ["restore-green"]
+    <<: *app-security
+    image: ${MARKHAND_API_IMAGE:-markhand-api:poc}
+    environment:
+      <<: *telemetry-environment
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-api-restore-green
+      MARKHAND_BIND_ADDR: 0.0.0.0:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_GREEN_POSTGRES_DB:-markhand_restore_green_missing}
+      MARKHAND_QDRANT_URL: http://qdrant-restore-green:6333
+      MARKHAND_MINIO_URL: http://minio-restore-green:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_GREEN_MINIO_BUCKET:-markhand-restore-green-missing}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_AUTH_ISSUER: ${MARKHAND_GREEN_AUTH_ISSUER:-http://127.0.0.1:8790}
+      MARKHAND_AUTH_AUDIENCE: ${MARKHAND_AUTH_AUDIENCE:-markhand-poc}
+      MARKHAND_AUTH_SIGNING_KEY: ${MARKHAND_AUTH_SIGNING_KEY:-poc-only-signing-key-at-least-32-bytes}
+      MARKHAND_AUTH_KID: ${MARKHAND_AUTH_KID:-poc-key-1}
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      MARKHAND_CHAT_BASE_URL: ${MARKHAND_CHAT_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_CHAT_API_KEY: ${MARKHAND_CHAT_API_KEY:-poc-chat-key}
+      MARKHAND_CHAT_MODEL: ${MARKHAND_CHAT_MODEL:-markhand-mock-chat}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+    ports:
+      - "127.0.0.1:${MARKHAND_GREEN_API_PORT:-8790}:8787"
+    networks: [private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=32m
+    mem_limit: ${MARKHAND_GREEN_API_MEM_LIMIT:-384m}
+    cpus: ${MARKHAND_GREEN_API_CPUS:-0.5}
+    pids_limit: ${MARKHAND_GREEN_API_PIDS_LIMIT:-192}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8787/api/v1/health/live >/dev/null",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: "no"
+
   worker-convert:
     <<: *app-security
     build: *worker-build
@@ -346,14 +493,23 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
-    # Override merged security_opt: default Docker seccomp blocks landlock/unshare
-    # sequences required by in-process convert sandbox preflight. Keep cap_drop ALL,
-    # no-new-privileges, read_only, and the internal `convert` network (no egress).
+    # Docker's default profile blocks mount/unshare, which the nested user/net/PID
+    # sandbox needs. This profile keeps the default deny policy and allows only
+    # those two additional sandbox syscalls; disabling seccomp is forbidden.
+    # docker-default AppArmor separately denies every mount, which breaks the
+    # sandbox's MS_REC|MS_PRIVATE remount on AppArmor hosts, so the convert worker
+    # runs under poc/apparmor-markhand-convert (docker-default plus `mount,`).
+    # Load it once per host:
+    #   sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
+    # Hosts without AppArmor set MARKHAND_CONVERTER_APPARMOR_PROFILE=unconfined.
     security_opt:
       - no-new-privileges:true
-      - seccomp=unconfined
+      - seccomp=${MARKHAND_CONVERTER_SECCOMP_PROFILE:-./poc/worker-sandbox-seccomp.json}
+      - apparmor=${MARKHAND_CONVERTER_APPARMOR_PROFILE:-markhand-convert}
     environment:
+      <<: *telemetry-environment
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-convert
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
       MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       # Config requires a URL; convert network has no Qdrant — blackhole keeps
@@ -372,7 +528,13 @@ services:
       MARKHAND_WORKER_KIND: convert
       MARKHAND_WORKER_ID: poc-convert-1
       MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
-      MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-536870912}
+      # RLIMIT_AS needs virtual headroom for PDFium/Tesseract; the container
+      # cgroup below still caps resident memory at MARKHAND_WORKER_MEM_LIMIT.
+      # The converter's rayon pool sizes itself from the host CPU count, so the
+      # address space it reserves grows with the machine: 1 GiB was enough on an
+      # 8-core laptop but made PDFium fail to load on a 24-core server, which
+      # surfaces as a misleading "PDFium not found" conversion error.
+      MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-4294967296}
       FILECONV_PDFIUM_LIB: /opt/pdfium/lib
       TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
     # No egress: only the internal `convert` network (Postgres + MinIO).
@@ -405,7 +567,9 @@ services:
       api:
         condition: service_started
     environment:
+      <<: *telemetry-environment
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-index
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
       MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
@@ -449,7 +613,9 @@ services:
       api:
         condition: service_started
     environment:
+      <<: *telemetry-environment
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-embedding
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
       MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
@@ -481,6 +647,115 @@ services:
     pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
     restart: unless-stopped
 
+  # Deletion is queue-driven: the API records the intent and a Delete job removes
+  # the object from MinIO and the points from Qdrant. Without this consumer the
+  # jobs accumulate untouched, storage is never reclaimed, and any operation that
+  # requires a quiesced pipeline (the O03 consistency backup) can never proceed.
+  worker-delete:
+    <<: *app-security
+    build: *worker-build
+    image: ${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      <<: *telemetry-environment
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-delete
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
+      MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
+      MARKHAND_WORKER_KIND: delete
+      MARKHAND_WORKER_ID: poc-delete-1
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+    networks: [private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_LIGHT_WORKER_MEM_LIMIT:-512m}
+    cpus: ${MARKHAND_LIGHT_WORKER_CPUS:-0.5}
+    pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
+    restart: unless-stopped
+
+  # Document-drift reconcile jobs are enqueued by the API and are claimed only by
+  # the reconcile worker: the convert worker takes the conversion-cleanup variety
+  # alone. The one-shot service below stays for operator-driven single-document
+  # runs; this one keeps the queue from growing without bound.
+  worker-reconcile:
+    <<: *app-security
+    build: *worker-build
+    image: ${MARKHAND_WORKER_IMAGE:-markhand-worker:poc}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+    environment:
+      <<: *telemetry-environment
+      MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-reconcile
+      MARKHAND_BIND_ADDR: 127.0.0.1:8787
+      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_QDRANT_URL: http://qdrant:6333
+      MARKHAND_MINIO_URL: http://minio:9000
+      MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
+      MARKHAND_MINIO_SECRET_KEY: ${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}
+      MARKHAND_MINIO_BUCKET: ${MARKHAND_MINIO_BUCKET:-markhand-documents}
+      MARKHAND_MINIO_PATH_STYLE: "true"
+      MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
+      MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
+      MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      MARKHAND_WORKER_ORG_ID: ${MARKHAND_WORKER_ORG_ID:-11111111-1111-1111-1111-111111111111}
+      MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
+      MARKHAND_WORKER_KIND: reconcile
+      MARKHAND_WORKER_ID: poc-reconcile-1
+      # Repair, deliberately. Dry-run releases the job back to pending so a later
+      # repair run still sees the intent, which for a continuously claiming
+      # service means an endless claim/report/release loop and a queue that never
+      # empties. Operators still get dry-run through worker-reconcile-oneshot.
+      MARKHAND_RECONCILE_MODE: ${MARKHAND_RECONCILE_WORKER_MODE:-repair}
+      MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
+      MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
+      MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
+      MARKHAND_EMBEDDING_MODEL: ${MARKHAND_EMBEDDING_MODEL:-markhand-mock}
+      MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
+      MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
+      MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+    networks: [private]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: ${MARKHAND_LIGHT_WORKER_MEM_LIMIT:-512m}
+    cpus: ${MARKHAND_LIGHT_WORKER_CPUS:-0.5}
+    pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
+    restart: unless-stopped
+
   # One-shot document-drift reconcile on the private network (Postgres + MinIO + Qdrant).
   # Not on the convert-only network — Qdrant is required. Finite exit via ONESHOT.
   # Usage:
@@ -500,7 +775,9 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment:
+      <<: *telemetry-environment
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
+      MARKHAND_OTEL_SERVICE_NAME: markhand-worker-reconcile
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
       MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333

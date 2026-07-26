@@ -31,7 +31,7 @@ use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
     convert_to_markdown, login_access_token, put_bytes, quarantine_key, seed_user_with_permissions,
     sha256_hex, take_live, test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes,
-    tiny_xlsx_bytes, trusted_key,
+    tiny_xlsx_bytes, trusted_key, MinioCleanupGuard,
 };
 
 struct IndexedDoc {
@@ -311,6 +311,7 @@ async fn live_pdf_pptx_xlsx_citation_preview_download_matrix() {
     let Some(store) = test_minio_client() else {
         return;
     };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app).await;
     assert_markhand_app_role(&pool).await;
     let keys =
@@ -524,6 +525,10 @@ async fn live_pdf_pptx_xlsx_citation_preview_download_matrix() {
         ));
     }
 
+    cleanup
+        .cleanup()
+        .await
+        .expect("clean citation matrix bucket");
     ephemeral.drop().await;
 }
 
@@ -539,6 +544,7 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
     let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app).await;
     assert_markhand_app_role(&pool).await;
     let keys =
@@ -878,5 +884,9 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         .unwrap();
     assert_ne!(denied.status(), StatusCode::OK);
 
+    cleanup
+        .cleanup()
+        .await
+        .expect("clean citation authz bucket");
     ephemeral.drop().await;
 }

@@ -1,0 +1,5 @@
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-f181c4313816 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-f181c4313816 Created 
+[2m2026-07-26T12:27:49.886623Z[0m [32m INFO[0m [2mtelemetry[0m[2m:[0m telemetry exporter configured [3mservice[0m[2m=[0mmarkhand-worker-reconcile [3mmetrics_enabled[0m[2m=[0mtrue [3mqueue_capacity[0m[2m=[0m1024
+fileconv-worker: MARKHAND_RECONCILE_DOCUMENT_ID must be a UUID
+

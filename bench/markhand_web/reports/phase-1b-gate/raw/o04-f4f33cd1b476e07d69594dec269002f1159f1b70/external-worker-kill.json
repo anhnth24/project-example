@@ -1,0 +1,244 @@
+{
+  "candidateWorkerStartExitCode": 0,
+  "candidateWorkerStopped": true,
+  "dbBeforeKill": {
+    "attempts": 1,
+    "eventCounts": {
+      "outbox.published": 1
+    },
+    "found": true,
+    "id": "dcca4414-bb71-4880-b836-3479755c422a",
+    "jobType": "convert",
+    "leaseExpired": false,
+    "leaseExpiresAtUnixMs": 1785068949968,
+    "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+    "leaseOwnerPrefix": "poc-convert-1",
+    "leaseOwnerPresent": true,
+    "maxAttempts": 5,
+    "observedAtUnixMs": 1785068890110,
+    "orgId": "11111111-1111-1111-1111-111111111111",
+    "outboxCounts": {
+      "job.enqueued": 1
+    },
+    "status": "leased"
+  },
+  "dbBeforeKillObservations": [
+    {
+      "query": {
+        "exitCode": 0,
+        "timedOut": false,
+        "truncated": false
+      },
+      "state": {
+        "attempts": 1,
+        "eventCounts": {
+          "outbox.published": 1
+        },
+        "found": true,
+        "id": "dcca4414-bb71-4880-b836-3479755c422a",
+        "jobType": "convert",
+        "leaseExpired": false,
+        "leaseExpiresAtUnixMs": 1785068949968,
+        "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+        "leaseOwnerPrefix": "poc-convert-1",
+        "leaseOwnerPresent": true,
+        "maxAttempts": 5,
+        "observedAtUnixMs": 1785068890110,
+        "orgId": "11111111-1111-1111-1111-111111111111",
+        "outboxCounts": {
+          "job.enqueued": 1
+        },
+        "status": "leased"
+      }
+    }
+  ],
+  "dbExpiredLease": {
+    "attempts": 1,
+    "eventCounts": {
+      "job.reclaimed": 1,
+      "outbox.published": 2
+    },
+    "found": true,
+    "id": "dcca4414-bb71-4880-b836-3479755c422a",
+    "jobType": "convert",
+    "leaseExpired": false,
+    "leaseExpiresAtUnixMs": null,
+    "leaseOwnerFingerprint": null,
+    "leaseOwnerPrefix": "",
+    "leaseOwnerPresent": false,
+    "maxAttempts": 5,
+    "observedAtUnixMs": 1785068950391,
+    "orgId": "11111111-1111-1111-1111-111111111111",
+    "outboxCounts": {
+      "job.enqueued": 1,
+      "job.reclaimed": 1
+    },
+    "status": "pending"
+  },
+  "dbExpiredLeaseObservations": [
+    {
+      "query": {
+        "exitCode": 0,
+        "timedOut": false,
+        "truncated": false
+      },
+      "state": {
+        "attempts": 1,
+        "eventCounts": {
+          "outbox.published": 1
+        },
+        "found": true,
+        "id": "dcca4414-bb71-4880-b836-3479755c422a",
+        "jobType": "convert",
+        "leaseExpired": false,
+        "leaseExpiresAtUnixMs": 1785068949968,
+        "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+        "leaseOwnerPrefix": "poc-convert-1",
+        "leaseOwnerPresent": true,
+        "maxAttempts": 5,
+        "observedAtUnixMs": 1785068947770,
+        "orgId": "11111111-1111-1111-1111-111111111111",
+        "outboxCounts": {
+          "job.enqueued": 1
+        },
+        "status": "leased"
+      }
+    },
+    {
+      "query": {
+        "exitCode": 0,
+        "timedOut": false,
+        "truncated": false
+      },
+      "state": {
+        "attempts": 1,
+        "eventCounts": {
+          "outbox.published": 1
+        },
+        "found": true,
+        "id": "dcca4414-bb71-4880-b836-3479755c422a",
+        "jobType": "convert",
+        "leaseExpired": false,
+        "leaseExpiresAtUnixMs": 1785068949968,
+        "leaseOwnerFingerprint": "13f1deb969d2c5c38c1c4195d8186081",
+        "leaseOwnerPrefix": "poc-convert-1",
+        "leaseOwnerPresent": true,
+        "maxAttempts": 5,
+        "observedAtUnixMs": 1785068949092,
+        "orgId": "11111111-1111-1111-1111-111111111111",
+        "outboxCounts": {
+          "job.enqueued": 1
+        },
+        "status": "leased"
+      }
+    },
+    {
+      "query": {
+        "exitCode": 0,
+        "timedOut": false,
+        "truncated": false
+      },
+      "state": {
+        "attempts": 1,
+        "eventCounts": {
+          "job.reclaimed": 1,
+          "outbox.published": 2
+        },
+        "found": true,
+        "id": "dcca4414-bb71-4880-b836-3479755c422a",
+        "jobType": "convert",
+        "leaseExpired": false,
+        "leaseExpiresAtUnixMs": null,
+        "leaseOwnerFingerprint": null,
+        "leaseOwnerPrefix": "",
+        "leaseOwnerPresent": false,
+        "maxAttempts": 5,
+        "observedAtUnixMs": 1785068950391,
+        "orgId": "11111111-1111-1111-1111-111111111111",
+        "outboxCounts": {
+          "job.enqueued": 1,
+          "job.reclaimed": 1
+        },
+        "status": "pending"
+      }
+    }
+  ],
+  "dbFinal": {
+    "attempts": 2,
+    "eventCounts": {
+      "job.reclaimed": 1,
+      "job.succeeded": 1,
+      "outbox.published": 2
+    },
+    "found": true,
+    "id": "dcca4414-bb71-4880-b836-3479755c422a",
+    "jobType": "convert",
+    "leaseExpired": false,
+    "leaseExpiresAtUnixMs": null,
+    "leaseOwnerFingerprint": null,
+    "leaseOwnerPrefix": "",
+    "leaseOwnerPresent": false,
+    "maxAttempts": 5,
+    "observedAtUnixMs": 1785068956068,
+    "orgId": "11111111-1111-1111-1111-111111111111",
+    "outboxCounts": {
+      "document.index_requested": 1,
+      "job.enqueued": 1,
+      "job.reclaimed": 1,
+      "job.succeeded": 1
+    },
+    "status": "succeeded"
+  },
+  "dbFinalObservations": [
+    {
+      "query": {
+        "exitCode": 0,
+        "timedOut": false,
+        "truncated": false
+      },
+      "state": {
+        "attempts": 2,
+        "eventCounts": {
+          "job.reclaimed": 1,
+          "job.succeeded": 1,
+          "outbox.published": 2
+        },
+        "found": true,
+        "id": "dcca4414-bb71-4880-b836-3479755c422a",
+        "jobType": "convert",
+        "leaseExpired": false,
+        "leaseExpiresAtUnixMs": null,
+        "leaseOwnerFingerprint": null,
+        "leaseOwnerPrefix": "",
+        "leaseOwnerPresent": false,
+        "maxAttempts": 5,
+        "observedAtUnixMs": 1785068956068,
+        "orgId": "11111111-1111-1111-1111-111111111111",
+        "outboxCounts": {
+          "document.index_requested": 1,
+          "job.enqueued": 1,
+          "job.reclaimed": 1,
+          "job.succeeded": 1
+        },
+        "status": "succeeded"
+      }
+    }
+  ],
+  "dbStateVerified": true,
+  "deathVerified": true,
+  "harnessControlled": true,
+  "killExitCode": 0,
+  "killedContainerId": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+  "leaseExpired": true,
+  "leaseExpiryProof": "durable_reclaim_after_captured_deadline",
+  "missingServices": [],
+  "observedJobId": "dcca4414-bb71-4880-b836-3479755c422a",
+  "postgresContainerId": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+  "replacementCommandExitCode": 0,
+  "replacementContainerId": "4af8b2f246a561159a8170765a088217369b231064d4bf9d94aeda02be467bbe",
+  "replacementReclaimed": true,
+  "replacementWorkerVerified": true,
+  "replayConsistent": true,
+  "restartPolicyDisabled": true,
+  "stdoutProofAccepted": false
+}

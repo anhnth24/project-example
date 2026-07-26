@@ -69,6 +69,44 @@ pub enum PromotionError {
     Injected(PromotionFault),
 }
 
+impl PromotionError {
+    /// Stable failure classification safe to persist on a job.
+    pub const fn safe_code(&self) -> &'static str {
+        match self {
+            Self::Db(DbError::Pool(_)) => "promotion_db_pool",
+            Self::Db(DbError::Query(_)) => "promotion_db_query",
+            Self::Db(DbError::Config(_)) => "promotion_db_config",
+            Self::Db(DbError::NotFound) => "promotion_db_not_found",
+            Self::Db(DbError::IllegalTransition { .. }) => "promotion_db_illegal_transition",
+            Self::Db(DbError::StaleState { .. }) => "promotion_db_stale_state",
+            Self::Job(JobError::InvalidPayload(_)) => "promotion_job_invalid_payload",
+            Self::Job(JobError::InvalidIdempotencyKey) => "promotion_job_invalid_idempotency_key",
+            Self::Job(JobError::InvalidLeaseOwner) => "promotion_job_invalid_lease_owner",
+            Self::Job(JobError::InvalidDuration) => "promotion_job_invalid_duration",
+            Self::Job(JobError::InvalidLimit) => "promotion_job_invalid_limit",
+            Self::Job(JobError::InvalidMaxAttempts) => "promotion_job_invalid_max_attempts",
+            Self::Job(JobError::LeaseLost) => "promotion_job_lease_lost",
+            Self::Job(JobError::NotFound) => "promotion_job_not_found",
+            Self::Job(JobError::CannotCancelTerminal(_)) => "promotion_job_cannot_cancel_terminal",
+            Self::Job(JobError::Database(DbError::Pool(_))) => "promotion_job_db_pool",
+            Self::Job(JobError::Database(DbError::Query(_))) => "promotion_job_db_query",
+            Self::Job(JobError::Database(DbError::Config(_))) => "promotion_job_db_config",
+            Self::Job(JobError::Database(DbError::NotFound)) => "promotion_job_db_not_found",
+            Self::Job(JobError::Database(DbError::IllegalTransition { .. })) => {
+                "promotion_job_db_illegal_transition"
+            }
+            Self::Job(JobError::Database(DbError::StaleState { .. })) => {
+                "promotion_job_db_stale_state"
+            }
+            Self::Quota(_) => "promotion_quota",
+            Self::LeaseLost => "promotion_lease_lost",
+            Self::IdempotencyConflict => "promotion_idempotency_conflict",
+            Self::CommittedOutcomeUnknown => "promotion_committed_outcome_unknown",
+            Self::Injected(_) => "promotion_injected_fault",
+        }
+    }
+}
+
 impl From<PromotionError> for JobError {
     fn from(error: PromotionError) -> Self {
         match error {

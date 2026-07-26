@@ -1,0 +1,14 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.92s
+     Running tests/worker.rs (target/debug/deps/worker-9553ff5cb381432d)
+
+running 1 test
+test live_convert_worker_cancel_loses_lease_and_kills_sandbox ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 1.17s
+
+
+O04_COMMAND_OUTPUT_TRUNCATED	false
+O04_COMMAND_EXIT_CODE	0
+O04_COMMAND_TIMED_OUT	false
+O04_COMMAND_EOF	true
+

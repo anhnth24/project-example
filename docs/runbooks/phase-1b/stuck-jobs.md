@@ -15,13 +15,19 @@ increase(markhand_quota_reservation_total{outcome="exceeded"}[15m])
 
 - Pause new uploads if convert/index queues are saturated.
 - Do not delete job rows; inspect truncated `last_error` only (no content).
+- A queue whose jobs stay `pending` with `attempts = 0` and a past `available_at`
+  has no consumer: check that the worker for that `job_type` is actually running.
+  Convert claims `convert` plus conversion-cleanup `reconcile`; index claims
+  `index` and `lifecycle_refresh`; `delete` and document-drift `reconcile` need
+  their own workers.
 - For quota storms, stop bulk ingest clients; do not raise limits blindly.
 
 ## Recover
 
 ```bash
 # Worker health (Compose POC)
-docker compose -f deploy/compose.poc.yml ps worker-convert worker-embedding worker-index
+docker compose -f deploy/compose.poc.yml ps \
+  worker-convert worker-embedding worker-index worker-delete worker-reconcile
 docker compose -f deploy/compose.poc.yml --env-file deploy/.env logs --tail=100 worker-convert \
   2>&1 | python3 deploy/scripts/redact_secrets.py
 

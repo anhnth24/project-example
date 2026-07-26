@@ -4,9 +4,10 @@
 //! evaluate_report. This Rust binary:
 //! - asserts default evidence is honest `not_run` / non-pass
 //! - refuses to treat O05 `o05-soak.json` / `summary.json` as O04 evidence
-//! - under `MARKHAND_E2E=1` + `--ignored`, invokes Python `--validate-report`
+//! - under `MARKHAND_RELEASE_GATE=1`, requires canonical O04 report pass
 //!
-//! Integration CI that uses `--include-ignored` must `--skip e2e_live_vertical_slice`.
+//! Template/unit CI may run this test without live services; release-gate CI must
+//! set `MARKHAND_RELEASE_GATE=1` after generating O04 evidence.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,14 +30,33 @@ fn load_json(rel: &str) -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
+fn o04_report_path() -> PathBuf {
+    std::env::var("O04_REPORT_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root().join(O04_REPORT))
+}
+
+fn load_json_path(path: &Path) -> Option<Value> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
 fn status_of(value: &Value) -> Option<&str> {
     value.get("status").and_then(|s| s.as_str())
+}
+
+fn python_exe() -> &'static str {
+    if Command::new("python3").arg("--version").output().is_ok() {
+        "python3"
+    } else {
+        "python"
+    }
 }
 
 /// Invoke Python evaluator (source of truth). Returns (status, blockers).
 fn validate_report_via_python(report_path: &Path) -> (String, Vec<String>, i32) {
     let harness = workspace_root().join(O04_HARNESS);
-    let output = Command::new("python3")
+    let output = Command::new(python_exe())
         .arg(&harness)
         .arg("--validate-report")
         .arg(report_path)
@@ -107,7 +127,7 @@ fn e2e_suite_default_is_not_run() {
     // O05 harness must exist and refuse pass without MARKHAND_SOAK=1.
     let o05_harness = workspace_root().join(O05_HARNESS);
     assert!(o05_harness.is_file(), "missing O05 harness {O05_HARNESS}");
-    let path = workspace_root().join(O04_REPORT);
+    let path = o04_report_path();
     let (status, blockers, _code) = validate_report_via_python(&path);
     match status.as_str() {
         "pass" => {
@@ -122,6 +142,41 @@ fn e2e_suite_default_is_not_run() {
         }
         other => panic!("unexpected o04 gate status: {other:?}"),
     }
+}
+
+#[test]
+fn o04_release_gate_requires_canonical_pass_when_enabled() {
+    if std::env::var("MARKHAND_RELEASE_GATE").ok().as_deref() != Some("1") {
+        eprintln!(
+            "o04_release_gate_requires_canonical_pass_when_enabled: \
+             template mode; set MARKHAND_RELEASE_GATE=1 after O04 live run"
+        );
+        return;
+    }
+
+    let path = o04_report_path();
+    let report = load_json_path(&path).expect("o04-release.json must exist");
+    let github_sha = std::env::var("GITHUB_SHA")
+        .expect("MARKHAND_RELEASE_GATE=1 requires explicit GITHUB_SHA binding");
+    assert!(
+        !github_sha.trim().is_empty(),
+        "MARKHAND_RELEASE_GATE=1 requires non-empty GITHUB_SHA"
+    );
+    assert_eq!(
+        report
+            .get("provenance")
+            .and_then(|v| v.get("gitShaFull"))
+            .and_then(|v| v.as_str()),
+        Some(github_sha.as_str()),
+        "O04 report must be bound to the exact GITHUB_SHA"
+    );
+    let (status, blockers, code) = validate_report_via_python(&path);
+    assert_eq!(
+        (status.as_str(), code),
+        ("pass", 0),
+        "MARKHAND_RELEASE_GATE=1 requires canonical O04 report pass; report_status={:?}; blockers={blockers:?}",
+        status_of(&report)
+    );
 }
 
 #[test]
@@ -240,68 +295,4 @@ fn o04_python_validator_rejects_non_pass_fixtures() {
         blockers.iter().any(|b| b == "partial_format"),
         "{blockers:?}"
     );
-}
-
-#[test]
-#[ignore = "live in-process workers against POC services; run with --ignored and MARKHAND_E2E=1 after o04 harness"]
-fn e2e_live_vertical_slice() {
-    assert_eq!(
-        std::env::var("MARKHAND_E2E").ok().as_deref(),
-        Some("1"),
-        "e2e_live_vertical_slice requires MARKHAND_E2E=1; CI must --skip this test under plain --include-ignored"
-    );
-    let database = std::env::var("MARKHAND_TEST_DATABASE_URL")
-        .expect("MARKHAND_E2E=1 requires MARKHAND_TEST_DATABASE_URL");
-    assert!(
-        database.starts_with("postgres"),
-        "MARKHAND_TEST_DATABASE_URL must be a postgres URL"
-    );
-
-    let report =
-        load_json(O04_REPORT).expect("o04-release.json missing — run run_o04_release_suite.py");
-    assert_eq!(
-        report.get("issue").and_then(|v| v.as_str()),
-        Some("P1B-O04"),
-        "live gate must read O04 report, not O05 summary.json"
-    );
-    assert_eq!(
-        report
-            .get("architecture")
-            .and_then(|v| v.get("kind"))
-            .and_then(|v| v.as_str()),
-        Some("in_process_workers_against_poc_services")
-    );
-    assert_eq!(
-        report
-            .get("architecture")
-            .and_then(|v| v.get("apiHttpExercised"))
-            .and_then(|v| v.as_bool()),
-        Some(false),
-        "must not claim Compose API HTTP was exercised"
-    );
-
-    let path = workspace_root().join(O04_REPORT);
-    let (status, blockers, code) = validate_report_via_python(&path);
-    assert_eq!(
-        (status.as_str(), code),
-        ("pass", 0),
-        "O04 live report failed Python provenance/coverage gates: {blockers:?}"
-    );
-    assert_eq!(status_of(&report), Some("pass"));
-
-    let raw_dir = report
-        .get("rawDir")
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from)
-        .expect("rawDir");
-    assert!(
-        raw_dir.is_dir()
-            && raw_dir
-                .read_dir()
-                .ok()
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false),
-        "raw evidence dir must contain suite logs"
-    );
-    eprintln!("e2e_live_vertical_slice: O04 report pass via Python validator");
 }

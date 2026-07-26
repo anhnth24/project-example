@@ -1169,6 +1169,197 @@ async fn live_ask_stream_last_event_id_purge_and_delayed_reconnect() {
 
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn live_ask_stream_maintenance_converges_under_bounded_load() {
+    use fileconv_server::db::ask_streams::{self, NewAskStreamSession};
+
+    const EXPIRED_SESSIONS: usize = 256;
+    const ACTIVE_SESSIONS: usize = 32;
+    const SWEEPS_PER_WORKER: usize = 8;
+
+    let Some(admin_url) = admin_database_url() else {
+        return;
+    };
+    let Some(app_url) = app_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin_url, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection_id = Uuid::new_v4();
+    seed_user_with_permissions(
+        &pool,
+        org,
+        user,
+        &format!("{user}@ask-maintenance-load.test"),
+        "correct-password-1",
+        &["qa.query"],
+    )
+    .await;
+    let ctx = OrgContext::try_new(org, user, ["qa.query"], [collection_id]).unwrap();
+
+    let (expired_ids, active_ids) = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let mut expired_ids = Vec::with_capacity(EXPIRED_SESSIONS);
+                let mut active_ids = Vec::with_capacity(ACTIVE_SESSIONS);
+                for index in 0..(EXPIRED_SESSIONS + ACTIVE_SESSIONS) {
+                    let id = Uuid::new_v4();
+                    ask_streams::create_session(
+                        txn,
+                        &ctx,
+                        NewAskStreamSession {
+                            id,
+                            version_mode: "current".into(),
+                            collection_ids: vec![collection_id],
+                            cited_document_ids: Vec::new(),
+                            cited_version_ids: Vec::new(),
+                            pinned_snapshot: serde_json::json!({ "loadIndex": index }),
+                            max_events: 4,
+                            max_bytes: 4096,
+                            ttl_secs: 3600,
+                        },
+                    )
+                    .await?;
+                    if index < EXPIRED_SESSIONS {
+                        ask_streams::append_event(
+                            txn,
+                            &ctx,
+                            id,
+                            "ask.token",
+                            serde_json::json!({ "index": index }),
+                        )
+                        .await?;
+                        expired_ids.push(id);
+                    } else {
+                        active_ids.push(id);
+                    }
+                }
+                txn.execute(
+                    "UPDATE ask_stream_sessions
+                     SET created_at = clock_timestamp() - interval '2 seconds',
+                         expires_at = clock_timestamp() - interval '1 second'
+                     WHERE org_id = $1 AND id = ANY($2)",
+                    &[&ctx.org_id(), &expired_ids],
+                )
+                .await?;
+                Ok((expired_ids, active_ids))
+            })
+        }
+    })
+    .await
+    .expect("seed bounded maintenance load");
+
+    let sweep = |pool: deadpool_postgres::Pool| async move {
+        let mut sessions = 0_u64;
+        let mut events = 0_u64;
+        for _ in 0..SWEEPS_PER_WORKER {
+            let (purged_sessions, purged_events, _) =
+                ask_streams::run_maintenance(&pool, 32).await?;
+            sessions += purged_sessions;
+            events += purged_events;
+            tokio::task::yield_now().await;
+        }
+        Ok::<_, fileconv_server::db::error::DbError>((sessions, events))
+    };
+    let reader_pool = pool.clone();
+    let reader_ctx = ctx.clone();
+    let reader_ids = active_ids.clone();
+    let reader = async move {
+        let mut seen = 0_usize;
+        for _ in 0..4 {
+            for &session_id in &reader_ids {
+                with_org_txn(&reader_pool, &reader_ctx, {
+                    let ctx = reader_ctx.clone();
+                    move |txn| {
+                        Box::pin(async move {
+                            ask_streams::get_owned_session(txn, &ctx, session_id).await?;
+                            Ok(())
+                        })
+                    }
+                })
+                .await?;
+                seen += 1;
+            }
+        }
+        Ok::<_, fileconv_server::db::error::DbError>(seen)
+    };
+
+    let started = std::time::Instant::now();
+    let (left, right, seen) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(sweep(pool.clone()), sweep(pool.clone()), reader)
+    })
+    .await
+    .expect("maintenance load must converge before deadline");
+    let (left_sessions, left_events) = left.expect("left maintenance worker");
+    let (right_sessions, right_events) = right.expect("right maintenance worker");
+    assert_eq!(
+        left_sessions + right_sessions,
+        EXPIRED_SESSIONS as u64,
+        "all expired sessions must be purged exactly once"
+    );
+    assert_eq!(
+        left_events + right_events,
+        EXPIRED_SESSIONS as u64,
+        "cascade must purge every expired session event"
+    );
+    assert_eq!(
+        seen.expect("active reader"),
+        ACTIVE_SESSIONS * 4,
+        "active reconnect-style reads must remain available during purge"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "bounded maintenance exceeded deadline"
+    );
+
+    let (expired_remaining, active_remaining, expired_events): (i64, i64, i64) =
+        with_org_txn(&pool, &ctx, {
+            let ctx = ctx.clone();
+            let expired_ids = expired_ids.clone();
+            let active_ids = active_ids.clone();
+            move |txn| {
+                Box::pin(async move {
+                    let expired_remaining = txn
+                        .query_one(
+                            "SELECT COUNT(*)::bigint FROM ask_stream_sessions
+                             WHERE org_id = $1 AND id = ANY($2)",
+                            &[&ctx.org_id(), &expired_ids],
+                        )
+                        .await?
+                        .get(0);
+                    let active_remaining = txn
+                        .query_one(
+                            "SELECT COUNT(*)::bigint FROM ask_stream_sessions
+                             WHERE org_id = $1 AND id = ANY($2)",
+                            &[&ctx.org_id(), &active_ids],
+                        )
+                        .await?
+                        .get(0);
+                    let expired_events = txn
+                        .query_one(
+                            "SELECT COUNT(*)::bigint FROM ask_stream_events
+                             WHERE org_id = $1 AND session_id = ANY($2)",
+                            &[&ctx.org_id(), &expired_ids],
+                        )
+                        .await?
+                        .get(0);
+                    Ok((expired_remaining, active_remaining, expired_events))
+                })
+            }
+        })
+        .await
+        .expect("verify maintenance convergence");
+    assert_eq!(expired_remaining, 0);
+    assert_eq!(expired_events, 0);
+    assert_eq!(active_remaining, ACTIVE_SESSIONS as i64);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn live_job_sse_replay_worker_restart_and_cross_org_idor() {
     let Some(admin_url) = admin_database_url() else {
         return;

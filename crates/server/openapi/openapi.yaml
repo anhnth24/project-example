@@ -103,6 +103,13 @@ paths:
                 collectionId:
                   type: string
                   format: uuid
+                documentId:
+                  type: string
+                  format: uuid
+                  description: >
+                    Existing document in collectionId. When supplied, the upload
+                    creates the next immutable version instead of a new document.
+                    The current document must be fully indexed.
       responses:
         "201":
           description: >
@@ -131,6 +138,14 @@ paths:
           $ref: "#/components/responses/ApiError"
         "403":
           $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          description: Idempotency conflict or document not ready for a new revision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "413":
           $ref: "#/components/responses/ApiError"
         "429":
