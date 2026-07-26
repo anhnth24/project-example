@@ -53,6 +53,11 @@ class RequestStats:
     errors: int = 0
     errors_outside_injection: int = 0
     errors_in_injection: int = 0
+    # Same errors attributed by when the outcome was recorded rather than by
+    # whether the operation overlapped a fault window; kept so the stricter
+    # reading stays visible in the evidence.
+    errors_outside_injection_at_outcome: int = 0
+    reconcile_failures: list[dict[str, Any]] = field(default_factory=list)
     # actor -> reason -> count, so a failed run says why instead of only how many.
     failure_reasons: dict[str, dict[str, int]] = field(default_factory=dict)
     query_success_latencies_ms: list[float] = field(default_factory=list)
@@ -72,6 +77,8 @@ class RequestStats:
     compare_dataset: dict[str, str] | None = None
     # Optional external window checker (InjectionPlan.in_window).
     injection_window_fn: Callable[[float], bool] | None = None
+    # Optional external overlap checker (InjectionPlan.overlaps).
+    injection_overlap_fn: Callable[[float, float], bool] | None = None
     workload_start_mono: float | None = None
     workload_end_mono: float | None = None
 
@@ -83,19 +90,43 @@ class RequestStats:
         with self.lock:
             self.submitted[kind] = self.submitted.get(kind, 0) + 1
 
-    def in_injection_window(self, monotonic_offset: float) -> bool:
-        if self.injection_window_fn is not None:
-            return bool(self.injection_window_fn(monotonic_offset))
+    def in_injection_window(
+        self, monotonic_offset: float, started_offset: float | None = None
+    ) -> bool:
+        """Whether an operation coincided with a deliberately injected fault.
+
+        An operation that was already running when a worker was killed is
+        affected by that kill even if it gives up afterwards, so the whole span
+        from start to outcome is compared against the windows rather than the
+        instant the outcome was recorded.
+        """
+        if started_offset is None:
+            started_offset = monotonic_offset
+        low, high = sorted((started_offset, monotonic_offset))
+        if self.injection_overlap_fn is not None:
+            if self.injection_overlap_fn(low, high):
+                return True
+        elif self.injection_window_fn is not None:
+            if self.injection_window_fn(low) or self.injection_window_fn(high):
+                return True
         with self.lock:
             windows = list(self.injection_windows)
         for start, end in windows:
-            if start <= monotonic_offset <= end:
+            if start <= high and low <= end:
                 return True
         return False
 
     def add_injection_window(self, start: float, end: float) -> None:
         with self.lock:
             self.injection_windows.append((start, end))
+
+    def record_reconcile_failure(
+        self, *, returncode: int, stdout: str, stderr: str
+    ) -> None:
+        with self.lock:
+            self.reconcile_failures.append(
+                {"returncode": returncode, "stdout": stdout, "stderr": stderr}
+            )
 
     def add(
         self,
@@ -108,7 +139,10 @@ class RequestStats:
         in_injection: bool = False,
         not_ready_reason: str | None = None,
         reason: str | None = None,
+        in_injection_at_outcome: bool | None = None,
     ) -> None:
+        if in_injection_at_outcome is None:
+            in_injection_at_outcome = in_injection
         with self.lock:
             self.completed[kind] = self.completed.get(kind, 0) + 1
             if not_ready_reason:
@@ -126,6 +160,8 @@ class RequestStats:
                     self.errors_in_injection += 1
                 else:
                     self.errors_outside_injection += 1
+                if not in_injection_at_outcome:
+                    self.errors_outside_injection_at_outcome += 1
             if kind == "query":
                 if mode:
                     self.query_attempts_by_mode[mode] = (
@@ -513,6 +549,7 @@ def do_ingest(
     start_mono: float,
     scheduled_mono: float | None = None,
 ) -> None:
+    began_offset = time.monotonic() - start_mono
     # Every upload carries its own marker so the retrieval assertion targets one
     # exact document instead of racing the whole collection for a top-N slot.
     # PNG is the exception when Pillow is unavailable: its marker has to survive
@@ -568,9 +605,11 @@ def do_ingest(
     elif ok:
         ok = False
         reason = "upload_missing_document_or_version_id"
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
+    ended_offset = time.monotonic() - start_mono
+    in_inj = stats.in_injection_window(ended_offset, began_offset)
     stats.add(
         "ingest",
+        in_injection_at_outcome=stats.in_injection_window(ended_offset),
         ok=ok,
         doc_id=doc_id if isinstance(doc_id, str) else None,
         in_injection=in_inj,
@@ -586,6 +625,7 @@ def do_query(
     start_mono: float,
     scheduled_mono: float | None = None,
 ) -> None:
+    began_offset = time.monotonic() - start_mono
     body_obj: dict[str, Any] = {
         "query": "markhand soak synthetic query",
         "mode": mode,
@@ -633,13 +673,15 @@ def do_query(
     else:
         not_ready = f"unsupported_mode:{mode}"
 
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
+    in_inj = stats.in_injection_window(time.monotonic() - start_mono, began_offset)
+    at_outcome = stats.in_injection_window(time.monotonic() - start_mono)
     if not_ready:
         stats.add(
             "query",
             ok=False,
             mode=mode,
             in_injection=in_inj,
+            in_injection_at_outcome=at_outcome,
             not_ready_reason=not_ready,
         )
         return
@@ -662,7 +704,10 @@ def do_query(
         ok=ok,
         latency_ms=((time.monotonic() - (scheduled_mono or start_mono)) * 1000.0) if ok else None,
         mode=mode,
-        in_injection=in_inj,
+        in_injection=stats.in_injection_window(
+            time.monotonic() - start_mono, began_offset
+        ),
+        in_injection_at_outcome=stats.in_injection_window(time.monotonic() - start_mono),
         reason=reason,
     )
 
@@ -674,6 +719,7 @@ def do_delete(
     start_mono: float,
     scheduled_mono: float | None = None,
 ) -> None:
+    began_offset = time.monotonic() - start_mono
     with stats.lock:
         if not stats.document_ids:
             doc_id = None
@@ -699,17 +745,25 @@ def do_delete(
                 doc_id = stats.document_ids.pop(0)
                 if stats.document_ids:
                     stats.retained_ids.append(stats.document_ids[0])
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     if not doc_id:
-        stats.add("delete", ok=False, in_injection=in_inj, not_ready_reason="delete_no_doc")
+        outcome_offset = time.monotonic() - start_mono
+        stats.add(
+            "delete",
+            ok=False,
+            in_injection=stats.in_injection_window(outcome_offset, began_offset),
+            in_injection_at_outcome=stats.in_injection_window(outcome_offset),
+            not_ready_reason="delete_no_doc",
+        )
         return
     status, _data, _latency = client.request("DELETE", f"/api/v1/documents/{doc_id}")
     delete_ok = _http_success(status)
+    outcome_offset = time.monotonic() - start_mono
     stats.add(
         "delete",
         ok=delete_ok,
         doc_id=doc_id,
-        in_injection=in_inj,
+        in_injection=stats.in_injection_window(outcome_offset, began_offset),
+        in_injection_at_outcome=stats.in_injection_window(outcome_offset),
         reason=None if delete_ok else f"delete_http_{status}",
     )
 
@@ -725,6 +779,7 @@ def do_reconcile(
 ) -> None:
     import subprocess
 
+    began_offset = time.monotonic() - start_mono
     run = runner or subprocess.run
     env = os.environ.copy()
     env["MARKHAND_RECONCILE_MODE"] = "dry-run"
@@ -745,17 +800,30 @@ def do_reconcile(
         "--no-deps",
         "worker-reconcile-oneshot",
     ]
-    in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     reason: str | None = None
     try:
         proc = run(cmd, capture_output=True, text=True, check=False, env=env, timeout=90)
         ok = proc.returncode == 0
         if not ok:
             reason = f"reconcile_exit_{proc.returncode}"
+            # A bare exit code says nothing about why; keep the output so the
+            # next investigation does not need another 30-minute run.
+            stats.record_reconcile_failure(
+                returncode=proc.returncode,
+                stdout=(proc.stdout or "")[-2000:],
+                stderr=(proc.stderr or "")[-2000:],
+            )
     except (OSError, subprocess.SubprocessError) as exc:
         ok = False
         reason = f"reconcile_spawn_{type(exc).__name__}"
-    stats.add("reconcile", ok=ok, in_injection=in_inj, reason=reason)
+    ended_offset = time.monotonic() - start_mono
+    stats.add(
+        "reconcile",
+        ok=ok,
+        in_injection=stats.in_injection_window(ended_offset, began_offset),
+        in_injection_at_outcome=stats.in_injection_window(ended_offset),
+        reason=reason,
+    )
 
 
 def expected_scheduled_counts(profile: dict[str, Any], duration_seconds: int) -> dict[str, int]:
@@ -797,6 +865,7 @@ def run_mixed_load(
     injection_schedule: list[tuple[float, str]] | None = None,
     compare_dataset: dict[str, str] | None = None,
     injection_window_fn: Callable[[float], bool] | None = None,
+    injection_overlap_fn: Callable[[float, float], bool] | None = None,
     retained_ids: list[str] | None = None,
     retained_markers: dict[str, str] | None = None,
     max_workers: int = 16,
@@ -815,6 +884,7 @@ def run_mixed_load(
     stats = RequestStats()
     stats.compare_dataset = compare_dataset
     stats.injection_window_fn = injection_window_fn
+    stats.injection_overlap_fn = injection_overlap_fn
     if retained_ids:
         stats.retained_ids = list(retained_ids)
         stats.document_ids = list(retained_ids)
@@ -972,6 +1042,7 @@ def metrics_from_stats(
         "success": dict(stats.success),
         "requestErrors": stats.errors,
         "requestErrorsOutsideInjection": stats.errors_outside_injection,
+        "requestErrorsOutsideInjectionAtOutcome": stats.errors_outside_injection_at_outcome,
         "requestErrorsInInjection": stats.errors_in_injection,
         "queryP50Ms": query_p50,
         "queryP95Ms": query_p95,

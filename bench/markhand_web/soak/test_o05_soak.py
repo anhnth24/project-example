@@ -250,6 +250,51 @@ class DeleteRetentionTests(unittest.TestCase):
         self.assertEqual(stats.deleted_ids, ["deletable-1"])
 
 
+class InjectionAttributionTests(unittest.TestCase):
+    def _stats(self) -> workload.RequestStats:
+        stats = workload.RequestStats()
+        stats.add_injection_window(100.0, 130.0)
+        return stats
+
+    def test_operation_spanning_a_window_counts_as_injected(self) -> None:
+        stats = self._stats()
+        # Started before the kill, gave up well after it.
+        self.assertTrue(stats.in_injection_window(300.0, 90.0))
+        # Recorded at the same late instant, but never overlapped the window.
+        self.assertFalse(stats.in_injection_window(300.0, 200.0))
+
+    def test_window_fully_inside_a_long_operation_still_counts(self) -> None:
+        stats = self._stats()
+        self.assertTrue(stats.in_injection_window(400.0, 50.0))
+
+    def test_both_attributions_are_recorded(self) -> None:
+        stats = self._stats()
+        stats.add(
+            "ingest",
+            ok=False,
+            reason="not_visible_before_timeout",
+            in_injection=stats.in_injection_window(300.0, 90.0),
+            in_injection_at_outcome=stats.in_injection_window(300.0),
+        )
+        self.assertEqual(stats.errors, 1)
+        self.assertEqual(stats.errors_in_injection, 1)
+        self.assertEqual(stats.errors_outside_injection, 0)
+        # The stricter reading stays visible for the report.
+        self.assertEqual(stats.errors_outside_injection_at_outcome, 1)
+
+    def test_unrelated_failure_stays_outside_under_both_readings(self) -> None:
+        stats = self._stats()
+        stats.add(
+            "query",
+            ok=False,
+            reason="search_http_500",
+            in_injection=stats.in_injection_window(300.0, 250.0),
+            in_injection_at_outcome=stats.in_injection_window(300.0),
+        )
+        self.assertEqual(stats.errors_outside_injection, 1)
+        self.assertEqual(stats.errors_outside_injection_at_outcome, 1)
+
+
 class SamplerCadenceTests(unittest.TestCase):
     def test_sample_cost_is_absorbed_by_the_interval(self) -> None:
         starts: list[float] = []

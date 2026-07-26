@@ -571,6 +571,7 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
                 else None,
                 compare_dataset=compare_info.get("dataset"),
                 injection_window_fn=plan.in_window,
+                injection_overlap_fn=plan.overlaps,
                 retained_ids=retained_ids,
                 retained_markers=retained_markers,
                 skip_fixture_preflight=True,
@@ -885,6 +886,12 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
     if stats is not None:
         metrics.update(workload.metrics_from_stats(stats, duration, modes=modes))
         metrics["reauthCount"] = client.reauth_count
+        if stats.reconcile_failures:
+            write_raw(
+                raw_dir,
+                "reconcile-failures.json",
+                json.dumps(stats.reconcile_failures, indent=2) + "\n",
+            )
         completeness = workload.completeness_ok(
             stats, ratio=float(thr["completenessRatio"])
         )

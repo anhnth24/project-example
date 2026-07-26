@@ -80,6 +80,18 @@ must also pass.
 green deployment. Blue and restored identities/storage signatures must be
 distinct; a URL alias cannot satisfy the gate.
 
+## Attributing errors to injected faults
+
+`requestErrors` allows nothing outside the injection windows, so what counts as
+"inside" decides the gate. An operation is inside when a window **overlaps its
+lifetime**, not when the outcome happens to be recorded: an upload that was
+already waiting for its document when a convert worker was killed is affected by
+that kill even though it gives up 180 seconds later, once the window has closed.
+The stricter reading — attribution at the moment the outcome was recorded —
+stays in the report as `requestErrorsOutsideInjectionAtOutcome`, so a run that
+passes only through overlap attribution is visible as such. Failures that never
+touch a window count against the gate under both readings.
+
 ## Authentication over a long run
 
 The access token lives 900 seconds (`MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS`,

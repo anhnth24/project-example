@@ -334,10 +334,15 @@ class InjectionPlan:
         self._futures.append(self._pool.submit(_run))
 
     def in_window(self, rel_offset: float) -> bool:
+        return self.overlaps(rel_offset, rel_offset)
+
+    def overlaps(self, start_offset: float, end_offset: float) -> bool:
+        """Whether [start_offset, end_offset] touches any injection window."""
+        low, high = sorted((start_offset, end_offset))
         with self.lock:
             windows = list(self.windows)
         for start, end in windows:
-            if start <= rel_offset and (end is None or rel_offset <= end):
+            if start <= high and (end is None or low <= end):
                 return True
         return False
 
