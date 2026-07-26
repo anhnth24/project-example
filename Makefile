@@ -43,6 +43,7 @@ check-markhand-gates:
 	python3 bench/markhand_web/scripts/test_run_o04_release_suite.py
 	python3 bench/markhand_web/scripts/run_o04_release_suite.py --self-test
 	python3 bench/markhand_web/soak/test_o05_soak.py
+	python3 bench/markhand_web/hanging_soak/test_hanging_soak.py
 	python3 bench/markhand_web/soak/run_soak.py --self-test
 
 check-corpus:

@@ -53,6 +53,13 @@ validation uses `make bundle-linux`.
   web, corpus, bundle, or dev-stack.
 - Spike report/validator edits are checked in `changes-and-static` only; they no
   longer trigger the heavy `dev-stack` job by themselves.
+- Live gates are **opt-in, never per-push**. `phase1b-o04-release-gate` boots the POC
+  stack and rebuilds the release server image inside Docker with no layer cache between
+  runners (~20 min per run), so it runs only on a manual `workflow_dispatch` or when a
+  pull request carries the `run-live-gates` label. Qualifying the POC is a deliberate
+  act before a phase closes; per-push CI stays static + unit + service-container
+  integration. The O05 soak is not a CI job at all: it needs a full 1800-second run on
+  a host that can meet the throughput gate.
 - `dev-stack` uses tiered profiles via `deploy/scripts/dev-stack-ci.sh`:
   - **lite** (`deploy/scripts/**`): compose config + `dev-up`/`dev-health` only.
   - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`.

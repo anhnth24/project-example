@@ -49,9 +49,19 @@ paths:
     post:
       operationId: authLogin
       security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
       responses:
         "200":
           description: Access + refresh token pair.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
         "401":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -60,9 +70,20 @@ paths:
     post:
       operationId: authRefresh
       security: []
+      requestBody:
+        required: true
+        description: The refresh token travels in the JSON body, not a cookie.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
       responses:
         "200":
           description: Rotated token pair.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
         "401":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -71,6 +92,13 @@ paths:
     post:
       operationId: authLogout
       security: []
+      requestBody:
+        required: true
+        description: The refresh token travels in the JSON body, not a cookie.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshTokenRequest"
       responses:
         "204":
           description: Session revoked.
@@ -82,6 +110,10 @@ paths:
       responses:
         "200":
           description: Current OrgContext snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
         "401":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -164,9 +196,19 @@ paths:
           $ref: "#/components/responses/RateLimited"
     post:
       operationId: createCollection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCollectionRequest"
       responses:
         "201":
           description: Collection created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collection"
         "403":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -179,15 +221,29 @@ paths:
       responses:
         "200":
           description: Collection detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collection"
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
     patch:
       operationId: updateCollection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCollectionRequest"
       responses:
         "200":
           description: Collection metadata updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collection"
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -206,9 +262,26 @@ paths:
       operationId: listDocuments
       parameters:
         - $ref: "#/components/parameters/collectionId"
+        - name: limit
+          in: query
+          description: Page size (server default 50, clamped to [1, 100]).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous page's nextCursor.
+          schema:
+            type: string
       responses:
         "200":
           description: Paginated documents.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentPage"
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -257,6 +330,10 @@ paths:
       responses:
         "200":
           description: Document detail (published-visible).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -284,7 +361,34 @@ paths:
             format: uuid
       responses:
         "200":
-          description: Trusted Markdown preview (published-only; history for non-current).
+          description: >
+            Trusted Markdown preview (published-only; history for non-current).
+            Still JSON: the Markdown text is embedded as the `markdown` string
+            field, not returned as a text/markdown body.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - documentId
+                  - versionId
+                  - versionNumber
+                  - sourceContentSha256
+                  - canonicalMarkdownSha256
+                  - isCurrent
+                  - truncated
+                  - markdown
+                  - requestId
+                properties:
+                  documentId: { type: string, format: uuid }
+                  versionId: { type: string, format: uuid }
+                  versionNumber: { type: integer }
+                  sourceContentSha256: { type: string }
+                  canonicalMarkdownSha256: { type: string }
+                  isCurrent: { type: boolean }
+                  truncated: { type: boolean }
+                  markdown: { type: string }
+                  requestId: { type: string }
         "403":
           $ref: "#/components/responses/ApiError"
         "404":
@@ -299,6 +403,10 @@ paths:
       responses:
         "200":
           description: Published versions (non-current requires qa.history).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentVersionPage"
         "429":
           $ref: "#/components/responses/RateLimited"
   /documents/{documentId}/versions/{versionId}:
@@ -310,6 +418,10 @@ paths:
       responses:
         "200":
           description: Published version detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DocumentVersion"
         "403":
           $ref: "#/components/responses/ApiError"
         "404":
@@ -330,7 +442,22 @@ paths:
             format: uuid
       responses:
         "200":
-          description: Version identity diff (compare retrieval for content deltas).
+          description: >
+            Version identity diff (compare retrieval for content deltas).
+            Not a text diff: left/right are the two full version records.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documentId, left, right, note, requestId]
+                properties:
+                  documentId: { type: string, format: uuid }
+                  left:
+                    $ref: "#/components/schemas/DocumentVersion"
+                  right:
+                    $ref: "#/components/schemas/DocumentVersion"
+                  note: { type: string }
+                  requestId: { type: string }
         "403":
           $ref: "#/components/responses/ApiError"
         "404":
@@ -354,9 +481,37 @@ paths:
       parameters:
         - $ref: "#/components/parameters/documentId"
         - $ref: "#/components/parameters/versionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [purpose]
+              properties:
+                purpose:
+                  type: string
+                  enum: [markdown, original]
       responses:
         "200":
           description: Short-lived single-use download capability.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  [capability, expiresIn, purpose, documentId, versionId, requestId]
+                properties:
+                  capability:
+                    type: string
+                    description: Opaque single-use token; redeem via GET /downloads/{capability}.
+                  expiresIn: { type: integer }
+                  purpose:
+                    type: string
+                    enum: [markdown, original]
+                  documentId: { type: string, format: uuid }
+                  versionId: { type: string, format: uuid }
+                  requestId: { type: string }
         "403":
           $ref: "#/components/responses/ApiError"
         "404":
@@ -374,7 +529,20 @@ paths:
             type: string
       responses:
         "200":
-          description: Object bytes streamed after fresh ACL + single-use redeem.
+          description: >
+            Object bytes streamed after fresh ACL + single-use redeem.
+            Media type depends on the capability's purpose: `text/markdown;
+            charset=utf-8` for the trusted canonical Markdown, or
+            `application/octet-stream` for the original uploaded bytes.
+            `Content-Disposition: attachment` is always set.
+          content:
+            text/markdown:
+              schema:
+                type: string
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -387,14 +555,82 @@ paths:
       responses:
         "200":
           description: Idempotent index job enqueue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [jobId, created, documentId, versionId, requestId]
+                properties:
+                  jobId: { type: string, format: uuid }
+                  created:
+                    type: boolean
+                    description: False when an existing idempotent job was replayed.
+                  documentId: { type: string, format: uuid }
+                  versionId: { type: string, format: uuid }
+                  requestId: { type: string }
         "429":
           $ref: "#/components/responses/RateLimited"
   /citations/resolve:
     post:
       operationId: resolveCitation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveCitationRequest"
       responses:
         "200":
           description: Freshly authorized citation pin with exact UTF-8 span.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [citation, requestId]
+                properties:
+                  citation:
+                    type: object
+                    required:
+                      - citeId
+                      - logicalDocumentId
+                      - versionId
+                      - versionNumber
+                      - sourceContentSha256
+                      - canonicalMarkdownSha256
+                      - quoteSha256
+                      - chunkId
+                      - chunkIdentitySha256
+                      - page
+                      - slide
+                      - sheet
+                      - sourceSpanStart
+                      - sourceSpanEnd
+                      - quoteLocalStart
+                      - quoteLocalEnd
+                      - quote
+                      - isCurrent
+                      - anchor
+                    properties:
+                      citeId: { type: string }
+                      logicalDocumentId: { type: string, format: uuid }
+                      versionId: { type: string, format: uuid }
+                      versionNumber: { type: integer }
+                      sourceContentSha256: { type: string }
+                      canonicalMarkdownSha256: { type: string }
+                      quoteSha256: { type: string }
+                      chunkId: { type: string, format: uuid }
+                      chunkIdentitySha256: { type: string }
+                      page: { type: [integer, "null"] }
+                      slide: { type: [integer, "null"] }
+                      sheet: { type: [string, "null"] }
+                      sourceSpanStart: { type: integer }
+                      sourceSpanEnd: { type: integer }
+                      quoteLocalStart: { type: integer }
+                      quoteLocalEnd: { type: integer }
+                      quote: { type: string }
+                      isCurrent: { type: boolean }
+                      anchor: { type: string }
+                  requestId: { type: string }
         "400":
           $ref: "#/components/responses/ApiError"
         "404":
@@ -407,6 +643,39 @@ paths:
       responses:
         "200":
           description: Open conflicts where both claim collections are authorized.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, requestId]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required:
+                        - id
+                        - status
+                        - severity
+                        - conflictType
+                        - claimAId
+                        - claimBId
+                        - collectionAId
+                        - collectionBId
+                        - firstDetectedAt
+                        - resolvedAt
+                      properties:
+                        id: { type: string, format: uuid }
+                        status: { type: string }
+                        severity: { type: string }
+                        conflictType: { type: string }
+                        claimAId: { type: string, format: uuid }
+                        claimBId: { type: string, format: uuid }
+                        collectionAId: { type: string, format: uuid }
+                        collectionBId: { type: string, format: uuid }
+                        firstDetectedAt: { type: string, format: date-time }
+                        resolvedAt: { type: [string, "null"], format: date-time }
+                  requestId: { type: string }
         "429":
           $ref: "#/components/responses/RateLimited"
   /conflicts/{conflictId}:
@@ -422,6 +691,34 @@ paths:
       responses:
         "200":
           description: Conflict detail (dual-collection authorized).
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                  - status
+                  - severity
+                  - conflictType
+                  - claimAId
+                  - claimBId
+                  - collectionAId
+                  - collectionBId
+                  - resolutionNote
+                  - resolvedAt
+                  - requestId
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string }
+                  severity: { type: string }
+                  conflictType: { type: string }
+                  claimAId: { type: string, format: uuid }
+                  claimBId: { type: string, format: uuid }
+                  collectionAId: { type: string, format: uuid }
+                  collectionBId: { type: string, format: uuid }
+                  resolutionNote: { type: [string, "null"] }
+                  resolvedAt: { type: [string, "null"], format: date-time }
+                  requestId: { type: string }
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -484,6 +781,16 @@ paths:
       responses:
         "200":
           description: Conflict triage applied.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, resolvedAt, requestId]
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string }
+                  resolvedAt: { type: string, format: date-time }
+                  requestId: { type: string }
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -496,6 +803,10 @@ paths:
       responses:
         "200":
           description: Job status (document collection authorized).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
         "404":
           $ref: "#/components/responses/ApiError"
         "429":
@@ -637,7 +948,11 @@ paths:
       security: []
       responses:
         "200":
-          description: Embedded OpenAPI document.
+          description: Embedded OpenAPI document, served verbatim as raw YAML text.
+          content:
+            application/yaml:
+              schema:
+                type: string
         "429":
           $ref: "#/components/responses/RateLimited"
 components:
@@ -983,3 +1298,216 @@ components:
         requestId:
           type: string
           format: uuid
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+    RefreshTokenRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          description: >
+            Travels in the JSON body, not a cookie. Shared shape for
+            POST /auth/refresh and POST /auth/logout.
+    TokenResponse:
+      type: object
+      required:
+        [accessToken, refreshToken, tokenType, expiresIn, orgId, userId]
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresIn:
+          type: integer
+        orgId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+    MeResponse:
+      type: object
+      required:
+        - userId
+        - orgId
+        - email
+        - displayName
+        - permissions
+        - allowedCollectionIds
+        - sessionId
+      properties:
+        userId:
+          type: string
+          format: uuid
+        orgId:
+          type: string
+          format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        allowedCollectionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        sessionId:
+          type: string
+    CreateCollectionRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        visibility:
+          type: string
+          enum: [private, org, groups]
+          default: org
+    UpdateCollectionRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+    Document:
+      type: object
+      required:
+        [id, collectionId, title, state, currentVersionId, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        collectionId:
+          type: string
+          format: uuid
+        title:
+          type: string
+        state:
+          type: string
+          enum:
+            [uploaded, converting, converted, indexing, indexed, failed, tombstoned, purged]
+        currentVersionId:
+          type: [string, "null"]
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DocumentPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Document"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    DocumentVersion:
+      type: object
+      required:
+        - id
+        - documentId
+        - versionNumber
+        - isCurrent
+        - sourceContentSha256
+        - effectiveFrom
+        - effectiveTo
+        - changeSummary
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        documentId:
+          type: string
+          format: uuid
+        versionNumber:
+          type: integer
+        isCurrent:
+          type: boolean
+        sourceContentSha256:
+          type: string
+          description: Original uploaded/source object SHA-256.
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: [string, "null"]
+          format: date-time
+        changeSummary:
+          type: [string, "null"]
+        createdAt:
+          type: string
+          format: date-time
+    DocumentVersionPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DocumentVersion"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    Job:
+      type: object
+      required:
+        [id, jobType, status, attempts, documentId, versionId, createdAt, updatedAt, finishedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        jobType:
+          type: string
+          enum:
+            [convert, index, delete, reconcile, embedding_batch, lifecycle_refresh]
+        status:
+          type: string
+          enum:
+            [pending, leased, running, succeeded, failed, cancelled, dead_letter]
+        attempts:
+          type: integer
+        documentId:
+          type: [string, "null"]
+          format: uuid
+        versionId:
+          type: [string, "null"]
+          format: uuid
+        requestId:
+          type: string
+          format: uuid
+          description: >
+            Server-minted request correlation id from the job payload, when
+            present; omitted entirely if the payload has none.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time

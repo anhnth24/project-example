@@ -98,13 +98,19 @@ poc_resolve_convert_apparmor() {
     return 0
   fi
   local profiles=/sys/kernel/security/apparmor/profiles
-  if [[ -r "$profiles" ]] && ! grep -q '^markhand-convert[ (]' "$profiles"; then
-    echo "AppArmor is enabled but the markhand-convert profile is not loaded." >&2
-    echo "Load it once:  sudo apparmor_parser -r -W $ROOT/deploy/poc/apparmor-markhand-convert" >&2
-    return 1
-  fi
   # The profile list is root-only on most distributions; when it cannot be read,
-  # let Docker report a missing profile instead of guessing.
+  # let Docker report a missing profile instead of guessing. `-r` is not enough
+  # to predict that: apparmorfs answers EACCES to an unprivileged read even when
+  # the mode bits say readable, and treating that failed read as "profile absent"
+  # refuses to boot on every AppArmor host that runs the stack unprivileged.
+  local listing
+  if listing="$(cat "$profiles" 2>/dev/null)"; then
+    if ! grep -q '^markhand-convert[ (]' <<<"$listing"; then
+      echo "AppArmor is enabled but the markhand-convert profile is not loaded." >&2
+      echo "Load it once:  sudo apparmor_parser -r -W $ROOT/deploy/poc/apparmor-markhand-convert" >&2
+      return 1
+    fi
+  fi
   export MARKHAND_CONVERTER_APPARMOR_PROFILE=markhand-convert
 }
 

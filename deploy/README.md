@@ -44,6 +44,27 @@ AITeamVN CPU embedding (not GLM):
 deploy/scripts/poc-up.sh
 ```
 
+### Sizing prerequisites (ingest throughput gate)
+
+`G0-CAP-INGEST-THROUGHPUT-POC` (environment `poc-compose`) requires >= 300
+documents/hour. Two measured data points:
+
+| Host | CPU given to Docker | Ingest throughput | Gate (>= 300/h) |
+|---|---:|---:|---|
+| 24-core Ubuntu 22.04 | 10 CPU | 356 documents/hour | pass |
+| 8 vCPU | 8 vCPU | 168 documents/hour | fail (expected) |
+
+`compose.poc.yml`'s per-service CPU limits reserve roughly **8.5 CPU** in
+total, so Docker needs meaningfully more than that available to have a chance
+at the gate — the only passing run gave Docker 10 CPU.
+
+Both measurements ran `COMPOSE_PROFILES=mock` (8-dimension deterministic
+embedding): these are ingest-throughput numbers only, not a retrieval-quality
+claim and not a Profile B capacity claim (the 1200 documents/hour peak gate
+belongs to `on-prem-reference`, not `poc-compose`).
+
+Evidence: [`bench/markhand_web/reports/phase-1b-gate/o05-soak.json`](../bench/markhand_web/reports/phase-1b-gate/o05-soak.json).
+
 ### Convert sandbox confinement
 
 The convert worker builds a nested sandbox for every job: it unshares user,

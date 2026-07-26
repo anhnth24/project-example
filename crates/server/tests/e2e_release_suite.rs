@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const O04_REPORT: &str = "bench/markhand_web/reports/phase-1b-gate/o04-release.json";
 const O05_REPORT: &str = "bench/markhand_web/reports/phase-1b-gate/o05-soak.json";
@@ -88,6 +89,94 @@ fn validate_report_via_python(report_path: &Path) -> (String, Vec<String>, i32) 
     (status, blockers, output.status.code().unwrap_or(1))
 }
 
+/// Assert a committed `o05-soak.json` that claims pass is bound to the live run
+/// that produced it. Mirrors the O04 rule below, where a committed pass is
+/// accepted only with the recorded `markhandE2e` opt-in.
+fn assert_committed_o05_pass_is_attested(o05: &Value) {
+    let flag = |key: &str| o05.get(key).and_then(Value::as_bool);
+    assert_eq!(
+        flag("markhandSoak"),
+        Some(true),
+        "o05-soak.json claims pass without the recorded MARKHAND_SOAK opt-in"
+    );
+    assert_eq!(
+        flag("smoke"),
+        Some(false),
+        "o05-soak.json claims pass from a smoke run"
+    );
+    assert_eq!(
+        flag("smokeNonQualifying"),
+        Some(false),
+        "o05-soak.json claims pass while flagged non-qualifying"
+    );
+    for key in ["blockers", "architecturalBlockers"] {
+        let blockers = o05
+            .get(key)
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("o05-soak.json claims pass without a {key} array"));
+        assert!(
+            blockers.is_empty(),
+            "o05-soak.json claims pass with {key}: {blockers:?}"
+        );
+    }
+    let seconds = |key: &str| o05.get(key).and_then(Value::as_u64);
+    let official = seconds("officialDurationSeconds")
+        .expect("o05-soak.json claims pass without officialDurationSeconds");
+    let measured =
+        seconds("durationSeconds").expect("o05-soak.json claims pass without durationSeconds");
+    assert!(
+        measured >= official,
+        "o05-soak.json claims pass from {measured}s against an official {official}s run"
+    );
+    let git_sha = o05
+        .get("versions")
+        .and_then(|versions| versions.get("gitShaFull"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        git_sha.len() == 40 && git_sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "o05-soak.json claims pass without a full commit binding; gitShaFull={git_sha:?}"
+    );
+
+    // The raw evidence must travel with the claim, not stay on the run host.
+    let raw_dir = o05
+        .get("rawDir")
+        .and_then(Value::as_str)
+        .expect("o05-soak.json claims pass without a rawDir");
+    let raw_root = workspace_root().join(raw_dir);
+    assert!(
+        raw_root.is_dir(),
+        "o05-soak.json claims pass but its raw evidence is not committed at {raw_dir}"
+    );
+    let files = o05
+        .get("rawManifest")
+        .and_then(|manifest| manifest.get("files"))
+        .and_then(Value::as_array)
+        .expect("o05-soak.json claims pass without a rawManifest.files array");
+    assert!(
+        !files.is_empty(),
+        "o05-soak.json claims pass with an empty rawManifest"
+    );
+    for entry in files {
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .expect("rawManifest entry without a path");
+        let expected = entry
+            .get("sha256")
+            .and_then(Value::as_str)
+            .expect("rawManifest entry without a sha256");
+        let bytes = std::fs::read(raw_root.join(path)).unwrap_or_else(|error| {
+            panic!("rawManifest lists {path}, which is not committed under {raw_dir}: {error}")
+        });
+        let actual = hex::encode(Sha256::digest(&bytes));
+        assert_eq!(
+            actual, expected,
+            "committed raw evidence {path} does not match the manifest sha256"
+        );
+    }
+}
+
 #[test]
 fn e2e_suite_default_is_not_run() {
     let report = load_json(O04_REPORT).expect("o04-release.json must exist");
@@ -103,15 +192,20 @@ fn e2e_suite_default_is_not_run() {
         Some("P1B-O05"),
         "canonical O05 report issue field"
     );
-    assert_ne!(
-        status_of(&o05),
-        Some("pass"),
-        "default committed O05 evidence must not claim pass without live soak"
-    );
-    assert!(
-        matches!(status_of(&o05), Some("not_run" | "incomplete")),
-        "committed O05 evidence must remain honest non-qualifying"
-    );
+    match status_of(&o05) {
+        // A committed O05 pass is only as good as the live run behind it, so it
+        // must carry that run's provenance: the soak opt-in, a full-length
+        // non-smoke run, no blockers, a full git sha, and a raw evidence
+        // directory committed alongside whose every manifest entry still
+        // hashes. Anything short of that is a pass nobody can re-check, which
+        // is what forbidding pass outright used to prevent.
+        Some("pass") => assert_committed_o05_pass_is_attested(&o05),
+        Some("not_run" | "incomplete") => {}
+        other => panic!(
+            "committed O05 evidence must be pass with attested provenance, \
+             or an honest non-qualifying not_run/incomplete; got {other:?}"
+        ),
+    }
     if let Some(summary) = load_json(O05_SUMMARY) {
         assert_ne!(
             summary.get("issue").and_then(|v| v.as_str()),

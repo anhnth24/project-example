@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
+import inspect
 import json
 import os
 import platform
@@ -20,7 +22,6 @@ DEFAULT_REPORT = ROOT / "bench/markhand_web/reports/spike-environment.json"
 IMPLEMENTATION_FILES = (
     "deploy/dev/compose.yml",
     "deploy/dev/otel-collector.yaml",
-    "deploy/scripts/mock-embedding.py",
     "deploy/compose.spike.yml",
     "deploy/spike/common.sh",
     "deploy/spike/up.sh",
@@ -33,6 +34,45 @@ IMPLEMENTATION_FILES = (
     "scripts/validate_spike.py",
     "bench/markhand_web/scripts/fingerprint_spike.py",
 )
+# Must stay identical to scripts/validate_spike.py — the validator recomputes
+# this seal and compares it against the report this script writes. The embedding
+# stub is sealed by measured behaviour rather than file bytes; see the comment
+# there for why. scripts/validate_spike.py --self-test asserts the two agree.
+EMBEDDING_STUB = "deploy/scripts/mock-embedding.py"
+EMBEDDING_STUB_SYMBOLS = ("l2_normalize", "embedding_for")
+EMBEDDING_STUB_PROBES = ("", "markhand", "Điều 3 khoản 2", "x" * 4096)
+EMBEDDING_STUB_DIMENSIONS = (8, 768)
+EMBEDDING_STUB_DEFAULT_DIMENSIONS = re.compile(
+    r"MARKHAND_MOCK_EMBEDDING_DIMENSIONS\",\s*\"(\d+)\""
+)
+
+
+def embedding_stub_seal(path: Path) -> str:
+    """Seal the measured embedding behaviour of the stub at `path`."""
+    spec = importlib.util.spec_from_file_location("markhand_spike_embedding_stub", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"{path}: cannot load the embedding stub")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    digest = hashlib.sha256()
+    for symbol in EMBEDDING_STUB_SYMBOLS:
+        digest.update(symbol.encode())
+        digest.update(b"\0")
+        digest.update(inspect.getsource(getattr(module, symbol)).encode())
+        digest.update(b"\0")
+    default_dimensions = EMBEDDING_STUB_DEFAULT_DIMENSIONS.search(
+        path.read_text(encoding="utf-8")
+    )
+    if default_dimensions is None:
+        raise ValueError(f"{path}: cannot find the default embedding dimension literal")
+    digest.update(default_dimensions.group(1).encode())
+    digest.update(b"\0")
+    for dimensions in EMBEDDING_STUB_DIMENSIONS:
+        for probe in EMBEDDING_STUB_PROBES:
+            vector = module.embedding_for(probe, dimensions)
+            digest.update(json.dumps([f"{value:.17g}" for value in vector]).encode())
+            digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def implementation_sha256() -> str:
@@ -42,6 +82,10 @@ def implementation_sha256() -> str:
         digest.update(b"\0")
         digest.update((ROOT / relative).read_bytes())
         digest.update(b"\0")
+    digest.update(EMBEDDING_STUB.encode())
+    digest.update(b"\0")
+    digest.update(embedding_stub_seal(ROOT / EMBEDDING_STUB).encode())
+    digest.update(b"\0")
     return digest.hexdigest()
 
 

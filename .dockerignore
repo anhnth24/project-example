@@ -18,7 +18,23 @@ vendor
 web
 plans
 docs
-app
+# `app` cannot be excluded wholesale: the root Cargo.toml lists app/src-tauri as
+# a workspace member, so `cargo build -p fileconv-server` fails to load the
+# workspace without its manifest — and without its lib source too ("can't find
+# library `fileconv_desktop_lib`"). Exclude the bulk of app/ (7.7 MB, mostly
+# assets and icons) by path and leave Cargo.toml, build.rs and src/ (~180 KB) in
+# the context. Listing paths rather than re-including with `!` keeps this
+# independent of how a given builder treats exceptions inside an excluded
+# directory.
+app/assets
+app/dist
+app/node_modules
+app/src
+app/src-tauri/capabilities
+app/src-tauri/fixtures
+app/src-tauri/icons
+app/src-tauri/native-runtime
+app/src-tauri/target
 tests
 scripts
 re-design

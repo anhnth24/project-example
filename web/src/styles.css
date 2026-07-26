@@ -1,14 +1,37 @@
 :root {
-  color: #18231b;
-  background: #f7f6f1;
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    sans-serif;
+  /*
+   * Design tokens ported from app/src/styles.css (desktop). The desktop
+   * palette is dark; this SPA's shell already shipped a light palette
+   * (P2-01 predates this port), so the *values* below keep the existing
+   * light look while the *shape* of the token set (accent/danger/warning/
+   * radius scale) matches desktop so future pages/components have a
+   * consistent vocabulary instead of ad hoc hex codes.
+   */
+  --color-bg: #f7f6f1;
+  --color-surface: #ffffff;
+  --color-border: #d9ddd3;
+  --color-border-soft: #e8ebe5;
+  --color-text: #18231b;
+  --color-text-secondary: #536057;
+  --color-text-faint: #8a938c;
+  --color-accent: #1e5c3c;
+  --color-accent-strong: #17482f;
+  --color-accent-soft: rgba(30, 92, 60, 0.12);
+  --color-focus: #8b4a16;
+  --color-warning: #a66328;
+  --color-success: #32824e;
+  --color-danger: #b53c32;
+  --radius-sm: 0.55rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-pill: 999px;
+  --font-ui:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-serif: Georgia, 'Times New Roman', serif;
+
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-family: var(--font-ui);
   font-synthesis: none;
 }
 
@@ -24,8 +47,8 @@ a {
 
 button {
   border: 0;
-  border-radius: 0.55rem;
-  background: #1e5c3c;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
   color: #ffffff;
   cursor: pointer;
   font: inherit;
@@ -35,7 +58,7 @@ button {
 }
 
 button:hover {
-  background: #17482f;
+  background: var(--color-accent-strong);
 }
 
 button:disabled {
@@ -44,9 +67,31 @@ button:disabled {
 }
 
 button:focus-visible,
-a:focus-visible {
-  outline: 3px solid #8b4a16;
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[role='button']:focus-visible {
+  outline: 3px solid var(--color-focus);
   outline-offset: 3px;
+}
+
+.skip-link {
+  background: var(--color-accent);
+  border-radius: 0 0 var(--radius-sm) 0;
+  color: #ffffff;
+  font-weight: 700;
+  left: 0;
+  padding: 0.75rem 1.1rem;
+  position: absolute;
+  text-decoration: none;
+  top: 0;
+  transform: translateY(-120%);
+  transition: transform 160ms ease-out;
+  z-index: 100;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
 }
 
 .app-shell {
@@ -55,10 +100,10 @@ a:focus-visible {
 
 .topbar {
   align-items: center;
-  border-bottom: 1px solid #d9ddd3;
+  border-bottom: 1px solid var(--color-border);
   display: flex;
+  flex-wrap: wrap;
   gap: 0.6rem;
-  justify-content: flex-end;
   min-height: 4.5rem;
   padding: 0 5vw;
 }
@@ -75,34 +120,60 @@ a:focus-visible {
 
 .brand-mark {
   align-items: center;
-  background: #1e5c3c;
+  background: var(--color-accent);
   border-radius: 0.5rem;
   color: #ffffff;
   display: inline-flex;
-  font-family: Georgia, serif;
+  font-family: var(--font-serif);
   font-size: 1.1rem;
   height: 2rem;
   justify-content: center;
   width: 2rem;
 }
 
+.primary-nav {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-right: 0.5rem;
+}
+
+.primary-nav a {
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.35rem 0.5rem;
+  text-decoration: none;
+}
+
+.primary-nav a:hover {
+  color: var(--color-text);
+}
+
+.primary-nav a[aria-current='page'] {
+  color: var(--color-accent);
+}
+
 .connection-dot {
-  background: #a66328;
+  background: var(--color-warning);
   border-radius: 50%;
+  flex: 0 0 auto;
   height: 0.55rem;
   width: 0.55rem;
 }
 
 .connection-dot.ready {
-  background: #32824e;
+  background: var(--color-success);
 }
 
 .connection-dot.unavailable {
-  background: #b53c32;
+  background: var(--color-danger);
 }
 
 .connection-label {
-  color: #536057;
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
 }
 
@@ -115,7 +186,7 @@ a:focus-visible {
 
 .eyebrow,
 .card-label {
-  color: #8b4a16;
+  color: var(--color-focus);
   font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.09em;
@@ -130,12 +201,12 @@ p {
 }
 
 h1 {
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--font-serif);
   font-size: clamp(2.5rem, 7vw, 4.5rem);
   letter-spacing: -0.045em;
   line-height: 0.98;
   margin-bottom: 1.5rem;
-  max-width: 12ch;
+  max-width: 20ch;
 }
 
 h2 {
@@ -145,16 +216,16 @@ h2 {
 }
 
 .lede {
-  color: #536057;
+  color: var(--color-text-secondary);
   font-size: 1.12rem;
   line-height: 1.65;
   max-width: 43rem;
 }
 
 .connection-card {
-  background: #ffffff;
-  border: 1px solid #d9ddd3;
-  border-radius: 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
   display: grid;
   gap: 1.25rem;
   grid-template-columns: 1fr auto;
@@ -167,15 +238,15 @@ h2 {
 }
 
 .card-copy {
-  color: #536057;
+  color: var(--color-text-secondary);
   line-height: 1.55;
   margin-bottom: 0;
   max-width: 34rem;
 }
 
 .request-id {
-  border-top: 1px solid #e8ebe5;
-  color: #536057;
+  border-top: 1px solid var(--color-border-soft);
+  color: var(--color-text-secondary);
   font-size: 0.8rem;
   grid-column: 1 / -1;
   margin: 0;
@@ -183,21 +254,34 @@ h2 {
 }
 
 code {
-  color: #18231b;
+  color: var(--color-text);
   word-break: break-all;
 }
 
 .next-steps {
-  border-top: 1px solid #d9ddd3;
+  border-top: 1px solid var(--color-border);
   margin-top: 4rem;
   padding-top: 1.5rem;
 }
 
 .next-steps ul {
-  color: #536057;
+  color: var(--color-text-secondary);
   line-height: 1.7;
   margin: 0;
   padding-left: 1.25rem;
+}
+
+/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 43rem;
+}
+
+.page h1 {
+  font-size: clamp(2rem, 5vw, 3rem);
+  max-width: none;
 }
 
 @media (max-width: 600px) {
@@ -229,5 +313,482 @@ code {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/*
+ * UI primitives ported from app/src/styles.css (desktop), driving the
+ * components in components/ui.tsx. Structure (spacing/radius/transitions)
+ * matches desktop; colors are remapped onto this SPA's light tokens above
+ * instead of desktop's dark palette.
+ */
+
+.ui-button {
+  align-items: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  font-weight: 600;
+  gap: 0.4rem;
+  justify-content: center;
+  min-height: 2.25rem;
+  padding: 0 0.95rem;
+  transition:
+    filter 160ms ease-out,
+    background 160ms ease-out,
+    opacity 160ms ease-out;
+  white-space: nowrap;
+}
+
+.ui-button-sm {
+  font-size: 0.72rem;
+  min-height: 2rem;
+  padding: 0 0.75rem;
+}
+
+.ui-button-primary {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.ui-button-secondary {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
+.ui-button-ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.ui-button-danger {
+  background: var(--color-danger);
+  color: #ffffff;
+}
+
+.ui-button:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.ui-button-ghost:hover:not(:disabled) {
+  background: var(--color-border-soft);
+}
+
+.ui-button:disabled {
+  cursor: not-allowed;
+  filter: none;
+  opacity: 0.5;
+}
+
+.ui-icon-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2.25rem;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition:
+    color 160ms ease-out,
+    background 160ms ease-out;
+  width: 2.25rem;
+}
+
+.ui-icon-button:hover,
+.ui-icon-button.active {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+
+.ui-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.ui-icon-badge {
+  align-items: center;
+  background: var(--color-accent);
+  border: 2px solid var(--color-bg);
+  border-radius: var(--radius-pill);
+  color: #ffffff;
+  display: inline-flex;
+  font-size: 0.6rem;
+  font-weight: 700;
+  height: 1rem;
+  justify-content: center;
+  min-width: 1rem;
+  padding: 0 0.2rem;
+  position: absolute;
+  right: -0.1rem;
+  top: -0.1rem;
+}
+
+.ui-select,
+.ui-combobox {
+  min-width: 0;
+  position: relative;
+  width: 100%;
+}
+
+.ui-select-trigger {
+  align-items: center;
+  background: var(--color-surface);
+  border: 0;
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  color: var(--color-text);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.8rem;
+  gap: 0.6rem;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  min-width: 0;
+  padding: 0 0.6rem 0 0.7rem;
+  text-align: left;
+  transition: box-shadow 160ms ease-out;
+}
+
+.ui-select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select-trigger > span.placeholder {
+  color: var(--color-text-faint);
+}
+
+.ui-select-trigger:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--color-text-faint);
+}
+
+.ui-select-trigger:focus-visible,
+.ui-select-trigger[aria-expanded='true'] {
+  box-shadow:
+    inset 0 0 0 1.5px var(--color-accent),
+    0 0 0 3px var(--color-accent-soft);
+  outline: 0;
+}
+
+.ui-select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ui-select-chevron {
+  color: var(--color-text-faint);
+  flex: 0 0 auto;
+  transition:
+    color 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+.ui-select-trigger[aria-expanded='true'] .ui-select-chevron,
+.ui-combobox input[aria-expanded='true'] + .ui-combobox-toggle .ui-select-chevron {
+  color: var(--color-accent);
+  transform: rotate(180deg);
+}
+
+.ui-select-menu {
+  animation: select-pop 150ms ease-out;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  box-shadow:
+    inset 0 0 0 1px var(--color-border),
+    0 18px 48px rgba(0, 0, 0, 0.18);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0.4rem;
+  position: fixed;
+  z-index: 120;
+}
+
+.ui-select-option {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.78rem;
+  gap: 0.6rem;
+  justify-content: space-between;
+  min-height: 2.1rem;
+  padding: 0 0.55rem;
+  text-align: left;
+  transition:
+    color 130ms ease-out,
+    background 130ms ease-out;
+  width: 100%;
+}
+
+.ui-select-option > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select-option:hover,
+.ui-select-option.active {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+
+.ui-select-option[aria-selected='true'] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+  font-weight: 600;
+}
+
+.ui-select-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.ui-select-compact .ui-select-trigger {
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  min-height: 1.4rem;
+  padding: 0.05rem 0 0;
+}
+
+.ui-select-compact .ui-select-trigger:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text);
+}
+
+.ui-select-compact .ui-select-trigger:focus-visible,
+.ui-select-compact .ui-select-trigger[aria-expanded='true'] {
+  box-shadow: 0 2px 0 var(--color-accent);
+  color: var(--color-text);
+}
+
+.ui-combobox > input {
+  padding-right: 2.4rem;
+}
+
+.ui-combobox-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-faint);
+  cursor: pointer;
+  display: inline-flex;
+  height: 2rem;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 0.15rem;
+  top: 0.15rem;
+  width: 2rem;
+}
+
+.ui-combobox-toggle:hover {
+  background: var(--color-border-soft);
+  color: var(--color-text);
+}
+
+@keyframes select-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-backdrop {
+  align-items: center;
+  background: rgba(24, 35, 27, 0.45);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 80;
+}
+
+.modal-panel {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 2.5rem);
+  max-width: calc(100% - 2rem);
+  overflow: hidden;
+}
+
+.modal-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 1.1rem;
+  justify-content: space-between;
+  padding: 1.25rem 1.4rem 0.9rem;
+}
+
+.modal-header h2 {
+  font-size: 1rem;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.modal-header p {
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  margin: 0.3rem 0 0;
+  max-width: 26rem;
+}
+
+.modal-content {
+  overflow: auto;
+  padding: 0 1.4rem 1.25rem;
+}
+
+.modal-footer {
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 0.9rem 1.4rem;
+}
+
+.modal-footer-spacer {
+  flex: 1;
+}
+
+.toggle-row {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.75rem;
+  min-height: 2.75rem;
+  position: relative;
+}
+
+.toggle-copy {
+  color: var(--color-text-secondary);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  font-size: 0.78rem;
+  font-weight: 500;
+  gap: 0.2rem;
+}
+
+.toggle-copy small {
+  color: var(--color-text-faint);
+  font-size: 0.68rem;
+  font-weight: 400;
+}
+
+.toggle-row input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.toggle-track {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+  flex: 0 0 2.25rem;
+  height: 1.4rem;
+  position: relative;
+  transition: background 160ms ease-out;
+  width: 2.25rem;
+}
+
+.toggle-track span {
+  background: #ffffff;
+  border-radius: 50%;
+  height: 1rem;
+  left: 0.2rem;
+  position: absolute;
+  top: 0.2rem;
+  transition: transform 160ms ease-out;
+  width: 1rem;
+}
+
+.toggle-row input:checked + .toggle-track {
+  background: var(--color-accent);
+}
+
+.toggle-row input:checked + .toggle-track span {
+  transform: translateX(0.85rem);
+}
+
+.toggle-row input:focus-visible + .toggle-track {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.notice {
+  align-items: center;
+  background: var(--color-border-soft);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  display: flex;
+  font-size: 0.75rem;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-height: 2.6rem;
+  padding: 0.45rem 0.5rem 0.45rem 0.75rem;
+}
+
+.notice-warning {
+  box-shadow: inset 0 0 0 1px rgba(166, 99, 40, 0.35);
+}
+
+.notice-error {
+  box-shadow: inset 0 0 0 1px rgba(181, 60, 50, 0.4);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 700px) {
+  .primary-nav {
+    order: 1;
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
