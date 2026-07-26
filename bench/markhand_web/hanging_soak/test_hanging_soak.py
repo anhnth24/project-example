@@ -45,6 +45,16 @@ def _live_sample(*, status: int = 200, elapsed: float = 0.05) -> dict:
     return {"httpStatus": status, "elapsedSeconds": elapsed, "error": None}
 
 
+class _FakeProc:
+    """Stand-in for subprocess.CompletedProcess, used only by the fake
+    docker runner injected into PauseGuard tests."""
+
+    def __init__(self, returncode: int, stdout: str = ""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
 def _base_result(**overrides) -> dict:
     result = {
         "expectedProbeCode": "ready_database",
@@ -221,32 +231,26 @@ class EvaluateStatusTests(unittest.TestCase):
 class PauseGuardArmRestoreTests(unittest.TestCase):
     """Exercise the arm/pause/restore state machine against a fake docker runner."""
 
-    def _make_runner(self, script: dict[str, list]):
-        """script maps a command tuple prefix -> list of CompletedProcess-likes
+    def _make_runner(self, script: dict[tuple, list]):
+        """script maps a command tuple prefix -> list of _FakeProc responses
         returned in order for repeated calls with that prefix."""
 
         calls: list[list[str]] = []
 
-        class _Proc:
-            def __init__(self, returncode: int, stdout: str = ""):
-                self.returncode = returncode
-                self.stdout = stdout
-                self.stderr = ""
-
         def runner(args, **_kwargs):
             calls.append(args)
-            key = tuple(args[1:3])  # e.g. ("inspect", "-f") or ("pause",) etc.
             for prefix, responses in script.items():
                 if tuple(args[1 : 1 + len(prefix)]) == prefix:
                     if responses:
                         return responses.pop(0)
-                    return _Proc(0)
-            return _Proc(0)
+                    return _FakeProc(0)
+            return _FakeProc(0)
 
-        return runner, calls, _Proc
+        return runner, calls
 
     def test_normal_arm_pause_restore_confirms(self) -> None:
-        runner, calls, Proc = self._make_runner(
+        Proc = _FakeProc
+        runner, calls = self._make_runner(
             {
                 ("inspect",): [
                     Proc(0, "true false"),  # precondition check: running, not paused
@@ -273,7 +277,8 @@ class PauseGuardArmRestoreTests(unittest.TestCase):
         caller's `finally: guard.restore_if_armed()` (see run_dependency)
         must still run and confirm the unpause, exactly as if atexit had
         fired."""
-        runner, calls, Proc = self._make_runner(
+        Proc = _FakeProc
+        runner, calls = self._make_runner(
             {
                 ("inspect",): [
                     Proc(0, "true false"),
@@ -296,7 +301,8 @@ class PauseGuardArmRestoreTests(unittest.TestCase):
         self.assertFalse(guard.armed)
 
     def test_failed_unpause_leaves_armed_and_unconfirmed(self) -> None:
-        runner, calls, Proc = self._make_runner(
+        Proc = _FakeProc
+        runner, calls = self._make_runner(
             {
                 ("inspect",): [
                     Proc(0, "true false"),  # precondition
@@ -316,9 +322,8 @@ class PauseGuardArmRestoreTests(unittest.TestCase):
         self.assertTrue(guard.armed)
 
     def test_precondition_not_running_refuses_to_pause(self) -> None:
-        runner, calls, Proc = self._make_runner(
-            {("inspect",): [Proc(0, "false false")]}
-        )
+        Proc = _FakeProc
+        runner, calls = self._make_runner({("inspect",): [Proc(0, "false false")]})
         guard = failpoint.PauseGuard(service="postgres", container_id="f" * 12, runner=runner)
         with self.assertRaises(failpoint.FailpointError):
             guard.arm_and_pause()

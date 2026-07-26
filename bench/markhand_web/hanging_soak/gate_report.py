@@ -68,8 +68,12 @@ DEFAULT_RECOVERY_DEADLINE_SECONDS = 30.0
 CONCURRENCY_BOUND_SECONDS = READY_BOUND_SECONDS + 2.0
 # A later batch taking much longer than the first is a slow leak (e.g. a
 # connection pool losing capacity across the sustain window) even if no
-# single batch crosses CONCURRENCY_BOUND_SECONDS outright.
+# single batch crosses CONCURRENCY_BOUND_SECONDS outright. The ratio is
+# measured against a floor rather than the raw first span so a fast, noisy
+# first batch (e.g. 0.1s) cannot make trivial jitter look like unbounded
+# growth.
 CONCURRENCY_GROWTH_FACTOR = 1.75
+CONCURRENCY_GROWTH_BASELINE_FLOOR_SECONDS = 1.0
 
 # Dependencies crates/server/src/services/readiness.rs actually probes over
 # the network, and the exact stable code (`ReadinessProbeError::code()`)
@@ -151,11 +155,12 @@ def evaluate_concurrency(batches: list[dict[str, Any]]) -> dict[str, Any]:
     if not all(_is_finite_number(s) for s in spans):
         return {"bounded": "fail", "noGrowth": "fail", "batchCount": len(batches)}
     bounded_ok = all(s <= CONCURRENCY_BOUND_SECONDS for s in spans)
-    first = spans[0]
-    growth_ok = all(
-        s <= max(first * CONCURRENCY_GROWTH_FACTOR, CONCURRENCY_BOUND_SECONDS)
-        for s in spans[1:]
-    ) if len(spans) > 1 else True
+    baseline = max(spans[0], CONCURRENCY_GROWTH_BASELINE_FLOOR_SECONDS)
+    growth_ok = (
+        all(s <= baseline * CONCURRENCY_GROWTH_FACTOR for s in spans[1:])
+        if len(spans) > 1
+        else True
+    )
     return {
         "bounded": "pass" if bounded_ok else "fail",
         "noGrowth": "pass" if growth_ok else "fail",
