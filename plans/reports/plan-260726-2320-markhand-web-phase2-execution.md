@@ -25,14 +25,25 @@ Parity check hiện có (`api::openapi::ROUTE_INVENTORY` +
 `openapi_inventory_is_structurally_complete_two_way`) chỉ kiểm **path, method,
 status code** — **không** kiểm schema. Vì thế tồn tại lỗ sau, đo trực tiếp từ spec:
 
-- **9 operation** có method nhận body nhưng **không khai `requestBody`**:
+- **7 operation** nhận body nhưng **không khai `requestBody`**:
   `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`,
   `POST /collections`, `PATCH /collections/{collectionId}`,
-  `POST .../publish`, `POST .../download-capability`,
-  `POST /documents/{documentId}/reindex`, `POST /citations/resolve`
-- **21 response 2xx** (không tính 204) **không có content schema**, gồm cả
+  `POST .../download-capability`, `POST /citations/resolve`
+- **22 response 2xx** (không tính 204) **không có content schema**, gồm cả
   `POST /auth/login 200`, `POST /auth/refresh 200`, `GET /auth/me 200`,
-  `GET /collections/{id} 200`, `GET /documents/{id} 200`, `GET /jobs/{jobId} 200`
+  `GET /collections/{id} 200`, `GET /documents/{id} 200`, `GET /jobs/{jobId} 200`,
+  `GET /openapi.yaml 200`
+
+> Đã sửa số so với bản đầu của tài liệu này. Ban đầu tôi ghi 9 requestBody và 21
+> response, vì tôi đếm theo **method** (POST/PATCH/PUT ⇒ phải có body). Đọc handler
+> thì `POST .../publish` (`routes/documents.rs:428-432`) và
+> `POST /documents/{documentId}/reindex` (`:520-526`) **không có body extractor**
+> nào — thêm `requestBody` cho chúng là mô tả sai API, nên chúng không phải gap.
+> Ngược lại `GET /openapi.yaml 200` là gap tôi đã bỏ sót.
+>
+> **Chặn này đã xử lý xong**: 22/22 response có content schema, 7/7 requestBody đã
+> khai, và parity check nay kiểm cả mức schema (`openapi_schema_completeness_gaps`)
+> nên lỗ không tái diễn.
 
 Hệ quả trực tiếp: **client typed mà SPA phải dựa vào không có type cho luồng auth
 và phần lớn CRUD**. P2-02/P2-03/P2-05 giả định điều ngược lại. Nếu bắt đầu mà không
