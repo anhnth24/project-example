@@ -1818,6 +1818,29 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
         &foreign_marker,
     )
     .await;
+    // Mutating methods on a foreign collection must hide existence exactly like
+    // GET does. The permission gate runs before the scope check in both
+    // handlers, so this only proves existence-hiding for a principal that holds
+    // the permission — which this one does (doc.upload, doc.delete). A 403 here
+    // would be an existence oracle: it separates "not yours" from "not there".
+    assert_foreign_not_found(
+        app.clone(),
+        "PATCH",
+        format!("/api/v1/collections/{foreign_collection}"),
+        &token,
+        Some(serde_json::json!({ "name": "foreign patch probe" })),
+        &foreign_marker,
+    )
+    .await;
+    assert_foreign_not_found(
+        app.clone(),
+        "DELETE",
+        format!("/api/v1/collections/{foreign_collection}"),
+        &token,
+        None,
+        &foreign_marker,
+    )
+    .await;
     assert_foreign_not_found(
         app.clone(),
         "POST",
@@ -1975,6 +1998,78 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
         &foreign_marker,
     )
     .await;
+
+    ephemeral.drop().await;
+}
+
+/// Retrieval routes are the widest cross-tenant surface left: the collection id
+/// arrives in the body, not the path, so the resource-route 404 probes above
+/// never touch them. `resolve_scope` treats any requested id outside the
+/// allow-list as a hard deny, so the contract here is 403 `forbidden` rather
+/// than the 404 that hides existence for addressed resources — a foreign id in a
+/// filter reveals nothing either way, because the caller already supplied it.
+///
+/// Needs Qdrant because both handlers resolve `vector_index()` before scope and
+/// would otherwise answer 503. `hybrid_search` resolves scope before it touches
+/// the embedder, so `None` is enough here.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_QDRANT_URL"]
+async fn live_http_retrieval_refuses_foreign_collection_scope() {
+    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+        return;
+    };
+    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
+        return;
+    };
+    let Some(qdrant_url) = take_live(
+        std::env::var("MARKHAND_TEST_QDRANT_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty()),
+        "MARKHAND_TEST_QDRANT_URL",
+    ) else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
+    assert_markhand_app_role(&pool).await;
+
+    let (_org, _user, token) = seed_http_principal(&pool).await;
+    let foreign_marker = format!("foreign-scope-{}", Uuid::new_v4());
+    let (foreign_collection, ..) = seed_foreign_collection_document(&pool, &foreign_marker).await;
+
+    let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
+    let state = common::build_app_state(pool.clone(), &ephemeral.app_url, None)
+        .with_retrieval_backends(qdrant, None);
+    let app = fileconv_server::http::router(state);
+
+    for (uri, body) in [
+        (
+            "/api/v1/search",
+            serde_json::json!({
+                "query": "kinh phí được phê duyệt",
+                "collectionIds": [foreign_collection],
+            }),
+        ),
+        (
+            "/api/v1/ask",
+            serde_json::json!({
+                "question": "kinh phí được phê duyệt là bao nhiêu?",
+                "collectionIds": [foreign_collection],
+            }),
+        ),
+    ] {
+        let (status, error, _) =
+            json_request(app.clone(), "POST", uri, Some(&token), Some(body), &[]).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "POST {uri} did not deny a foreign collection scope: {error}"
+        );
+        assert_eq!(error["code"], "forbidden", "POST {uri}: {error}");
+        assert!(
+            !error.to_string().contains(&foreign_marker),
+            "POST {uri} leaked foreign marker: {error}"
+        );
+    }
 
     ephemeral.drop().await;
 }
