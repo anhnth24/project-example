@@ -591,9 +591,17 @@ import json
 print(json.dumps([{"objectKey":"$SEED_KEY","documentId":"$SEED_DOC_ID","objectSha256":"$SEED_SHA","versionId":"$SEED_VER_ID"}]))
 PY
 )"
-IFS='|' read -r QUERY_COLLECTION_ID QUERY_DOCUMENT_ID < <(
+# The canary is whichever document indexed last, so the query has to come from
+# that document too. A fixed question only cited it back when the collection was
+# nearly empty; against a loaded stack the newest document is unrelated to the
+# question and the proof fails for the wrong reason.
+IFS='|' read -r QUERY_COLLECTION_ID QUERY_DOCUMENT_ID QUERY_CANARY_TERM < <(
   docker exec "$PG_CONTAINER" psql -U markhand -d markhand -At -F '|' -c "
-    SELECT d.collection_id, d.id
+    SELECT d.collection_id, d.id,
+           coalesce(
+             (regexp_match(c.body, '[A-Z][A-Z0-9]{7,63}'))[1],
+             regexp_replace(left(c.body, 60), '[^[:alnum:] ]', ' ', 'g')
+           )
     FROM index_metadata im
     JOIN chunks c ON c.index_metadata_id = im.id
     JOIN documents d ON d.org_id = c.org_id AND d.id = c.document_id
@@ -611,8 +619,17 @@ IFS='|' read -r QUERY_COLLECTION_ID QUERY_DOCUMENT_ID < <(
 )
 [[ "$QUERY_COLLECTION_ID" =~ ^[0-9a-f-]{36}$ && "$QUERY_DOCUMENT_ID" =~ ^[0-9a-f-]{36}$ ]] \
   || die "no published indexed API query canary for active generation"
-printf 'collection_id=%s\ndocument_id=%s\n' \
-  "$QUERY_COLLECTION_ID" "$QUERY_DOCUMENT_ID" >"$RAW/query-canary-ids.txt"
+QUERY_CANARY_TERM="$(printf '%s' "$QUERY_CANARY_TERM" | tr -cd '[:alnum:] ' | cut -c1-64)"
+if [[ -n "${QUERY_CANARY_TERM// /}" ]]; then
+  QUERY_TERM_SOURCE=canary-document
+else
+  QUERY_CANARY_TERM="O01 async canary"
+  QUERY_TERM_SOURCE=fallback
+fi
+export QUERY_CANARY_TERM
+# The term itself stays out of the evidence: it is document text.
+printf 'collection_id=%s\ndocument_id=%s\nquery_term_source=%s\n' \
+  "$QUERY_COLLECTION_ID" "$QUERY_DOCUMENT_ID" "$QUERY_TERM_SOURCE" >"$RAW/query-canary-ids.txt"
 
 python3 - <<'PY' &
 import os, sys, time
@@ -842,6 +859,7 @@ printf '%s\n' "$POST_LIVE" >"$RAW/api-live-post-restore.status"
 MARKHAND_GREEN_API_URL="$GREEN_API_URL" \
 MARKHAND_QUERY_COLLECTION_ID="$QUERY_COLLECTION_ID" \
 MARKHAND_QUERY_DOCUMENT_ID="$QUERY_DOCUMENT_ID" \
+MARKHAND_QUERY_TERM_SOURCE="$QUERY_TERM_SOURCE" \
   python3 - <<'PY' >"$RAW/green-query-proof.json"
 import json
 import os
@@ -877,9 +895,9 @@ token = login.get("accessToken") or login.get("access_token")
 ask_status, ask = request(
     "/api/v1/ask",
     {
-        "question": "O01 async canary",
+        "question": os.environ.get("QUERY_CANARY_TERM") or "O01 async canary",
         "collectionIds": [collection_id],
-        "limit": 3,
+        "limit": 5,
     },
     token=token,
 ) if token else (0, {})
@@ -891,6 +909,7 @@ proof = {
     "askHttp": ask_status,
     "grounded": grounded,
     "expectedDocument": expected_document,
+    "questionSource": os.environ.get("MARKHAND_QUERY_TERM_SOURCE", "unknown"),
 }
 print(json.dumps(proof, sort_keys=True))
 if login_status != 200 or ask_status != 200 or not grounded or not expected_document:
