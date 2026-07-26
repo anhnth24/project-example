@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = ROOT / "bench/markhand_web"
+PHASE1B_GATE_DIR = DEFAULT_ROOT / "reports/phase-1b-gate"
 SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -458,6 +459,82 @@ def validate(root: Path) -> list[str]:
     return errors
 
 
+_MD_STATUS_RE = re.compile(r"^Status: \*\*(.*?)\*\*\s*$", re.MULTILINE)
+
+
+def phase1b_gate_report_errors(gate_dir: Path) -> list[str]:
+    """Fail closed if summary.json / phase-1b-gate.md disagree with the
+    canonical o05-soak.json inside gate_dir.
+
+    All three files are written by the same function
+    (bench/markhand_web/soak/report.py:write_reports, issue P1B-O05); if a
+    passing run's canonical o05-soak.json gets committed but the derived
+    summary.json / phase-1b-gate.md do not, a machine reading gates.yaml
+    (which points at o05-soak.json) sees "pass" while a human opening
+    summary.json or phase-1b-gate.md still sees the stale status. This
+    happened once (o05-soak.json from PR #309 vs summary.json/
+    phase-1b-gate.md still from PR #306) — catch it mechanically instead of
+    relying on someone noticing.
+    """
+    errors: list[str] = []
+    canonical_path = gate_dir / "o05-soak.json"
+    summary_path = gate_dir / "summary.json"
+    md_path = gate_dir / "phase-1b-gate.md"
+
+    try:
+        canonical = load_json_yaml(canonical_path)
+    except (OSError, ValueError) as error:
+        return [f"{canonical_path}: cannot read canonical o05-soak.json: {error}"]
+    if not isinstance(canonical, dict):
+        return [f"{canonical_path}: canonical o05-soak.json is not an object"]
+
+    canonical_status = canonical.get("status")
+    canonical_git = (canonical.get("versions") or {}).get("git")
+    canonical_blockers = canonical.get("blockers") or []
+
+    try:
+        summary = load_json_yaml(summary_path)
+    except (OSError, ValueError) as error:
+        errors.append(f"{summary_path}: cannot read summary.json: {error}")
+        summary = None
+    if isinstance(summary, dict):
+        summary_status = summary.get("status")
+        summary_git = (summary.get("versions") or {}).get("git")
+        summary_blockers = summary.get("blockers") or []
+        if summary_status != canonical_status:
+            errors.append(
+                f"{summary_path}: status {summary_status!r} disagrees with "
+                f"canonical {canonical_path.name} status {canonical_status!r}"
+            )
+        if summary_git != canonical_git:
+            errors.append(
+                f"{summary_path}: versions.git {summary_git!r} disagrees with "
+                f"canonical {canonical_path.name} versions.git {canonical_git!r}"
+            )
+        if summary_blockers != canonical_blockers:
+            errors.append(
+                f"{summary_path}: blockers disagree with canonical {canonical_path.name}"
+            )
+    elif summary is not None:
+        errors.append(f"{summary_path}: summary.json is not an object")
+
+    try:
+        md_text = md_path.read_text(encoding="utf-8")
+    except OSError as error:
+        errors.append(f"{md_path}: cannot read phase-1b-gate.md: {error}")
+        md_text = None
+    if md_text is not None:
+        match = _MD_STATUS_RE.search(md_text)
+        md_status = match.group(1) if match else None
+        if md_status != canonical_status:
+            errors.append(
+                f"{md_path}: status line {md_status!r} disagrees with "
+                f"canonical {canonical_path.name} status {canonical_status!r}"
+            )
+
+    return errors
+
+
 class GateValidatorTests(unittest.TestCase):
     def prepare_root(self, root: Path) -> None:
         (root / "environments").mkdir()
@@ -611,19 +688,107 @@ class GateValidatorTests(unittest.TestCase):
             self.assertTrue(any("diverges from approved workload" in error for error in errors))
 
 
+class Phase1bGateReportConsistencyTests(unittest.TestCase):
+    """Self-test for phase1b_gate_report_errors (P1B-O05 evidence drift)."""
+
+    def _canonical(self) -> dict:
+        return {
+            "status": "pass",
+            "versions": {"git": "f4f33cd1b"},
+            "blockers": [],
+        }
+
+    def write_trio(self, gate_dir: Path, canonical: dict, summary: dict, md_status: str) -> None:
+        gate_dir.mkdir(parents=True, exist_ok=True)
+        (gate_dir / "o05-soak.json").write_text(json.dumps(canonical, indent=2, sort_keys=True) + "\n")
+        (gate_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        (gate_dir / "phase-1b-gate.md").write_text(
+            f"# Phase 1B soak / qualification\n\nStatus: **{md_status}**\n\nnotes\n"
+        )
+
+    def test_repository_reports_are_consistent(self) -> None:
+        # Regression guard: the real committed evidence trio must agree.
+        self.assertEqual(phase1b_gate_report_errors(PHASE1B_GATE_DIR), [])
+
+    def test_matching_trio_has_no_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            gate_dir = Path(temporary)
+            canonical = self._canonical()
+            self.write_trio(
+                gate_dir,
+                canonical,
+                {
+                    "status": "pass",
+                    "versions": {"git": "f4f33cd1b"},
+                    "blockers": [],
+                },
+                "pass",
+            )
+            self.assertEqual(phase1b_gate_report_errors(gate_dir), [])
+
+    def test_stale_summary_status_and_git_and_blockers_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            gate_dir = Path(temporary)
+            canonical = self._canonical()
+            self.write_trio(
+                gate_dir,
+                canonical,
+                {
+                    "status": "incomplete",
+                    "versions": {"git": "e3350d2"},
+                    "blockers": ["prerequisites_incomplete"],
+                },
+                "pass",
+            )
+            errors = phase1b_gate_report_errors(gate_dir)
+            self.assertTrue(any("status" in error and "summary.json" in error for error in errors))
+            self.assertTrue(any("versions.git" in error for error in errors))
+            self.assertTrue(any("blockers disagree" in error for error in errors))
+
+    def test_stale_markdown_status_detected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            gate_dir = Path(temporary)
+            canonical = self._canonical()
+            self.write_trio(
+                gate_dir,
+                canonical,
+                {
+                    "status": "pass",
+                    "versions": {"git": "f4f33cd1b"},
+                    "blockers": [],
+                },
+                "incomplete",
+            )
+            errors = phase1b_gate_report_errors(gate_dir)
+            self.assertTrue(
+                any("phase-1b-gate.md" in error and "status line" in error for error in errors)
+            )
+
+    def test_missing_canonical_report_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            gate_dir = Path(temporary)
+            gate_dir.mkdir(parents=True, exist_ok=True)
+            errors = phase1b_gate_report_errors(gate_dir)
+            self.assertTrue(any("cannot read canonical o05-soak.json" in error for error in errors))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
-        suite = unittest.defaultTestLoader.loadTestsFromTestCase(GateValidatorTests)
+        loader = unittest.defaultTestLoader
+        suite = unittest.TestSuite()
+        suite.addTests(loader.loadTestsFromTestCase(GateValidatorTests))
+        suite.addTests(loader.loadTestsFromTestCase(Phase1bGateReportConsistencyTests))
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     try:
         errors = validate(args.root)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"gate registry error: {error}", file=sys.stderr)
         return 1
+    errors += phase1b_gate_report_errors(args.root / "reports/phase-1b-gate")
     if errors:
         print("gate registry validation failed:", file=sys.stderr)
         for error in errors:

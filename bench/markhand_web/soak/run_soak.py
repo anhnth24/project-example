@@ -1110,10 +1110,30 @@ def main() -> int:
         default=None,
         help="Validate an o05-soak.json and print {status,blockers}",
     )
+    parser.add_argument(
+        "--rewrite-derived-from-canonical",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Repair entry point: reread DIR/o05-soak.json (the canonical report) "
+            "and rewrite ONLY the derived summary.json + phase-1b-gate.md from it "
+            "(report.write_derived_from_canonical). Does not touch o05-soak.json "
+            "or o05-soak.md and does not run a new soak. Use when the derived "
+            "files drift from canonical, e.g. only o05-soak.json was committed "
+            "after a run."
+        ),
+    )
     args = parser.parse_args()
 
     if args.self_test:
         self_test()
+        return 0
+
+    if args.rewrite_derived_from_canonical is not None:
+        report.write_derived_from_canonical(args.rewrite_derived_from_canonical)
+        print(args.rewrite_derived_from_canonical / "summary.json")
+        print(args.rewrite_derived_from_canonical / "phase-1b-gate.md")
         return 0
 
     if args.validate_report is not None:

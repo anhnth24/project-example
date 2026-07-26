@@ -406,6 +406,71 @@ def _write_text_atomic(path: Path, text: str, *, mode: int = 0o600) -> None:
             tmp.unlink()
 
 
+def derive_summary(canonical: dict[str, Any]) -> dict[str, Any]:
+    """Backward-compatible summary.json — explicitly O05, never O04.
+
+    Pure function of the canonical o05-soak.json payload, so summary.json
+    can always be rebuilt from o05-soak.json alone (see
+    write_derived_from_canonical / --rewrite-derived-from-canonical).
+    """
+    status = canonical.get("status", "not_run")
+    notes = canonical.get("notes") or ""
+    blockers = canonical.get("blockers") or []
+    return {
+        "issue": ISSUE,
+        "canonicalReport": CANONICAL,
+        "generatedAt": canonical.get("generatedAt"),
+        "profile": canonical.get("profile"),
+        "live": bool(canonical.get("markhandSoak")),
+        "status": status,
+        "notes": notes,
+        "versions": canonical.get("versions") or {},
+        "gates": {
+            "unboundedGrowth": (canonical.get("gates") or {}).get("unboundedGrowth", "unknown"),
+            "recovery": (canonical.get("gates") or {}).get("recovery", "unknown"),
+            "postRestoreRetrieval": (canonical.get("gates") or {}).get(
+                "postRestoreRetrieval", "unknown"
+            ),
+        },
+        "blockers": blockers,
+    }
+
+
+def derive_phase1b_gate_md(canonical: dict[str, Any]) -> str:
+    """Legacy phase-1b-gate.md text, kept in sync with O05 status (honest).
+
+    Pure function of the canonical o05-soak.json payload, mirroring
+    derive_summary().
+    """
+    status = canonical.get("status", "not_run")
+    notes = canonical.get("notes") or ""
+    return (
+        "# Phase 1B soak / qualification\n\n"
+        f"Status: **{status}**\n\n"
+        f"{notes}\n\n"
+        f"Canonical evidence: `{CANONICAL}` (issue `{ISSUE}`).\n"
+    )
+
+
+def write_derived_from_canonical(out_dir: Path) -> None:
+    """Recovery entry point: reread <out_dir>/o05-soak.json and rewrite ONLY
+    the derived summary.json + phase-1b-gate.md from it, via the exact same
+    derive_summary()/derive_phase1b_gate_md() logic write_reports() uses.
+
+    Does NOT touch o05-soak.json or o05-soak.md, and does not run a new
+    soak. Use this to repair drift where only the canonical report got
+    committed/updated but the two derived files did not (see the P1B-O05
+    report consistency check in scripts/check-markhand-gates.py).
+    """
+    canonical_path = out_dir / CANONICAL
+    canonical = json.loads(canonical_path.read_text(encoding="utf-8"))
+    _write_text_atomic(
+        out_dir / "summary.json",
+        json.dumps(derive_summary(canonical), indent=2, sort_keys=True) + "\n",
+    )
+    _write_text_atomic(out_dir / "phase-1b-gate.md", derive_phase1b_gate_md(canonical))
+
+
 def write_reports(out_dir: Path, payload: dict[str, Any]) -> None:
     """Write o05-soak.json/.md and a thin summary.json pointer (issue=P1B-O05)."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -445,31 +510,8 @@ def write_reports(out_dir: Path, payload: dict[str, Any]) -> None:
     md.append("")
     _write_text_atomic(out_dir / "o05-soak.md", "\n".join(md))
 
-    # Backward-compatible summary.json — explicitly O05, never O04.
-    summary = {
-        "issue": ISSUE,
-        "canonicalReport": CANONICAL,
-        "generatedAt": canonical.get("generatedAt"),
-        "profile": canonical.get("profile"),
-        "live": bool(canonical.get("markhandSoak")),
-        "status": status,
-        "notes": notes,
-        "versions": canonical.get("versions") or {},
-        "gates": {
-            "unboundedGrowth": (canonical.get("gates") or {}).get("unboundedGrowth", "unknown"),
-            "recovery": (canonical.get("gates") or {}).get("recovery", "unknown"),
-            "postRestoreRetrieval": (canonical.get("gates") or {}).get(
-                "postRestoreRetrieval", "unknown"
-            ),
-        },
-        "blockers": blockers,
-    }
-    _write_text_atomic(out_dir / "summary.json", json.dumps(summary, indent=2, sort_keys=True) + "\n")
-    # Keep legacy phase-1b-gate.md in sync with O05 status (honest).
     _write_text_atomic(
-        out_dir / "phase-1b-gate.md",
-        "# Phase 1B soak / qualification\n\n"
-        f"Status: **{status}**\n\n"
-        f"{notes}\n\n"
-        f"Canonical evidence: `{CANONICAL}` (issue `{ISSUE}`).\n",
+        out_dir / "summary.json",
+        json.dumps(derive_summary(canonical), indent=2, sort_keys=True) + "\n",
     )
+    _write_text_atomic(out_dir / "phase-1b-gate.md", derive_phase1b_gate_md(canonical))
