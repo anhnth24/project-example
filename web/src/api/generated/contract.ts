@@ -849,6 +849,11 @@ export interface operations {
                     file: string;
                     /** Format: uuid */
                     collectionId: string;
+                    /**
+                     * Format: uuid
+                     * @description Existing document in collectionId. When supplied, the upload creates the next immutable version instead of a new document. The current document must be fully indexed.
+                     */
+                    documentId?: string;
                 };
             };
         };
@@ -880,6 +885,16 @@ export interface operations {
             };
             400: components["responses"]["ApiError"];
             403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            /** @description Idempotency conflict or document not ready for a new revision. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             413: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
