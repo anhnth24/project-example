@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
+import inspect
 import json
 import math
 import os
@@ -29,7 +31,6 @@ SECRET = re.compile(
 IMPLEMENTATION_FILES = (
     "deploy/dev/compose.yml",
     "deploy/dev/otel-collector.yaml",
-    "deploy/scripts/mock-embedding.py",
     "deploy/compose.spike.yml",
     "deploy/spike/common.sh",
     "deploy/spike/up.sh",
@@ -42,6 +43,50 @@ IMPLEMENTATION_FILES = (
     "scripts/validate_spike.py",
     "bench/markhand_web/scripts/fingerprint_spike.py",
 )
+# The embedding stub is sealed by the behaviour the spike measured, not by file
+# bytes. It also serves endpoints the spike never exercised, and an additive
+# change there cannot move an embedding measurement: sealing the whole file made
+# the /v1/chat/completions endpoint added in #309 invalidate a report it could
+# not affect. Any change to the embedding math, to its output, or to the default
+# dimension count still breaks the seal.
+EMBEDDING_STUB = "deploy/scripts/mock-embedding.py"
+EMBEDDING_STUB_SYMBOLS = ("l2_normalize", "embedding_for")
+EMBEDDING_STUB_PROBES = ("", "markhand", "Điều 3 khoản 2", "x" * 4096)
+EMBEDDING_STUB_DIMENSIONS = (8, 768)
+EMBEDDING_STUB_DEFAULT_DIMENSIONS = re.compile(
+    r"MARKHAND_MOCK_EMBEDDING_DIMENSIONS\",\s*\"(\d+)\""
+)
+
+
+def embedding_stub_seal(path: Path) -> str:
+    """Seal the measured embedding behaviour of the stub at `path`."""
+    spec = importlib.util.spec_from_file_location("markhand_spike_embedding_stub", path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"{path}: cannot load the embedding stub")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    digest = hashlib.sha256()
+    for symbol in EMBEDDING_STUB_SYMBOLS:
+        digest.update(symbol.encode())
+        digest.update(b"\0")
+        digest.update(inspect.getsource(getattr(module, symbol)).encode())
+        digest.update(b"\0")
+    # Read the default dimension count from the source literal, not from the
+    # imported module: the module resolves it against the ambient environment,
+    # which must not move the seal.
+    default_dimensions = EMBEDDING_STUB_DEFAULT_DIMENSIONS.search(
+        path.read_text(encoding="utf-8")
+    )
+    if default_dimensions is None:
+        raise ValueError(f"{path}: cannot find the default embedding dimension literal")
+    digest.update(default_dimensions.group(1).encode())
+    digest.update(b"\0")
+    for dimensions in EMBEDDING_STUB_DIMENSIONS:
+        for probe in EMBEDDING_STUB_PROBES:
+            vector = module.embedding_for(probe, dimensions)
+            digest.update(json.dumps([f"{value:.17g}" for value in vector]).encode())
+            digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def implementation_sha256() -> str:
@@ -51,6 +96,10 @@ def implementation_sha256() -> str:
         digest.update(b"\0")
         digest.update((ROOT / relative).read_bytes())
         digest.update(b"\0")
+    digest.update(EMBEDDING_STUB.encode())
+    digest.update(b"\0")
+    digest.update(embedding_stub_seal(ROOT / EMBEDDING_STUB).encode())
+    digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -527,6 +576,77 @@ def validate_report(
     return errors
 
 
+class EmbeddingStubSealTests(unittest.TestCase):
+    """The narrowed seal must ignore unrelated endpoints and still catch drift."""
+
+    def variant(self, temporary: str, old: str, new: str) -> Path:
+        source = (ROOT / EMBEDDING_STUB).read_text(encoding="utf-8")
+        self.assertIn(old, source)
+        path = Path(temporary) / "mock-embedding.py"
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+        return path
+
+    def test_seal_is_stable_for_an_unrelated_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.variant(
+                temporary,
+                'if self.path not in ("/v1/embeddings", "/v1/chat/completions"):',
+                'if self.path not in ("/v1/embeddings", "/v1/chat/completions", "/v1/rerank"):',
+            )
+            self.assertEqual(
+                embedding_stub_seal(path),
+                embedding_stub_seal(ROOT / EMBEDDING_STUB),
+            )
+
+    def test_seal_breaks_when_the_embedding_math_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.variant(
+                temporary,
+                "values.append((raw / 4294967295.0) * 2.0 - 1.0)",
+                "values.append((raw / 4294967295.0) * 2.0 - 0.5)",
+            )
+            self.assertNotEqual(
+                embedding_stub_seal(path),
+                embedding_stub_seal(ROOT / EMBEDDING_STUB),
+            )
+
+    def test_seal_breaks_when_the_default_dimension_count_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.variant(
+                temporary,
+                '"MARKHAND_MOCK_EMBEDDING_DIMENSIONS", "8"',
+                '"MARKHAND_MOCK_EMBEDDING_DIMENSIONS", "16"',
+            )
+            self.assertNotEqual(
+                embedding_stub_seal(path),
+                embedding_stub_seal(ROOT / EMBEDDING_STUB),
+            )
+
+    def test_seal_ignores_the_ambient_dimension_environment(self) -> None:
+        previous = os.environ.get("MARKHAND_MOCK_EMBEDDING_DIMENSIONS")
+        os.environ["MARKHAND_MOCK_EMBEDDING_DIMENSIONS"] = "1024"
+        try:
+            seal = embedding_stub_seal(ROOT / EMBEDDING_STUB)
+        finally:
+            if previous is None:
+                del os.environ["MARKHAND_MOCK_EMBEDDING_DIMENSIONS"]
+            else:
+                os.environ["MARKHAND_MOCK_EMBEDDING_DIMENSIONS"] = previous
+        self.assertEqual(seal, embedding_stub_seal(ROOT / EMBEDDING_STUB))
+
+    def test_fingerprint_writer_computes_the_same_seal(self) -> None:
+        # The two definitions are duplicated by convention; if they drift, the
+        # writer seals a report the validator will always reject.
+        path = ROOT / "bench/markhand_web/scripts/fingerprint_spike.py"
+        spec = importlib.util.spec_from_file_location("markhand_fingerprint_spike", path)
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        writer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(writer)
+        self.assertEqual(writer.IMPLEMENTATION_FILES, IMPLEMENTATION_FILES)
+        self.assertEqual(writer.implementation_sha256(), implementation_sha256())
+
+
 class SpikeValidatorTests(unittest.TestCase):
     def test_config_contract_is_valid(self) -> None:
         self.assertEqual(validate_config(), [])
@@ -578,7 +698,10 @@ def main() -> int:
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
-        suite = unittest.defaultTestLoader.loadTestsFromTestCase(SpikeValidatorTests)
+        loader = unittest.defaultTestLoader
+        suite = unittest.TestSuite()
+        suite.addTests(loader.loadTestsFromTestCase(EmbeddingStubSealTests))
+        suite.addTests(loader.loadTestsFromTestCase(SpikeValidatorTests))
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     env_file = args.env_file.resolve() if args.env_file else default_env_file()
     errors = validate_config(env_file)
