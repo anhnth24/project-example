@@ -2,6 +2,12 @@
 //!
 //! Two-way parity: every inventory route must appear in OpenAPI, and every
 //! OpenAPI `/` path (except documented exclusions) must appear in inventory.
+//!
+//! Schema completeness (separate from route/method/status parity above): every
+//! body-taking operation must declare a `requestBody`, and every 2xx response
+//! other than 204 must declare response `content`. This is the check that
+//! catches a path/method/status being present but payload-less (the gap that
+//! route/method/status parity alone cannot see).
 
 /// Canonical (method, path, required status codes) for every shipped `/api/v1` route.
 /// Paths are OpenAPI-relative (no `/api/v1` prefix). Parity is structural — not substring.
@@ -90,6 +96,35 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
 
 const HEALTH_PATHS: &[&str] = &["/health/live", "/health/ready", "/health/start"];
 
+/// Operations whose route handler actually reads a request body (JSON or
+/// multipart), used to assert every such operation declares an OpenAPI
+/// `requestBody`. Deliberately excludes bodyless POST routes — e.g.
+/// `publish` (`documents.rs::publish_version`) and `reindex`
+/// (`documents.rs::reindex_document`) take no `Json<...>`/body extractor at
+/// all, so they must NOT be listed here or the check would demand a
+/// `requestBody` the handler doesn't accept.
+pub const BODY_TAKING_OPERATIONS: &[(&str, &str)] = &[
+    ("post", "/auth/login"),
+    ("post", "/auth/refresh"),
+    ("post", "/auth/logout"),
+    ("post", "/uploads"),
+    ("post", "/collections"),
+    ("patch", "/collections/{collectionId}"),
+    (
+        "post",
+        "/collections/{collectionId}/documents/{documentId}/approve-intake",
+    ),
+    (
+        "post",
+        "/documents/{documentId}/versions/{versionId}/download-capability",
+    ),
+    ("post", "/citations/resolve"),
+    ("post", "/conflicts/{conflictId}/triage"),
+    ("post", "/search"),
+    ("post", "/ask"),
+    ("post", "/ask/stream"),
+];
+
 pub fn embedded_openapi_yaml() -> &'static str {
     include_str!("../../openapi/openapi.yaml")
 }
@@ -176,6 +211,67 @@ pub fn router_openapi_parity_gaps(yaml: &str) -> Vec<String> {
     gaps
 }
 
+/// Every operation in [`BODY_TAKING_OPERATIONS`] must declare a `requestBody`.
+/// Fail-closed: an unreadable path/method is itself reported as a gap rather
+/// than silently skipped.
+pub fn openapi_request_body_gaps(yaml: &str) -> Vec<String> {
+    let mut gaps = Vec::new();
+    for &(method, path) in BODY_TAKING_OPERATIONS {
+        let Some(path_block) = extract_path_block(yaml, path) else {
+            gaps.push(format!("missing path {path} for requestBody check"));
+            continue;
+        };
+        let Some(op_block) = extract_method_block(path_block, method) else {
+            gaps.push(format!(
+                "unreadable method {method} on {path} for requestBody check"
+            ));
+            continue;
+        };
+        if !op_block.contains("requestBody:") {
+            gaps.push(format!("missing requestBody on {method} {path}"));
+        }
+    }
+    gaps
+}
+
+/// Every 2xx response other than 204 (across [`ROUTE_INVENTORY`]) must declare
+/// response `content`. Fail-closed: an unreadable status block is itself
+/// reported as a gap rather than silently skipped.
+pub fn openapi_response_content_gaps(yaml: &str) -> Vec<String> {
+    let mut gaps = Vec::new();
+    for &(method, path, statuses) in ROUTE_INVENTORY {
+        let Some(path_block) = extract_path_block(yaml, path) else {
+            // Already reported by openapi_inventory_gaps.
+            continue;
+        };
+        let Some(op_block) = extract_method_block(path_block, method) else {
+            continue;
+        };
+        for &status in statuses {
+            if status == "204" || !status.starts_with('2') {
+                continue;
+            }
+            match extract_status_block(op_block, status) {
+                Some(status_block) if status_block.contains("content:") => {}
+                Some(_) => gaps.push(format!(
+                    "missing response content on {status} for {method} {path}"
+                )),
+                None => gaps.push(format!(
+                    "unreadable status {status} on {method} {path} for content check"
+                )),
+            }
+        }
+    }
+    gaps
+}
+
+/// Combined schema-completeness gaps: requestBody presence + 2xx response content.
+pub fn openapi_schema_completeness_gaps(yaml: &str) -> Vec<String> {
+    let mut gaps = openapi_request_body_gaps(yaml);
+    gaps.extend(openapi_response_content_gaps(yaml));
+    gaps
+}
+
 fn openapi_paths(yaml: &str) -> Vec<&str> {
     yaml.lines()
         .filter_map(|line| {
@@ -233,6 +329,34 @@ fn extract_method_block<'a>(path_block: &'a str, method: &str) -> Option<&'a str
     Some(rest)
 }
 
+/// Slice an operation block down to a single status entry's body, e.g. the
+/// `"200": ...` sub-block, stopping at the next status key (same 8-space
+/// indent, sibling of `responses:`) or any shallower line. Indentation is
+/// fixed throughout this file at path(2)/method(4)/`responses:`(6)/status(8).
+fn extract_status_block<'a>(op_block: &'a str, status: &str) -> Option<&'a str> {
+    let needle = format!("        \"{status}\":");
+    let needle_alt = format!("        '{status}':");
+    let (start, _) =
+        exact_line_span(op_block, &needle).or_else(|| exact_line_span(op_block, &needle_alt))?;
+    let rest = &op_block[start..];
+    let mut offset = 0usize;
+    for (idx, raw_line) in rest.split_inclusive('\n').enumerate() {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        if idx == 0 {
+            offset += raw_line.len();
+            continue;
+        }
+        if !line.trim().is_empty() {
+            let indent = line.len() - line.trim_start().len();
+            if indent <= 8 {
+                return Some(&rest[..offset]);
+            }
+        }
+        offset += raw_line.len();
+    }
+    Some(rest)
+}
+
 fn exact_line_span(input: &str, expected: &str) -> Option<(usize, usize)> {
     let mut offset = 0usize;
     for raw_line in input.split_inclusive('\n') {
@@ -274,6 +398,96 @@ mod tests {
             "CRLF OpenAPI/router parity gaps: {}",
             gaps.join("; ")
         );
+    }
+
+    #[test]
+    fn openapi_schema_is_complete() {
+        let yaml = embedded_openapi_yaml();
+        let gaps = openapi_schema_completeness_gaps(yaml);
+        assert!(
+            gaps.is_empty(),
+            "OpenAPI schema completeness gaps: {}",
+            gaps.join("; ")
+        );
+    }
+
+    #[test]
+    fn openapi_schema_completeness_gaps_detects_stripped_request_body() {
+        // /auth/login stripped of its requestBody (compare to the real
+        // embedded document, which does declare one for this operation).
+        let yaml = concat!(
+            "  /auth/login:\n",
+            "    post:\n",
+            "      operationId: authLogin\n",
+            "      responses:\n",
+            "        \"200\":\n",
+            "          description: ok\n",
+            "          content:\n",
+            "            application/json:\n",
+            "              schema: {}\n",
+        );
+        let gaps = openapi_request_body_gaps(yaml);
+        assert!(
+            gaps.iter()
+                .any(|g| g == "missing requestBody on post /auth/login"),
+            "expected missing-requestBody gap, got: {gaps:?}"
+        );
+        // A fixture that keeps requestBody must not be flagged.
+        let fixed = concat!(
+            "  /auth/login:\n",
+            "    post:\n",
+            "      operationId: authLogin\n",
+            "      requestBody:\n",
+            "        required: true\n",
+            "        content:\n",
+            "          application/json:\n",
+            "            schema: {}\n",
+            "      responses:\n",
+            "        \"200\":\n",
+            "          description: ok\n",
+            "          content:\n",
+            "            application/json:\n",
+            "              schema: {}\n",
+        );
+        assert!(!openapi_request_body_gaps(fixed)
+            .iter()
+            .any(|g| g == "missing requestBody on post /auth/login"));
+    }
+
+    #[test]
+    fn openapi_schema_completeness_gaps_detects_stripped_response_content() {
+        // /auth/login's 200 stripped of its content block.
+        let yaml = concat!(
+            "  /auth/login:\n",
+            "    post:\n",
+            "      operationId: authLogin\n",
+            "      responses:\n",
+            "        \"200\":\n",
+            "          description: ok, but no content schema\n",
+            "        \"401\":\n",
+            "          $ref: \"#/components/responses/ApiError\"\n",
+        );
+        let gaps = openapi_response_content_gaps(yaml);
+        assert_eq!(
+            gaps,
+            vec!["missing response content on 200 for post /auth/login".to_string()],
+            "expected exactly one gap for the stripped 200, got: {gaps:?}"
+        );
+        // A fixture that keeps content must not be flagged.
+        let fixed = concat!(
+            "  /auth/login:\n",
+            "    post:\n",
+            "      operationId: authLogin\n",
+            "      responses:\n",
+            "        \"200\":\n",
+            "          description: ok\n",
+            "          content:\n",
+            "            application/json:\n",
+            "              schema: {}\n",
+            "        \"401\":\n",
+            "          $ref: \"#/components/responses/ApiError\"\n",
+        );
+        assert!(openapi_response_content_gaps(fixed).is_empty());
     }
 
     #[test]

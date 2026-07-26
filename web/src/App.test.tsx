@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
@@ -6,6 +6,7 @@ describe('App', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    window.history.pushState(null, '', '/');
   });
 
   it('renders readiness from the real API contract', async () => {
@@ -44,5 +45,35 @@ describe('App', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Máy chủ chưa sẵn sàng'),
     );
     expect(screen.getByRole('button', { name: 'Kiểm tra kết nối' })).toBeVisible();
+  });
+
+  it('navigates to a P2.3 route by clicking the primary nav link', () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('link', { name: 'Trợ giúp' }));
+
+    expect(window.location.pathname).toBe('/help');
+    expect(screen.getByRole('heading', { name: 'Trợ giúp Markhand' })).toBeVisible();
+  });
+
+  it('renders the library page for a deep-linked collection path', () => {
+    window.history.pushState(null, '', '/library/col-42');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Bộ sưu tập col-42' })).toBeVisible();
+  });
+
+  it('shows a not-found page for an unknown path and links back home', () => {
+    window.history.pushState(null, '', '/does-not-exist');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: 'Không tìm thấy trang' })).toBeVisible();
+    fireEvent.click(screen.getByRole('link', { name: 'Về trang chính' }));
+    expect(window.location.pathname).toBe('/');
   });
 });
