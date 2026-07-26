@@ -1,0 +1,20 @@
+{
+  "action": "dependency_blip",
+  "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+  "service": "postgres",
+  "beforeId": "edbbdc9fce68",
+  "afterId": "edbbdc9fce68",
+  "blipSeconds": 15,
+  "recovered": true,
+  "recoveryDeadlineSeconds": 120.0,
+  "windowStartMono": 15380693.265087958,
+  "stopExit": 0,
+  "startExit": 0,
+  "windowEndMono": 15380710.25473763,
+  "recoveryLatencySeconds": 16.99,
+  "eventId": "dependency_blip-2",
+  "kind": "dependency_blip",
+  "scheduledAtSeconds": 900.0020492691547,
+  "windowStartRel": 900.0199946146458,
+  "windowEndRel": 917.0097980760038
+}

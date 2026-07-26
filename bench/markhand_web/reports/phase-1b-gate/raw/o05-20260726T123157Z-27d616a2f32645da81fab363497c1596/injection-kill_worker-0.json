@@ -1,0 +1,19 @@
+{
+  "action": "kill_worker",
+  "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+  "service": "worker-convert",
+  "beforeId": "4af8b2f246a5",
+  "afterId": "4af8b2f246a5",
+  "recovered": true,
+  "recoveryDeadlineSeconds": 120.0,
+  "windowStartMono": 15380393.266476056,
+  "killExit": 0,
+  "startExit": 0,
+  "windowEndMono": 15380394.739341844,
+  "recoveryLatencySeconds": 1.473,
+  "eventId": "kill_worker-0",
+  "kind": "kill_worker",
+  "scheduledAtSeconds": 600.002760803327,
+  "windowStartRel": 600.0214152783155,
+  "windowEndRel": 601.4943869002163
+}

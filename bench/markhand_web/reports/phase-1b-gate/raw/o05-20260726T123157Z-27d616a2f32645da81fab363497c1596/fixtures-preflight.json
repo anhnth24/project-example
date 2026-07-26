@@ -1,0 +1,77 @@
+{
+  "ok": true,
+  "paths": {
+    "pdf": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-pdf.pdf",
+    "docx": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-docx.docx",
+    "pptx": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-pptx.pptx",
+    "xlsx": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-xlsx.xlsx",
+    "csv": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-csv.csv",
+    "html": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-html.html",
+    "txt": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-txt.txt",
+    "png": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-png.png"
+  },
+  "formats": [
+    "csv",
+    "docx",
+    "html",
+    "pdf",
+    "png",
+    "pptx",
+    "txt",
+    "xlsx"
+  ],
+  "fileconv": "/home/administrator/markhand/target/debug/fileconv",
+  "converterChecked": true,
+  "convertResults": {
+    "pdf": {
+      "ok": true,
+      "markerSha256": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78",
+      "outputChars": 10
+    },
+    "docx": {
+      "ok": true,
+      "markerSha256": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872",
+      "outputChars": 13
+    },
+    "pptx": {
+      "ok": true,
+      "markerSha256": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f",
+      "outputChars": 25
+    },
+    "xlsx": {
+      "ok": true,
+      "markerSha256": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898",
+      "outputChars": 36
+    },
+    "csv": {
+      "ok": true,
+      "markerSha256": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d",
+      "outputChars": 48
+    },
+    "html": {
+      "ok": true,
+      "markerSha256": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3",
+      "outputChars": 11
+    },
+    "txt": {
+      "ok": true,
+      "markerSha256": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0",
+      "outputChars": 11
+    },
+    "png": {
+      "ok": true,
+      "markerSha256": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff",
+      "outputChars": 9
+    }
+  },
+  "markerHashes": {
+    "pdf": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78",
+    "docx": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872",
+    "pptx": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f",
+    "xlsx": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898",
+    "csv": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d",
+    "html": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3",
+    "txt": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0",
+    "png": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff"
+  }
+}

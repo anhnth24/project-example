@@ -1,0 +1,72 @@
+exit=0
+3
+== P1B-O03 drill 20260726T130227Z (restore-green; promote disabled; external mktemp) ==
+PASS: baseline ready 200
+PASS: app mutation write-gate integrated (ops_fence consulted outside readiness)
+PASS: REQUIRE=1 does not refuse for write-gate-unavailable (rc=1)
+PASS: hermetic auth/schema/symlink/traversal/malformed/pgpass/mc guards
+PASS: proc canary: no MinIO secret on mc argv
+BEGIN
+              set_config              
+--------------------------------------
+ 11111111-1111-1111-1111-111111111111
+(1 row)
+
+INSERT 0 1
+INSERT 0 1
+COMMIT
+PASS: concurrent backup refused under session advisory lock
+/home/administrator/p1b-tmp/markhand-backup-o03.Qgcawt/20260726T130227Z
+PASS: manifest mode 0600 (umask 077)
+PASS: backup.sh capture (captureWindow 307s)
+PASS: minio normalized history written
+ok
+PASS: normalized MinIO history (type/size/hash; no versionId/ts)
+PASS: restore.sh refuses without green targets
+PASS: isolated green MinIO and Qdrant endpoints healthy
+PASS: restore refuses missing MinIO allowlist
+PASS: restore.sh refuses wrong green allowlist
+PASS: restore.sh refuses blue bucket alias
+PASS: restore.sh refuses blue collection alias
+PASS: existing allowlisted MinIO target refused before mutation
+PASS: restore.sh refuses tampered artifacts
+PASS: restore-green OK; promote disabled
+PASS: cutover/promote disabled (exit 3)
+PASS: green API live but not ready before independent attestation
+PASS: independent green target-state attestation cleared matching fence
+PASS: attested green API ready 200
+PASS: attested green API live 200
+PASS: distinct green API answered grounded query from restored stores
+PASS: query-ready RTO 1099s <= 3600s
+PASS: attested consistency RPO 328s <= 900s
+PASS: full-vector RTO 1099s <= 14400s
+PASS: blue API remained fenced while green became query-ready
+PASS: blue restore fence retained (no false cutover)
+PASS: external O05 retained/deleted/authz probe passed on live green
+PASS: no raw dumps in evidence
+PASS: encrypted destination policy exercised
+PASS: traffic cutover remained disabled; distinct attested green API used for restore proof
+DROP DATABASE
+Removed `green/markhand-documents` successfully.
+token_cleanup_ok af570588
+fence_restored_ok
+qdrant_preexisting_ok
+cleanup_seed_docs=0
+green_db=0
+green_bucket=0
+blue_collection_http=200
+green_collection_http=000000
+green_containers=0
+fence_now=null
+cleanup_verified=1
+PASS: verified cleanup before report
+/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json
+/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json
+reproducible_ok
+PASS: reproducible raw→report
+/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json
+drill complete status=pass gaps=0 raw=/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o03-20260726T130227Z
+/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json
+
+curl: (7) Failed to connect to 127.0.0.1 port 6443 after 0 ms: Connection refused
+

@@ -840,14 +840,14 @@
       "phase": "1B",
       "id": "P1B-O05",
       "title": "P1B-O05 — Mixed-load soak và POC qualification",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1B — Single-org POC",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1b"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-O05\n- Status: `in_progress`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nConcurrent ingest/query/delete/reconcile against POC API per\n`phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;\nevaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.\n\n## Files/modules\n\n`bench/markhand_web/soak/*`, `workloads/phase1b-mixed.yaml`,\n`reports/phase-1b-gate/o05-soak.*`, `docs/runbooks/phase-1b/soak-o05.md`,\n`deploy/scripts/o05-soak.sh`.\n\n## Dependencies / blocks\n\nO02/O03/O04 + G0-CAP/G0-SLO.\n\n## Required tests / evidence\n\nUnit/self-test (fake OOXML/PDF/PNG fail preflight, compare\nwithout dataset non-pass, async injection, partial injection counts fail,\nrestored==blue/missing non-pass, retained absent / unauthorized 2xx non-pass,\nsmoke≠pass); live: query p95≤500 / p99≤1000, ingest≥1200 docs/h, RSS≤256MB /\ntemp≤512MB / queue≤100 / DB conn≤40, recovery + green post-restore; duration\nexactly 1800.\n\n## Security and migration notes\n\nSynthetic/redacted, exact git/image/migration/index\nversions; injection only on expected POC project/services.\n**Out:** production/multi-org.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-O05\n- Status: `done`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nConcurrent ingest/query/delete/reconcile against POC API per\n`phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;\nevaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.\n\n## Files/modules\n\n`bench/markhand_web/soak/*`, `workloads/phase1b-mixed.yaml`,\n`reports/phase-1b-gate/o05-soak.*`, `docs/runbooks/phase-1b/soak-o05.md`,\n`deploy/scripts/o05-soak.sh`.\n\n## Dependencies / blocks\n\nO02/O03/O04 + G0-CAP/G0-SLO.\n\n## Required tests / evidence\n\nUnit/self-test (fake OOXML/PDF/PNG fail preflight, compare\nwithout dataset non-pass, async injection, partial injection counts fail,\nrestored==blue/missing non-pass, retained absent / unauthorized 2xx non-pass,\nsmoke≠pass); live: query p95≤500 / p99≤1000, ingest≥1200 docs/h, RSS≤256MB /\ntemp≤512MB / queue≤100 / DB conn≤40, recovery + green post-restore; duration\nexactly 1800.\n\n## Security and migration notes\n\nSynthetic/redacted, exact git/image/migration/index\nversions; injection only on expected POC project/services.\n**Out:** production/multi-org.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {

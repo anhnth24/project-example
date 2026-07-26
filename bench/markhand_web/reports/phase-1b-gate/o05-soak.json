@@ -1,92 +1,200 @@
 {
-  "architecturalBlockers": [
-    "compare_dataset_unavailable"
-  ],
-  "blockers": [
-    "smoke_non_qualifying_duration",
-    "prerequisites_incomplete",
-    "metrics_not_measured",
-    "injection_or_recovery_failed",
-    "gate:queryP95:unknown",
-    "gate:queryP99:unknown",
-    "gate:ingestThroughput:unknown",
-    "gate:rssGrowth:unknown",
-    "gate:tempGrowth:unknown",
-    "gate:queueDepth:unknown",
-    "gate:dbConnections:unknown",
-    "gate:unboundedGrowth:unknown",
-    "gate:recovery:unknown",
-    "gate:postRestoreRetrieval:unknown",
-    "gate:requestErrors:unknown",
-    "gate:completeness:unknown",
-    "arch:compare_dataset_unavailable"
-  ],
+  "architecturalBlockers": [],
+  "blockers": [],
   "canonicalReport": "o05-soak.json",
   "compareDataset": {
-    "available": false,
-    "blocker": "compare_dataset_unavailable",
-    "dataset": null,
-    "notes": "MARKHAND_SOAK_COMPARE_DATASET unset. Architectural blocker: upload always creates a new document; harness will not invent version pairs.",
-    "required": true
+    "available": true,
+    "dataset": {
+      "asOfA": "2026-07-26T12:32:04.854155Z",
+      "asOfB": "2026-07-26T12:32:08.024897Z",
+      "documentId": "ff71f09d-9568-4e15-a9ff-45adf6e09da9",
+      "effectiveFromA": "2026-07-26T12:32:02.705409Z",
+      "effectiveFromB": "2026-07-26T12:32:07.002902Z",
+      "markerASha256": "66145de637dfbf73df0e9634ad0a2d12c3fad979953f1417957b2b1042970a0b",
+      "markerBSha256": "39ee910dab7a99a883976ca0f14237c2e9f4273f0fd4903b4bcaca1c7df7ab50",
+      "query": "[REDACTED_CONTENT_MARKER]",
+      "versionA": "407b6763-f020-3523-866f-cc2faabc4c29",
+      "versionB": "2e648f4d-6ad1-f2e3-7610-a0a4ded6b5fc"
+    },
+    "required": true,
+    "source": "public_revision_upload",
+    "verified": {
+      "asOf": {
+        "A": {
+          "httpStatus": 200,
+          "latencyMs": 102.26395353674889
+        },
+        "B": {
+          "httpStatus": 200,
+          "latencyMs": 94.98833492398262
+        }
+      },
+      "dataset": {
+        "asOfA": "2026-07-26T12:32:04.854155Z",
+        "asOfB": "2026-07-26T12:32:08.024897Z",
+        "documentId": "ff71f09d-9568-4e15-a9ff-45adf6e09da9",
+        "effectiveFromA": "2026-07-26T12:32:02.705409Z",
+        "effectiveFromB": "2026-07-26T12:32:07.002902Z",
+        "markerASha256": "66145de637dfbf73df0e9634ad0a2d12c3fad979953f1417957b2b1042970a0b",
+        "markerBSha256": "39ee910dab7a99a883976ca0f14237c2e9f4273f0fd4903b4bcaca1c7df7ab50",
+        "query": "[REDACTED_CONTENT_MARKER]",
+        "versionA": "407b6763-f020-3523-866f-cc2faabc4c29",
+        "versionB": "2e648f4d-6ad1-f2e3-7610-a0a4ded6b5fc"
+      },
+      "httpStatus": 200,
+      "latencyMs": 56.387487798929214,
+      "ok": true
+    }
   },
-  "durationSeconds": 5,
+  "durationSeconds": 1800,
   "failureInjection": {
     "enabled": true,
     "schedule": [
       {
-        "at": 1.0,
+        "at": 600.0,
+        "kind": "kill_worker"
+      },
+      {
+        "at": 1200.0,
+        "kind": "kill_worker"
+      },
+      {
+        "at": 900.0,
         "kind": "dependency_blip"
       }
     ],
     "summary": {
-      "ok": false
+      "allRecovered": true,
+      "blipsExpected": 1,
+      "blipsObserved": 1,
+      "countsMatch": true,
+      "errors": [],
+      "events": [
+        {
+          "action": "kill_worker",
+          "afterId": "4af8b2f246a5",
+          "beforeId": "4af8b2f246a5",
+          "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "eventId": "kill_worker-0",
+          "killExit": 0,
+          "kind": "kill_worker",
+          "recovered": true,
+          "recoveryDeadlineSeconds": 120.0,
+          "recoveryLatencySeconds": 1.473,
+          "scheduledAtSeconds": 600.002760803327,
+          "service": "worker-convert",
+          "startExit": 0,
+          "windowEndMono": 15380394.739341844,
+          "windowEndRel": 601.4943869002163,
+          "windowStartMono": 15380393.266476056,
+          "windowStartRel": 600.0214152783155
+        },
+        {
+          "action": "dependency_blip",
+          "afterId": "edbbdc9fce68",
+          "beforeId": "edbbdc9fce68",
+          "blipSeconds": 15,
+          "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "eventId": "dependency_blip-2",
+          "kind": "dependency_blip",
+          "recovered": true,
+          "recoveryDeadlineSeconds": 120.0,
+          "recoveryLatencySeconds": 16.99,
+          "scheduledAtSeconds": 900.0020492691547,
+          "service": "postgres",
+          "startExit": 0,
+          "stopExit": 0,
+          "windowEndMono": 15380710.25473763,
+          "windowEndRel": 917.0097980760038,
+          "windowStartMono": 15380693.265087958,
+          "windowStartRel": 900.0199946146458
+        },
+        {
+          "action": "kill_worker",
+          "afterId": "4af8b2f246a5",
+          "beforeId": "4af8b2f246a5",
+          "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+          "eventId": "kill_worker-1",
+          "killExit": 0,
+          "kind": "kill_worker",
+          "recovered": true,
+          "recoveryDeadlineSeconds": 120.0,
+          "recoveryLatencySeconds": 1.221,
+          "scheduledAtSeconds": 1200.0000035837293,
+          "service": "worker-convert",
+          "startExit": 0,
+          "windowEndMono": 15380994.484799145,
+          "windowEndRel": 1201.239866770804,
+          "windowStartMono": 15380993.264110668,
+          "windowStartRel": 1200.0189764406532
+        }
+      ],
+      "expected": 3,
+      "killsExpected": 2,
+      "killsObserved": 2,
+      "observed": 3,
+      "ok": true,
+      "windows": [
+        [
+          600.0214152783155,
+          601.4943869002163
+        ],
+        [
+          900.0199946146458,
+          917.0097980760038
+        ],
+        [
+          1200.0189764406532,
+          1201.239866770804
+        ]
+      ]
     }
   },
   "fixturePreflight": {
     "convertResults": {
       "csv": {
-        "marker": "SOAKCSV15",
+        "markerSha256": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d",
         "ok": true,
         "outputChars": 48
       },
       "docx": {
-        "marker": "SOAKDOCX15",
+        "markerSha256": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872",
         "ok": true,
         "outputChars": 13
       },
       "html": {
-        "marker": "SOAKHTML15",
+        "markerSha256": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3",
         "ok": true,
         "outputChars": 11
       },
       "pdf": {
-        "marker": "SOAKPDF15",
+        "markerSha256": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78",
         "ok": true,
         "outputChars": 10
       },
       "png": {
-        "marker": "SOAK15",
+        "markerSha256": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff",
         "ok": true,
-        "outputChars": 8
+        "outputChars": 9
       },
       "pptx": {
-        "marker": "SOAKPPTX15",
+        "markerSha256": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f",
         "ok": true,
         "outputChars": 25
       },
       "txt": {
-        "marker": "SOAKTXT15",
+        "markerSha256": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0",
         "ok": true,
         "outputChars": 11
       },
       "xlsx": {
-        "marker": "SOAKXLSX15",
+        "markerSha256": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898",
         "ok": true,
         "outputChars": 36
       }
     },
     "converterChecked": true,
-    "fileconv": "/workspace/target/debug/fileconv",
+    "fileconv": "/home/administrator/markhand/target/debug/fileconv",
     "formats": [
       "csv",
       "docx",
@@ -97,192 +205,642 @@
       "txt",
       "xlsx"
     ],
-    "markers": {
-      "csv": "SOAKCSV15",
-      "docx": "SOAKDOCX15",
-      "html": "SOAKHTML15",
-      "pdf": "SOAKPDF15",
-      "png": "SOAK15",
-      "pptx": "SOAKPPTX15",
-      "txt": "SOAKTXT15",
-      "xlsx": "SOAKXLSX15"
+    "markerHashes": {
+      "csv": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d",
+      "docx": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872",
+      "html": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3",
+      "pdf": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78",
+      "png": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff",
+      "pptx": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f",
+      "txt": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0",
+      "xlsx": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898"
     },
     "ok": true,
     "paths": {
-      "csv": "/workspace/bench/markhand_web/soak/fixtures/soak-csv.csv",
-      "docx": "/workspace/bench/markhand_web/soak/fixtures/soak-docx.docx",
-      "html": "/workspace/bench/markhand_web/soak/fixtures/soak-html.html",
-      "pdf": "/workspace/bench/markhand_web/soak/fixtures/soak-pdf.pdf",
-      "png": "/workspace/bench/markhand_web/soak/fixtures/soak-png.png",
-      "pptx": "/workspace/bench/markhand_web/soak/fixtures/soak-pptx.pptx",
-      "txt": "/workspace/bench/markhand_web/soak/fixtures/soak-txt.txt",
-      "xlsx": "/workspace/bench/markhand_web/soak/fixtures/soak-xlsx.xlsx"
+      "csv": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-csv.csv",
+      "docx": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-docx.docx",
+      "html": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-html.html",
+      "pdf": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-pdf.pdf",
+      "png": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-png.png",
+      "pptx": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-pptx.pptx",
+      "txt": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-txt.txt",
+      "xlsx": "/home/administrator/markhand/bench/markhand_web/soak/fixtures/soak-xlsx.xlsx"
     }
   },
   "gates": {
-    "completeness": "unknown",
-    "dbConnections": "unknown",
-    "ingestThroughput": "unknown",
-    "postRestoreRetrieval": "unknown",
-    "queryP95": "unknown",
-    "queryP99": "unknown",
-    "queueDepth": "unknown",
-    "recovery": "unknown",
-    "requestErrors": "unknown",
-    "rssGrowth": "unknown",
-    "tempGrowth": "unknown",
-    "unboundedGrowth": "unknown"
+    "canonicalBinding": "pass",
+    "completeness": "pass",
+    "dbConnections": "pass",
+    "ingestThroughput": "pass",
+    "postRestoreRetrieval": "pass",
+    "queryP95": "pass",
+    "queryP99": "pass",
+    "queueDepth": "pass",
+    "reconcile": "pass",
+    "recovery": "pass",
+    "requestErrors": "pass",
+    "resourceCoverage": "pass",
+    "rssGrowth": "pass",
+    "tempGrowth": "pass",
+    "unboundedGrowth": "pass",
+    "workloadDrain": "pass"
   },
-  "generatedAt": "2026-07-24T03:16:03Z",
+  "generatedAt": "2026-07-26T13:32:01Z",
   "issue": "P1B-O05",
   "markhandSoak": true,
   "metrics": {
-    "architecturalBlockers": [
-      "compare_dataset_unavailable"
-    ],
-    "dbConnectionsMax": null,
-    "dependencyRecoveryPass": null,
-    "durationSeconds": 5,
-    "measured": false,
-    "postRestoreRetrievalPass": null,
-    "queueAgeMaxSeconds": null,
-    "queueDepthMax": null,
+    "actualElapsedSeconds": 1801.426,
+    "architecturalBlockers": [],
+    "completed": {
+      "delete": 90,
+      "ingest": 180,
+      "query": 3600,
+      "reconcile": 5
+    },
+    "completeness": {
+      "actors": {
+        "delete": {
+          "completed": 90,
+          "drained": true,
+          "failedUnderInjection": 1,
+          "passed": true,
+          "required": 85,
+          "scheduled": 90,
+          "submitted": 90,
+          "success": 89
+        },
+        "ingest": {
+          "completed": 180,
+          "drained": true,
+          "failedUnderInjection": 2,
+          "passed": true,
+          "required": 170,
+          "scheduled": 180,
+          "submitted": 180,
+          "success": 178
+        },
+        "query": {
+          "completed": 3600,
+          "drained": true,
+          "failedUnderInjection": 34,
+          "passed": true,
+          "required": 3388,
+          "scheduled": 3600,
+          "submitted": 3600,
+          "success": 3566
+        },
+        "reconcile": {
+          "completed": 5,
+          "drained": true,
+          "failedUnderInjection": 1,
+          "passed": true,
+          "required": 4,
+          "scheduled": 5,
+          "submitted": 5,
+          "success": 4
+        }
+      },
+      "drainPassed": true,
+      "passed": true,
+      "ratio": 0.95,
+      "reconcilePassed": true
+    },
+    "completenessPassed": true,
+    "dbConnectionsMax": 19,
+    "deletedCount": 89,
+    "dependencyRecoveryPass": true,
+    "durationSeconds": 1800,
+    "failureReasons": {
+      "delete": {
+        "delete_http_503@injection": 1
+      },
+      "ingest": {
+        "upload_http_503@injection": 2
+      },
+      "query": {
+        "search_http_503@injection": 34
+      },
+      "reconcile": {
+        "reconcile_exit_1@injection": 1
+      }
+    },
+    "ingestDocsPerHour": 356.0,
+    "ingestOk": 178,
+    "measured": true,
+    "notReady": [],
+    "postRestoreRetrievalPass": true,
+    "queryModesReady": true,
+    "queryP50Ms": 139.51432425528765,
+    "queryP95Ms": 301.81284388527274,
+    "queryP99Ms": 418.48446382209653,
+    "querySuccessByMode": {
+      "as_of": 1189,
+      "compare": 1189,
+      "current": 1188
+    },
+    "querySuccessSamples": 3566,
+    "queueAgeMaxSeconds": 0.0,
+    "queueDepthMax": 0.0,
+    "reauthCount": 1,
+    "reconcilePassed": true,
+    "requestErrors": 38,
+    "requestErrorsInInjection": 38,
+    "requestErrorsOutsideInjection": 0,
+    "requestErrorsOutsideInjectionAtOutcome": 0,
+    "resourceCoverage": {
+      "errors": [],
+      "expectedSamples": 362,
+      "maxAllowedGapSeconds": 12.5,
+      "minimumSamples": 325,
+      "observedCounts": {
+        "db": 359,
+        "queue": 362,
+        "rss": 362,
+        "temp": 362
+      },
+      "passed": true,
+      "sampleCount": 362,
+      "sampleIntervalCanonical": true,
+      "sampleMaxGapSeconds": 7.303,
+      "sampleSpanSeconds": 1806.595
+    },
+    "resourceCoveragePassed": true,
+    "retainedCount": 8,
     "rss": {
-      "end": null,
-      "growth": null,
-      "peak": null,
-      "start": null
+      "end": 314.602,
+      "growth": 15.576999999999998,
+      "peak": 353.483,
+      "start": 337.906
     },
-    "rssGrowthMb": null,
+    "rssGrowthMb": 15.576999999999998,
     "samplerErrors": [],
-    "smoke": true,
-    "tempBytes": {
-      "end": null,
-      "growth": null,
-      "peak": null,
-      "start": null
+    "scheduled": {
+      "delete": 90,
+      "ingest": 180,
+      "query": 3600,
+      "reconcile": 5
     },
-    "tempGrowthMb": null,
-    "workerRecoveryPass": null
+    "smoke": false,
+    "submitted": {
+      "delete": 90,
+      "ingest": 180,
+      "query": 3600,
+      "reconcile": 5
+    },
+    "success": {
+      "delete": 89,
+      "ingest": 178,
+      "query": 3566,
+      "reconcile": 4
+    },
+    "tempBytes": {
+      "end": 49472,
+      "growth": 61276,
+      "peak": 110748,
+      "start": 49472
+    },
+    "tempGrowthMb": 0.058,
+    "workerRecoveryPass": true,
+    "workloadDrainPassed": true
   },
-  "notes": "Smoke/non-qualifying duration; cannot pass official O05.",
-  "o03SameRun": null,
+  "notes": "Live measured soak.",
+  "o03SameRun": {
+    "baselineRetainedIds": [
+      "f8193c2d-6347-4ed5-9164-ee8f53da354c",
+      "ba5b4dfe-4509-425b-bc8d-b5cdd1085ea0",
+      "62a7c1e6-b8d1-405f-a082-928637db5a2f",
+      "06a6a515-6274-4a13-9ee7-f26f4d5030ec",
+      "02c235ea-bb98-4654-ae42-f30cf8675339",
+      "add925a4-8388-4628-9a4c-6fc9da994431",
+      "32eecaed-6a95-49e3-acbe-aa95e7938886",
+      "966a1892-c28f-464b-800b-6b7380867c5c"
+    ],
+    "exitCode": 0,
+    "externalGreenProbe": {
+      "passed": true,
+      "postRestore": {
+        "gate": "pass",
+        "leakedDeletedIds": 0,
+        "passed": true,
+        "retainedVisible": true,
+        "sameRunRestore": true,
+        "unauthorizedDenied": true,
+        "unauthorizedStatus": 401
+      },
+      "restoredApi": {
+        "available": true,
+        "blueApiBase": "http://127.0.0.1:8788",
+        "blueDeploymentIdentity": "markhand-poc-f02-20260726t121843z-1815269-17292:blue:f4f33cd1b476e07d69594dec269002f1159f1b70",
+        "blueStorageSignature": "d53c0f18d2a1ab8333cf60431134d8fc8db13fb7582309eb7ac77f898dd1fab4",
+        "restoredApiBase": "http://127.0.0.1:8790",
+        "restoredDeploymentIdentity": "markhand-poc-f02-20260726t121843z-1815269-17292:restore-green:markhand_o03_green_20260726130227:20260726T130227Z",
+        "restoredStorageSignature": "fbfb5d4578b7ed96ad2014b7953cf1e1bdf462732ddbfdeb3b423171cf39650b",
+        "source": "o03_live_external_probe"
+      },
+      "schemaVersion": 1
+    },
+    "invoked": true,
+    "phase": "post_baseline_checkpoint",
+    "postExecutionValidation": {
+      "blockers": [],
+      "canonicalReports": {
+        "f02": {
+          "issue": "P1B-F02",
+          "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json",
+          "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/f02-20260726T121843Z-1815269-17292",
+          "rawManifestSha256": "796918633abd1f25a735034163eb6f9dbf1e399a3846ac08dd52d3d06dc2d0b2",
+          "sha256": "6d7a1acfeac0d1f70ff43dda07a7820964c4a6e23531120c6829435711a35c1b",
+          "status": true,
+          "trustedAttestation": true
+        },
+        "o02": {
+          "issue": "P1B-O02",
+          "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+          "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o02-20260726T122352Z",
+          "rawManifestSha256": "5fb2282432b4c53e4aaaaee5c40a20f58274e2264f64c335a97c6bfa5fd4d3c3",
+          "sha256": "5a2c141e5548c06ea94814b3cc3f2dc342a99cb1653fbd6e4c2c9dc329f5ed05",
+          "status": "pass",
+          "trustedAttestation": true
+        },
+        "o03": {
+          "issue": "P1B-O03",
+          "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json",
+          "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o03-20260726T130227Z",
+          "rawManifestSha256": "2e9b09593f957a52646a82adc9f28636fce07282361bf1bc4ce59e320fa55cdf",
+          "sha256": "3ed96ce4817c4909f1be21d5803f034779d1ffb67a2f410ed97558d22f1a26b2",
+          "status": "pass",
+          "trustedAttestation": true
+        },
+        "o04": {
+          "issue": "P1B-O04",
+          "path": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/o04-release.json",
+          "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/raw/o04-f4f33cd1b476e07d69594dec269002f1159f1b70",
+          "rawManifestSha256": "7b3cda916eea9306bcc2707c84d50b119f91939eb0e1e612de6f3aff68a33f41",
+          "sha256": "d007ec04b4fce1625de6b44623f22543870c7adff4ab909fd7a7d61b1fca52d4",
+          "status": "pass",
+          "trustedAttestation": true
+        }
+      },
+      "f02": {
+        "passed": true,
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json"
+      },
+      "fingerprint": {
+        "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+        "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
+      },
+      "o02": {
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+        "status": "pass"
+      },
+      "o03": {
+        "consistencyRpoPass": true,
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json",
+        "queryReadyRtoPass": true
+      },
+      "o04": {
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/o04-release.json",
+        "status": "pass"
+      },
+      "ok": true
+    },
+    "sameRun": true
+  },
   "officialDurationSeconds": 1800,
-  "outDir": "/workspace/bench/markhand_web/reports/phase-1b-gate",
+  "outDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate",
   "postRestoreRetrieval": {
-    "gate": "unknown",
-    "passed": null,
-    "reason": "no_reachable_restored_endpoint"
+    "gate": "pass",
+    "leakedDeletedIds": 0,
+    "passed": true,
+    "retainedVisible": true,
+    "sameRunRestore": true,
+    "unauthorizedDenied": true,
+    "unauthorizedStatus": 401
   },
   "prerequisites": {
-    "blockers": [
-      "f02_not_passed",
-      "o03_consistencyRpoPass_not_true",
-      "o03_queryReadyRtoPass_not_true",
-      "o03_full_vector_rto_measured_missing",
-      "o04_not_passed"
-    ],
+    "blockers": [],
+    "canonicalReports": {
+      "f02": {
+        "issue": "P1B-F02",
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json",
+        "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/f02-20260726T121843Z-1815269-17292",
+        "rawManifestSha256": "796918633abd1f25a735034163eb6f9dbf1e399a3846ac08dd52d3d06dc2d0b2",
+        "sha256": "6d7a1acfeac0d1f70ff43dda07a7820964c4a6e23531120c6829435711a35c1b",
+        "status": true,
+        "trustedAttestation": true
+      },
+      "o02": {
+        "issue": "P1B-O02",
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+        "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o02-20260726T122352Z",
+        "rawManifestSha256": "5fb2282432b4c53e4aaaaee5c40a20f58274e2264f64c335a97c6bfa5fd4d3c3",
+        "sha256": "5a2c141e5548c06ea94814b3cc3f2dc342a99cb1653fbd6e4c2c9dc329f5ed05",
+        "status": "pass",
+        "trustedAttestation": true
+      },
+      "o03": {
+        "issue": "P1B-O03",
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json",
+        "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o03-20260726T122953Z",
+        "rawManifestSha256": "7c6f6d01d261900d40e6587e9bb44097620d83214251f124ba7f3bb36ebaf3a0",
+        "sha256": "6568d4a11cfa157665185faeaf594df9a9a71ef16602ae28b53be814adf4cad6",
+        "status": "pass",
+        "trustedAttestation": true
+      },
+      "o04": {
+        "issue": "P1B-O04",
+        "path": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/o04-release.json",
+        "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/raw/o04-f4f33cd1b476e07d69594dec269002f1159f1b70",
+        "rawManifestSha256": "7b3cda916eea9306bcc2707c84d50b119f91939eb0e1e612de6f3aff68a33f41",
+        "sha256": "d007ec04b4fce1625de6b44623f22543870c7adff4ab909fd7a7d61b1fca52d4",
+        "status": "pass",
+        "trustedAttestation": true
+      }
+    },
     "f02": {
-      "passed": false,
-      "path": "/workspace/bench/markhand_web/reports/poc-f02-boot.json"
+      "passed": true,
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json"
     },
     "fingerprint": {
-      "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f",
+      "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
       "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
     },
     "o02": {
-      "path": "/workspace/bench/markhand_web/reports/phase-1b-gate/o02-alerts.json",
-      "status": "incomplete"
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+      "status": "pass"
     },
     "o03": {
-      "consistencyRpoPass": null,
-      "path": "/workspace/bench/markhand_web/reports/phase-1b-gate/o03-restore.json",
-      "queryReadyRtoPass": null
+      "consistencyRpoPass": true,
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json",
+      "queryReadyRtoPass": true
     },
     "o04": {
-      "path": "/workspace/bench/markhand_web/reports/phase-1b-gate/o04-release.json",
-      "status": "fail"
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/o04-release.json",
+      "status": "pass"
     },
-    "ok": false
+    "ok": true
   },
-  "profile": "/workspace/bench/markhand_web/workloads/phase1b-mixed.yaml",
+  "profile": "bench/markhand_web/workloads/phase1b-mixed.yaml",
   "provenance": {
     "apiBase": "http://127.0.0.1:8788",
-    "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f",
-    "composeProject": "markhand-poc",
-    "gitSha": "e3350d2",
-    "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "gitSha": "f4f33cd1b",
+    "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
     "imageIds": {
-      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "db-bootstrap": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "migrate": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
-      "minio-init": "sha256:c2ad77420d33bb4ad8694457d3edf7188076428582bd24e3dd4d09d6a1d52872",
-      "mock-embedding": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
-      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
-      "qdrant-init": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
-      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+      "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "db-bootstrap": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "migrate": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "minio-init": "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+      "mock-embedding": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "otel-capture": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "qdrant-init": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-delete": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-embedding": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-reconcile": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
     },
     "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
     "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
   },
-  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o05-20260724T031602Z",
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o05-20260726T123157Z-27d616a2f32645da81fab363497c1596",
+  "rawManifest": {
+    "files": [
+      {
+        "bytes": 2349,
+        "path": "baseline-dataset-ids.json",
+        "sha256": "a310093ecc1a1de099c613825faefb66aab9618590464e45ba49f91694d6613f"
+      },
+      {
+        "bytes": 1605,
+        "path": "compare-dataset.json",
+        "sha256": "4a0bcde48ca3400267d2cd2518c368a6b482541716edf9d96c35cfd3183217dd"
+      },
+      {
+        "bytes": 2870,
+        "path": "fixtures-preflight.json",
+        "sha256": "8a2bf9c0b12ea36854ce764e30cda6bfb2c5dbda735d655cc0d7cb2dbabda8c0"
+      },
+      {
+        "bytes": 74844,
+        "path": "growth-samples.json",
+        "sha256": "07b141c34537d87fc0c62cdf5c7531b43d222818fc839cc8cc3bf3f91c6c7459"
+      },
+      {
+        "bytes": 598,
+        "path": "injection-dependency_blip-2.json",
+        "sha256": "5bd508b8e082b0bf7369a13c8da88173a129f1e47998e0c352a20881b1ea5972"
+      },
+      {
+        "bytes": 571,
+        "path": "injection-kill_worker-0.json",
+        "sha256": "62cbe033b4c058a1236ed0c973c960e5c6b7a86b82cbaffd440c2d37a422ba27"
+      },
+      {
+        "bytes": 574,
+        "path": "injection-kill_worker-1.json",
+        "sha256": "a1e6db0eff5343f4ee996f9f0d354f4744aaa054504c81897fd3454670338629"
+      },
+      {
+        "bytes": 2404,
+        "path": "injection-summary.json",
+        "sha256": "525289c85b4f8825faf838b638a657a75e0226aac4cd258d1f14538c8547d818"
+      },
+      {
+        "bytes": 3388,
+        "path": "metrics.json",
+        "sha256": "5665823d8ac298e2dd71170e46689b961ad0fbf9cd4cbcfc412ec85a4193606b"
+      },
+      {
+        "bytes": 3048,
+        "path": "o03-runner.txt",
+        "sha256": "3423c8812f9833587741ff0ef4f565674707bc11579af2944909694cf7aefa98"
+      },
+      {
+        "bytes": 2911,
+        "path": "prerequisites.json",
+        "sha256": "fd8e340ced46785d5860bbc9caf6b3ebeb3797c26994ab3804ae15f22dbc43af"
+      },
+      {
+        "bytes": 692,
+        "path": "reconcile-failures.json",
+        "sha256": "31b1275478c2e185d6f9d8f04490afe1aa4b823438c55864631069ec89890101"
+      },
+      {
+        "bytes": 616,
+        "path": "restored-api.json",
+        "sha256": "f1e852ee7ecc5b3c1cb7ef5d98a2705092c3012a43d2641ae11c25986353054c"
+      },
+      {
+        "bytes": 3418,
+        "path": "seed.json",
+        "sha256": "5c1cb84cc8c8aaff1462a5b2b8b64eb5ca467ff79483385410117611ee56d938"
+      }
+    ],
+    "ok": true,
+    "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o05-20260726T123157Z-27d616a2f32645da81fab363497c1596/raw-manifest.json",
+    "sha256": "7901a9b7897ab3b6a6df4b7f4927b681bd9ad2f80261e03587b8ed6e584e032c"
+  },
   "redactionScan": {
     "findings": [],
     "passed": true
   },
   "restoredApi": {
-    "available": false,
-    "blocker": "restored_api_base_missing",
+    "available": true,
     "blueApiBase": "http://127.0.0.1:8788",
-    "notes": "O03 restores an isolated green stack with promote/cutover disabled; the blue MARKHAND_SOAK_API_BASE is not post-restore proof. Set MARKHAND_SOAK_RESTORED_API_BASE or have O03 evidence expose restoredApiBase for a reachable green endpoint.",
-    "restoredApiBase": null
+    "blueDeploymentIdentity": "markhand-poc-f02-20260726t121843z-1815269-17292:blue:f4f33cd1b476e07d69594dec269002f1159f1b70",
+    "blueStorageSignature": "d53c0f18d2a1ab8333cf60431134d8fc8db13fb7582309eb7ac77f898dd1fab4",
+    "restoredApiBase": "http://127.0.0.1:8790",
+    "restoredDeploymentIdentity": "markhand-poc-f02-20260726t121843z-1815269-17292:restore-green:markhand_o03_green_20260726130227:20260726T130227Z",
+    "restoredStorageSignature": "fbfb5d4578b7ed96ad2014b7953cf1e1bdf462732ddbfdeb3b423171cf39650b",
+    "source": "o03_live_external_probe"
   },
   "sampleIntervalSeconds": 5.0,
   "seed": {
-    "ok": false
+    "ok": true,
+    "readyFormats": [
+      "csv",
+      "docx",
+      "html",
+      "pdf",
+      "png",
+      "pptx",
+      "txt",
+      "xlsx"
+    ],
+    "retainedDocumentIds": [
+      "f8193c2d-6347-4ed5-9164-ee8f53da354c",
+      "ba5b4dfe-4509-425b-bc8d-b5cdd1085ea0",
+      "62a7c1e6-b8d1-405f-a082-928637db5a2f",
+      "06a6a515-6274-4a13-9ee7-f26f4d5030ec",
+      "02c235ea-bb98-4654-ae42-f30cf8675339",
+      "add925a4-8388-4628-9a4c-6fc9da994431",
+      "32eecaed-6a95-49e3-acbe-aa95e7938886",
+      "966a1892-c28f-464b-800b-6b7380867c5c"
+    ],
+    "retainedMarkerHashes": {
+      "02c235ea-bb98-4654-ae42-f30cf8675339": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d",
+      "06a6a515-6274-4a13-9ee7-f26f4d5030ec": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898",
+      "32eecaed-6a95-49e3-acbe-aa95e7938886": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0",
+      "62a7c1e6-b8d1-405f-a082-928637db5a2f": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f",
+      "966a1892-c28f-464b-800b-6b7380867c5c": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff",
+      "add925a4-8388-4628-9a4c-6fc9da994431": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3",
+      "ba5b4dfe-4509-425b-bc8d-b5cdd1085ea0": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872",
+      "f8193c2d-6347-4ed5-9164-ee8f53da354c": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78"
+    },
+    "seeded": [
+      {
+        "documentId": "f8193c2d-6347-4ed5-9164-ee8f53da354c",
+        "format": "pdf",
+        "markerSha256": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78",
+        "versionId": "85119951-816b-576d-beda-ad51fd6e3a3b"
+      },
+      {
+        "documentId": "ba5b4dfe-4509-425b-bc8d-b5cdd1085ea0",
+        "format": "docx",
+        "markerSha256": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872",
+        "versionId": "fc2e6094-944c-d3f2-9feb-1c48764257a9"
+      },
+      {
+        "documentId": "62a7c1e6-b8d1-405f-a082-928637db5a2f",
+        "format": "pptx",
+        "markerSha256": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f",
+        "versionId": "4f543005-3f38-57f0-58f5-9810de5af8f5"
+      },
+      {
+        "documentId": "06a6a515-6274-4a13-9ee7-f26f4d5030ec",
+        "format": "xlsx",
+        "markerSha256": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898",
+        "versionId": "743bee6e-3ffb-beb0-e201-d33f92dc6093"
+      },
+      {
+        "documentId": "02c235ea-bb98-4654-ae42-f30cf8675339",
+        "format": "csv",
+        "markerSha256": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d",
+        "versionId": "c62ddf10-8294-58b9-d3b4-e095c23037b2"
+      },
+      {
+        "documentId": "add925a4-8388-4628-9a4c-6fc9da994431",
+        "format": "html",
+        "markerSha256": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3",
+        "versionId": "76c1ead0-eb0c-457f-47c9-bb3516b2bb8c"
+      },
+      {
+        "documentId": "32eecaed-6a95-49e3-acbe-aa95e7938886",
+        "format": "txt",
+        "markerSha256": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0",
+        "versionId": "09f7f46d-7001-2d4d-da81-bc3d5b102929"
+      },
+      {
+        "documentId": "966a1892-c28f-464b-800b-6b7380867c5c",
+        "format": "png",
+        "markerSha256": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff",
+        "versionId": "38463d83-33ff-2e64-9a3c-4dfa76e4c07d"
+      }
+    ]
   },
-  "smoke": true,
-  "smokeNonQualifying": true,
-  "status": "incomplete",
+  "smoke": false,
+  "smokeNonQualifying": false,
+  "status": "pass",
   "thresholds": {
     "allowedErrorsOutsideInjection": 0,
+    "canonicalBindingPass": true,
+    "canonicalGatesSha256": "f3d987a397fecb47c44da0b044c94df86b91917e1da779ab0988c073e83631d0",
+    "canonicalProfileSha256": "ee99f59424bf967d8e52572687ad38a9efe0976e693e56cb54233bb64330192e",
+    "canonicalThresholdValues": {
+      "ingestDocsPerHour": 300.0,
+      "maxDbConnections": 40,
+      "maxQueueDepth": 100,
+      "maxRssGrowthMb": 256.0,
+      "maxTempGrowthMb": 512.0,
+      "queryP95Ms": 500.0,
+      "queryP99Ms": 1000.0
+    },
     "completenessRatio": 0.95,
     "fullVectorRtoMinutes": 240,
-    "ingestDocsPerHour": 1200.0,
+    "gatesSha256": "f3d987a397fecb47c44da0b044c94df86b91917e1da779ab0988c073e83631d0",
+    "ingestDocsPerHour": 300.0,
     "ingestGateBinding": true,
     "maxDbConnections": 40,
     "maxQueueDepth": 100,
     "maxRssGrowthMb": 256.0,
     "maxTempGrowthMb": 512.0,
+    "minQuerySuccessSamples": 100,
+    "minResourceCoverageRatio": 0.9,
     "officialDurationSeconds": 1800,
+    "profileDurationSeconds": 1800,
+    "profileSha256": "ee99f59424bf967d8e52572687ad38a9efe0976e693e56cb54233bb64330192e",
     "queryP95Ms": 500.0,
     "queryP99Ms": 1000.0,
     "queryReadyRtoMinutes": 60,
     "rpoMinutes": 15
   },
   "versions": {
-    "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f",
-    "composeVersion": "Docker Compose version 2.40.3+ds1-0ubuntu1~24.04.1",
-    "dockerVersion": "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2",
-    "git": "e3350d2",
-    "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeVersion": "Docker Compose version v5.3.1",
+    "dockerVersion": "Docker version 29.6.2, build dfc4efb",
+    "git": "f4f33cd1b",
+    "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
     "imageIds": {
-      "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "db-bootstrap": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "migrate": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-      "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
-      "minio-init": "sha256:c2ad77420d33bb4ad8694457d3edf7188076428582bd24e3dd4d09d6a1d52872",
-      "mock-embedding": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
-      "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-      "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
-      "qdrant-init": "sha256:602b20fbec782d0c4c9bc5314194d6a8e82a42cf208face7141a3d36b2edb39f",
-      "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-      "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+      "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "db-bootstrap": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "migrate": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "minio-init": "sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727",
+      "mock-embedding": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "otel-capture": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "qdrant-init": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-delete": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-embedding": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-reconcile": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
     },
     "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
     "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"

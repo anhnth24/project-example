@@ -1,0 +1,68 @@
+[
+  {
+    "Id": "6afd129754f484ba2e606f1fa33521d8c6d32d8413bffec32157f0f232242838",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1",
+    "Created": "2026-07-26T12:18:51.499576931Z",
+    "Image": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "Config": {
+      "User": "65534:65534",
+      "Image": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": [],
+      "Devices": null,
+      "Tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=32m"
+      },
+      "Memory": 268435456,
+      "NanoCpus": 500000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 64
+    },
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Destination": "/opt/mock-embedding.py",
+        "Mode": "ro",
+        "RW": false,
+        "Propagation": "rprivate"
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.2",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "a24553d9cc61dae3d9e243f984cd636a01faa681946f7b48648cee07af9e8046",
+          "MacAddress": "b6:cd:a8:c4:64:07",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1",
+            "mock-embedding"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0
+      },
+      "OOMKilled": false,
+      "Pid": 1815977
+    }
+  }
+]

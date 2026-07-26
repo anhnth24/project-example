@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "issue": "P1B-O02",
+  "stamp": "20260726T122352Z",
+  "generatedAt": "2026-07-26T12:28:00.767425+00:00",
+  "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+  "gitDirty": false,
+  "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+  "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
+  "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+  "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
+  "containerIds": {
+    "api": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+    "minio": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+    "postgres": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+    "qdrant": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+    "worker-convert": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+    "worker-index": "a9eaa04a11e811b38a45df1a62b543220675ed8ca15859356e6f7c26208681fa"
+  },
+  "imageIds": {
+    "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+    "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
+  },
+  "git": {
+    "commit": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+    "dirty": false,
+    "statusPorcelain": "",
+    "diffStat": ""
+  },
+  "toolImages": {
+    "prom/prometheus:v2.54.1": "prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94",
+    "grafana/grafana:11.1.4": "grafana/grafana@sha256:886b56d5534e54f69a8cfcb4b8928da8fc753178a7a3d20c3f9b04b660169805",
+    "quay.io/prometheus/blackbox-exporter:v0.25.0": "unavailable"
+  },
+  "env": {
+    "PROM_URL": "http://127.0.0.1:9095",
+    "API_URL": "http://127.0.0.1:8788",
+    "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "privateNetwork": "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+  },
+  "grafanaStatus": "pass",
+  "observations": {
+    "promRulesLoaded": true,
+    "liveFireFiles": [
+      "alerts-during-20260726T122520Z.json",
+      "alerts-during-20260726T122530Z.json",
+      "alerts-during-20260726T122540Z.json",
+      "alerts-during-20260726T122551Z.json",
+      "alerts-during-20260726T122601Z.json",
+      "alerts-during-20260726T122611Z.json",
+      "alerts-during-20260726T122621Z.json",
+      "alerts-during-20260726T122632Z.json",
+      "alerts-during-20260726T122642Z.json",
+      "alerts-during-20260726T122652Z.json",
+      "alerts-during-20260726T122702Z.json",
+      "alerts-during-20260726T122713Z.json",
+      "alerts-during-20260726T122723Z.json"
+    ],
+    "liveResolveFiles": [
+      "alerts-after-20260726T122740Z.json"
+    ],
+    "timeline": "restore_armed_before_stop=1\nstop_at_unix=1785068710\nt=10s alert_state=pending file=alerts-during-20260726T122520Z.json\nt=20s alert_state=pending file=alerts-during-20260726T122530Z.json\nt=30s alert_state=pending file=alerts-during-20260726T122540Z.json\nt=41s alert_state=pending file=alerts-during-20260726T122551Z.json\nt=51s alert_state=pending file=alerts-during-20260726T122601Z.json\nt=61s alert_state=pending file=alerts-during-20260726T122611Z.json\nt=71s alert_state=pending file=alerts-during-20260726T122621Z.json\nt=82s alert_state=pending file=alerts-during-20260726T122632Z.json\nt=92s alert_state=pending file=alerts-during-20260726T122642Z.json\nt=102s alert_state=pending file=alerts-during-20260726T122652Z.json\nt=112s alert_state=pending file=alerts-during-20260726T122702Z.json\nt=123s alert_state=pending file=alerts-during-20260726T122713Z.json\nt=133s alert_state=firing file=alerts-during-20260726T122723Z.json\nstart_at_unix=1785068844\nrestore_disarmed_confirmed=1\nrecover_t=16s alert_state=absent file=alerts-after-20260726T122740Z.json\n"
+  },
+  "secretScan": {
+    "schema": "o02-broad-secret-scan-v1",
+    "clean": true,
+    "findings": []
+  }
+}

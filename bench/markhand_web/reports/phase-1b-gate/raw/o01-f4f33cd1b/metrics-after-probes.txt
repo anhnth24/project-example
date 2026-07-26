@@ -1,0 +1,81 @@
+# HELP markhand_metrics_build Phase 1B bounded metrics exporter
+# TYPE markhand_metrics_build gauge
+markhand_metrics_build{component="api"} 1
+# HELP markhand_exporter_queue_depth Bounded OTLP export queue depth
+# TYPE markhand_exporter_queue_depth gauge
+markhand_exporter_queue_depth{} 1
+# TYPE markhand_exporter_dropped_total counter
+markhand_exporter_dropped_total{reason="queue_full"} 0
+# TYPE markhand_exporter_export_total counter
+markhand_exporter_export_total{outcome="ok"} 35
+# TYPE markhand_job_queue_age_seconds gauge
+markhand_job_queue_age_seconds{job_type="convert"} 0
+markhand_job_queue_age_seconds{job_type="delete"} 0
+markhand_job_queue_age_seconds{job_type="embedding_batch"} 0
+markhand_job_queue_age_seconds{job_type="index"} 0
+markhand_job_queue_age_seconds{job_type="lifecycle_refresh"} 0
+markhand_job_queue_age_seconds{job_type="reconcile"} 0
+# TYPE markhand_job_queue_depth gauge
+markhand_job_queue_depth{job_type="convert"} 0
+markhand_job_queue_depth{job_type="delete"} 0
+markhand_job_queue_depth{job_type="embedding_batch"} 0
+markhand_job_queue_depth{job_type="index"} 0
+markhand_job_queue_depth{job_type="lifecycle_refresh"} 0
+markhand_job_queue_depth{job_type="reconcile"} 0
+# TYPE markhand_http_request_duration_seconds histogram
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.005"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.01"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.025"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.05"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.1"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.25"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="0.5"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="1"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="2"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="5"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="10"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.auth.login",status="2xx",le="+Inf"} 1
+markhand_http_request_duration_seconds_sum{route="api.v1.auth.login",status="2xx"} 0.144589336
+markhand_http_request_duration_seconds_count{route="api.v1.auth.login",status="2xx"} 1
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.005"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.01"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.025"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.05"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.1"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.25"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="0.5"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="1"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="2"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="5"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="10"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.live",status="2xx",le="+Inf"} 3
+markhand_http_request_duration_seconds_sum{route="api.v1.health.live",status="2xx"} 0.000280748
+markhand_http_request_duration_seconds_count{route="api.v1.health.live",status="2xx"} 3
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.005"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.01"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.025"} 0
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.05"} 9
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.1"} 18
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.25"} 24
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="0.5"} 31
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="1"} 31
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="2"} 31
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="5"} 31
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="10"} 31
+markhand_http_request_duration_seconds_bucket{route="api.v1.health.ready",status="2xx",le="+Inf"} 31
+markhand_http_request_duration_seconds_sum{route="api.v1.health.ready",status="2xx"} 4.172620187
+markhand_http_request_duration_seconds_count{route="api.v1.health.ready",status="2xx"} 31
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.005"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.01"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.025"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.05"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.1"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.25"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="0.5"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="1"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="2"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="5"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="10"} 1
+markhand_http_request_duration_seconds_bucket{route="metrics",status="2xx",le="+Inf"} 1
+markhand_http_request_duration_seconds_sum{route="metrics",status="2xx"} 0.000250854
+markhand_http_request_duration_seconds_count{route="metrics",status="2xx"} 1

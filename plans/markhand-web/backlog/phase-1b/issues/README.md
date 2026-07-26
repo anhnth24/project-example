@@ -37,15 +37,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-F02 — POC deployment và isolation scaffold
 
-- **Status:** Done — live boot evidence regenerated 2026-07-25 on a standard
-  overlayfs Docker host (WSL2) from a clean tree at `302b6e4`:
-  `poc-f02-boot.json` `passed=true`, 67 checks / 0 fails, project
-  `markhand-poc-f02-20260725t053206z-39674-24731`, clean project boot measured,
+- **Status:** Done — live boot evidence regenerated 2026-07-26 on a 24-core
+  Ubuntu 22.04 host from a clean tree at `f4f33cd`:
+  `poc-f02-boot.json` `passed=true`, 81 checks / 0 fails, project
+  `markhand-poc-f02-20260726t121843z-1815269-17292`, clean project boot measured,
   nonzero mem/cpu/pids on every service, convert network `Internal=true` with an
   executable egress probe, narrow MinIO credential positive/negative probes, and
-  the full native format smoke matrix. Report sha256 prefix `0064435387c8fef1`;
-  the release-gate artifacts live outside the source tree under
-  `.artifacts/markhand_web/reports/`.
+  the full native format smoke matrix. Report sha256 prefix `9d7214df30e57a95`.
+  The run wrote its evidence outside the tree so the gate could bind to a clean
+  worktree; the accepted run was then copied in, with only the recorded raw
+  directory paths rewritten to repository-relative form.
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
@@ -344,7 +345,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O01 — End-to-end telemetry và safe audit
 
-- **Status:** Done — live evidence 2026-07-25 at `302b6e4`: `o01-telemetry.json`
+- **Status:** Done — live evidence 2026-07-26 at `f4f33cd`: `o01-telemetry.json`
   `status=pass` with 0 blockers. The async API→worker→provider canary closed all
   16 proofs (job terminal + payload `request_id`, DB audit row per request,
   exact deny audit, same-trace ingest and ask exports with the required
@@ -353,7 +354,7 @@ ghi trong issue đã `Done`.
   graph, grounded ask, clean metrics with no canary or high-cardinality label).
   Cargo telemetry suite, OTLP capture unit tests, live app-role audit test and
   the negative proof fixtures all passed. Report sha256 prefix
-  `0a9becb0af977e12`.
+  `e8efc7b6975fdb4b`.
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`,
@@ -365,7 +366,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O02 — Dashboards, alerts và runbooks
 
-- **Status:** Done — live tabletop 2026-07-25 at `302b6e4`: `o02-alerts.json`
+- **Status:** Done — live tabletop 2026-07-26 at `f4f33cd`: `o02-alerts.json`
   `status=pass`, 31 passes / 0 fails, no blockers. Real fault executed against
   the POC stack: `MarkhandDependencyDown` fired at 150s while Postgres was
   stopped and went absent 24s after restore, both snapshots taken from the live
@@ -374,7 +375,7 @@ ghi trong issue đã `Done`.
   DCRV, PG restore arm-before-stop failpoint matrix, live reconcile worker
   dry-run→repair→idempotent plus the `worker-reconcile-oneshot` compose job, and
   a clean provenance + broad secret scan. Report sha256 prefix
-  `737c30f5dab4bbef`.
+  `56f0475a26fd174d`.
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
 - **Files / scope:** `deploy/observability/**`, `docs/runbooks/phase-1b/**`,
@@ -391,13 +392,16 @@ ghi trong issue đã `Done`.
 
 ### P1B-O03 — Backup/restore và migration safety
 
-- **Status:** Done — live blue/green drill 2026-07-25 at `302b6e4`:
-  `o03-restore.json` `status=pass`, 35 checks / 0 fails. Measured attested
-  consistency RPO 26s (≤ 900s), query-ready RTO 34s (≤ 3600s) and full-vector
-  RTO 34s (≤ 14400s); the restored green API answered a grounded query from the
+- **Status:** Done — live blue/green drill 2026-07-26 at `f4f33cd`, run inside
+  the O05 soak so it restored a loaded stack rather than an idle one:
+  `o03-restore.json` `status=pass`, 0 gaps. Measured attested consistency RPO
+  328s (≤ 900s), query-ready RTO 1099s (≤ 3600s) and full-vector RTO 1099s
+  (≤ 14400s) — an order of magnitude above the idle-stack drill (26s/34s)
+  because ~180 documents of objects are restored one at a time. The restored
+  green API answered a grounded query from the
   restored stores while blue stayed fenced, promote/cutover stayed disabled
   (exit 3), the encrypted destination policy was exercised, and cleanup was
-  verified before the report. Report sha256 prefix `b92ecd8c5fd4b6ec`.
+  verified before the report. Report sha256 prefix `66b5045a80925f90`.
   Promote itself remains out of scope until the API consumes durable routing
   plus an independent reconcile target-state attestation.
   **Previous write-gate context (retained):** central `middleware/write_gate.rs` /
@@ -426,7 +430,7 @@ ghi trong issue đã `Done`.
 
 ### P1B-O04 — Vertical-slice/security release suite
 
-- **Status:** Done — live release gate 2026-07-25 at `302b6e4`:
+- **Status:** Done — live release gate 2026-07-26 at `f4f33cd`:
   `o04-release.json` `status=pass` with no blockers, validated through
   `MARKHAND_RELEASE_GATE=1 cargo test -p fileconv-server --test e2e_release_suite`
   (3/3). Full workload format matrix observed (csv, docx, html, pdf, png OCR,
@@ -435,8 +439,7 @@ ghi trong issue đã `Done`.
   suspend/membership/delete deny, adversarial upload reject/contain, and
   structured external worker kill → lease expiry → reclaim → replay → DB
   verification. Provenance binds the F02 project, container ids and image ids.
-  Report sha256 prefix `f4cdb03a185c9da8`; evidence generated outside the source
-  tree under `.artifacts/markhand_web/o04-release/`.
+  Report sha256 prefix `949e14202849cf8b`.
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `bench/markhand_web/scripts/run_o04_release_suite.py`,
@@ -453,26 +456,33 @@ ghi trong issue đã `Done`.
 
 ### P1B-O05 — Mixed-load soak và POC qualification
 
-- **Status:** In progress — the official live run executed end to end on
-  2026-07-25 at `302b6e4` (prerequisites F02/O02/O03/O04 all validated against
-  the same Compose project, `canonicalBinding=pass`, duration exactly 1800s),
-  but `o05-soak.json` is `status=fail`: the qualification host could not carry
-  the canonical load. Qualification is **not** claimed.
-  Report sha256 prefix `22753d3bc410eed9`.
-- **Measured 1800s run (host: WSL2 Docker, 8 vCPU / 10 GB):**
-  - Passing gates: `recovery` (2 worker kills + 1 dependency blip, every event
-    recovered, expected==observed), `rssGrowth` 37.4 MB (≤ 256), `tempGrowth`
-    0.02 MB (≤ 512), `queueDepth` 0 (≤ 100), `dbConnections` 16 (≤ 40),
-    `unboundedGrowth`, `canonicalBinding`.
-  - Failing gates: `ingestThroughput` 168 docs/h (84 of 900 uploads reached
-    terminal indexed; gate needs ≥ 1200), `queryP99` 9277 ms (≤ 1000),
-    `queryP95` 253 ms and `completeness`/`workloadDrain`/`reconcile` fail
-    through the same saturation, `requestErrors` 2553 (only 6 inside injection
-    windows), `resourceCoverage` 129 of 325 samples with a 16.1s gap (12.5s
-    allowed) because the sampler thread was starved.
-  - `postRestoreRetrieval` stayed `unknown`: the in-run O03 restore refused with
-    `STRICT_DRAIN_FAILED` (56 jobs still in flight at the end of the load), so
-    no attested green endpoint existed to probe.
+- **Status:** Done — the official 1800s run passed every gate on 2026-07-26 at
+  `f4f33cd`, on a 24-core Ubuntu host, Compose project
+  `markhand-poc-f02-20260726t121843z-1815269-17292`, with F02/O01/O02/O03/O04
+  passing on that same commit and project. `o05-soak.json` is `status=pass` with
+  no blockers; report sha256 prefix `a1a6d0e6ee57df4d`.
+- **Measured 1800s run (host: 24-core Ubuntu 22.04, Docker capped at 10 CPU):**
+  - Capacity: ingest 356 documents/hour (178 of 180 uploads reached terminal
+    indexed; gate ≥ 300), query p95 302 ms (≤ 500), p99 418 ms (≤ 1000).
+  - Stability: RSS growth 15.6 MB (≤ 256), temp growth 0.06 MB (≤ 512), queue
+    depth 0 (≤ 100), DB connections 19 (≤ 40), `unboundedGrowth` pass.
+  - Resource coverage 362 of 362 expected samples, maximum gap 7.5s (12.5s
+    allowed).
+  - `requestErrors` 38, **all 38 inside injection windows** under both
+    attributions the report records, so zero unexplained errors either way:
+    34 query 503s, 2 upload 503s, 1 delete 503, 1 reconcile enqueue refused
+    while the database was deliberately blipped.
+  - Recovery: 2 worker kills + 1 dependency blip, every event recovered,
+    expected == observed.
+  - `postRestoreRetrieval` pass: the in-run O03 restore drained, produced an
+    attested green endpoint and answered the retained/deleted/authz probe.
+- **Defects this gate found and fixed:** the POC stack ran no consumer for
+  `delete` or document-drift `reconcile` jobs, so deleted content was never
+  reclaimed and any quiesced-pipeline operation stalled forever; the soak client
+  reused one access token past its 900s lifetime; the restore drill proved its
+  canary with a fixed question that only matched on a near-empty collection; the
+  convert sandbox needed an AppArmor profile allowing `mount` and 4 GiB of
+  address space on many-core hosts.
 - **Gate scoping (2026-07-25, project-owner decision):** the soak used to bind
   `G0-CAP-INGEST-THROUGHPUT` (1200 docs/hour), which the gate registry defines
   for `on-prem-reference` (32 cores, 256 GB, NVMe, accelerator) and which the SLA
@@ -481,16 +491,16 @@ ghi trong issue đã `Done`.
   `G0-CAP-INGEST-THROUGHPUT-POC` (≥ 300 docs/hour, SLA normal tier) on the new
   `poc-compose` environment, and the profile applies 360 docs/hour. The
   production peak gate is unchanged and still blocks any Profile B claim.
-- **Root cause and path to pass:** the container set alone reserves ~7.5 of the
-  8 vCPUs the host allows Docker, so convert/index workers, API and the driver
-  contend. A 30s smoke on the same stack measured p95 69 ms and 1800 docs/h,
-  which indicates the profile is reachable with more CPU. Re-run the official
-  soak on a host that can give Docker substantially more than 8 vCPU
-  (raise the WSL2 `.wslconfig` allocation or use a Linux runner).
+- **Host requirement:** the container caps alone reserve ~8.5 CPU, so the earlier
+  8-vCPU WSL2 attempt starved the workers, the API and the driver against each
+  other and measured 168 docs/hour. The passing run gave Docker 10 CPU on a
+  24-core host. Anything at or below 8 vCPU should be expected to fail on
+  throughput and latency regardless of the code.
 - **Architectural notes:** `compare_dataset_unavailable` is resolved — the public
   revision preflight now builds the version pair over HTTP. `restored_api_base`
-  still depends on O03 exposing a reachable attested green endpoint, which only
-  happens when the workload drains before the in-run restore.
+  resolves through the drill's external probe, which requires the pipeline to
+  drain before the in-run restore; that only became possible once the delete and
+  reconcile queues had consumers.
 - **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
   `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
   evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.
@@ -501,9 +511,9 @@ ghi trong issue đã `Done`.
 - **Acceptance/tests:** Unit/self-test (fake OOXML/PDF/PNG fail preflight, compare
   without dataset non-pass, async injection, partial injection counts fail,
   restored==blue/missing non-pass, retained absent / unauthorized 2xx non-pass,
-  smoke≠pass); live: query p95≤500 / p99≤1000, ingest≥1200 docs/h, RSS≤256MB /
-  temp≤512MB / queue≤100 / DB conn≤40, recovery + green post-restore; duration
-  exactly 1800.
+  smoke≠pass); live: query p95≤500 / p99≤1000, ingest≥300 docs/h on
+  `poc-compose`, RSS≤256MB / temp≤512MB / queue≤100 / DB conn≤40, recovery +
+  green post-restore; duration exactly 1800.
 - **Security/migration:** Synthetic/redacted, exact git/image/migration/index
   versions; injection only on expected POC project/services.
   **Out:** production/multi-org.

@@ -1,0 +1,5 @@
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-f1aca3c8718b Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-f1aca3c8718b Created 
+[2m2026-07-26T12:27:54.214509Z[0m [32m INFO[0m [2mtelemetry[0m[2m:[0m telemetry exporter configured [3mservice[0m[2m=[0mmarkhand-worker-reconcile [3mmetrics_enabled[0m[2m=[0mtrue [3mqueue_capacity[0m[2m=[0m1024
+fileconv-worker: NoJob
+fileconv-worker: MARKHAND_WORKER_ONESHOT=1 — finite exit after one reconcile cycle

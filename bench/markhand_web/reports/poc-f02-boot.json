@@ -1,180 +1,621 @@
 {
+  "bootEvidence": {
+    "cleanBootMeasured": true,
+    "durationSeconds": 27.861307283863425,
+    "exitCode": 0,
+    "freshVolumes": true,
+    "readinessChecked": true,
+    "transcript": "clean-boot.txt",
+    "uniqueComposeProject": true
+  },
+  "cgroupLimitsEnforced": true,
+  "composeBlobSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+  "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+  "composeLabels": {
+    "api": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "api"
+    },
+    "minio": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "minio"
+    },
+    "mock-embedding": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "mock-embedding"
+    },
+    "postgres": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "postgres"
+    },
+    "qdrant": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "qdrant"
+    },
+    "worker-convert": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "worker-convert"
+    },
+    "worker-delete": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "worker-delete"
+    },
+    "worker-embedding": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "worker-embedding"
+    },
+    "worker-index": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "worker-index"
+    },
+    "worker-reconcile": {
+      "project": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "service": "worker-reconcile"
+    }
+  },
+  "composeProfiles": [
+    "mock",
+    "telemetry"
+  ],
+  "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+  "composeVersion": "5.3.1",
+  "containerIds": {
+    "api": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+    "minio": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+    "mock-embedding": "6afd129754f484ba2e606f1fa33521d8c6d32d8413bffec32157f0f232242838",
+    "postgres": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+    "qdrant": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+    "worker-convert": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+    "worker-delete": "1d72fa068e9a9315794eb8ea76c71b1a37a00ca5eaac215a31cde907ef0d6ef6",
+    "worker-embedding": "22bfad486294a45aff9b60d555a90632d6a8e9ce37f05567934e65a579ab4ef2",
+    "worker-index": "a9eaa04a11e811b38a45df1a62b543220675ed8ca15859356e6f7c26208681fa",
+    "worker-reconcile": "3bf20d5259f6103a7ec85123a7560fff7435d555a59dfba43892a0da561c5aeb"
+  },
+  "dockerVersion": "29.6.2",
+  "egressProbe": {
+    "blocked": true,
+    "executed": true,
+    "exitCode": 20,
+    "namespace": "container:worker-convert",
+    "network": "markhand-poc-f02-20260726t121843z-1815269-17292_convert",
+    "probeImage": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "raw": "exit=20\nDEFAULT_ROUTE_PRESENT=false\nOSERROR errno=101 name=ENETUNREACH msg=[Errno 101] Network unreachable\n",
+    "routeProbe": {
+      "blocked": true,
+      "classification": "route_blocked",
+      "defaultRoutePresent": false,
+      "target": "1.1.1.1:443"
+    },
+    "toolMissing": false
+  },
+  "evaluationBlockers": [],
+  "fail_count": 0,
+  "fails": [],
+  "generatedAt": "2026-07-26T12:19:59.514660+00:00",
+  "gitSha": "f4f33cd1b",
+  "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+  "gitWorktree": {
+    "dirty": false,
+    "porcelain": []
+  },
+  "imageDigests": {
+    "api": "markhand-api@sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+    "minio": "pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "mock-embedding": "python@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "postgres": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "qdrant": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "worker-convert": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-delete": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-embedding": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-index": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-reconcile": "markhand-worker@sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
+  },
+  "imageIds": {
+    "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+    "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+    "mock-embedding": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+    "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+    "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-delete": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-embedding": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "worker-reconcile": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
+  },
+  "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
   "issue": "P1B-F02",
-  "stamp_utc": "20260724T031535Z",
-  "generatedAt": "2026-07-24T03:15:42.185115+00:00",
-  "passed": false,
-  "pass_count": 34,
-  "fail_count": 13,
+  "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
+  "minioCredentialProbe": {
+    "adminDenialKind": "authorization_denied",
+    "crossBucketDenialKind": "authorization_denied",
+    "negativeAdminDenied": true,
+    "negativeCrossBucketDenied": true,
+    "positiveListBucket": true
+  },
+  "nativeSmoke": {
+    "contentAssertions": {
+      "csv": true,
+      "docx": true,
+      "html": true,
+      "pdf": true,
+      "png": true,
+      "pptx": true,
+      "txt": true,
+      "xlsx": true
+    },
+    "directFileconvContentAssertions": {
+      "csv": true,
+      "docx": true,
+      "html": true,
+      "pdf": true,
+      "png": true,
+      "pptx": true,
+      "txt": true,
+      "xlsx": true
+    },
+    "productionWorkerSandboxPath": true,
+    "workerSandboxConversionProbe": "/usr/local/bin/fileconv-worker --sandbox-convert-probe",
+    "workerSandboxPreflight": true
+  },
+  "nolimitComposeUsed": false,
+  "notes": [
+    "storageDriver=overlayfs",
+    "worker-convert image lacks curl \u2014 using external probe image on convert network"
+  ],
+  "pass_count": 81,
+  "passed": true,
   "passes": [
     "command docker",
     "command curl",
+    "clean project boot measured (27.861307283863425s)",
     "poc-health",
+    "postgres memory limit=1073741824",
+    "postgres cpu limit nanoCpus=1000000000",
+    "postgres pids limit=256",
+    "qdrant memory limit=1073741824",
+    "qdrant cpu limit nanoCpus=1000000000",
+    "qdrant pids limit=256",
+    "minio memory limit=536870912",
+    "minio cpu limit nanoCpus=1000000000",
+    "minio pids limit=256",
+    "mock-embedding memory limit=268435456",
+    "mock-embedding cpu limit nanoCpus=500000000",
+    "mock-embedding pids limit=64",
     "api user=10001:10001",
     "api read_only",
     "api cap_drop ALL",
     "api no-new-privileges",
+    "api memory limit=536870912",
+    "api cpu limit nanoCpus=1000000000",
+    "api pids limit=256",
     "worker-convert user=10001:10001",
     "worker-convert read_only",
     "worker-convert cap_drop ALL",
     "worker-convert no-new-privileges",
+    "worker-convert memory limit=805306368",
+    "worker-convert cpu limit nanoCpus=1000000000",
+    "worker-convert pids limit=512",
     "worker-index user=10001:10001",
     "worker-index read_only",
     "worker-index cap_drop ALL",
     "worker-index no-new-privileges",
+    "worker-index memory limit=805306368",
+    "worker-index cpu limit nanoCpus=1000000000",
+    "worker-index pids limit=512",
     "worker-embedding user=10001:10001",
     "worker-embedding read_only",
     "worker-embedding cap_drop ALL",
     "worker-embedding no-new-privileges",
-    "worker-convert on convert network (markhand-poc_convert)",
-    "worker-convert not on edge/private",
+    "worker-embedding memory limit=805306368",
+    "worker-embedding cpu limit nanoCpus=1000000000",
+    "worker-embedding pids limit=512",
+    "worker-delete user=10001:10001",
+    "worker-delete read_only",
+    "worker-delete cap_drop ALL",
+    "worker-delete no-new-privileges",
+    "worker-delete memory limit=536870912",
+    "worker-delete cpu limit nanoCpus=500000000",
+    "worker-delete pids limit=512",
+    "worker-reconcile user=10001:10001",
+    "worker-reconcile read_only",
+    "worker-reconcile cap_drop ALL",
+    "worker-reconcile no-new-privileges",
+    "worker-reconcile memory limit=536870912",
+    "worker-reconcile cpu limit nanoCpus=500000000",
+    "worker-reconcile pids limit=512",
+    "storage driver overlayfs",
+    "worker-convert exactly on convert network (markhand-poc-f02-20260726t121843z-1815269-17292_convert)",
     "convert --sandbox-preflight",
     "convert network Internal=true",
-    "convert network external egress blocked (probe exit=1)",
+    "convert worker namespace external route blocked (probe exit=20)",
     "api /health/ready",
+    "MinIO app credential can list configured bucket",
+    "MinIO app credential admin user list authorization denied",
+    "MinIO app credential cross-bucket access authorization denied",
+    "qdrant-init exited 0",
+    "Qdrant collection config verified",
     "api/worker images distinct (markhand-api:poc vs markhand-worker:poc)",
     "api image lacks fileconv converter",
     "worker image has fileconv + fileconv-worker",
     "worker excludes PhoWhisper model path",
-    "native format smoke txt",
-    "native format smoke html",
-    "native format smoke csv",
-    "native format smoke png",
-    "native format smoke pdf (gold-004)"
+    "native format smoke csv content",
+    "native format smoke docx content",
+    "native format smoke html content",
+    "native format smoke pdf content",
+    "native format smoke png OCR content",
+    "native format smoke pptx content",
+    "native format smoke txt content",
+    "native format smoke xlsx content"
   ],
-  "fails": [
-    "api memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
-    "api cpu limit missing/zero (HostConfig.NanoCpus=0)",
-    "api pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
-    "worker-convert memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
-    "worker-convert cpu limit missing/zero (HostConfig.NanoCpus=0)",
-    "worker-convert pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
-    "worker-index memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
-    "worker-index cpu limit missing/zero (HostConfig.NanoCpus=0)",
-    "worker-index pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
-    "worker-embedding memory limit missing/zero (HostConfig.Memory=0) \u2014 nested no-limit cannot Done",
-    "worker-embedding cpu limit missing/zero (HostConfig.NanoCpus=0)",
-    "worker-embedding pids limit missing/zero (HostConfig.PidsLimit=<nil>)",
-    "storage driver vfs is nested/nonstandard \u2014 F02 Done requires standard host (e.g. overlay2)"
-  ],
-  "notes": [
-    "storageDriver=vfs",
-    "nolimit compose fallback active \u2014 cannot qualify F02 Done",
-    "worker-convert image lacks curl \u2014 using external probe image on convert network"
-  ],
-  "composeProject": "markhand-poc",
-  "containerIds": {
-    "api": "96b7b3ac57a3c993887450717f60dcc7a8661eefe20fa950e2b3851cb9ed320d",
-    "minio": "967ae4dee0020e9e75bf08b7059cf609362fbc51551abcd1e3020848c7cd972f",
-    "postgres": "1fa173a5fe458f136d4fe401df9801b926f6afc2aa15807a80d245497571c2cf",
-    "qdrant": "54cb3ae0c7cecf6970f65f4f1c48ed2260d06f7ad6bc7a70325618412d1ca46d",
-    "worker-convert": "00e813ecb25b60fa90b312346ff11080e3d5499afba4e6e4c0585126aa0768eb",
-    "worker-index": "19cf27b771be337cff27ec4afbeddfb44f1f7ac3f6774230f9012fa1da41bb68",
-    "worker-embedding": "f76f0aa89912486f136a5d05179cdf1debe19476270617175ecb621124a241c5"
+  "provenance": {
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+    "imageIds": {
+      "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "mock-embedding": "sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
+      "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-delete": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-embedding": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-reconcile": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
+    },
+    "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189"
   },
-  "imageIds": {
-    "api": "sha256:4d3e32c1a903d4df84bf446cacfbea53e8f918b2b536db02b44e422ecf72c4d2",
-    "minio": "sha256:4c1bebd81fc62ed8d3435e1716b8846e729a86d2dc643a7fc88e19c8e006a07c",
-    "postgres": "sha256:0a314d409a9633cff4f89dc18482262625c0ee78cb1aa2ff8e47bc6da0251e1b",
-    "qdrant": "sha256:e13294053db80229932ca53f6ace97c3da1ae2581b770373e187a15707244eb5",
-    "worker-convert": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-    "worker-index": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa",
-    "worker-embedding": "sha256:98aca6ea180f1891d60da1a2a9820b52e55af960dbba2136a6abdb835cf046fa"
+  "qdrantInit": {
+    "configEvidence": "qdrant-config.json",
+    "configVerified": true,
+    "exitCode": 0,
+    "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874"
   },
-  "imageDigests": {
-    "minio": "pgsty/minio@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
-    "postgres": "postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
-    "qdrant": "qdrant/qdrant@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c"
+  "rawArtifactManifest": {
+    "path": "bench/markhand_web/reports/phase-1b-gate/raw/f02-20260726T121843Z-1815269-17292/raw-manifest.json",
+    "sha256": "796918633abd1f25a735034163eb6f9dbf1e399a3846ac08dd52d3d06dc2d0b2"
   },
-  "gitSha": "e3350d2",
-  "gitShaFull": "e3350d26dd258ff44b0cb78e1a507a2ee4c07bea",
-  "dockerVersion": "29.1.3",
-  "composeVersion": "2.40.3+ds1-0ubuntu1~24.04.1",
-  "composeFileSha256": "43ce324989252184f2df7c3ae572e71a3d84b07032ed5c262dc019147c7b3f9f",
-  "storageDriver": "vfs",
-  "nolimitComposeUsed": true,
-  "cgroupLimitsEnforced": false,
-  "standardHostQualification": false,
-  "egressProbe": {
-    "executed": true,
-    "blocked": true,
-    "toolMissing": false,
-    "exitCode": 1,
-    "network": "markhand-poc_convert",
-    "probeImage": "python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0",
-    "raw": "exit=1\nwget: can't connect to remote host (1.1.1.1): Network unreachable\n"
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/f02-20260726T121843Z-1815269-17292",
+  "redactionScan": {
+    "findings": [],
+    "passed": true
   },
   "resourceLimits": {
     "api": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 256
     },
     "minio": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 536870912,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 256
+    },
+    "mock-embedding": {
+      "cpuPeriod": 0,
+      "cpuQuota": 0,
+      "memory": 268435456,
+      "nanoCpus": 500000000,
+      "pidsLimit": 64
     },
     "postgres": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 1073741824,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 256
     },
     "qdrant": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 1073741824,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 256
     },
     "worker-convert": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 805306368,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 512
     },
-    "worker-index": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+    "worker-delete": {
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 536870912,
+      "nanoCpus": 500000000,
+      "pidsLimit": 512
     },
     "worker-embedding": {
-      "memory": 0,
-      "nanoCpus": 0,
-      "pidsLimit": 0,
+      "cpuPeriod": 0,
       "cpuQuota": 0,
-      "cpuPeriod": 0
+      "memory": 805306368,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 512
+    },
+    "worker-index": {
+      "cpuPeriod": 0,
+      "cpuQuota": 0,
+      "memory": 805306368,
+      "nanoCpus": 1000000000,
+      "pidsLimit": 512
+    },
+    "worker-reconcile": {
+      "cpuPeriod": 0,
+      "cpuQuota": 0,
+      "memory": 536870912,
+      "nanoCpus": 500000000,
+      "pidsLimit": 512
     }
   },
-  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/f02-20260724T031535Z",
-  "redactionScan": {
-    "passed": true,
-    "findings": []
+  "runtimeSecurity": {
+    "api": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_edge": false,
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_edge",
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "user": "10001:10001"
+    },
+    "minio": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert": true,
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert",
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": false,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {},
+      "user": ""
+    },
+    "mock-embedding": {
+      "bindMounts": [
+        {
+          "destination": "/opt/mock-embedding.py",
+          "mode": "ro",
+          "rw": false
+        }
+      ],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=32m"
+      },
+      "user": "65534:65534"
+    },
+    "postgres": {
+      "bindMounts": [
+        {
+          "destination": "/docker-entrypoint-initdb.d/10-markhand-app.sh",
+          "mode": "ro",
+          "rw": false
+        }
+      ],
+      "capAdd": [],
+      "capDrop": [],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert": true,
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert",
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": false,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {},
+      "user": ""
+    },
+    "qdrant": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": false,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {},
+      "user": "0:0"
+    },
+    "worker-convert": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert": true
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true",
+        "seccomp={\"defaultAction\":\"SCMP_ACT_ERRNO\",\"defaultErrnoRet\":1,\"archMap\":[{\"architecture\":\"SCMP_ARCH_X86_64\",\"subArchitectures\":[\"SCMP_ARCH_X86\",\"SCMP_ARCH_X32\"]},{\"architecture\":\"SCMP_ARCH_AARCH64\",\"subArchitectures\":[\"SCMP_ARCH_ARM\"]}],\"syscalls\":[{\"names\":[\"_llseek\",\"_newselect\",\"accept\",\"accept4\",\"access\",\"adjtimex\",\"alarm\",\"bind\",\"brk\",\"cachestat\",\"capget\",\"capset\",\"chdir\",\"chmod\",\"chown\",\"chown32\",\"clock_adjtime\",\"clock_adjtime64\",\"clock_getres\",\"clock_getres_time64\",\"clock_gettime\",\"clock_gettime64\",\"clock_nanosleep\",\"clock_nanosleep_time64\",\"close\",\"close_range\",\"connect\",\"copy_file_range\",\"creat\",\"dup\",\"dup2\",\"dup3\",\"epoll_create\",\"epoll_create1\",\"epoll_ctl\",\"epoll_ctl_old\",\"epoll_pwait\",\"epoll_pwait2\",\"epoll_wait\",\"epoll_wait_old\",\"eventfd\",\"eventfd2\",\"execve\",\"execveat\",\"exit\",\"exit_group\",\"faccessat\",\"faccessat2\",\"fadvise64\",\"fadvise64_64\",\"fallocate\",\"fanotify_mark\",\"fchdir\",\"fchmod\",\"fchmodat\",\"fchmodat2\",\"fchown\",\"fchown32\",\"fchownat\",\"fcntl\",\"fcntl64\",\"fdatasync\",\"fgetxattr\",\"flistxattr\",\"flock\",\"fork\",\"fremovexattr\",\"fsetxattr\",\"fstat\",\"fstat64\",\"fstatat64\",\"fstatfs\",\"fstatfs64\",\"fsync\",\"ftruncate\",\"ftruncate64\",\"futex\",\"futex_requeue\",\"futex_time64\",\"futex_wait\",\"futex_waitv\",\"futex_wake\",\"futimesat\",\"get_robust_list\",\"get_thread_area\",\"getcpu\",\"getcwd\",\"getdents\",\"getdents64\",\"getegid\",\"getegid32\",\"geteuid\",\"geteuid32\",\"getgid\",\"getgid32\",\"getgroups\",\"getgroups32\",\"getitimer\",\"getpeername\",\"getpgid\",\"getpgrp\",\"getpid\",\"getppid\",\"getpriority\",\"getrandom\",\"getresgid\",\"getresgid32\",\"getresuid\",\"getresuid32\",\"getrlimit\",\"getrusage\",\"getsid\",\"getsockname\",\"getsockopt\",\"gettid\",\"gettimeofday\",\"getuid\",\"getuid32\",\"getxattr\",\"getxattrat\",\"inotify_add_watch\",\"inotify_init\",\"inotify_init1\",\"inotify_rm_watch\",\"io_cancel\",\"io_destroy\",\"io_getevents\",\"io_pgetevents\",\"io_pgetevents_time64\",\"io_setup\",\"io_submit\",\"ioctl\",\"ioprio_get\",\"ioprio_set\",\"ipc\",\"kill\",\"landlock_add_rule\",\"landlock_create_ruleset\",\"landlock_restrict_self\",\"lchown\",\"lchown32\",\"lgetxattr\",\"link\",\"linkat\",\"listen\",\"listmount\",\"listxattr\",\"listxattrat\",\"llistxattr\",\"lremovexattr\",\"lseek\",\"lsetxattr\",\"lstat\",\"lstat64\",\"madvise\",\"map_shadow_stack\",\"membarrier\",\"memfd_create\",\"memfd_secret\",\"mincore\",\"mkdir\",\"mkdirat\",\"mknod\",\"mknodat\",\"mlock\",\"mlock2\",\"mlockall\",\"mmap\",\"mmap2\",\"mprotect\",\"mq_getsetattr\",\"mq_notify\",\"mq_open\",\"mq_timedreceive\",\"mq_timedreceive_time64\",\"mq_timedsend\",\"mq_timedsend_time64\",\"mq_unlink\",\"mremap\",\"mseal\",\"msgctl\",\"msgget\",\"msgrcv\",\"msgsnd\",\"msync\",\"munlock\",\"munlockall\",\"munmap\",\"name_to_handle_at\",\"nanosleep\",\"newfstatat\",\"open\",\"openat\",\"openat2\",\"pause\",\"pidfd_open\",\"pidfd_send_signal\",\"pipe\",\"pipe2\",\"pkey_alloc\",\"pkey_free\",\"pkey_mprotect\",\"poll\",\"ppoll\",\"ppoll_time64\",\"prctl\",\"pread64\",\"preadv\",\"preadv2\",\"prlimit64\",\"process_mrelease\",\"pselect6\",\"pselect6_time64\",\"pwrite64\",\"pwritev\",\"pwritev2\",\"read\",\"readahead\",\"readlink\",\"readlinkat\",\"readv\",\"recv\",\"recvfrom\",\"recvmmsg\",\"recvmmsg_time64\",\"recvmsg\",\"remap_file_pages\",\"removexattr\",\"removexattrat\",\"rename\",\"renameat\",\"renameat2\",\"restart_syscall\",\"riscv_hwprobe\",\"rmdir\",\"rseq\",\"rt_sigaction\",\"rt_sigpending\",\"rt_sigprocmask\",\"rt_sigqueueinfo\",\"rt_sigreturn\",\"rt_sigsuspend\",\"rt_sigtimedwait\",\"rt_sigtimedwait_time64\",\"rt_tgsigqueueinfo\",\"sched_get_priority_max\",\"sched_get_priority_min\",\"sched_getaffinity\",\"sched_getattr\",\"sched_getparam\",\"sched_getscheduler\",\"sched_rr_get_interval\",\"sched_rr_get_interval_time64\",\"sched_setaffinity\",\"sched_setattr\",\"sched_setparam\",\"sched_setscheduler\",\"sched_yield\",\"seccomp\",\"select\",\"semctl\",\"semget\",\"semop\",\"semtimedop\",\"semtimedop_time64\",\"send\",\"sendfile\",\"sendfile64\",\"sendmmsg\",\"sendmsg\",\"sendto\",\"set_robust_list\",\"set_thread_area\",\"set_tid_address\",\"setfsgid\",\"setfsgid32\",\"setfsuid\",\"setfsuid32\",\"setgid\",\"setgid32\",\"setgroups\",\"setgroups32\",\"setitimer\",\"setpgid\",\"setpriority\",\"setregid\",\"setregid32\",\"setresgid\",\"setresgid32\",\"setresuid\",\"setresuid32\",\"setreuid\",\"setreuid32\",\"setrlimit\",\"setsid\",\"setsockopt\",\"setuid\",\"setuid32\",\"setxattr\",\"setxattrat\",\"shmat\",\"shmctl\",\"shmdt\",\"shmget\",\"shutdown\",\"sigaltstack\",\"signalfd\",\"signalfd4\",\"sigprocmask\",\"sigreturn\",\"socketcall\",\"socketpair\",\"splice\",\"stat\",\"stat64\",\"statfs\",\"statfs64\",\"statmount\",\"statx\",\"symlink\",\"symlinkat\",\"sync\",\"sync_file_range\",\"syncfs\",\"sysinfo\",\"tee\",\"tgkill\",\"time\",\"timer_create\",\"timer_delete\",\"timer_getoverrun\",\"timer_gettime\",\"timer_gettime64\",\"timer_settime\",\"timer_settime64\",\"timerfd_create\",\"timerfd_gettime\",\"timerfd_gettime64\",\"timerfd_settime\",\"timerfd_settime64\",\"times\",\"tkill\",\"truncate\",\"truncate64\",\"ugetrlimit\",\"umask\",\"uname\",\"unlink\",\"unlinkat\",\"uretprobe\",\"utime\",\"utimensat\",\"utimensat_time64\",\"utimes\",\"vfork\",\"vmsplice\",\"wait4\",\"waitid\",\"waitpid\",\"write\",\"writev\"],\"action\":\"SCMP_ACT_ALLOW\"},{\"names\":[\"socket\"],\"action\":\"SCMP_ACT_ALLOW\",\"args\":[{\"index\":0,\"value\":40,\"op\":\"SCMP_CMP_NE\"}]},{\"names\":[\"personality\"],\"action\":\"SCMP_ACT_ALLOW\",\"args\":[{\"index\":0,\"value\":4294967295,\"op\":\"SCMP_CMP_EQ\"}]},{\"names\":[\"arch_prctl\"],\"action\":\"SCMP_ACT_ALLOW\",\"includes\":{\"arches\":[\"amd64\",\"x32\"]}},{\"names\":[\"clone\"],\"action\":\"SCMP_ACT_ALLOW\",\"args\":[{\"index\":0,\"value\":2114060288,\"op\":\"SCMP_CMP_MASKED_EQ\"}],\"excludes\":{\"caps\":[\"CAP_SYS_ADMIN\"],\"arches\":[\"s390\",\"s390x\"]}},{\"names\":[\"clone3\"],\"action\":\"SCMP_ACT_ERRNO\",\"errnoRet\":38,\"excludes\":{\"caps\":[\"CAP_SYS_ADMIN\"]}},{\"comment\":\"Required by the in-process sandbox after entering a new user namespace.\",\"names\":[\"mount\",\"unshare\"],\"action\":\"SCMP_ACT_ALLOW\"}]}",
+        "apparmor=markhand-convert"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=512m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "user": "10001:10001"
+    },
+    "worker-delete": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "user": "10001:10001"
+    },
+    "worker-embedding": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "user": "10001:10001"
+    },
+    "worker-index": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "user": "10001:10001"
+    },
+    "worker-reconcile": {
+      "bindMounts": [],
+      "capAdd": [],
+      "capDrop": [
+        "ALL"
+      ],
+      "devices": [],
+      "networkInternal": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": false
+      },
+      "networks": [
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private"
+      ],
+      "privileged": false,
+      "readOnlyRootfs": true,
+      "securityOpt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "user": "10001:10001"
+    }
   },
-  "evaluationBlockers": [
-    "nolimit_compose",
-    "resource_limit_zero:api:memory",
-    "resource_limit_zero:api:cpu",
-    "resource_limit_zero:api:pids",
-    "resource_limit_zero:worker-convert:memory",
-    "resource_limit_zero:worker-convert:cpu",
-    "resource_limit_zero:worker-convert:pids",
-    "resource_limit_zero:worker-index:memory",
-    "resource_limit_zero:worker-index:cpu",
-    "resource_limit_zero:worker-index:pids",
-    "resource_limit_zero:worker-embedding:memory",
-    "resource_limit_zero:worker-embedding:cpu",
-    "resource_limit_zero:worker-embedding:pids",
-    "nonstandard_storage:vfs",
-    "fail_count_nonzero",
-    "passed_false"
-  ]
+  "sourceGit": {
+    "after": {
+      "dirty": false,
+      "gitSha": "f4f33cd1b",
+      "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+      "porcelain": []
+    },
+    "before": {
+      "dirty": false,
+      "gitSha": "f4f33cd1b",
+      "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+      "porcelain": []
+    },
+    "headUnchanged": true,
+    "porcelainUnchanged": true
+  },
+  "stamp_utc": "20260726T121843Z",
+  "standardHostQualification": true,
+  "storageDriver": "overlayfs"
 }

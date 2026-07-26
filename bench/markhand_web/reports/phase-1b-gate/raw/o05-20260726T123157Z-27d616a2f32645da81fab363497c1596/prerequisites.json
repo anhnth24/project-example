@@ -1,0 +1,63 @@
+{
+  "ok": true,
+  "blockers": [],
+  "fingerprint": {
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608"
+  },
+  "canonicalReports": {
+    "f02": {
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json",
+      "sha256": "6d7a1acfeac0d1f70ff43dda07a7820964c4a6e23531120c6829435711a35c1b",
+      "issue": "P1B-F02",
+      "status": true,
+      "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/f02-20260726T121843Z-1815269-17292",
+      "rawManifestSha256": "796918633abd1f25a735034163eb6f9dbf1e399a3846ac08dd52d3d06dc2d0b2",
+      "trustedAttestation": true
+    },
+    "o02": {
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+      "sha256": "5a2c141e5548c06ea94814b3cc3f2dc342a99cb1653fbd6e4c2c9dc329f5ed05",
+      "issue": "P1B-O02",
+      "status": "pass",
+      "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o02-20260726T122352Z",
+      "rawManifestSha256": "5fb2282432b4c53e4aaaaee5c40a20f58274e2264f64c335a97c6bfa5fd4d3c3",
+      "trustedAttestation": true
+    },
+    "o03": {
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json",
+      "sha256": "6568d4a11cfa157665185faeaf594df9a9a71ef16602ae28b53be814adf4cad6",
+      "issue": "P1B-O03",
+      "status": "pass",
+      "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/raw/o03-20260726T122953Z",
+      "rawManifestSha256": "7c6f6d01d261900d40e6587e9bb44097620d83214251f124ba7f3bb36ebaf3a0",
+      "trustedAttestation": true
+    },
+    "o04": {
+      "path": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/o04-release.json",
+      "sha256": "d007ec04b4fce1625de6b44623f22543870c7adff4ab909fd7a7d61b1fca52d4",
+      "issue": "P1B-O04",
+      "status": "pass",
+      "rawDir": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/raw/o04-f4f33cd1b476e07d69594dec269002f1159f1b70",
+      "rawManifestSha256": "7b3cda916eea9306bcc2707c84d50b119f91939eb0e1e612de6f3aff68a33f41",
+      "trustedAttestation": true
+    }
+  },
+  "f02": {
+    "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/poc-f02-boot.json",
+    "passed": true
+  },
+  "o02": {
+    "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o02-alerts.json",
+    "status": "pass"
+  },
+  "o03": {
+    "path": "/home/administrator/markhand/.artifacts/markhand_web/reports/phase-1b-gate/o03-restore.json",
+    "consistencyRpoPass": true,
+    "queryReadyRtoPass": true
+  },
+  "o04": {
+    "path": "/home/administrator/markhand/.artifacts/markhand_web/o04-release/o04-release.json",
+    "status": "pass"
+  }
+}

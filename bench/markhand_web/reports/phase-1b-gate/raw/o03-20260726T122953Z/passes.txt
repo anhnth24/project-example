@@ -1,0 +1,35 @@
+baseline ready 200
+app mutation write-gate integrated (ops_fence consulted outside readiness)
+REQUIRE=1 does not refuse for write-gate-unavailable (rc=1)
+hermetic auth/schema/symlink/traversal/malformed/pgpass/mc guards
+proc canary: no MinIO secret on mc argv
+concurrent backup refused under session advisory lock
+manifest mode 0600 (umask 077)
+backup.sh capture (captureWindow 11s)
+minio normalized history written
+normalized MinIO history (type/size/hash; no versionId/ts)
+restore.sh refuses without green targets
+isolated green MinIO and Qdrant endpoints healthy
+restore refuses missing MinIO allowlist
+restore.sh refuses wrong green allowlist
+restore.sh refuses blue bucket alias
+restore.sh refuses blue collection alias
+existing allowlisted MinIO target refused before mutation
+restore.sh refuses tampered artifacts
+restore-green OK; promote disabled
+cutover/promote disabled (exit 3)
+green API live but not ready before independent attestation
+independent green target-state attestation cleared matching fence
+attested green API ready 200
+attested green API live 200
+distinct green API answered grounded query from restored stores
+query-ready RTO 42s <= 3600s
+attested consistency RPO 32s <= 900s
+full-vector RTO 42s <= 14400s
+blue API remained fenced while green became query-ready
+blue restore fence retained (no false cutover)
+no raw dumps in evidence
+encrypted destination policy exercised
+traffic cutover remained disabled; distinct attested green API used for restore proof
+verified cleanup before report
+reproducible raw→report

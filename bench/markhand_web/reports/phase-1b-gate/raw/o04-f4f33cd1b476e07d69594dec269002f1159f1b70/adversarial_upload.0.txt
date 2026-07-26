@@ -1,0 +1,25 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.92s
+     Running tests/uploads.rs (target/debug/deps/uploads-21705cd2019d1de8)
+
+running 12 tests
+test declared_entry_count_rejects_before_name_allocation ... ok
+test zip_bomb_rejects_without_unbounded_decompress ... ok
+test oversize_stream_rejects_early ... ok
+test hidden_nested_polyglot_duplicate_and_symlink_reject ... ok
+test forged_central_directory_size_rejects_during_inflation ... ok
+test spoof_pdf_and_html_pdf_reject ... ok
+test malformed_and_traversal_docx_reject ... ok
+test unparseable_compressed_span_rejects_closed ... ok
+test rejected_upload_is_not_stored ... ok
+test mime_mismatch_and_malformed_audio_reject ... ok
+test corrupt_and_page_bomb_pdf_reject ... ok
+test entry_count_bomb_rejects ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.26s
+
+
+O04_COMMAND_OUTPUT_TRUNCATED	false
+O04_COMMAND_EXIT_CODE	0
+O04_COMMAND_TIMED_OUT	false
+O04_COMMAND_EOF	true
+

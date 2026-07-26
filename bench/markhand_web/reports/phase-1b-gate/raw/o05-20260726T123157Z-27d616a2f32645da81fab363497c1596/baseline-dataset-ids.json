@@ -1,0 +1,62 @@
+{
+  "retained": [
+    "f8193c2d-6347-4ed5-9164-ee8f53da354c",
+    "ba5b4dfe-4509-425b-bc8d-b5cdd1085ea0",
+    "62a7c1e6-b8d1-405f-a082-928637db5a2f",
+    "06a6a515-6274-4a13-9ee7-f26f4d5030ec",
+    "02c235ea-bb98-4654-ae42-f30cf8675339",
+    "add925a4-8388-4628-9a4c-6fc9da994431",
+    "32eecaed-6a95-49e3-acbe-aa95e7938886",
+    "966a1892-c28f-464b-800b-6b7380867c5c"
+  ],
+  "seeded": [
+    {
+      "format": "pdf",
+      "documentId": "f8193c2d-6347-4ed5-9164-ee8f53da354c",
+      "versionId": "85119951-816b-576d-beda-ad51fd6e3a3b",
+      "markerSha256": "29792c643360f1028003c7243c4807582a6407a2a6dcb101dfa9c0e096b19a78"
+    },
+    {
+      "format": "docx",
+      "documentId": "ba5b4dfe-4509-425b-bc8d-b5cdd1085ea0",
+      "versionId": "fc2e6094-944c-d3f2-9feb-1c48764257a9",
+      "markerSha256": "37f9bc179acffd7990514dbc19a497531b86067439f1e04f63189e0eabf6f872"
+    },
+    {
+      "format": "pptx",
+      "documentId": "62a7c1e6-b8d1-405f-a082-928637db5a2f",
+      "versionId": "4f543005-3f38-57f0-58f5-9810de5af8f5",
+      "markerSha256": "65dc0675d34202cc22d98b867f219612aed9456854ce9df2de1061ae2a73731f"
+    },
+    {
+      "format": "xlsx",
+      "documentId": "06a6a515-6274-4a13-9ee7-f26f4d5030ec",
+      "versionId": "743bee6e-3ffb-beb0-e201-d33f92dc6093",
+      "markerSha256": "eaae834e5fad9e8e9255d5dc8428e19cb0136281461872b2e6edec9de699c898"
+    },
+    {
+      "format": "csv",
+      "documentId": "02c235ea-bb98-4654-ae42-f30cf8675339",
+      "versionId": "c62ddf10-8294-58b9-d3b4-e095c23037b2",
+      "markerSha256": "f52854d1980cc07f34353ff9316a007a9c59bfafd7b898cc0c09f8beabc0eb7d"
+    },
+    {
+      "format": "html",
+      "documentId": "add925a4-8388-4628-9a4c-6fc9da994431",
+      "versionId": "76c1ead0-eb0c-457f-47c9-bb3516b2bb8c",
+      "markerSha256": "73abf8e19d972a57162e0889d8aa5fe4cd01d7cfb5d18bb12079a6edf4e3c3f3"
+    },
+    {
+      "format": "txt",
+      "documentId": "32eecaed-6a95-49e3-acbe-aa95e7938886",
+      "versionId": "09f7f46d-7001-2d4d-da81-bc3d5b102929",
+      "markerSha256": "fa5db9f07d8be07a520c696572ca7bf1db122285c6e1339409ffa047eade89e0"
+    },
+    {
+      "format": "png",
+      "documentId": "966a1892-c28f-464b-800b-6b7380867c5c",
+      "versionId": "38463d83-33ff-2e64-9a3c-4dfa76e4c07d",
+      "markerSha256": "ba2d72aa3d0cebb494a4cebbe7e263a025e53f222ef24f16725fd3ed92c36cff"
+    }
+  ]
+}

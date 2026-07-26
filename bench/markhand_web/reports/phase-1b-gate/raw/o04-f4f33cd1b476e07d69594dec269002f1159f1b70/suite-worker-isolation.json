@@ -1,0 +1,47 @@
+{
+  "services": [
+    "worker-convert",
+    "worker-index",
+    "worker-embedding",
+    "worker-delete",
+    "worker-reconcile"
+  ],
+  "startCommand": [
+    "docker",
+    "compose",
+    "-p",
+    "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "-f",
+    "/home/administrator/markhand/deploy/compose.poc.yml",
+    "start",
+    "worker-convert",
+    "worker-index",
+    "worker-embedding",
+    "worker-delete",
+    "worker-reconcile"
+  ],
+  "startExitCode": 0,
+  "startOutput": " Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Starting \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Started \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Started \n",
+  "startTimedOut": false,
+  "stopCommand": [
+    "docker",
+    "compose",
+    "-p",
+    "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "-f",
+    "/home/administrator/markhand/deploy/compose.poc.yml",
+    "stop",
+    "--timeout",
+    "15",
+    "worker-convert",
+    "worker-index",
+    "worker-embedding",
+    "worker-delete",
+    "worker-reconcile"
+  ],
+  "stopExitCode": 0,
+  "stopOutput": " Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Stopping \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Stopping \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Stopping \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Stopping \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Stopping \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Stopped \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Stopped \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Stopped \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Stopped \n Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Stopped \n",
+  "stopTimedOut": false,
+  "workersRestarted": true,
+  "workersStopped": true
+}

@@ -1,47 +1,4 @@
 {
-  "issue": "P1B-O02",
-  "stamp": "20260723T110541Z",
-  "status": "incomplete",
-  "passCount": 31,
-  "failCount": 0,
-  "passes": [
-    "promtool check rules",
-    "histogram fixture invariants",
-    "promtool test rules (fire/resolve)",
-    "rules avoid high-cardinality label tokens",
-    "redact_secrets unit tests",
-    "dashboard JSON + datasource parameterization",
-    "runbooks DCRV + redact/allowlist",
-    "unit-test fire\u2192resolve transitions present",
-    "Grafana API import (query deferred/gap)",
-    "live Prometheus loaded markhand rules",
-    "compose resolved postgres cid=6cad89f62d43",
-    "disposable guard container 6f272e62fb5a",
-    "failpoint disposable before_stop: armed; EXIT left/kept running",
-    "failpoint disposable during_stop: EXIT restored armed stop",
-    "failpoint disposable after_stop: EXIT restored armed stop",
-    "failpoint disposable initially_stopped: preserved stopped",
-    "failpoint disposable normal: confirmed restart disarmed",
-    "failpoint real compose after_stop: EXIT restored",
-    "failpoint real compose normal: confirmed restart disarmed",
-    "failpoint real compose initially_stopped: preserved stopped",
-    "live MarkhandDependencyDown firing at 140s (saved alerts-during-20260723T110903Z.json)",
-    "postgres container healthy after restore (disarm on confirm)",
-    "app-role DB select current_user=markhand_app",
-    "API live status matches baseline (200)",
-    "API ready status matches baseline (503)",
-    "live MarkhandDependencyDown inactive/absent at 15s after restore",
-    "live reconcile worker dry-run\u2192repair\u2192idempotent + scope isolation",
-    "oneshot missing DOCUMENT_ID exits non-zero before DB work",
-    "oneshot malformed DOCUMENT_ID exits non-zero",
-    "oneshot dry-run/repair/clean finite exits (compose or documented docker-run fallback)",
-    "provenance + broad secret scan clean"
-  ],
-  "fails": [],
-  "notes": [
-    "Grafana dashboard import OK; query proxy gap (Prometheus may be down during Grafana phase)",
-    "DEPLOYMENT GAP \u2014 exact docker compose run blocked by cgroupv2; used runbook docker run --cgroupns=host --network markhand-poc_private fallback (same image/env). Compose attempt outputs retained as *.compose.txt"
-  ],
   "alerts": [
     "MarkhandApiLatencyBurn",
     "MarkhandQueueGrowth",
@@ -55,139 +12,203 @@
     "MarkhandQuotaExceeded",
     "MarkhandBackupStale"
   ],
-  "transitions": {
-    "MarkhandApiLatencyBurn": {
-      "testName": "MarkhandApiLatencyBurn fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandQueueGrowth": {
-      "testName": "MarkhandQueueGrowth fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandQueueAgeHigh": {
-      "testName": "MarkhandQueueAgeHigh fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandDiskLow": {
-      "testName": "MarkhandDiskLow two-instance fire only low disk then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandDependencyDown": {
-      "testName": "MarkhandDependencyDown fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandProviderErrors": {
-      "testName": "MarkhandProviderErrors fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandEmbeddingErrors": {
-      "testName": "MarkhandEmbeddingErrors fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandConversionFailures": {
-      "testName": "MarkhandConversionFailures fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandReconcileDrift": {
-      "testName": "MarkhandReconcileDrift fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandQuotaExceeded": {
-      "testName": "MarkhandQuotaExceeded fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    },
-    "MarkhandBackupStale": {
-      "testName": "MarkhandBackupStale fire then resolve",
-      "fired": true,
-      "resolved": true,
-      "ok": true
-    }
-  },
-  "liveFaultExecuted": true,
+  "blockers": [],
+  "dashboards": [
+    "/home/administrator/markhand/deploy/observability/dashboards/markhand-phase1b.json"
+  ],
+  "failCount": 0,
+  "fails": [],
+  "generatedAt": "2026-07-26T12:28:01.026265+00:00",
+  "issue": "P1B-O02",
   "liveAlerts": [
     "MarkhandDependencyDown"
   ],
+  "liveFaultExecuted": true,
   "liveUsesSyntheticMirror": false,
-  "dashboards": [
-    "/workspace/deploy/observability/dashboards/markhand-phase1b.json"
+  "notes": [
+    "Backup alert uses the O01 metric contract; capture/restore execution is owned independently by P1B-O03."
   ],
-  "rawDir": "/workspace/bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T110541Z",
+  "passCount": 31,
+  "passes": [
+    "promtool check rules",
+    "histogram fixture invariants",
+    "promtool test rules (fire/resolve)",
+    "rules avoid high-cardinality label tokens",
+    "redact_secrets unit tests",
+    "dashboard JSON + datasource parameterization",
+    "runbooks DCRV + redact/allowlist",
+    "unit-test fire\u2192resolve transitions present",
+    "Grafana API import + query",
+    "live Prometheus loaded markhand rules",
+    "compose resolved postgres cid=edbbdc9fce68",
+    "disposable guard container 64cc982db9b8",
+    "failpoint disposable before_stop: armed; EXIT left/kept running",
+    "failpoint disposable during_stop: EXIT restored armed stop",
+    "failpoint disposable after_stop: EXIT restored armed stop",
+    "failpoint disposable initially_stopped: preserved stopped",
+    "failpoint disposable normal: confirmed restart disarmed",
+    "failpoint real compose after_stop: EXIT restored",
+    "failpoint real compose normal: confirmed restart disarmed",
+    "failpoint real compose initially_stopped: preserved stopped",
+    "live MarkhandDependencyDown firing at 133s (saved alerts-during-20260726T122723Z.json)",
+    "postgres container healthy after restore (disarm on confirm)",
+    "app-role DB select current_user=markhand_app",
+    "API live status matches baseline (200)",
+    "API ready status matches baseline (200)",
+    "live MarkhandDependencyDown inactive/absent at 16s after restore",
+    "live reconcile worker dry-run\u2192repair\u2192idempotent + scope isolation",
+    "oneshot missing DOCUMENT_ID exits non-zero before DB work",
+    "oneshot malformed DOCUMENT_ID exits non-zero",
+    "oneshot dry-run/repair/clean finite exits (compose or documented docker-run fallback)",
+    "provenance + broad secret scan clean"
+  ],
   "promtoolImage": "prom/prometheus:v2.54.1",
   "provenance": {
-    "schemaVersion": 1,
-    "issue": "P1B-O02",
-    "stamp": "20260723T110541Z",
-    "generatedAt": "2026-07-23T11:22:57.343311+00:00",
-    "git": {
-      "commit": "3c6811f16fe5d75d33b7d8af37cf77fa48860bbc",
-      "dirty": true,
-      "statusPorcelain": "M crates/server/src/bin/worker.rs\n M crates/server/src/db/jobs.rs\n M crates/server/src/jobs/mod.rs\n M crates/server/src/services/reconciliation.rs\n M crates/server/src/workers/convert.rs\n M crates/server/src/workers/reconcile.rs\n M crates/server/tests/deletion_reconcile.rs\n M deploy/compose.poc.yml\n M deploy/observability/alerts/README.md\n M deploy/observability/prometheus/markhand-rules.yml\n M docs/runbooks/phase-1b/README.md\n M docs/runbooks/phase-1b/api-latency.md\n M docs/runbooks/phase-1b/backup-restore.md\n M docs/runbooks/phase-1b/converter-outbreak.md\n M docs/runbooks/phase-1b/dependency-outage.md\n M docs/runbooks/phase-1b/disk-exhaustion.md\n M docs/runbooks/phase-1b/glm-fallback.md\n M docs/runbooks/phase-1b/key-rotation.md\n M docs/runbooks/phase-1b/reconcile-drift.md\n M docs/runbooks/phase-1b/stuck-jobs.md\n M docs/runbooks/phase-1b/vector-rebuild.md\n M plans/markhand-web/backlog/github-issues.json\n M plans/markhand-web/backlog/phase-1b/issues/README.md\n?? bench/markhand_web/reports/phase-1b-gate/o02-alerts.json\n?? bench/markhand_web/reports/phase-1b-gate/o02-alerts.md\n?? bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T100630Z/\n?? bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T102304Z/\n?? bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T102644Z/\n?? bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T103645Z/\n?? bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T105128Z/\n?? bench/markhand_web/reports/phase-1b-gate/raw/o02-20260723T110541Z/\n?? deploy/observability/compose.observe.yml\n?? deploy/observability/dashboards/\n?? deploy/observability/prometheus/blackbox.yml\n?? deploy/observability/prometheus/check_histogram_fixtures.py\n?? deploy/observability/prometheus/markhand-rules-test.yml\n?? deploy/observability/prometheus/prometheus.yml\n?? deploy/scripts/o02-alert-tabletop.sh\n?? deploy/scripts/o02-pg-restore-guard.sh\n?? deploy/scripts/redact_secrets.py\n?? deploy/scripts/test_redact_secrets.py",
-      "diffStat": " crates/server/src/bin/worker.rs                    |  85 +++++++++++-\n crates/server/src/db/jobs.rs                       |  40 ++++++\n crates/server/src/jobs/mod.rs                      |  31 +++++\n crates/server/src/services/reconciliation.rs       |   3 +\n crates/server/src/workers/convert.rs               |   1 +\n crates/server/src/workers/reconcile.rs             |  84 ++++++++----\n crates/server/tests/deletion_reconcile.rs          | 144 ++++++++++++++++++++-\n deploy/compose.poc.yml                             |  54 ++++++++\n deploy/observability/alerts/README.md              |  45 +++++--\n deploy/observability/prometheus/markhand-rules.yml | 115 ++++++++++++++--\n docs/runbooks/phase-1b/README.md                   |  36 ++++--\n docs/runbooks/phase-1b/api-latency.md              |  42 +++++-\n docs/runbooks/phase-1b/backup-restore.md           |  43 ++++--\n docs/runbooks/phase-1b/converter-outbreak.md       |  41 ++++--\n docs/runbooks/phase-1b/dependency-outage.md        |  57 ++++++--\n docs/runbooks/phase-1b/disk-exhaustion.md          |  43 +++++-\n docs/runbooks/phase-1b/glm-fallback.md             |  31 ++++-\n docs/runbooks/phase-1b/key-rotation.md             |  23 +++-\n docs/runbooks/phase-1b/reconcile-drift.md          |  90 ++++++++++++-\n docs/runbooks/phase-1b/stuck-jobs.md               |  40 ++++--\n docs/runbooks/phase-1b/vector-rebuild.md           |  22 +++-\n plans/markhand-web/backlog/github-issues.json      |   2 +-\n .../markhand-web/backlog/phase-1b/issues/README.md |  20 ++-\n 23 files changed, 951 insertions(+), 141 deletions(-)\n"
-    },
-    "toolImages": {
-      "prom/prometheus:v2.54.1": "prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94",
-      "grafana/grafana:11.1.4": "grafana/grafana@sha256:886b56d5534e54f69a8cfcb4b8928da8fc753178a7a3d20c3f9b04b660169805",
-      "quay.io/prometheus/blackbox-exporter:v0.25.0": "quay.io/prometheus/blackbox-exporter@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e"
+    "composeFileSha256": "79b1f57a3d5428adae832458d0e55fb01ee9568cd6a634e52640b3d26850f608",
+    "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+    "containerIds": {
+      "api": "a3e6c57109f45c5168f032ee07c3c0c6d91ce6d5d15e7ae8cc86c956f9f17680",
+      "minio": "8b2921e9214dfd9ecea2850fc2a100f5b10403d0513700a9782ac8181d147626",
+      "postgres": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+      "qdrant": "cf8f933b6eb9e671d7bc39a5bf5f4afa82e00826671db5d41cd7654f008ac743",
+      "worker-convert": "71493752278b0797500ef87e05f7f1008c78e683faaae636dde4ea5da0011954",
+      "worker-index": "a9eaa04a11e811b38a45df1a62b543220675ed8ca15859356e6f7c26208681fa"
     },
     "env": {
-      "PROM_URL": "http://127.0.0.1:9095",
       "API_URL": "http://127.0.0.1:8788",
-      "composeProject": "markhand-poc"
+      "PROM_URL": "http://127.0.0.1:9095",
+      "composeProject": "markhand-poc-f02-20260726t121843z-1815269-17292",
+      "privateNetwork": "markhand-poc-f02-20260726t121843z-1815269-17292_private"
     },
-    "grafanaStatus": "import_ok_query_gap",
+    "generatedAt": "2026-07-26T12:28:00.767425+00:00",
+    "git": {
+      "commit": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+      "diffStat": "",
+      "dirty": false,
+      "statusPorcelain": ""
+    },
+    "gitDirty": false,
+    "gitShaFull": "f4f33cd1b476e07d69594dec269002f1159f1b70",
+    "grafanaStatus": "pass",
+    "imageIds": {
+      "api": "sha256:374a9e4bbec437b78691a8b4e084215cd30d6fd5e0b1418ac2a6b9f6731bfe56",
+      "minio": "sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b",
+      "postgres": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+      "qdrant": "sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c",
+      "worker-convert": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+      "worker-index": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f"
+    },
+    "indexSignature": "72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874",
+    "issue": "P1B-O02",
+    "migrationManifestSha256": "a0de4ff74f9f4e6ebe5e6cdaab8ddb5b4a0f8949ecd9226111c77ceb357d1189",
     "observations": {
-      "promRulesLoaded": true,
       "liveFireFiles": [
-        "alerts-during-20260723T110653Z.json",
-        "alerts-during-20260723T110703Z.json",
-        "alerts-during-20260723T110713Z.json",
-        "alerts-during-20260723T110723Z.json",
-        "alerts-during-20260723T110733Z.json",
-        "alerts-during-20260723T110743Z.json",
-        "alerts-during-20260723T110753Z.json",
-        "alerts-during-20260723T110803Z.json",
-        "alerts-during-20260723T110813Z.json",
-        "alerts-during-20260723T110823Z.json",
-        "alerts-during-20260723T110833Z.json",
-        "alerts-during-20260723T110843Z.json",
-        "alerts-during-20260723T110853Z.json",
-        "alerts-during-20260723T110903Z.json"
+        "alerts-during-20260726T122520Z.json",
+        "alerts-during-20260726T122530Z.json",
+        "alerts-during-20260726T122540Z.json",
+        "alerts-during-20260726T122551Z.json",
+        "alerts-during-20260726T122601Z.json",
+        "alerts-during-20260726T122611Z.json",
+        "alerts-during-20260726T122621Z.json",
+        "alerts-during-20260726T122632Z.json",
+        "alerts-during-20260726T122642Z.json",
+        "alerts-during-20260726T122652Z.json",
+        "alerts-during-20260726T122702Z.json",
+        "alerts-during-20260726T122713Z.json",
+        "alerts-during-20260726T122723Z.json"
       ],
       "liveResolveFiles": [
-        "alerts-after-20260723T110919Z.json"
+        "alerts-after-20260726T122740Z.json"
       ],
-      "timeline": "restore_armed_before_stop=1\nstop_at_unix=1784804803\nt=10s alert_state=absent file=alerts-during-20260723T110653Z.json\nt=20s alert_state=pending file=alerts-during-20260723T110703Z.json\nt=30s alert_state=pending file=alerts-during-20260723T110713Z.json\nt=40s alert_state=pending file=alerts-during-20260723T110723Z.json\nt=50s alert_state=pending file=alerts-during-20260723T110733Z.json\nt=60s alert_state=pending file=alerts-during-20260723T110743Z.json\nt=70s alert_state=pending file=alerts-during-20260723T110753Z.json\nt=80s alert_state=pending file=alerts-during-20260723T110803Z.json\nt=90s alert_state=pending file=alerts-during-20260723T110813Z.json\nt=100s alert_state=pending file=alerts-during-20260723T110823Z.json\nt=110s alert_state=pending file=alerts-during-20260723T110833Z.json\nt=120s alert_state=pending file=alerts-during-20260723T110843Z.json\nt=130s alert_state=pending file=alerts-during-20260723T110853Z.json\nt=140s alert_state=firing file=alerts-during-20260723T110903Z.json\nstart_at_unix=1784804944\nrestore_disarmed_confirmed=1\nrecover_t=15s alert_state=absent file=alerts-after-20260723T110919Z.json\n"
+      "promRulesLoaded": true,
+      "timeline": "restore_armed_before_stop=1\nstop_at_unix=1785068710\nt=10s alert_state=pending file=alerts-during-20260726T122520Z.json\nt=20s alert_state=pending file=alerts-during-20260726T122530Z.json\nt=30s alert_state=pending file=alerts-during-20260726T122540Z.json\nt=41s alert_state=pending file=alerts-during-20260726T122551Z.json\nt=51s alert_state=pending file=alerts-during-20260726T122601Z.json\nt=61s alert_state=pending file=alerts-during-20260726T122611Z.json\nt=71s alert_state=pending file=alerts-during-20260726T122621Z.json\nt=82s alert_state=pending file=alerts-during-20260726T122632Z.json\nt=92s alert_state=pending file=alerts-during-20260726T122642Z.json\nt=102s alert_state=pending file=alerts-during-20260726T122652Z.json\nt=112s alert_state=pending file=alerts-during-20260726T122702Z.json\nt=123s alert_state=pending file=alerts-during-20260726T122713Z.json\nt=133s alert_state=firing file=alerts-during-20260726T122723Z.json\nstart_at_unix=1785068844\nrestore_disarmed_confirmed=1\nrecover_t=16s alert_state=absent file=alerts-after-20260726T122740Z.json\n"
     },
+    "schemaVersion": 1,
     "secretScan": {
-      "schema": "o02-broad-secret-scan-v1",
       "clean": true,
-      "findings": []
+      "findings": [],
+      "schema": "o02-broad-secret-scan-v1"
+    },
+    "stamp": "20260726T122352Z",
+    "toolImages": {
+      "grafana/grafana:11.1.4": "grafana/grafana@sha256:886b56d5534e54f69a8cfcb4b8928da8fc753178a7a3d20c3f9b04b660169805",
+      "prom/prometheus:v2.54.1": "prom/prometheus@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94",
+      "quay.io/prometheus/blackbox-exporter:v0.25.0": "unavailable"
     }
   },
-  "generatedAt": "2026-07-23T11:22:57.368228+00:00",
-  "blockers": [
-    "O01 not Done \u2014 O02 remains in_progress per dependency policy",
-    "Backup alert uses O01-as-shipped series when present; O02 does not claim always-present live backup metrics; capture/restore drill owned by P1B-O03",
-    "Compose worker-reconcile-oneshot deployment gap: docker compose run cgroupv2; finite exits proven via docker run fallback"
-  ]
+  "rawArtifactManifest": {
+    "path": "bench/markhand_web/reports/phase-1b-gate/raw/o02-20260726T122352Z/raw-manifest.json",
+    "sha256": "b4ba75bc79cd29f93ce67aeee0d3c39dcef95c762ecaad400989468df8ceb6cc"
+  },
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o02-20260726T122352Z",
+  "stamp": "20260726T122352Z",
+  "status": "pass",
+  "transitions": {
+    "MarkhandApiLatencyBurn": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandApiLatencyBurn fire then resolve"
+    },
+    "MarkhandBackupStale": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandBackupStale fire then resolve"
+    },
+    "MarkhandConversionFailures": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandConversionFailures fire then resolve"
+    },
+    "MarkhandDependencyDown": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandDependencyDown fire then resolve"
+    },
+    "MarkhandDiskLow": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandDiskLow two-instance fire only low disk then resolve"
+    },
+    "MarkhandEmbeddingErrors": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandEmbeddingErrors fire then resolve"
+    },
+    "MarkhandProviderErrors": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandProviderErrors fire then resolve"
+    },
+    "MarkhandQueueAgeHigh": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandQueueAgeHigh fire then resolve"
+    },
+    "MarkhandQueueGrowth": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandQueueGrowth fire then resolve"
+    },
+    "MarkhandQuotaExceeded": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandQuotaExceeded fire then resolve"
+    },
+    "MarkhandReconcileDrift": {
+      "fired": true,
+      "ok": true,
+      "resolved": true,
+      "testName": "MarkhandReconcileDrift fire then resolve"
+    }
+  }
 }

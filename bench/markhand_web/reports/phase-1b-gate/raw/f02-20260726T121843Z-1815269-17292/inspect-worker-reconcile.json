@@ -1,0 +1,57 @@
+[
+  {
+    "Id": "3bf20d5259f6103a7ec85123a7560fff7435d555a59dfba43892a0da561c5aeb",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1",
+    "Created": "2026-07-26T12:18:52.005182272Z",
+    "Image": "sha256:b4abf134998e286df5a4b7d3bfce13e76ede68793569d23a71b17e6a23d6de0f",
+    "Config": {
+      "User": "10001:10001",
+      "Image": "markhand-worker:poc"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": true,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": [
+        "ALL"
+      ],
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": null,
+      "Devices": null,
+      "Tmpfs": {
+        "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+        "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m"
+      },
+      "Memory": 536870912,
+      "NanoCpus": 500000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 512
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.10",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "86b51d43ebf45f3f41552b0e8b1be7cc9e380fd522b46586158f1436c412cead",
+          "MacAddress": "aa:24:89:e0:56:ea",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1",
+            "worker-reconcile"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "OOMKilled": false,
+      "Pid": 1817140
+    }
+  }
+]

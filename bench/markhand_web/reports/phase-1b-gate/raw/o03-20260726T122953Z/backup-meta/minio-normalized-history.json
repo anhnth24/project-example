@@ -1,0 +1,84 @@
+{
+  "keys": [
+    {
+      "key": "quarantine/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/e4282e0f0b374a29bbc5587e4d889b98",
+      "events": [
+        {
+          "type": "put",
+          "size": 106,
+          "contentSha256": "4b1e983e579a0e4b3424d492f6809ade43bd6aed2deed74c89da07aa74c719bf"
+        }
+      ]
+    },
+    {
+      "key": "quarantine/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/f2cc685e1b454ad0b20e42d9f59220e7",
+      "events": [
+        {
+          "type": "put",
+          "size": 63325,
+          "contentSha256": "91b08350e8dbc31cdbbf8bd8644605d6fc146c55da0bd0f6b7c2ada1aebd2a78"
+        }
+      ]
+    },
+    {
+      "key": "trusted/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/0e1be2ff107de7ffa16d419d696219cb42582aa100e36f90d03e2a5f16862feb/3dfadef74cf9594abc1ac7d2b981e9c1",
+      "events": [
+        {
+          "type": "put",
+          "size": 290,
+          "contentSha256": "a3163669a6312bb02168f12c8655d530eff251039e88598938229c7c9de5d0e1"
+        }
+      ]
+    },
+    {
+      "key": "trusted/05f94af6de92341d481e516d951b5f81a57c8886a0491b31bf6bc4361e46f186/84591cbd9555575223db4066b86ba0dd66683e5b3da1b8df49dd47aef548279f/5baca741207ffe2bf51c81300feb6f78",
+      "events": [
+        {
+          "type": "put",
+          "size": 107,
+          "contentSha256": "da27c012b532ff2c46f2ab42c946cba56fac283a2bc240c6dd785c8ceb598702"
+        }
+      ]
+    },
+    {
+      "key": "trusted/o03-seed-20260726t122953z.txt",
+      "events": [
+        {
+          "type": "put",
+          "size": 47,
+          "contentSha256": "9e2f90cab11e1f25768c291fdda61150e4e85ad2ca962d6ba303f726a5842dff"
+        },
+        {
+          "type": "put",
+          "size": 50,
+          "contentSha256": "8fe685feb37855d09d33d0e5dc391b68ef24c662af71181a87a1216c66174faf"
+        }
+      ]
+    },
+    {
+      "key": "trusted/o03-tomb-20260726t122953z.txt",
+      "events": [
+        {
+          "type": "put",
+          "size": 25,
+          "contentSha256": "52b7002f79e5a21916ad3e14c2e33ea53b938ba11b753c738afb70fe658e9efe"
+        },
+        {
+          "type": "delete",
+          "size": null,
+          "contentSha256": null
+        },
+        {
+          "type": "put",
+          "size": 35,
+          "contentSha256": "3ef0811f343a48bf20c0380e5304bbbe1504c2f15b7975c6f7f92555dbb59239"
+        },
+        {
+          "type": "delete",
+          "size": null,
+          "contentSha256": null
+        }
+      ]
+    }
+  ]
+}

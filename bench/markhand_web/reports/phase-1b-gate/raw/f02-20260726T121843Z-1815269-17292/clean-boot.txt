@@ -1,0 +1,163 @@
+clean_boot_project=markhand-poc-f02-20260726t121843z-1815269-17292
+clean_boot_run_id=f02-20260726T121843Z-1815269-17292
+2026-07-26T12:18:44Z
+ Image markhand-api:poc Building 
+ Image markhand-api:poc Building 
+Sending build context to Docker daemon  524.4kBSending build context to Docker daemon  1.049MBSending build context to Docker daemon  1.573MBSending build context to Docker daemon  1.898MB
+Step 1/13 : FROM rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
+ ---> af306cfa71d9
+Step 2/13 : WORKDIR /src
+ ---> Using cache
+ ---> 41474549e21c
+Step 3/13 : RUN apt-get update     && apt-get install -y --no-install-recommends pkg-config libssl-dev     && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 263e3f55dc96
+Step 4/13 : COPY . .
+ ---> Using cache
+ ---> a3c84e6fba11
+Step 5/13 : RUN cargo build --release -p fileconv-server --bin fileconv-server     && strip /src/target/release/fileconv-server
+ ---> Running in b0f4c4afd410
+[91minfo: syncing channel updates for '1.88.0-x86_64-unknown-linux-gnu'
+[0m[91minfo: latest update on 2025-06-26, rust version 1.88.0 (6b00bc388 2025-06-23)
+[0m[91minfo: downloading component 'clippy'
+[0m[91minfo: downloading component 'rustfmt'
+[0m[91minfo: installing component 'clippy'
+[0m[91minfo: installing component 'rustfmt'
+[0m[91merror: failed to load manifest for workspace member `/src/app/src-tauri`
+referenced by workspace at `/src/Cargo.toml`
+
+Caused by:
+  failed to read `/src/app/src-tauri/Cargo.toml`
+
+Caused by:
+  No such file or directory (os error 2)
+[0mThe command '/bin/sh -c cargo build --release -p fileconv-server --bin fileconv-server     && strip /src/target/release/fileconv-server' returned a non-zero code: 101
+ Network markhand-poc-f02-20260726t121843z-1815269-17292_convert Creating 
+ Network markhand-poc-f02-20260726t121843z-1815269-17292_convert Created 
+ Network markhand-poc-f02-20260726t121843z-1815269-17292_edge Creating 
+ Network markhand-poc-f02-20260726t121843z-1815269-17292_edge Created 
+ Network markhand-poc-f02-20260726t121843z-1815269-17292_private Creating 
+ Network markhand-poc-f02-20260726t121843z-1815269-17292_private Created 
+ Volume markhand-poc-f02-20260726t121843z-1815269-17292_postgres_data Creating 
+ Volume markhand-poc-f02-20260726t121843z-1815269-17292_postgres_data Created 
+ Volume markhand-poc-f02-20260726t121843z-1815269-17292_qdrant_data Creating 
+ Volume markhand-poc-f02-20260726t121843z-1815269-17292_qdrant_data Created 
+ Volume markhand-poc-f02-20260726t121843z-1815269-17292_minio_data Creating 
+ Volume markhand-poc-f02-20260726t121843z-1815269-17292_minio_data Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-otel-capture-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-otel-capture-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-api-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-api-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Created 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-otel-capture-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-otel-capture-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-db-bootstrap-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-init-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-migrate-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-api-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-api-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Waiting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1 Healthy 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-minio-init-1 Exited 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Starting 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1 Started 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1 Started 
+healthy: postgres
+healthy: qdrant
+healthy: minio
+healthy: mock-embedding
+healthy: api-live
+healthy: api-ready
+healthy: worker-convert (running, health=healthy)
+healthy: worker-index (running, health=none)
+healthy: worker-embedding (running, health=none)
+healthy: worker-delete (running, health=none)
+healthy: worker-reconcile (running, health=none)
+POC health OK
+NAME                                                                 IMAGE                                                                                                              COMMAND                  SERVICE            CREATED          STATUS                             PORTS
+markhand-poc-f02-20260726t121843z-1815269-17292-api-1                markhand-api:poc                                                                                                   "/usr/local/bin/file…"   api                20 seconds ago   Up 10 seconds (healthy)            127.0.0.1:8788->8787/tcp
+markhand-poc-f02-20260726t121843z-1815269-17292-minio-1              pgsty/minio:RELEASE.2026-06-18T00-00-00Z@sha256:dacff8306a6e0a734518533992dbdcca26bc1ca47f77cf47cb9945725f92b29b   "/usr/bin/docker-ent…"   minio              20 seconds ago   Up 19 seconds                      127.0.0.1:9010->9000/tcp, 127.0.0.1:9011->9001/tcp
+markhand-poc-f02-20260726t121843z-1815269-17292-mock-embedding-1     python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0                      "python /opt/mock-em…"   mock-embedding     20 seconds ago   Up 19 seconds (healthy)            127.0.0.1:8090->8080/tcp
+markhand-poc-f02-20260726t121843z-1815269-17292-otel-capture-1       python:3.12.12-alpine@sha256:2d91681153dd4b8cdb52d4fd34a17b9edbafa4dd3086143cfd4b6c3a84c1acb0                      "python /opt/otel-ca…"   otel-capture       20 seconds ago   Up 19 seconds (health: starting)   127.0.0.1:14318->4318/tcp
+markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1           postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296                     "docker-entrypoint.s…"   postgres           20 seconds ago   Up 19 seconds (healthy)            127.0.0.1:54330->5432/tcp
+markhand-poc-f02-20260726t121843z-1815269-17292-qdrant-1             qdrant/qdrant:v1.18.2@sha256:75eab8c4ba42096724fdcfde8b4de0b5713d529dde32f285a1f86fdcb2c9e50c                      "./entrypoint.sh"        qdrant             20 seconds ago   Up 19 seconds                      127.0.0.1:6343->6333/tcp, 127.0.0.1:6344->6334/tcp
+markhand-poc-f02-20260726t121843z-1815269-17292-worker-convert-1     markhand-worker:poc                                                                                                "/usr/local/bin/file…"   worker-convert     19 seconds ago   Up 9 seconds (healthy)             
+markhand-poc-f02-20260726t121843z-1815269-17292-worker-delete-1      markhand-worker:poc                                                                                                "/usr/local/bin/file…"   worker-delete      19 seconds ago   Up 9 seconds                       
+markhand-poc-f02-20260726t121843z-1815269-17292-worker-embedding-1   markhand-worker:poc                                                                                                "/usr/local/bin/file…"   worker-embedding   19 seconds ago   Up 9 seconds                       
+markhand-poc-f02-20260726t121843z-1815269-17292-worker-index-1       markhand-worker:poc                                                                                                "/usr/local/bin/file…"   worker-index       19 seconds ago   Up 9 seconds                       
+markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-1   markhand-worker:poc                                                                                                "/usr/local/bin/file…"   worker-reconcile   19 seconds ago   Up 9 seconds                       
+2026-07-26T12:19:11Z

@@ -1,0 +1,8 @@
+cleanup_seed_docs=0
+green_db=0
+green_bucket=0
+blue_collection_http=200
+green_collection_http=000000
+green_containers=0
+fence_now=null
+cleanup_verified=1

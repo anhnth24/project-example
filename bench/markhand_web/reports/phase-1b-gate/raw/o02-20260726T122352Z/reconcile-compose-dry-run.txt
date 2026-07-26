@@ -1,0 +1,5 @@
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-6d9caa335948 Creating 
+ Container markhand-poc-f02-20260726t121843z-1815269-17292-worker-reconcile-oneshot-run-6d9caa335948 Created 
+[2m2026-07-26T12:27:51.807042Z[0m [32m INFO[0m [2mtelemetry[0m[2m:[0m telemetry exporter configured [3mservice[0m[2m=[0mmarkhand-worker-reconcile [3mmetrics_enabled[0m[2m=[0mtrue [3mqueue_capacity[0m[2m=[0m1024
+fileconv-worker: DryRunReported { job_id: 8d2f76c3-a692-4cf2-8dfd-c22519102d59, report: ReconcileReport { missing_vectors: 0, orphan_vectors: 0, stale_vectors: 0, in_flight_vectors: 0, missing_objects: 0, orphan_objects: 0, repaired: ReconcileRepairCounts { orphan_vectors: 0, stale_vectors: 0, staged_objects: 0, orphan_objects: 0, rebuilt_vector_jobs: 0 } } }
+fileconv-worker: MARKHAND_WORKER_ONESHOT=1 — finite exit after one reconcile cycle

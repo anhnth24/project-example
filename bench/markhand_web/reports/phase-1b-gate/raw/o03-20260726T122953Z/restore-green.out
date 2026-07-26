@@ -1,0 +1,2 @@
+{"status": "RESTORE_GREEN_OK", "promote": "DISABLED", "greenIdentity": {"pgSystemIdentifier": "7666810114227994667", "pgDatabase": "markhand_o03_green_20260726122953"}, "greenBucket": "markhand-documents", "greenCollection": "markhand_chunks_72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874", "allowlistDigest": "70c44adebec8b7a4182997d942a2f3ee849f1490c6e7cb35202dc4b213145a65", "creationToken": "83b9eda5f7407c332ce7f2e3b43af5d9"}
+RESTORE_GREEN_OK_PROMOTE_DISABLED

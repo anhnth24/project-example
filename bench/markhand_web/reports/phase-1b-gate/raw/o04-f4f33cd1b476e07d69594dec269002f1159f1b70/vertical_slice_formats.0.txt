@@ -1,0 +1,15 @@
+    Finished `test` profile [optimized + debuginfo] target(s) in 0.93s
+     Running tests/retrieval_vertical_slice.rs (target/debug/deps/retrieval_vertical_slice-270897c15ea9dd98)
+
+running 1 test
+O04_FORMAT_COVERAGE	["csv","docx","html","pdf","png","pptx","txt","xlsx"]
+test live_upload_convert_index_citation_vertical_slice ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 12.23s
+
+
+O04_COMMAND_OUTPUT_TRUNCATED	false
+O04_COMMAND_EXIT_CODE	0
+O04_COMMAND_TIMED_OUT	false
+O04_COMMAND_EOF	true
+

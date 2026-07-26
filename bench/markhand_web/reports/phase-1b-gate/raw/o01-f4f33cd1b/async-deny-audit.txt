@@ -1,0 +1,3 @@
+1
+
+SELECT count(*) FROM audit_log WHERE request_id = '2fc9f865-f6fa-4876-a356-fc49d8945305' AND action = 'search.query' AND outcome = 'deny'

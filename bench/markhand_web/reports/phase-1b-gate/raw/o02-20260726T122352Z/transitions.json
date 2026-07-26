@@ -1,0 +1,68 @@
+{
+  "MarkhandApiLatencyBurn": {
+    "testName": "MarkhandApiLatencyBurn fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandQueueGrowth": {
+    "testName": "MarkhandQueueGrowth fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandQueueAgeHigh": {
+    "testName": "MarkhandQueueAgeHigh fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandDiskLow": {
+    "testName": "MarkhandDiskLow two-instance fire only low disk then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandDependencyDown": {
+    "testName": "MarkhandDependencyDown fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandProviderErrors": {
+    "testName": "MarkhandProviderErrors fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandEmbeddingErrors": {
+    "testName": "MarkhandEmbeddingErrors fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandConversionFailures": {
+    "testName": "MarkhandConversionFailures fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandReconcileDrift": {
+    "testName": "MarkhandReconcileDrift fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandQuotaExceeded": {
+    "testName": "MarkhandQuotaExceeded fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  },
+  "MarkhandBackupStale": {
+    "testName": "MarkhandBackupStale fire then resolve",
+    "fired": true,
+    "resolved": true,
+    "ok": true
+  }
+}

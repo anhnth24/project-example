@@ -1,0 +1,82 @@
+[
+  {
+    "Id": "edbbdc9fce68169e34b8b756d30f746d1b9df9cfd2050dccd27a0e3f4779636d",
+    "Name": "/markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1",
+    "Created": "2026-07-26T12:18:51.524020953Z",
+    "Image": "sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296",
+    "Config": {
+      "User": "",
+      "Image": "postgres:18.4-bookworm@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296"
+    },
+    "HostConfig": {
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [
+        "no-new-privileges:true"
+      ],
+      "CapDrop": null,
+      "CapAdd": null,
+      "Privileged": false,
+      "Binds": [],
+      "Devices": null,
+      "Memory": 1073741824,
+      "NanoCpus": 1000000000,
+      "CpuPeriod": 0,
+      "CpuQuota": 0,
+      "PidsLimit": 256
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "markhand-poc-f02-20260726t121843z-1815269-17292_postgres_data",
+        "Destination": "/var/lib/postgresql",
+        "Mode": "rw",
+        "RW": true,
+        "Propagation": ""
+      },
+      {
+        "Type": "bind",
+        "Destination": "/docker-entrypoint-initdb.d/10-markhand-app.sh",
+        "Mode": "ro",
+        "RW": false,
+        "Propagation": "rprivate"
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "markhand-poc-f02-20260726t121843z-1815269-17292_convert": {
+          "IPAddress": "172.18.0.4",
+          "Gateway": "",
+          "NetworkID": "a9396d74ba3f84c9b2206f48e9fd9377846a1fef432f4429c2aa95c0ca293faa",
+          "EndpointID": "25152abd5c6e73a795fda7d42c1baf70cbd7a1c8c1438ad865bde04fbb736a61",
+          "MacAddress": "02:35:17:3e:62:b7",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1",
+            "postgres"
+          ]
+        },
+        "markhand-poc-f02-20260726t121843z-1815269-17292_private": {
+          "IPAddress": "172.20.0.5",
+          "Gateway": "172.20.0.1",
+          "NetworkID": "4f05814d59d7f23c6df6823379139e36d6aa31db45598c34e2b92a3eb3913db9",
+          "EndpointID": "eb81064f8238702336c139e5cf1e282ecbc16bc349a00911018b030c0b54529e",
+          "MacAddress": "ce:b4:3d:5b:cb:ec",
+          "Aliases": [
+            "markhand-poc-f02-20260726t121843z-1815269-17292-postgres-1",
+            "postgres"
+          ]
+        }
+      }
+    },
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "ExitCode": 0,
+      "Health": {
+        "Status": "healthy",
+        "FailingStreak": 0
+      },
+      "OOMKilled": false,
+      "Pid": 1816014
+    }
+  }
+]

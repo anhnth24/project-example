@@ -1,0 +1,39 @@
+{
+  "artifacts": {
+    "adversarial_upload.0.txt": {
+      "sha256": "26ba5de07d80e36ebffb3d3e6eec2930bdbe82b120482d95a534fb3b7895c70f",
+      "sizeBytes": 989
+    },
+    "api-http-probes.json": {
+      "sha256": "45a6651de8cc9ac736af35247fc3a2779d33c9199914264a6bde9b23f503d803",
+      "sizeBytes": 1236
+    },
+    "external-worker-kill.json": {
+      "sha256": "ff6051aff01971b561fa19b5a8bf12f2e8f91ce0be6ab9ddc67f146e12403536",
+      "sizeBytes": 6841
+    },
+    "suite-worker-isolation.json": {
+      "sha256": "f73a36336e631dea342892569394ea17fafdf971640c4aebdec375e21bc9ffef",
+      "sizeBytes": 5947
+    },
+    "suspend_membership_delete_deny.0.txt": {
+      "sha256": "3edbdb8da98d245fe7a0bd2d76627984aa27cb72495479e8c24d4e69b9dc6bbb",
+      "sizeBytes": 466
+    },
+    "unauthorized_cross_tenant.0.txt": {
+      "sha256": "4154efbbf2cb596d730138862e724ab19aee428feba5676268a9d9cb659c779a",
+      "sizeBytes": 460
+    },
+    "vertical_slice_formats.0.txt": {
+      "sha256": "0108f60e51b5f6e58fec95a6f5bf44b78ca6f517f34b4ac13dec15eae47358f2",
+      "sizeBytes": 539
+    },
+    "worker_kill_replay.0.txt": {
+      "sha256": "6ee94e944b9b0a74884f7fb99084db1cade6b96fbf8bb9eb4f96b88fba2737ac",
+      "sizeBytes": 436
+    }
+  },
+  "generatedAt": "2026-07-26T12:29:50Z",
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o04-f4f33cd1b476e07d69594dec269002f1159f1b70",
+  "schema": 1
+}

@@ -1,0 +1,76 @@
+{
+  "files": [
+    {
+      "bytes": 2349,
+      "path": "baseline-dataset-ids.json",
+      "sha256": "a310093ecc1a1de099c613825faefb66aab9618590464e45ba49f91694d6613f"
+    },
+    {
+      "bytes": 1605,
+      "path": "compare-dataset.json",
+      "sha256": "4a0bcde48ca3400267d2cd2518c368a6b482541716edf9d96c35cfd3183217dd"
+    },
+    {
+      "bytes": 2870,
+      "path": "fixtures-preflight.json",
+      "sha256": "8a2bf9c0b12ea36854ce764e30cda6bfb2c5dbda735d655cc0d7cb2dbabda8c0"
+    },
+    {
+      "bytes": 74844,
+      "path": "growth-samples.json",
+      "sha256": "07b141c34537d87fc0c62cdf5c7531b43d222818fc839cc8cc3bf3f91c6c7459"
+    },
+    {
+      "bytes": 598,
+      "path": "injection-dependency_blip-2.json",
+      "sha256": "5bd508b8e082b0bf7369a13c8da88173a129f1e47998e0c352a20881b1ea5972"
+    },
+    {
+      "bytes": 571,
+      "path": "injection-kill_worker-0.json",
+      "sha256": "62cbe033b4c058a1236ed0c973c960e5c6b7a86b82cbaffd440c2d37a422ba27"
+    },
+    {
+      "bytes": 574,
+      "path": "injection-kill_worker-1.json",
+      "sha256": "a1e6db0eff5343f4ee996f9f0d354f4744aaa054504c81897fd3454670338629"
+    },
+    {
+      "bytes": 2404,
+      "path": "injection-summary.json",
+      "sha256": "525289c85b4f8825faf838b638a657a75e0226aac4cd258d1f14538c8547d818"
+    },
+    {
+      "bytes": 3388,
+      "path": "metrics.json",
+      "sha256": "5665823d8ac298e2dd71170e46689b961ad0fbf9cd4cbcfc412ec85a4193606b"
+    },
+    {
+      "bytes": 3048,
+      "path": "o03-runner.txt",
+      "sha256": "3423c8812f9833587741ff0ef4f565674707bc11579af2944909694cf7aefa98"
+    },
+    {
+      "bytes": 2911,
+      "path": "prerequisites.json",
+      "sha256": "fd8e340ced46785d5860bbc9caf6b3ebeb3797c26994ab3804ae15f22dbc43af"
+    },
+    {
+      "bytes": 692,
+      "path": "reconcile-failures.json",
+      "sha256": "31b1275478c2e185d6f9d8f04490afe1aa4b823438c55864631069ec89890101"
+    },
+    {
+      "bytes": 616,
+      "path": "restored-api.json",
+      "sha256": "f1e852ee7ecc5b3c1cb7ef5d98a2705092c3012a43d2641ae11c25986353054c"
+    },
+    {
+      "bytes": 3418,
+      "path": "seed.json",
+      "sha256": "5c1cb84cc8c8aaff1462a5b2b8b64eb5ca467ff79483385410117611ee56d938"
+    }
+  ],
+  "ok": true,
+  "rawDir": "bench/markhand_web/reports/phase-1b-gate/raw/o05-20260726T123157Z-27d616a2f32645da81fab363497c1596"
+}

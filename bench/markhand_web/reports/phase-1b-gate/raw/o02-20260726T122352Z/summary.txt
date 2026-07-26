@@ -1,0 +1,37 @@
+== P1B-O02 alert tabletop 20260726T122352Z ==
+promtool: docker run --rm --entrypoint promtool -v /home/administrator/markhand:/workspace:ro -w /workspace/deploy/observability/prometheus prom/prometheus:v2.54.1
+PASS: promtool check rules
+PASS: histogram fixture invariants
+PASS: promtool test rules (fire/resolve)
+PASS: rules avoid high-cardinality label tokens
+PASS: redact_secrets unit tests
+PASS: dashboard JSON + datasource parameterization
+PASS: runbooks DCRV + redact/allowlist
+PASS: unit-test fire→resolve transitions present
+PASS: Grafana API import + query
+Starting observe Prometheus/blackbox on markhand-poc-f02-20260726t121843z-1815269-17292_private
+PASS: live Prometheus loaded markhand rules
+PASS: compose resolved postgres cid=edbbdc9fce68
+PASS: disposable guard container 64cc982db9b8
+PASS: failpoint disposable before_stop: armed; EXIT left/kept running
+PASS: failpoint disposable during_stop: EXIT restored armed stop
+PASS: failpoint disposable after_stop: EXIT restored armed stop
+PASS: failpoint disposable initially_stopped: preserved stopped
+PASS: failpoint disposable normal: confirmed restart disarmed
+PASS: failpoint real compose after_stop: EXIT restored
+PASS: failpoint real compose normal: confirmed restart disarmed
+PASS: failpoint real compose initially_stopped: preserved stopped
+LIVE: stop postgres >2m; poll Prometheus /api/v1/alerts for MarkhandDependencyDown
+PASS: live MarkhandDependencyDown firing at 133s (saved alerts-during-20260726T122723Z.json)
+PASS: postgres container healthy after restore (disarm on confirm)
+PASS: app-role DB select current_user=markhand_app
+PASS: API live status matches baseline (200)
+PASS: API ready status matches baseline (200)
+PASS: live MarkhandDependencyDown inactive/absent at 16s after restore
+LIVE reconcile: cargo worker dry-run→repair + exact compose worker-reconcile-oneshot
+PASS: live reconcile worker dry-run→repair→idempotent + scope isolation
+Reusing existing worker image markhand-worker:poc for oneshot binary
+PASS: oneshot missing DOCUMENT_ID exits non-zero before DB work
+PASS: oneshot malformed DOCUMENT_ID exits non-zero
+PASS: oneshot dry-run/repair/clean finite exits (compose or documented docker-run fallback)
+PASS: provenance + broad secret scan clean
