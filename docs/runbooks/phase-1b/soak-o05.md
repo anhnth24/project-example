@@ -82,6 +82,16 @@ distinct; a URL alias cannot satisfy the gate.
 
 ## Fixtures
 
+Every timed upload is generated in memory with its **own marker**
+(`SOAKTXT15U<token>`), because the POC runs the 8-dimension mock embedding: all
+documents look alike to the vector side, so a shared per-format marker made the
+wanted document compete with the entire collection for a top-N slot and it
+dropped out as the corpus grew. A unique marker lets the keyword side rank the
+intended document first, which is what the retained/deleted/citation assertions
+depend on. PNG markers are recovered through OCR, so the host needs Pillow and
+DejaVu fonts (`python3-pil`, `fonts-dejavu-core`); without them the builder
+falls back to an unreadable bitmap and PNG uploads keep the shared marker.
+
 Synthetic fixtures under `bench/markhand_web/soak/fixtures/` are modeled on Rust
 `tiny_*_bytes` helpers and must be **converter-accepted** (real OOXML parts,
 valid PDF body, OCR-readable PNG). Preflight runs structural validation and, when

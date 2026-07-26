@@ -250,6 +250,21 @@ class DeleteRetentionTests(unittest.TestCase):
         self.assertEqual(stats.deleted_ids, ["deletable-1"])
 
 
+class UniqueMarkerTests(unittest.TestCase):
+    def test_marker_is_unique_per_upload_and_embedded_in_content(self) -> None:
+        first = fixtures.unique_marker("txt", "AAAA1111")
+        second = fixtures.unique_marker("txt", "BBBB2222")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith(fixtures.marker_for("txt")))
+        self.assertIn(first.encode(), fixtures.generate_bytes("txt", first))
+        self.assertIn(second.encode(), fixtures.generate_bytes("csv", second))
+
+    def test_generate_bytes_defaults_to_the_shared_marker(self) -> None:
+        self.assertIn(
+            fixtures.marker_for("html").encode(), fixtures.generate_bytes("html")
+        )
+
+
 class FailureReasonTests(unittest.TestCase):
     def test_failures_are_attributed_per_actor_and_window(self) -> None:
         stats = workload.RequestStats()
@@ -637,8 +652,10 @@ class ExceptionPropagationTests(unittest.TestCase):
     def test_worker_exception_propagates(self) -> None:
         client = workload.ApiClient("http://127.0.0.1:9", token="t", collection_id="c")
         loaded = profile.load_workload_profile(WORKLOAD)
+        # Ingest builds its payload per upload, so fail that call to prove a
+        # worker exception still reaches the caller instead of being swallowed.
         with mock.patch.object(
-            workload, "fixture_path", side_effect=RuntimeError("boom")
+            workload.fixtures, "generate_bytes", side_effect=RuntimeError("boom")
         ):
             with mock.patch.object(
                 workload, "preflight_fixtures", return_value={"ok": True}

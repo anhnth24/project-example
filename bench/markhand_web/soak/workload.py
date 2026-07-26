@@ -16,6 +16,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import fixtures
 from fixtures import fixture_path, marker_for, preflight_fixtures
 from mathutil import percentile, schedule_event_times
 
@@ -471,8 +472,22 @@ def do_ingest(
     start_mono: float,
     scheduled_mono: float | None = None,
 ) -> None:
-    path = fixture_path(fmt)
-    body, content_type = _multipart(path, client.collection_id)
+    # Every upload carries its own marker so the retrieval assertion targets one
+    # exact document instead of racing the whole collection for a top-N slot.
+    # PNG is the exception when Pillow is unavailable: its marker has to survive
+    # OCR, and the bitmap fallback is unreadable, so it keeps the golden marker.
+    unique_marker_used = fmt.lower() != "png" or fixtures.unique_png_marker_supported()
+    if unique_marker_used:
+        marker = fixtures.unique_marker(fmt, uuid.uuid4().hex[:8].upper())
+        file_bytes = fixtures.generate_bytes(fmt, marker)
+    else:
+        marker = marker_for(fmt)
+        file_bytes = fixture_path(fmt).read_bytes()
+    body, content_type = _multipart_bytes(
+        filename=fixtures.fixture_filename(fmt),
+        file_bytes=file_bytes,
+        collection_id=client.collection_id,
+    )
     status, data, _latency = client.request(
         "POST",
         "/api/v1/uploads",
@@ -481,7 +496,6 @@ def do_ingest(
     )
     doc_id = None
     version_id = None
-    marker = marker_for(fmt)
     ok = _http_success(status)
     reason: str | None = None if ok else f"upload_http_{status}"
     if ok:

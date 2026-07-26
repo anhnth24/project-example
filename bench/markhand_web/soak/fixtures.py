@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 import zlib
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
@@ -400,9 +401,31 @@ def invalid_stub_bytes(fmt: str) -> bytes:
     return b"invalid"
 
 
-def generate_bytes(fmt: str) -> bytes:
+def unique_marker(fmt: str, token: str) -> str:
+    """Per-upload marker so retrieval can target one exact document.
+
+    The soak used one marker per format, so every upload of that format shared a
+    search term. With the mock embedding every document matches every query, so
+    the wanted document had to win a ranking race against the whole collection
+    and dropped out of the top hits as the corpus grew. A unique suffix makes the
+    keyword side of the hybrid search rank the intended document first.
+    """
+    return f"{marker_for(fmt)}U{token}"
+
+
+@lru_cache(maxsize=1)
+def unique_png_marker_supported() -> bool:
+    """PNG markers are OCR'd back, so they need the TrueType render path.
+
+    Without Pillow the builder falls back to a 5x7 bitmap that Tesseract cannot
+    read, and a unique marker would fail conversion instead of proving anything.
+    """
+    return _truetype_png_bytes("SOAKPROBE1") is not None
+
+
+def generate_bytes(fmt: str, marker: str | None = None) -> bytes:
     key = fmt.lower()
-    marker = marker_for(key)
+    marker = marker or marker_for(key)
     if key == "pdf":
         return tiny_pdf_bytes(marker)
     if key == "docx":
