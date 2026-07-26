@@ -24,6 +24,8 @@ workers, Postgres, Qdrant, MinIO (narrow app credentials), and embedding
 
 ```bash
 cp deploy/.env.example deploy/.env
+# AppArmor hosts only, once per machine (see "Convert sandbox confinement"):
+sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
 deploy/scripts/poc-up.sh      # build images, compose up, health
 deploy/scripts/poc-health.sh  # readiness + worker state
 ```
@@ -41,6 +43,31 @@ AITeamVN CPU embedding (not GLM):
 # signature must be dc6f6af4… (see images.lock.json / print-index-signature.py)
 deploy/scripts/poc-up.sh
 ```
+
+### Convert sandbox confinement
+
+The convert worker builds a nested sandbox for every job: it unshares user,
+network, mount and PID namespaces, remounts `/` as `MS_REC|MS_PRIVATE`, applies a
+Landlock ruleset and per-job rlimits, then execs the converter. Two host policies
+have to permit that:
+
+| Layer | Profile | Why |
+|---|---|---|
+| seccomp | `poc/worker-sandbox-seccomp.json` | Docker's default allows `mount`/`unshare` only with `CAP_SYS_ADMIN`, which the container drops |
+| AppArmor | `poc/apparmor-markhand-convert` | `docker-default` carries `deny mount,`, so the private remount fails |
+
+On an AppArmor host the profile must be loaded before the stack starts:
+
+```bash
+sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
+sudo aa-status | grep markhand-convert
+```
+
+`poc-compose.sh` resolves `MARKHAND_CONVERTER_APPARMOR_PROFILE` automatically:
+`unconfined` when the host has no AppArmor (Docker Desktop, most nested VMs) and
+`markhand-convert` otherwise, failing with the load command when AppArmor is
+enabled but the profile is missing. Without it the worker crash-loops on
+`converter worker initialization failed: sandbox error`.
 
 ### Isolation matrix
 

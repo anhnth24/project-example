@@ -496,9 +496,16 @@ services:
     # Docker's default profile blocks mount/unshare, which the nested user/net/PID
     # sandbox needs. This profile keeps the default deny policy and allows only
     # those two additional sandbox syscalls; disabling seccomp is forbidden.
+    # docker-default AppArmor separately denies every mount, which breaks the
+    # sandbox's MS_REC|MS_PRIVATE remount on AppArmor hosts, so the convert worker
+    # runs under poc/apparmor-markhand-convert (docker-default plus `mount,`).
+    # Load it once per host:
+    #   sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
+    # Hosts without AppArmor set MARKHAND_CONVERTER_APPARMOR_PROFILE=unconfined.
     security_opt:
       - no-new-privileges:true
       - seccomp=${MARKHAND_CONVERTER_SECCOMP_PROFILE:-./poc/worker-sandbox-seccomp.json}
+      - apparmor=${MARKHAND_CONVERTER_APPARMOR_PROFILE:-markhand-convert}
     environment:
       <<: *telemetry-environment
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
