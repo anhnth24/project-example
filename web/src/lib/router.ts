@@ -44,9 +44,6 @@ export function matchRoute(pathname: string): RouteMatch {
 }
 
 /** Builds a path for `/library/:collectionId?` or `/qa/:collectionId?`. */
-export function buildScopedPath(
-  base: 'library' | 'qa',
-  collectionId?: string,
-): string {
+export function buildScopedPath(base: 'library' | 'qa', collectionId?: string): string {
   return collectionId ? `/${base}/${encodeURIComponent(collectionId)}` : `/${base}`;
 }

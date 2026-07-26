@@ -6,14 +6,7 @@
  * land by default.
  */
 export type RouteName =
-  | 'home'
-  | 'login'
-  | 'library'
-  | 'qa'
-  | 'adminMembers'
-  | 'adminUsage'
-  | 'help'
-  | 'notFound';
+  'home' | 'login' | 'library' | 'qa' | 'adminMembers' | 'adminUsage' | 'help' | 'notFound';
 
 export interface RouteParams {
   collectionId?: string;

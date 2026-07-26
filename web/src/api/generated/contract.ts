@@ -660,6 +660,114 @@ export interface components {
             /** Format: uuid */
             requestId: string;
         };
+        LoginRequest: {
+            email: string;
+            password: string;
+        };
+        RefreshTokenRequest: {
+            /** @description Travels in the JSON body, not a cookie. Shared shape for POST /auth/refresh and POST /auth/logout. */
+            refreshToken: string;
+        };
+        TokenResponse: {
+            accessToken: string;
+            refreshToken: string;
+            /** @enum {string} */
+            tokenType: "Bearer";
+            expiresIn: number;
+            /** Format: uuid */
+            orgId: string;
+            /** Format: uuid */
+            userId: string;
+        };
+        MeResponse: {
+            /** Format: uuid */
+            userId: string;
+            /** Format: uuid */
+            orgId: string;
+            email: string;
+            displayName: string;
+            permissions: string[];
+            allowedCollectionIds: string[];
+            sessionId: string;
+        };
+        CreateCollectionRequest: {
+            name: string;
+            slug: string;
+            description?: string;
+            /**
+             * @default org
+             * @enum {string}
+             */
+            visibility: "private" | "org" | "groups";
+        };
+        UpdateCollectionRequest: {
+            name: string;
+            description?: string | null;
+        };
+        Document: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            collectionId: string;
+            title: string;
+            /** @enum {string} */
+            state: "uploaded" | "converting" | "converted" | "indexing" | "indexed" | "failed" | "tombstoned" | "purged";
+            /** Format: uuid */
+            currentVersionId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        DocumentPage: {
+            items: components["schemas"]["Document"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        DocumentVersion: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            documentId: string;
+            versionNumber: number;
+            isCurrent: boolean;
+            /** @description Original uploaded/source object SHA-256. */
+            sourceContentSha256: string;
+            /** Format: date-time */
+            effectiveFrom: string;
+            /** Format: date-time */
+            effectiveTo: string | null;
+            changeSummary: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        DocumentVersionPage: {
+            items: components["schemas"]["DocumentVersion"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        Job: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            jobType: "convert" | "index" | "delete" | "reconcile" | "embedding_batch" | "lifecycle_refresh";
+            /** @enum {string} */
+            status: "pending" | "leased" | "running" | "succeeded" | "failed" | "cancelled" | "dead_letter";
+            attempts: number;
+            /** Format: uuid */
+            documentId: string | null;
+            /** Format: uuid */
+            versionId: string | null;
+            /**
+             * Format: uuid
+             * @description Server-minted request correlation id from the job payload, when present; omitted entirely if the payload has none.
+             */
+            requestId?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+        };
     };
     responses: {
         /** @description Canonical API error */
@@ -763,14 +871,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
         responses: {
             /** @description Access + refresh token pair. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
             };
             401: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -783,14 +897,21 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description The refresh token travels in the JSON body, not a cookie. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshTokenRequest"];
+            };
+        };
         responses: {
             /** @description Rotated token pair. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
             };
             401: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -803,7 +924,12 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        /** @description The refresh token travels in the JSON body, not a cookie. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RefreshTokenRequest"];
+            };
+        };
         responses: {
             /** @description Session revoked. */
             204: {
@@ -829,7 +955,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
             };
             401: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -927,14 +1055,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCollectionRequest"];
+            };
+        };
         responses: {
             /** @description Collection created. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
             };
             403: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -956,7 +1090,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -993,14 +1129,20 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCollectionRequest"];
+            };
+        };
         responses: {
             /** @description Collection metadata updated. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1008,7 +1150,12 @@ export interface operations {
     };
     listDocuments: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Page size (server default 50, clamped to [1, 100]). */
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous page's nextCursor. */
+                cursor?: string;
+            };
             header?: never;
             path: {
                 collectionId: components["parameters"]["collectionId"];
@@ -1022,7 +1169,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DocumentPage"];
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1087,7 +1236,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Document"];
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1128,12 +1279,26 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Trusted Markdown preview (published-only; history for non-current). */
+            /** @description Trusted Markdown preview (published-only; history for non-current). Still JSON: the Markdown text is embedded as the `markdown` string field, not returned as a text/markdown body. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        documentId: string;
+                        /** Format: uuid */
+                        versionId: string;
+                        versionNumber: number;
+                        sourceContentSha256: string;
+                        canonicalMarkdownSha256: string;
+                        isCurrent: boolean;
+                        truncated: boolean;
+                        markdown: string;
+                        requestId: string;
+                    };
+                };
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
@@ -1156,7 +1321,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DocumentVersionPage"];
+                };
             };
             429: components["responses"]["RateLimited"];
         };
@@ -1178,7 +1345,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DocumentVersion"];
+                };
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
@@ -1199,12 +1368,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Version identity diff (compare retrieval for content deltas). */
+            /** @description Version identity diff (compare retrieval for content deltas). Not a text diff: left/right are the two full version records. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        documentId: string;
+                        left: components["schemas"]["DocumentVersion"];
+                        right: components["schemas"]["DocumentVersion"];
+                        note: string;
+                        requestId: string;
+                    };
+                };
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
@@ -1243,14 +1421,34 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    purpose: "markdown" | "original";
+                };
+            };
+        };
         responses: {
             /** @description Short-lived single-use download capability. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** @description Opaque single-use token; redeem via GET /downloads/{capability}. */
+                        capability: string;
+                        expiresIn: number;
+                        /** @enum {string} */
+                        purpose: "markdown" | "original";
+                        /** Format: uuid */
+                        documentId: string;
+                        /** Format: uuid */
+                        versionId: string;
+                        requestId: string;
+                    };
+                };
             };
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
@@ -1268,12 +1466,15 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Object bytes streamed after fresh ACL + single-use redeem. */
+            /** @description Object bytes streamed after fresh ACL + single-use redeem. Media type depends on the capability's purpose: `text/markdown; charset=utf-8` for the trusted canonical Markdown, or `application/octet-stream` for the original uploaded bytes. `Content-Disposition: attachment` is always set. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "text/markdown": string;
+                    "application/octet-stream": string;
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1295,7 +1496,19 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        jobId: string;
+                        /** @description False when an existing idempotent job was replayed. */
+                        created: boolean;
+                        /** Format: uuid */
+                        documentId: string;
+                        /** Format: uuid */
+                        versionId: string;
+                        requestId: string;
+                    };
+                };
             };
             429: components["responses"]["RateLimited"];
         };
@@ -1307,14 +1520,46 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveCitationRequest"];
+            };
+        };
         responses: {
             /** @description Freshly authorized citation pin with exact UTF-8 span. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        citation: {
+                            citeId: string;
+                            /** Format: uuid */
+                            logicalDocumentId: string;
+                            /** Format: uuid */
+                            versionId: string;
+                            versionNumber: number;
+                            sourceContentSha256: string;
+                            canonicalMarkdownSha256: string;
+                            quoteSha256: string;
+                            /** Format: uuid */
+                            chunkId: string;
+                            chunkIdentitySha256: string;
+                            page: number | null;
+                            slide: number | null;
+                            sheet: string | null;
+                            sourceSpanStart: number;
+                            sourceSpanEnd: number;
+                            quoteLocalStart: number;
+                            quoteLocalEnd: number;
+                            quote: string;
+                            isCurrent: boolean;
+                            anchor: string;
+                        };
+                        requestId: string;
+                    };
+                };
             };
             400: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
@@ -1335,7 +1580,30 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        items: {
+                            /** Format: uuid */
+                            id: string;
+                            status: string;
+                            severity: string;
+                            conflictType: string;
+                            /** Format: uuid */
+                            claimAId: string;
+                            /** Format: uuid */
+                            claimBId: string;
+                            /** Format: uuid */
+                            collectionAId: string;
+                            /** Format: uuid */
+                            collectionBId: string;
+                            /** Format: date-time */
+                            firstDetectedAt: string;
+                            /** Format: date-time */
+                            resolvedAt: string | null;
+                        }[];
+                        requestId: string;
+                    };
+                };
             };
             429: components["responses"]["RateLimited"];
         };
@@ -1356,7 +1624,27 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                        status: string;
+                        severity: string;
+                        conflictType: string;
+                        /** Format: uuid */
+                        claimAId: string;
+                        /** Format: uuid */
+                        claimBId: string;
+                        /** Format: uuid */
+                        collectionAId: string;
+                        /** Format: uuid */
+                        collectionBId: string;
+                        resolutionNote: string | null;
+                        /** Format: date-time */
+                        resolvedAt: string | null;
+                        requestId: string;
+                    };
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1419,7 +1707,16 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                        status: string;
+                        /** Format: date-time */
+                        resolvedAt: string;
+                        requestId: string;
+                    };
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1441,7 +1738,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Job"];
+                };
             };
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
@@ -1577,12 +1876,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Embedded OpenAPI document. */
+            /** @description Embedded OpenAPI document, served verbatim as raw YAML text. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/yaml": string;
+                };
             };
             429: components["responses"]["RateLimited"];
         };

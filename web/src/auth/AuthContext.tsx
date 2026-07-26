@@ -9,8 +9,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 export type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 
 export type Session =
-  | { status: 'anonymous' }
-  | { status: 'authenticated'; email: string; role: Role };
+  { status: 'anonymous' } | { status: 'authenticated'; email: string; role: Role };
 
 export interface AuthContextValue {
   session: Session;

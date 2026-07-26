@@ -10,7 +10,9 @@ describe('SafeMarkdown', () => {
 
   it('renders trusted Markdown content', () => {
     const { container } = render(
-      <SafeMarkdown>{'# Tiêu đề\n\nĐoạn văn **in đậm** và [liên kết](https://example.com).'}</SafeMarkdown>,
+      <SafeMarkdown>
+        {'# Tiêu đề\n\nĐoạn văn **in đậm** và [liên kết](https://example.com).'}
+      </SafeMarkdown>,
     );
 
     expect(screen.getByRole('heading', { name: 'Tiêu đề' })).toBeVisible();
@@ -36,7 +38,9 @@ describe('SafeMarkdown', () => {
       // rehype-sanitize is doing the blocking here (see the mutation-test note below and
       // the `style` case right after, which *is* sanitizer-dependent).
       const { container } = render(
-        <SafeMarkdown>{'<img src="x" alt="test" onerror="window.__xss = \'onerror\'">'}</SafeMarkdown>,
+        <SafeMarkdown>
+          {'<img src="x" alt="test" onerror="window.__xss = \'onerror\'">'}
+        </SafeMarkdown>,
       );
 
       const img = container.querySelector('img');
@@ -51,7 +55,9 @@ describe('SafeMarkdown', () => {
       // schema does not allow `style` on any tag. Real mutation-test coverage for the
       // "event handler / dangerous attribute" vector.
       const { container } = render(
-        <SafeMarkdown>{'<p style="background-image: url(https://evil.example/track.gif)">hi</p>'}</SafeMarkdown>,
+        <SafeMarkdown>
+          {'<p style="background-image: url(https://evil.example/track.gif)">hi</p>'}
+        </SafeMarkdown>,
       );
 
       const p = container.querySelector('p');
@@ -69,7 +75,9 @@ describe('SafeMarkdown', () => {
 
     it('strips <object> elements', () => {
       const { container } = render(
-        <SafeMarkdown>{'<object data="https://evil.example" type="text/html"></object>'}</SafeMarkdown>,
+        <SafeMarkdown>
+          {'<object data="https://evil.example" type="text/html"></object>'}
+        </SafeMarkdown>,
       );
 
       expect(container.querySelector('object')).toBeNull();
@@ -80,7 +88,10 @@ describe('SafeMarkdown', () => {
     it.each([
       ['javascript:', '[click](javascript:window.__xss=1)'],
       ['JavaScript: (case obfuscation)', '[click](JavaScript:window.__xss=1)'],
-      ['leading-whitespace javascript: (whitespace obfuscation)', '<a href="  javascript:window.__xss=1">click</a>'],
+      [
+        'leading-whitespace javascript: (whitespace obfuscation)',
+        '<a href="  javascript:window.__xss=1">click</a>',
+      ],
       ['tab-obfuscated javascript:', '<a href="java&#9;script:window.__xss=1">click</a>'],
       ['vbscript:', '<a href="vbscript:msgbox(1)">click</a>'],
       ['data:text/html', '[click](data:text/html,<script>window.__xss=1</script>)'],
@@ -119,7 +130,9 @@ describe('SafeMarkdown', () => {
 
     it('strips data: URLs from Markdown image src (including SVG data URLs)', () => {
       const { container } = render(
-        <SafeMarkdown>{'![alt](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIi8+)'}</SafeMarkdown>,
+        <SafeMarkdown>
+          {'![alt](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIi8+)'}
+        </SafeMarkdown>,
       );
 
       const img = container.querySelector('img');
@@ -128,7 +141,9 @@ describe('SafeMarkdown', () => {
     });
 
     it('keeps http(s) image src', () => {
-      const { container } = render(<SafeMarkdown>{'![alt](https://example.com/a.png)'}</SafeMarkdown>);
+      const { container } = render(
+        <SafeMarkdown>{'![alt](https://example.com/a.png)'}</SafeMarkdown>,
+      );
 
       const img = container.querySelector('img');
       expect(img?.getAttribute('src')).toBe('https://example.com/a.png');
@@ -156,7 +171,9 @@ describe('SafeMarkdown', () => {
 
   describe('DOM clobbering', () => {
     it('prefixes clobber-prone id/name attributes instead of leaving them raw', () => {
-      const { container } = render(<SafeMarkdown>{'<img name="parentNode" src="https://example.com/a.png">'}</SafeMarkdown>);
+      const { container } = render(
+        <SafeMarkdown>{'<img name="parentNode" src="https://example.com/a.png">'}</SafeMarkdown>,
+      );
 
       const img = container.querySelector('img');
       expect(img?.getAttribute('name')).not.toBe('parentNode');
