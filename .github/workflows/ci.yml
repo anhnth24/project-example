@@ -4,6 +4,8 @@ on:
   push:
     branches: [master]
   pull_request:
+  # Manual entry point for the opt-in live gates (see phase1b-o04-release-gate).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,9 +40,13 @@ jobs:
         name: Classify changed paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          # workflow_dispatch carries neither a PR base nor a push "before", and
+          # the classifier requires a base. Fall back to the default branch so a
+          # manual run still classifies paths instead of failing the whole job.
           python3 scripts/classify-ci-changes.py \
-            --base "$BASE_SHA" \
+            --base "${BASE_SHA:-origin/$DEFAULT_BRANCH}" \
             --head HEAD \
             --github-output "$GITHUB_OUTPUT"
       - run: bash scripts/check-foundation-gate.sh --static-only
@@ -228,15 +234,17 @@ jobs:
           node-version: 20
       - run: make check-toolchain
 
+  # Opt-in, not per-push: this gate boots the whole POC stack and builds the
+  # release server image inside Docker with no layer cache across runners, which
+  # the .dockerignore header measures at ~20 minutes. Qualifying the POC belongs
+  # to a deliberate run before a phase closes, not to every commit. Trigger it
+  # with a manual workflow_dispatch, or by putting the `run-live-gates` label on
+  # a pull request.
   phase1b-o04-release-gate:
     needs: changes-and-static
     if: >-
-      needs.changes-and-static.outputs.rust == 'true' &&
-      (
-        github.event_name == 'push' ||
-        contains(needs.changes-and-static.outputs.rust_crates, 'server') ||
-        needs.changes-and-static.outputs.dev_stack == 'true'
-      )
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-live-gates')
     runs-on: ubuntu-22.04
     env:
       GITHUB_SHA: ${{ github.sha }}
