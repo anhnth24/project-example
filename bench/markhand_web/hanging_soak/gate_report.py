@@ -235,10 +235,13 @@ def evaluate_status(
     blockers.extend(dependency_blockers)
     if not blockers:
         return "pass", []
+    # dependency_blockers arrive prefixed with their dependency label (e.g.
+    # "database:gate:restoreConfirmed:fail"), so match on substring rather
+    # than a fixed prefix.
     hard = (
         not redaction_ok
-        or any(b.startswith("gate:") for b in dependency_blockers)
-        or "pause_not_confirmed" in dependency_blockers
+        or any("gate:" in b for b in dependency_blockers)
+        or any("pause_not_confirmed" in b for b in dependency_blockers)
     )
     return ("fail" if hard else "incomplete"), blockers
 
