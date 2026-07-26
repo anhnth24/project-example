@@ -89,6 +89,25 @@ def _base_good_report() -> dict:
             "networks": ["markhand-poc_private"],
             "networkInternal": {"markhand-poc_private": False},
         },
+        **{
+            service: {
+                "user": "10001:10001",
+                "privileged": False,
+                "capAdd": [],
+                "capDrop": ["ALL"],
+                "readOnlyRootfs": True,
+                "securityOpt": ["no-new-privileges:true"],
+                "devices": [],
+                "bindMounts": [],
+                "tmpfs": {
+                    "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+                    "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m",
+                },
+                "networks": ["markhand-poc_private"],
+                "networkInternal": {"markhand-poc_private": False},
+            }
+            for service in ("worker-delete", "worker-reconcile")
+        },
     }
     return {
         "issue": "P1B-F02",

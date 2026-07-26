@@ -93,7 +93,7 @@ require_regex "$DOCKERFILE_SERVER" 'useradd.*--uid 10001|--uid 10001' "server im
 require_regex "$DOCKERFILE_WORKER" 'useradd.*--uid 10001|--uid 10001' "worker image non-root UID 10001"
 
 # Isolation flags on hardened services
-for svc in api worker-convert worker-index worker-embedding; do
+for svc in api worker-convert worker-index worker-embedding worker-delete worker-reconcile; do
   if grep -q 'x-app-security: &app-security' "$COMPOSE_FILE" \
     && awk -v svc="$svc:" '
       $0 ~ "^  "svc {found=1; next}

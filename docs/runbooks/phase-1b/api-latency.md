@@ -29,7 +29,8 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/api/v1/health/li
 curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8788/api/v1/health/ready
 
 # Inspect API + worker health (Compose POC example)
-docker compose -f deploy/compose.poc.yml ps api worker-convert worker-embedding worker-index
+docker compose -f deploy/compose.poc.yml ps \
+  api worker-convert worker-embedding worker-index worker-delete worker-reconcile
 docker compose -f deploy/compose.poc.yml --env-file deploy/.env logs --tail=100 api \
   2>&1 | python3 deploy/scripts/redact_secrets.py
 ```

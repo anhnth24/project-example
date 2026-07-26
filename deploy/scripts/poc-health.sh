@@ -84,5 +84,7 @@ wait_http \
 require_running worker-convert
 require_running worker-index
 require_running worker-embedding
+require_running worker-delete
+require_running worker-reconcile
 
 echo "POC health OK"

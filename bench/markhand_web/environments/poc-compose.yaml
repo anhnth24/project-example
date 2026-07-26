@@ -39,5 +39,5 @@
     "migrationManifestSha256",
     "hardware"
   ],
-  "notes": "Single-host Docker Compose POC stack from deploy/compose.poc.yml. Per-service caps bound the stack to roughly 7.5 CPU regardless of host size (api/postgres/qdrant/minio 1.0 each, three workers 1.0 each, mock-embedding 0.5), and embeddings come from the deterministic mock service, not a production embedding runtime. This environment qualifies the single-org POC only; Profile B production capacity is measured on on-prem-reference. Capacity fields are minimums in decimal GB (10^9 bytes)."
+  "notes": "Single-host Docker Compose POC stack from deploy/compose.poc.yml. Per-service caps bound the stack to roughly 8.5 CPU regardless of host size (api/postgres/qdrant/minio 1.0 each, convert/index/embedding workers 1.0 each, delete/reconcile workers 0.5 each, mock-embedding 0.5), and embeddings come from the deterministic mock service, not a production embedding runtime. This environment qualifies the single-org POC only; Profile B production capacity is measured on on-prem-reference. Capacity fields are minimums in decimal GB (10^9 bytes)."
 }

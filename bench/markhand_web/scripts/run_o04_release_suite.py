@@ -52,7 +52,13 @@ DEFAULT_COMPOSE_PROJECT = "markhand-poc"
 RAW_MANIFEST = "raw-manifest.json"
 DEFAULT_COMMAND_TIMEOUT_SECS = 15 * 60
 DEFAULT_MAX_CAPTURE_BYTES = 8 * 1024 * 1024
-SUITE_WORKER_SERVICES = ["worker-convert", "worker-index", "worker-embedding"]
+SUITE_WORKER_SERVICES = [
+    "worker-convert",
+    "worker-index",
+    "worker-embedding",
+    "worker-delete",
+    "worker-reconcile",
+]
 
 # POC services that must appear under the Compose project label for live pass.
 EXPECTED_POC_SERVICES = [
@@ -2495,14 +2501,13 @@ def self_test() -> None:
     assert "--include-ignored" in suite_specs()["adversarial_upload"][0]
     stop_command = compose_worker_control_command("poc-test", "stop")
     start_command = compose_worker_control_command("poc-test", "start")
-    assert stop_command[-5:] == [
+    assert stop_command[-(len(SUITE_WORKER_SERVICES) + 2) :] == [
         "--timeout",
         "15",
-        "worker-convert",
-        "worker-index",
-        "worker-embedding",
+        *SUITE_WORKER_SERVICES,
     ]
-    assert start_command[-3:] == SUITE_WORKER_SERVICES
+    assert "worker-delete" in SUITE_WORKER_SERVICES
+    assert start_command[-len(SUITE_WORKER_SERVICES) :] == SUITE_WORKER_SERVICES
     try:
         compose_worker_control_command("poc-test", "restart")
         raise AssertionError("expected unsupported worker action to raise")

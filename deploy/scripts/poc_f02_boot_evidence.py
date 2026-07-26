@@ -46,6 +46,8 @@ REQUIRED_RUNTIME_SERVICES = [
     "worker-convert",
     "worker-index",
     "worker-embedding",
+    "worker-delete",
+    "worker-reconcile",
 ]
 
 REQUIRED_BASE_SERVICES = [
@@ -56,6 +58,8 @@ REQUIRED_BASE_SERVICES = [
     "worker-convert",
     "worker-index",
     "worker-embedding",
+    "worker-delete",
+    "worker-reconcile",
 ]
 
 # Resource-limit checks for long-lived POC services. `mock-embedding` is required
@@ -70,6 +74,8 @@ LIMIT_SERVICES = [
     "worker-convert",
     "worker-index",
     "worker-embedding",
+    "worker-delete",
+    "worker-reconcile",
 ]
 OPTIONAL_LIMIT_SERVICES = ["embedding-cpu"]
 REQUIRED_NATIVE_FORMATS = ["csv", "docx", "html", "pdf", "png", "pptx", "txt", "xlsx"]
@@ -410,6 +416,8 @@ def _validate_runtime_security(report: dict[str, Any]) -> list[str]:
         "worker-convert": {"convert"},
         "worker-index": {"private"},
         "worker-embedding": {"private"},
+        "worker-delete": {"private"},
+        "worker-reconcile": {"private"},
     }
     for svc in REQUIRED_RUNTIME_SERVICES:
         sec = runtime.get(svc) if isinstance(runtime.get(svc), dict) else {}
@@ -1371,6 +1379,25 @@ def run_self_test() -> int:
                     },
                     "networks": ["markhand-poc_private"],
                     "networkInternal": {"markhand-poc_private": False},
+                },
+                **{
+                    service: {
+                        "user": "10001:10001",
+                        "privileged": False,
+                        "capAdd": [],
+                        "capDrop": ["ALL"],
+                        "readOnlyRootfs": True,
+                        "securityOpt": ["no-new-privileges:true"],
+                        "devices": [],
+                        "bindMounts": [],
+                        "tmpfs": {
+                            "/tmp": "rw,noexec,nosuid,nodev,size=256m",
+                            "/var/lib/markhand": "rw,noexec,nosuid,nodev,size=64m",
+                        },
+                        "networks": ["markhand-poc_private"],
+                        "networkInternal": {"markhand-poc_private": False},
+                    }
+                    for service in ("worker-delete", "worker-reconcile")
                 },
             },
             "bootEvidence": {

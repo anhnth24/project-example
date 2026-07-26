@@ -71,7 +71,7 @@ enabled but the profile is missing. Without it the worker crash-loops on
 
 ### Isolation matrix
 
-| Control | api | worker-convert | worker-index / embedding |
+| Control | api | worker-convert | worker-index / embedding / delete / reconcile |
 |---|---|---|---|
 | non-root UID 10001 | yes | yes | yes |
 | `read_only` rootfs | yes | yes | yes |

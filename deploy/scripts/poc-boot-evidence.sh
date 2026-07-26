@@ -321,7 +321,7 @@ fi
 pass "poc-health"
 
 # --- Metadata for expected O04 services + limit surfaces ---
-for svc in api minio postgres qdrant mock-embedding worker-convert worker-index worker-embedding; do
+for svc in api minio postgres qdrant mock-embedding worker-convert worker-index worker-embedding worker-delete worker-reconcile; do
   collect_service_meta "$svc" || true
 done
 
@@ -355,7 +355,7 @@ if [[ "${COMPOSE_PROFILES}" == *aiteamvn* ]]; then
 fi
 
 # --- Isolation: UID / read-only / caps / no-new-privileges / nonzero limits ---
-for svc in api worker-convert worker-index worker-embedding; do
+for svc in api worker-convert worker-index worker-embedding worker-delete worker-reconcile; do
   id="$(service_id "$svc")"
   if [[ -z "$id" ]]; then
     continue
