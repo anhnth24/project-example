@@ -250,6 +250,30 @@ class DeleteRetentionTests(unittest.TestCase):
         self.assertEqual(stats.deleted_ids, ["deletable-1"])
 
 
+class FailureReasonTests(unittest.TestCase):
+    def test_failures_are_attributed_per_actor_and_window(self) -> None:
+        stats = workload.RequestStats()
+        stats.add("ingest", ok=False, reason="upload_http_429")
+        stats.add("ingest", ok=False, reason="upload_http_429")
+        stats.add("ingest", ok=False, reason="not_visible_before_timeout")
+        stats.add("query", ok=False, reason="no_expected_match:current", in_injection=True)
+        stats.add("delete", ok=False, not_ready_reason="delete_no_doc")
+        stats.add("delete", ok=True, doc_id="doc-1")
+
+        self.assertEqual(
+            stats.failure_reasons["ingest"],
+            {"upload_http_429": 2, "not_visible_before_timeout": 1},
+        )
+        self.assertEqual(
+            stats.failure_reasons["query"],
+            {"no_expected_match:current@injection": 1},
+        )
+        # A delete with no candidate document is still a failure, labelled by its
+        # not-ready reason rather than lost as "unspecified".
+        self.assertEqual(stats.failure_reasons["delete"], {"delete_no_doc": 1})
+        self.assertEqual(stats.success["delete"], 1)
+
+
 class QuerySuccessTests(unittest.TestCase):
     def test_compare_without_dataset_is_not_success(self) -> None:
         stats = workload.RequestStats()

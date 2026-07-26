@@ -52,6 +52,8 @@ class RequestStats:
     errors: int = 0
     errors_outside_injection: int = 0
     errors_in_injection: int = 0
+    # actor -> reason -> count, so a failed run says why instead of only how many.
+    failure_reasons: dict[str, dict[str, int]] = field(default_factory=dict)
     query_success_latencies_ms: list[float] = field(default_factory=list)
     query_success_by_mode: dict[str, int] = field(default_factory=dict)
     query_attempts_by_mode: dict[str, int] = field(default_factory=dict)
@@ -104,6 +106,7 @@ class RequestStats:
         mode: str | None = None,
         in_injection: bool = False,
         not_ready_reason: str | None = None,
+        reason: str | None = None,
     ) -> None:
         with self.lock:
             self.completed[kind] = self.completed.get(kind, 0) + 1
@@ -112,6 +115,11 @@ class RequestStats:
             if ok:
                 self.success[kind] = self.success.get(kind, 0) + 1
             else:
+                label = reason or not_ready_reason or "unspecified"
+                if in_injection:
+                    label = f"{label}@injection"
+                per_kind = self.failure_reasons.setdefault(kind, {})
+                per_kind[label] = per_kind.get(label, 0) + 1
                 self.errors += 1
                 if in_injection:
                     self.errors_in_injection += 1
@@ -475,10 +483,12 @@ def do_ingest(
     version_id = None
     marker = marker_for(fmt)
     ok = _http_success(status)
+    reason: str | None = None if ok else f"upload_http_{status}"
     if ok:
         payload = _json_payload(data)
         if payload is None:
             ok = False
+            reason = "upload_body_not_json"
         else:
             doc_id = payload.get("documentId")
             version_id = payload.get("versionId")
@@ -490,7 +500,11 @@ def do_ingest(
             marker=marker,
             timeout_seconds=float(os.environ.get("MARKHAND_SOAK_INGEST_TERMINAL_TIMEOUT", "180")),
         )
+        if not ok:
+            reason = "not_visible_before_timeout"
         published_version = current_published_version(client, doc_id) if ok else None
+        if ok and published_version is None:
+            reason = "no_published_version"
         ok = published_version is not None
         if published_version is not None:
             stats.record_version(doc_id, published_version, published=True)
@@ -498,12 +512,14 @@ def do_ingest(
             stats.record_expected_version(doc_id, published_version)
     elif ok:
         ok = False
+        reason = "upload_missing_document_or_version_id"
     in_inj = stats.in_injection_window(time.monotonic() - start_mono)
     stats.add(
         "ingest",
         ok=ok,
         doc_id=doc_id if isinstance(doc_id, str) else None,
         in_injection=in_inj,
+        reason=reason,
     )
 
 
@@ -575,19 +591,24 @@ def do_query(
 
     body = json.dumps(body_obj).encode("utf-8")
     status, data, _latency = client.request("POST", "/api/v1/search", body=body)
-    ok = _http_success(status) and search_matches_expected(
+    http_ok = _http_success(status)
+    ok = http_ok and search_matches_expected(
         data,
         expected_doc=expected_doc,
         expected_version=locals().get("expected_version"),
         expected_marker=expected_marker,
         require_citation=True,
     )
+    reason = None
+    if not ok:
+        reason = f"search_http_{status}" if not http_ok else f"no_expected_match:{mode}"
     stats.add(
         "query",
         ok=ok,
         latency_ms=((time.monotonic() - (scheduled_mono or start_mono)) * 1000.0) if ok else None,
         mode=mode,
         in_injection=in_inj,
+        reason=reason,
     )
 
 
@@ -628,7 +649,14 @@ def do_delete(
         stats.add("delete", ok=False, in_injection=in_inj, not_ready_reason="delete_no_doc")
         return
     status, _data, _latency = client.request("DELETE", f"/api/v1/documents/{doc_id}")
-    stats.add("delete", ok=_http_success(status), doc_id=doc_id, in_injection=in_inj)
+    delete_ok = _http_success(status)
+    stats.add(
+        "delete",
+        ok=delete_ok,
+        doc_id=doc_id,
+        in_injection=in_inj,
+        reason=None if delete_ok else f"delete_http_{status}",
+    )
 
 
 def do_reconcile(
@@ -663,12 +691,16 @@ def do_reconcile(
         "worker-reconcile-oneshot",
     ]
     in_inj = stats.in_injection_window(time.monotonic() - start_mono)
+    reason: str | None = None
     try:
         proc = run(cmd, capture_output=True, text=True, check=False, env=env, timeout=90)
         ok = proc.returncode == 0
-    except (OSError, subprocess.SubprocessError):
+        if not ok:
+            reason = f"reconcile_exit_{proc.returncode}"
+    except (OSError, subprocess.SubprocessError) as exc:
         ok = False
-    stats.add("reconcile", ok=ok, in_injection=in_inj)
+        reason = f"reconcile_spawn_{type(exc).__name__}"
+    stats.add("reconcile", ok=ok, in_injection=in_inj, reason=reason)
 
 
 def expected_scheduled_counts(profile: dict[str, Any], duration_seconds: int) -> dict[str, int]:
@@ -897,6 +929,10 @@ def metrics_from_stats(
         "deletedCount": len(stats.deleted_ids),
         "retainedCount": len(stats.retained_ids),
         "notReady": list(stats.not_ready),
+        "failureReasons": {
+            kind: dict(sorted(reasons.items(), key=lambda item: -item[1]))
+            for kind, reasons in sorted(stats.failure_reasons.items())
+        },
         "durationSeconds": duration_seconds,
         "actualElapsedSeconds": (
             None

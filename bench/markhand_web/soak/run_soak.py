@@ -16,6 +16,7 @@ Canonical artifacts:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -513,12 +514,24 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
     )
 
     def sample_once() -> None:
-        stats_s = sampler.sample_docker_stats(allowed_ids_holder)
-        metrics_s = sampler.sample_api_metrics(host)
-        pg = sampler.sample_pg_connections(
-            compose_project=project, container_ids=allowed_ids_holder
-        )
-        temp = sampler.sample_container_temp_bytes(allowed_ids_holder)
+        # Each collector shells out to docker or psql, which costs seconds on a
+        # busy host; running them sequentially blew past the sample interval and
+        # starved resource coverage. Collect concurrently and keep the cadence.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="o05-sample"
+        ) as pool:
+            stats_f = pool.submit(sampler.sample_docker_stats, allowed_ids_holder)
+            metrics_f = pool.submit(sampler.sample_api_metrics, host)
+            pg_f = pool.submit(
+                sampler.sample_pg_connections,
+                compose_project=project,
+                container_ids=allowed_ids_holder,
+            )
+            temp_f = pool.submit(sampler.sample_container_temp_bytes, allowed_ids_holder)
+            stats_s = stats_f.result()
+            metrics_s = metrics_f.result()
+            pg = pg_f.result()
+            temp = temp_f.result()
         tracker.observe(
             rss_mb=stats_s.get("rssMbTotal"),
             temp_bytes=temp.get("tempBytes"),
