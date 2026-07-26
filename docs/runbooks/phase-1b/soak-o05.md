@@ -92,6 +92,12 @@ stays in the report as `requestErrorsOutsideInjectionAtOutcome`, so a run that
 passes only through overlap attribution is visible as such. Failures that never
 touch a window count against the gate under both readings.
 
+Completeness applies the same rule: an event that failed inside a window is
+subtracted from the minimum rather than counted against it, and the report shows
+`failedUnderInjection` per actor. Reconcile needs every remaining event, and
+with five reconciles in a run the old all-or-nothing minimum turned into a coin
+toss on whether an injection happened to land on a tick.
+
 ## Authentication over a long run
 
 The access token lives 900 seconds (`MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS`,

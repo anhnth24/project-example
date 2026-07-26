@@ -295,6 +295,39 @@ class InjectionAttributionTests(unittest.TestCase):
         self.assertEqual(stats.errors_outside_injection_at_outcome, 1)
 
 
+class CompletenessInjectionAllowanceTests(unittest.TestCase):
+    def _stats(self) -> workload.RequestStats:
+        stats = workload.RequestStats()
+        for kind, n in (("ingest", 4), ("query", 4), ("delete", 4), ("reconcile", 5)):
+            stats.mark_scheduled(kind, n)
+            for _ in range(n):
+                stats.mark_submitted(kind)
+                stats.add(kind, ok=True)
+        return stats
+
+    def test_reconcile_lost_to_an_injected_fault_is_excused(self) -> None:
+        stats = self._stats()
+        # Replace one reconcile success with a failure inside an injection window.
+        stats.success["reconcile"] -= 1
+        stats.add("reconcile", ok=False, in_injection=True, reason="reconcile_exit_1")
+        stats.completed["reconcile"] -= 1
+        result = workload.completeness_ok(stats)
+        self.assertEqual(result["actors"]["reconcile"]["required"], 4)
+        self.assertEqual(result["actors"]["reconcile"]["failedUnderInjection"], 1)
+        self.assertTrue(result["reconcilePassed"])
+        self.assertTrue(result["passed"])
+
+    def test_reconcile_failing_on_its_own_still_fails(self) -> None:
+        stats = self._stats()
+        stats.success["reconcile"] -= 1
+        stats.add("reconcile", ok=False, in_injection=False, reason="reconcile_exit_1")
+        stats.completed["reconcile"] -= 1
+        result = workload.completeness_ok(stats)
+        self.assertEqual(result["actors"]["reconcile"]["required"], 5)
+        self.assertFalse(result["reconcilePassed"])
+        self.assertFalse(result["passed"])
+
+
 class SamplerCadenceTests(unittest.TestCase):
     def test_sample_cost_is_absorbed_by_the_interval(self) -> None:
         starts: list[float] = []
@@ -377,6 +410,23 @@ class UniqueMarkerTests(unittest.TestCase):
         self.assertTrue(first.startswith(fixtures.marker_for("txt")))
         self.assertIn(first.encode(), fixtures.generate_bytes("txt", first))
         self.assertIn(second.encode(), fixtures.generate_bytes("csv", second))
+
+    def test_token_is_words_so_ocr_can_read_it_back(self) -> None:
+        tokens = {fixtures.unique_token() for _ in range(200)}
+        self.assertGreater(len(tokens), 190, "tokens should not repeat")
+        for token in tokens:
+            words = token.split()
+            self.assertEqual(len(words), 4)
+            for word in words:
+                self.assertTrue(word.isalpha() and word.isupper(), token)
+
+    def test_png_marker_carries_no_digits_through_ocr(self) -> None:
+        token = fixtures.unique_token()
+        png_marker = fixtures.unique_marker("png", token)
+        self.assertEqual(png_marker, token)
+        self.assertFalse(any(ch.isdigit() for ch in png_marker))
+        # Other formats keep the readable per-format prefix.
+        self.assertTrue(fixtures.unique_marker("pdf", token).startswith("SOAKPDF"))
 
     def test_generate_bytes_defaults_to_the_shared_marker(self) -> None:
         self.assertIn(

@@ -57,6 +57,7 @@ class RequestStats:
     # whether the operation overlapped a fault window; kept so the stricter
     # reading stays visible in the evidence.
     errors_outside_injection_at_outcome: int = 0
+    failures_in_injection: dict[str, int] = field(default_factory=dict)
     reconcile_failures: list[dict[str, Any]] = field(default_factory=list)
     # actor -> reason -> count, so a failed run says why instead of only how many.
     failure_reasons: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -158,6 +159,9 @@ class RequestStats:
                 self.errors += 1
                 if in_injection:
                     self.errors_in_injection += 1
+                    self.failures_in_injection[kind] = (
+                        self.failures_in_injection.get(kind, 0) + 1
+                    )
                 else:
                     self.errors_outside_injection += 1
                 if not in_injection_at_outcome:
@@ -556,7 +560,7 @@ def do_ingest(
     # OCR, and the bitmap fallback is unreadable, so it keeps the golden marker.
     unique_marker_used = fmt.lower() != "png" or fixtures.unique_png_marker_supported()
     if unique_marker_used:
-        marker = fixtures.unique_marker(fmt, uuid.uuid4().hex[:8].upper())
+        marker = fixtures.unique_marker(fmt, fixtures.unique_token())
         file_bytes = fixtures.generate_bytes(fmt, marker)
     else:
         marker = marker_for(fmt)
@@ -1073,7 +1077,14 @@ def completeness_ok(
     *,
     ratio: float = COMPLETENESS_RATIO,
 ) -> dict[str, Any]:
-    """Require scheduled work to drain and actor success to meet qualification minima."""
+    """Require scheduled work to drain and actor success to meet qualification minima.
+
+    Events the run deliberately sabotaged do not count against the minimum: a
+    reconcile scheduled while the database is being blipped cannot succeed, and
+    with five reconciles in a run that made the gate a coin toss on whether an
+    injection landed on a tick. Everything a fault never touched still has to
+    succeed.
+    """
     details: dict[str, Any] = {}
     ok = True
     for kind in ("ingest", "query", "delete", "reconcile"):
@@ -1081,10 +1092,12 @@ def completeness_ok(
         submitted = int(stats.submitted.get(kind, 0))
         completed = int(stats.completed.get(kind, 0))
         success = int(stats.success.get(kind, 0))
+        injured = int(stats.failures_in_injection.get(kind, 0))
+        qualifying = max(scheduled - injured, 0)
         if kind == "reconcile":
-            need = scheduled
+            need = qualifying
         else:
-            need = math.ceil(scheduled * ratio) if scheduled else 0
+            need = math.ceil(qualifying * ratio) if qualifying else 0
         drained = scheduled == submitted == completed
         passed = bool(scheduled and drained and success >= need)
         details[kind] = {
@@ -1092,6 +1105,7 @@ def completeness_ok(
             "submitted": submitted,
             "completed": completed,
             "success": success,
+            "failedUnderInjection": injured,
             "required": need,
             "drained": drained,
             "passed": passed,
