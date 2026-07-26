@@ -396,6 +396,7 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
         collection_id=collection_id,
         timeout_seconds=float(os.environ.get("MARKHAND_SOAK_TIMEOUT_SECONDS", "30")),
         max_in_flight=int(os.environ.get("MARKHAND_SOAK_MAX_IN_FLIGHT", "32")),
+        credentials=(email, password) if password else None,
     )
 
     # 2) Compare dataset — fail closed if profile includes compare.
@@ -799,6 +800,7 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
                 timeout_seconds=float(
                     os.environ.get("MARKHAND_SOAK_TIMEOUT_SECONDS", "30")
                 ),
+                credentials=(email, password) if password else None,
             )
             low_priv_token = (
                 os.environ.get("MARKHAND_SOAK_LOW_PRIV_TOKEN", "").strip() or None
@@ -882,6 +884,7 @@ def run_live(args: argparse.Namespace, loaded: dict[str, Any]) -> dict[str, Any]
     completeness = {"passed": None}
     if stats is not None:
         metrics.update(workload.metrics_from_stats(stats, duration, modes=modes))
+        metrics["reauthCount"] = client.reauth_count
         completeness = workload.completeness_ok(
             stats, ratio=float(thr["completenessRatio"])
         )

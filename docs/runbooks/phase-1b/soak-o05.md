@@ -80,6 +80,16 @@ must also pass.
 green deployment. Blue and restored identities/storage signatures must be
 distinct; a URL alias cannot satisfy the gate.
 
+## Authentication over a long run
+
+The access token lives 900 seconds (`MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS`,
+capped at 900 in production), so a 1800-second soak outlives two tokens. The
+client re-authenticates when a request comes back 401 and retries it once; the
+report carries `reauthCount` so a run that never refreshed is distinguishable
+from one that did. Expect 1–2 per official run. Clients built to prove denial —
+the low-privilege one in the post-restore check — get no credentials, so their
+401 stays a result rather than becoming a retry.
+
 ## Fixtures
 
 Every timed upload is generated in memory with its **own marker**

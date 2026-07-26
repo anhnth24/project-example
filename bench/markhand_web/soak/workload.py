@@ -197,12 +197,36 @@ class ApiClient:
         collection_id: str,
         timeout_seconds: float = 30.0,
         max_in_flight: int = 32,
+        credentials: tuple[str, str] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.collection_id = collection_id
         self.timeout_seconds = timeout_seconds
         self._sema = threading.BoundedSemaphore(max_in_flight)
+        # The access token outlives a smoke run but not a 1800s soak, so keep the
+        # credentials to re-authenticate instead of turning every later request
+        # into a 401 and reporting it as a system failure.
+        self._credentials = credentials
+        self._auth_lock = threading.Lock()
+        self.reauth_count = 0
+
+    def _reauthenticate(self, stale_token: str | None) -> bool:
+        if not self._credentials:
+            return False
+        with self._auth_lock:
+            if self.token != stale_token:
+                # Another thread already refreshed it.
+                return True
+            email, password = self._credentials
+            try:
+                self.token = login(
+                    self.base_url, email, password, timeout=self.timeout_seconds
+                )
+            except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, ValueError):
+                return False
+            self.reauth_count += 1
+            return True
 
     def _headers(self, content_type: str | None = "application/json") -> dict[str, str]:
         headers: dict[str, str] = {}
@@ -220,26 +244,43 @@ class ApiClient:
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, bytes, float]:
-        url = self.base_url + path
-        req = Request(url, data=body, method=method, headers=headers or self._headers())
         started = time.perf_counter()
-        acquired = self._sema.acquire(timeout=self.timeout_seconds)
-        if not acquired:
-            return 0, b"backpressure", (time.perf_counter() - started) * 1000.0
-        try:
-            with urlopen(req, timeout=self.timeout_seconds) as resp:  # noqa: S310
-                data = resp.read()
-                status = int(getattr(resp, "status", 200))
-        except HTTPError as exc:
-            data = exc.read() if hasattr(exc, "read") else b""
-            status = int(exc.code)
-        except (URLError, TimeoutError, OSError):
-            data = b""
-            status = 0
-        finally:
-            self._sema.release()
+        status, data = self._send(method, path, body=body, headers=headers)
+        if status == 401 and self._reauthenticate(self.token):
+            retry_headers = headers
+            if retry_headers is not None and "Authorization" in retry_headers:
+                # Multipart callers build their own headers; carry the content
+                # type over but authorize with the token we just obtained.
+                retry_headers = {
+                    **retry_headers,
+                    "Authorization": f"Bearer {self.token}",
+                }
+            status, data = self._send(method, path, body=body, headers=retry_headers)
         latency = (time.perf_counter() - started) * 1000.0
         return status, data, latency
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None,
+        headers: dict[str, str] | None,
+    ) -> tuple[int, bytes]:
+        url = self.base_url + path
+        req = Request(url, data=body, method=method, headers=headers or self._headers())
+        acquired = self._sema.acquire(timeout=self.timeout_seconds)
+        if not acquired:
+            return 0, b"backpressure"
+        try:
+            with urlopen(req, timeout=self.timeout_seconds) as resp:  # noqa: S310
+                return int(getattr(resp, "status", 200)), resp.read()
+        except HTTPError as exc:
+            return int(exc.code), (exc.read() if hasattr(exc, "read") else b"")
+        except (URLError, TimeoutError, OSError):
+            return 0, b""
+        finally:
+            self._sema.release()
 
 
 def login(base_url: str, email: str, password: str, *, timeout: float = 15.0) -> str:

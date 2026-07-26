@@ -250,6 +250,60 @@ class DeleteRetentionTests(unittest.TestCase):
         self.assertEqual(stats.deleted_ids, ["deletable-1"])
 
 
+class TokenRefreshTests(unittest.TestCase):
+    def _client(self, statuses: list[int]) -> tuple[workload.ApiClient, list[Any]]:
+        client = workload.ApiClient(
+            "http://api",
+            token="stale",
+            collection_id="c",
+            credentials=("admin@example.com", "pw"),
+        )
+        seen: list[Any] = []
+
+        def fake_send(method, path, *, body, headers):
+            seen.append(headers)
+            return statuses.pop(0), b"{}"
+
+        client._send = fake_send  # type: ignore[method-assign]
+        return client, seen
+
+    def test_expired_token_is_refreshed_and_the_request_retried(self) -> None:
+        client, seen = self._client([401, 200])
+        with mock.patch.object(workload, "login", return_value="fresh") as login:
+            status, _data, _latency = client.request("GET", "/api/v1/search")
+        self.assertEqual(status, 200)
+        self.assertEqual(login.call_count, 1)
+        self.assertEqual(client.reauth_count, 1)
+        # The retry builds its headers from the refreshed token.
+        self.assertIsNone(seen[1])
+        self.assertEqual(client._headers()["Authorization"], "Bearer fresh")
+
+    def test_multipart_retry_keeps_content_type_and_new_token(self) -> None:
+        client, seen = self._client([401, 200])
+        headers = client._headers("multipart/form-data; boundary=x")
+        with mock.patch.object(workload, "login", return_value="fresh"):
+            status, _data, _latency = client.request(
+                "POST", "/api/v1/uploads", body=b"x", headers=headers
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(seen[1]["Content-Type"], "multipart/form-data; boundary=x")
+        self.assertEqual(seen[1]["Authorization"], "Bearer fresh")
+
+    def test_client_without_credentials_reports_the_401(self) -> None:
+        client = workload.ApiClient("http://api", token="low", collection_id="c")
+        client._send = lambda *a, **k: (401, b"{}")  # type: ignore[method-assign]
+        status, _data, _latency = client.request("GET", "/api/v1/documents")
+        self.assertEqual(status, 401)
+        self.assertEqual(client.reauth_count, 0)
+
+    def test_failed_refresh_surfaces_the_401(self) -> None:
+        client, _seen = self._client([401])
+        with mock.patch.object(workload, "login", side_effect=RuntimeError("down")):
+            status, _data, _latency = client.request("GET", "/api/v1/search")
+        self.assertEqual(status, 401)
+        self.assertEqual(client.reauth_count, 0)
+
+
 class UniqueMarkerTests(unittest.TestCase):
     def test_marker_is_unique_per_upload_and_embedded_in_content(self) -> None:
         first = fixtures.unique_marker("txt", "AAAA1111")
