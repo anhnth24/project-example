@@ -735,7 +735,11 @@ services:
       MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
       MARKHAND_WORKER_KIND: reconcile
       MARKHAND_WORKER_ID: poc-reconcile-1
-      MARKHAND_RECONCILE_MODE: ${MARKHAND_RECONCILE_MODE:-dry-run}
+      # Repair, deliberately. Dry-run releases the job back to pending so a later
+      # repair run still sees the intent, which for a continuously claiming
+      # service means an endless claim/report/release loop and a queue that never
+      # empties. Operators still get dry-run through worker-reconcile-oneshot.
+      MARKHAND_RECONCILE_MODE: ${MARKHAND_RECONCILE_WORKER_MODE:-repair}
       MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
       MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
       MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}
