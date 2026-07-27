@@ -1,16 +1,327 @@
+// P2-07 (plans/markhand-web/phase-2-web-spa.md §P2.4): collection
+// navigation, document list with filter + cursor pagination, and a
+// sanitized Markdown preview. Every fetch goes through
+// `useScopeSafeRequest` (never a raw `useEffect` + `apiClient.request`) so
+// an org switch mid-flight discards stale responses instead of leaking
+// cross-tenant data — see that hook's module doc for why each guard exists.
+//
+// Explicitly out of scope here (plan P2.4): filesystem tree, native
+// dialogs, local paths, client-side conversion. There is also no
+// cross-collection document list endpoint (`GET
+// /collections/{collectionId}/documents` always requires a collectionId),
+// so "Tất cả bộ sưu tập" (no collectionId) can only offer collection
+// navigation, not a merged document list — documented further in the P2-07
+// report.
+//
+// This page is where P2-07's list, P2-08's upload panel and P2-09's
+// per-document actions meet. Both of the latter mutate the collection, so
+// both feed the same `refreshDocuments()` — a bump of the retry counter the
+// documents request already depends on. Nothing here re-derives a document
+// from a mutation's response: the list is refetched and the server stays the
+// only source of truth for state (`converting` -> `indexed`, tombstoning),
+// which also means a delete's own row disappears on the next page load
+// rather than being optimistically hidden while the server may still reject.
+import { useState } from 'react';
+import { apiClient, type ApiClient } from '../api/client';
+import {
+  CollectionNav,
+  DocumentFilters,
+  DocumentList,
+  DocumentPreview,
+  Pagination,
+  describeApiError,
+  matchesQuery,
+  type Collection,
+  type LibraryDocument,
+  type PreviewLoadState,
+  type StatusFilterValue,
+} from '../components/library';
+import { DocumentRowActions } from '../components/actions';
 import { Notice } from '../components/ui';
+import { UploadPanel } from '../components/upload';
+import { useScopeSafeRequest } from '../hooks/useScopeSafeRequest';
+import { useScope } from '../state/ScopeProvider';
 
-export function LibraryPage({ collectionId }: { collectionId?: string }) {
+/** Server default is 50 (clamped [1,100]); 20 keeps a page comfortably scannable. */
+const DOCUMENTS_PAGE_SIZE = 20;
+
+interface ViewState {
+  /** Which `collectionId` this state was built for — the reset trigger. */
+  collectionId: string | undefined;
+  pageIndex: number;
+  /** cursors[i] is the cursor used to fetch page i; cursors[0] is always undefined (first page). */
+  cursors: Array<string | undefined>;
+  searchText: string;
+  statusFilter: StatusFilterValue;
+  selectedDocumentId: string | null;
+}
+
+function initialView(collectionId: string | undefined): ViewState {
+  return {
+    collectionId,
+    pageIndex: 0,
+    cursors: [undefined],
+    searchText: '',
+    statusFilter: 'all',
+    selectedDocumentId: null,
+  };
+}
+
+export function LibraryPage({
+  collectionId,
+  client = apiClient,
+}: {
+  collectionId?: string;
+  /** Injectable for tests; defaults to the app-wide singleton, same convention as `AuthProvider`. */
+  client?: ApiClient;
+}) {
+  const { epoch } = useScope();
+  const [view, setView] = useState<ViewState>(() => initialView(collectionId));
+  // A `collectionId` prop change (collection switch/deep link) re-scopes the
+  // whole page — pagination, filters, and selection all belonged to the
+  // previous collection. Adjusting state during render (same idiom as
+  // `ui.tsx`'s `SelectControl` and `useScopeSafeRequest.ts`'s own
+  // `useRequestGeneration`) instead of an effect means the rest of *this*
+  // render already uses the reset values — no stale-collection fetch fires
+  // first and gets thrown away a tick later.
+  let effectiveView = view;
+  if (view.collectionId !== collectionId) {
+    effectiveView = initialView(collectionId);
+    setView(effectiveView);
+  }
+
+  const [collectionsRetry, setCollectionsRetry] = useState(0);
+  const collectionsResult = useScopeSafeRequest(
+    (signal) => client.request('get', '/collections', { signal }),
+    [client, collectionsRetry],
+  );
+  const collections: Collection[] = collectionsResult.data?.items ?? [];
+
+  const cursor = effectiveView.cursors[effectiveView.pageIndex];
+  const [documentsRetry, setDocumentsRetry] = useState(0);
+  const documentsResult = useScopeSafeRequest(
+    async (signal) => {
+      if (!collectionId) return null;
+      return client.request('get', '/collections/{collectionId}/documents', {
+        params: { path: { collectionId }, query: { limit: DOCUMENTS_PAGE_SIZE, cursor } },
+        signal,
+      });
+    },
+    [client, collectionId, cursor, documentsRetry],
+  );
+
+  // A refresh must not blank the list. `useScopeSafeRequest` reports
+  // `data: undefined` for the whole of a re-run, so without this the
+  // `refreshDocuments()` that follows an upload or a reindex would drop
+  // `items` to `[]` for a frame, `selectedDocument` to `null`, and unmount
+  // the preview — taking the actions component (and the success notice it
+  // had just rendered) with it, then remounting it fresh.
+  //
+  // Retaining the previous payload is only safe if it can never outlive the
+  // request identity it belongs to, so the retained copy is keyed by the
+  // scope epoch, the collection and the cursor — the three things that make
+  // it a *different* list rather than the same list re-read. An org switch
+  // or a collection change therefore discards it rather than showing one
+  // tenant's documents while another's load, which is the exact failure
+  // `useScopeSafeRequest` exists to prevent; only a `documentsRetry` bump
+  // reuses it.
+  const documentsKey = `${epoch}|${collectionId ?? ''}|${cursor ?? ''}`;
+  const [retainedDocuments, setRetainedDocuments] = useState<{
+    key: string;
+    data: NonNullable<typeof documentsResult.data>;
+  } | null>(null);
+  if (documentsResult.data && retainedDocuments?.data !== documentsResult.data) {
+    // Adjust-state-while-rendering, the same idiom `useRequestGeneration`
+    // and `SelectControl` use. Converges: the next render compares equal.
+    setRetainedDocuments({ key: documentsKey, data: documentsResult.data });
+  }
+  const documentsData =
+    documentsResult.data ??
+    (retainedDocuments?.key === documentsKey ? retainedDocuments.data : undefined);
+
+  const items: LibraryDocument[] = documentsData?.items ?? [];
+  const visibleItems = items.filter(
+    (doc) =>
+      matchesQuery(doc.title, effectiveView.searchText) &&
+      (effectiveView.statusFilter === 'all' || doc.state === effectiveView.statusFilter),
+  );
+  const selectedDocument = items.find((doc) => doc.id === effectiveView.selectedDocumentId) ?? null;
+
+  const previewResult = useScopeSafeRequest(
+    async (signal) => {
+      if (!selectedDocument?.currentVersionId) return null;
+      return client.request('get', '/documents/{documentId}/preview', {
+        params: { path: { documentId: selectedDocument.id } },
+        signal,
+      });
+    },
+    [client, selectedDocument?.id, selectedDocument?.currentVersionId],
+  );
+
+  function selectDocument(documentId: string) {
+    setView((v) => ({ ...v, selectedDocumentId: documentId }));
+  }
+
+  // Re-runs the documents request (and, through the selected document's
+  // `currentVersionId`, the preview) without disturbing the current page,
+  // filters or selection. Both the upload panel and the row actions call it.
+  function refreshDocuments() {
+    setDocumentsRetry((n) => n + 1);
+  }
+
+  function goToPrevPage() {
+    setView((v) =>
+      v.pageIndex === 0 ? v : { ...v, pageIndex: v.pageIndex - 1, selectedDocumentId: null },
+    );
+  }
+
+  function goToNextPage() {
+    setView((v) => {
+      const page = documentsResult.data?.page;
+      if (!page?.hasMore || !page.nextCursor) return v;
+      const cursors = v.cursors.slice(0, v.pageIndex + 1);
+      cursors.push(page.nextCursor);
+      return { ...v, pageIndex: v.pageIndex + 1, cursors, selectedDocumentId: null };
+    });
+  }
+
+  const pageInfo = documentsData?.page;
+
+  let previewLoadState: PreviewLoadState | undefined;
+  if (selectedDocument) {
+    if (!selectedDocument.currentVersionId) previewLoadState = 'no-version';
+    else if (previewResult.status === 'loading') previewLoadState = 'loading';
+    else if (previewResult.status === 'error') previewLoadState = 'error';
+    else previewLoadState = 'success';
+  }
+
   return (
-    <section className="page" aria-labelledby="library-heading">
+    <section className="page" style={{ maxWidth: 'none' }} aria-labelledby="library-heading">
       <p className="eyebrow">Thư viện</p>
       <h1 id="library-heading">
         {collectionId ? `Bộ sưu tập ${collectionId}` : 'Tất cả bộ sưu tập'}
       </h1>
       <p className="lede">
-        Danh sách tài liệu, tải lên và xem trước sẽ hiển thị ở đây khi client API sẵn sàng.
+        Duyệt bộ sưu tập, theo dõi trạng thái xử lý và xem trước nội dung Markdown đã chuyển đổi.
       </p>
-      <Notice tone="info">Chưa kết nối tới API thư viện.</Notice>
+
+      {collectionsResult.status === 'error' && (
+        <Notice
+          tone="error"
+          action={
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setCollectionsRetry((n) => n + 1)}
+            >
+              Thử lại
+            </button>
+          }
+        >
+          {describeApiError(collectionsResult.error)}
+        </Notice>
+      )}
+
+      <CollectionNav
+        collections={collections}
+        activeCollectionId={collectionId}
+        loading={collectionsResult.status === 'loading'}
+      />
+
+      {!collectionId ? (
+        <Notice tone="info">Chọn một bộ sưu tập ở trên để xem danh sách tài liệu.</Notice>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          {/* Scoped to the open collection — `POST /uploads` needs a
+              collectionId, so there is nothing to render on the "all
+              collections" view above. */}
+          <div className="card" data-slot="library-upload">
+            <UploadPanel
+              collectionId={collectionId}
+              onUploaded={refreshDocuments}
+              client={client}
+            />
+          </div>
+
+          <DocumentFilters
+            searchText={effectiveView.searchText}
+            onSearchTextChange={(value) => setView((v) => ({ ...v, searchText: value }))}
+            statusFilter={effectiveView.statusFilter}
+            onStatusFilterChange={(value) => setView((v) => ({ ...v, statusFilter: value }))}
+          />
+
+          {documentsResult.status === 'error' && (
+            <Notice
+              tone="error"
+              action={
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setDocumentsRetry((n) => n + 1)}
+                >
+                  Thử lại
+                </button>
+              }
+            >
+              {describeApiError(documentsResult.error)}
+            </Notice>
+          )}
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
+              gap: 'var(--space-4)',
+              alignItems: 'start',
+            }}
+          >
+            <div className="card">
+              <DocumentList
+                items={visibleItems}
+                totalOnPage={items.length}
+                selectedDocumentId={effectiveView.selectedDocumentId}
+                onSelect={selectDocument}
+                loading={documentsResult.status === 'loading' && documentsData === undefined}
+              />
+              {documentsData !== undefined && (
+                <Pagination
+                  pageNumber={effectiveView.pageIndex + 1}
+                  hasMore={pageInfo?.hasMore ?? false}
+                  onPrev={goToPrevPage}
+                  onNext={goToNextPage}
+                />
+              )}
+            </div>
+
+            <DocumentPreview
+              document={selectedDocument}
+              loadState={previewLoadState}
+              markdown={previewResult.data?.markdown}
+              versionNumber={previewResult.data?.versionNumber}
+              isCurrent={previewResult.data?.isCurrent}
+              serverTruncated={previewResult.data?.truncated}
+              errorMessage={
+                previewResult.status === 'error' ? describeApiError(previewResult.error) : undefined
+              }
+              actions={
+                selectedDocument ? (
+                  // Keyed by document id so switching selection remounts the
+                  // actions: `useSingleFlightAction` holds per-ticket phase
+                  // state, and a success notice ("đã đưa vào hàng đợi") left
+                  // over from the previous document would otherwise read as
+                  // belonging to the newly selected one.
+                  <DocumentRowActions
+                    key={selectedDocument.id}
+                    document={selectedDocument}
+                    onChanged={refreshDocuments}
+                    client={client}
+                  />
+                ) : undefined
+              }
+            />
+          </div>
+        </div>
+      )}
     </section>
   );
 }

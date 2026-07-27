@@ -11,6 +11,7 @@ pub mod jobs;
 pub mod middleware;
 pub mod routes;
 pub mod services;
+pub mod spa;
 pub mod state;
 pub mod storage;
 pub mod telemetry;

@@ -53,6 +53,18 @@ thiserror.workspace = true
 tokio = { version = "1.53.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-postgres-rustls = "0.14.0"
+# ServiceBuilder for layering Cache-Control/security headers onto the static
+# asset service (src/spa.rs, P2-16). Was previously dev-only (test harness
+# used `tower::ServiceExt::oneshot`); promoted to a normal dependency since
+# production code now needs `tower::ServiceBuilder` too. Already present in
+# the dependency graph regardless (tower-http itself depends on it).
+tower = { version = "0.5.3", features = ["util"] }
+# P2-16: serves web/dist (hashed assets + SPA fallback). Already resolved as a
+# transitive dep of reqwest at 0.6.11 (see Cargo.lock) so this pins the same
+# version rather than introducing a new major dependency; only the `fs`
+# (ServeDir) and `set-header` (per-route Cache-Control/CSP layering) features
+# are new compile surface.
+tower-http = { version = "0.6.11", default-features = false, features = ["fs", "set-header"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 uuid = { version = "1.24.0", features = ["serde", "v4", "v8"] }
@@ -65,4 +77,3 @@ test-hooks = []
 
 [dev-dependencies]
 http-body-util = "0.1.4"
-tower = { version = "0.5.3", features = ["util"] }

@@ -119,6 +119,9 @@ importers:
 
   web:
     dependencies:
+      lucide-react:
+        specifier: ^1.22.0
+        version: 1.24.0(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -156,6 +159,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: ^4.3.4
         version: 4.7.0(vite@6.4.3)
+      axe-core:
+        specifier: ^4.12.1
+        version: 4.12.1
       eslint:
         specifier: ^10.7.0
         version: 10.7.0
@@ -1211,6 +1217,10 @@ packages:
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
     engines: {node: '>=12'}
+
+  axe-core@4.12.1:
+    resolution: {integrity: sha512-s7iGf5GaVMxEG0ENN9x+xTr7GFZCb1ZP/1uATUpCEK2X78nDB3RwbtFCo9pGAf9ru+VwoQ464DkaLEeRM08wJA==}
+    engines: {node: '>=4'}
 
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
@@ -3297,6 +3307,8 @@ snapshots:
   aria-query@5.3.2: {}
 
   assertion-error@2.0.1: {}
+
+  axe-core@4.12.1: {}
 
   bail@2.0.2: {}
 

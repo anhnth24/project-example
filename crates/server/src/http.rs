@@ -482,7 +482,7 @@ pub fn router(state: AppState) -> Router {
     let state = Arc::new(state);
     // Layer order (outer → inner): request-id → write-gate → cors → rate-limit → handler.
     // `mutation_write_gate` is the central O03 contract (see middleware/write_gate.rs).
-    Router::new()
+    let mut app = Router::new()
         .merge(routes::health::router())
         .merge(routes::auth::router())
         .merge(routes::uploads::router(max_upload_bytes))
@@ -492,8 +492,33 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::search::router())
         .merge(routes::ask::router())
         .merge(routes::events::router())
-        .route("/api/v1/openapi.yaml", axum::routing::get(openapi_yaml))
-        .layer(from_fn_with_state(state.clone(), baseline_ip_rate_limit))
+        .route("/api/v1/openapi.yaml", axum::routing::get(openapi_yaml));
+
+    // P2-16: serve web/dist (hashed assets + SPA history fallback) when a
+    // built bundle is present; otherwise the API runs standalone (tests,
+    // dev, CI, and any deployment layer that ships the SPA separately).
+    //
+    // Mounted inside the middleware stack below, but that stack is a no-op
+    // for these routes and deliberately so — checked, not assumed:
+    // `baseline_ip_rate_limit` returns early for any path outside
+    // `/api/v1/` (middleware/mod.rs:236), and `is_write_gate_exempt` is true
+    // for the same set (middleware/write_gate.rs:50). So an SPA page load
+    // pulling a dozen hashed assets cannot burn the caller's API rate-limit
+    // budget, and static GETs never take the O03 advisory lock. Request-id
+    // injection does still apply, which is what we want for tracing.
+    match crate::spa::resolve_web_dist_dir() {
+        Some(dist_dir) => match crate::spa::spa_router::<Arc<AppState>>(&dist_dir) {
+            Some(spa) => app = app.merge(spa),
+            None => tracing::warn!(
+                target: "spa",
+                dir = %dist_dir.display(),
+                "web dist directory configured but unusable; serving API only"
+            ),
+        },
+        None => tracing::debug!(target: "spa", "no web dist directory found; serving API only"),
+    }
+
+    app.layer(from_fn_with_state(state.clone(), baseline_ip_rate_limit))
         .layer(from_fn_with_state(state.clone(), cors_middleware))
         .layer(from_fn_with_state(state.clone(), mutation_write_gate))
         .layer(from_fn_with_state(state.clone(), inject_request_id))
