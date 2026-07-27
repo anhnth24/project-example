@@ -6,6 +6,12 @@ server, applies checksum-verified PostgreSQL migrations, and exposes:
 - `GET /api/v1/health/live` — process liveness;
 - `GET /api/v1/health/ready` — PostgreSQL, Qdrant and MinIO readiness.
 
+It can optionally also serve the built web SPA (`web/dist`) — hashed/immutable
+assets, history-fallback for UI routes, strict security headers — without ever
+letting an unmatched `/api/v1/*` path fall through to the SPA shell. See
+`src/spa.rs` and [`deploy/README.md`](../../deploy/README.md#web-spa-static-serving-p2-16).
+Serving is entirely optional: absent `web/dist`, the server just runs the API.
+
 For a local run, start the real dependency stack and export endpoints from
 `deploy/dev/.env.example`:
 
