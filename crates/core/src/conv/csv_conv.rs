@@ -190,10 +190,10 @@ mod tests {
         let out = to_markdown(&path).expect("convert shared CSV fixture");
 
         assert!(
-            out.contains("| --- |"),
-            "expected markdown separator, got:\n{out}"
+            out.contains("| Họ tên | Tuổi | Thành phố |"),
+            "expected 3-column header, got:\n{out}"
         );
-        assert!(out.contains("Họ tên"), "missing header");
+        assert!(out.contains("| --- | --- | --- |"), "expected 3 columns");
         assert!(
             out.contains("Nguyễn Văn A"),
             "missing Vietnamese diacritics"

@@ -25,7 +25,7 @@
     {
       "id": "shared.synthetic.csv.vi.v1",
       "path": "sample/contacts.vi.csv",
-      "sha256": "144900388c6f56c0b69430387b6ce0336618a9e1404dedad46dbb23af5093408",
+      "sha256": "7e54c4a295628fe6175fdd5158f4cf3fdf411228038b2fe312f8f4f6c8172f9c",
       "kind": "csv",
       "owner": "markhand-core",
       "source": "synthetic",
