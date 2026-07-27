@@ -223,6 +223,23 @@ export function UploadItemRow({
 
         {phase.kind === 'tracking' && (
           <span className="upload-item-status" role="status">
+            {/* Job progress has no percentage the server reports (`Job.status`
+                is an enum, not a number — see jobLifecycle.ts's module doc),
+                so this is a `progressbar` in the same indeterminate shape
+                already used above for a non-computable upload length, never
+                a fabricated aria-valuenow. Rendered only while the job is
+                still running: once conversionPhase is terminal
+                (converted/failed) there is nothing left to show progress
+                on. */}
+            {!jobTerminal && (
+              <span
+                className="upload-progress-track upload-progress-track--indeterminate"
+                role="progressbar"
+                aria-label={`Đang xử lý ${file.name}`}
+              >
+                <span className="upload-progress-value upload-progress-value--indeterminate" />
+              </span>
+            )}
             {conversionPhase
               ? conversionLabel(conversionPhase)
               : 'Đã tải lên — đang xác nhận tác vụ xử lý…'}

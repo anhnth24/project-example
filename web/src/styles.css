@@ -1380,7 +1380,15 @@ textarea.input {
 }
 
 .upload-item-meta {
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  /* contrast: this shipped at 55% (copy-pasted from the same spec value
+     .text-muted already measured and rejected far above) — 3.45:1 on
+     --color-surface (this row's background), under WCAG AA's 4.5:1 for
+     12px text. Switched to the same 68% formula as every other muted-text
+     rule in this file (5.01:1 on --color-surface). Found by grepping this
+     file for `color-mix(in srgb, var(--color-text)` and diffing every
+     percentage against the documented-safe 68%, not by assuming this rule
+     matched its neighbors. */
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
   font-size: 12px;
 }
 

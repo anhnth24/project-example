@@ -88,12 +88,37 @@ export function App() {
 function AppShell() {
   const [connection, setConnection] = useState<ConnectionState>({ kind: 'checking' });
   const controllerRef = useRef<AbortController | null>(null);
-  const { match } = useRouter();
+  const { match, pathname } = useRouter();
   // The rail is the app's chrome for every *inside-the-app* route. `/login`
   // (both design sources render it as a distinct, chrome-free full-bleed
   // screen — see the report) is the one route that opts out, matching
   // `PublicOnlyRoute`'s own framing: a visitor there isn't "in the app" yet.
   const showRail = match.name !== 'login';
+
+  // P2-14 (plans/markhand-web/phase-2-web-spa.md §P2.7): "focus sau route
+  // change". Without this, activating a rail link (or any in-app
+  // navigation) leaves focus sitting on the control that triggered it while
+  // the page underneath changes — a keyboard/screen-reader user never has
+  // the new page's heading announced, and Tab would continue from the rail
+  // rather than from the content. `#main-content` is already `tabIndex={-1}`
+  // (added for the skip link below), so it's a valid, non-tab-stealing
+  // programmatic focus target.
+  //
+  // Keyed on `pathname`, not `match.name`: a param-only change (e.g.
+  // switching collection while staying on the `library` route) is still a
+  // real navigation the user asked for and still deserves this. The first
+  // render is deliberately skipped — initial page load should leave focus
+  // wherever the browser puts it (verified in App.test.tsx: activeElement
+  // is not `#main-content` before any navigation has happened).
+  const mainRef = useRef<HTMLElement | null>(null);
+  const isFirstRouteRef = useRef(true);
+  useEffect(() => {
+    if (isFirstRouteRef.current) {
+      isFirstRouteRef.current = false;
+      return;
+    }
+    mainRef.current?.focus();
+  }, [pathname]);
 
   const loadConnection = useCallback(async () => {
     controllerRef.current?.abort();
@@ -149,7 +174,7 @@ function AppShell() {
           </span>
         </div>
 
-        <main id="main-content" className="welcome" tabIndex={-1}>
+        <main id="main-content" className="welcome" tabIndex={-1} ref={mainRef}>
           {match.name === 'home' ? (
             <>
               <p className="eyebrow">Không gian tri thức</p>
