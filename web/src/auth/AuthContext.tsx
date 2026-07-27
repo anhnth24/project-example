@@ -1,32 +1,265 @@
-// Seam for P2.3 (Wave 1): real login/session/token/refresh logic is out of
-// scope for this workspace-foundations task. This only establishes the
-// shape — an in-memory session the shell and pages can read — so the auth
-// agent can replace `AuthProvider`'s implementation (wire it to
-// `api/client.ts`, keep the access token in memory, add org switch) without
-// having to introduce the context/hook pair from scratch.
-import { createContext, useContext, useMemo, type ReactNode } from 'react';
+// Real login/session implementation for P2-05 (plans/markhand-web/phase-2-web-spa.md
+// §P2.3). This replaces the Wave-0 seam but keeps `useAuth()` as the single
+// hook callers reach for; `session` is still the first thing on the returned
+// value so the one existing caller (`LoginPage.tsx`) does not have to change
+// how it reads status.
+//
+// Ground truth for this task: `MeResponse` has no single "role" field — only
+// `permissions: string[]` (see plans/markhand-web/phase-1c-multi-org-security.md
+// §P1C.2's permission constants/matrix). So `Session` surfaces permissions
+// directly instead of inventing a role label the server does not send.
+//
+// This file depends on `../state/ScopeProvider`'s `useScope()` (owned by the
+// concurrent org-switch agent, not edited here — only its already-committed
+// public seam is used). `ScopeProvider.tsx`'s own module doc names this
+// exact handoff: "the auth/shell agent calls `useScope().setScope(...)`
+// after login resolves, after an org switch completes, and with `null` on
+// logout/session-lost." This file owns the login/logout/session-lost calls;
+// the org-switch call site belongs to whoever builds org switching.
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { apiClient, type ApiClient } from '../api/client';
+import { isAbortError } from '../api/errors';
+import type { components } from '../api/generated/contract';
+import { useScope } from '../state/ScopeProvider';
+import {
+  clearPersistedRefreshToken,
+  loadPersistedRefreshToken,
+  savePersistedRefreshToken,
+} from './tokenStorage';
 
-export type Role = 'owner' | 'admin' | 'editor' | 'viewer';
+type MeResponse = components['schemas']['MeResponse'];
 
+/**
+ * `checking` covers both "bootstrapping on page load" and "a login/logout is
+ * in flight" — callers that only care about "may I render protected UI yet"
+ * treat it like anonymous (do not render), while `RouteGuard.tsx` shows a
+ * neutral loading state for it instead of bouncing to `/login` prematurely.
+ */
 export type Session =
-  { status: 'anonymous' } | { status: 'authenticated'; email: string; role: Role };
+  { status: 'checking' } | { status: 'anonymous' } | ({ status: 'authenticated' } & MeResponse);
 
 export interface AuthContextValue {
   session: Session;
+  /** `POST /auth/login` + populates the session from `GET /auth/me`. Rejects (and leaves the session anonymous) on any failure — callers show the error. */
+  login(email: string, password: string): Promise<void>;
+  /** Clears the session immediately (client-side), then best-effort calls `POST /auth/logout`. Never rejects. */
+  logout(): Promise<void>;
+  /** Re-fetches `GET /auth/me` and applies the result — e.g. after an org switch changes permissions/allowedCollectionIds without a full reload. */
+  refreshSession(): Promise<void>;
+  /**
+   * UI convenience only — never authorization. This only decides whether the
+   * shell *renders* something; the server is always the one that decides
+   * whether a request succeeds. A `true` here that turns out wrong just means
+   * a control is shown that the next API call answers with a 403.
+   */
+  hasPermission(permission: string): boolean;
 }
 
-const defaultValue: AuthContextValue = { session: { status: 'anonymous' } };
+const defaultValue: AuthContextValue = {
+  session: { status: 'anonymous' },
+  login: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
+  logout: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
+  refreshSession: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
+  hasPermission: () => false,
+};
 
 const AuthContext = createContext<AuthContextValue>(defaultValue);
 
-export function AuthProvider({
-  children,
-  session = defaultValue.session,
-}: {
+export interface AuthProviderProps {
   children: ReactNode;
-  session?: Session;
-}) {
-  const value = useMemo<AuthContextValue>(() => ({ session }), [session]);
+  /** Injectable for tests; defaults to the app-wide singleton in `api/client.ts`. */
+  client?: ApiClient;
+}
+
+export function AuthProvider({ children, client = apiClient }: AuthProviderProps) {
+  // Lazy initializer (not an effect) so a visitor with no persisted refresh
+  // token renders `anonymous` on the very first paint — no synchronous
+  // setState-in-effect needed for that branch, and no flash of "checking"
+  // for the common case of a plain, never-logged-in visit.
+  const [session, setSession] = useState<Session>(() =>
+    loadPersistedRefreshToken() ? { status: 'checking' } : { status: 'anonymous' },
+  );
+  const scope = useScope();
+
+  // Guards against two known races:
+  //  - a stale `me()` response arriving after `logout()` (or after a newer
+  //    login/bootstrap superseded it) must not repopulate the shell;
+  //  - `onSessionLost` firing while a `me()` call is still in flight must win.
+  // Every attempt captures the epoch at its start and checks it again before
+  // calling `setSession`; anything else bumps the epoch first.
+  const epochRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const applyMe = useCallback(
+    (me: MeResponse) => {
+      setSession({ status: 'authenticated', ...me });
+      scope.setScope({
+        orgId: me.orgId,
+        permissions: me.permissions,
+        allowedCollectionIds: me.allowedCollectionIds,
+      });
+    },
+    [scope],
+  );
+
+  const becomeAnonymous = useCallback(() => {
+    clearPersistedRefreshToken();
+    setSession({ status: 'anonymous' });
+    scope.setScope(null);
+  }, [scope]);
+
+  // Persists the pair handed to `onTokensRotated`, which fires synchronously
+  // inside the rotation itself — the only point at which the stored copy is
+  // guaranteed not to lag the server's view of the family.
+  const persistRotatedTokens = useCallback((tokens: { refreshToken: string }) => {
+    savePersistedRefreshToken(tokens.refreshToken);
+  }, []);
+
+  // Re-persists whatever refresh token the session manager is holding right
+  // now. Still used at the login/bootstrap boundaries, where the caller wants
+  // the write to have happened before it proceeds rather than as a side effect
+  // of the rotation that just occurred.
+  const syncPersistedRefreshToken = useCallback(() => {
+    const current = client.sessionManager.getRefreshTokenForLogout();
+    if (current) savePersistedRefreshToken(current);
+  }, [client]);
+
+  // --- Bootstrap: restore "am I signed in?" once per provider lifetime. ---
+  // The "no stored token" case needs no work here at all — the lazy
+  // `useState` initializer above already rendered `anonymous` on first paint.
+  useEffect(() => {
+    const stored = loadPersistedRefreshToken();
+    if (!stored) return;
+    const epoch = (epochRef.current += 1);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    (async () => {
+      try {
+        // Seed the session manager with the persisted refresh token behind
+        // an already-expired dummy access token (the same
+        // `expiresIn: -1` pattern `api/session.test.ts` uses to force a
+        // refresh), so the very first `getAccessToken()` call inside
+        // `client.me()` goes through the manager's own single-flight
+        // refresh path — this file never re-implements refresh itself.
+        client.sessionManager.setTokens({
+          accessToken: '',
+          refreshToken: stored,
+          tokenType: 'Bearer',
+          expiresIn: -1,
+          orgId: '',
+          userId: '',
+        });
+        const me = await client.me(controller.signal);
+        if (epochRef.current !== epoch) return;
+        applyMe(me);
+        syncPersistedRefreshToken();
+      } catch (cause) {
+        if (epochRef.current !== epoch || isAbortError(cause)) return;
+        becomeAnonymous();
+      }
+    })();
+    return () => controller.abort();
+    // Runs once per mount by design (bootstrap); `client`/`applyMe`/
+    // `becomeAnonymous`/`syncPersistedRefreshToken` are stable for the
+    // provider's lifetime (default client is a module singleton).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // --- Session loss mid-session (refresh rejected). ---
+  useEffect(
+    () =>
+      client.tokenProvider.onSessionLost(() => {
+        epochRef.current += 1;
+        abortRef.current?.abort();
+        becomeAnonymous();
+      }),
+    [client, becomeAnonymous],
+  );
+
+  // --- Keep the persisted refresh token from going stale. ---
+  // Refresh tokens rotate on every use and replaying an already-rotated one
+  // revokes the whole family (ADR 0010), so a persisted copy that misses a
+  // rotation does not merely fail to restore the session — its next use looks
+  // like a replay attack and signs the user out everywhere. An ordinary
+  // in-session refresh rotates the pair entirely inside `session.ts`, so the
+  // only correct place to write is the rotation itself: `onTokensRotated`
+  // fires synchronously as part of applying the new pair, closing the window
+  // rather than narrowing it.
+  useEffect(() => client.sessionManager.onTokensRotated(persistRotatedTokens), [client]);
+
+  const login = useCallback(
+    async (email: string, password: string) => {
+      abortRef.current?.abort();
+      const epoch = (epochRef.current += 1);
+      const tokens = await client.login({ email, password });
+      savePersistedRefreshToken(tokens.refreshToken);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const me = await client.me(controller.signal);
+        if (epochRef.current !== epoch) return;
+        applyMe(me);
+        syncPersistedRefreshToken();
+      } catch (cause) {
+        if (epochRef.current !== epoch || isAbortError(cause)) return;
+        client.sessionManager.clear();
+        becomeAnonymous();
+        throw cause;
+      }
+    },
+    [client, applyMe, becomeAnonymous, syncPersistedRefreshToken],
+  );
+
+  const logout = useCallback(async () => {
+    epochRef.current += 1;
+    abortRef.current?.abort();
+    // Clear client-side first and unconditionally: logout must always take
+    // effect locally even if the network call below fails (matches
+    // `client.ts`'s own logout() contract).
+    becomeAnonymous();
+    try {
+      await client.logout();
+    } catch {
+      // Best-effort; the local session is already cleared above.
+    }
+  }, [client, becomeAnonymous]);
+
+  const refreshSession = useCallback(async () => {
+    abortRef.current?.abort();
+    const epoch = (epochRef.current += 1);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const me = await client.me(controller.signal);
+      if (epochRef.current !== epoch) return;
+      applyMe(me);
+      syncPersistedRefreshToken();
+    } catch (cause) {
+      if (epochRef.current !== epoch || isAbortError(cause)) return;
+      becomeAnonymous();
+    }
+  }, [client, applyMe, becomeAnonymous, syncPersistedRefreshToken]);
+
+  const hasPermission = useCallback(
+    (permission: string) =>
+      session.status === 'authenticated' && session.permissions.includes(permission),
+    [session],
+  );
+
+  const value = useMemo<AuthContextValue>(
+    () => ({ session, login, logout, refreshSession, hasPermission }),
+    [session, login, logout, refreshSession, hasPermission],
+  );
+
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
