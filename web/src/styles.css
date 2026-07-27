@@ -1469,40 +1469,6 @@ textarea.input {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Minimal theme seam (components/shell/useTheme.ts). Organic itself ships
-   one light-only token set — no dark ramp anywhere in organic-styles.css —
-   so this is a from-scratch, intentionally small dark override: it flips
-   only the ground/text/divider/neutral tokens and the shadow opacities,
-   leaving the terracotta/sage accent ramps as-is. Selector specificity
-   (`:root[data-theme]` beats plain `:root`) means this safely overrides the
-   base token block above without editing it. Every component already reads
-   these variable names, so this is a real repaint, not a per-component
-   restyle. Contrast against the new dark ground has not been re-audited
-   the way the light-mode deviations above were (see the file's opening
-   comment) — flagged here rather than silently assumed fine.
-   ══════════════════════════════════════════════════════════════════════ */
-:root[data-theme='dark'] {
-  --color-bg: #201e1d;
-  --color-surface: #2b2724;
-  --color-text: #f5ead8;
-  --color-divider: color-mix(in srgb, #f5ead8 18%, transparent);
-
-  --color-neutral-100: #2e2b25;
-  --color-neutral-200: #3a352d;
-  --color-neutral-300: #474238;
-  --color-neutral-400: #645c50;
-  --color-neutral-500: #82796a;
-  --color-neutral-600: #a19786;
-  --color-neutral-700: #c0b6a5;
-  --color-neutral-800: #dcd3c4;
-  --color-neutral-900: #f9f4ed;
-
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #000000 40%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #000000 45%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #000000 55%, transparent);
-}
-
-/* ══════════════════════════════════════════════════════════════════════
    Application shell rail (components/shell/**) — vertical left icon rail
    replacing the old topbar/primary-nav for authenticated routes. `.topbar`/
    `.primary-nav`/`.session-status` above are left in place per the

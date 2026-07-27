@@ -1,5 +1,5 @@
 // The application shell's vertical left icon rail: brand mark, primary
-// destinations, and the bottom cluster (theme toggle, org identity, account
+// destinations, and the bottom cluster (org identity, account
 // menu). See ../../../plans (P2.3) and the shell task brief for the
 // requirements this satisfies; see styles.css's "rail" section for the
 // layout notes (why the bottom cluster can never be clipped).
@@ -16,7 +16,6 @@ import { useRouter } from '../../state/RouterProvider';
 import type { RouteName } from '../../types/routes';
 import { OrgSwitch } from './OrgSwitch';
 import { RailHint } from './RailHint';
-import { ThemeToggle } from './ThemeToggle';
 import { UserMenu } from './UserMenu';
 
 interface RailDestination {
@@ -74,7 +73,6 @@ export function Rail() {
       </nav>
 
       <div className="rail-bottom">
-        <ThemeToggle />
         <OrgSwitch />
         <UserMenu />
       </div>

@@ -31,7 +31,7 @@ function fillAndSubmitLogin(email: string, password: string) {
 }
 
 /** The rail's icon-only controls that are always present regardless of auth
- * state (destinations + brand + theme toggle) — org switch and the account
+ * state (brand + destinations) — org switch and the account
  * menu only render once `session.status === 'authenticated'` (see
  * components/shell/OrgSwitch.tsx / UserMenu.tsx), so they're covered
  * separately in the authenticated describe block below. */
@@ -42,7 +42,6 @@ const ALWAYS_ON_RAIL_CONTROLS: Array<{ role: 'link' | 'button'; name: string | R
   { role: 'link', name: 'Thành viên' },
   { role: 'link', name: 'Sử dụng' },
   { role: 'link', name: 'Trợ giúp' },
-  { role: 'button', name: /Chuyển sang giao diện/ },
 ];
 
 describe('App', () => {
