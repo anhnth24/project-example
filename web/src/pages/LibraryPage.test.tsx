@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiClient, type ApiClient } from '../api/client';
 import type { components } from '../api/generated/contract';
@@ -7,6 +7,7 @@ import { getStore, nextId } from '../mocks/fixtures';
 import { mockTimestamp, mockUuid } from '../mocks/ids';
 import { RouterProvider } from '../state/RouterProvider';
 import { ScopeProvider } from '../state/ScopeProvider';
+import { createScopeManager } from '../state/scope';
 import { LibraryPage } from './LibraryPage';
 
 type Collection = components['schemas']['Collection'];
@@ -297,5 +298,108 @@ describe('LibraryPage', () => {
     // The panel's own document-title heading is a separate <h2>, not the
     // rendered Markdown body.
     expect(screen.getByRole('heading', { level: 2, name: 'Onboarding Guide.pdf' })).toBeVisible();
+  });
+
+  // The three cases below cover this page's own wiring of the upload panel
+  // (P2-08) and the per-document actions (P2-09) — the seams between the
+  // three components, which each component's own suite cannot see.
+  describe('upload and document-action wiring', () => {
+    it('mounts the upload panel scoped to the open collection, and not on the all-collections view', async () => {
+      const client = await loggedInClient();
+      const { container } = renderLibrary(client, HANDBOOK_COLLECTION_ID);
+
+      await screen.findByRole('button', { name: /Onboarding Guide\.pdf/ });
+      expect(container.querySelector('[data-slot="library-upload"]')).not.toBeNull();
+      expect(screen.getByLabelText('Chọn tệp để tải lên')).toBeVisible();
+
+      cleanup();
+      renderLibrary(client, undefined);
+
+      // `POST /uploads` requires a collectionId, so there is nothing to
+      // upload *into* here — the panel must be absent, not disabled.
+      await screen.findByText('Chọn một bộ sưu tập ở trên để xem danh sách tài liệu.');
+      expect(screen.queryByLabelText('Chọn tệp để tải lên')).not.toBeInTheDocument();
+    });
+
+    it('mounts the document actions in the preview panel once a document is selected, keyed so a previous selection’s notice cannot carry over', async () => {
+      const collection = seedCollection();
+      const first = seedDocumentWithVersion(collection.id, { title: 'Đầu tiên.pdf' });
+      seedDocumentWithVersion(collection.id, { title: 'Thứ hai.pdf' });
+      const client = await loggedInClient();
+      const { container } = renderLibrary(client, collection.id);
+
+      // Nothing selected yet: no actions anywhere.
+      await screen.findByRole('button', { name: /Đầu tiên\.pdf/ });
+      expect(screen.queryByRole('button', { name: 'Lập chỉ mục lại' })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Đầu tiên\.pdf/ }));
+      await waitFor(() =>
+        expect(
+          container.querySelector(`[data-slot="document-actions:${first.id}"]`),
+        ).not.toBeNull(),
+      );
+      // Exactly one instance — the list no longer carries a per-row copy.
+      expect(screen.getAllByRole('button', { name: 'Lập chỉ mục lại' })).toHaveLength(1);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Lập chỉ mục lại' }));
+      expect(await screen.findByText('Đã đưa tài liệu vào hàng đợi lập chỉ mục.')).toBeVisible();
+
+      // Switching selection must remount the actions: the success notice
+      // belongs to the previous document, not to this one.
+      fireEvent.click(screen.getByRole('button', { name: /Thứ hai\.pdf/ }));
+      await waitFor(() =>
+        expect(
+          screen.queryByText('Đã đưa tài liệu vào hàng đợi lập chỉ mục.'),
+        ).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole('button', { name: 'Lập chỉ mục lại' })).toBeVisible();
+    });
+
+    it('discards the retained document list on an org switch instead of showing the previous org’s rows while the new list loads', async () => {
+      const collection = seedCollection();
+      seedDocument(collection.id, { title: 'Của org cũ.pdf' });
+      const client = await loggedInClient();
+      const manager = createScopeManager();
+      manager.setScope({ orgId: 'org-a', permissions: [], allowedCollectionIds: [collection.id] });
+      render(
+        <RouterProvider>
+          <ScopeProvider manager={manager}>
+            <LibraryPage collectionId={collection.id} client={client} />
+          </ScopeProvider>
+        </RouterProvider>,
+      );
+
+      expect(await screen.findByRole('button', { name: /Của org cũ\.pdf/ })).toBeVisible();
+
+      // The epoch moves, so the retained payload's key no longer matches and
+      // it must not be served while the new org's list is in flight. This is
+      // the guard that keeps the retention above from becoming the
+      // cross-tenant leak `useScopeSafeRequest` exists to prevent.
+      act(() => {
+        manager.setScope({ orgId: 'org-b', permissions: [], allowedCollectionIds: [] });
+      });
+
+      expect(screen.queryByRole('button', { name: /Của org cũ\.pdf/ })).not.toBeInTheDocument();
+      expect(screen.getByText('Đang tải danh sách tài liệu…')).toBeVisible();
+    });
+
+    it('refetches the document list after a delete, rather than hiding the row optimistically', async () => {
+      const collection = seedCollection();
+      seedDocumentWithVersion(collection.id, { title: 'Sẽ bị xóa.pdf' });
+      const client = await loggedInClient();
+      renderLibrary(client, collection.id);
+
+      fireEvent.click(await screen.findByRole('button', { name: /Sẽ bị xóa\.pdf/ }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Xóa' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Xóa tài liệu' }));
+
+      // The mock deletes server-side; the row goes away because the list was
+      // refetched (`onChanged` -> `refreshDocuments`), not because the UI
+      // guessed. If the refetch were dropped, the row would still be here.
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: /Sẽ bị xóa\.pdf/ })).not.toBeInTheDocument(),
+      );
+      expect(screen.getByText('Chưa có tài liệu nào trong bộ sưu tập này.')).toBeVisible();
+    });
   });
 });

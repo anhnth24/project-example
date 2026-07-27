@@ -3,10 +3,22 @@
 // loading, genuinely no documents in the collection, and documents present
 // but none match the current client-side filter.
 //
-// Mount point for the row-actions agent (components/actions/**): the last
-// `<td data-slot="document-row-actions:<documentId>">` per row is left
-// empty on purpose — approve-intake/reindex/download/delete controls mount
-// there, scoped by that document's id.
+// This table used to carry an empty fourth column reserved for per-row
+// actions (`data-slot="document-row-actions:<id>"`). The column is gone and
+// `DocumentRowActions` mounts once, in the preview panel next to this list,
+// for two measured reasons rather than taste:
+//   - Fit. The three controls are pill buttons with Vietnamese labels
+//     ("Tải xuống", "Lập chỉ mục lại", "Xóa") and the component renders its
+//     result/error notices inline beneath them. In a cell of a four-column
+//     table inside the `minmax(0, 2fr)` list card, that wraps every row.
+//   - Cost per row. Each instance registers `pointerdown` + `keydown`
+//     listeners on `window` while its download menu is open and owns three
+//     independent single-flight states. One mounted instance for the
+//     selected document does the same job without N copies of that, and
+//     without two live delete confirmations for one document (row + preview)
+//     racing each other.
+// Selecting a row is already how the preview loads, so acting on a document
+// costs no extra step.
 import { DocumentStateBadge } from './DocumentStateBadge';
 import { extensionLabel, formatDateTime } from './documentPresentation';
 import type { LibraryDocument } from './types';
@@ -43,9 +55,6 @@ export function DocumentList({
           <th scope="col">Tài liệu</th>
           <th scope="col">Trạng thái</th>
           <th scope="col">Cập nhật</th>
-          <th scope="col">
-            <span className="text-muted">Thao tác</span>
-          </th>
         </tr>
       </thead>
       <tbody>
@@ -69,7 +78,6 @@ export function DocumentList({
                 <DocumentStateBadge state={doc.state} />
               </td>
               <td className="text-muted">{formatDateTime(doc.updatedAt)}</td>
-              <td data-slot={`document-row-actions:${doc.id}`} />
             </tr>
           );
         })}

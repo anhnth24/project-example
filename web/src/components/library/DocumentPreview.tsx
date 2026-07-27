@@ -2,11 +2,14 @@
 // preview"). All Markdown goes through `SafeMarkdown` — never
 // `dangerouslySetInnerHTML` — per the task's hard rule.
 //
-// Mount point for the actions agent (components/actions/**): the empty
-// `<div data-slot="document-actions:<documentId>">` below is where primary
-// actions belong ("Hỏi về tài liệu này", download, approve-intake,
-// reindex/publish), scoped by `document.id` (and the loaded preview's
-// `versionId`, once one has loaded).
+// Per-document actions (components/actions/**) mount here, in the
+// `document-actions:<documentId>` slot, passed in as `actions` rather than
+// imported: this panel stays presentational and its tests keep rendering it
+// without an API client. The library page is what supplies the node.
+//
+// The actions live here and not in each table row on purpose — see
+// `DocumentList.tsx`'s note.
+import type { ReactNode } from 'react';
 import { SafeMarkdown } from '../SafeMarkdown';
 import { Notice } from '../ui';
 import { DocumentStateBadge } from './DocumentStateBadge';
@@ -23,6 +26,7 @@ export function DocumentPreview({
   isCurrent,
   serverTruncated,
   errorMessage,
+  actions,
 }: {
   document: LibraryDocument | null;
   loadState?: PreviewLoadState;
@@ -31,6 +35,8 @@ export function DocumentPreview({
   isCurrent?: boolean;
   serverTruncated?: boolean;
   errorMessage?: string;
+  /** Rendered in the `document-actions:<id>` slot. Omitted in tests that only exercise preview rendering. */
+  actions?: ReactNode;
 }) {
   if (!document) {
     return (
@@ -53,7 +59,7 @@ export function DocumentPreview({
         <span className="text-muted">Cập nhật {formatDateTime(document.updatedAt)}</span>
       </div>
 
-      <div data-slot={`document-actions:${document.id}`} />
+      <div data-slot={`document-actions:${document.id}`}>{actions}</div>
 
       {loadState === 'no-version' && (
         <p className="text-muted">

@@ -13,13 +13,14 @@
 // navigation, not a merged document list — documented further in the P2-07
 // report.
 //
-// Two mount points intentionally left empty for other in-flight agents:
-//   - `<div data-slot="library-upload" />` below the header — the upload
-//     entry point (components/upload/**), scoped to `collectionId` when set.
-//   - Each document row's last `<td data-slot="document-row-actions:id">`
-//     (components/library/DocumentList.tsx) and the preview panel's
-//     `<div data-slot="document-actions:id">` (components/library/
-//     DocumentPreview.tsx) — per-document actions (components/actions/**).
+// This page is where P2-07's list, P2-08's upload panel and P2-09's
+// per-document actions meet. Both of the latter mutate the collection, so
+// both feed the same `refreshDocuments()` — a bump of the retry counter the
+// documents request already depends on. Nothing here re-derives a document
+// from a mutation's response: the list is refetched and the server stays the
+// only source of truth for state (`converting` -> `indexed`, tombstoning),
+// which also means a delete's own row disappears on the next page load
+// rather than being optimistically hidden while the server may still reject.
 import { useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
 import {
@@ -35,8 +36,11 @@ import {
   type PreviewLoadState,
   type StatusFilterValue,
 } from '../components/library';
+import { DocumentRowActions } from '../components/actions';
 import { Notice } from '../components/ui';
+import { UploadPanel } from '../components/upload';
 import { useScopeSafeRequest } from '../hooks/useScopeSafeRequest';
+import { useScope } from '../state/ScopeProvider';
 
 /** Server default is 50 (clamped [1,100]); 20 keeps a page comfortably scannable. */
 const DOCUMENTS_PAGE_SIZE = 20;
@@ -71,6 +75,7 @@ export function LibraryPage({
   /** Injectable for tests; defaults to the app-wide singleton, same convention as `AuthProvider`. */
   client?: ApiClient;
 }) {
+  const { epoch } = useScope();
   const [view, setView] = useState<ViewState>(() => initialView(collectionId));
   // A `collectionId` prop change (collection switch/deep link) re-scopes the
   // whole page — pagination, filters, and selection all belonged to the
@@ -105,7 +110,36 @@ export function LibraryPage({
     [client, collectionId, cursor, documentsRetry],
   );
 
-  const items: LibraryDocument[] = documentsResult.data?.items ?? [];
+  // A refresh must not blank the list. `useScopeSafeRequest` reports
+  // `data: undefined` for the whole of a re-run, so without this the
+  // `refreshDocuments()` that follows an upload or a reindex would drop
+  // `items` to `[]` for a frame, `selectedDocument` to `null`, and unmount
+  // the preview — taking the actions component (and the success notice it
+  // had just rendered) with it, then remounting it fresh.
+  //
+  // Retaining the previous payload is only safe if it can never outlive the
+  // request identity it belongs to, so the retained copy is keyed by the
+  // scope epoch, the collection and the cursor — the three things that make
+  // it a *different* list rather than the same list re-read. An org switch
+  // or a collection change therefore discards it rather than showing one
+  // tenant's documents while another's load, which is the exact failure
+  // `useScopeSafeRequest` exists to prevent; only a `documentsRetry` bump
+  // reuses it.
+  const documentsKey = `${epoch}|${collectionId ?? ''}|${cursor ?? ''}`;
+  const [retainedDocuments, setRetainedDocuments] = useState<{
+    key: string;
+    data: NonNullable<typeof documentsResult.data>;
+  } | null>(null);
+  if (documentsResult.data && retainedDocuments?.data !== documentsResult.data) {
+    // Adjust-state-while-rendering, the same idiom `useRequestGeneration`
+    // and `SelectControl` use. Converges: the next render compares equal.
+    setRetainedDocuments({ key: documentsKey, data: documentsResult.data });
+  }
+  const documentsData =
+    documentsResult.data ??
+    (retainedDocuments?.key === documentsKey ? retainedDocuments.data : undefined);
+
+  const items: LibraryDocument[] = documentsData?.items ?? [];
   const visibleItems = items.filter(
     (doc) =>
       matchesQuery(doc.title, effectiveView.searchText) &&
@@ -128,6 +162,13 @@ export function LibraryPage({
     setView((v) => ({ ...v, selectedDocumentId: documentId }));
   }
 
+  // Re-runs the documents request (and, through the selected document's
+  // `currentVersionId`, the preview) without disturbing the current page,
+  // filters or selection. Both the upload panel and the row actions call it.
+  function refreshDocuments() {
+    setDocumentsRetry((n) => n + 1);
+  }
+
   function goToPrevPage() {
     setView((v) =>
       v.pageIndex === 0 ? v : { ...v, pageIndex: v.pageIndex - 1, selectedDocumentId: null },
@@ -144,7 +185,7 @@ export function LibraryPage({
     });
   }
 
-  const pageInfo = documentsResult.data?.page;
+  const pageInfo = documentsData?.page;
 
   let previewLoadState: PreviewLoadState | undefined;
   if (selectedDocument) {
@@ -163,8 +204,6 @@ export function LibraryPage({
       <p className="lede">
         Duyệt bộ sưu tập, theo dõi trạng thái xử lý và xem trước nội dung Markdown đã chuyển đổi.
       </p>
-
-      <div data-slot="library-upload" />
 
       {collectionsResult.status === 'error' && (
         <Notice
@@ -193,6 +232,17 @@ export function LibraryPage({
         <Notice tone="info">Chọn một bộ sưu tập ở trên để xem danh sách tài liệu.</Notice>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          {/* Scoped to the open collection — `POST /uploads` needs a
+              collectionId, so there is nothing to render on the "all
+              collections" view above. */}
+          <div className="card" data-slot="library-upload">
+            <UploadPanel
+              collectionId={collectionId}
+              onUploaded={refreshDocuments}
+              client={client}
+            />
+          </div>
+
           <DocumentFilters
             searchText={effectiveView.searchText}
             onSearchTextChange={(value) => setView((v) => ({ ...v, searchText: value }))}
@@ -231,9 +281,9 @@ export function LibraryPage({
                 totalOnPage={items.length}
                 selectedDocumentId={effectiveView.selectedDocumentId}
                 onSelect={selectDocument}
-                loading={documentsResult.status === 'loading'}
+                loading={documentsResult.status === 'loading' && documentsData === undefined}
               />
-              {documentsResult.status === 'success' && (
+              {documentsData !== undefined && (
                 <Pagination
                   pageNumber={effectiveView.pageIndex + 1}
                   hasMore={pageInfo?.hasMore ?? false}
@@ -252,6 +302,21 @@ export function LibraryPage({
               serverTruncated={previewResult.data?.truncated}
               errorMessage={
                 previewResult.status === 'error' ? describeApiError(previewResult.error) : undefined
+              }
+              actions={
+                selectedDocument ? (
+                  // Keyed by document id so switching selection remounts the
+                  // actions: `useSingleFlightAction` holds per-ticket phase
+                  // state, and a success notice ("đã đưa vào hàng đợi") left
+                  // over from the previous document would otherwise read as
+                  // belonging to the newly selected one.
+                  <DocumentRowActions
+                    key={selectedDocument.id}
+                    document={selectedDocument}
+                    onChanged={refreshDocuments}
+                    client={client}
+                  />
+                ) : undefined
               }
             />
           </div>
