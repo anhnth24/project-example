@@ -1,10 +1,15 @@
 // Ported from app/src/components/ui.tsx (desktop, 600 lines). All of that
 // file was already generic React (no Tauri IPC, no native dialogs, no
 // filesystem/local paths), so nothing needed to be dropped on that front.
-// The only desktop-only dependency was the `lucide-react` icon package,
-// which is not declared for web; icons come from `./icons` instead (see the
-// note there). `useFloatingMenu` and the Modal focus trap were extracted
-// into `../hooks` so this file only exports components.
+// Icons come from `./icons`, which now wraps `lucide-react` (see the note
+// there). `useFloatingMenu` and the Modal focus trap were extracted into
+// `../hooks` so this file only exports components.
+//
+// Organic re-skin: class names below now come from styles.css's Organic
+// component layer (`.btn*`, `.dialog*`, etc.) instead of the old
+// `.ui-button`/`.modal-*` set — see styles.css for the token mapping and
+// contrast notes. Props, behaviour and accessibility semantics (roles,
+// labels, keyboard handling) are unchanged.
 import {
   useEffect,
   useId,
@@ -42,7 +47,7 @@ export function Button({
   return (
     <button
       type="button"
-      className={`ui-button ui-button-${variant} ui-button-${size} ${className}`}
+      className={`btn btn-${variant} ${size === 'sm' ? 'btn-sm' : ''} ${className}`}
       disabled={disabled || loading}
       {...props}
     >
@@ -72,11 +77,11 @@ export function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      className={`ui-icon-button ${active ? 'active' : ''} ${className}`}
+      className={`btn btn-icon ${active ? 'active' : ''} ${className}`}
       {...props}
     >
       {children}
-      {!!badge && <span className="ui-icon-badge">{badge > 9 ? '9+' : badge}</span>}
+      {!!badge && <span className="icon-badge">{badge > 9 ? '9+' : badge}</span>}
     </button>
   );
 }
@@ -418,28 +423,30 @@ export function Modal({
 
   return (
     <div
-      className="modal-backdrop"
+      className="dialog-backdrop"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
       <div
         ref={panelRef}
-        className="modal-panel"
+        className="dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         style={{ width }}
       >
-        <header className="modal-header">
+        <header className="dialog-header">
           <div>
-            <h2 id={titleId}>{title}</h2>
-            {description && <p>{description}</p>}
+            <h2 id={titleId} className="dialog-title">
+              {title}
+            </h2>
+            {description && <p className="dialog-body">{description}</p>}
           </div>
           <IconButton label="Đóng" onClick={onClose}>
             <CloseIcon size={15} />
           </IconButton>
         </header>
-        <div className="modal-content">{children}</div>
-        {footer && <footer className="modal-footer">{footer}</footer>}
+        <div className="dialog-content">{children}</div>
+        {footer && <footer className="dialog-actions">{footer}</footer>}
       </div>
     </div>
   );
