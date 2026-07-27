@@ -284,6 +284,57 @@ code {
   max-width: none;
 }
 
+/* Auth shell: session/org visibility (App.tsx) and the login form (LoginPage.tsx). */
+.session-status {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  margin-left: 0.5rem;
+}
+
+.session-identity {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.session-org {
+  color: var(--color-text-secondary);
+}
+
+.auth-loading {
+  color: var(--color-text-secondary);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 24rem;
+}
+
+.auth-form .field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.auth-form label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.auth-form input {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.auth-form input:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
 @media (max-width: 600px) {
   .topbar {
     min-height: 4rem;

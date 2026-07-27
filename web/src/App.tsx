@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchReadiness, type ConnectionState } from './api/health';
-import { AuthProvider } from './auth/AuthContext';
+import { AuthProvider, useAuth } from './auth/AuthContext';
+import { ProtectedRoute, PublicOnlyRoute } from './auth/RouteGuard';
+import { Button } from './components/ui';
 import { RouteLink } from './components/RouteLink';
 import {
   AdminMembersPage,
@@ -11,7 +13,17 @@ import {
   QaPage,
 } from './pages';
 import { RouterProvider, useRouter } from './state/RouterProvider';
+import { ScopeProvider } from './state/ScopeProvider';
 import type { RouteName } from './types/routes';
+
+/**
+ * Real permission constants from plans/markhand-web/phase-1c-multi-org-security.md
+ * §P1C.2 — `member.manage` gates the members admin page. There is no
+ * documented constant yet for the usage/quota admin page (P2-12/1C haven't
+ * shipped one), so that route only requires "signed in" below rather than
+ * guessing a permission name the server may not agree with.
+ */
+const MEMBER_MANAGE_PERMISSION = 'member.manage';
 
 const navItems: Array<{ route: RouteName; to: string; label: string }> = [
   { route: 'login', to: '/login', label: 'Đăng nhập' },
@@ -43,15 +55,35 @@ function RouteOutlet() {
   const { match } = useRouter();
   switch (match.name) {
     case 'login':
-      return <LoginPage />;
+      return (
+        <PublicOnlyRoute>
+          <LoginPage />
+        </PublicOnlyRoute>
+      );
     case 'library':
-      return <LibraryPage collectionId={match.params.collectionId} />;
+      return (
+        <ProtectedRoute>
+          <LibraryPage collectionId={match.params.collectionId} />
+        </ProtectedRoute>
+      );
     case 'qa':
-      return <QaPage collectionId={match.params.collectionId} />;
+      return (
+        <ProtectedRoute>
+          <QaPage collectionId={match.params.collectionId} />
+        </ProtectedRoute>
+      );
     case 'adminMembers':
-      return <AdminMembersPage />;
+      return (
+        <ProtectedRoute permission={MEMBER_MANAGE_PERMISSION}>
+          <AdminMembersPage />
+        </ProtectedRoute>
+      );
     case 'adminUsage':
-      return <AdminUsagePage />;
+      return (
+        <ProtectedRoute>
+          <AdminUsagePage />
+        </ProtectedRoute>
+      );
     case 'help':
       return <HelpPage />;
     case 'notFound':
@@ -71,10 +103,50 @@ function RouteOutlet() {
 export function App() {
   return (
     <RouterProvider>
-      <AuthProvider>
-        <AppShell />
-      </AuthProvider>
+      <ScopeProvider>
+        <AuthProvider>
+          <AppShell />
+        </AuthProvider>
+      </ScopeProvider>
     </RouterProvider>
+  );
+}
+
+/**
+ * Session/org visibility for the shell (plan requirement: "session/org/role
+ * hiển thị rõ"). There is no single "role" the API returns — only
+ * `permissions[]` (see AuthContext.tsx) — so this surfaces the org and the
+ * permission count/list instead of inventing a role label.
+ */
+function AuthStatus() {
+  const { session, logout } = useAuth();
+  const { navigate } = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  if (session.status !== 'authenticated') return null;
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    try {
+      await logout();
+    } finally {
+      setLoggingOut(false);
+      navigate('/login');
+    }
+  }
+
+  return (
+    <div className="session-status" role="status">
+      <span
+        className="session-identity"
+        title={`Quyền: ${session.permissions.join(', ') || '(không có)'}`}
+      >
+        {session.displayName} <span className="session-org">· org {session.orgId}</span>
+      </span>
+      <Button variant="ghost" size="sm" loading={loggingOut} onClick={() => void handleLogout()}>
+        Đăng xuất
+      </Button>
+    </div>
   );
 }
 
@@ -133,6 +205,7 @@ function AppShell() {
           <span>Markhand</span>
         </RouteLink>
         <PrimaryNav />
+        <AuthStatus />
         <span className={`connection-dot ${connection.kind}`} aria-hidden="true" />
         <span className="connection-label" role="status">
           {connection.kind === 'checking' && 'Đang kiểm tra máy chủ'}
