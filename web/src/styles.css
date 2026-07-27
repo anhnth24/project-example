@@ -1299,3 +1299,293 @@ textarea.input {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Minimal theme seam (components/shell/useTheme.ts). Organic itself ships
+   one light-only token set — no dark ramp anywhere in organic-styles.css —
+   so this is a from-scratch, intentionally small dark override: it flips
+   only the ground/text/divider/neutral tokens and the shadow opacities,
+   leaving the terracotta/sage accent ramps as-is. Selector specificity
+   (`:root[data-theme]` beats plain `:root`) means this safely overrides the
+   base token block above without editing it. Every component already reads
+   these variable names, so this is a real repaint, not a per-component
+   restyle. Contrast against the new dark ground has not been re-audited
+   the way the light-mode deviations above were (see the file's opening
+   comment) — flagged here rather than silently assumed fine.
+   ══════════════════════════════════════════════════════════════════════ */
+:root[data-theme='dark'] {
+  --color-bg: #201e1d;
+  --color-surface: #2b2724;
+  --color-text: #f5ead8;
+  --color-divider: color-mix(in srgb, #f5ead8 18%, transparent);
+
+  --color-neutral-100: #2e2b25;
+  --color-neutral-200: #3a352d;
+  --color-neutral-300: #474238;
+  --color-neutral-400: #645c50;
+  --color-neutral-500: #82796a;
+  --color-neutral-600: #a19786;
+  --color-neutral-700: #c0b6a5;
+  --color-neutral-800: #dcd3c4;
+  --color-neutral-900: #f9f4ed;
+
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #000000 40%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #000000 45%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #000000 55%, transparent);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Application shell rail (components/shell/**) — vertical left icon rail
+   replacing the old topbar/primary-nav for authenticated routes. `.topbar`/
+   `.primary-nav`/`.session-status` above are left in place per the
+   append-only rule even though App.tsx no longer renders them.
+
+   Layout note (the bottom cluster fix): the rail is a column flex
+   container at full viewport height. `.rail-nav`/`.rail-nav-list` is the
+   *only* flexible, scrollable member (`flex: 1 1 auto; min-height: 0;
+   overflow-y: auto`); `.rail-bottom` is `flex: 0 0 auto` — a normal,
+   non-overlaid flow item that always renders at its own intrinsic height
+   after the nav list. Nothing in the bottom cluster is positioned
+   `fixed`/`absolute` against the viewport, so it can never sit on top of or
+   get clipped by another element the way an overlay pinned to the bottom
+   edge without reserved space would: at a short viewport the nav list runs
+   out of room and scrolls internally; the bottom cluster's own height is
+   never touched.
+   ══════════════════════════════════════════════════════════════════════ */
+.app-shell.shell-with-rail {
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-shell-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.shell-statusline {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) 5vw 0;
+}
+
+.rail {
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-divider);
+  box-sizing: border-box;
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100vh;
+  height: 100dvh;
+  padding: var(--space-3) var(--space-2) var(--space-4);
+  position: sticky;
+  top: 0;
+  width: 76px;
+}
+
+.rail-item {
+  display: flex;
+  justify-content: center;
+  position: relative;
+  width: 100%;
+}
+
+.rail-tooltip {
+  background: var(--color-text);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  color: var(--color-bg);
+  font-size: 12px;
+  font-weight: 600;
+  left: calc(100% + var(--space-2));
+  opacity: 0;
+  padding: 6px 10px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  transition:
+    opacity 120ms ease-out,
+    transform 120ms ease-out;
+  white-space: nowrap;
+  z-index: 70;
+}
+
+.rail-item-top .rail-tooltip {
+  bottom: calc(100% + var(--space-2));
+  left: 50%;
+  top: auto;
+  transform: translateX(-50%) translateY(4px);
+}
+
+.rail-item:hover .rail-tooltip,
+.rail-item:focus-within .rail-tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.rail-item-top:hover .rail-tooltip,
+.rail-item-top:focus-within .rail-tooltip {
+  transform: translateX(-50%) translateY(0);
+}
+
+.rail-brand {
+  align-items: center;
+  background: var(--color-accent-700);
+  border-radius: var(--radius-sm);
+  color: var(--color-bg);
+  display: flex;
+  flex: 0 0 auto;
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  height: 44px;
+  justify-content: center;
+  text-decoration: none;
+  width: 44px;
+}
+
+.rail-nav {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rail-nav-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+  width: 100%;
+}
+
+.rail-nav-list li {
+  display: flex;
+  justify-content: center;
+}
+
+.rail-btn,
+.rail-link {
+  align-items: center;
+  display: inline-flex;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+
+.rail-link {
+  border-radius: var(--radius-md);
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  text-decoration: none;
+}
+
+.rail-link:hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
+}
+
+.rail-link[aria-current='page'] {
+  /* contrast: same deep ramp step used throughout for accent-on-ground
+     text (see .text-muted note far above). */
+  background: var(--color-accent-100);
+  color: var(--color-accent-800);
+}
+
+.rail-link[aria-current='page']:hover {
+  background: var(--color-accent-200);
+}
+
+.rail-bottom {
+  border-top: 1px solid var(--color-divider);
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  width: 100%;
+}
+
+.rail-avatar {
+  align-items: center;
+  background: var(--color-text);
+  border: 0;
+  border-radius: 50%;
+  color: var(--color-bg);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 700;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+
+.rail-avatar:hover {
+  background: var(--color-accent-800);
+}
+
+.rail-menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+}
+
+.rail-menu-kicker {
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0 0 var(--space-1);
+  text-transform: uppercase;
+}
+
+.rail-menu-row,
+.rail-menu-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.rail-menu-org-id {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  margin: 0 0 var(--space-1);
+  word-break: break-all;
+}
+
+.rail-menu-note {
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.rail-menu-logout {
+  justify-content: flex-start;
+  margin-top: var(--space-2);
+  width: 100%;
+}
+
+@media (max-width: 600px) {
+  .rail {
+    width: 64px;
+  }
+
+  .rail-brand,
+  .rail-btn,
+  .rail-link {
+    height: 40px;
+    width: 40px;
+  }
+}
