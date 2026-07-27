@@ -14,6 +14,7 @@
     "api:check": "pnpm api:generate && git diff --exit-code -- src/api/generated/contract.ts"
   },
   "dependencies": {
+    "lucide-react": "^1.22.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^9.0.1",
