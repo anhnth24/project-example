@@ -21,6 +21,16 @@
       "license": "CC0-1.0",
       "sensitive": false,
       "notes": "Synthetic Helvetica garbage-punctuation page; pdf-inspector is_garbage_text \u2192 needs_ocr for CORE-T7 partial-success"
+    },
+    {
+      "id": "shared.synthetic.csv.vi.v1",
+      "path": "sample/contacts.vi.csv",
+      "sha256": "144900388c6f56c0b69430387b6ce0336618a9e1404dedad46dbb23af5093408",
+      "kind": "csv",
+      "owner": "markhand-core",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
     }
   ]
 }
