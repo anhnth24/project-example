@@ -193,6 +193,24 @@ describe('UploadPanel', () => {
     expect(screen.getByLabelText('Chọn tệp để tải lên')).toBeInTheDocument();
   });
 
+  // P2-14 (plans/markhand-web/phase-2-web-spa.md §P2.7): "keyboard-operable
+  // upload". The real file input is visually hidden (`.upload-dropzone-input`
+  // in styles.css: opacity 0 + 1x1px, not `display:none`/`visibility:hidden`
+  // — see that rule's own comment for why), which only actually keeps it
+  // keyboard-reachable if it stays out of `display:none`/`tabindex="-1"`.
+  // This asserts the reachability, not just the visual-hiding technique in
+  // the stylesheet: a real Tab would land here and Enter/Space is native
+  // `<input type="file">` behaviour the browser supplies for free once
+  // focus lands, which jsdom does not simulate opening a file dialog for.
+  it('keeps the file input keyboard-reachable despite being visually hidden', () => {
+    renderPanel(createScopeManager());
+    const input = screen.getByLabelText('Chọn tệp để tải lên');
+    expect(input).not.toHaveAttribute('tabindex', '-1');
+    expect(input).not.toBeDisabled();
+    input.focus();
+    expect(document.activeElement).toBe(input);
+  });
+
   it('sends the file and collectionId as multipart form data on selection', async () => {
     renderPanel(createScopeManager());
     const xhr = selectFile('report.pdf');
@@ -343,6 +361,62 @@ describe('UploadPanel', () => {
     await waitFor(() =>
       expect(screen.getByText(/hệ thống đang hoàn thiện lập chỉ mục/)).toBeVisible(),
     );
+  });
+
+  // P2-14 (plans/markhand-web/phase-2-web-spa.md §P2.7): a `progressbar` for
+  // the job, not just the upload — the job has no percentage the server
+  // reports (`Job` has only a `status` enum, no numeric progress field; see
+  // `jobLifecycle.ts`'s module doc), so this is deliberately the same
+  // indeterminate shape already used for a non-computable upload length,
+  // never a fabricated percentage.
+  it('shows an indeterminate progressbar while a job is tracked, and none once it reaches a terminal state', async () => {
+    const manager = createScopeManager();
+    manager.setScope(scope('org-a'));
+    const sources: ReturnType<typeof fakeSseSource<SseMessage>>[] = [];
+    vi.mocked(createJobEventsSource).mockImplementation(() => {
+      const fake = fakeSseSource<SseMessage>();
+      sources.push(fake);
+      return fake.source;
+    });
+
+    renderPanel(manager);
+    const xhr = selectFile();
+    await flush();
+
+    getStore().jobs.set(JOB_ID, {
+      id: JOB_ID,
+      jobType: 'convert',
+      status: 'running',
+      attempts: 1,
+      documentId: DOC_ID,
+      versionId: VERSION_ID,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      finishedAt: null,
+    });
+    xhr.respond(201, { disposition: 'accepted', documentId: DOC_ID, jobId: JOB_ID });
+    await flush();
+
+    await waitFor(() => expect(screen.getByRole('progressbar')).toBeVisible());
+    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+
+    getStore().jobs.set(JOB_ID, {
+      id: JOB_ID,
+      jobType: 'convert',
+      status: 'succeeded',
+      attempts: 1,
+      documentId: DOC_ID,
+      versionId: VERSION_ID,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    });
+    act(() => sources[0].push(fakeJobEnvelope()));
+
+    await waitFor(() =>
+      expect(screen.getByText(/hệ thống đang hoàn thiện lập chỉ mục/)).toBeVisible(),
+    );
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 
   it('a job.failed transition is shown as a conversion failure, distinct from an upload failure', async () => {

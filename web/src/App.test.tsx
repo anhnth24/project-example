@@ -99,6 +99,29 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Trợ giúp Markhand' })).toBeVisible();
   });
 
+  // P2-14 (plans/markhand-web/phase-2-web-spa.md §P2.7): "focus sau route
+  // change". Without this, a keyboard/screen-reader user who activates a
+  // rail link keeps focus on the link itself while the page underneath it
+  // changes — the new page's heading is never announced and Tab continues
+  // from the rail instead of from the content. Moving focus to the `<main>`
+  // landmark (already `tabIndex={-1}` at App.tsx's `#main-content`, put
+  // there for the skip link) is the standard SPA fix; this only asserts it
+  // actually happens, not just that the markup exists for it to.
+  it('moves focus to the main landmark after a route change (not just on first paint)', () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+
+    render(<App />);
+    const main = screen.getByRole('main');
+    // The initial mount must not be reporting a false positive here — a
+    // browser tab load starts focus on <body>, not on the landmark.
+    expect(document.activeElement).not.toBe(main);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Trợ giúp' }));
+
+    expect(window.location.pathname).toBe('/help');
+    expect(document.activeElement).toBe(main);
+  });
+
   it('redirects a deep-linked protected route to /login when anonymous, preserving it as ?next=', async () => {
     window.history.pushState(null, '', '/library/col-42');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
