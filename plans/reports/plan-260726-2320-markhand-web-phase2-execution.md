@@ -7,6 +7,15 @@ Base commit: `7b0a85e` (branch `claude/pull-master-large-pr-eg39zh`, PR #310)
 Tài liệu này là **thứ tự làm**, dựa trên trạng thái code đo được hôm nay, và nêu hai
 thứ chặn thật mà bản plan gốc không thể biết trước.
 
+> **Cập nhật kết quả (2026-07-27).** Kế hoạch này đã thực thi xong phần không bị chặn.
+> Đã merge vào `master`: **#311** (Wave 0+1: P2-01…06), **#312** (Wave 2: P2-07…09),
+> **#313** (Wave 5 phần làm được: P2-14 a11y, P2-16 build+serve SPA). B1 (schema
+> OpenAPI) đã lấp và có parity check mức schema. Còn lại: **P2-15** (E2E — Ready, chưa
+> bắt đầu), và Wave 3–4 vẫn **Blocked** đúng như mục 2/4 dưới đây dự báo — P2-10 chờ
+> R02/R03/R05, P2-11/P2-12 chờ Phase 1C (quyết định B2 chưa chốt). **Exit gate Phase 2
+> chưa đạt** (cần E2E deploy thật + gate Phase 1C). Trạng thái chi tiết từng issue:
+> [`../markhand-web/backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md).
+
 ## 1. Điều kiện vào — đã đạt
 
 | Hạng mục | Trạng thái đo được |
