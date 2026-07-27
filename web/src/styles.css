@@ -1272,6 +1272,174 @@ textarea.input {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-800) 45%, transparent);
 }
 
+/* — upload panel (components/upload/**) —
+   The upload agent wrote the markup against these class names but did not
+   pick colors, on the grounds that Organic ships no success/danger hue. It
+   was right to stop there; the escalation used here is the same one
+   `.connection-dot` above already established — sage 600 for "went well",
+   accent 800 for "went wrong" — so the panel reads consistently with the
+   rest of the app instead of introducing a second severity vocabulary. */
+.upload-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.upload-dropzone {
+  align-items: center;
+  background: var(--color-neutral-100);
+  border: 2px dashed color-mix(in srgb, var(--color-text) 22%, transparent);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.upload-dropzone:hover,
+.upload-dropzone--dragging {
+  background: var(--color-accent-100);
+  border-color: var(--color-accent-600);
+}
+
+/* Visually hidden, but still focusable and still the label's control — so
+   keyboard users get the dropzone's `:focus-within` ring below rather than
+   a ring around a 0×0 box. */
+.upload-dropzone-input {
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  width: 1px;
+}
+
+.upload-dropzone:focus-within {
+  outline: 2px solid var(--color-accent-700);
+  outline-offset: 2px;
+}
+
+.upload-dropzone-icon {
+  align-items: center;
+  background: var(--color-accent-200);
+  border-radius: 999px;
+  color: var(--color-accent-800);
+  display: inline-flex;
+  height: 2.6rem;
+  justify-content: center;
+  width: 2.6rem;
+}
+
+.upload-dropzone span:last-of-type {
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  font-size: 13px;
+}
+
+.upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.upload-item {
+  align-items: flex-start;
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.upload-item-icon {
+  align-items: center;
+  color: var(--color-accent-700);
+  display: inline-flex;
+  flex: none;
+  height: 1.4rem;
+  justify-content: center;
+  width: 1.4rem;
+}
+
+.upload-item-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.upload-item-name {
+  overflow-wrap: anywhere;
+}
+
+.upload-item-meta {
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  font-size: 12px;
+}
+
+.upload-item-status {
+  align-items: center;
+  display: flex;
+  font-size: 13px;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* Severity, mirroring `.connection-dot`'s escalation-by-depth: the row's
+   icon deepens to accent 800 when the row is reporting a failure. Selected
+   via `:has([role='alert'])` — the upload agent already distinguishes an
+   upload failure (`role="alert"`) from every other state (`role="status"`),
+   so the markup needs no tone class it deliberately didn't invent. A
+   *conversion* failure is `role="status"` by that same deliberate choice
+   and so is not covered here; it reads as failure from its copy and its
+   AlertTriangle glyph, not from color. */
+.upload-item:has([role='alert']) .upload-item-icon {
+  color: var(--color-accent-800);
+}
+
+.upload-item-actions {
+  flex: none;
+}
+
+.upload-progress-track {
+  background: color-mix(in srgb, var(--color-text) 12%, transparent);
+  border-radius: 999px;
+  display: block;
+  flex: 1;
+  height: 0.4rem;
+  max-width: 14rem;
+  overflow: hidden;
+}
+
+.upload-progress-value {
+  background: var(--color-accent-700);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+  transition: width 140ms ease;
+}
+
+.upload-progress-value--indeterminate {
+  animation: upload-slide 1.1s ease-in-out infinite;
+  width: 40%;
+}
+
+@keyframes upload-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }
