@@ -883,11 +883,17 @@ async fn reload_principal_locked(
 
     // Membership/user rows are read under the principal advisory lock (not
     // FOR UPDATE) so suspend/disable writers are not blocked while a saga
-    // pauses; re-check after pause observes the fresh disabled_at.
+    // pauses; re-check after pause observes the fresh disabled_at — and the
+    // fresh `state`. The `state = 'active'` filter is not cosmetic: this saga
+    // builds its own OrgContext from role→permissions rather than going
+    // through `resolve_org_context` (the only place migration 0029's suspend
+    // gate lives), so without it a member suspended while a saga is paused
+    // would resume with full permissions on the next attempt. Mirror the
+    // resolver's gate here so suspend means the same thing on every authz path.
     let membership = txn
         .query_opt(
             "SELECT role FROM org_memberships
-             WHERE org_id = $1 AND user_id = $2",
+             WHERE org_id = $1 AND user_id = $2 AND state = 'active'",
             &[&org_id, &user_id],
         )
         .await
@@ -916,7 +922,7 @@ async fn reload_principal_locked(
                ON rp.org_id = r.org_id AND rp.role_id = r.id
              JOIN permissions p
                ON p.id = rp.permission_id
-             WHERE m.org_id = $1 AND m.user_id = $2
+             WHERE m.org_id = $1 AND m.user_id = $2 AND m.state = 'active'
              ORDER BY p.code",
             &[&org_id, &user_id],
         )

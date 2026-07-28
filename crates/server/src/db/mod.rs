@@ -11,6 +11,7 @@ pub mod embedding_batches;
 pub mod error;
 pub mod index_metadata;
 pub(crate) mod jobs;
+pub mod members;
 pub mod models;
 pub mod orgs;
 pub mod pool;

@@ -16,11 +16,13 @@ import { RouterProvider, useRouter } from './state/RouterProvider';
 import { ScopeProvider } from './state/ScopeProvider';
 
 /**
- * Real permission constants from plans/markhand-web/phase-1c-multi-org-security.md
- * §P1C.2 — `member.manage` gates the members admin page. There is no
- * documented constant yet for the usage/quota admin page (P2-12/1C haven't
- * shipped one), so that route only requires "signed in" below rather than
- * guessing a permission name the server may not agree with.
+ * Real permission constant from plans/markhand-web/phase-1c-multi-org-security.md
+ * §P1C.2 / `crates/server/src/routes/members.rs`'s `PERMISSION_MEMBER_MANAGE`
+ * — gates both the members admin page and the usage/quota admin page: the
+ * P2-11/P2-12 OpenAPI doc documents `GET /usage` itself as "requires
+ * member.manage", same as every `/members*` operation, so both routes below
+ * share this one constant rather than the usage page guessing a permission
+ * name of its own.
  */
 const MEMBER_MANAGE_PERMISSION = 'member.manage';
 
@@ -53,7 +55,7 @@ function RouteOutlet() {
       );
     case 'adminUsage':
       return (
-        <ProtectedRoute>
+        <ProtectedRoute permission={MEMBER_MANAGE_PERMISSION}>
           <AdminUsagePage />
         </ProtectedRoute>
       );

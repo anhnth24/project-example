@@ -372,9 +372,14 @@ async fn find_user_org(client: &mut Object, user_id: Uuid) -> Result<Option<Uuid
             .await
             .map_err(|_| SessionError::Database)?;
         set_org_guc_txn(&txn, org_id).await?;
+        // `state = 'active'` mirrors `resolve_org_context`: a suspended
+        // membership is treated as absent, so a suspended member cannot log in
+        // and mint a fresh token for the org. In multi-org this correctly skips
+        // a suspended org and finds an active one instead.
         let membership = txn
             .query_opt(
-                "SELECT 1 FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+                "SELECT 1 FROM org_memberships
+                 WHERE org_id = $1 AND user_id = $2 AND state = 'active'",
                 &[&org_id, &user_id],
             )
             .await
@@ -637,9 +642,16 @@ pub async fn refresh_session(
         txn.commit().await.map_err(|_| SessionError::Database)?;
         return Err(SessionError::UserDisabled);
     }
+    // `state = 'active'` gives refresh the same suspend backstop that
+    // `resolve_org_context` gives every request: a member suspended after their
+    // token was issued cannot refresh it, and — because the miss path below
+    // revokes the family in THIS transaction — suspend hard-kills the session
+    // without depending on the out-of-band `revoke_all_user_families` call the
+    // suspend route makes (which could be lost to a crash between the two).
     let membership = txn
         .query_opt(
-            "SELECT 1 FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+            "SELECT 1 FROM org_memberships
+             WHERE org_id = $1 AND user_id = $2 AND state = 'active'",
             &[&org_id, &user_id],
         )
         .await

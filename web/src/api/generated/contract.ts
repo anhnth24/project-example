@@ -519,6 +519,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List org members (requires member.manage) */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/members/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List invites, open and terminal (requires member.manage) */
+        get: operations["listMemberInvites"];
+        put?: never;
+        /** Create a single-use invite (requires member.manage; owner role requires an active owner caller) */
+        post: operations["createMemberInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/members/invites/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an invite by token (authenticated bearer only — no existing org membership required) */
+        post: operations["acceptMemberInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/members/invites/{inviteId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                inviteId: components["parameters"]["inviteId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke an invite that has not yet been accepted/revoked (requires member.manage) */
+        post: operations["revokeMemberInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/members/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["userId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a member from the org (requires member.manage; last-owner invariant enforced) */
+        delete: operations["deleteMember"];
+        options?: never;
+        head?: never;
+        /** Change role and/or suspend/reactivate a member (requires member.manage; last-owner invariant enforced) */
+        patch: operations["patchMember"];
+        trace?: never;
+    };
+    "/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Aggregated per-resource usage/limit/reserved (requires member.manage) */
+        get: operations["getUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -768,6 +876,77 @@ export interface components {
             /** Format: date-time */
             finishedAt: string | null;
         };
+        Membership: {
+            /** Format: uuid */
+            userId: string;
+            /** @enum {string} */
+            role: "owner" | "admin" | "editor" | "viewer";
+            /** @enum {string} */
+            state: "active" | "suspended";
+            /** Format: date-time */
+            createdAt: string;
+        };
+        MembershipPage: {
+            items: components["schemas"]["Membership"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        Invite: {
+            /** Format: uuid */
+            id: string;
+            email: string;
+            /** @enum {string} */
+            role: "owner" | "admin" | "editor" | "viewer";
+            /**
+             * @description Derived, not stored — never both terminal and pending.
+             * @enum {string}
+             */
+            status: "pending" | "accepted" | "revoked" | "expired";
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: date-time */
+            acceptedAt?: string | null;
+            /** Format: date-time */
+            revokedAt?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        InvitePage: {
+            items: components["schemas"]["Invite"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        CreateInviteRequest: {
+            email: string;
+            /** @enum {string} */
+            role: "owner" | "admin" | "editor" | "viewer";
+            /** @description Invite lifetime in seconds (default 7 days; clamped [60, 2592000]). */
+            ttlSecs?: number;
+        };
+        CreateInviteResponse: {
+            invite: components["schemas"]["Invite"];
+            /** @description Plaintext single-use invite token, returned exactly once. Only its hash is ever persisted — this value cannot be retrieved again. */
+            token: string;
+        };
+        AcceptInviteRequest: {
+            token: string;
+        };
+        /** @description At least one of role/state must be present. */
+        PatchMemberRequest: {
+            /** @enum {string} */
+            role?: "owner" | "admin" | "editor" | "viewer";
+            /** @enum {string} */
+            state?: "active" | "suspended";
+        };
+        UsageEntry: {
+            /** @enum {string} */
+            resource: "storage_bytes" | "documents" | "concurrent_jobs" | "tokens";
+            limit: number;
+            committed: number;
+            reserved: number;
+            remaining: number;
+        };
+        UsageResponse: {
+            items: components["schemas"]["UsageEntry"][];
+        };
     };
     responses: {
         /** @description Canonical API error */
@@ -795,6 +974,8 @@ export interface components {
         documentId: string;
         versionId: string;
         jobId: string;
+        inviteId: string;
+        userId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1885,6 +2066,241 @@ export interface operations {
                     "application/yaml": string;
                 };
             };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Memberships in the caller's current org (both active and suspended). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipPage"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listMemberInvites: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invites for the caller's current org. Never includes tokenHash. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitePage"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createMemberInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Invite created. The plaintext token is returned exactly once here and is never retrievable again (only its hash is stored). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateInviteResponse"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    acceptMemberInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInviteRequest"];
+            };
+        };
+        responses: {
+            /** @description Membership created in the invite's org. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            /** @description Invite already accepted/revoked, expired, or caller is already a member. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    revokeMemberInvite: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                inviteId: components["parameters"]["inviteId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Invite revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invite"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            /** @description Invite already accepted or revoked. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["userId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Member removed; refresh-token sessions invalidated. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            /** @description Operation would leave the org with zero active owners. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    patchMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: components["parameters"]["userId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Membership updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Membership"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            /** @description Operation would leave the org with zero active owners. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Usage snapshot for every quota ResourceKind. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageResponse"];
+                };
+            };
+            403: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
     };

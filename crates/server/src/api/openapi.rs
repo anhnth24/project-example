@@ -92,6 +92,31 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
         &["200", "400", "401", "403", "404", "429"],
     ),
     ("get", "/openapi.yaml", &["200", "429"]),
+    // P2-11 / P2-12 membership + invite + usage admin surface (Wave 2).
+    ("get", "/members", &["200", "403", "429"]),
+    ("get", "/members/invites", &["200", "403", "429"]),
+    ("post", "/members/invites", &["201", "400", "403", "429"]),
+    (
+        "post",
+        "/members/invites/{inviteId}/revoke",
+        &["200", "403", "404", "409", "429"],
+    ),
+    (
+        "post",
+        "/members/invites/accept",
+        &["201", "400", "401", "404", "409", "429"],
+    ),
+    (
+        "patch",
+        "/members/{userId}",
+        &["200", "400", "403", "404", "409", "429"],
+    ),
+    (
+        "delete",
+        "/members/{userId}",
+        &["204", "403", "404", "409", "429"],
+    ),
+    ("get", "/usage", &["200", "403", "429"]),
 ];
 
 const HEALTH_PATHS: &[&str] = &["/health/live", "/health/ready", "/health/start"];
@@ -123,6 +148,9 @@ pub const BODY_TAKING_OPERATIONS: &[(&str, &str)] = &[
     ("post", "/search"),
     ("post", "/ask"),
     ("post", "/ask/stream"),
+    ("post", "/members/invites"),
+    ("post", "/members/invites/accept"),
+    ("patch", "/members/{userId}"),
 ];
 
 pub fn embedded_openapi_yaml() -> &'static str {
