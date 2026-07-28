@@ -34,11 +34,16 @@ export default defineConfig({
     },
   ],
   webServer: {
-    // Vite dev is enough for E2E and avoids a separate build step; the mock
-    // flag is read at runtime via `import.meta.env`.
-    command: `VITE_MARKHAND_MOCK=1 pnpm exec vite --port ${PORT} --strictPort`,
+    // Bind the dev server explicitly to 127.0.0.1 so it matches the IPv4 `url`
+    // Playwright polls: with a bare `localhost` bind, a CI runner that resolves
+    // `localhost` to `::1` first leaves the IPv4 health check hanging until the
+    // timeout (observed on GitHub Actions). The mock flag is read at runtime
+    // via `import.meta.env`, so `vite` dev needs no separate build step.
+    command: `VITE_MARKHAND_MOCK=1 pnpm exec vite --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: `http://127.0.0.1:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    stdout: 'pipe',
+    stderr: 'pipe',
   },
 });
