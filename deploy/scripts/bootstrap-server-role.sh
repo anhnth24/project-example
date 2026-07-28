@@ -51,6 +51,22 @@ REVOKE CREATE ON SCHEMA public FROM ${APP_USER};
 -- PG16+: membership inherit so migrator can reassign legacy app-owned objects.
 GRANT ${APP_USER} TO ${MIG_USER} WITH INHERIT TRUE;
 
+-- Dev seed scripts (deploy/scripts/seed*.sh) create tables as ${PG_USER} before
+-- migrations run; 0027's GRANT ... ON ALL TABLES IN SCHEMA public then fails with
+-- 42501 unless the migrator can grant on them, so hand ownership to the migrator.
+DO \$\$
+DECLARE
+  t record;
+BEGIN
+  FOR t IN
+    SELECT schemaname, tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tableowner = '${PG_USER}'
+  LOOP
+    EXECUTE format('ALTER TABLE %I.%I OWNER TO ${MIG_USER}', t.schemaname, t.tablename);
+  END LOOP;
+END
+\$\$;
+
 -- Default privileges for objects created by migrator.
 ALTER DEFAULT PRIVILEGES FOR ROLE ${MIG_USER} IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${APP_USER};

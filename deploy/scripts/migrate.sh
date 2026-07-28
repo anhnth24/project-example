@@ -7,7 +7,8 @@ MIG_USER="${MARKHAND_MIGRATOR_DB_USER:-markhand_migrator}"
 MIG_PASSWORD="${MARKHAND_MIGRATOR_DB_PASSWORD:-markhand_migrator_dev_only}"
 APP_DB="${MARKHAND_POSTGRES_DB:-markhand}"
 HOST="${MARKHAND_POSTGRES_HOST:-127.0.0.1}"
-PORT="${MARKHAND_POSTGRES_PORT:-5432}"
+# Dev Compose publishes Postgres on 54329 (see deploy/dev/compose.yml).
+PORT="${MARKHAND_POSTGRES_PORT:-54329}"
 
 if [[ -z "${MARKHAND_MIGRATOR_DATABASE_URL:-}" ]]; then
   export MARKHAND_MIGRATOR_DATABASE_URL="postgres://${MIG_USER}:${MIG_PASSWORD}@${HOST}:${PORT}/${APP_DB}"
@@ -27,13 +28,16 @@ if [[ -x "$ROOT/deploy/scripts/bootstrap-server-role.sh" ]]; then
 fi
 
 cd "$ROOT"
-if [[ -x "$ROOT/target/release/fileconv-server" ]]; then
+if [[ -x "$ROOT/target/release/fileconv-server" || -x "$ROOT/target/release/fileconv-server.exe" ]]; then
   BIN="$ROOT/target/release/fileconv-server"
-elif [[ -x "$ROOT/target/debug/fileconv-server" ]]; then
+  [[ -x "$ROOT/target/release/fileconv-server.exe" ]] && BIN="$ROOT/target/release/fileconv-server.exe"
+elif [[ -x "$ROOT/target/debug/fileconv-server" || -x "$ROOT/target/debug/fileconv-server.exe" ]]; then
   BIN="$ROOT/target/debug/fileconv-server"
+  [[ -x "$ROOT/target/debug/fileconv-server.exe" ]] && BIN="$ROOT/target/debug/fileconv-server.exe"
 else
   cargo build -p fileconv-server
   BIN="$ROOT/target/debug/fileconv-server"
+  [[ -x "$ROOT/target/debug/fileconv-server.exe" ]] && BIN="$ROOT/target/debug/fileconv-server.exe"
 fi
 
 exec "$BIN" --migrate-only

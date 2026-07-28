@@ -41,12 +41,16 @@ re-design
 *.log
 # Only the Dockerfiles are build inputs; compose files, env files, deploy
 # scripts and service assets are runtime concerns and must not bust the cache.
+# Keep the two embedding-cpu build inputs (COPY in Dockerfile.embedding-cpu).
 deploy/compose*.yml
-deploy/dev
+deploy/dev/**
+!deploy/dev/requirements-embedding-server.txt
+!deploy/dev/Dockerfile.embedding-cpu
 deploy/spike
 deploy/poc
 deploy/backup
 deploy/observability
-deploy/scripts
+deploy/scripts/**
+!deploy/scripts/aiteamvn-embedding-server.py
 deploy/README.md
 deploy/.env

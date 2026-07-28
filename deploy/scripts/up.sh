@@ -3,13 +3,20 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT/deploy/dev"
+# Preserve caller/CI COMPOSE_PROFILES (e.g. mock) over values in .env.
+incoming_profiles="${COMPOSE_PROFILES:-}"
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
-  source .env
+  # Tolerate CRLF from Windows editors / checkout.
+  source <(sed 's/\r$//' .env)
   set +a
 fi
-export COMPOSE_PROFILES="${COMPOSE_PROFILES:-aiteamvn}"
+if [[ -n "$incoming_profiles" ]]; then
+  export COMPOSE_PROFILES="$incoming_profiles"
+else
+  export COMPOSE_PROFILES="${COMPOSE_PROFILES:-aiteamvn}"
+fi
 docker compose up -d
 
 for _ in $(seq 1 30); do
