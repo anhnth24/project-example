@@ -56,6 +56,26 @@ export interface AuthContextValue {
   /** Re-fetches `GET /auth/me` and applies the result — e.g. after an org switch changes permissions/allowedCollectionIds without a full reload. */
   refreshSession(): Promise<void>;
   /**
+   * `POST /orgs/switch` (1C-01) + atomic session swap for the org-switch UI
+   * (`components/shell/OrgSwitch.tsx`). On success: the returned access+
+   * refresh pair replaces the previous org's in one synchronous
+   * `sessionManager.setTokens` call (no window where a concurrent request
+   * could observe a half-updated session), then `GET /auth/me` is re-applied
+   * exactly like `login`/`refreshSession` already do — which is what bumps
+   * the scope epoch (`state/scope.ts`: a different `orgId` always bumps),
+   * aborting every REST/SSE request still registered under the old org and
+   * letting every `useScopeSafeRequest`/`useScopeSafeSse` caller restart
+   * fresh under the new one. Rejects (session/scope left completely
+   * untouched, still on the previous org) on a denied/network/rate-limited
+   * switch, and also — mirroring `login`'s own failure path — if the
+   * follow-up `/auth/me` fails even though the switch itself succeeded, so a
+   * caller is never left holding new-org tokens with stale old-org session
+   * state. A newer `switchOrg`/`login`/`logout`/`refreshSession` call
+   * silently supersedes an older one in flight (same epoch-guard convention
+   * every method here already uses) rather than letting the slower one win.
+   */
+  switchOrg(orgId: string): Promise<void>;
+  /**
    * UI convenience only — never authorization. This only decides whether the
    * shell *renders* something; the server is always the one that decides
    * whether a request succeeds. A `true` here that turns out wrong just means
@@ -69,6 +89,7 @@ const defaultValue: AuthContextValue = {
   login: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
   logout: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
   refreshSession: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
+  switchOrg: () => Promise.reject(new Error('useAuth() called outside an AuthProvider')),
   hasPermission: () => false,
 };
 
@@ -249,6 +270,43 @@ export function AuthProvider({ children, client = apiClient }: AuthProviderProps
     }
   }, [client, applyMe, becomeAnonymous, syncPersistedRefreshToken]);
 
+  const switchOrg = useCallback(
+    async (orgId: string) => {
+      abortRef.current?.abort();
+      const epoch = (epochRef.current += 1);
+      // Mirrors `login`'s own shape exactly (mint tokens -> re-fetch `me()`
+      // -> `applyMe`), because a switch IS a login into a different org
+      // through a different endpoint — same failure handling applies.
+      const tokens = await client.request('post', '/orgs/switch', { body: { orgId } });
+      // A newer login/logout/switch superseded this one while the POST was in
+      // flight: drop the minted tokens unused instead of installing them over
+      // the newer call's session (same fate as an abandoned login response).
+      if (epochRef.current !== epoch) return;
+      // Atomic swap: this one synchronous call installs the new access AND
+      // refresh token together, replacing the previous org's pair — no
+      // partial state a concurrent `getAccessToken()`/`refreshNow()` could
+      // observe mid-swap.
+      client.sessionManager.setTokens(tokens);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const me = await client.me(controller.signal);
+        if (epochRef.current !== epoch) return;
+        applyMe(me); // orgId differs from the previous scope -> bumps the scope epoch (state/scope.ts), which aborts every REST/SSE request still registered under the old org.
+        syncPersistedRefreshToken();
+      } catch (cause) {
+        if (epochRef.current !== epoch || isAbortError(cause)) return;
+        // The switch itself succeeded (we hold valid org-B tokens) but the
+        // follow-up `me()` didn't — same call `login()` makes: don't leave
+        // the app holding new tokens with no session to show for them.
+        client.sessionManager.clear();
+        becomeAnonymous();
+        throw cause;
+      }
+    },
+    [client, applyMe, becomeAnonymous, syncPersistedRefreshToken],
+  );
+
   const hasPermission = useCallback(
     (permission: string) =>
       session.status === 'authenticated' && session.permissions.includes(permission),
@@ -256,8 +314,8 @@ export function AuthProvider({ children, client = apiClient }: AuthProviderProps
   );
 
   const value = useMemo<AuthContextValue>(
-    () => ({ session, login, logout, refreshSession, hasPermission }),
-    [session, login, logout, refreshSession, hasPermission],
+    () => ({ session, login, logout, refreshSession, switchOrg, hasPermission }),
+    [session, login, logout, refreshSession, switchOrg, hasPermission],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -14,6 +14,9 @@ type DocumentVersion = components['schemas']['DocumentVersion'];
 type Job = components['schemas']['Job'];
 type MeResponse = components['schemas']['MeResponse'];
 type Membership = components['schemas']['Membership'];
+type Org = components['schemas']['Org'];
+type OrgRole = Org['role'];
+type OrgState = Membership['state'];
 
 export interface MockUser {
   userId: string;
@@ -68,24 +71,62 @@ export interface InviteRecord {
   createdAt: string;
 }
 
+/**
+ * A token is scoped to exactly one org — `orgId` here is what `switchOrg`
+ * mints a *new* access token for, independent of `user.orgId` (the user's
+ * "home"/original org). A session in org A stays alive and usable after a
+ * switch mints a fresh, separate token pair for org B (1C-01's "the caller's
+ * session in their current org is untouched").
+ */
 export interface AccessTokenRecord {
   userId: string;
   sessionId: string;
+  orgId: string;
+}
+
+/** Catalog entry for an org — 1C-01's `Org`/`OrgPage`, minus the caller-specific `role` (that's per-membership, see `OrgMembershipRecord`). */
+export interface OrgRecord {
+  id: string;
+  slug: string;
+  name: string;
+  createdAt: string;
+}
+
+/** One user's membership in one org — the thing `listOrgs`/`getOrg`/`switchOrg` all re-check against, mirroring `crates/server/src/services/orgs.rs`'s PostgreSQL membership re-check. */
+export interface OrgMembershipRecord {
+  userId: string;
+  orgId: string;
+  role: OrgRole;
+  state: OrgState;
+}
+
+/** Per-org `permissions`/`allowedCollectionIds` for `GET /auth/me` after a switch — the same user can carry a different collection allowlist per org even though this fixture set keeps `permissions` identical across the demo user's two orgs. */
+export interface OrgProfile {
+  permissions: string[];
+  allowedCollectionIds: string[];
 }
 
 interface Store {
   users: MockUser[];
-  refreshTokens: Map<string, string>; // refreshToken -> userId
-  accessTokens: Map<string, AccessTokenRecord>; // accessToken -> {userId, sessionId}
+  refreshTokens: Map<string, { userId: string; orgId: string }>; // refreshToken -> {userId, orgId}
+  accessTokens: Map<string, AccessTokenRecord>; // accessToken -> {userId, sessionId, orgId}
   collections: Collection[];
+  /** collectionId -> the org it belongs to. Not part of the wire `Collection` shape (the real schema has no `orgId` field — org isolation is enforced server-side from the bearer token, never a response field), kept here purely so mock handlers can filter. */
+  collectionOrgId: Map<string, string>;
   documents: Map<string, Document[]>; // collectionId -> documents
   versions: Map<string, DocumentVersion[]>; // documentId -> versions, oldest first
   jobs: Map<string, Job>;
   conflicts: ConflictRecord[];
   downloadCapabilities: Map<string, DownloadCapabilityRecord>;
-  /** Memberships of the demo org (`DEMO_USER.orgId`) — every seeded/mock user's role+state. */
+  /** Memberships of the demo org (`DEMO_USER.orgId`) — every seeded/mock user's role+state. Unaffected by org switch: the admin member/invite/usage pages are out of scope for the org-switch task and stay pinned to this one org's roster. */
   memberships: Membership[];
   invites: InviteRecord[];
+  /** Org catalog for `listOrgs`/`getOrg`/`switchOrg` (1C-01). */
+  orgs: OrgRecord[];
+  /** Every user's org memberships, across every org — not just the demo org's roster above. */
+  orgMemberships: OrgMembershipRecord[];
+  /** orgId -> permissions/allowedCollectionIds `GET /auth/me` reports once a session is scoped to that org. */
+  orgProfiles: Map<string, OrgProfile>;
 }
 
 const DEMO_USER: MockUser = {
@@ -108,6 +149,47 @@ const DEMO_USER: MockUser = {
 export const SECOND_MEMBER_USER_ID = mockUuid(30);
 /** A third seeded org member — suspended viewer — so the list shows a non-active row too. */
 export const THIRD_MEMBER_USER_ID = mockUuid(31);
+
+/**
+ * Org switch (1C-01 + P2-06/P2-15). `DEMO_USER.orgId` (`mockUuid(2)`) is
+ * "org A" — the org every other fixture/test in this file predates this
+ * feature and already assumes. `ORG_B_ID` is a second org the same demo user
+ * is also an active member of, seeded with its own collection/document (see
+ * `ORG_B_COLLECTION_ID` below) so a switch has something visibly different to
+ * render — the whole point being to prove the previous org's data is gone,
+ * not just that a new orgId string appears somewhere.
+ */
+export const ORG_A_ID = DEMO_USER.orgId;
+/** The seeded demo user's own id — exported so test-only helpers (e.g. `components/shell/testSupport.ts`'s `seedThirdOrgMembership`) can add memberships/profiles for them without reaching into `getStore().users` themselves. */
+export const DEMO_USER_ID = DEMO_USER.userId;
+export const ORG_B_ID = mockUuid(3);
+export const ORG_B_COLLECTION_ID = mockUuid(12);
+export const ORG_B_DOCUMENT_ID = mockUuid(120);
+const ORG_B_VERSION_ID = mockUuid(1200);
+
+function seedOrgs(): OrgRecord[] {
+  return [
+    { id: ORG_A_ID, slug: 'acme-co', name: 'Acme Co', createdAt: mockTimestamp(0) },
+    { id: ORG_B_ID, slug: 'globex-labs', name: 'Globex Labs', createdAt: mockTimestamp(0) },
+  ];
+}
+
+function seedOrgMemberships(): OrgMembershipRecord[] {
+  return [
+    { userId: DEMO_USER.userId, orgId: ORG_A_ID, role: 'owner', state: 'active' },
+    { userId: DEMO_USER.userId, orgId: ORG_B_ID, role: 'editor', state: 'active' },
+  ];
+}
+
+function seedOrgProfiles(): Map<string, OrgProfile> {
+  return new Map([
+    [
+      ORG_A_ID,
+      { permissions: DEMO_USER.permissions, allowedCollectionIds: [mockUuid(10), mockUuid(11)] },
+    ],
+    [ORG_B_ID, { permissions: DEMO_USER.permissions, allowedCollectionIds: [ORG_B_COLLECTION_ID] }],
+  ]);
+}
 
 function seedMemberships(): Membership[] {
   return [
@@ -160,6 +242,18 @@ function seedCollections(): Collection[] {
       visibility: 'private',
       createdAt: mockTimestamp(60),
     },
+    // Org B's own collection — deliberately distinct name/content from every
+    // org A fixture above, so an org-switch test can assert its *absence*
+    // while on org A and its presence (with org A's fully gone) after
+    // switching, rather than merely asserting "some org id changed".
+    {
+      id: ORG_B_COLLECTION_ID,
+      name: 'Globex Roadmap',
+      slug: 'globex-roadmap',
+      description: 'Globex Labs planning material — org B only.',
+      visibility: 'org',
+      createdAt: mockTimestamp(90),
+    },
   ];
 }
 
@@ -196,6 +290,17 @@ function seedDocuments(): Map<string, Document[]> {
       updatedAt: mockTimestamp(7),
     },
   ]);
+  map.set(ORG_B_COLLECTION_ID, [
+    {
+      id: ORG_B_DOCUMENT_ID,
+      collectionId: ORG_B_COLLECTION_ID,
+      title: 'Globex Master Plan.pdf',
+      state: 'indexed',
+      currentVersionId: ORG_B_VERSION_ID,
+      createdAt: mockTimestamp(91),
+      updatedAt: mockTimestamp(92),
+    },
+  ]);
   return map;
 }
 
@@ -227,7 +332,28 @@ function seedVersions(): Map<string, DocumentVersion[]> {
       createdAt: mockTimestamp(3),
     },
   ]);
+  map.set(ORG_B_DOCUMENT_ID, [
+    {
+      id: ORG_B_VERSION_ID,
+      documentId: ORG_B_DOCUMENT_ID,
+      versionNumber: 1,
+      isCurrent: true,
+      sourceContentSha256: 'c'.repeat(64),
+      effectiveFrom: mockTimestamp(91),
+      effectiveTo: null,
+      changeSummary: null,
+      createdAt: mockTimestamp(91),
+    },
+  ]);
   return map;
+}
+
+function seedCollectionOrgId(): Map<string, string> {
+  return new Map([
+    [mockUuid(10), ORG_A_ID],
+    [mockUuid(11), ORG_A_ID],
+    [ORG_B_COLLECTION_ID, ORG_B_ID],
+  ]);
 }
 
 function seedJobs(): Map<string, Job> {
@@ -271,6 +397,7 @@ function freshStore(): Store {
     refreshTokens: new Map(),
     accessTokens: new Map(),
     collections: seedCollections(),
+    collectionOrgId: seedCollectionOrgId(),
     documents: seedDocuments(),
     versions: seedVersions(),
     jobs: seedJobs(),
@@ -278,6 +405,9 @@ function freshStore(): Store {
     downloadCapabilities: new Map(),
     memberships: seedMemberships(),
     invites: seedInvites(),
+    orgs: seedOrgs(),
+    orgMemberships: seedOrgMemberships(),
+    orgProfiles: seedOrgProfiles(),
   };
 }
 
@@ -306,37 +436,50 @@ export interface TokenPair {
   sessionId: string;
 }
 
-/** Mints and registers a fresh access/refresh token pair for `user`. */
-export function mintTokenPair(user: MockUser): TokenPair {
+/**
+ * Mints and registers a fresh access/refresh token pair for `user`, scoped to
+ * `orgId` (defaults to the user's home org — the plain login/refresh case).
+ * `switchOrg` is the one caller that passes a *different* org: the resulting
+ * pair is an independent family scoped to that org, and the org-A family
+ * this call didn't touch stays valid (mirrors the real server's "caller's
+ * session in their current org is untouched").
+ */
+export function mintTokenPair(user: MockUser, orgId: string = user.orgId): TokenPair {
   const accessToken = `mock-access.${nextId()}`;
   const refreshToken = `mock-refresh.${nextId()}`;
   const sessionId = `mock-session.${nextId()}`;
-  store.accessTokens.set(accessToken, { userId: user.userId, sessionId });
-  store.refreshTokens.set(refreshToken, user.userId);
+  store.accessTokens.set(accessToken, { userId: user.userId, sessionId, orgId });
+  store.refreshTokens.set(refreshToken, { userId: user.userId, orgId });
   return { accessToken, refreshToken, sessionId };
 }
 
-/** Looks up the caller (and their session) from an `Authorization: Bearer <token>` header value. */
+/** Looks up the caller (and their session + the org this specific token is scoped to) from an `Authorization: Bearer <token>` header value. */
 export function authContextForHeader(
   authorizationHeader: string | null,
-): { user: MockUser; sessionId: string } | undefined {
+): { user: MockUser; sessionId: string; orgId: string } | undefined {
   const match = authorizationHeader ? /^Bearer\s+(.+)$/i.exec(authorizationHeader.trim()) : null;
   if (!match) return undefined;
   const record = store.accessTokens.get(match[1]);
   if (!record) return undefined;
   const user = store.users.find((u) => u.userId === record.userId);
   if (!user) return undefined;
-  return { user, sessionId: record.sessionId };
+  return { user, sessionId: record.sessionId, orgId: record.orgId };
 }
 
-export function toMeResponse(user: MockUser, sessionId: string): MeResponse {
+/** `GET /auth/me`'s shape for `user`, scoped to `orgId` (defaults to the user's home org) — `permissions`/`allowedCollectionIds` come from that org's `OrgProfile`, not a single fixed value on `user`, so a post-switch `/auth/me` reflects the org actually active for this token. */
+export function toMeResponse(
+  user: MockUser,
+  sessionId: string,
+  orgId: string = user.orgId,
+): MeResponse {
+  const profile = store.orgProfiles.get(orgId);
   return {
     userId: user.userId,
-    orgId: user.orgId,
+    orgId,
     email: user.email,
     displayName: user.displayName,
-    permissions: user.permissions,
-    allowedCollectionIds: user.allowedCollectionIds,
+    permissions: profile?.permissions ?? user.permissions,
+    allowedCollectionIds: profile?.allowedCollectionIds ?? user.allowedCollectionIds,
     sessionId,
   };
 }

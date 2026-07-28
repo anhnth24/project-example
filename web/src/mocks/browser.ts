@@ -12,6 +12,7 @@
 // per-test reset hook. `window.__markhandMockReset` is also exposed so a test
 // can re-seed mid-scenario (e.g. after a destructive flow) without a reload.
 import { grantMemberManage } from '../components/admin/testSupport';
+import { succeedJob } from '../components/upload/testSupport';
 import { installMockFetch, mockControl, resetMockState } from './index';
 
 declare global {
@@ -24,6 +25,12 @@ declare global {
      * page context to drive permission-deny / quota-exceed flows. E2E-only.
      */
     __markhandMockControl?: typeof mockControl;
+    /**
+     * Advances a job already registered in the mock store past `pending` —
+     * see `components/upload/testSupport.ts`'s own doc for why this needs
+     * its own seam rather than reusing `__markhandMockControl`. E2E-only.
+     */
+    __markhandMockJobs?: { succeed: typeof succeedJob };
   }
 }
 
@@ -43,4 +50,5 @@ export function installBrowserMocks(): void {
     grantMemberManage();
   };
   window.__markhandMockControl = mockControl;
+  window.__markhandMockJobs = { succeed: succeedJob };
 }

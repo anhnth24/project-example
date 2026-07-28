@@ -28,6 +28,16 @@ if [[ "$run_server_smoke" == "true" ]]; then
   make dev-server-smoke
 fi
 
+# Real-deployment half of P2-15 (web-e2e-real.sh): reuses this same dev-up
+# stack while it's still up, so it runs before dev-down, not after. Gated on
+# MODE == full only, same as spike-* below — it always needs its own
+# fileconv-server + web build regardless of DEV_STACK_RUST_SERVER (unlike
+# dev-server-smoke's skip above, this is new coverage the Rust job's own
+# tests don't provide, not a duplicate of them).
+if [[ "$MODE" == "full" ]]; then
+  bash deploy/scripts/web-e2e-real.sh
+fi
+
 make dev-down
 
 if [[ "$MODE" == "full" ]]; then

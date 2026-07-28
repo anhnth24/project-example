@@ -335,6 +335,110 @@ pub async fn login_with_password(
     Ok(pair)
 }
 
+/// Switches an authenticated caller into a different org (1C-01 lifecycle).
+///
+/// `target_org_id` is fully untrusted client input — the same trust level as
+/// a JWT `org_id` claim — so this re-verifies membership from current
+/// PostgreSQL state via [`resolve_org_context_in_txn`] before minting
+/// anything. That resolve already collapses "org does not exist", "no
+/// membership row", and "membership suspended" into the same
+/// `MembershipMissing` outcome (the membership query simply finds zero rows
+/// in every case), so a forged/stale target org denies exactly like a
+/// nonexistent one — no existence oracle.
+///
+/// Design decision: switch mints an INDEPENDENT new refresh-token family
+/// scoped to `target_org_id`; it does not touch the caller's session in
+/// whatever org their current access token names. A user who is legitimately
+/// a member of both orgs may hold valid sessions in both at once — the same
+/// shape `refresh_tokens` already has (org_id + family_id together scope a
+/// session), just reached from a second org instead of a second login.
+pub async fn switch_org(
+    pool: &deadpool_postgres::Pool,
+    auth: &AuthConfig,
+    keys: &JwtKeys,
+    user_id: Uuid,
+    target_org_id: Uuid,
+    request_id: &str,
+) -> Result<TokenPair, SessionError> {
+    match resolve_org_context_in_txn(pool, target_org_id, user_id).await {
+        Ok(_ctx) => {
+            let family_id = Uuid::new_v4();
+            issue_new_family(
+                pool,
+                keys,
+                auth,
+                NewFamilyParams {
+                    org_id: target_org_id,
+                    user_id,
+                    family_id,
+                    request_id,
+                    action: "org.switch",
+                },
+            )
+            .await
+        }
+        Err(error @ (ResolveError::UserDisabled | ResolveError::MembershipMissing)) => {
+            // Only audit into a REAL org. Writing an audit row against an
+            // org_id that does not exist would either violate the
+            // `audit_log` FK (surfacing a 500 vs 403, which itself leaks
+            // "this org does not exist") or — for a real victim org
+            // guessed/forged by an attacker — become an audit-log injection
+            // vector, exactly the risk `refresh_session`/`logout_session`
+            // above already document for forged `mh1.<org>.<secret>` tokens.
+            if org_exists(pool, target_org_id).await? {
+                let reason = if error == ResolveError::UserDisabled {
+                    "user_disabled"
+                } else {
+                    "membership_missing"
+                };
+                audit_switch_deny(pool, target_org_id, user_id, request_id, reason).await?;
+            }
+            Err(error.into())
+        }
+        Err(other) => Err(other.into()),
+    }
+}
+
+async fn org_exists(pool: &deadpool_postgres::Pool, org_id: Uuid) -> Result<bool, SessionError> {
+    let client = pool.get().await.map_err(|_| SessionError::Database)?;
+    let row = client
+        .query_opt("SELECT 1 FROM orgs WHERE id = $1", &[&org_id])
+        .await
+        .map_err(|_| SessionError::Database)?;
+    Ok(row.is_some())
+}
+
+async fn audit_switch_deny(
+    pool: &deadpool_postgres::Pool,
+    org_id: Uuid,
+    user_id: Uuid,
+    request_id: &str,
+    reason: &'static str,
+) -> Result<(), SessionError> {
+    let mut client = pool.get().await.map_err(|_| SessionError::Database)?;
+    let txn = client
+        .transaction()
+        .await
+        .map_err(|_| SessionError::Database)?;
+    set_org_guc_txn(&txn, org_id).await?;
+    write_audit(
+        &txn,
+        AuditEvent {
+            org_id,
+            actor_user_id: Some(user_id),
+            action: "org.switch",
+            resource_type: "session",
+            resource_id: None,
+            outcome: "deny",
+            request_id,
+            metadata: serde_json::json!({ "reason": reason }),
+        },
+    )
+    .await?;
+    txn.commit().await.map_err(|_| SessionError::Database)?;
+    Ok(())
+}
+
 /// Dummy Argon2id verify using the configured parameters so timing matches real checks.
 fn burn_password_verify_time(password: &str, params: &Argon2Config) {
     use std::sync::Mutex;

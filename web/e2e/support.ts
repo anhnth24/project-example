@@ -26,6 +26,12 @@ export const IDS = {
   secondMember: '00000000-0000-4000-8000-00000000001e',
   /** Third seeded member — `viewer`, `suspended` (the non-active row). */
   thirdMember: '00000000-0000-4000-8000-00000000001f',
+  /** The seeded "Employee Handbook" collection `openEmployeeHandbook` opens. */
+  employeeHandbookCollection: '00000000-0000-4000-8000-00000000000a',
+  /** Second org the demo user is also an active member of (`editor`) — org switch (P2-06/P2-15). */
+  orgB: '00000000-0000-4000-8000-000000000003',
+  /** Org B's own collection — seeded with content distinct from every org A fixture, so a switch has something visibly different to render. */
+  orgBCollection: '00000000-0000-4000-8000-00000000000c',
 } as const;
 
 export const DEMO = {
@@ -47,6 +53,10 @@ declare global {
       ) => void;
       clear: (operationId: string) => void;
       reset: () => void;
+    };
+    /** Advances a job already registered in the mock store past `pending` (src/components/upload/testSupport.ts). */
+    __markhandMockJobs?: {
+      succeed: (jobId: string) => void;
     };
   }
 }
@@ -96,6 +106,19 @@ export async function forceStatus(
     },
     [operationId, status, times] as const,
   );
+}
+
+/**
+ * Marks `jobId` (a job the real `createUpload` handler already registered in
+ * the mock store) `succeeded`, via the mock jobs control exposed on
+ * `window`. Nothing in the mock ever advances a job's status past `pending`
+ * on its own (see `components/upload/testSupport.ts`), so a job-lifecycle
+ * test that needs to observe the "converted" stage calls this once it has
+ * seen the "converting" one.
+ */
+export async function succeedUploadJob(page: Page, jobId: string): Promise<void> {
+  await page.waitForFunction(() => window.__markhandMockJobs !== undefined);
+  await page.evaluate((id) => window.__markhandMockJobs!.succeed(id), jobId);
 }
 
 /** Opens the seeded "Employee Handbook" collection from the library's collection nav. */

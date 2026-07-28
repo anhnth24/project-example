@@ -18,6 +18,7 @@ pub mod indexing;
 pub mod lifecycle;
 pub mod members;
 pub mod ops_fence;
+pub mod orgs;
 pub mod preview;
 pub mod promotion;
 pub mod qa;

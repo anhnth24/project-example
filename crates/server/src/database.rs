@@ -122,6 +122,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0029_expand_org_membership_state.sql",
         include_str!("../migrations/0029_expand_org_membership_state.sql"),
     ),
+    (
+        "0030_expand_global_role_catalog.sql",
+        include_str!("../migrations/0030_expand_global_role_catalog.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -331,6 +335,32 @@ mod tests {
         assert!(source.contains(&format!("ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;")));
         assert!(source.contains(&format!("ALTER TABLE {table} FORCE ROW LEVEL SECURITY;")));
         assert!(source.contains(&format!("CREATE POLICY {table}_org_isolation ON {table}")));
+    }
+
+    #[test]
+    fn role_catalog_is_global_and_immutable() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0030_expand_global_role_catalog.sql")
+            .expect("global role catalog migration")
+            .1;
+        for table in ["role_catalog", "role_catalog_permissions"] {
+            assert!(
+                source.contains(&format!(
+                    "BEFORE UPDATE OR DELETE ON {table}\n    FOR EACH ROW\n    EXECUTE FUNCTION role_catalog_enforce_immutability();"
+                )),
+                "{table} must have a row-level immutability trigger"
+            );
+            assert!(
+                source.contains(&format!(
+                    "BEFORE TRUNCATE ON {table}\n    FOR EACH STATEMENT\n    EXECUTE FUNCTION role_catalog_enforce_immutability();"
+                )),
+                "{table} must have a statement-level truncate guard"
+            );
+        }
+        assert!(
+            source.contains("CREATE OR REPLACE FUNCTION provision_org_role_catalog(p_org_id uuid)")
+        );
     }
 
     #[test]

@@ -36,7 +36,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-01 — Organization lifecycle và validated context
 
-- **Status:** In progress — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Thiếu nửa lifecycle**: không có endpoint org create/list/detail/switch, không xử lý org-header (org lấy từ JWT claim), chưa có two-org resolver test.
+- **Status:** In progress — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Nửa lifecycle đã landed phần lớn**: `GET /orgs` (chỉ org của mình), `GET /orgs/{id}` (404 đồng nhất cho "không tồn tại"/"không phải member" — không oracle), `POST /orgs/switch` (re-verify membership từ PG, mint session mới độc lập scoped target org, audit `org.switch` cả success/deny; deny với org không tồn tại thì không ghi audit để tránh FK-oracle) — routes bearer-identity-only theo tiền lệ `accept_invite`, kèm two-org resolver test DB-gated (`tests/orgs.rs`, 8 test: forged/stale/suspended deny + audit). **`POST /orgs` (create) đã landed** sau khi owner chốt thiết kế catalog toàn cục (xem 1C-03/migration `0030`): tạo org + owner membership + `provision_org_role_catalog(org_id)` trong MỘT transaction, audit `org.create`, validate slug khớp CHECK constraint, rate-limit auth-IP, 409 slug taken; test DB-gated create (happy/duplicate/unauth/audit + owner resolve đủ permission không cần seed riêng) trong `tests/orgs.rs` (12 test).
 
 - **Plan/files:** Org create/list/detail/switch, service/repo/middleware; issue new
   context/session after verified membership.
@@ -59,7 +59,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-03 — Canonical RBAC seed
 
-- **Status:** In progress — bảng `permissions/roles/role_permissions` + seed 4 role owner/admin/editor/viewer + matrix (`migrations/0011:38`, `is_system=true`), idempotent (`tests/schema_migrations.rs` DB-gated). **Thiếu**: seed POC-only gắn 1 org hardcode (không seed cho org mới), không trigger immutable system-role, không OpenAPI fixture, không test kiểm giá trị matrix.
+- **Status:** In progress — bảng `permissions/roles/role_permissions` + seed 4 role owner/admin/editor/viewer + matrix (`migrations/0011:38`, `is_system=true`), idempotent (`tests/schema_migrations.rs` DB-gated). **Đã thêm (migration `0030`)**: catalog toàn cục `role_catalog`/`role_catalog_permissions` làm template bất biến duy nhất (trigger chặn UPDATE/DELETE/TRUNCATE — immutable system roles), seed idempotent đúng matrix hiệu lực POC, hàm `provision_org_role_catalog(org_id)` copy per-org khi tạo org (cố ý KHÔNG trigger tự động trên `orgs` INSERT và KHÔNG đổi resolver join — per-org rows vẫn là nguồn resolve runtime để `acl_mutate` revoke containment hoạt động); test matrix + immutability + no-seed-resolve trong `tests/role_catalog.rs`. **Còn thiếu**: OpenAPI fixture cho matrix, đối chiếu UI không hard-code matrix.
 
 - **Plan/files:** Permission constants + DB seed owner/admin/editor/viewer; immutable
   system roles; OpenAPI fixture.

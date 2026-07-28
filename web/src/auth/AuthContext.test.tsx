@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client';
@@ -5,6 +6,7 @@ import { HttpApiError } from '../api/errors';
 import type { SessionTokens } from '../api/session';
 import { installMockFetch, mockControl, resetMockState, uninstallMockFetch } from '../mocks';
 import { createApiClient } from '../api/client';
+import { ORG_A_ID, ORG_B_ID } from '../mocks/fixtures';
 import { ScopeProvider, useScope } from '../state/ScopeProvider';
 import { AuthProvider, useAuth } from './AuthContext';
 import { loadPersistedRefreshToken } from './tokenStorage';
@@ -62,6 +64,7 @@ function createFakeClient() {
     login: vi.fn(),
     logout: vi.fn(async () => {}),
     me: vi.fn(),
+    request: vi.fn(),
     tokenProvider: {
       getAccessToken: vi.fn(),
       refreshNow: vi.fn(),
@@ -448,6 +451,208 @@ describe('AuthContext / scope integration', () => {
   });
 });
 
+describe('AuthContext switchOrg (P2-06/P2-15 org switch)', () => {
+  const ORG_B_ME = {
+    ...SAMPLE_ME,
+    orgId: 'org-2',
+    permissions: ['org-b.permission'],
+    allowedCollectionIds: ['col-b'],
+  };
+
+  function orgBTokens(): SessionTokens {
+    return sampleTokens({
+      accessToken: 'access-org-b',
+      refreshToken: 'refresh-org-b',
+      orgId: 'org-2',
+    });
+  }
+
+  let lastSwitchError: unknown;
+
+  function Harness() {
+    const { session, switchOrg } = useAuth();
+    const { scope } = useScope();
+    return (
+      <>
+        <span data-testid="status">{session.status}</span>
+        <span data-testid="scope-org">{scope ? scope.orgId : 'null'}</span>
+        <button
+          onClick={() => {
+            switchOrg('org-2').catch((e) => {
+              lastSwitchError = e;
+            });
+          }}
+        >
+          switch
+        </button>
+      </>
+    );
+  }
+
+  async function renderAuthenticated(client: ApiClient) {
+    render(
+      <ScopeProvider>
+        <AuthProvider client={client}>
+          <Harness />
+        </AuthProvider>
+      </ScopeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'));
+  }
+
+  it('swaps tokens atomically, re-applies me(), and bumps the scope to the new org', async () => {
+    window.sessionStorage.setItem('markhand.refreshToken', 'stored-refresh');
+    const { client, setTokensCalls } = createFakeClient();
+    (client.me as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(SAMPLE_ME) // bootstrap
+      .mockResolvedValueOnce(ORG_B_ME); // post-switch
+    (client.request as ReturnType<typeof vi.fn>).mockResolvedValue(orgBTokens());
+
+    await renderAuthenticated(client);
+    expect(screen.getByTestId('scope-org')).toHaveTextContent('org-1');
+
+    await act(async () => {
+      screen.getByText('switch').click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(client.request).toHaveBeenCalledWith('post', '/orgs/switch', {
+      body: { orgId: 'org-2' },
+    });
+    // The new pair replaces the old one in one call — never a separate
+    // "clear, then set" pair of calls a concurrent reader could land between.
+    expect(setTokensCalls[setTokensCalls.length - 1]).toMatchObject({
+      orgId: 'org-2',
+      accessToken: 'access-org-b',
+    });
+    await waitFor(() => expect(screen.getByTestId('scope-org')).toHaveTextContent('org-2'));
+    expect(screen.getByTestId('status')).toHaveTextContent('authenticated');
+  });
+
+  it('leaves session/scope on the previous org when the switch request itself is denied', async () => {
+    window.sessionStorage.setItem('markhand.refreshToken', 'stored-refresh');
+    const { client } = createFakeClient();
+    (client.me as ReturnType<typeof vi.fn>).mockResolvedValue(SAMPLE_ME);
+    (client.request as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new HttpApiError({
+        status: 403,
+        code: 'membership_missing',
+        message: 'not a member',
+        requestId: 'r1',
+      }),
+    );
+
+    await renderAuthenticated(client);
+    lastSwitchError = undefined;
+
+    await act(async () => {
+      screen.getByText('switch').click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(lastSwitchError).toBeInstanceOf(HttpApiError);
+    expect(screen.getByTestId('status')).toHaveTextContent('authenticated');
+    expect(screen.getByTestId('scope-org')).toHaveTextContent('org-1');
+  });
+
+  it('a switch that succeeds but whose follow-up me() fails ends up anonymous, not half-switched', async () => {
+    window.sessionStorage.setItem('markhand.refreshToken', 'stored-refresh');
+    const { client } = createFakeClient();
+    (client.me as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(SAMPLE_ME) // bootstrap
+      .mockRejectedValueOnce(new Error('me failed after switch'));
+    (client.request as ReturnType<typeof vi.fn>).mockResolvedValue(orgBTokens());
+
+    await renderAuthenticated(client);
+
+    await act(async () => {
+      screen.getByText('switch').click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'));
+    expect(screen.getByTestId('scope-org')).toHaveTextContent('null');
+  });
+
+  it('a rapid second switchOrg supersedes the first — the first stale resolution never applies', async () => {
+    window.sessionStorage.setItem('markhand.refreshToken', 'stored-refresh');
+    const { client } = createFakeClient();
+    const meCalls: Array<{ resolve: (v: typeof SAMPLE_ME) => void }> = [];
+    let meInvocations = 0;
+    (client.me as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      meInvocations += 1;
+      if (meInvocations === 1) return Promise.resolve(SAMPLE_ME); // bootstrap
+      const pending = deferred<typeof SAMPLE_ME>();
+      meCalls.push(pending);
+      return pending.promise;
+    });
+    let switchCall = 0;
+    (client.request as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      switchCall += 1;
+      const call = switchCall;
+      return Promise.resolve(
+        sampleTokens({
+          accessToken: `access-${call}`,
+          refreshToken: `refresh-${call}`,
+          orgId: `org-${call + 1}`,
+        }),
+      );
+    });
+
+    function RaceHarness() {
+      const { switchOrg } = useAuth();
+      const { scope } = useScope();
+      return (
+        <>
+          <span data-testid="scope-org">{scope ? scope.orgId : 'null'}</span>
+          <button onClick={() => void switchOrg('org-2').catch(() => {})}>first</button>
+          <button onClick={() => void switchOrg('org-3').catch(() => {})}>second</button>
+        </>
+      );
+    }
+
+    render(
+      <ScopeProvider>
+        <AuthProvider client={client}>
+          <RaceHarness />
+        </AuthProvider>
+      </ScopeProvider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('scope-org')).toHaveTextContent('org-1'));
+
+    await act(async () => {
+      screen.getByText('first').click();
+      await Promise.resolve();
+      await Promise.resolve();
+      screen.getByText('second').click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Both me() calls (for "first" and "second") are now pending; resolve the
+    // FIRST one (the superseded one) first, out of order, to prove it's
+    // discarded rather than merely "usually resolves last".
+    expect(meCalls.length).toBe(2);
+    await act(async () => {
+      meCalls[0].resolve({ ...SAMPLE_ME, orgId: 'org-2' });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('scope-org')).not.toHaveTextContent('org-2');
+
+    await act(async () => {
+      meCalls[1].resolve({ ...SAMPLE_ME, orgId: 'org-3' });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('scope-org')).toHaveTextContent('org-3');
+  });
+});
+
 describe('AuthContext end-to-end against the real API client + mock server', () => {
   beforeEach(() => {
     installMockFetch();
@@ -507,6 +712,60 @@ describe('AuthContext end-to-end against the real API client + mock server', () 
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'));
     expect(loadPersistedRefreshToken()).toBeNull();
   });
+
+  it('switchOrg() against the real mock server moves scope/permissions to org B and persists the new refresh token', async () => {
+    const client = createApiClient({ baseUrl: '' });
+    render(
+      <ScopeProvider>
+        <AuthProvider client={client}>
+          <LoginHarness />
+          <SwitchHarness />
+        </AuthProvider>
+      </ScopeProvider>,
+    );
+    await act(async () => {
+      screen.getByText('go').click();
+    });
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'));
+    expect(screen.getByTestId('scope-org')).toHaveTextContent(ORG_A_ID);
+    const refreshBeforeSwitch = loadPersistedRefreshToken();
+
+    await act(async () => {
+      screen.getByText('switch-to-b').click();
+    });
+
+    await waitFor(() => expect(screen.getByTestId('scope-org')).toHaveTextContent(ORG_B_ID));
+    expect(screen.getByTestId('status')).toHaveTextContent('authenticated');
+    // A genuinely different, freshly-persisted refresh token for the new org
+    // family — not the pre-switch org A token still sitting there.
+    expect(loadPersistedRefreshToken()).not.toBe(refreshBeforeSwitch);
+  });
+
+  it('switchOrg() to an org the caller is not an active member of is denied (membership_missing) and leaves org A active', async () => {
+    const client = createApiClient({ baseUrl: '' });
+    render(
+      <ScopeProvider>
+        <AuthProvider client={client}>
+          <LoginHarness />
+          <SwitchHarness targetOrgId="00000000-0000-4000-8000-0000000000ff" />
+        </AuthProvider>
+      </ScopeProvider>,
+    );
+    await act(async () => {
+      screen.getByText('go').click();
+    });
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'));
+
+    await act(async () => {
+      screen.getByText('switch-to-b').click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('switch-error')).toHaveTextContent('membership_missing');
+    expect(screen.getByTestId('scope-org')).toHaveTextContent(ORG_A_ID);
+    expect(screen.getByTestId('status')).toHaveTextContent('authenticated');
+  });
 });
 
 function LoginHarness() {
@@ -515,6 +774,26 @@ function LoginHarness() {
     <>
       <span data-testid="status">{session.status}</span>
       <button onClick={() => void login(DEMO_EMAIL, DEMO_PASSWORD)}>go</button>
+    </>
+  );
+}
+
+/** `ORG_B_ID` unless `targetOrgId` overrides it (the "switch to an org the caller isn't in" test). */
+function SwitchHarness({ targetOrgId }: { targetOrgId?: string } = {}) {
+  const { switchOrg } = useAuth();
+  const { scope } = useScope();
+  const [error, setError] = useState<unknown>(undefined);
+  return (
+    <>
+      <span data-testid="scope-org">{scope ? scope.orgId : 'null'}</span>
+      <span data-testid="switch-error">{error instanceof HttpApiError ? error.code : ''}</span>
+      <button
+        onClick={() => {
+          switchOrg(targetOrgId ?? ORG_B_ID).catch((e) => setError(e));
+        }}
+      >
+        switch-to-b
+      </button>
     </>
   );
 }

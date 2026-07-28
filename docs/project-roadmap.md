@@ -43,10 +43,12 @@
   file mới vào queue frontend.
 - **Bảng merge/multiline**: XLSX/XLS/DOCX fallback HTML rowspan/colspan và render
   qua sanitizer.
+- **Đếm slide PPTX hợp nhất native**: CLI bench dùng `fileconv_core::probe`
+  (bỏ nhánh shell `python3` trùng lặp; hai logic đã đối chiếu cho cùng kết quả).
 
 ## Đang làm / Gần ✋
 
-- Dọn **logic trùng** đếm slide PPTX (CLI shell `python3` vs `probe.rs` native).
+- (trống — xem backlog Markhand Web tại `../plans/markhand-web/backlog/`)
 
 ## Backlog
 

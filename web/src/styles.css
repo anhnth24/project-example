@@ -1908,13 +1908,6 @@ textarea.input {
   margin: 0;
 }
 
-.rail-menu-org-id {
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 12px;
-  margin: 0 0 var(--space-1);
-  word-break: break-all;
-}
-
 .rail-menu-note {
   color: color-mix(in srgb, var(--color-text) 68%, transparent);
   font-size: 12px;
@@ -1926,6 +1919,47 @@ textarea.input {
   justify-content: flex-start;
   margin-top: var(--space-2);
   width: 100%;
+}
+
+.rail-menu-org-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rail-menu-org-option {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 2.6rem;
+  padding: 0.4rem 0.55rem;
+}
+
+.rail-menu-org-name {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: space-between;
+  width: 100%;
+}
+
+.rail-menu-org-role {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.rail-menu-org-pending {
+  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  font-size: 11px;
+}
+
+.rail-menu-switch-error {
+  margin: var(--space-1) 0 0;
 }
 
 @media (max-width: 600px) {

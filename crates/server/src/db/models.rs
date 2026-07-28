@@ -947,6 +947,24 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
             "role_permissions",
             &["org_id", "role_id", "permission_id", "created_at"],
         ),
+        // 1C-03/1C-01 global RBAC catalog (migrations/0030) — org-independent,
+        // immutable source of truth `provision_org_role_catalog` copies into
+        // each org's `roles`/`role_permissions` above.
+        (
+            "role_catalog",
+            &[
+                "id",
+                "code",
+                "name",
+                "is_system",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        (
+            "role_catalog_permissions",
+            &["role_code", "permission_id", "created_at"],
+        ),
         (
             "groups",
             &[

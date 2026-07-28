@@ -62,10 +62,21 @@ validation uses `make bundle-linux`.
   a host that can meet the throughput gate.
 - `dev-stack` uses tiered profiles via `deploy/scripts/dev-stack-ci.sh`:
   - **lite** (`deploy/scripts/**`): compose config + `dev-up`/`dev-health` only.
-  - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`.
+  - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`,
+    plus `deploy/scripts/web-e2e-real.sh` (real-deployment half of P2-15) run against
+    the same still-up dev stack, before `dev-down`.
+  - `deploy/scripts/web-e2e-real.sh` and `web/e2e-real/**` are carved out of the
+    otherwise-lite `deploy/scripts/**`/`web/**` patterns and force `full` on their own
+    (`scripts/classify-ci-changes.py`'s `DEV_STACK_FULL`), so editing only the real-E2E
+    harness still exercises it instead of silently classifying as `lite`.
   - Skips `dev-server-smoke` when the Rust job already validated `fileconv-server`.
-- `dev-stack` keeps `rust-cache` only when it may run `dev-server-smoke` without a
-  parallel Rust job.
+    `web-e2e-real.sh` is not skipped by that flag — it is new coverage (build the SPA,
+    serve it from `fileconv-server`, drive it with the Playwright `real` project), not
+    a duplicate of the Rust job's own tests.
+- `dev-stack` runs `rust-cache` whenever the tier is `full` (its full tier always builds
+  `fileconv-server` at least once, for `web-e2e-real.sh` if nothing else) and installs
+  Node/pnpm + Playwright's Chromium only for that same tier, so the lite tier's cost is
+  unchanged.
 - Linux bundle smoke (including native-runtime preparation) runs only for
   packaging/runtime configuration changes; the full Linux/Windows/macOS installer
   matrix remains release-only.

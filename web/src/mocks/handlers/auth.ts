@@ -34,23 +34,27 @@ registerOperation('authLogin', async (ctx) => {
 
 registerOperation('authRefresh', async (ctx) => {
   const body = await ctx.json<RefreshTokenRequest>();
-  const userId = getStore().refreshTokens.get(body.refreshToken);
-  if (!userId) {
+  const entry = getStore().refreshTokens.get(body.refreshToken);
+  if (!entry) {
     return {
       status: 401,
       body: apiError('unauthorized', 'Refresh token is invalid, expired, or already used.'),
     };
   }
   getStore().refreshTokens.delete(body.refreshToken); // rotation: old refresh token is single-use
-  const user = getStore().users.find((u) => u.userId === userId);
+  const user = getStore().users.find((u) => u.userId === entry.userId);
   if (!user) {
     return {
       status: 401,
       body: apiError('unauthorized', 'The account for this refresh token no longer exists.'),
     };
   }
-  const pair = mintTokenPair(user);
-  return { status: 200, body: tokenResponse(user.userId, user.orgId, pair) };
+  // Rotates within the SAME org the refresh token family was scoped to
+  // (`entry.orgId`) — not necessarily `user.orgId` — so refreshing a session
+  // that `switchOrg` moved to org B stays on org B, never silently falling
+  // back to the user's home org.
+  const pair = mintTokenPair(user, entry.orgId);
+  return { status: 200, body: tokenResponse(user.userId, entry.orgId, pair) };
 });
 
 registerOperation('authLogout', async (ctx) => {
@@ -62,5 +66,5 @@ registerOperation('authLogout', async (ctx) => {
 registerOperation('authMe', (ctx) => {
   const auth = authContextForHeader(ctx.headers.get('authorization'));
   if (!auth) return unauthorized('No active session for this access token.');
-  return { status: 200, body: toMeResponse(auth.user, auth.sessionId) };
+  return { status: 200, body: toMeResponse(auth.user, auth.sessionId, auth.orgId) };
 });
