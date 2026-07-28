@@ -351,6 +351,29 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: make check-web
 
+  web-e2e:
+    needs: changes-and-static
+    if: needs.changes-and-static.outputs.web == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.33.3
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # The runner has no pre-installed browser (unlike the dev environment,
+      # where playwright.config.ts points at a fixed path); install just
+      # Chromium + its OS deps here so Playwright resolves the browser itself.
+      - run: pnpm --dir web exec playwright install --with-deps chromium
+      # Playwright starts its own mock-mode vite dev server (see
+      # playwright.config.ts `webServer`); no backend stack required.
+      - run: pnpm --dir web e2e
+
   dev-stack:
     needs: changes-and-static
     if: needs.changes-and-static.outputs.dev_stack == 'true'
