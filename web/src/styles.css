@@ -341,52 +341,111 @@ button:disabled {
 }
 
 /* Login (App.tsx renders <main> with this on the `/login` route, and omits
-   the rail + status line). A chrome-free, full-bleed screen that centers a
-   single auth card, instead of stranding the form in the top-left of an empty
-   page. Declared after `.app-main` so its centering/width win. */
+   the rail + status line). A full-bleed, two-column auth screen: a branded
+   charcoal panel beside the form, instead of a lone pale card stranded on an
+   empty page. Overrides `.app-main`'s padding/width; declared after it so it
+   wins. */
 .app-main-auth {
-  align-items: center;
-  display: flex;
-  justify-content: center;
   max-width: none;
   min-height: 100vh;
   min-height: 100dvh;
-  padding: var(--space-6) clamp(1.25rem, 5vw, 4rem);
+  padding: 0;
 }
 
-/* `.page.auth-card` (two classes) so these win over the plain `.page` rules
-   declared later in the sheet — otherwise the card inherits `.page`'s 62rem
-   measure and stops looking like a compact login card. */
-.page.auth-card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-divider);
-  border-radius: calc(var(--radius-lg) * 1.15);
-  box-shadow: var(--shadow-md);
+.auth-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Left brand panel — Folyvo charcoal (app-icon gradient) with a warm orange
+   glow, carrying the white logo mark, wordmark, and a one-line pitch. */
+.auth-brand {
+  align-items: center;
+  background:
+    radial-gradient(115% 80% at 12% 0%, rgba(255, 122, 26, 0.24), transparent 55%),
+    linear-gradient(155deg, #3a4150 0%, #171b26 72%);
+  color: #fff;
+  display: flex;
+  overflow: hidden;
+  padding: clamp(2.5rem, 6vw, 5rem);
+}
+
+.auth-brand-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 26rem;
+}
+
+.auth-brand-logo {
+  height: 3.5rem;
+  width: 3.5rem;
+}
+
+.auth-brand-word {
+  color: #fff;
+  font-family: var(--font-heading);
+  font-size: clamp(2.5rem, 5vw, 3.5rem);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin: 0;
+}
+
+/* Brand guide: "yvo" is the orange accent on dark grounds. */
+.auth-brand-word-accent {
+  color: #ff7a1a;
+}
+
+.auth-brand-tagline {
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 1.1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Right form panel — cream ground, form centered at a comfortable measure. */
+.auth-panel {
+  align-items: center;
+  background: var(--color-bg);
+  display: flex;
+  justify-content: center;
+  padding: clamp(1.75rem, 5vw, 4rem);
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
   gap: 0.85rem;
-  max-width: 27rem;
-  padding: clamp(1.75rem, 4vw, 2.75rem);
+  max-width: 23rem;
   width: 100%;
 }
 
-.page.auth-card .auth-card-brand {
-  height: 2.75rem;
-  margin-bottom: var(--space-2);
-  width: 2.75rem;
+.auth-card h1 {
+  font-size: clamp(1.9rem, 4vw, 2.35rem);
+  margin-bottom: 0.25rem;
+  max-width: none;
 }
 
-.page.auth-card h1 {
-  font-size: clamp(1.8rem, 4vw, 2.4rem);
-}
-
-.page.auth-card .lede {
+.auth-card .lede {
   font-size: 1rem;
 }
 
-/* Inputs and the submit button fill the card rather than the login form's
-   default 24rem measure. */
-.page.auth-card .auth-form {
-  margin-top: var(--space-2);
+.auth-card .auth-form {
+  margin-top: var(--space-3);
   max-width: none;
+}
+
+/* Narrow viewports: drop the brand panel, form takes the full width. */
+@media (max-width: 820px) {
+  .auth-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-brand {
+    display: none;
+  }
 }
 
 .eyebrow,

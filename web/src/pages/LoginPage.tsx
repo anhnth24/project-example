@@ -1,8 +1,8 @@
 import { useId, useState, type FormEvent } from 'react';
 import { HttpApiError, NetworkError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
-import { BrandMark } from '../components/BrandMark';
 import { Button, Notice } from '../components/ui';
+import brandMarkWhite from '../assets/brand/folyvo-mark-white.svg';
 
 function messageFor(cause: unknown): string {
   if (cause instanceof HttpApiError && cause.status === 401) {
@@ -43,47 +43,68 @@ export function LoginPage() {
   }
 
   return (
-    <section className="page auth-card" aria-labelledby="login-heading">
-      <BrandMark className="rail-brand-mark auth-card-brand" />
-      <p className="eyebrow">Đăng nhập</p>
-      <h1 id="login-heading">Đăng nhập vào Folyvo</h1>
-      <p className="lede">Nhập thông tin đăng nhập để truy cập bộ sưu tập và trợ lý tài liệu.</p>
-
-      {error && <Notice tone="error">{error}</Notice>}
-
-      <form className="auth-form" onSubmit={(event) => void handleSubmit(event)} noValidate>
-        <div className="field">
-          <label htmlFor={emailId}>Email</label>
-          <input
-            id={emailId}
-            name="email"
-            type="email"
-            autoComplete="username"
-            required
-            disabled={pending}
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
+    <div className="auth-layout">
+      {/* Decorative brand panel — the form's own <h1> is the accessible name
+          for the screen, so this whole side is aria-hidden. Collapses away
+          below the responsive breakpoint (see styles.css). */}
+      <aside className="auth-brand" aria-hidden="true">
+        <div className="auth-brand-inner">
+          <img className="auth-brand-logo" src={brandMarkWhite} alt="" draggable={false} />
+          <p className="auth-brand-word">
+            Fol<span className="auth-brand-word-accent">yvo</span>
+          </p>
+          <p className="auth-brand-tagline">
+            Chuyển đổi tài liệu, lập chỉ mục và câu trả lời có trích dẫn — trong một không gian tri
+            thức được kiểm soát.
+          </p>
         </div>
+      </aside>
 
-        <div className="field">
-          <label htmlFor={passwordId}>Mật khẩu</label>
-          <input
-            id={passwordId}
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            disabled={pending}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </div>
+      <div className="auth-panel">
+        <section className="auth-card" aria-labelledby="login-heading">
+          <p className="eyebrow">Đăng nhập</p>
+          <h1 id="login-heading">Đăng nhập vào Folyvo</h1>
+          <p className="lede">
+            Nhập thông tin đăng nhập để truy cập bộ sưu tập và trợ lý tài liệu.
+          </p>
 
-        <Button type="submit" variant="primary" loading={pending} disabled={pending}>
-          Đăng nhập
-        </Button>
-      </form>
-    </section>
+          {error && <Notice tone="error">{error}</Notice>}
+
+          <form className="auth-form" onSubmit={(event) => void handleSubmit(event)} noValidate>
+            <div className="field">
+              <label htmlFor={emailId}>Email</label>
+              <input
+                id={emailId}
+                name="email"
+                type="email"
+                autoComplete="username"
+                required
+                disabled={pending}
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor={passwordId}>Mật khẩu</label>
+              <input
+                id={passwordId}
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                required
+                disabled={pending}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </div>
+
+            <Button type="submit" variant="primary" loading={pending} disabled={pending}>
+              Đăng nhập
+            </Button>
+          </form>
+        </section>
+      </div>
+    </div>
   );
 }
