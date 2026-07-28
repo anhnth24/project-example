@@ -91,11 +91,15 @@ describe('OrgSwitch', () => {
     fireEvent.click(screen.getByText('Globex Labs').closest('button')!);
 
     await waitFor(() => expect(screen.getByTestId('scope-org')).toHaveTextContent(ORG_B_ID));
-    // Popover closes on success.
-    expect(screen.queryByRole('dialog', { name: 'Đơn vị hiện tại' })).not.toBeInTheDocument();
+    // Popover closes on success — one state update behind the scope bump
+    // (the component's own setState runs after switchOrg() resolves), so this
+    // must also be awaited or it races the microtask on slower machines.
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Đơn vị hiện tại' })).not.toBeInTheDocument(),
+    );
     // Navigates back to a neutral, org-agnostic route rather than staying on
     // a path that named something specific to the org just left.
-    expect(window.location.pathname).toBe('/');
+    await waitFor(() => expect(window.location.pathname).toBe('/'));
   });
 
   it('a denied switch (403) shows an accessible error and leaves org A active', async () => {
