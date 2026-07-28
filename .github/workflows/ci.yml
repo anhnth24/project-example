@@ -388,8 +388,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.88.0
+      # dev-stack-ci.sh's full tier always builds+runs fileconv-server itself
+      # now (web-e2e-real.sh, real-deployment half of P2-15), not only when
+      # dev-server-smoke does — so this no longer needs to exclude runs where
+      # the Rust job also ran; caching the build is worth it either way.
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        if: needs.changes-and-static.outputs.dev_stack_mode == 'full' && needs.changes-and-static.outputs.rust != 'true'
+        if: needs.changes-and-static.outputs.dev_stack_mode == 'full'
+      # Node/pnpm only for the full tier's web-e2e-real.sh step (SPA build +
+      # Playwright); the lite tier never reaches it, so skip the setup cost
+      # there.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: needs.changes-and-static.outputs.dev_stack_mode == 'full'
+        with:
+          version: 10.33.3
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: needs.changes-and-static.outputs.dev_stack_mode == 'full'
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install web dependencies
+        if: needs.changes-and-static.outputs.dev_stack_mode == 'full'
+        run: pnpm install --frozen-lockfile
+      # See web-e2e job's own comment: no pre-installed browser on this
+      # runner, so resolve Chromium via Playwright itself.
+      - name: Install Playwright Chromium
+        if: needs.changes-and-static.outputs.dev_stack_mode == 'full'
+        run: pnpm --dir web exec playwright install --with-deps chromium
       - name: Validate and smoke-test local services
         run: bash deploy/scripts/dev-stack-ci.sh
 

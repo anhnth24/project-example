@@ -41,6 +41,12 @@ DEV_STACK_FULL = (
     "deploy/dev/**",
     "deploy/compose.spike.yml",
     "deploy/spike/**",
+    # Real-deployment E2E harness (P2-15): only meaningful in the full tier
+    # (it needs the dev-up stack + a built fileconv-server), so it must not
+    # fall through to the deploy/scripts/** lite pattern below like an
+    # ordinary deploy script would.
+    "deploy/scripts/web-e2e-real.sh",
+    "web/e2e-real/**",
 )
 DEV_STACK_LITE = (
     "deploy/scripts/**",
@@ -286,6 +292,26 @@ class ClassifierTests(unittest.TestCase):
         paths = ["deploy/dev/compose.yml"]
         self.assertTrue(classify(paths)["dev_stack"])
         self.assertEqual(dev_stack_mode_for(paths), "full")
+
+    def test_web_e2e_real_script_uses_full_dev_stack(self) -> None:
+        # Unlike an ordinary deploy/scripts/** edit (lite), this harness is
+        # only meaningful in the full tier — it needs the dev-up stack + a
+        # built fileconv-server (see deploy/scripts/web-e2e-real.sh).
+        paths = ["deploy/scripts/web-e2e-real.sh"]
+        self.assertTrue(classify(paths)["dev_stack"])
+        self.assertEqual(dev_stack_mode_for(paths), "full")
+
+    def test_web_e2e_real_spec_uses_full_dev_stack(self) -> None:
+        paths = ["web/e2e-real/library.spec.ts"]
+        self.assertTrue(classify(paths)["dev_stack"])
+        self.assertEqual(dev_stack_mode_for(paths), "full")
+
+    def test_deploy_scripts_other_than_web_e2e_real_stay_lite_dev_stack(self) -> None:
+        # Regression guard: the new full-tier carve-out must not swallow the
+        # rest of deploy/scripts/** back into the full tier.
+        paths = ["deploy/scripts/init-dev-env.sh"]
+        self.assertTrue(classify(paths)["dev_stack"])
+        self.assertEqual(dev_stack_mode_for(paths), "lite")
 
     def test_root_lockfile_activates_both_frontends(self) -> None:
         result = classify(["pnpm-lock.yaml"])

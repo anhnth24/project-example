@@ -8,8 +8,8 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"*.{ts,json}\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"*.{ts,json}\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"e2e-real/**/*.ts\" \"*.{ts,json}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"e2e-real/**/*.ts\" \"*.{ts,json}\"",
     "api:generate": "openapi-typescript ../crates/server/openapi/openapi.yaml -o src/api/generated/contract.ts",
     "api:check": "pnpm api:generate && git diff --exit-code -- src/api/generated/contract.ts",
     "e2e": "playwright test"
