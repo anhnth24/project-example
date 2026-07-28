@@ -802,7 +802,9 @@ fn resolve(base: &Path, p: &str) -> PathBuf {
     }
 }
 
-/// Đếm "page": pdf→số trang (pdfinfo), pptx→số slide (zip), còn lại None.
+/// Đếm "page": pdf→số trang (pdfinfo), pptx→số slide (native, dùng chung logic
+/// với `fileconv_core::probe` — trước đây có nhánh shell `python3` riêng đếm
+/// slide qua zip, nay hợp nhất về một đường Rust duy nhất).
 fn count_pages(path: &Path, fmt: FormatKind) -> Option<u32> {
     match fmt {
         FormatKind::Pdf => {
@@ -815,19 +817,7 @@ fn count_pages(path: &Path, fmt: FormatKind) -> Option<u32> {
             }
             None
         }
-        FormatKind::Pptx => {
-            let out = Command::new("python3")
-                .arg("-c")
-                .arg(
-                    "import zipfile,sys,re;\
-                     z=zipfile.ZipFile(sys.argv[1]);\
-                     print(sum(1 for n in z.namelist() if re.match(r'ppt/slides/slide[0-9]+\\.xml$',n)))",
-                )
-                .arg(path)
-                .output()
-                .ok()?;
-            String::from_utf8_lossy(&out.stdout).trim().parse().ok()
-        }
+        FormatKind::Pptx => fileconv_core::probe(path).pages,
         _ => None,
     }
 }
