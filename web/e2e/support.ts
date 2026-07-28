@@ -32,6 +32,8 @@ export const IDS = {
   orgB: '00000000-0000-4000-8000-000000000003',
   /** Org B's own collection — seeded with content distinct from every org A fixture, so a switch has something visibly different to render. */
   orgBCollection: '00000000-0000-4000-8000-00000000000c',
+  /** Org B's own second member (`editor`, active) on its admin members roster — distinct from every org A member id, so a post-switch members page reads as genuinely different data. */
+  globexMember: '00000000-0000-4000-8000-000000000020',
 } as const;
 
 export const DEMO = {
