@@ -182,7 +182,18 @@ async fn guard_owner_tier(
     if !operation_manages_owner(target_current_role, grants_owner) {
         return Ok(());
     }
-    let caller = members::get(txn, ctx, ctx.user_id()).await?;
+    let caller = match members::get(txn, ctx, ctx.user_id()).await {
+        Ok(caller) => caller,
+        // The caller's own membership vanished between the request's auth
+        // resolution and this in-transaction re-read (e.g. a concurrent owner
+        // removed them mid-request). Someone with no membership row is
+        // definitionally not an active owner, so this is the same "must be an
+        // active owner" denial (→ 403), NOT a "target not found" 404 — which
+        // would be misleading, since the *target* is fine and it's the caller
+        // who lost standing.
+        Err(DbError::NotFound) => return Err(MemberError::OwnerRequiredToManageOwner),
+        Err(other) => return Err(other.into()),
+    };
     if caller.role != MembershipRole::Owner || caller.state != MembershipState::Active {
         return Err(MemberError::OwnerRequiredToManageOwner);
     }

@@ -430,28 +430,41 @@ async fn concurrent_last_owner_race_exactly_one_survives() {
     let (status_1, body_1) = task_1.await.expect("task 1 join");
     let (status_2, body_2) = task_2.await.expect("task 2 join");
 
+    // Exactly one removal succeeds; the other is denied. The loser is denied
+    // one of two correct ways, and which one is timing-dependent — that is
+    // *expected*, not flakiness to paper over:
+    //   - 409 `last_owner`: the loser reached `guard_last_owner`, which under
+    //     the owner-row `FOR UPDATE` lock saw the winner's removal and refused
+    //     to drop the org to zero owners.
+    //   - 403 `forbidden`: the winner removed the loser's OWN membership first,
+    //     so `guard_owner_tier`'s in-transaction caller re-read found the caller
+    //     no longer an active owner and denied before reaching the last-owner
+    //     check.
+    // Both deny the operation; the invariant checked below (exactly one active
+    // owner remains) is the real guarantee, and holds in every interleaving
+    // because the two removals serialize on the owner-row lock and can never
+    // both succeed. (Neither a 5xx, a 404, nor a second 204 is acceptable.)
     let successes = [status_1, status_2]
         .iter()
         .filter(|status| **status == StatusCode::NO_CONTENT)
-        .count();
-    let conflicts = [status_1, status_2]
-        .iter()
-        .filter(|status| **status == StatusCode::CONFLICT)
         .count();
     assert_eq!(
         successes, 1,
         "exactly one removal must succeed: {status_1} {body_1} / {status_2} {body_2}"
     );
-    assert_eq!(
-        conflicts, 1,
-        "the loser must see last_owner conflict: {status_1} {body_1} / {status_2} {body_2}"
-    );
-    let conflict_body = if status_1 == StatusCode::CONFLICT {
-        &body_1
+    let (loser_status, loser_body) = if status_1 == StatusCode::NO_CONTENT {
+        (status_2, &body_2)
     } else {
-        &body_2
+        (status_1, &body_1)
     };
-    assert_eq!(conflict_body["code"], "last_owner");
+    let denied_correctly = (loser_status == StatusCode::CONFLICT
+        && loser_body["code"] == "last_owner")
+        || (loser_status == StatusCode::FORBIDDEN && loser_body["code"] == "forbidden");
+    assert!(
+        denied_correctly,
+        "loser must be denied via last_owner (409) or caller-no-longer-owner (403): \
+         {loser_status} {loser_body}"
+    );
 
     let ctx = OrgContext::try_new(org, owner_a, [] as [&str; 0], []).unwrap();
     with_org_txn(&pool, &ctx, move |txn| {
