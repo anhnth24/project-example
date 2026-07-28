@@ -147,7 +147,7 @@ export function InviteForm({
       {issued && (
         <Modal
           title="Đã tạo lời mời"
-          description="Mã mời chỉ hiển thị một lần duy nhất ngay bây giờ — hãy sao chép và gửi cho người được mời. Markhand sẽ không thể hiển thị lại mã này sau khi đóng hộp thoại."
+          description="Mã mời chỉ hiển thị một lần duy nhất ngay bây giờ — hãy sao chép và gửi cho người được mời. Folyvo sẽ không thể hiển thị lại mã này sau khi đóng hộp thoại."
           onClose={closeTokenModal}
           footer={
             <Button variant="primary" onClick={closeTokenModal}>

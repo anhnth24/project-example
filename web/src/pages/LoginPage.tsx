@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from 'react';
 import { HttpApiError, NetworkError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
+import { BrandMark } from '../components/BrandMark';
 import { Button, Notice } from '../components/ui';
 
 function messageFor(cause: unknown): string {
@@ -42,9 +43,10 @@ export function LoginPage() {
   }
 
   return (
-    <section className="page" aria-labelledby="login-heading">
+    <section className="page auth-card" aria-labelledby="login-heading">
+      <BrandMark className="rail-brand-mark auth-card-brand" />
       <p className="eyebrow">Đăng nhập</p>
-      <h1 id="login-heading">Đăng nhập vào Markhand</h1>
+      <h1 id="login-heading">Đăng nhập vào Folyvo</h1>
       <p className="lede">Nhập thông tin đăng nhập để truy cập bộ sưu tập và trợ lý tài liệu.</p>
 
       {error && <Notice tone="error">{error}</Notice>}

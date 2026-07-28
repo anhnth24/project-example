@@ -7,7 +7,7 @@ import { expect, test } from '@playwright/test';
 test('the mock-mode app boots and logs in with the demo user', async ({ page }) => {
   await page.goto('/login');
 
-  await expect(page.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible();
 
   await page.getByLabel('Email').fill('demo@markhand.test');
   await page.getByLabel('Mật khẩu').fill('demo-password');

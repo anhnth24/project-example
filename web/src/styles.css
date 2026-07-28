@@ -340,6 +340,55 @@ button:disabled {
   width: 100%;
 }
 
+/* Login (App.tsx renders <main> with this on the `/login` route, and omits
+   the rail + status line). A chrome-free, full-bleed screen that centers a
+   single auth card, instead of stranding the form in the top-left of an empty
+   page. Declared after `.app-main` so its centering/width win. */
+.app-main-auth {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: var(--space-6) clamp(1.25rem, 5vw, 4rem);
+}
+
+/* `.page.auth-card` (two classes) so these win over the plain `.page` rules
+   declared later in the sheet — otherwise the card inherits `.page`'s 62rem
+   measure and stops looking like a compact login card. */
+.page.auth-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: calc(var(--radius-lg) * 1.15);
+  box-shadow: var(--shadow-md);
+  gap: 0.85rem;
+  max-width: 27rem;
+  padding: clamp(1.75rem, 4vw, 2.75rem);
+  width: 100%;
+}
+
+.page.auth-card .auth-card-brand {
+  height: 2.75rem;
+  margin-bottom: var(--space-2);
+  width: 2.75rem;
+}
+
+.page.auth-card h1 {
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+}
+
+.page.auth-card .lede {
+  font-size: 1rem;
+}
+
+/* Inputs and the submit button fill the card rather than the login form's
+   default 24rem measure. */
+.page.auth-card .auth-form {
+  margin-top: var(--space-2);
+  max-width: none;
+}
+
 .eyebrow,
 .card-label {
   /* contrast: deep ramp step, see .text-muted note above. */
@@ -1639,17 +1688,57 @@ textarea.input {
 
 .rail-brand {
   align-items: center;
-  background: var(--color-accent-700);
-  border-radius: var(--radius-sm);
-  color: var(--color-bg);
+  color: var(--color-text);
   display: flex;
   flex: 0 0 auto;
-  font-family: var(--font-heading);
-  font-size: 1.1rem;
-  height: 44px;
-  justify-content: center;
+  gap: var(--space-2);
   text-decoration: none;
+}
+
+/* The Folyvo logo badge (an <img>, see BrandMark.tsx) — a fixed square so it
+   looks identical whether the rail is collapsed (badge only) or expanded
+   (badge + wordmark). The SVG carries its own rounded corners and dark fill. */
+.rail-brand-mark {
+  border-radius: 11px;
+  display: block;
+  flex: 0 0 auto;
+  height: 44px;
+  object-fit: contain;
   width: 44px;
+}
+
+/* Wordmark shown only when the rail is expanded. */
+.rail-brand-word {
+  display: none;
+  font-family: var(--font-heading);
+  font-size: 1.15rem;
+}
+
+/* Collapse/expand toggle. Overrides the global <button> reset (accent fill,
+   2.75rem min-height) to read as a quiet icon control that matches the rail
+   links. */
+.rail-toggle {
+  align-items: center;
+  align-self: center;
+  background: transparent;
+  border-radius: var(--radius-md);
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 36px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  width: 44px;
+}
+
+.rail-toggle:hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
+}
+
+.rail-link-label {
+  display: none;
 }
 
 .rail-nav {
@@ -1781,14 +1870,66 @@ textarea.input {
 }
 
 @media (max-width: 600px) {
-  .rail {
+  .rail:not(.rail-expanded) {
     width: 64px;
   }
 
-  .rail-brand,
-  .rail-btn,
-  .rail-link {
+  .rail-brand-mark,
+  .rail:not(.rail-expanded) .rail-btn,
+  .rail:not(.rail-expanded) .rail-link {
     height: 40px;
     width: 40px;
   }
+}
+
+/* ── Expanded rail ──────────────────────────────────────────────────────
+   The same rail, widened to show a text label beside every icon. Declared
+   after the base `.rail`/`.rail-*` rules so the shared-specificity overrides
+   (width, alignment, label visibility) win. The base `.rail` block — and its
+   `height: 100dvh`, sticky positioning, and the bottom-cluster flow contract
+   the shell tests assert on — is left untouched. */
+.rail-expanded {
+  width: 232px;
+  padding-inline: var(--space-3);
+}
+
+.rail-expanded .rail-item {
+  justify-content: flex-start;
+}
+
+.rail-expanded .rail-brand {
+  padding-inline: var(--space-1);
+}
+
+.rail-expanded .rail-brand-word {
+  display: inline;
+}
+
+.rail-expanded .rail-toggle {
+  align-self: flex-end;
+}
+
+.rail-expanded .rail-nav-list li {
+  justify-content: stretch;
+}
+
+.rail-expanded .rail-btn,
+.rail-expanded .rail-link {
+  gap: var(--space-3);
+  justify-content: flex-start;
+  padding-inline: var(--space-3);
+  width: 100%;
+}
+
+.rail-expanded .rail-link-label {
+  display: inline;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Labels already name every destination, so the hover/focus tooltips would be
+   redundant (and would overlap the widened rail). */
+.rail-expanded .rail-tooltip {
+  display: none;
 }

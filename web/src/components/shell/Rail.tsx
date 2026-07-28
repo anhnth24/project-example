@@ -3,20 +3,48 @@
 // menu). See ../../../plans (P2.3) and the shell task brief for the
 // requirements this satisfies; see styles.css's "rail" section for the
 // layout notes (why the bottom cluster can never be clipped).
+import { useState } from 'react';
 import {
   CircleHelp,
   Gauge,
   Library,
   MessageCircleQuestion,
+  PanelLeftClose,
+  PanelLeftOpen,
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { BrandMark } from '../BrandMark';
 import { RouteLink } from '../RouteLink';
 import { useRouter } from '../../state/RouterProvider';
 import type { RouteName } from '../../types/routes';
 import { OrgSwitch } from './OrgSwitch';
 import { RailHint } from './RailHint';
 import { UserMenu } from './UserMenu';
+
+/**
+ * localStorage key for the collapsed/expanded preference. Persisted so the
+ * choice survives reloads, read defensively (private-mode / disabled storage
+ * throws on access) so the rail always renders even if storage is unavailable.
+ */
+const RAIL_EXPANDED_KEY = 'markhand.rail.expanded';
+
+function readExpandedPref(): boolean {
+  try {
+    return window.localStorage.getItem(RAIL_EXPANDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeExpandedPref(expanded: boolean): void {
+  try {
+    window.localStorage.setItem(RAIL_EXPANDED_KEY, expanded ? '1' : '0');
+  } catch {
+    // Storage unavailable (private mode, quota) — the preference simply
+    // doesn't persist across reloads; the in-session toggle still works.
+  }
+}
 
 interface RailDestination {
   route: RouteName;
@@ -44,14 +72,43 @@ const RAIL_DESTINATIONS: RailDestination[] = [
 
 export function Rail() {
   const { match } = useRouter();
+  const [expanded, setExpanded] = useState(readExpandedPref);
+
+  function toggleExpanded() {
+    setExpanded((prev) => {
+      const next = !prev;
+      writeExpandedPref(next);
+      return next;
+    });
+  }
 
   return (
-    <aside className="rail" aria-label="Thanh điều hướng Markhand">
-      <RailHint label="Trang chủ Markhand">
-        <RouteLink to="/" className="rail-brand" aria-label="Trang chủ Markhand">
-          <span aria-hidden="true">M</span>
+    <aside
+      className={`rail ${expanded ? 'rail-expanded' : ''}`}
+      aria-label="Thanh điều hướng Folyvo"
+    >
+      <RailHint label="Trang chủ Folyvo">
+        <RouteLink to="/" className="rail-brand" aria-label="Trang chủ Folyvo">
+          <BrandMark className="rail-brand-mark" />
+          <span className="rail-brand-word" aria-hidden="true">
+            Folyvo
+          </span>
         </RouteLink>
       </RailHint>
+
+      <button
+        type="button"
+        className="rail-toggle"
+        aria-pressed={expanded}
+        aria-label={expanded ? 'Thu gọn thanh điều hướng' : 'Mở rộng thanh điều hướng'}
+        onClick={toggleExpanded}
+      >
+        {expanded ? (
+          <PanelLeftClose size={18} strokeWidth={2.75} aria-hidden="true" />
+        ) : (
+          <PanelLeftOpen size={18} strokeWidth={2.75} aria-hidden="true" />
+        )}
+      </button>
 
       <nav className="rail-nav" aria-label="Điều hướng chính">
         <ul className="rail-nav-list">
@@ -65,6 +122,9 @@ export function Rail() {
                   aria-current={match.name === route ? 'page' : undefined}
                 >
                   <Icon size={20} strokeWidth={2.75} aria-hidden="true" />
+                  <span className="rail-link-label" aria-hidden="true">
+                    {label}
+                  </span>
                 </RouteLink>
               </RailHint>
             </li>
