@@ -955,6 +955,182 @@ paths:
                 type: string
         "429":
           $ref: "#/components/responses/RateLimited"
+  /members:
+    get:
+      operationId: listMembers
+      summary: List org members (requires member.manage)
+      responses:
+        "200":
+          description: Memberships in the caller's current org (both active and suspended).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipPage"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /members/invites:
+    get:
+      operationId: listMemberInvites
+      summary: List invites, open and terminal (requires member.manage)
+      responses:
+        "200":
+          description: Invites for the caller's current org. Never includes tokenHash.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvitePage"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      operationId: createMemberInvite
+      summary: Create a single-use invite (requires member.manage; owner role requires an active owner caller)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInviteRequest"
+      responses:
+        "201":
+          description: >
+            Invite created. The plaintext token is returned exactly once here
+            and is never retrievable again (only its hash is stored).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateInviteResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /members/invites/accept:
+    post:
+      operationId: acceptMemberInvite
+      summary: Accept an invite by token (authenticated bearer only — no existing org membership required)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInviteRequest"
+      responses:
+        "201":
+          description: Membership created in the invite's org.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          description: Invite already accepted/revoked, expired, or caller is already a member.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /members/invites/{inviteId}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/inviteId"
+    post:
+      operationId: revokeMemberInvite
+      summary: Revoke an invite that has not yet been accepted/revoked (requires member.manage)
+      responses:
+        "200":
+          description: Invite revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invite"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          description: Invite already accepted or revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/userId"
+    patch:
+      operationId: patchMember
+      summary: Change role and/or suspend/reactivate a member (requires member.manage; last-owner invariant enforced)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchMemberRequest"
+      responses:
+        "200":
+          description: Membership updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          description: Operation would leave the org with zero active owners.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      operationId: deleteMember
+      summary: Remove a member from the org (requires member.manage; last-owner invariant enforced)
+      responses:
+        "204":
+          description: Member removed; refresh-token sessions invalidated.
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          description: Operation would leave the org with zero active owners.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /usage:
+    get:
+      operationId: getUsage
+      summary: Aggregated per-resource usage/limit/reserved (requires member.manage)
+      responses:
+        "200":
+          description: Usage snapshot for every quota ResourceKind.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResponse"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     bearerAuth:
@@ -985,6 +1161,20 @@ components:
         format: uuid
     jobId:
       name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    inviteId:
+      name: inviteId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    userId:
+      name: userId
       in: path
       required: true
       schema:
@@ -1511,3 +1701,129 @@ components:
         finishedAt:
           type: [string, "null"]
           format: date-time
+    Membership:
+      type: object
+      required: [userId, role, state, createdAt]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [owner, admin, editor, viewer]
+        state:
+          type: string
+          enum: [active, suspended]
+        createdAt:
+          type: string
+          format: date-time
+    MembershipPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    Invite:
+      type: object
+      required: [id, email, role, status, expiresAt, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, editor, viewer]
+        status:
+          type: string
+          description: Derived, not stored — never both terminal and pending.
+          enum: [pending, accepted, revoked, expired]
+        expiresAt:
+          type: string
+          format: date-time
+        acceptedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    InvitePage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invite"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    CreateInviteRequest:
+      type: object
+      required: [email, role]
+      properties:
+        email:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, editor, viewer]
+        ttlSecs:
+          type: integer
+          description: Invite lifetime in seconds (default 7 days; clamped [60, 2592000]).
+    CreateInviteResponse:
+      type: object
+      required: [invite, token]
+      properties:
+        invite:
+          $ref: "#/components/schemas/Invite"
+        token:
+          type: string
+          description: >
+            Plaintext single-use invite token, returned exactly once. Only its
+            hash is ever persisted — this value cannot be retrieved again.
+    AcceptInviteRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+    PatchMemberRequest:
+      type: object
+      description: At least one of role/state must be present.
+      properties:
+        role:
+          type: string
+          enum: [owner, admin, editor, viewer]
+        state:
+          type: string
+          enum: [active, suspended]
+    UsageEntry:
+      type: object
+      required: [resource, limit, committed, reserved, remaining]
+      properties:
+        resource:
+          type: string
+          enum: [storage_bytes, documents, concurrent_jobs, tokens]
+        limit:
+          type: integer
+        committed:
+          type: integer
+        reserved:
+          type: integer
+        remaining:
+          type: integer
+    UsageResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageEntry"

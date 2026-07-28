@@ -7,6 +7,7 @@ pub mod documents;
 pub mod events;
 pub mod health;
 pub mod jobs;
+pub mod members;
 pub mod rate_limit_guard;
 pub mod search;
 pub mod uploads;

@@ -94,13 +94,35 @@ pub enum MemberError {
     LastOwner,
     #[error("only an active owner may invite a new owner")]
     OwnerRequiredForOwnerInvite,
+    #[error("only an active owner may grant or manage an owner")]
+    OwnerRequiredToManageOwner,
     #[error("database error")]
     Database,
 }
 
+/// Pure decision: does this membership operation touch the owner tier and so
+/// require the *caller* to be an active owner? True when the operation grants
+/// owner, or when its target is currently an owner (demote/remove/suspend/
+/// reactivate of an owner). Phase 1C-02 acceptance: "admin không quản owner".
+/// Kept pure so the rule is unit- and mutation-testable without a database.
+pub fn operation_manages_owner(target_current_role: MembershipRole, grants_owner: bool) -> bool {
+    grants_owner || target_current_role == MembershipRole::Owner
+}
+
 impl From<DbError> for MemberError {
-    fn from(_: DbError) -> Self {
-        Self::Database
+    fn from(err: DbError) -> Self {
+        // `NotFound` must not collapse into `Database` (→ 500). Every bare `?`
+        // on a `members::get`/`mark_invite_accepted` here can legitimately hit
+        // a row that a concurrent delete removed between a route's pre-check
+        // and this transaction; the caller maps `NotFound` → 404, which is the
+        // honest answer, instead of an opaque 500 indistinguishable from a real
+        // outage. The invite-lookup path maps `NotFound` → `InviteNotFound`
+        // explicitly *before* this blanket conversion is reached, so member
+        // gets are the only thing this arm relabels.
+        match err {
+            DbError::NotFound => Self::NotFound,
+            _ => Self::Database,
+        }
     }
 }
 
@@ -142,6 +164,29 @@ async fn guard_last_owner(
 ) -> Result<(), MemberError> {
     let owners = members::lock_owner_rows(txn, ctx).await?;
     check_last_owner_invariant(&owners, target_user_id, target_will_be_active_owner)
+}
+
+/// Enforces "only an active owner may grant or manage an owner" in the same
+/// transaction as the mutation. Without this, `guard_last_owner` alone lets any
+/// `member.manage` holder `PATCH {self} {role: owner}` — it only stops the
+/// *count* reaching zero, never restricts *who* may reach the owner tier — so a
+/// non-owner admin could self-promote and take over the tenant. The caller row
+/// is read inside the mutation txn so a concurrent demote of the caller is
+/// observed.
+async fn guard_owner_tier(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    target_current_role: MembershipRole,
+    grants_owner: bool,
+) -> Result<(), MemberError> {
+    if !operation_manages_owner(target_current_role, grants_owner) {
+        return Ok(());
+    }
+    let caller = members::get(txn, ctx, ctx.user_id()).await?;
+    if caller.role != MembershipRole::Owner || caller.state != MembershipState::Active {
+        return Err(MemberError::OwnerRequiredToManageOwner);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -430,6 +475,17 @@ pub async fn change_role(
         move |txn| {
             Box::pin(async move {
                 let current = members::get(txn, &ctx, target_user_id).await?;
+                // Owner-tier gate BEFORE the no-op short-circuit, so an admin
+                // cannot probe "is this user an owner?" by PATCHing owner→owner
+                // and reading 200 vs 403 — the gate answers 403 either way.
+                guard_owner_tier(txn, &ctx, current.role, new_role == MembershipRole::Owner)
+                    .await?;
+                // A role no-op changes nothing: skip the mutation and the
+                // audit row so the trail never records a misleading "owner →
+                // owner" change (adversarial review finding #5).
+                if new_role == current.role {
+                    return Ok(current);
+                }
                 let will_be_active_owner =
                     new_role == MembershipRole::Owner && current.state == MembershipState::Active;
                 guard_last_owner(txn, &ctx, target_user_id, will_be_active_owner).await?;
@@ -482,6 +538,8 @@ pub async fn remove_member(
         move |txn| {
             Box::pin(async move {
                 let current = members::get(txn, &ctx, target_user_id).await?;
+                // Removing an owner is managing an owner → owner-only.
+                guard_owner_tier(txn, &ctx, current.role, false).await?;
                 guard_last_owner(txn, &ctx, target_user_id, false).await?;
 
                 members::purge_refresh_tokens(txn, &ctx, target_user_id).await?;
@@ -563,6 +621,13 @@ async fn set_member_state(
         move |txn| {
             Box::pin(async move {
                 let current = members::get(txn, &ctx, target_user_id).await?;
+                // Suspending or reactivating an owner is managing an owner →
+                // owner-only, checked before the no-op short-circuit for the
+                // same anti-probe reason as `change_role`.
+                guard_owner_tier(txn, &ctx, current.role, false).await?;
+                if new_state == current.state {
+                    return Ok(current);
+                }
                 if new_state == MembershipState::Suspended {
                     guard_last_owner(txn, &ctx, target_user_id, false).await?;
                 }
@@ -689,6 +754,24 @@ mod tests {
             check_last_owner_invariant(&owners, sole, false),
             Err(MemberError::LastOwner)
         );
+    }
+
+    // --- Owner-tier gate (adversarial finding #1: no self-promotion) ---
+
+    #[test]
+    fn operation_manages_owner_flags_owner_target_or_owner_grant() {
+        use MembershipRole::*;
+        // Granting owner (to anyone, whatever their current role) is owner-tier.
+        assert!(operation_manages_owner(Viewer, true));
+        assert!(operation_manages_owner(Admin, true));
+        // Touching a current owner (demote/remove/suspend) is owner-tier even
+        // when not granting owner.
+        assert!(operation_manages_owner(Owner, false));
+        // Managing a non-owner without granting owner is NOT owner-tier — an
+        // admin may do it.
+        assert!(!operation_manages_owner(Admin, false));
+        assert!(!operation_manages_owner(Editor, false));
+        assert!(!operation_manages_owner(Viewer, false));
     }
 
     #[test]
