@@ -1,22 +1,35 @@
-//! Organization lifecycle: list / detail (1C-01, lifecycle half).
+//! Organization lifecycle: create / list / detail (1C-01, full slice).
 //!
 //! `switch` itself lives in [`crate::auth::session::switch_org`] next to the
 //! other token-minting flows (login/refresh) since it mints a fresh session;
-//! this module only covers the read paths list/detail need.
+//! this module covers create (unblocked by 1C-03's global RBAC catalog,
+//! migrations/0030) and the read paths list/detail need.
 //!
 //! Every check here re-verifies current PostgreSQL state — the caller's
 //! bearer access token only proves *who* they are (`sub`), never *which org*
-//! they may act in. `org_id` values in requests (path or body) are always
-//! untrusted client input, same trust level as a JWT `org_id` claim.
+//! they may act in or authority over a not-yet-existing org. `org_id` values
+//! in requests (path or body) are always untrusted client input, same trust
+//! level as a JWT `org_id` claim.
 
 use deadpool_postgres::Pool;
+use thiserror::Error;
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
-use crate::auth::context::OrgContext;
+use crate::auth::context::{OrgContext, OrgContextError};
 use crate::auth::permissions::ResolveError;
+use crate::db::error::DbError;
 use crate::db::models::{MembershipRole, Org};
 use crate::db::orgs;
-use crate::db::pool::with_org_txn;
+use crate::db::pool::{with_org_txn, with_org_txn_typed};
+use crate::services::audit::{self, AuditAction, AuditRecord};
+
+/// Org + the caller's (always `owner`) role in it, same shape list/detail
+/// return via [`OrgSummary`]/[`OrgDetail`].
+pub struct CreatedOrg {
+    pub org: Org,
+    pub role: MembershipRole,
+}
 
 /// One organization the caller currently has an active membership in.
 pub struct OrgSummary {
@@ -27,6 +40,99 @@ pub struct OrgSummary {
 pub struct OrgDetail {
     pub org: Org,
     pub role: MembershipRole,
+}
+
+#[derive(Debug, Error)]
+pub enum CreateOrgError {
+    #[error("slug already taken")]
+    SlugTaken,
+    #[error("database error")]
+    Database,
+}
+
+impl From<DbError> for CreateOrgError {
+    fn from(error: DbError) -> Self {
+        match error {
+            DbError::Query(pg_error) if pg_error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                Self::SlugTaken
+            }
+            _ => Self::Database,
+        }
+    }
+}
+
+/// Creates a new org + an `owner` membership for `user_id`, in one
+/// transaction. Provisions the new org's full RBAC (`roles`/
+/// `role_permissions`) from the canonical global catalog
+/// (`provision_org_role_catalog`, migrations/0030) — no per-org seed
+/// migration required, unlike the POC org (migrations/0011).
+///
+/// `slug`/`name` must already be validated/trimmed by the caller (route
+/// layer); this only re-asserts non-empty as a defense-in-depth floor. A
+/// slug collision with an existing org surfaces as [`CreateOrgError::SlugTaken`]
+/// (mapped from the `orgs_slug_key` unique-violation the `INSERT` below can
+/// hit — `db::orgs::ensure_exists`'s `ON CONFLICT (id)` only suppresses a
+/// conflict on the fresh `id`, never on `slug`).
+pub async fn create_org(
+    pool: &Pool,
+    user_id: Uuid,
+    slug: &str,
+    name: &str,
+    request_id: &str,
+) -> Result<CreatedOrg, CreateOrgError> {
+    if slug.trim().is_empty() || name.trim().is_empty() {
+        return Err(CreateOrgError::Database);
+    }
+    let org_id = Uuid::new_v4();
+    let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
+        .map_err(|_: OrgContextError| CreateOrgError::Database)?;
+    let request_id = request_id.to_string();
+    let slug = slug.to_string();
+    let name = name.to_string();
+
+    let org = with_org_txn_typed(pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let org = orgs::ensure_exists(txn, &ctx, &slug, &name).await?;
+
+                // Global canonical RBAC catalog -> this org's roles/grants
+                // (migrations/0030). No manual per-org seed needed.
+                txn.execute("SELECT provision_org_role_catalog($1)", &[&ctx.org_id()])
+                    .await
+                    .map_err(DbError::from)?;
+
+                // Caller becomes the first (and, right now, only) owner.
+                orgs::ensure_membership(txn, &ctx).await?;
+
+                let resource_id = org.id.to_string();
+                audit::record_in_txn(
+                    txn,
+                    &ctx,
+                    AuditRecord {
+                        request_id: &request_id,
+                        action: AuditAction::OrgCreate.as_str(),
+                        resource_type: "org",
+                        resource_id: Some(&resource_id),
+                        outcome: crate::db::models::AuditOutcome::Success,
+                        metadata: serde_json::json!({
+                            "slug_chars": org.slug.len() as i64,
+                            "name_chars": org.name.len() as i64,
+                        }),
+                    },
+                )
+                .await?;
+
+                Ok::<Org, CreateOrgError>(org)
+            })
+        }
+    })
+    .await?;
+
+    Ok(CreatedOrg {
+        org,
+        role: MembershipRole::Owner,
+    })
 }
 
 /// Lists organizations where `user_id` currently holds an ACTIVE membership.

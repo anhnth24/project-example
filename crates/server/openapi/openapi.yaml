@@ -974,6 +974,41 @@ paths:
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
+    post:
+      operationId: createOrg
+      summary: Create a new organization; caller becomes its owner
+      description: >
+        Authenticated bearer only (no existing OrgContext required — the
+        caller has no membership in the org being created). Creates the org
+        and an `owner` membership for the caller in one transaction, and
+        provisions the new org's roles/permissions from the global RBAC
+        catalog (1C-03) — no per-org seed step required. Audited as
+        `org.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrgRequest"
+      responses:
+        "201":
+          description: Created org, with the caller's (owner) role.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Org"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          description: Slug already taken by another organization.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /orgs/switch:
     post:
       operationId: switchOrg
@@ -1659,6 +1694,15 @@ components:
         createdAt:
           type: string
           format: date-time
+    CreateOrgRequest:
+      type: object
+      required: [slug, name]
+      properties:
+        slug:
+          type: string
+          description: 2-63 lowercase alphanumeric/hyphen chars, must not start with a hyphen.
+        name:
+          type: string
     OrgPage:
       type: object
       required: [items, page]

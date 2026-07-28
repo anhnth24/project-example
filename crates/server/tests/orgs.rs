@@ -1,5 +1,6 @@
-//! Live PostgreSQL HTTP contract tests for org lifecycle (1C-01, lifecycle
-//! half): GET /orgs, GET /orgs/{orgId}, POST /orgs/switch.
+//! Live PostgreSQL HTTP contract tests for org lifecycle (1C-01, full slice):
+//! POST /orgs (create), GET /orgs (list), GET /orgs/{orgId} (detail),
+//! POST /orgs/switch.
 //!
 //! Skips cleanly when `MARKHAND_TEST_DATABASE_URL` / `MARKHAND_TEST_APP_DATABASE_URL`
 //! are unset (see `common::boot_app_pool`). Must run in the `rust-integration`
@@ -12,6 +13,7 @@ use axum::http::{Request, StatusCode};
 use common::{admin_database_url, app_database_url, boot_app_pool, build_router};
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
+use fileconv_server::auth::permissions::resolve_org_context_in_txn;
 use fileconv_server::db::pool::with_org_txn;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -54,6 +56,20 @@ async fn send(
     (status, json)
 }
 
+/// A caller needs *some* existing membership to obtain a bearer token at all
+/// (`login_password` has no path for a brand-new user with zero
+/// memberships — same gap `members.rs::accept_invite`'s module doc already
+/// records). Seeds a throwaway origin org purely so the caller can log in;
+/// the org created via `POST /orgs` in the create tests below is a separate,
+/// brand-new org the caller has no prior relationship to.
+async fn seed_caller(pool: &Pool, email: &str) -> (Uuid, String) {
+    let origin_org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    common::seed_user_with_permissions(pool, origin_org, user, email, PASSWORD, &[]).await;
+    let (token, _) = common::login_tokens(pool, email, PASSWORD).await;
+    (user, token)
+}
+
 /// Seeds a bare membership (owner role, no extra permissions) for `user` in
 /// `org` — orgs/list/detail/switch need no permission beyond membership
 /// itself. Reuses `common::seed_user_with_permissions`'s org/user/membership
@@ -86,15 +102,20 @@ async fn suspend_membership(pool: &Pool, org: Uuid, user: Uuid) {
     .expect("suspend membership");
 }
 
-async fn audit_rows(pool: &Pool, org: Uuid) -> Vec<(String, String, String)> {
+/// `action` selects which audit action to filter on (`org.create` for the
+/// create tests below, `org.switch` for the switch tests) — the two branches
+/// this file was reconciled from each hardcoded their own action; a caller
+/// arg keeps both call sites intact instead of duplicating this helper.
+async fn audit_rows(pool: &Pool, org: Uuid, action: &str) -> Vec<(String, String, String)> {
     let ctx = OrgContext::try_new(org, org, [] as [&str; 0], []).unwrap();
+    let action = action.to_string();
     with_org_txn(pool, &ctx, move |txn| {
         Box::pin(async move {
             let rows = txn
                 .query(
                     "SELECT action, outcome, metadata::text
-                     FROM audit_log WHERE org_id = $1 AND action = 'org.switch' ORDER BY seq",
-                    &[&org],
+                     FROM audit_log WHERE org_id = $1 AND action = $2 ORDER BY seq",
+                    &[&org, &action],
                 )
                 .await?;
             Ok(rows
@@ -105,6 +126,143 @@ async fn audit_rows(pool: &Pool, org: Uuid) -> Vec<(String, String, String)> {
     })
     .await
     .unwrap()
+}
+
+// ---------------------------------------------------------------------
+// POST /orgs — create a new org; caller becomes its owner.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn create_org_succeeds_and_caller_becomes_owner() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let (user_id, token) = seed_caller(&pool, "create-happy@orgs-it.test").await;
+    let slug = format!("acme-{}", Uuid::new_v4().simple());
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/orgs",
+        Some(&token),
+        Some(json!({ "slug": slug, "name": "Acme Inc" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["slug"], slug);
+    assert_eq!(body["name"], "Acme Inc");
+    assert_eq!(body["role"], "owner");
+    let org_id: Uuid = body["id"].as_str().unwrap().parse().unwrap();
+
+    // Acceptance contract: after create, the caller resolves full owner
+    // permissions in the brand-new org — including `member.manage` — with
+    // NOTHING beyond `POST /orgs` having touched `roles`/`role_permissions`
+    // for this org. Asserted at the same resolver every route's
+    // `AuthenticatedOrg` extractor calls in production
+    // (`auth::permissions::resolve_org_context_in_txn`), same as the
+    // `/orgs/switch` flow below does after minting its token.
+    let ctx = resolve_org_context_in_txn(&pool, org_id, user_id)
+        .await
+        .expect("owner must resolve in the new org with zero manual seeding");
+    assert!(
+        ctx.has_permission("member.manage"),
+        "owner must hold member.manage: {:?}",
+        ctx.permissions()
+    );
+    assert!(ctx.has_permission("doc.upload"));
+    assert!(ctx.has_permission("audit.view"));
+
+    let rows = audit_rows(&pool, org_id, "org.create").await;
+    assert!(
+        rows.iter()
+            .any(|(action, outcome, _)| action == "org.create" && outcome == "success"),
+        "create must be audited: {rows:?}"
+    );
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn create_org_rejects_a_duplicate_slug() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let (_user_id, token) = seed_caller(&pool, "create-dup@orgs-it.test").await;
+    let slug = format!("dup-{}", Uuid::new_v4().simple());
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/orgs",
+        Some(&token),
+        Some(json!({ "slug": slug, "name": "First" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status_dup, body_dup) = send(
+        &app,
+        "POST",
+        "/api/v1/orgs",
+        Some(&token),
+        Some(json!({ "slug": slug, "name": "Second" })),
+    )
+    .await;
+    assert_eq!(status_dup, StatusCode::CONFLICT, "{body_dup}");
+    assert_eq!(body_dup["code"], "slug_taken");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn create_org_requires_a_bearer_token() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/orgs",
+        None,
+        Some(json!({ "slug": "no-auth-org", "name": "No Auth" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn create_org_rejects_an_invalid_slug() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let (_user_id, token) = seed_caller(&pool, "create-invalid@orgs-it.test").await;
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/orgs",
+        Some(&token),
+        Some(json!({ "slug": "Not_Valid!", "name": "Whatever" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "validation_failed");
+
+    ephemeral.drop().await;
 }
 
 // ---------------------------------------------------------------------
@@ -268,7 +426,7 @@ async fn switch_denies_and_audits_a_real_org_the_caller_is_not_a_member_of() {
     let user_b = Uuid::new_v4();
     seed_member(&pool, org_b, user_b, "switch-b@orgs-it.test").await;
 
-    let before = audit_rows(&pool, org_b).await;
+    let before = audit_rows(&pool, org_b, "org.switch").await;
     let (status, body) = send(
         &app,
         "POST",
@@ -280,7 +438,7 @@ async fn switch_denies_and_audits_a_real_org_the_caller_is_not_a_member_of() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["code"], "membership_missing");
 
-    let after = audit_rows(&pool, org_b).await;
+    let after = audit_rows(&pool, org_b, "org.switch").await;
     assert_eq!(
         after.len(),
         before.len() + 1,
@@ -360,7 +518,7 @@ async fn switch_denies_a_suspended_membership_and_audits() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["code"], "membership_missing");
 
-    let rows = audit_rows(&pool, org_b).await;
+    let rows = audit_rows(&pool, org_b, "org.switch").await;
     assert!(rows
         .iter()
         .any(|(action, outcome, metadata)| action == "org.switch"
@@ -423,7 +581,7 @@ async fn switch_succeeds_for_a_two_org_member_and_mints_an_independent_session()
     );
 
     // Success is audited too.
-    let rows = audit_rows(&pool, org_b).await;
+    let rows = audit_rows(&pool, org_b, "org.switch").await;
     assert!(rows
         .iter()
         .any(|(action, outcome, _)| action == "org.switch" && outcome == "success"));

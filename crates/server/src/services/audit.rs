@@ -25,6 +25,10 @@ pub enum AuditAction {
     AuthRefresh,
     AuthRefreshReuse,
     AuthRevokeAll,
+    // 1C-01 org create (POST /orgs) — org + owner membership in one
+    // transaction, audited regardless of outcome like the other mutation
+    // actions below (never mints a session, unlike auth.login/org.switch).
+    OrgCreate,
     // 1C-01 org-switch (mints a fresh session like AuthLogin; written
     // directly via `auth::session::write_audit`, same as the Auth* actions
     // above — this variant exists for the canonical action-name registry,
@@ -73,6 +77,7 @@ impl AuditAction {
             Self::AuthRefresh => "auth.refresh",
             Self::AuthRefreshReuse => "auth.refresh.reuse",
             Self::AuthRevokeAll => "auth.revoke_all",
+            Self::OrgCreate => "org.create",
             Self::OrgSwitch => "org.switch",
             Self::CollectionCreate => "collection.create",
             Self::CollectionUpdate => "collection.update",
@@ -113,6 +118,7 @@ impl AuditAction {
             "auth.refresh" => Ok(Self::AuthRefresh),
             "auth.refresh.reuse" => Ok(Self::AuthRefreshReuse),
             "auth.revoke_all" => Ok(Self::AuthRevokeAll),
+            "org.create" => Ok(Self::OrgCreate),
             "org.switch" => Ok(Self::OrgSwitch),
             "collection.create" => Ok(Self::CollectionCreate),
             "collection.update" => Ok(Self::CollectionUpdate),
@@ -153,6 +159,9 @@ impl AuditAction {
                 &["reason", "error_class", "family_id", "refresh_id"]
             }
             Self::AuthDeny | Self::AuthRevokeAll => &["reason", "error_class"],
+            // Structural only, same shape as CollectionCreate below — never
+            // the org name/slug free text itself.
+            Self::OrgCreate => &["reason", "slug_chars", "name_chars"],
             Self::OrgSwitch => &["reason", "family_id", "refresh_id"],
             Self::AuthRefresh | Self::AuthRefreshReuse => &[
                 "reason",
@@ -255,6 +264,7 @@ impl AuditAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditResource {
     Session,
+    Org,
     Document,
     Collection,
     Job,
@@ -271,6 +281,7 @@ impl AuditResource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Session => "session",
+            Self::Org => "org",
             Self::Document => "document",
             Self::Collection => "collection",
             Self::Job => "job",
@@ -287,6 +298,7 @@ impl AuditResource {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "session" => Ok(Self::Session),
+            "org" => Ok(Self::Org),
             "document" => Ok(Self::Document),
             "collection" => Ok(Self::Collection),
             "job" | "jobs" => Ok(Self::Job),

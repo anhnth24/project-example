@@ -46,7 +46,14 @@ const BUSINESS_TABLES: &[&str] = &[
     "download_capability_redemptions",
 ];
 
-const GLOBAL_TABLES: &[&str] = &["orgs", "users", "permissions"];
+const GLOBAL_TABLES: &[&str] = &[
+    "orgs",
+    "users",
+    "permissions",
+    // 1C-03/1C-01 canonical RBAC catalog (migrations/0030) — org-independent.
+    "role_catalog",
+    "role_catalog_permissions",
+];
 
 const POC_ORG: &str = "11111111-1111-1111-1111-111111111111";
 const POC_USER: &str = "22222222-2222-2222-2222-222222222201";

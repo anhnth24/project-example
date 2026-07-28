@@ -532,7 +532,11 @@ export interface paths {
          */
         get: operations["listOrgs"];
         put?: never;
-        post?: never;
+        /**
+         * Create a new organization; caller becomes its owner
+         * @description Authenticated bearer only (no existing OrgContext required — the caller has no membership in the org being created). Creates the org and an `owner` membership for the caller in one transaction, and provisions the new org's roles/permissions from the global RBAC catalog (1C-03) — no per-org seed step required. Audited as `org.create`.
+         */
+        post: operations["createOrg"];
         delete?: never;
         options?: never;
         head?: never;
@@ -872,6 +876,11 @@ export interface components {
             role: "owner" | "admin" | "editor" | "viewer";
             /** Format: date-time */
             createdAt: string;
+        };
+        CreateOrgRequest: {
+            /** @description 2-63 lowercase alphanumeric/hyphen chars, must not start with a hyphen. */
+            slug: string;
+            name: string;
         };
         OrgPage: {
             items: components["schemas"]["Org"][];
@@ -2172,6 +2181,42 @@ export interface operations {
                 };
             };
             401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createOrg: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOrgRequest"];
+            };
+        };
+        responses: {
+            /** @description Created org, with the caller's (owner) role. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Org"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            401: components["responses"]["ApiError"];
+            /** @description Slug already taken by another organization. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };

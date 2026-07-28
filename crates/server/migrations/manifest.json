@@ -29,6 +29,7 @@
     "0026_expand_audit_append_only.sql": "79ffe4cded8b9c1fee03691b7011d971a3ddb17aaa18d396f9c72100d5013eb8",
     "0027_expand_migrator_app_grants.sql": "c46298a4a2e7c8a0a3fd4c5e3bcfe402d51dd007e5cf1423877f05a14d95fced",
     "0028_expand_audit_ownership_migrator.sql": "087cd986645f779267011d359574afa8e8e255a60fcc63d01224ad7514efa2ee",
-    "0029_expand_org_membership_state.sql": "41de0ab024806d760d1e080ec1cbbb54855695ee541566e216cf55f563dc1ec0"
+    "0029_expand_org_membership_state.sql": "41de0ab024806d760d1e080ec1cbbb54855695ee541566e216cf55f563dc1ec0",
+    "0030_expand_global_role_catalog.sql": "00d6758cc6559dd6585ca13aa1a69a8f5b508aa4dadec89642254f3866c8c6be"
   }
 }
