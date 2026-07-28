@@ -314,11 +314,138 @@ button:disabled {
   font-size: 0.875rem;
 }
 
+/* Home hero content wrapper (App.tsx's `home` branch only). Left-aligned so
+   it hugs the content's left edge with whitespace on the right — the Organic
+   layout rule — rather than sitting as a centered column stranded in the
+   middle of the wide main area. Horizontal padding lives on `.app-main`
+   (shared by every route); this only sets the hero's reading measure and a
+   little top breathing room, not the old 8rem marketing gap. */
 .welcome {
   box-sizing: border-box;
-  margin: 0 auto;
-  max-width: 50rem;
-  padding: clamp(4rem, 12vw, 8rem) 5vw 4rem;
+  max-width: 52rem;
+  padding-top: clamp(1rem, 5vh, 3rem);
+}
+
+/* The single content container for every route's <main> (App.tsx). Owns the
+   page's horizontal gutters and its overall reading width. Left-aligned (no
+   `margin: auto`): after the rail, content hugs the left edge and the
+   whitespace falls on the right, so a data table gets the full width it needs
+   instead of being stranded in a narrow centered column. The max-width still
+   caps it on ultra-wide displays so lines never run edge-to-edge. */
+.app-main {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  max-width: 84rem;
+  padding: var(--space-4) clamp(1.25rem, 5vw, 4rem) var(--space-8);
+  width: 100%;
+}
+
+/* Login (App.tsx renders <main> with this on the `/login` route, and omits
+   the rail + status line). A full-bleed, two-column auth screen: a branded
+   charcoal panel beside the form, instead of a lone pale card stranded on an
+   empty page. Overrides `.app-main`'s padding/width; declared after it so it
+   wins. */
+.app-main-auth {
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0;
+}
+
+.auth-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Left brand panel — Folyvo charcoal (app-icon gradient) with a warm orange
+   glow, carrying the white logo mark, wordmark, and a one-line pitch. */
+.auth-brand {
+  align-items: center;
+  background:
+    radial-gradient(115% 80% at 12% 0%, rgba(255, 122, 26, 0.24), transparent 55%),
+    linear-gradient(155deg, #3a4150 0%, #171b26 72%);
+  color: #fff;
+  display: flex;
+  overflow: hidden;
+  padding: clamp(2.5rem, 6vw, 5rem);
+}
+
+.auth-brand-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 26rem;
+}
+
+.auth-brand-logo {
+  height: 3.5rem;
+  width: 3.5rem;
+}
+
+.auth-brand-word {
+  color: #fff;
+  font-family: var(--font-heading);
+  font-size: clamp(2.5rem, 5vw, 3.5rem);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  margin: 0;
+}
+
+/* Brand guide: "yvo" is the orange accent on dark grounds. */
+.auth-brand-word-accent {
+  color: #ff7a1a;
+}
+
+.auth-brand-tagline {
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 1.1rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Right form panel — cream ground, form centered at a comfortable measure. */
+.auth-panel {
+  align-items: center;
+  background: var(--color-bg);
+  display: flex;
+  justify-content: center;
+  padding: clamp(1.75rem, 5vw, 4rem);
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  max-width: 23rem;
+  width: 100%;
+}
+
+.auth-card h1 {
+  font-size: clamp(1.9rem, 4vw, 2.35rem);
+  margin-bottom: 0.25rem;
+  max-width: none;
+}
+
+.auth-card .lede {
+  font-size: 1rem;
+}
+
+.auth-card .auth-form {
+  margin-top: var(--space-3);
+  max-width: none;
+}
+
+/* Narrow viewports: drop the brand panel, form takes the full width. */
+@media (max-width: 820px) {
+  .auth-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-brand {
+    display: none;
+  }
 }
 
 .eyebrow,
@@ -411,12 +538,14 @@ code {
   padding-left: 1.25rem;
 }
 
-/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. */
+/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. The
+   measure is generous enough for prose plus a comfortable form/card column;
+   table-heavy pages (admin members) opt out to the full `.app-main` width. */
 .page {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-  max-width: 43rem;
+  max-width: 62rem;
 }
 
 .page h1 {
@@ -812,9 +941,14 @@ textarea.input {
 .tag {
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+  /* A status/role label is a single token — never let a narrow table cell
+     wrap it into a two-line sliver. The cell scrolls/widens instead. */
+  white-space: nowrap;
+  padding: 4px 11px;
   border-radius: calc(var(--radius-md) * 0.75);
 }
 
@@ -899,6 +1033,39 @@ textarea.input {
 
 .table tbody tr:hover {
   background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+/* Member identity cell (components/admin/MembersTable.tsx): the membership
+   API carries only a user id — no name or email — so the identity reads as a
+   round monogram avatar + the id set in monospace, with a "Bạn" tag when the
+   row is the signed-in caller. Replaces the old bare `<code>` UUID blob. */
+.member-identity {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.member-avatar {
+  align-items: center;
+  background: var(--color-accent-200);
+  border-radius: 50%;
+  color: var(--color-accent-800);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  height: 2.1rem;
+  justify-content: center;
+  text-transform: uppercase;
+  width: 2.1rem;
+}
+
+.member-identity-id {
+  color: var(--color-text);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
 }
 
 /* — dialog — */
@@ -1511,7 +1678,9 @@ textarea.input {
   align-items: center;
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-3) 5vw 0;
+  /* Same left gutter as `.app-main` so the status dot lines up with the page
+     heading below it rather than sitting on a different margin. */
+  padding: var(--space-3) clamp(1.25rem, 5vw, 4rem) 0;
 }
 
 .rail {
@@ -1578,17 +1747,57 @@ textarea.input {
 
 .rail-brand {
   align-items: center;
-  background: var(--color-accent-700);
-  border-radius: var(--radius-sm);
-  color: var(--color-bg);
+  color: var(--color-text);
   display: flex;
   flex: 0 0 auto;
-  font-family: var(--font-heading);
-  font-size: 1.1rem;
-  height: 44px;
-  justify-content: center;
+  gap: var(--space-2);
   text-decoration: none;
+}
+
+/* The Folyvo logo badge (an <img>, see BrandMark.tsx) — a fixed square so it
+   looks identical whether the rail is collapsed (badge only) or expanded
+   (badge + wordmark). The SVG carries its own rounded corners and dark fill. */
+.rail-brand-mark {
+  border-radius: 11px;
+  display: block;
+  flex: 0 0 auto;
+  height: 44px;
+  object-fit: contain;
   width: 44px;
+}
+
+/* Wordmark shown only when the rail is expanded. */
+.rail-brand-word {
+  display: none;
+  font-family: var(--font-heading);
+  font-size: 1.15rem;
+}
+
+/* Collapse/expand toggle. Overrides the global <button> reset (accent fill,
+   2.75rem min-height) to read as a quiet icon control that matches the rail
+   links. */
+.rail-toggle {
+  align-items: center;
+  align-self: center;
+  background: transparent;
+  border-radius: var(--radius-md);
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 36px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  width: 44px;
+}
+
+.rail-toggle:hover {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
+}
+
+.rail-link-label {
+  display: none;
 }
 
 .rail-nav {
@@ -1720,14 +1929,66 @@ textarea.input {
 }
 
 @media (max-width: 600px) {
-  .rail {
+  .rail:not(.rail-expanded) {
     width: 64px;
   }
 
-  .rail-brand,
-  .rail-btn,
-  .rail-link {
+  .rail-brand-mark,
+  .rail:not(.rail-expanded) .rail-btn,
+  .rail:not(.rail-expanded) .rail-link {
     height: 40px;
     width: 40px;
   }
+}
+
+/* ── Expanded rail ──────────────────────────────────────────────────────
+   The same rail, widened to show a text label beside every icon. Declared
+   after the base `.rail`/`.rail-*` rules so the shared-specificity overrides
+   (width, alignment, label visibility) win. The base `.rail` block — and its
+   `height: 100dvh`, sticky positioning, and the bottom-cluster flow contract
+   the shell tests assert on — is left untouched. */
+.rail-expanded {
+  width: 232px;
+  padding-inline: var(--space-3);
+}
+
+.rail-expanded .rail-item {
+  justify-content: flex-start;
+}
+
+.rail-expanded .rail-brand {
+  padding-inline: var(--space-1);
+}
+
+.rail-expanded .rail-brand-word {
+  display: inline;
+}
+
+.rail-expanded .rail-toggle {
+  align-self: flex-end;
+}
+
+.rail-expanded .rail-nav-list li {
+  justify-content: stretch;
+}
+
+.rail-expanded .rail-btn,
+.rail-expanded .rail-link {
+  gap: var(--space-3);
+  justify-content: flex-start;
+  padding-inline: var(--space-3);
+  width: 100%;
+}
+
+.rail-expanded .rail-link-label {
+  display: inline;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Labels already name every destination, so the hover/focus tooltips would be
+   redundant (and would overlap the widened rail). */
+.rail-expanded .rail-tooltip {
+  display: none;
 }

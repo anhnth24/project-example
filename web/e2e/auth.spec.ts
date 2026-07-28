@@ -13,7 +13,7 @@ test('logout returns to /login', async ({ page }) => {
   await page.getByRole('button', { name: 'Đăng xuất' }).click();
 
   await expect(page).toHaveURL(/\/login/);
-  await expect(page.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible();
   // The rail is chrome-free on /login — its destinations are gone.
   await expect(page.getByRole('link', { name: 'Thư viện' })).toHaveCount(0);
 });
@@ -26,7 +26,7 @@ test('deep-linking a protected route while anonymous redirects to /login with ?n
   await page.goto('/library/some-collection?tab=recent');
 
   await expect(page).toHaveURL(/\/login\?next=/);
-  await expect(page.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible();
 
   const next = new URL(page.url()).searchParams.get('next');
   expect(next).toBe('/library/some-collection?tab=recent');

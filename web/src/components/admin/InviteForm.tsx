@@ -80,7 +80,17 @@ export function InviteForm({
     <div>
       <form
         className="auth-form"
-        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 'var(--space-3)' }}
+        style={{
+          // Override `.auth-form`'s column + 24rem cap: the invite form is a
+          // horizontal row of fields (email · role · TTL · submit) that wraps
+          // only when it runs out of width, not a stacked login column.
+          display: 'flex',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          alignItems: 'flex-end',
+          gap: 'var(--space-3)',
+          maxWidth: 'none',
+        }}
         onSubmit={handleSubmit}
         noValidate
       >
@@ -137,7 +147,7 @@ export function InviteForm({
       {issued && (
         <Modal
           title="Đã tạo lời mời"
-          description="Mã mời chỉ hiển thị một lần duy nhất ngay bây giờ — hãy sao chép và gửi cho người được mời. Markhand sẽ không thể hiển thị lại mã này sau khi đóng hộp thoại."
+          description="Mã mời chỉ hiển thị một lần duy nhất ngay bây giờ — hãy sao chép và gửi cho người được mời. Folyvo sẽ không thể hiển thị lại mã này sau khi đóng hộp thoại."
           onClose={closeTokenModal}
           footer={
             <Button variant="primary" onClick={closeTokenModal}>
