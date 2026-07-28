@@ -473,21 +473,43 @@ mod tests {
     /// Tài liệu chứa tiếng Việt dạng NFD (dấu rời) phải ra NFC sau convert.
     #[test]
     fn output_normalized_to_nfc() {
-        // "tiếng Việt" ở dạng NFD: e + U+0302 + U+0301, ê tách dấu.
+        use unicode_normalization::{is_nfc_quick, IsNormalized};
+
+        // 1) Chuỗi NFD tường minh (không gõ "tiếng" trực tiếp — editor có thể NFC hoá).
         let nfd = "ti\u{0065}\u{0302}\u{0301}ng Vi\u{0065}\u{0323}\u{0302}t,ok\n";
+        let nfc_expected = "tiếng Việt,ok\n"; // literal NFC trong source
+
+        // 2) Chứng minh hai form KHÁC nhau (nếu bằng nhau thì test vô nghĩa).
+        assert_ne!(nfd.as_bytes(), nfc_expected.as_bytes());
+        assert_ne!(nfd, nfc_expected);
+
+        // 3) Input đi qua đường convert thật (CSV → markdown).
         let dir = std::env::temp_dir().join(format!("fileconv_nfc_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("nfd.csv");
         std::fs::write(&f, nfd).unwrap();
 
         let out = Converter::new().convert_path(&f).unwrap().markdown;
+
+        // 4) Output chứa literal NFC (CSV có thể bọc table — chỉ check substring).
         assert!(
-            out.contains("tiếng"),
-            "phải chứa 'tiếng' dạng NFC, got: {out:?}"
+            out.contains("tiếng") && out.contains("Việt"),
+            "phải chứa 'tiếng'/'Việt' NFC, got: {out:?}"
         );
-        assert!(out.contains("Việt"), "phải chứa 'Việt' dạng NFC");
-        // Không còn combining mark rời nào.
-        assert!(!out.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)));
+
+        // 5) Toàn bộ markdown đã NFC (gate production chạy).
+        assert_eq!(
+            is_nfc_quick(out.chars()),
+            IsNormalized::Yes,
+            "output chưa NFC: {out:?}"
+        );
+
+        // 6) Không còn combining mark — fail nếu ai đó xoá gate NFC.
+        assert!(
+            !out.chars().any(|c| ('\u{0300}'..='\u{036F}').contains(&c)),
+            "còn dấu rời NFD trong output: {out:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 
