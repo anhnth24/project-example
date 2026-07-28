@@ -4,20 +4,22 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-07-27).** MVP xây trên mock server đã xong và
-đã merge vào `master`: 11/16 issue **Done** (P2-01…09, P2-13, P2-14, P2-16 phần build
-+ serve). Ba issue **Blocked** vì thiếu API backend, không phải vì UI: P2-10 (Q&A) chờ
-R02/R03/R05; P2-11 (member/role) và P2-12 (usage/quota) chờ Phase 1C. Một issue
-**Ready** chưa bắt đầu: P2-15 (E2E). Xem `**Status:**` từng issue bên dưới.
+**Trạng thái tổng quan (cập nhật 2026-07-28).** MVP xây trên mock server đã merge vào
+`master`: **13/16 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
++ serve). **1 In progress**: P2-15 (E2E — nửa mock-based xong, nửa real-deployment hoãn).
+**1 Blocked**: P2-10 (Q&A) chờ R02/R03/R05. P2-11/P2-12 rời khỏi Blocked nhờ lát
+membership API (1C-02/1C-11 slice) landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
-> mock/deterministic**, đã qua CI (`web`, `rust`, `rust-integration`) trên `master`.
-> **Exit gate của cả Phase 2 vẫn CHƯA đạt** — nó đòi E2E trên backend deploy thật + gate
-> denial/security của Phase 1C (xem mục "Exit gate" cuối trang). Mock E2E không thay
-> integration.
+> mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
+> `master`. **Exit gate của cả Phase 2 vẫn CHƯA đạt** — nó đòi E2E trên backend deploy
+> thật + gate denial/security của Phase 1C (xem mục "Exit gate" cuối trang). Mock E2E
+> không thay integration.
 
 Truy vết merge: **#311** (P2-01…06 — foundations, client, SSE, mock, login, org switch),
-**#312** (P2-07…09 — library, upload, actions), **#313** (P2-14, P2-16 — a11y, serve SPA).
+**#312** (P2-07…09 — library, upload, actions), **#313** (P2-14, P2-16 — a11y, serve SPA),
+**#317** (P2-11, P2-12 — member/usage admin, trên lát membership API),
+**#318** (P2-15 nửa mock-based — Playwright E2E + job `web-e2e`).
 P2-13 đi cùng wave 0 (#311); phần CSP/header của nó thực tế landed ở P2-16 (#313).
 
 ## Dependency
@@ -143,7 +145,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-11 — Member/role admin
 
-- **Status:** Blocked — không có endpoint member/invite/role trong 32 route hiện tại (thuộc Phase 1C, R04 ghi "Out: admin membership API").
+- **Status:** Done — #317. UI member table/invite (one-time token)/suspend/role/remove, owner-tier fail-closed mirror server, last-owner 409 + owner-tier 403 mapped. Mở khoá nhờ lát membership API (1C-02/1C-11) landed cùng #317.
 
 - **Plan/files:** Member table/invite/suspend/role selector; owner restrictions from API.
 - **Depends:** P2-02/03/05 + backend 1C-02…04. **Acceptance/tests:** Owner/admin matrix,
@@ -152,7 +154,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-12 — Usage/quota/reservations
 
-- **Status:** Blocked — chỉ có quota metadata qua header; không có endpoint tổng hợp usage (chờ Phase 1C).
+- **Status:** Done — #317. Usage cards từ `GET /usage` (endpoint tổng hợp landed cùng lát membership); route gate `member.manage`. Actionable 429 dùng chung path với document actions.
 
 - **Plan/files:** Usage cards, limits, active reservations/jobs, actionable 429.
 - **Depends:** P2-03/05 + backend 1C-09…11. **Acceptance/tests:** API numbers match;
@@ -180,7 +182,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-15 — Contract/integration/E2E suite
 
-- **Status:** Ready — chưa bắt đầu. Unit/component đã có (405 test). Playwright full-flow chờ làm; phần E2E trên deploy thật cần endpoint Phase 1C.
+- **Status:** In progress — #318. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 15 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota. **Nửa còn lại hoãn**, ghi rõ trong PR: real-deployment E2E (cần stack thật), org-switch (không có endpoint list/switch org — 1C-01), upload→indexed (XHR không qua fetch-mock), ask→citation (P2-10 chặn), OWASP baseline. Unit/component đã có (424 test).
 
 - **Plan/files:** Unit API/SSE/cache; component auth/library/Q&A/admin; Playwright full
   flows, org switch, deny/quota; CI artifacts redacted.
