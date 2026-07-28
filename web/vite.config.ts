@@ -17,6 +17,10 @@ export default defineConfig(({ mode }) => {
     test: {
       environment: 'jsdom',
       setupFiles: './src/test/setup.ts',
+      // Keep vitest to the in-source unit/component tests. The Playwright E2E
+      // specs live in `e2e/` and also match `*.spec.ts`; without this bound
+      // vitest would try to run them and fail on Playwright's `test()`.
+      include: ['src/**/*.{test,spec}.{ts,tsx}'],
     },
   };
 });
