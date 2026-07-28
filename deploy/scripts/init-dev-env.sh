@@ -16,7 +16,8 @@ copy_if_missing() {
     echo "missing example: deploy/dev/$example" >&2
     exit 1
   fi
-  cp "$DEV_DIR/$example" "$DEV_DIR/$target"
+  # Strip CRLF so Git Bash on Windows can `source` the file.
+  sed 's/\r$//' "$DEV_DIR/$example" >"$DEV_DIR/$target"
   echo "created deploy/dev/$target from $example"
 }
 

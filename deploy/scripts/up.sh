@@ -6,7 +6,8 @@ cd "$ROOT/deploy/dev"
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
-  source .env
+  # Tolerate CRLF from Windows editors / checkout.
+  source <(sed 's/\r$//' .env)
   set +a
 fi
 export COMPOSE_PROFILES="${COMPOSE_PROFILES:-aiteamvn}"

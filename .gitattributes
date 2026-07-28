@@ -1,4 +1,9 @@
 tests/fixtures/pdf/*.pdf binary
 crates/core/tests/snapshots/*.md text eol=lf
 *.sh text eol=lf
+# Leading-dot names are not matched by *.env.example (fnmatch + period).
+.env.example text eol=lf
+**/.env.example text eol=lf
 *.env.example text eol=lf
+worker.env.example text eol=lf
+**/worker.env.example text eol=lf

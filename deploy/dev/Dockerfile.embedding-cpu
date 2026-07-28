@@ -1,5 +1,5 @@
 # CPU embedding server image for local dev and on-prem CPU inference (AITeamVN P0-05 pin).
-FROM python:3.12.12-bookworm-slim
+FROM python:3.12.12-slim-bookworm
 
 WORKDIR /opt
 
