@@ -53,9 +53,13 @@ pub async fn resolve_org_context(
         return Err(ResolveError::UserDisabled);
     }
 
+    // P2-11: a suspended membership resolves exactly like a missing one
+    // (fail-closed) — suspend is deliberately not full removal, so the row/role
+    // history survives, but `state <> 'active'` must deny here same as no row.
     let membership = client
         .query_opt(
-            "SELECT role FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+            "SELECT role FROM org_memberships
+             WHERE org_id = $1 AND user_id = $2 AND state = 'active'",
             &[&org_id, &user_id],
         )
         .await
@@ -152,9 +156,11 @@ pub async fn resolve_org_context_on_txn(
     if disabled_at.is_some() {
         return Err(ResolveError::UserDisabled);
     }
+    // P2-11: same suspended-as-missing rule as `resolve_org_context` above.
     let membership = txn
         .query_opt(
-            "SELECT role FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+            "SELECT role FROM org_memberships
+             WHERE org_id = $1 AND user_id = $2 AND state = 'active'",
             &[&org_id, &user_id],
         )
         .await

@@ -63,11 +63,59 @@ pub enum MembershipRole {
     Viewer,
 }
 
+impl MembershipRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Admin => "admin",
+            Self::Editor => "editor",
+            Self::Viewer => "viewer",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "owner" => Ok(Self::Owner),
+            "admin" => Ok(Self::Admin),
+            "editor" => Ok(Self::Editor),
+            "viewer" => Ok(Self::Viewer),
+            other => Err(format!("unknown membership role: {other}")),
+        }
+    }
+}
+
+/// P2-11: suspended is distinct from removed (row/history kept, access denied).
+/// The org-context resolver treats `Suspended` exactly like a missing membership.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipState {
+    Active,
+    Suspended,
+}
+
+impl MembershipState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Suspended => "suspended",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "active" => Ok(Self::Active),
+            "suspended" => Ok(Self::Suspended),
+            other => Err(format!("unknown membership state: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrgMembership {
     pub org_id: Uuid,
     pub user_id: Uuid,
     pub role: MembershipRole,
+    pub state: MembershipState,
     pub created_at: DateTime<Utc>,
 }
 
@@ -880,7 +928,7 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
         ),
         (
             "org_memberships",
-            &["org_id", "user_id", "role", "created_at"],
+            &["org_id", "user_id", "role", "created_at", "state"],
         ),
         ("permissions", &["id", "code", "description", "created_at"]),
         (

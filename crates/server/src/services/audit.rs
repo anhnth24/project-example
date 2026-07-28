@@ -48,6 +48,15 @@ pub enum AuditAction {
     ReconcileDeadLetterGc,
     VectorCleanupIntent,
     ObjectCleanup,
+    // P2-11 / 1C-02 membership + invite admin surface (Wave 1 domain layer).
+    // Suspend/reactivate deliberately reuse `MemberRoleChange` (metadata carries
+    // old_state/new_state instead of old_role/new_role) rather than adding a
+    // sixth variant — see plans/reports/plan-260728-0231-...-slice.md section 8b.
+    MemberInvite,
+    MemberInviteAccept,
+    MemberInviteRevoke,
+    MemberRoleChange,
+    MemberRemove,
 }
 
 impl AuditAction {
@@ -82,6 +91,11 @@ impl AuditAction {
             Self::ReconcileDeadLetterGc => "reconcile.dead_letter_gc",
             Self::VectorCleanupIntent => "vector.cleanup_intent",
             Self::ObjectCleanup => "object.cleanup",
+            Self::MemberInvite => "member.invite",
+            Self::MemberInviteAccept => "member.invite_accept",
+            Self::MemberInviteRevoke => "member.invite_revoke",
+            Self::MemberRoleChange => "member.role_change",
+            Self::MemberRemove => "member.remove",
         }
     }
 
@@ -116,6 +130,11 @@ impl AuditAction {
             "reconcile.dead_letter_gc" => Ok(Self::ReconcileDeadLetterGc),
             "vector.cleanup_intent" => Ok(Self::VectorCleanupIntent),
             "object.cleanup" => Ok(Self::ObjectCleanup),
+            "member.invite" => Ok(Self::MemberInvite),
+            "member.invite_accept" => Ok(Self::MemberInviteAccept),
+            "member.invite_revoke" => Ok(Self::MemberInviteRevoke),
+            "member.role_change" => Ok(Self::MemberRoleChange),
+            "member.remove" => Ok(Self::MemberRemove),
             _ => Err(format!("audit_action_invalid:{value}")),
         }
     }
@@ -206,6 +225,21 @@ impl AuditAction {
                 "object_count",
             ],
             Self::VectorCleanupIntent => &["document_id", "phase", "result", "point_count"],
+            // Structural only: target user / invite ids, role and state enums.
+            // Never email (invite recipient), never the invite plaintext token
+            // (only `org_invites.token_hash` ever reaches storage, and that
+            // never enters audit metadata either) — see plan section 2 (C3).
+            Self::MemberInvite | Self::MemberInviteAccept => &["reason", "invite_id", "role"],
+            Self::MemberInviteRevoke => &["reason", "invite_id"],
+            Self::MemberRoleChange => &[
+                "reason",
+                "target_user_id",
+                "old_role",
+                "new_role",
+                "old_state",
+                "new_state",
+            ],
+            Self::MemberRemove => &["reason", "target_user_id", "old_role"],
         }
     }
 }
@@ -222,6 +256,7 @@ pub enum AuditResource {
     AskStream,
     Search,
     Conflict,
+    Member,
 }
 
 impl AuditResource {
@@ -237,6 +272,7 @@ impl AuditResource {
             Self::AskStream => "ask_stream",
             Self::Search => "search",
             Self::Conflict => "conflict",
+            Self::Member => "member",
         }
     }
 
@@ -252,6 +288,7 @@ impl AuditResource {
             "ask_stream" => Ok(Self::AskStream),
             "search" => Ok(Self::Search),
             "conflict" => Ok(Self::Conflict),
+            "member" => Ok(Self::Member),
             _ => Err(format!("audit_resource_type_invalid:{value}")),
         }
     }
