@@ -63,15 +63,30 @@ impl std::fmt::Debug for LogoutRequest {
     }
 }
 
+/// Access + refresh token pair on the wire. `pub(crate)` so `routes::orgs`
+/// (org switch mints the same shape) reuses it instead of a second copy.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TokenResponse {
+pub(crate) struct TokenResponse {
     access_token: String,
     refresh_token: String,
     token_type: &'static str,
     expires_in: u64,
     org_id: String,
     user_id: String,
+}
+
+impl From<crate::auth::session::TokenPair> for TokenResponse {
+    fn from(tokens: crate::auth::session::TokenPair) -> Self {
+        Self {
+            access_token: tokens.access_token.expose().to_string(),
+            refresh_token: tokens.refresh_token.expose().to_string(),
+            token_type: "Bearer",
+            expires_in: tokens.expires_in,
+            org_id: tokens.org_id.to_string(),
+            user_id: tokens.user_id.to_string(),
+        }
+    }
 }
 
 impl std::fmt::Debug for TokenResponse {
@@ -168,18 +183,7 @@ async fn login(
         .login_password(&body.email, &body.password, &meta)
         .await
     {
-        Ok(session) => {
-            let tokens = session.tokens;
-            Json(TokenResponse {
-                access_token: tokens.access_token.expose().to_string(),
-                refresh_token: tokens.refresh_token.expose().to_string(),
-                token_type: "Bearer",
-                expires_in: tokens.expires_in,
-                org_id: tokens.org_id.to_string(),
-                user_id: tokens.user_id.to_string(),
-            })
-            .into_response()
-        }
+        Ok(session) => Json(TokenResponse::from(session.tokens)).into_response(),
         Err(error) => session_error_response(error, &request_id),
     }
 }
@@ -209,18 +213,7 @@ async fn refresh(
         request_id: request_id.clone(),
     };
     match provider.refresh(&body.refresh_token, &meta).await {
-        Ok(session) => {
-            let tokens = session.tokens;
-            Json(TokenResponse {
-                access_token: tokens.access_token.expose().to_string(),
-                refresh_token: tokens.refresh_token.expose().to_string(),
-                token_type: "Bearer",
-                expires_in: tokens.expires_in,
-                org_id: tokens.org_id.to_string(),
-                user_id: tokens.user_id.to_string(),
-            })
-            .into_response()
-        }
+        Ok(session) => Json(TokenResponse::from(session.tokens)).into_response(),
         Err(error) => session_error_response(error, &request_id),
     }
 }

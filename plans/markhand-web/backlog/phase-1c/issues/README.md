@@ -36,7 +36,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-01 — Organization lifecycle và validated context
 
-- **Status:** In progress — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Thiếu nửa lifecycle**: không có endpoint org create/list/detail/switch, không xử lý org-header (org lấy từ JWT claim), chưa có two-org resolver test.
+- **Status:** In progress — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Nửa lifecycle đã landed phần lớn**: `GET /orgs` (chỉ org của mình), `GET /orgs/{id}` (404 đồng nhất cho "không tồn tại"/"không phải member" — không oracle), `POST /orgs/switch` (re-verify membership từ PG, mint session mới độc lập scoped target org, audit `org.switch` cả success/deny; deny với org không tồn tại thì không ghi audit để tránh FK-oracle) — routes bearer-identity-only theo tiền lệ `accept_invite`, kèm two-org resolver test DB-gated (`tests/orgs.rs`, 8 test: forged/stale/suspended deny + audit). **Còn thiếu**: `POST /orgs` (create) — CHẶN bởi câu hỏi thiết kế 1C-03 (role seed cho org mới: template canonical copy per-org, hay roles catalog toàn cục + `role_permissions` per-org?); org mới tạo hôm nay sẽ không có role nào.
 
 - **Plan/files:** Org create/list/detail/switch, service/repo/middleware; issue new
   context/session after verified membership.

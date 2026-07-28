@@ -955,6 +955,83 @@ paths:
                 type: string
         "429":
           $ref: "#/components/responses/RateLimited"
+  /orgs:
+    get:
+      operationId: listOrgs
+      summary: List organizations the caller currently has an active membership in
+      description: >
+        Authenticated bearer only (no existing OrgContext required) — the
+        JWT's own org claim is never consulted. Never lists an org the
+        caller does not currently belong to.
+      responses:
+        "200":
+          description: Orgs the caller is an active member of.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgPage"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /orgs/switch:
+    post:
+      operationId: switchOrg
+      summary: Re-verify membership in a target org and mint a new session for it
+      description: >
+        Membership is re-checked against current PostgreSQL state — the
+        request's orgId is untrusted input, same trust level as a JWT org
+        claim. Mints an independent new refresh-token family scoped to the
+        target org; the caller's session in their current org is untouched.
+        Every deny against a real org is audited (org.switch, outcome=deny).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SwitchOrgRequest"
+      responses:
+        "200":
+          description: New access + refresh token pair scoped to the target org.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          description: >
+            Forged/stale target org — membership missing, suspended, or the
+            org does not exist (all three respond identically; see
+            description above).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /orgs/{orgId}:
+    parameters:
+      - $ref: "#/components/parameters/orgId"
+    get:
+      operationId: getOrg
+      summary: Organization detail, only if the caller is currently an active member
+      description: >
+        "No such org" and "org exists but caller is not an active member"
+        render the identical 404 — no existence oracle for non-members.
+      responses:
+        "200":
+          description: Organization detail plus the caller's role in it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Org"
+        "401":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /members:
     get:
       operationId: listMembers
@@ -1175,6 +1252,13 @@ components:
         format: uuid
     userId:
       name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    orgId:
+      name: orgId
       in: path
       required: true
       schema:
@@ -1557,6 +1641,41 @@ components:
             format: uuid
         sessionId:
           type: string
+    Org:
+      type: object
+      required: [id, slug, name, role, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          description: The CALLER's role in this org (not a role catalog).
+          enum: [owner, admin, editor, viewer]
+        createdAt:
+          type: string
+          format: date-time
+    OrgPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Org"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    SwitchOrgRequest:
+      type: object
+      required: [orgId]
+      properties:
+        orgId:
+          type: string
+          format: uuid
     CreateCollectionRequest:
       type: object
       required: [name, slug]

@@ -25,6 +25,11 @@ pub enum AuditAction {
     AuthRefresh,
     AuthRefreshReuse,
     AuthRevokeAll,
+    // 1C-01 org-switch (mints a fresh session like AuthLogin; written
+    // directly via `auth::session::write_audit`, same as the Auth* actions
+    // above — this variant exists for the canonical action-name registry,
+    // not because the write path runs through `services::audit`).
+    OrgSwitch,
     CollectionCreate,
     CollectionUpdate,
     CollectionDelete,
@@ -68,6 +73,7 @@ impl AuditAction {
             Self::AuthRefresh => "auth.refresh",
             Self::AuthRefreshReuse => "auth.refresh.reuse",
             Self::AuthRevokeAll => "auth.revoke_all",
+            Self::OrgSwitch => "org.switch",
             Self::CollectionCreate => "collection.create",
             Self::CollectionUpdate => "collection.update",
             Self::CollectionDelete => "collection.delete",
@@ -107,6 +113,7 @@ impl AuditAction {
             "auth.refresh" => Ok(Self::AuthRefresh),
             "auth.refresh.reuse" => Ok(Self::AuthRefreshReuse),
             "auth.revoke_all" => Ok(Self::AuthRevokeAll),
+            "org.switch" => Ok(Self::OrgSwitch),
             "collection.create" => Ok(Self::CollectionCreate),
             "collection.update" => Ok(Self::CollectionUpdate),
             "collection.delete" => Ok(Self::CollectionDelete),
@@ -146,6 +153,7 @@ impl AuditAction {
                 &["reason", "error_class", "family_id", "refresh_id"]
             }
             Self::AuthDeny | Self::AuthRevokeAll => &["reason", "error_class"],
+            Self::OrgSwitch => &["reason", "family_id", "refresh_id"],
             Self::AuthRefresh | Self::AuthRefreshReuse => &[
                 "reason",
                 "family_id",

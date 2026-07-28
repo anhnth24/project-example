@@ -519,6 +519,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/orgs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List organizations the caller currently has an active membership in
+         * @description Authenticated bearer only (no existing OrgContext required) — the JWT's own org claim is never consulted. Never lists an org the caller does not currently belong to.
+         */
+        get: operations["listOrgs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-verify membership in a target org and mint a new session for it
+         * @description Membership is re-checked against current PostgreSQL state — the request's orgId is untrusted input, same trust level as a JWT org claim. Mints an independent new refresh-token family scoped to the target org; the caller's session in their current org is untouched. Every deny against a real org is audited (org.switch, outcome=deny).
+         */
+        post: operations["switchOrg"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/orgs/{orgId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["orgId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Organization detail, only if the caller is currently an active member
+         * @description "No such org" and "org exists but caller is not an active member" render the identical 404 — no existence oracle for non-members.
+         */
+        get: operations["getOrg"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/members": {
         parameters: {
             query?: never;
@@ -798,6 +860,27 @@ export interface components {
             allowedCollectionIds: string[];
             sessionId: string;
         };
+        Org: {
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            name: string;
+            /**
+             * @description The CALLER's role in this org (not a role catalog).
+             * @enum {string}
+             */
+            role: "owner" | "admin" | "editor" | "viewer";
+            /** Format: date-time */
+            createdAt: string;
+        };
+        OrgPage: {
+            items: components["schemas"]["Org"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        SwitchOrgRequest: {
+            /** Format: uuid */
+            orgId: string;
+        };
         CreateCollectionRequest: {
             name: string;
             slug: string;
@@ -976,6 +1059,7 @@ export interface components {
         jobId: string;
         inviteId: string;
         userId: string;
+        orgId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2066,6 +2150,88 @@ export interface operations {
                     "application/yaml": string;
                 };
             };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listOrgs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Orgs the caller is an active member of. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgPage"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    switchOrg: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchOrgRequest"];
+            };
+        };
+        responses: {
+            /** @description New access + refresh token pair scoped to the target org. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            /** @description Forged/stale target org — membership missing, suspended, or the org does not exist (all three respond identically; see description above). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getOrg: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["orgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Organization detail plus the caller's role in it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Org"];
+                };
+            };
+            401: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
     };

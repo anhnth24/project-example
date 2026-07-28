@@ -4,8 +4,8 @@ import { buildSpecIndex, getOperation } from './openApiSpec';
 const spec = buildSpecIndex();
 
 describe('buildSpecIndex against the real openapi.yaml', () => {
-  it('indexes all 34 component schemas', () => {
-    expect(Object.keys(spec.schemas)).toHaveLength(34);
+  it('indexes all 37 component schemas', () => {
+    expect(Object.keys(spec.schemas)).toHaveLength(37);
     expect(spec.schemas.TokenResponse).toBeDefined();
     expect(spec.schemas.ApiError).toBeDefined();
   });

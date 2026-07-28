@@ -490,6 +490,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::documents::router())
         .merge(routes::jobs::router())
         .merge(routes::members::router())
+        .merge(routes::orgs::router())
         .merge(routes::search::router())
         .merge(routes::ask::router())
         .merge(routes::events::router())
