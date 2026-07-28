@@ -81,6 +81,13 @@ export async function forceStatus(
   status: ForcedStatus,
   times = 1,
 ): Promise<void> {
+  // The mock control is installed by `main.tsx`'s async bootstrap (a dynamic
+  // `import('./mocks/browser')` awaited before render). A test that calls this
+  // immediately after `goto` — before any UI it would otherwise wait on has
+  // rendered — can race that install; on a fast CI run `__markhandMockControl`
+  // was still undefined here (flaky `forceStatus` TypeError). Wait for it so
+  // the helper is deterministic regardless of when it's called.
+  await page.waitForFunction(() => window.__markhandMockControl !== undefined);
   await page.evaluate(
     ([op, kind, n]) => {
       window.__markhandMockControl!.forceStatus(op as string, kind as ForcedStatus, {
