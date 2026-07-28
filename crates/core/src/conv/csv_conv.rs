@@ -174,7 +174,34 @@ pub(crate) fn rows_to_html_table(rows: &[Vec<String>], merges: &[MergeRange]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{rows_to_html_table, sniff_delimiter, MergeRange};
+    use super::{rows_to_html_table, sniff_delimiter, to_markdown, MergeRange};
+    use std::path::PathBuf;
+
+    fn contacts_vi_csv_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/sample/contacts.vi.csv")
+    }
+
+    #[test]
+    fn committed_vietnamese_csv_fixture_converts_to_markdown_table() {
+        let path = contacts_vi_csv_fixture_path();
+        assert!(path.is_file(), "fixture must exist: {}", path.display());
+
+        let out = to_markdown(&path).expect("convert shared CSV fixture");
+
+        assert!(
+            out.contains("| Họ tên | Tuổi | Thành phố |"),
+            "expected 3-column header, got:\n{out}"
+        );
+        assert!(out.contains("| --- | --- | --- |"), "expected 3 columns");
+        assert!(
+            out.contains("Nguyễn Văn A"),
+            "missing Vietnamese diacritics"
+        );
+        assert!(out.contains("Hà Nội"));
+        assert!(out.contains("Đà Nẵng"));
+        assert!(out.contains("Thành phố Hồ Chí Minh"));
+    }
 
     #[test]
     fn sniff_picks_delimiter() {
