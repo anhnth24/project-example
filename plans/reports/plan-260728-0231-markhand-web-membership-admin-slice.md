@@ -146,6 +146,30 @@ Có thể spawn subagent: một agent làm W1–W3 (service/repo/migration, khô
 một agent làm W4–W6 (routes+parity) sau khi W2 xong; W7 nên do người điều phối kiểm vì đây là
 phần bảo mật (kéo sớm 1C-12). Opus review last-owner + cross-org denial.
 
+## 8b. Quyết định đã chốt (2026-07-28) + phân wave cho subagent
+
+**Quyết định:**
+- **M2 (cột `state` active/suspended): CÓ** — P2-11 cần "suspend" là chức năng riêng khác
+  remove. Suspend = `state='suspended'`; resolver coi suspended như thiếu membership.
+- **M1 (cột `version`): HOÃN** — chưa có cache 1C-05 tiêu thụ; thêm sau khi làm 1C-05.
+
+**Ràng buộc kỹ thuật khi chia subagent:** hai agent build Rust **không được chạy song song**
+— chúng đè cùng `target/`, hỏng incremental cache (đã dính lỗi này ở P2-16). Nên chia
+**tuần tự hai wave**, seam sạch giữa domain và surface:
+
+- **Wave 1 — DOMAIN (agent A).** Migration M2, models, repo `db/members.rs`, `AuditAction`
+  +5 + allowlist, service `services/members.rs`: invite create/accept/revoke (hash+expiry+
+  terminal) và **last-owner invariant transactional** + membership list/role-change/remove/
+  suspend + usage aggregation. **Unit test fast** cho last-owner + invite. Phải `cargo build`
+  + fast test xanh, clippy `-D warnings` sạch. **Không** mở HTTP surface. Đây là lõi bảo mật
+  → tôi + review agent soi kỹ **trước khi** có endpoint.
+- **Wave 2 — SURFACE + TEST (agent B), sau khi Wave 1 compile.** Routes E1–E8, guard, audit
+  wiring, `openapi.yaml` + `ROUTE_INVENTORY` + `http.rs`, `pnpm api:generate`, và **test
+  DB-gated**: cross-org denial mỗi endpoint (điều kiện đóng — C1), concurrent last-owner,
+  invite replay/expiry, revoke-on-remove.
+- **Review.** Một review agent đối kháng nhắm **last-owner correctness** (race) +
+  **độ phủ cross-org denial** + audit coverage + parity; tôi tổng hợp và sửa.
+
 ## 9. Không thuộc kế hoạch này
 
 Org create/list/switch (1C-01), ACL cache/version + groups grant (1C-05), per-org fairness/GPU
