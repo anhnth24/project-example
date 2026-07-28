@@ -28,6 +28,10 @@ export const IDS = {
   thirdMember: '00000000-0000-4000-8000-00000000001f',
   /** The seeded "Employee Handbook" collection `openEmployeeHandbook` opens. */
   employeeHandbookCollection: '00000000-0000-4000-8000-00000000000a',
+  /** Second org the demo user is also an active member of (`editor`) — org switch (P2-06/P2-15). */
+  orgB: '00000000-0000-4000-8000-000000000003',
+  /** Org B's own collection — seeded with content distinct from every org A fixture, so a switch has something visibly different to render. */
+  orgBCollection: '00000000-0000-4000-8000-00000000000c',
 } as const;
 
 export const DEMO = {

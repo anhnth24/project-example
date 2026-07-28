@@ -1,7 +1,7 @@
 import { registerOperation } from '../registry';
-import { notFound, conflict as conflictResponse, apiError } from '../apiError';
+import { notFound, conflict as conflictResponse, apiError, unauthorized } from '../apiError';
 import { nextRequestId, encodeCursor, decodeCursor, mockTimestamp } from '../ids';
-import { getStore, nextId } from '../fixtures';
+import { authContextForHeader, getStore, nextId } from '../fixtures';
 import type { components } from '../../api/generated/contract';
 
 type Collection = components['schemas']['Collection'];
@@ -14,12 +14,27 @@ type Job = components['schemas']['Job'];
 // Collections
 // ---------------------------------------------------------------------------
 
-registerOperation('listCollections', () => ({
-  status: 200,
-  body: { items: getStore().collections, page: { hasMore: false, nextCursor: null } },
-}));
+// Org scoping (P2-06/P2-15 org switch): `Collection`'s wire shape has no
+// `orgId` field — the real server isolates tenants from the bearer token,
+// never a response field — so filtering here goes through
+// `getStore().collectionOrgId` (collectionId -> orgId), keyed off whichever
+// org the caller's *current* access token is scoped to
+// (`authContextForHeader(...).orgId`, not any fixed `user.orgId`). This is
+// what makes switching orgs actually change what `listCollections` returns
+// instead of merely changing the bearer token's claimed org while serving
+// the same fixed list.
+registerOperation('listCollections', (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
+  const items = getStore().collections.filter(
+    (c) => getStore().collectionOrgId.get(c.id) === auth.orgId,
+  );
+  return { status: 200, body: { items, page: { hasMore: false, nextCursor: null } } };
+});
 
 registerOperation('createCollection', async (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
   const body = await ctx.json<CreateCollectionRequest>();
   const collection: Collection = {
     id: nextId(),
@@ -30,12 +45,17 @@ registerOperation('createCollection', async (ctx) => {
     createdAt: mockTimestamp(0),
   };
   getStore().collections.push(collection);
+  getStore().collectionOrgId.set(collection.id, auth.orgId);
   return { status: 201, body: collection };
 });
 
 registerOperation('getCollection', (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
   const collection = getStore().collections.find((c) => c.id === ctx.params.collectionId);
-  if (!collection) return notFound(`Collection ${ctx.params.collectionId} does not exist.`);
+  if (!collection || getStore().collectionOrgId.get(collection.id) !== auth.orgId) {
+    return notFound(`Collection ${ctx.params.collectionId} does not exist.`);
+  }
   return { status: 200, body: collection };
 });
 
