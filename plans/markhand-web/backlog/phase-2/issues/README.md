@@ -182,7 +182,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-15 — Contract/integration/E2E suite
 
-- **Status:** In progress — #318. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 15 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota. **Nửa còn lại hoãn**, ghi rõ trong PR: real-deployment E2E (cần stack thật), org-switch (không có endpoint list/switch org — 1C-01), upload→indexed (XHR không qua fetch-mock), ask→citation (P2-10 chặn), OWASP baseline. Unit/component đã có (424 test).
+- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **Còn hoãn**: org-switch (không có endpoint list/switch org — 1C-01), ask→citation (P2-10 chặn), upload→indexed real-mode, OWASP baseline. Unit/component đã có (424 test).
 
 - **Plan/files:** Unit API/SSE/cache; component auth/library/Q&A/admin; Playwright full
   flows, org switch, deny/quota; CI artifacts redacted.
