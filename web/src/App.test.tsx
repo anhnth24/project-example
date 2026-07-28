@@ -36,7 +36,7 @@ function fillAndSubmitLogin(email: string, password: string) {
  * components/shell/OrgSwitch.tsx / UserMenu.tsx), so they're covered
  * separately in the authenticated describe block below. */
 const ALWAYS_ON_RAIL_CONTROLS: Array<{ role: 'link' | 'button'; name: string | RegExp }> = [
-  { role: 'link', name: 'Trang chủ Markhand' },
+  { role: 'link', name: 'Trang chủ Folyvo' },
   { role: 'link', name: 'Thư viện' },
   { role: 'link', name: 'Hỏi đáp' },
   { role: 'link', name: 'Thành viên' },
@@ -96,7 +96,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Trợ giúp' }));
 
     expect(window.location.pathname).toBe('/help');
-    expect(screen.getByRole('heading', { name: 'Trợ giúp Markhand' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Trợ giúp Folyvo' })).toBeVisible();
   });
 
   // P2-14 (plans/markhand-web/phase-2-web-spa.md §P2.7): "focus sau route
@@ -133,7 +133,7 @@ describe('App', () => {
         '/login?next=%2Flibrary%2Fcol-42',
       ),
     );
-    expect(screen.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Bộ sưu tập col-42' })).not.toBeInTheDocument();
   });
 
@@ -154,7 +154,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible();
     expect(screen.queryByRole('navigation', { name: 'Điều hướng chính' })).not.toBeInTheDocument();
   });
 });
@@ -251,7 +251,7 @@ describe('App / authenticated shell (P2-05 guard matrix + login/logout)', () => 
     render(<App />);
 
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible(),
+      expect(screen.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible(),
     );
     expect(window.location.search).toBe('?next=%2Flibrary%2Fcol-42');
 
@@ -296,7 +296,7 @@ describe('App / authenticated shell (P2-05 guard matrix + login/logout)', () => 
 
     await waitFor(() => expect(window.location.pathname).toBe('/login'));
     expect(screen.queryByRole('button', { name: /Tài khoản:/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Đăng nhập vào Markhand' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Đăng nhập vào Folyvo' })).toBeVisible();
   });
 
   it('renders an in-shell notice — not the admin page, not a redirect — for a signed-in user without member.manage', async () => {

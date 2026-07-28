@@ -197,7 +197,7 @@ export function DocumentRowActions({
 
       {!isGone && isFailed && (
         <Notice tone="warning">
-          Xử lý tài liệu trước đó thất bại. Markhand chưa có API thử lại chuyển đổi riêng — dùng
+          Xử lý tài liệu trước đó thất bại. Folyvo chưa có API thử lại chuyển đổi riêng — dùng
           &quot;Thử lại lập chỉ mục&quot; để đưa tài liệu vào lại hàng đợi xử lý.
         </Notice>
       )}

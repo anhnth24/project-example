@@ -167,22 +167,32 @@ function AppShell() {
       {showRail && <Rail />}
 
       <div className="app-shell-main">
-        <div className="shell-statusline">
-          <span className={`connection-dot ${connection.kind}`} aria-hidden="true" />
-          <span className="connection-label" role="status">
-            {connection.kind === 'checking' && 'Đang kiểm tra máy chủ'}
-            {connection.kind === 'ready' && 'Đã kết nối máy chủ'}
-            {connection.kind === 'unavailable' && 'Máy chủ chưa sẵn sàng'}
-          </span>
-        </div>
+        {/* The server-connection status line is in-app chrome: a visitor at
+            /login isn't "in the app" yet (same reason the rail opts out), so
+            this only renders on real inside-the-app routes. */}
+        {showRail && (
+          <div className="shell-statusline">
+            <span className={`connection-dot ${connection.kind}`} aria-hidden="true" />
+            <span className="connection-label" role="status">
+              {connection.kind === 'checking' && 'Đang kiểm tra máy chủ'}
+              {connection.kind === 'ready' && 'Đã kết nối máy chủ'}
+              {connection.kind === 'unavailable' && 'Máy chủ chưa sẵn sàng'}
+            </span>
+          </div>
+        )}
 
-        <main id="main-content" className="welcome" tabIndex={-1} ref={mainRef}>
+        <main
+          id="main-content"
+          className={`app-main ${showRail ? '' : 'app-main-auth'}`}
+          tabIndex={-1}
+          ref={mainRef}
+        >
           {match.name === 'home' ? (
-            <>
+            <div className="welcome">
               <p className="eyebrow">Không gian tri thức</p>
               <h1>Không gian làm việc đã sẵn sàng để kết nối.</h1>
               <p className="lede">
-                Markhand quản lý chuyển đổi tài liệu, lập chỉ mục và câu trả lời có trích dẫn trong
+                Folyvo quản lý chuyển đổi tài liệu, lập chỉ mục và câu trả lời có trích dẫn trong
                 một không gian được kiểm soát.
               </p>
 
@@ -195,7 +205,7 @@ function AppShell() {
                   <p className="card-copy">
                     {isReady
                       ? 'Không gian tài liệu có thể tải dữ liệu thật khi các API nghiệp vụ sẵn sàng.'
-                      : 'Khởi động máy chủ Markhand, sau đó kiểm tra lại kết nối.'}
+                      : 'Khởi động máy chủ Folyvo, sau đó kiểm tra lại kết nối.'}
                   </p>
                 </div>
                 <button
@@ -220,7 +230,7 @@ function AppShell() {
                   <li>Tìm kiếm và câu trả lời có trích dẫn</li>
                 </ul>
               </section>
-            </>
+            </div>
           ) : (
             <RouteOutlet />
           )}
