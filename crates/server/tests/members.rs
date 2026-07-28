@@ -115,6 +115,17 @@ async fn seed_admin_role_member(pool: &Pool, org: Uuid, user: Uuid, email: &str)
     })
     .await
     .unwrap();
+    // The shared seeder sets a password as a step after its own txn; this
+    // hand-rolled admin seed must do the same or `login_access_token` below
+    // panics on a credential-less user (the actual rust-integration failure).
+    fileconv_server::auth::session::set_password_hash(
+        pool,
+        user,
+        PASSWORD,
+        &common::test_auth_config().argon2,
+    )
+    .await
+    .expect("set admin password");
     login_access_token(pool, email, PASSWORD).await
 }
 
