@@ -6,4 +6,5 @@
 import './health';
 import './auth';
 import './library';
+import './members';
 import './qa';

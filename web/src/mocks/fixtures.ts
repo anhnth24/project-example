@@ -13,6 +13,7 @@ type Document = components['schemas']['Document'];
 type DocumentVersion = components['schemas']['DocumentVersion'];
 type Job = components['schemas']['Job'];
 type MeResponse = components['schemas']['MeResponse'];
+type Membership = components['schemas']['Membership'];
 
 export interface MockUser {
   userId: string;
@@ -47,6 +48,26 @@ export interface DownloadCapabilityRecord {
   redeemed: boolean;
 }
 
+/**
+ * Server-side invite record: every wire `Invite` field plus the token hash,
+ * which `Invite` (the response schema) never carries — mirrors
+ * `DownloadCapabilityRecord`'s split between "what's stored" and "what's on
+ * the wire". `status` is intentionally absent here too: like the real
+ * `org_invites` table, it's derived at read time from
+ * `acceptedAt`/`revokedAt`/`expiresAt` (see `handlers/members.ts`'s
+ * `inviteStatus`), never stored as its own field.
+ */
+export interface InviteRecord {
+  id: string;
+  email: string;
+  role: Membership['role'];
+  tokenHash: string;
+  expiresAt: string;
+  acceptedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
 export interface AccessTokenRecord {
   userId: string;
   sessionId: string;
@@ -62,6 +83,9 @@ interface Store {
   jobs: Map<string, Job>;
   conflicts: ConflictRecord[];
   downloadCapabilities: Map<string, DownloadCapabilityRecord>;
+  /** Memberships of the demo org (`DEMO_USER.orgId`) — every seeded/mock user's role+state. */
+  memberships: Membership[];
+  invites: InviteRecord[];
 }
 
 const DEMO_USER: MockUser = {
@@ -70,9 +94,53 @@ const DEMO_USER: MockUser = {
   email: 'demo@markhand.test',
   password: 'demo-password',
   displayName: 'Demo User',
+  // Deliberately WITHOUT `member.manage` — `App.test.tsx` already has a
+  // scenario ("renders an in-shell notice... for a signed-in user without
+  // member.manage") that depends on this exact user lacking it. P2-11/P2-12
+  // tests that need a member.manage caller grant it on this same seeded user
+  // via `components/admin/testSupport.ts`'s `grantMemberManage()` instead of
+  // changing the shared default here.
   permissions: ['doc.quarantine.review', 'qa.history'],
   allowedCollectionIds: [mockUuid(10), mockUuid(11)],
 };
+
+/** A second seeded org member — active admin, non-owner — so member-list tests have more than one row and a non-owner promotion/demotion target. */
+export const SECOND_MEMBER_USER_ID = mockUuid(30);
+/** A third seeded org member — suspended viewer — so the list shows a non-active row too. */
+export const THIRD_MEMBER_USER_ID = mockUuid(31);
+
+function seedMemberships(): Membership[] {
+  return [
+    { userId: DEMO_USER.userId, role: 'owner', state: 'active', createdAt: mockTimestamp(0) },
+    {
+      userId: SECOND_MEMBER_USER_ID,
+      role: 'admin',
+      state: 'active',
+      createdAt: mockTimestamp(10),
+    },
+    {
+      userId: THIRD_MEMBER_USER_ID,
+      role: 'viewer',
+      state: 'suspended',
+      createdAt: mockTimestamp(20),
+    },
+  ];
+}
+
+function seedInvites(): InviteRecord[] {
+  return [
+    {
+      id: mockUuid(9100),
+      email: 'moi-nguoi-moi@example.com',
+      role: 'editor',
+      tokenHash: 'seed-invite-token-hash-unused',
+      expiresAt: mockTimestamp(60 * 24 * 7),
+      acceptedAt: null,
+      revokedAt: null,
+      createdAt: mockTimestamp(0),
+    },
+  ];
+}
 
 function seedCollections(): Collection[] {
   return [
@@ -208,6 +276,8 @@ function freshStore(): Store {
     jobs: seedJobs(),
     conflicts: seedConflicts(),
     downloadCapabilities: new Map(),
+    memberships: seedMemberships(),
+    invites: seedInvites(),
   };
 }
 
