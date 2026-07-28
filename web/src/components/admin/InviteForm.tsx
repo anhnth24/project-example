@@ -80,7 +80,17 @@ export function InviteForm({
     <div>
       <form
         className="auth-form"
-        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 'var(--space-3)' }}
+        style={{
+          // Override `.auth-form`'s column + 24rem cap: the invite form is a
+          // horizontal row of fields (email · role · TTL · submit) that wraps
+          // only when it runs out of width, not a stacked login column.
+          display: 'flex',
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          alignItems: 'flex-end',
+          gap: 'var(--space-3)',
+          maxWidth: 'none',
+        }}
         onSubmit={handleSubmit}
         noValidate
       >

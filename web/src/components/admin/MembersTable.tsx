@@ -43,7 +43,15 @@ export function MembersTable({
         {members.map((membership) => (
           <tr key={membership.userId}>
             <td>
-              <code>{membership.userId}</code>
+              <div className="member-identity">
+                <span className="member-avatar" aria-hidden="true">
+                  {membership.userId.replace(/-/g, '').slice(-2)}
+                </span>
+                <span className="member-identity-id">{membership.userId}</span>
+                {membership.userId === currentUserId && (
+                  <span className="tag tag-neutral">Bạn</span>
+                )}
+              </div>
             </td>
             <td>
               <span className={`tag ${ROLE_META[membership.role].tagClass}`}>

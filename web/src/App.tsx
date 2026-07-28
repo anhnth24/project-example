@@ -176,9 +176,9 @@ function AppShell() {
           </span>
         </div>
 
-        <main id="main-content" className="welcome" tabIndex={-1} ref={mainRef}>
+        <main id="main-content" className="app-main" tabIndex={-1} ref={mainRef}>
           {match.name === 'home' ? (
-            <>
+            <div className="welcome">
               <p className="eyebrow">Không gian tri thức</p>
               <h1>Không gian làm việc đã sẵn sàng để kết nối.</h1>
               <p className="lede">
@@ -220,7 +220,7 @@ function AppShell() {
                   <li>Tìm kiếm và câu trả lời có trích dẫn</li>
                 </ul>
               </section>
-            </>
+            </div>
           ) : (
             <RouteOutlet />
           )}

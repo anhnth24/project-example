@@ -314,11 +314,30 @@ button:disabled {
   font-size: 0.875rem;
 }
 
+/* Home hero content wrapper (App.tsx's `home` branch only). Left-aligned so
+   it hugs the content's left edge with whitespace on the right — the Organic
+   layout rule — rather than sitting as a centered column stranded in the
+   middle of the wide main area. Horizontal padding lives on `.app-main`
+   (shared by every route); this only sets the hero's reading measure and a
+   little top breathing room, not the old 8rem marketing gap. */
 .welcome {
   box-sizing: border-box;
-  margin: 0 auto;
-  max-width: 50rem;
-  padding: clamp(4rem, 12vw, 8rem) 5vw 4rem;
+  max-width: 52rem;
+  padding-top: clamp(1rem, 5vh, 3rem);
+}
+
+/* The single content container for every route's <main> (App.tsx). Owns the
+   page's horizontal gutters and its overall reading width. Left-aligned (no
+   `margin: auto`): after the rail, content hugs the left edge and the
+   whitespace falls on the right, so a data table gets the full width it needs
+   instead of being stranded in a narrow centered column. The max-width still
+   caps it on ultra-wide displays so lines never run edge-to-edge. */
+.app-main {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  max-width: 84rem;
+  padding: var(--space-4) clamp(1.25rem, 5vw, 4rem) var(--space-8);
+  width: 100%;
 }
 
 .eyebrow,
@@ -411,12 +430,14 @@ code {
   padding-left: 1.25rem;
 }
 
-/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. */
+/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. The
+   measure is generous enough for prose plus a comfortable form/card column;
+   table-heavy pages (admin members) opt out to the full `.app-main` width. */
 .page {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-  max-width: 43rem;
+  max-width: 62rem;
 }
 
 .page h1 {
@@ -812,9 +833,14 @@ textarea.input {
 .tag {
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.35;
+  /* A status/role label is a single token — never let a narrow table cell
+     wrap it into a two-line sliver. The cell scrolls/widens instead. */
+  white-space: nowrap;
+  padding: 4px 11px;
   border-radius: calc(var(--radius-md) * 0.75);
 }
 
@@ -899,6 +925,39 @@ textarea.input {
 
 .table tbody tr:hover {
   background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+/* Member identity cell (components/admin/MembersTable.tsx): the membership
+   API carries only a user id — no name or email — so the identity reads as a
+   round monogram avatar + the id set in monospace, with a "Bạn" tag when the
+   row is the signed-in caller. Replaces the old bare `<code>` UUID blob. */
+.member-identity {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.member-avatar {
+  align-items: center;
+  background: var(--color-accent-200);
+  border-radius: 50%;
+  color: var(--color-accent-800);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: var(--font-heading);
+  font-size: 13px;
+  height: 2.1rem;
+  justify-content: center;
+  text-transform: uppercase;
+  width: 2.1rem;
+}
+
+.member-identity-id {
+  color: var(--color-text);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12.5px;
+  letter-spacing: -0.01em;
 }
 
 /* — dialog — */
@@ -1511,7 +1570,9 @@ textarea.input {
   align-items: center;
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-3) 5vw 0;
+  /* Same left gutter as `.app-main` so the status dot lines up with the page
+     heading below it rather than sitting on a different margin. */
+  padding: var(--space-3) clamp(1.25rem, 5vw, 4rem) 0;
 }
 
 .rail {
