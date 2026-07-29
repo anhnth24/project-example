@@ -1,6 +1,7 @@
 //! HTTP route modules.
 
 pub mod ask;
+pub mod audit;
 pub mod auth;
 pub mod collections;
 pub mod documents;

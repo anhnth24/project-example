@@ -177,13 +177,55 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-11 — Audit/admin APIs
 
-- **Status:** In progress — `audit_log` append-only (trigger immutability `migrations/0026`) + writer co-commit trong txn mutation (`services/audit.rs:447`) + redaction forbidden-keys + test tốt (DB-gated + unit). **Nhưng nửa admin = 0**: KHÔNG có endpoint audit/member/role/usage nào (openapi grep rỗng), hàm đọc `db/audit.rs:11 list_recent` **chưa được gọi** và không phân trang/filter, không có code quản membership, không có audit action cho member/role/config, không có retention.
+- **Status:** In progress — audit **READ** endpoint landed (phiên này, worktree,
+  chưa chạy DB-gated CI): `GET /api/v1/audit` (`routes/audit.rs`), org-scoped
+  (`org_id = $1` defense-in-depth + RLS `audit_log_org_isolation` migration `0010`
+  là gate thật), guard `audit.view` (đã seed sẵn `migrations/0011`/`0030`, owner/admin
+  có) — 403 khi thiếu, và **tự ghi audit `audit.read`/deny cho chính lần đọc bị từ
+  chối** (đọc audit log đủ nhạy cảm để audit cả deny lẫn success, giống pattern
+  `search.query`/`ask.query`, không giống `list_members`/`list_invites`/`usage`
+  không audit gì). Cursor pagination `(created_at, id)` DESC ổn định — cùng convention
+  `db::documents::list_in_collection` (tái dùng `api::pagination::{encode_cursor,
+  decode_cursor}` sẵn có, không thêm cơ chế mới). Filter: `action` (exact, validate
+  qua `AuditAction::parse` — 400 nếu không thuộc enum đóng), `actor` (uuid),
+  `from`/`to` (RFC3339, validate `from <= to`); limit mặc định 50 / max 100 (route
+  clamp qua `Pagination::from_query`, `db::audit::list_page` clamp 101 để chừa chỗ
+  cho hàng dò-thêm phát hiện `hasMore` đúng tại limit=100). Hàm mới `db::audit::list_page`
+  (giữ nguyên `list_recent` cũ — vẫn được gọi trực tiếp trong `tests/members.rs`).
+  OpenAPI: path `/audit` + schema `AuditEntry`/`AuditPage` mới trong `openapi.yaml`,
+  `ROUTE_INVENTORY`/`BODY_TAKING_OPERATIONS` cập nhật trong `api/openapi.rs`; web
+  codegen (`pnpm --dir web api:generate`) + pin-count schema 38→40 (2 test web) +
+  `pnpm --dir web test` xanh (446/446, xem ghi chú dưới về 1 fail không liên quan).
+  Test DB-gated mới `tests/audit_read.rs` (8 test, chạy xanh cục bộ với Postgres 16
+  local): happy list + cursor pagination không gap/không trùng qua nhiều trang,
+  filter theo action/actor/time-range, 403 thiếu `audit.view` **và** audit deny row
+  đó phải đọc lại được bởi người có quyền, org isolation 2-org (org B không thấy
+  actor/email của org A), và metadata trả về không vượt allowlist hiện có của từng
+  action (vd `member.invite` chỉ `{reason, invite_id, role}`, không bao giờ email).
+  **Sửa 1 chỗ status cũ đã stale**: dòng trên từng ghi "KHÔNG có endpoint audit/
+  member/role/usage nào (openapi grep rỗng)" — sai, `GET /members`, `GET /members/
+  invites`, `GET /usage` (và CRUD member) đã landed từ 1C-02 (`routes/members.rs`,
+  xem mục 1C-02 ở trên); chỉ riêng **đọc audit log** là thật sự thiếu trước phiên này.
+  **Ngoài phạm vi issue-con "đọc audit log" này** (xem `Out` bên dưới): action set
+  KHÔNG đổi ngoài `audit.read` mới — không thêm audit action nào cho ACL/config/
+  quota/cloud event (đó là ghi audit ở nơi khác, không phải endpoint đọc); retention/
+  archival không làm; owner-only admin *mutation* controls (member/role/ACL/config/
+  quota khác) không thuộc "đọc log" nên không đụng.
 
-- **Plan/files:** Member/role/ACL/config/quota/data/cloud events; read-only pagination/
-  filter/retention; owner-only controls.
+- **Plan/files:** Member/role/ACL/config/quota/data/cloud events (**out of scope của
+  đợt này — chỉ audit READ**); read-only pagination/filter (**done**: `routes/audit.rs`,
+  `db/audit.rs::list_page`)/retention (**out**); owner-only controls (**out — không
+  phải đọc log**).
 - **Depends:** 1C-02…10. **Acceptance/tests:** Mọi mutation có actor/org/action/target/
-  result/request ID; coverage/access/pagination/redaction/retention tests.
-- **Security/migration:** No document/prompt/token/PII/URL. **Out:** SIEM archive.
+  result/request ID (pre-existing, không đổi ở đây); coverage (pre-existing, không
+  đổi)/access (**done**: 403 + deny-audit test)/pagination (**done**: cursor stable
+  test)/redaction (**done**: no-leak-beyond-allowlist test)/retention (**out of
+  scope**, chưa làm).
+- **Security/migration:** No document/prompt/token/PII/URL (allowlist per-action giữ
+  nguyên, `audit.read` chỉ thêm `result_count`). Không migration mới — RLS/seed
+  permission đã có sẵn. **Out:** SIEM archive, retention/TTL, audit coverage mở
+  rộng sang action mới cho ACL/config/quota/cloud mutation, owner-only admin
+  controls khác ngoài đọc log.
 
 ## 1C-12 — Multi-org denial suite
 
