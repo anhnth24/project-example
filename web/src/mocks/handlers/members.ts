@@ -3,6 +3,14 @@
 // `crates/server/src/routes/members.rs` closely enough for the SPA's tests to
 // exercise the same decisions the real server makes — in particular:
 //
+//   - Org scoping (P2-06/P2-15 org switch): every operation below (except
+//     `acceptMemberInvite`, see its own note) reads/writes through
+//     `getOrgMemberships(auth.orgId)`/`getOrgInvites(auth.orgId)`/
+//     `getOrgUsage(auth.orgId)` — `auth.orgId` from `authContextForHeader(...)`,
+//     i.e. whichever org the caller's *current* access token is scoped to, not
+//     any fixed org. Same pattern `handlers/library.ts`'s `listCollections`
+//     already established for collections; this file previously stayed pinned
+//     to one org's roster regardless of `switchOrg` (a known gap, now closed).
 //   - `member.manage` gates every operation here except `acceptMemberInvite`
 //     (auth-only by design, matching the real route).
 //   - "admin không quản owner": granting the owner role, or mutating a
@@ -22,7 +30,16 @@
 import { registerOperation } from '../registry';
 import { apiError, forbidden, notFound } from '../apiError';
 import { mockTimestamp } from '../ids';
-import { authContextForHeader, getStore, nextId, type InviteRecord } from '../fixtures';
+import {
+  authContextForHeader,
+  findInviteAcrossOrgs,
+  getOrgInvites,
+  getOrgMemberships,
+  getOrgUsage,
+  nextId,
+  type InviteRecord,
+  type MockUser,
+} from '../fixtures';
 import type { components } from '../../api/generated/contract';
 
 type Membership = components['schemas']['Membership'];
@@ -42,16 +59,23 @@ function permissionDenied() {
   return forbidden('Permission denied');
 }
 
-/** Resolves the caller's `MockUser` + their own membership row, or `undefined` if unauthenticated/not a member of the seeded org. `fetchMock.ts` already 401s a missing/invalid bearer before any handler runs, so `undefined` here means "authenticated but not in `getStore().memberships`" — treated as no `member.manage`, fail-closed. */
-function callerMembership(authorizationHeader: string | null): Membership | undefined {
+/** Resolves the caller's `MockUser` + their own membership row in `orgId`, or `undefined` if unauthenticated/not on that org's roster. `fetchMock.ts` already 401s a missing/invalid bearer before any handler runs, so `undefined` here means "authenticated but not in `getOrgMemberships(orgId)`" — treated as no `member.manage`, fail-closed. */
+function callerMembership(
+  authorizationHeader: string | null,
+  orgId: string,
+): Membership | undefined {
   const auth = authContextForHeader(authorizationHeader);
   if (!auth) return undefined;
-  return getStore().memberships.find((m) => m.userId === auth.user.userId);
+  return getOrgMemberships(orgId).find((m) => m.userId === auth.user.userId);
 }
 
-function hasMemberManage(authorizationHeader: string | null): boolean {
+/** Resolves the caller if authenticated AND holding `member.manage`, `undefined` otherwise — one call gets both the permission check and the `orgId` every operation below scopes its store access to. */
+function authWithMemberManage(
+  authorizationHeader: string | null,
+): { user: MockUser; sessionId: string; orgId: string } | undefined {
   const auth = authContextForHeader(authorizationHeader);
-  return !!auth && auth.user.permissions.includes(PERMISSION_MEMBER_MANAGE);
+  if (!auth || !auth.user.permissions.includes(PERMISSION_MEMBER_MANAGE)) return undefined;
+  return auth;
 }
 
 /** Mirrors `services::members::operation_manages_owner`. */
@@ -59,20 +83,25 @@ function operationManagesOwner(targetCurrentRole: MembershipRole, grantsOwner: b
   return grantsOwner || targetCurrentRole === 'owner';
 }
 
-/** Mirrors `services::members::guard_owner_tier`: true (allowed) unless the operation touches the owner tier and the caller isn't an active owner. */
+/** Mirrors `services::members::guard_owner_tier`: true (allowed) unless the operation touches the owner tier and the caller isn't an active owner in `orgId`. */
 function guardOwnerTier(
   authorizationHeader: string | null,
+  orgId: string,
   targetCurrentRole: MembershipRole,
   grantsOwner: boolean,
 ): boolean {
   if (!operationManagesOwner(targetCurrentRole, grantsOwner)) return true;
-  const caller = callerMembership(authorizationHeader);
+  const caller = callerMembership(authorizationHeader, orgId);
   return !!caller && caller.role === 'owner' && caller.state === 'active';
 }
 
-/** Mirrors `services::members::check_last_owner_invariant`. */
-function guardLastOwner(targetUserId: string, targetWillBeActiveOwner: boolean): boolean {
-  const othersActive = getStore().memberships.filter(
+/** Mirrors `services::members::check_last_owner_invariant`, scoped to `orgId`'s own roster. */
+function guardLastOwner(
+  orgId: string,
+  targetUserId: string,
+  targetWillBeActiveOwner: boolean,
+): boolean {
+  const othersActive = getOrgMemberships(orgId).filter(
     (m) => m.userId !== targetUserId && m.role === 'owner' && m.state === 'active',
   ).length;
   const remaining = othersActive + (targetWillBeActiveOwner ? 1 : 0);
@@ -111,10 +140,11 @@ function inviteDto(invite: InviteRecord): Invite {
 // ---------------------------------------------------------------------------
 
 registerOperation('listMembers', (ctx) => {
-  if (!hasMemberManage(ctx.headers.get('authorization'))) return permissionDenied();
+  const auth = authWithMemberManage(ctx.headers.get('authorization'));
+  if (!auth) return permissionDenied();
   return {
     status: 200,
-    body: { items: getStore().memberships, page: { hasMore: false, nextCursor: null } },
+    body: { items: getOrgMemberships(auth.orgId), page: { hasMore: false, nextCursor: null } },
   };
 });
 
@@ -123,11 +153,12 @@ registerOperation('listMembers', (ctx) => {
 // ---------------------------------------------------------------------------
 
 registerOperation('listMemberInvites', (ctx) => {
-  if (!hasMemberManage(ctx.headers.get('authorization'))) return permissionDenied();
+  const auth = authWithMemberManage(ctx.headers.get('authorization'));
+  if (!auth) return permissionDenied();
   return {
     status: 200,
     body: {
-      items: getStore().invites.map(inviteDto),
+      items: getOrgInvites(auth.orgId).map(inviteDto),
       page: { hasMore: false, nextCursor: null },
     },
   };
@@ -139,7 +170,8 @@ registerOperation('listMemberInvites', (ctx) => {
 
 registerOperation('createMemberInvite', async (ctx) => {
   const authorization = ctx.headers.get('authorization');
-  if (!hasMemberManage(authorization)) return permissionDenied();
+  const auth = authWithMemberManage(authorization);
+  if (!auth) return permissionDenied();
   const body = await ctx.json<CreateInviteRequest>();
 
   const email = body.email.trim();
@@ -157,7 +189,7 @@ registerOperation('createMemberInvite', async (ctx) => {
   // `create_invite`'s `OwnerRequiredForOwnerInvite` check (there is no
   // "current role" for an invite target, so this only ever checks the
   // grants-owner half of `guardOwnerTier`).
-  if (body.role === 'owner' && !guardOwnerTier(authorization, 'viewer', true)) {
+  if (body.role === 'owner' && !guardOwnerTier(authorization, auth.orgId, 'viewer', true)) {
     return permissionDenied();
   }
 
@@ -173,7 +205,7 @@ registerOperation('createMemberInvite', async (ctx) => {
     revokedAt: null,
     createdAt: mockTimestamp(0),
   };
-  getStore().invites.push(record);
+  getOrgInvites(auth.orgId).push(record);
 
   return {
     status: 201,
@@ -186,8 +218,9 @@ registerOperation('createMemberInvite', async (ctx) => {
 // ---------------------------------------------------------------------------
 
 registerOperation('revokeMemberInvite', (ctx) => {
-  if (!hasMemberManage(ctx.headers.get('authorization'))) return permissionDenied();
-  const invite = getStore().invites.find((i) => i.id === ctx.params.inviteId);
+  const auth = authWithMemberManage(ctx.headers.get('authorization'));
+  if (!auth) return permissionDenied();
+  const invite = getOrgInvites(auth.orgId).find((i) => i.id === ctx.params.inviteId);
   if (!invite) return notFound(`Invite ${ctx.params.inviteId} does not exist.`);
   if (invite.acceptedAt || invite.revokedAt) {
     return {
@@ -203,6 +236,13 @@ registerOperation('revokeMemberInvite', (ctx) => {
 // E5 — POST /members/invites/accept (auth-only — see module doc; the admin
 // pages this task builds never call this, it's the invitee's own flow, but
 // it's mocked for completeness/future use).
+//
+// Deliberately NOT scoped by `auth.orgId` like every other operation above:
+// the invite being accepted belongs to whichever org issued it, which is not
+// necessarily the org the accepting caller's *current* access token is scoped
+// to (they may not even be a member of it yet — that is the whole point of an
+// invite), so `findInviteAcrossOrgs` searches every org's invite list by
+// token hash instead.
 // ---------------------------------------------------------------------------
 
 registerOperation('acceptMemberInvite', async (ctx) => {
@@ -210,8 +250,9 @@ registerOperation('acceptMemberInvite', async (ctx) => {
   if (!auth) return { status: 401, body: apiError('unauthorized', 'Authentication required') };
   const body = await ctx.json<AcceptInviteRequest>();
   const token = body.token.trim();
-  const invite = getStore().invites.find((i) => `hash-of-${token}` === i.tokenHash);
-  if (!invite) return notFound('Invite token is unknown.');
+  const found = findInviteAcrossOrgs((i) => `hash-of-${token}` === i.tokenHash);
+  if (!found) return notFound('Invite token is unknown.');
+  const { orgId, invite } = found;
   if (invite.acceptedAt || invite.revokedAt) {
     return {
       status: 409,
@@ -221,7 +262,7 @@ registerOperation('acceptMemberInvite', async (ctx) => {
   if (Date.parse(invite.expiresAt) <= Date.now()) {
     return { status: 409, body: apiError('invite_expired', 'Invite has expired') };
   }
-  if (getStore().memberships.some((m) => m.userId === auth.user.userId)) {
+  if (getOrgMemberships(orgId).some((m) => m.userId === auth.user.userId)) {
     return {
       status: 409,
       body: apiError('already_member', 'User is already a member of this organization'),
@@ -233,7 +274,7 @@ registerOperation('acceptMemberInvite', async (ctx) => {
     state: 'active',
     createdAt: mockTimestamp(0),
   };
-  getStore().memberships.push(membership);
+  getOrgMemberships(orgId).push(membership);
   invite.acceptedAt = mockTimestamp(0);
   return { status: 201, body: membership };
 });
@@ -244,14 +285,15 @@ registerOperation('acceptMemberInvite', async (ctx) => {
 
 registerOperation('patchMember', async (ctx) => {
   const authorization = ctx.headers.get('authorization');
-  if (!hasMemberManage(authorization)) return permissionDenied();
+  const auth = authWithMemberManage(authorization);
+  if (!auth) return permissionDenied();
   const body = await ctx.json<PatchMemberRequest>();
   if (body.role === undefined && body.state === undefined) {
     return { status: 400, body: apiError('validation_failed', 'role or state is required') };
   }
 
   const userId = ctx.params.userId;
-  const membership = getStore().memberships.find((m) => m.userId === userId);
+  const membership = getOrgMemberships(auth.orgId).find((m) => m.userId === userId);
   if (!membership) return notFound(`Member ${userId} does not exist.`);
 
   // Two separate owner-tier gates, not one shared at the top: mirrors
@@ -263,20 +305,24 @@ registerOperation('patchMember', async (ctx) => {
   // for the demotion and, since the target is no longer an owner afterwards,
   // does not require owner-tier again for the suspend.
   if (body.role !== undefined) {
-    if (!guardOwnerTier(authorization, membership.role, body.role === 'owner')) {
+    if (!guardOwnerTier(authorization, auth.orgId, membership.role, body.role === 'owner')) {
       return permissionDenied();
     }
     if (body.role !== membership.role) {
       const willBeActiveOwner = body.role === 'owner' && membership.state === 'active';
-      if (!guardLastOwner(userId, willBeActiveOwner)) return lastOwnerConflict();
+      if (!guardLastOwner(auth.orgId, userId, willBeActiveOwner)) return lastOwnerConflict();
       membership.role = body.role;
     }
   }
 
   if (body.state !== undefined) {
-    if (!guardOwnerTier(authorization, membership.role, false)) return permissionDenied();
+    if (!guardOwnerTier(authorization, auth.orgId, membership.role, false)) {
+      return permissionDenied();
+    }
     if (body.state !== membership.state) {
-      if (body.state === 'suspended' && !guardLastOwner(userId, false)) return lastOwnerConflict();
+      if (body.state === 'suspended' && !guardLastOwner(auth.orgId, userId, false)) {
+        return lastOwnerConflict();
+      }
       membership.state = body.state;
     }
   }
@@ -290,17 +336,19 @@ registerOperation('patchMember', async (ctx) => {
 
 registerOperation('deleteMember', (ctx) => {
   const authorization = ctx.headers.get('authorization');
-  if (!hasMemberManage(authorization)) return permissionDenied();
+  const auth = authWithMemberManage(authorization);
+  if (!auth) return permissionDenied();
 
   const userId = ctx.params.userId;
-  const store = getStore();
-  const membership = store.memberships.find((m) => m.userId === userId);
-  if (!membership) return notFound(`Member ${userId} does not exist.`);
+  const roster = getOrgMemberships(auth.orgId);
+  const idx = roster.findIndex((m) => m.userId === userId);
+  if (idx === -1) return notFound(`Member ${userId} does not exist.`);
+  const membership = roster[idx];
 
-  if (!guardOwnerTier(authorization, membership.role, false)) return permissionDenied();
-  if (!guardLastOwner(userId, false)) return lastOwnerConflict();
+  if (!guardOwnerTier(authorization, auth.orgId, membership.role, false)) return permissionDenied();
+  if (!guardLastOwner(auth.orgId, userId, false)) return lastOwnerConflict();
 
-  store.memberships = store.memberships.filter((m) => m.userId !== userId);
+  roster.splice(idx, 1);
   return { status: 204 };
 });
 
@@ -309,28 +357,7 @@ registerOperation('deleteMember', (ctx) => {
 // ---------------------------------------------------------------------------
 
 registerOperation('getUsage', (ctx) => {
-  if (!hasMemberManage(ctx.headers.get('authorization'))) return permissionDenied();
-  return {
-    status: 200,
-    body: {
-      items: [
-        {
-          resource: 'storage_bytes',
-          limit: 10_737_418_240,
-          committed: 3_221_225_472,
-          reserved: 104_857_600,
-          remaining: 7_411_335_168,
-        },
-        { resource: 'documents', limit: 5000, committed: 812, reserved: 3, remaining: 4185 },
-        { resource: 'concurrent_jobs', limit: 8, committed: 1, reserved: 0, remaining: 7 },
-        {
-          resource: 'tokens',
-          limit: 2_000_000,
-          committed: 415_000,
-          reserved: 0,
-          remaining: 1_585_000,
-        },
-      ],
-    },
-  };
+  const auth = authWithMemberManage(ctx.headers.get('authorization'));
+  if (!auth) return permissionDenied();
+  return { status: 200, body: { items: getOrgUsage(auth.orgId) } };
 });

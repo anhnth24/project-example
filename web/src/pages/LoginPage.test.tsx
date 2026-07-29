@@ -87,10 +87,14 @@ describe('LoginPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Đăng nhập' }));
 
     await waitFor(() =>
-      expect(client.login).toHaveBeenCalledWith({
-        email: 'demo@markhand.test',
-        password: 'demo-password',
-      }),
+      // A third `AbortSignal` argument now rides along (`AuthContext.tsx`'s
+      // `login()` passes its own epoch-scoped controller so a superseded
+      // login's request can be cancelled outright) — assert on credentials
+      // only, not on the exact signal instance.
+      expect(client.login).toHaveBeenCalledWith(
+        { email: 'demo@markhand.test', password: 'demo-password' },
+        expect.any(AbortSignal),
+      ),
     );
     await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'));
   });

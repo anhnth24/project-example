@@ -46,16 +46,54 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-02 — Membership, invites và last-owner invariant
 
-- **Status:** Backlog — chỉ có **schema** (`org_invites` hashed single-use `migrations/0003:93`, `org_memberships` `0001:26`). KHÔNG có service/route invite (create/accept/revoke/expiry), KHÔNG có last-owner invariant (grep rỗng), không có membership state/version, `member.manage` seed nhưng chưa dùng. Session-family revoke có (`auth/session.rs:862`) nhưng thuộc auth 1B.
+- **Status:** In progress — gần Done; **đã landed đầy đủ trong #317** (đọc code xác
+  minh 2026-07-28, không phải backlog cũ ghi "Backlog"): invite create/accept/revoke/list
+  hashed single-use `routes/members.rs` E1-E5, **`PATCH /api/v1/members/{userId}`** (đổi
+  role/state, `routes/members.rs:450 patch_member`) và **`DELETE /api/v1/members/{userId}`**
+  (`routes/members.rs:551 delete_member`) đều đã có — không chỉ GET như một đợt audit
+  trước từng nêu. Last-owner invariant transactional + row-lock: `check_last_owner_invariant`
+  (pure, `services/members.rs:143`) + `guard_last_owner` (`FOR UPDATE` qua
+  `db::members::lock_owner_rows`, `services/members.rs:159`) chạy cùng transaction với
+  `change_role`/`remove_member`/`suspend_member` (`services/members.rs:476/540`); riêng
+  cả tự-hạ-role/tự-xóa của owner cuối cũng 409 (không có ngoại lệ cho "chính mình").
+  `guard_owner_tier` (`services/members.rs:176`) chặn thêm escalation: chỉ active owner
+  mới được cấp/thao tác owner khác — admin có `member.manage` không tự thăng owner hay
+  quản owner khác (403). Membership **state** (`active|suspended`, KHÔNG có "removed" —
+  remove là hard-delete có chủ đích vì FK `refresh_tokens` không có `ON DELETE`, xem
+  migration `0029_expand_org_membership_state.sql` + doc `services/members.rs:25-35`)
+  đã dùng cho suspend/reactivate; **version** cho ACL cache (1C-05) cố ý CHƯA thêm (chưa
+  có cache để invalidate). Downgrade/suspend/remove đều gọi
+  `auth::session::revoke_all_user_families` (route layer, `routes/members.rs:532/587`)
+  để refresh-token family cũ không sống quá TTL. Audit `member.role_change` (old→new
+  role/state trong metadata) và `member.remove` (old_role) ghi cùng transaction
+  (`services/audit.rs` allowlist `member.role_change`/`member.remove`). OpenAPI
+  (`openapi/openapi.yaml:1180`, `ROUTE_INVENTORY`/`BODY_TAKING_OPERATIONS` trong
+  `api/openapi.rs`) + web codegen + admin UI (`web/src/components/admin/membersApi.ts`,
+  `memberPresentation.ts`) đã có, pin-count schema vẫn 38 (không schema mới). Migration
+  MỚI không cần — `0029` đã đủ.
+  **Bổ sung trong phiên này** (worktree, chưa chạy DB-gated CI): thêm vào
+  `tests/members.rs` 4 test còn thiếu so với danh sách acceptance — last-owner 409
+  *deterministic* (không chỉ qua race) cho tự-downgrade/tự-remove/tự-suspend của owner
+  cuối cùng, 403 khi thiếu `member.manage` (kèm audit-deny), 404 cho user id chưa từng
+  tồn tại trong org (khác case cross-org RLS-hidden), và audit before/after cho
+  role-change + remove trên happy path.
+  **Còn thiếu thật** (không phải của 1C-02, thuộc issue khác): 1C-05 chưa có ACL
+  version/cache nên chưa cần cột `version`; 1C-11 vẫn chưa có endpoint đọc audit log
+  (chỉ ghi, `db::audit::list_recent` chưa có route). MVP token invite vẫn chỉ hiển thị
+  1 lần qua response body — automated email delivery vẫn out of scope như thiết kế.
 
 - **Plan/files:** Hashed single-use invite; membership state; transactional last-owner;
-  membership version; session revoke. MVP chưa có mail dùng invite URL/token hiển thị
-  đúng một lần cho admin copy qua kênh được tổ chức phê duyệt; expiry/revoke/audit
-  bắt buộc.
-- **Depends:** 1C-01. **Acceptance/tests:** Không remove/downgrade last owner; admin
-  không quản owner; concurrent owner removal, invite replay/expiry, escalation tests.
-- **Security/migration:** Row lock, expand/backfill version; plaintext invite không
-  lưu DB/log. **Out:** automated email delivery/SCIM/MFA.
+  membership version (deferred to 1C-05); session revoke. MVP chưa có mail dùng invite
+  URL/token hiển thị đúng một lần cho admin copy qua kênh được tổ chức phê duyệt;
+  expiry/revoke/audit bắt buộc — **tất cả đã landed**.
+- **Depends:** 1C-01. **Acceptance/tests:** Không remove/downgrade last owner (kể cả tự
+  thao tác chính mình); admin không quản owner; concurrent owner removal, invite
+  replay/expiry, escalation tests — **đã có trong `tests/members.rs`, DB-gated
+  `#[ignore]`, cần chạy trong CI `rust-integration` (`MARKHAND_TEST_DATABASE_URL`) để
+  đóng gate, chưa tự chạy trong `cargo test` mặc định**.
+- **Security/migration:** Row lock (`FOR UPDATE` trên owner rows), expand/backfill
+  version (deferred, xem trên); plaintext invite không lưu DB/log (chỉ trả 1 lần trong
+  response). **Out:** automated email delivery/SCIM/MFA.
 
 ## 1C-03 — Canonical RBAC seed
 
@@ -139,13 +177,55 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-11 — Audit/admin APIs
 
-- **Status:** In progress — `audit_log` append-only (trigger immutability `migrations/0026`) + writer co-commit trong txn mutation (`services/audit.rs:447`) + redaction forbidden-keys + test tốt (DB-gated + unit). **Nhưng nửa admin = 0**: KHÔNG có endpoint audit/member/role/usage nào (openapi grep rỗng), hàm đọc `db/audit.rs:11 list_recent` **chưa được gọi** và không phân trang/filter, không có code quản membership, không có audit action cho member/role/config, không có retention.
+- **Status:** In progress — audit **READ** endpoint landed (phiên này, worktree,
+  chưa chạy DB-gated CI): `GET /api/v1/audit` (`routes/audit.rs`), org-scoped
+  (`org_id = $1` defense-in-depth + RLS `audit_log_org_isolation` migration `0010`
+  là gate thật), guard `audit.view` (đã seed sẵn `migrations/0011`/`0030`, owner/admin
+  có) — 403 khi thiếu, và **tự ghi audit `audit.read`/deny cho chính lần đọc bị từ
+  chối** (đọc audit log đủ nhạy cảm để audit cả deny lẫn success, giống pattern
+  `search.query`/`ask.query`, không giống `list_members`/`list_invites`/`usage`
+  không audit gì). Cursor pagination `(created_at, id)` DESC ổn định — cùng convention
+  `db::documents::list_in_collection` (tái dùng `api::pagination::{encode_cursor,
+  decode_cursor}` sẵn có, không thêm cơ chế mới). Filter: `action` (exact, validate
+  qua `AuditAction::parse` — 400 nếu không thuộc enum đóng), `actor` (uuid),
+  `from`/`to` (RFC3339, validate `from <= to`); limit mặc định 50 / max 100 (route
+  clamp qua `Pagination::from_query`, `db::audit::list_page` clamp 101 để chừa chỗ
+  cho hàng dò-thêm phát hiện `hasMore` đúng tại limit=100). Hàm mới `db::audit::list_page`
+  (giữ nguyên `list_recent` cũ — vẫn được gọi trực tiếp trong `tests/members.rs`).
+  OpenAPI: path `/audit` + schema `AuditEntry`/`AuditPage` mới trong `openapi.yaml`,
+  `ROUTE_INVENTORY`/`BODY_TAKING_OPERATIONS` cập nhật trong `api/openapi.rs`; web
+  codegen (`pnpm --dir web api:generate`) + pin-count schema 38→40 (2 test web) +
+  `pnpm --dir web test` xanh (446/446, xem ghi chú dưới về 1 fail không liên quan).
+  Test DB-gated mới `tests/audit_read.rs` (8 test, chạy xanh cục bộ với Postgres 16
+  local): happy list + cursor pagination không gap/không trùng qua nhiều trang,
+  filter theo action/actor/time-range, 403 thiếu `audit.view` **và** audit deny row
+  đó phải đọc lại được bởi người có quyền, org isolation 2-org (org B không thấy
+  actor/email của org A), và metadata trả về không vượt allowlist hiện có của từng
+  action (vd `member.invite` chỉ `{reason, invite_id, role}`, không bao giờ email).
+  **Sửa 1 chỗ status cũ đã stale**: dòng trên từng ghi "KHÔNG có endpoint audit/
+  member/role/usage nào (openapi grep rỗng)" — sai, `GET /members`, `GET /members/
+  invites`, `GET /usage` (và CRUD member) đã landed từ 1C-02 (`routes/members.rs`,
+  xem mục 1C-02 ở trên); chỉ riêng **đọc audit log** là thật sự thiếu trước phiên này.
+  **Ngoài phạm vi issue-con "đọc audit log" này** (xem `Out` bên dưới): action set
+  KHÔNG đổi ngoài `audit.read` mới — không thêm audit action nào cho ACL/config/
+  quota/cloud event (đó là ghi audit ở nơi khác, không phải endpoint đọc); retention/
+  archival không làm; owner-only admin *mutation* controls (member/role/ACL/config/
+  quota khác) không thuộc "đọc log" nên không đụng.
 
-- **Plan/files:** Member/role/ACL/config/quota/data/cloud events; read-only pagination/
-  filter/retention; owner-only controls.
+- **Plan/files:** Member/role/ACL/config/quota/data/cloud events (**out of scope của
+  đợt này — chỉ audit READ**); read-only pagination/filter (**done**: `routes/audit.rs`,
+  `db/audit.rs::list_page`)/retention (**out**); owner-only controls (**out — không
+  phải đọc log**).
 - **Depends:** 1C-02…10. **Acceptance/tests:** Mọi mutation có actor/org/action/target/
-  result/request ID; coverage/access/pagination/redaction/retention tests.
-- **Security/migration:** No document/prompt/token/PII/URL. **Out:** SIEM archive.
+  result/request ID (pre-existing, không đổi ở đây); coverage (pre-existing, không
+  đổi)/access (**done**: 403 + deny-audit test)/pagination (**done**: cursor stable
+  test)/redaction (**done**: no-leak-beyond-allowlist test)/retention (**out of
+  scope**, chưa làm).
+- **Security/migration:** No document/prompt/token/PII/URL (allowlist per-action giữ
+  nguyên, `audit.read` chỉ thêm `result_count`). Không migration mới — RLS/seed
+  permission đã có sẵn. **Out:** SIEM archive, retention/TTL, audit coverage mở
+  rộng sang action mới cho ACL/config/quota/cloud mutation, owner-only admin
+  controls khác ngoài đọc log.
 
 ## 1C-12 — Multi-org denial suite
 

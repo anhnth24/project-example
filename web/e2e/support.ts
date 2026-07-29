@@ -5,11 +5,13 @@
 //     against the in-browser fetch mock (`VITE_MARKHAND_MOCK=1`). The
 //     real-deployment E2E half (against Postgres/Qdrant/MinIO) is out of
 //     scope here — see playwright.config.ts's own header.
-//   - `ask -> citation` is deliberately ABSENT. The Q&A page (`QaPage.tsx`) is
-//     a placeholder — "Chưa kết nối tới API hỏi đáp." — because P2-10 is
-//     blocked on R02/R03/R05. There is no Q&A UI to drive, so this suite does
-//     NOT contain an ask/citation spec (a skipped-but-named test would falsely
-//     imply the flow exists). Its absence is intentional and noted here.
+//   - `ask -> citation` (`qa.spec.ts`, P2-10): the owner lowered P2-10's gate
+//     2026-07-29 (`plans/markhand-web/backlog/phase-2/issues/README.md`) to
+//     build on the OpenAPI contract + mock server, same as every other P2-0x
+//     flow, rather than waiting for full R02/R03/R05 live-evidence. `QaPage`
+//     is real now (search/ask/stream/citations/revoke/fallback) — see
+//     `qa.spec.ts` for the covered scenarios, and `mocks/handlers/qa.ts`'s
+//     module doc for how `/ask/stream` is mocked deterministically.
 //
 // FIXTURE GROUND TRUTH (src/mocks/fixtures.ts): every assertion below is
 // against these seeded values, not invented ones. ids come from `mockUuid(n)`
@@ -32,6 +34,8 @@ export const IDS = {
   orgB: '00000000-0000-4000-8000-000000000003',
   /** Org B's own collection — seeded with content distinct from every org A fixture, so a switch has something visibly different to render. */
   orgBCollection: '00000000-0000-4000-8000-00000000000c',
+  /** Org B's own second member (`editor`, active) on its admin members roster — distinct from every org A member id, so a post-switch members page reads as genuinely different data. */
+  globexMember: '00000000-0000-4000-8000-000000000020',
 } as const;
 
 export const DEMO = {

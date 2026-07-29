@@ -446,3 +446,418 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     cleanup.cleanup().await.expect("clean ask grounding bucket");
     ephemeral.drop().await;
 }
+
+/// Seeds an org/user + collection/document with one published+current version
+/// (PG only; conflict warnings never require MinIO/Qdrant/chunks).
+async fn seed_conflict_capable_doc(
+    pool: &deadpool_postgres::Pool,
+    label: &str,
+) -> (OrgContext, Uuid, Uuid) {
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let perms = ["qa.query", "qa.history", "doc.upload", "doc.delete"];
+    seed_user_with_permissions(
+        pool,
+        org,
+        user,
+        &format!("{user}@{label}.test"),
+        "correct-password-1",
+        &perms,
+    )
+    .await;
+    let collection_id = Uuid::new_v4();
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let ctx = OrgContext::try_new(org, user, perms, [collection_id]).unwrap();
+    with_org_txn(pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                collections::insert(
+                    txn,
+                    &ctx,
+                    NewCollection {
+                        id: collection_id,
+                        name: "Conflict collection",
+                        slug: &format!("conflict-{}", collection_id.simple()),
+                        description: None,
+                        visibility: fileconv_server::db::models::CollectionVisibility::Org,
+                    },
+                )
+                .await?;
+                documents::insert(
+                    txn,
+                    &ctx,
+                    NewDocument {
+                        id: document_id,
+                        collection_id,
+                        title: "Conflict doc",
+                    },
+                )
+                .await?;
+                let sha = format!("{:0>64}", version_id.as_u128());
+                let key = format!("org/{}/doc/{document_id}/v/{version_id}/source", ctx.org_id());
+                txn.execute(
+                    "INSERT INTO document_versions (
+                        id, org_id, document_id, version_number, publication_state,
+                        is_current, content_sha256, original_object_key, markdown_object_key,
+                        source_content_type, byte_size, created_by_user_id
+                     ) VALUES ($1,$2,$3,1,'published',true,$4,$5,$5,'text/markdown',1,$6)",
+                    &[
+                        &version_id,
+                        &ctx.org_id(),
+                        &document_id,
+                        &sha,
+                        &key,
+                        &ctx.user_id(),
+                    ],
+                )
+                .await?;
+                let indexed = DocumentState::Indexed.as_str();
+                txn.execute(
+                    "UPDATE documents SET state=$3, current_version_id=$4 WHERE org_id=$1 AND id=$2",
+                    &[&ctx.org_id(), &document_id, &indexed, &version_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed conflict-capable doc");
+    (ctx, document_id, version_id)
+}
+
+/// Inserts two claims on the same current+published version plus an `open`
+/// numeric conflict between them (canonical `claim_a_id < claim_b_id`).
+async fn seed_open_conflict(
+    pool: &deadpool_postgres::Pool,
+    ctx: &OrgContext,
+    document_id: Uuid,
+    version_id: Uuid,
+    value_low: i64,
+    value_high: i64,
+) -> Uuid {
+    let claim_x = Uuid::new_v4();
+    let claim_y = Uuid::new_v4();
+    let (claim_a, claim_b) = if claim_x < claim_y {
+        (claim_x, claim_y)
+    } else {
+        (claim_y, claim_x)
+    };
+    let conflict_id = Uuid::new_v4();
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let value_low_decimal = rust_decimal::Decimal::from(value_low);
+                let value_high_decimal = rust_decimal::Decimal::from(value_high);
+                let quote_low = format!("Kinh phí là {value_low} triệu đồng.");
+                let quote_high = format!("Kinh phí là {value_high} triệu đồng.");
+                txn.execute(
+                    "INSERT INTO claims (
+                        id, org_id, document_id, version_id, claim_key, subject, predicate,
+                        value_type, value_money, unit, scope, effective_from, citation_quote
+                     ) VALUES ($1,$2,$3,$4,'budget','Kinh phí','is','money',$5,'triệu','', now(),$6)",
+                    &[
+                        &claim_a,
+                        &ctx.org_id(),
+                        &document_id,
+                        &version_id,
+                        &value_low_decimal,
+                        &quote_low,
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO claims (
+                        id, org_id, document_id, version_id, claim_key, subject, predicate,
+                        value_type, value_money, unit, scope, effective_from, citation_quote
+                     ) VALUES ($1,$2,$3,$4,'budget','Kinh phí','is','money',$5,'triệu','', now(),$6)",
+                    &[
+                        &claim_b,
+                        &ctx.org_id(),
+                        &document_id,
+                        &version_id,
+                        &value_high_decimal,
+                        &quote_high,
+                    ],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO conflicts (
+                        id, org_id, status, severity, conflict_type, claim_a_id, claim_b_id,
+                        first_detected_version_id
+                     ) VALUES ($1,$2,'open','warning','numeric',$3,$4,$5)",
+                    &[&conflict_id, &ctx.org_id(), &claim_a, &claim_b, &version_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed open conflict");
+    conflict_id
+}
+
+/// P1B-R03 "Remaining for Done" (b): triage-then-current/history matrix on a
+/// real DB. Current mode must warn only while a conflict is `open`; history
+/// mode must surface the resolution note once terminal, across every terminal
+/// status (`resolved`/`accepted_exception`/`false_positive`).
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+async fn live_ask_conflict_triage_then_current_and_history_matrix() {
+    use fileconv_server::services::access::triage_authorized_conflict;
+
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app) = app_database_url() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app).await;
+    assert_markhand_app_role(&pool).await;
+
+    // No embedder is configured anywhere in this test, so the vector leg is
+    // never dispatched (see `search_all_vector_legs`'s `query_vector` guard) —
+    // this Qdrant client is constructed but never dialed over the network.
+    let qdrant =
+        fileconv_server::storage::QdrantClient::new("http://127.0.0.1:6333").expect("qdrant");
+
+    for status in ["resolved", "accepted_exception", "false_positive"] {
+        let (ctx, document_id, version_id) =
+            seed_conflict_capable_doc(&pool, &format!("conflict-{status}")).await;
+        let conflict_id = seed_open_conflict(&pool, &ctx, document_id, version_id, 10, 15).await;
+        let collection_id = *ctx.allowed_collection_ids().iter().next().unwrap();
+
+        let current_before = ask(
+            &pool,
+            &qdrant,
+            None,
+            None,
+            &ctx,
+            AskRequest {
+                question: "Kinh phí là bao nhiêu?".into(),
+                collection_ids: Some([collection_id].into_iter().collect()),
+                mode: VersionMode::Current,
+                limit: 5,
+                conflict_ids: vec![conflict_id],
+            },
+        )
+        .await
+        .expect("ask current before triage");
+        assert!(
+            current_before
+                .warnings
+                .iter()
+                .any(|w| w.contains("Unresolved conflict") && w.contains(&conflict_id.to_string())),
+            "status={status} expected open-conflict warning before triage: {:?}",
+            current_before.warnings
+        );
+
+        let history_before = ask(
+            &pool,
+            &qdrant,
+            None,
+            None,
+            &ctx,
+            AskRequest {
+                question: "Lịch sử kinh phí?".into(),
+                collection_ids: Some([collection_id].into_iter().collect()),
+                mode: VersionMode::History { document_id },
+                limit: 5,
+                conflict_ids: vec![conflict_id],
+            },
+        )
+        .await
+        .expect("ask history before triage");
+        assert!(
+            !history_before
+                .warnings
+                .iter()
+                .any(|w| w.starts_with("Conflict ") && w.contains("status=")),
+            "status={status} unexpected resolution note before triage: {:?}",
+            history_before.warnings
+        );
+
+        let note = format!("Đã thống nhất theo bản mới nhất ({status}).");
+        triage_authorized_conflict(&pool, &ctx, conflict_id, status, Some(&note))
+            .await
+            .expect("triage conflict");
+
+        let current_after = ask(
+            &pool,
+            &qdrant,
+            None,
+            None,
+            &ctx,
+            AskRequest {
+                question: "Kinh phí là bao nhiêu?".into(),
+                collection_ids: Some([collection_id].into_iter().collect()),
+                mode: VersionMode::Current,
+                limit: 5,
+                conflict_ids: vec![conflict_id],
+            },
+        )
+        .await
+        .expect("ask current after triage");
+        assert!(
+            !current_after
+                .warnings
+                .iter()
+                .any(|w| w.contains("Unresolved conflict")),
+            "status={status} triaged conflict must stop warning current-mode: {:?}",
+            current_after.warnings
+        );
+
+        let history_after = ask(
+            &pool,
+            &qdrant,
+            None,
+            None,
+            &ctx,
+            AskRequest {
+                question: "Lịch sử kinh phí?".into(),
+                collection_ids: Some([collection_id].into_iter().collect()),
+                mode: VersionMode::History { document_id },
+                limit: 5,
+                conflict_ids: vec![conflict_id],
+            },
+        )
+        .await
+        .expect("ask history after triage");
+        assert!(
+            history_after.warnings.iter().any(|w| {
+                w.contains(&conflict_id.to_string())
+                    && w.contains(&format!("status={status}"))
+                    && w.contains(&note)
+            }),
+            "status={status} expected resolution note in history mode: {:?}",
+            history_after.warnings
+        );
+    }
+
+    ephemeral.drop().await;
+}
+
+/// P1B-R03 "Remaining for Done" (c): wrong-delta/same-topic contradiction
+/// soak through the production `ask()` path. `force_extractive_only()` is
+/// hardcoded fail-closed while structured entailment is unavailable
+/// (see `services::qa::STRUCTURED_ENTAILMENT_AVAILABLE`), so this asserts the
+/// *practical* guarantee under concurrent/repeated load: no wrong-delta or
+/// same-topic-contradiction LLM answer can ever leak through `ask()` as a
+/// claimed-grounded response, and no citation/answer cross-contaminates
+/// across concurrent callers sharing one pool.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+async fn live_ask_wrong_delta_and_contradiction_soak_stays_fail_closed() {
+    let Some(admin) = admin_database_url() else {
+        return;
+    };
+    let Some(app) = app_database_url() else {
+        return;
+    };
+    let Some(store) = test_minio_client() else {
+        return;
+    };
+    let (ephemeral, pool) = boot_app_pool(&admin, &app).await;
+    assert_markhand_app_role(&pool).await;
+    let cleanup = MinioCleanupGuard::new(store.clone());
+
+    const SOAK_ITERATIONS: usize = 20;
+    // Two independent tenants, each with a distinct real budget value. Every
+    // provider deliberately fabricates a wrong-delta/contradiction answer
+    // that quotes the *other* tenant's value, so any cross-tenant leak or
+    // wrong-delta pass-through is directly observable in the final text.
+    let markdown_a = "# BA\n\nKinh phí được phê duyệt là 15 triệu đồng.\n";
+    let markdown_b = "# BA\n\nKinh phí được phê duyệt là 76 triệu đồng.\n";
+    let (ctx_a, _document_id_a, _version_id_a, _token_a) =
+        seed_ask_doc(&pool, &store, markdown_a).await;
+    let (ctx_b, _document_id_b, _version_id_b, _token_b) =
+        seed_ask_doc(&pool, &store, markdown_b).await;
+    let collection_a = *ctx_a.allowed_collection_ids().iter().next().unwrap();
+    let collection_b = *ctx_b.allowed_collection_ids().iter().next().unwrap();
+
+    // Tenant A's provider fabricates B's value (wrong-delta); vice versa.
+    let provider_a = ChatProvider::Static(StaticChatProvider::new(
+        "Kinh phí được phê duyệt là 76 triệu đồng, không phải 15 triệu [CITE-0001].",
+        AnswerMode::LocalLlm,
+    ));
+    let provider_b = ChatProvider::Static(StaticChatProvider::new(
+        "Kinh phí được phê duyệt là 15 triệu đồng, không phải 76 triệu [CITE-0001].",
+        AnswerMode::LocalLlm,
+    ));
+
+    let mut handles = Vec::with_capacity(SOAK_ITERATIONS);
+    for iteration in 0..SOAK_ITERATIONS {
+        let pool = pool.clone();
+        let is_a = iteration % 2 == 0;
+        let ctx = if is_a { ctx_a.clone() } else { ctx_b.clone() };
+        let collection_id = if is_a { collection_a } else { collection_b };
+        let provider = if is_a {
+            provider_a.clone()
+        } else {
+            provider_b.clone()
+        };
+        handles.push(tokio::spawn(async move {
+            let qdrant = fileconv_server::storage::QdrantClient::new("http://127.0.0.1:6333")
+                .expect("qdrant");
+            let response = ask(
+                &pool,
+                &qdrant,
+                None,
+                Some(&provider),
+                &ctx,
+                AskRequest {
+                    question: "Kinh phí được phê duyệt là bao nhiêu?".into(),
+                    collection_ids: Some([collection_id].into_iter().collect()),
+                    mode: VersionMode::Current,
+                    limit: 5,
+                    conflict_ids: vec![],
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("ask iteration {iteration} failed: {error}"));
+            (iteration, is_a, ctx.org_id(), response)
+        }));
+    }
+
+    let mut fabricated_leaked = 0usize;
+    for handle in handles {
+        let (iteration, is_a, org_id, response) = handle.await.expect("soak task join");
+        let (own_value, other_value) = if is_a { ("15", "76") } else { ("76", "15") };
+        assert_eq!(
+            response.mode,
+            AnswerMode::OfflineExtractive,
+            "iteration {iteration}: fail-closed must stay extractive-only while entailment is unavailable: {response:?}"
+        );
+        assert!(
+            response.warnings.iter().any(|w| w.contains("fail-closed")),
+            "iteration {iteration}: expected fail-closed warning: {:?}",
+            response.warnings
+        );
+        if response.answer.contains(&format!("{other_value} triệu")) {
+            fabricated_leaked += 1;
+        }
+        assert!(
+            response.answer.contains(own_value) || response.citations.is_empty(),
+            "iteration {iteration}: extractive answer must ground in this tenant's own value: {}",
+            response.answer
+        );
+        // No cross-tenant contamination under concurrent soak against one pool.
+        for citation in &response.citations {
+            assert_eq!(
+                citation.org_id, org_id,
+                "iteration {iteration}: cross-tenant citation leaked under concurrency"
+            );
+        }
+    }
+    assert_eq!(
+        fabricated_leaked, 0,
+        "wrong-delta/contradiction provider text must never leak into an ask() answer"
+    );
+
+    cleanup.cleanup().await.expect("clean soak bucket");
+    ephemeral.drop().await;
+}

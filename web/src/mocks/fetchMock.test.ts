@@ -261,10 +261,18 @@ describe('fetchMock', () => {
     });
   });
 
-  it('throws a clear error for the SSE streaming endpoints instead of returning wrong data', async () => {
+  it('throws a clear error for the still-unmocked SSE streaming endpoint instead of returning wrong data', async () => {
+    // `askStream` moved out of `DELIBERATELY_UNMOCKED_OPERATIONS`'s effective
+    // set in P2-10 — `mocks/handlers/qa.ts` registers a real handler for it
+    // (a pre-serialized `text/event-stream` body, since every event it will
+    // ever emit is already decided before the response is built — see that
+    // file's module doc), so it's no longer this test's example. `jobEvents`
+    // remains genuinely unmocked (a real job's live progress cannot be
+    // pre-decided the same way), so it's the one still exercised here.
     const { accessToken } = await login();
-    await expect(
-      fetch(`${API_PREFIX}/ask/stream`, authed(accessToken, { method: 'POST' })),
-    ).rejects.toThrow(/deliberately not mocked/);
+    const jobId = getStore().jobs.keys().next().value;
+    await expect(fetch(`${API_PREFIX}/jobs/${jobId}/events`, authed(accessToken))).rejects.toThrow(
+      /deliberately not mocked/,
+    );
   });
 });

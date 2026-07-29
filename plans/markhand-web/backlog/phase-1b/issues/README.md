@@ -259,9 +259,31 @@ ghi trong issue đã `Done`.
   (Static/Failing/Timeout) but never claims GLM grounded while structured
   entailment is unavailable. Conflict hydrate exposes status/resolutionNote;
   current warns only `open`; history emits resolution notes for
-  resolved/accepted_exception/false_positive. Remaining for Done: live router SSE
-  consume + delete-between-batches `citation_revoked`; triage-then-current/history
-  matrix on real DB; wrong-delta/same-topic contradiction soak through ask path.
+  resolved/accepted_exception/false_positive. 2026-07-29 re-verify on local
+  PG16+MinIO (no Qdrant): all three "Remaining for Done" items closed —
+  (a) `live_ask_stream_slow_trickle_concurrent_delete_releases_locks` +
+  `live_ask_stream_jwt_exp_membership_and_delete_barriers` already drive the
+  production router SSE live-tail through a delete/ACL-revoke *between* two
+  trickled batches and assert `citation_revoked`/`stream.closed` with no
+  post-commit content sequence — this was already Done, the backlog text was
+  stale; (b) new `live_ask_conflict_triage_then_current_and_history_matrix`
+  (`tests/ask_grounding_matrix.rs`) drives `services::access::triage_authorized_conflict`
+  against a real open conflict across all three terminal statuses
+  (resolved/accepted_exception/false_positive) and asserts current-mode warns
+  only pre-triage while history-mode surfaces the exact resolution note only
+  post-triage; (c) new `live_ask_wrong_delta_and_contradiction_soak_stays_fail_closed`
+  runs 20 concurrent `ask()` calls across two tenants, each fed a
+  StaticChatProvider that fabricates the *other* tenant's value (wrong-delta/
+  same-topic contradiction), and asserts the fail-closed extractive guarantee
+  and citation tenant-scoping hold under concurrency — no fabricated value or
+  cross-tenant citation ever leaks. Note: `force_extractive_only()` is a
+  hardcoded `true` while `STRUCTURED_ENTAILMENT_AVAILABLE` is `false`
+  (`services/qa/mod.rs`), so `validate_answer_citations`'s wrong-delta/
+  contradiction detectors are exercised today only via the existing hermetic
+  unit tests in `services/qa/grounding.rs`, not via the live `ask()` branch
+  (that branch is dead code until a trusted structured-entailment verifier
+  ships) — this is intentional fail-closed design, not a bug, and out of this
+  session's scope (provider/GLM readiness).
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
@@ -304,9 +326,24 @@ ghi trong issue đã `Done`.
   ≤1 event under fixed pull deadline → non-blocking permit enqueue; production
   `/auth/logout` router barriers (≤1 in-flight, no buffered batch after commit);
   concurrent delete trickle + `acl_mutate` role/collection barriers assert no new
-  sequenced content after commit. Gaps remaining for Done: delayed-producer
-  reconnect matrix green on CI agent; live purge/load bound evidence; production
-  ask still often extractive when entailment fail-closed.
+  sequenced content after commit. 2026-07-29 re-verify on local PG16+MinIO (no
+  Qdrant reachable in this sandbox): the delayed-producer reconnect matrix
+  (`live_ask_stream_last_event_id_purge_and_delayed_reconnect`) and the live
+  purge/load bound evidence (`live_ask_stream_maintenance_converges_under_bounded_load`)
+  both already exist in `tests/sse_stream_readiness.rs` and pass green —
+  neither actually dials Qdrant: every test in this file configures
+  `embedder: None`, so `hybrid_search`'s vector leg (`search_all_vector_legs`)
+  is never dispatched (`query_vector.as_deref()` short-circuits to
+  `Ok(Ok(Vec::new()))`) and retrieval runs FTS-only; the `QdrantClient` values
+  built in these tests are constructed but never make a network call. So both
+  gaps were already Done — the "green on CI agent" framing was the only
+  outstanding piece, and this run supplies that PG(+MinIO)-only evidence
+  locally. Remaining, unchanged: production ask still routes through the
+  fail-closed extractive path whenever entailment is unavailable (by design,
+  see P1B-R03 status — `STRUCTURED_ENTAILMENT_AVAILABLE = false` is a hardcoded
+  constant, not a bug; unblocking it needs a trusted structured-entailment
+  verifier / GLM readiness decision outside this session's scope, not more
+  test code).
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,

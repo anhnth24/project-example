@@ -1243,6 +1243,69 @@ paths:
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /audit:
+    get:
+      operationId: listAudit
+      summary: >-
+        List org audit log entries, newest first (requires audit.view).
+        Read-only; audit_log is append-only and org-isolated by RLS.
+      parameters:
+        - name: limit
+          in: query
+          description: Page size (server default 50, clamped to [1, 100]).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous page's nextCursor.
+          schema:
+            type: string
+        - name: action
+          in: query
+          description: >-
+            Exact audit action code filter (closed enum, e.g.
+            member.role_change, document.upload). Unknown values are rejected
+            with 400.
+          schema:
+            type: string
+        - name: actor
+          in: query
+          description: Filter to a specific actor user id.
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          description: Inclusive lower bound on occurredAt (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Inclusive upper bound on occurredAt (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated audit log entries for the caller's current org.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditPage"
+        "400":
+          description: Invalid action/actor/from/to/cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     bearerAuth:
@@ -1990,3 +2053,53 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/UsageEntry"
+    AuditEntry:
+      type: object
+      required:
+        - id
+        - seq
+        - action
+        - targetType
+        - outcome
+        - metadata
+        - occurredAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          format: int64
+        actorId:
+          type: [string, "null"]
+          format: uuid
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: [string, "null"]
+        outcome:
+          type: string
+          enum: [success, deny, error, intent]
+        metadata:
+          type: object
+          description: >-
+            Per-action scalar allowlist only (services::audit::sanitize_for_action)
+            — never document content, prompts, tokens, or PII.
+        requestId:
+          type: [string, "null"]
+          format: uuid
+        occurredAt:
+          type: string
+          format: date-time
+    AuditPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEntry"
+        page:
+          $ref: "#/components/schemas/PageInfo"

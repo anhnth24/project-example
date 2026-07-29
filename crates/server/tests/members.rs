@@ -818,3 +818,318 @@ async fn non_owner_admin_cannot_reach_the_owner_tier() {
 
     ephemeral.drop().await;
 }
+
+// ---------------------------------------------------------------------
+// Deterministic last-owner denial (complements the concurrent race above,
+// which is inherently racy about 409 vs 403). A single-owner org acting on
+// itself has no interleaving to race against: the caller IS the sole owner,
+// so `guard_owner_tier` always passes (an active owner may always manage an
+// owner) and `guard_last_owner` is the only gate — this must deterministically
+// 409, including when the owner targets their own membership.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn sole_owner_cannot_downgrade_or_remove_themselves() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let org = Uuid::new_v4();
+    let owner = Uuid::new_v4();
+    let owner_token = seed_admin(&pool, org, owner, "sole-owner@members-it.test").await;
+
+    // Self-downgrade: the org's only active owner may not demote themselves.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/members/{owner}"),
+        Some(&owner_token),
+        Some(json!({ "role": "admin" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "self-downgrade sole owner: {body}"
+    );
+    assert_eq!(body["code"], "last_owner");
+
+    // Self-remove: same invariant, the DELETE path.
+    let (status, body) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/members/{owner}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "self-remove sole owner: {body}"
+    );
+    assert_eq!(body["code"], "last_owner");
+
+    // Self-suspend: state transitions share the same guard.
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/members/{owner}"),
+        Some(&owner_token),
+        Some(json!({ "state": "suspended" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "self-suspend sole owner: {body}"
+    );
+    assert_eq!(body["code"], "last_owner");
+
+    // The membership must be untouched by all three rejected attempts.
+    let ctx = OrgContext::try_new(org, owner, [] as [&str; 0], []).unwrap();
+    with_org_txn(&pool, &ctx, move |txn| {
+        Box::pin(async move {
+            let row = txn
+                .query_one(
+                    "SELECT role, state FROM org_memberships WHERE org_id = $1 AND user_id = $2",
+                    &[&org, &owner],
+                )
+                .await?;
+            let role: String = row.get(0);
+            let state: String = row.get(1);
+            assert_eq!(
+                role, "owner",
+                "role must be unchanged after rejected downgrade"
+            );
+            assert_eq!(
+                state, "active",
+                "state must be unchanged after rejected suspend"
+            );
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+
+    ephemeral.drop().await;
+}
+
+// ---------------------------------------------------------------------
+// Missing `member.manage` permission must deny PATCH/DELETE with 403, not
+// leak whether the target user id exists (permission check runs before the
+// existence pre-check in both route handlers).
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn member_manage_permission_required_for_patch_and_delete() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let org = Uuid::new_v4();
+    let plain_user = Uuid::new_v4();
+    // Same org, but zero permissions granted (see `seed_plain_member` doc) —
+    // an authenticated caller with no `member.manage`.
+    let plain_token = seed_plain_member(&pool, org, plain_user, "no-perm@members-it.test").await;
+
+    // Target need not exist: the permission gate must deny before any lookup.
+    let some_target = Uuid::new_v4();
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/members/{some_target}"),
+        Some(&plain_token),
+        Some(json!({ "role": "admin" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "patch without member.manage: {body}"
+    );
+    assert_eq!(body["code"], "forbidden");
+
+    let (status, body) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/members/{some_target}"),
+        Some(&plain_token),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "delete without member.manage: {body}"
+    );
+    assert_eq!(body["code"], "forbidden");
+
+    // Both denials must have been audited (route layer calls
+    // `audit::record_deny` before returning, see routes/members.rs).
+    let ctx = OrgContext::try_new(org, plain_user, [] as [&str; 0], []).unwrap();
+    let (role_change_denied, remove_denied) = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let entries = db_audit::list_recent(txn, &ctx, 50).await?;
+                let role_change_denied = entries.iter().any(|entry| {
+                    entry.action == "member.role_change"
+                        && entry.resource_id == Some(some_target.to_string())
+                        && entry.outcome == fileconv_server::db::models::AuditOutcome::Deny
+                });
+                let remove_denied = entries.iter().any(|entry| {
+                    entry.action == "member.remove"
+                        && entry.resource_id == Some(some_target.to_string())
+                        && entry.outcome == fileconv_server::db::models::AuditOutcome::Deny
+                });
+                Ok((role_change_denied, remove_denied))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        role_change_denied,
+        "PATCH permission denial must be audited"
+    );
+    assert!(remove_denied, "DELETE permission denial must be audited");
+
+    ephemeral.drop().await;
+}
+
+// ---------------------------------------------------------------------
+// A user id that never had a membership row in the caller's own org (not a
+// cross-org row hidden by RLS, but a genuinely nonexistent one) must also
+// 404 — same no-oracle contract as the cross-org case.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn nonexistent_member_returns_404_for_patch_and_delete() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    let org = Uuid::new_v4();
+    let owner = Uuid::new_v4();
+    let owner_token = seed_admin(&pool, org, owner, "nonexistent-owner@members-it.test").await;
+    let never_seeded = Uuid::new_v4();
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/members/{never_seeded}"),
+        Some(&owner_token),
+        Some(json!({ "role": "admin" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "patch nonexistent member: {body}"
+    );
+    assert_eq!(body["code"], "not_found");
+
+    let (status, body) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/members/{never_seeded}"),
+        Some(&owner_token),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "delete nonexistent member: {body}"
+    );
+    assert_eq!(body["code"], "not_found");
+
+    ephemeral.drop().await;
+}
+
+// ---------------------------------------------------------------------
+// Happy-path role change and remove must each write an audit row carrying
+// old->new (role change) / old role (remove) in metadata, in addition to the
+// session-revocation behavior already covered by the `refresh_rejected_*`
+// tests above.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn role_change_and_remove_write_audit_rows_with_before_after() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+
+    // Two-owner org so downgrading/removing one target never trips the
+    // last-owner invariant.
+    let (org, _caller, target, caller_token) = seed_two_owner_org(&pool, "audit-role-remove").await;
+
+    let (status, body) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/members/{target}"),
+        Some(&caller_token),
+        Some(json!({ "role": "admin" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "downgrade target: {body}");
+
+    let ctx = OrgContext::try_new(org, target, [] as [&str; 0], []).unwrap();
+    let role_change_entry = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let entries = db_audit::list_recent(txn, &ctx, 50).await?;
+                Ok(entries.into_iter().find(|entry| {
+                    entry.action == "member.role_change"
+                        && entry.resource_id == Some(target.to_string())
+                }))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    let role_change_entry = role_change_entry.expect("role_change audit row must exist");
+    assert_eq!(role_change_entry.metadata["old_role"], "owner");
+    assert_eq!(role_change_entry.metadata["new_role"], "admin");
+
+    let (status, body) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/members/{target}"),
+        Some(&caller_token),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "remove target: {body}");
+
+    let remove_entry = with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let entries = db_audit::list_recent(txn, &ctx, 50).await?;
+                Ok(entries.into_iter().find(|entry| {
+                    entry.action == "member.remove" && entry.resource_id == Some(target.to_string())
+                }))
+            })
+        }
+    })
+    .await
+    .unwrap();
+    let remove_entry = remove_entry.expect("member.remove audit row must exist");
+    // `target` was downgraded to `admin` just above, so the removed row's
+    // last known role is `admin`, not the original `owner`.
+    assert_eq!(remove_entry.metadata["old_role"], "admin");
+
+    ephemeral.drop().await;
+}
