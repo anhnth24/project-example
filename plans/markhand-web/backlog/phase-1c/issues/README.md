@@ -174,10 +174,13 @@ ADR RLS ───────→ 1C-08 ─────────────�
   (pre-existing, không đổi); grants/status/cache/revoke tests (**done**: `tests/acl_cache.rs`
   + unit tests `auth::context_cache`).
 - **Security/migration:** Backfill ACL version (**done**: `DEFAULT 1`, expand-only,
-  migration `0031`). **Out:** nested/time-based groups; groups/role-based grant resolution
-  (tính năng mới, không phải phần "cache" — xem trên); version bump cho collection
-  create/soft-delete/visibility ngoài `services::acl_mutate` (khoảng trống đã biết, xem
-  trên); operator-configurable cache capacity/TTL qua env.
+  migration `0031`). **Gap version-bump đã ĐÓNG (migration `0033`, 2026-07-29)**: trigger
+  DB `bump_org_acl_version()` trên `collections`/`collection_user_access`/
+  `org_memberships`/`roles`/`role_permissions` — bump cùng transaction cho MỌI writer,
+  kể cả SQL trực tiếp (fixtures/vận hành; CI `rust-integration` bắt được đúng lỗ này
+  ở `api_http_contracts`/`citation_authz_matrix` trước khi vá). **Out:**
+  nested/time-based groups; groups/role-based grant resolution (tính năng mới, không
+  phải phần "cache" — xem trên); operator-configurable cache capacity/TTL qua env.
 
 ## 1C-06 — PostgreSQL ACL enforcement
 
