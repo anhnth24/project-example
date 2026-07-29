@@ -282,8 +282,16 @@ ghi trong issue đã `Done`.
   contradiction detectors are exercised today only via the existing hermetic
   unit tests in `services/qa/grounding.rs`, not via the live `ask()` branch
   (that branch is dead code until a trusted structured-entailment verifier
-  ships) — this is intentional fail-closed design, not a bug, and out of this
-  session's scope (provider/GLM readiness).
+  ships) — this is intentional fail-closed design, not a bug. **Dev-gate
+  landed 2026-07-29 (owner quyết định)**: provider HTTP OpenAI-compatible đã
+  có sẵn từ trước (`OpenAiCompatibleChat`, env `MARKHAND_GLM_*`/`MARKHAND_CHAT_*`);
+  phần mới là cờ opt-in `MARKHAND_QA_ALLOW_UNVERIFIED_LLM` (default OFF —
+  hành vi extractive fail-closed giữ nguyên từng bit): khi bật VÀ provider
+  cấu hình, answer LLM đi qua `validate_answer_citations` (các detector
+  wrong-delta/fabricated-citation giờ reachable từ ask thật), mode wire mới
+  `llm_unverified` + warning cố định "chưa kiểm chứng entailment" — không bao
+  giờ claim grounded; validation fail → rớt về extractive. Claim GLM
+  *grounded* thật vẫn chờ structured-entailment verifier (không đổi).
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
@@ -343,7 +351,10 @@ ghi trong issue đã `Done`.
   see P1B-R03 status — `STRUCTURED_ENTAILMENT_AVAILABLE = false` is a hardcoded
   constant, not a bug; unblocking it needs a trusted structured-entailment
   verifier / GLM readiness decision outside this session's scope, not more
-  test code).
+  test code). **Dev-gate 2026-07-29** (xem R03): `run_producer` có nhánh
+  opt-in cùng cờ — buffer toàn bộ answer GLM, validate xong mới tokenize qua
+  đường `ask.token` sẵn có (không phải passthrough token thật — chủ ý, vì
+  validation cần cả answer); stream token thật để dành khi hết fail-closed.
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,

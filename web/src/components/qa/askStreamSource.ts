@@ -1,5 +1,5 @@
-// Thin seam between `AskPanel` and `api/sse.ts`'s `SseConnection`, building
-// the `POST /ask/stream` request — same shape as
+// Thin seam between `ChatTurnBubble` (via `useAskStream`) and `api/sse.ts`'s
+// `SseConnection`, building the `POST /ask/stream` request — same shape as
 // `components/upload/jobEventsSource.ts`'s `createJobEventsSource` for
 // `GET /jobs/{jobId}/events`, minus that file's "mocks never mock SSE" caveat:
 // `mocks/handlers/qa.ts` registers `askStream` as a real fetch-mocked

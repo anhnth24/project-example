@@ -13,7 +13,16 @@
  * button labels). Those are bumped to a deeper ramp step below, each marked
  * "contrast:" at the point of change.
  */
-@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
+/* Self-hosted fonts (@fontsource, bundled by Vite — no CDN request, so
+ * rendering is identical online/offline and CSP stays 'self'). Both families
+ * ship a real `vietnamese` unicode-range subset; the previous Google-hosted
+ * Caprasimo/Figtree pair had none (latin/latin-ext only, missing
+ * U+1EA0–U+1EF1), so every diacritic-carrying glyph fell back to whatever
+ * system font the machine had — mixed-face headings that differed per OS. */
+@import '@fontsource/baloo-2/700.css';
+@import '@fontsource/be-vietnam-pro/400.css';
+@import '@fontsource/be-vietnam-pro/600.css';
+@import '@fontsource/be-vietnam-pro/700.css';
 
 :root {
   --color-bg: #f5ead8;
@@ -53,9 +62,9 @@
   --color-accent-2-800: #3d472b;
   --color-accent-2-900: #272e1b;
 
-  --font-heading: 'Caprasimo', system-ui, sans-serif;
-  --font-heading-weight: 400;
-  --font-body: 'Figtree', system-ui, sans-serif;
+  --font-heading: 'Baloo 2', system-ui, sans-serif;
+  --font-heading-weight: 700;
+  --font-body: 'Be Vietnam Pro', system-ui, sans-serif;
 
   --space-1: 4.4px;
   --space-2: 8.8px;

@@ -451,7 +451,7 @@ function seedCollectionOrgId(): Map<string, string> {
 /**
  * P2-10 (Q&A) demo document — the one seeded document with **two** published
  * versions, so `mode: 'compare'`/`'history'` ask requests (and the version
- * picker that drives them, `components/qa/AskPanel.tsx`) have something real
+ * picker that drives them, `components/qa/ChatPanel.tsx`) have something real
  * to compare instead of every other seeded document's single version. Added
  * into the existing "Product Specs" collection (`mockUuid(11)`, already in
  * `DEMO_USER.allowedCollectionIds`) rather than a new collection, and purely

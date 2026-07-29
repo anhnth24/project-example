@@ -45,7 +45,7 @@ export function SearchPanel({
 }: {
   collectionIds?: string[];
   client?: ApiClient;
-  /** Lets `AskPanel`'s compare/history document picker reuse whichever documents a search already turned up, instead of asking the user to type a UUID. */
+  /** Lets `ChatPanel`'s compare/history document picker reuse whichever documents a search already turned up, instead of asking the user to type a UUID. */
   onHitsChanged?: (hits: SearchHit[]) => void;
 }) {
   const inputId = useId();

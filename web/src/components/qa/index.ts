@@ -1,5 +1,7 @@
 export { SearchPanel, type SearchHit } from './SearchPanel';
-export { AskPanel } from './AskPanel';
+export { ChatPanel } from './ChatPanel';
+export { ChatTurnBubble } from './ChatTurnBubble';
+export { describeAnswerMode, type AnswerModeInfo } from './answerMode';
 export { CitationCard, type CitationPin } from './CitationCard';
 export { DocumentPreviewPanel } from './DocumentPreviewPanel';
 export { useAskStream, type UseAskStreamResult } from './useAskStream';

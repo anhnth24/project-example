@@ -42,21 +42,18 @@ pub const WEB_DIST_ENV: &str = "MARKHAND_WEB_DIST_DIR";
 /// Narrowest policy that still loads the app as shipped today:
 /// - `script-src 'self'` — the Vite build emits only `<script type="module"
 ///   src="/assets/...">`, no inline scripts, so no `unsafe-inline` is needed.
-/// - `style-src`/`font-src` allow `fonts.googleapis.com`/`fonts.gstatic.com`
-///   because `web/src/styles.css` currently loads Caprasimo/Figtree via a
-///   CSS `@import` from Google Fonts (checked 2026-07-27). This is the one
-///   deliberate cross-origin allowance in an otherwise `'self'`-only policy.
-///   **Product decision handed back, not made silently**: the alternative is
-///   self-hosting those two font families under `web/dist` and dropping this
-///   allowance entirely — narrower, but requires a `web/src` change outside
-///   this crate's ownership. Until that happens, this is the CSP.
+/// - `style-src`/`font-src` are `'self'`-only: fonts are self-hosted via
+///   `@fontsource` and bundled into `web/dist` by Vite (2026-07-29 — chosen
+///   over the earlier Google Fonts `@import`, whose Caprasimo/Figtree pair
+///   also lacked a `vietnamese` unicode-range subset and broke diacritic
+///   rendering). No cross-origin allowance remains in this policy.
 /// - no `data:`/`unsafe-inline` anywhere; `object-src`/`base-uri`/
 ///   `frame-ancestors` are all `'none'`.
 const CONTENT_SECURITY_POLICY: &str = concat!(
     "default-src 'self'; ",
     "script-src 'self'; ",
-    "style-src 'self' https://fonts.googleapis.com; ",
-    "font-src 'self' https://fonts.gstatic.com; ",
+    "style-src 'self'; ",
+    "font-src 'self'; ",
     "img-src 'self'; ",
     "connect-src 'self'; ",
     "object-src 'none'; ",
@@ -242,8 +239,7 @@ mod tests {
     const EXPECT_FRAME: &str = "DENY";
     const EXPECT_REFERRER: &str = "strict-origin-when-cross-origin";
     const EXPECT_CSP: &str = "default-src 'self'; script-src 'self'; \
-style-src 'self' https://fonts.googleapis.com; \
-font-src 'self' https://fonts.gstatic.com; img-src 'self'; \
+style-src 'self'; font-src 'self'; img-src 'self'; \
 connect-src 'self'; object-src 'none'; base-uri 'none'; \
 frame-ancestors 'none'; form-action 'self'";
 
