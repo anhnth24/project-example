@@ -773,7 +773,8 @@ code {
 }
 
 /* — forms — */
-.field > label {
+.field > label,
+.field-label {
   display: block;
   font-size: 12px;
   margin-bottom: 5px;

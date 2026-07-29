@@ -448,6 +448,65 @@ function seedCollectionOrgId(): Map<string, string> {
   ]);
 }
 
+/**
+ * P2-10 (Q&A) demo document — the one seeded document with **two** published
+ * versions, so `mode: 'compare'`/`'history'` ask requests (and the version
+ * picker that drives them, `components/qa/AskPanel.tsx`) have something real
+ * to compare instead of every other seeded document's single version. Added
+ * into the existing "Product Specs" collection (`mockUuid(11)`, already in
+ * `DEMO_USER.allowedCollectionIds`) rather than a new collection, and purely
+ * additive to `seedDocuments()`/`seedVersions()` above — no existing id's data
+ * changes, so `LibraryPage.test.tsx`/`DocumentRowActions.test.tsx` (which key
+ * off specific pre-existing titles/ids, not "how many documents total") stay
+ * unaffected. Numeric id range (150/1500/1501) is disjoint from every id used
+ * elsewhere in this file.
+ */
+export const QA_COMPARE_DOCUMENT_ID = mockUuid(150);
+export const QA_COMPARE_VERSION_A_ID = mockUuid(1500);
+export const QA_COMPARE_VERSION_B_ID = mockUuid(1501);
+
+function seedQaCompareDocument(
+  documents: Map<string, Document[]>,
+  versions: Map<string, DocumentVersion[]>,
+): void {
+  const collectionId = mockUuid(11);
+  const docs = documents.get(collectionId) ?? [];
+  docs.push({
+    id: QA_COMPARE_DOCUMENT_ID,
+    collectionId,
+    title: 'Chính sách ngân sách vận hành.pdf',
+    state: 'indexed',
+    currentVersionId: QA_COMPARE_VERSION_B_ID,
+    createdAt: mockTimestamp(50),
+    updatedAt: mockTimestamp(95),
+  });
+  documents.set(collectionId, docs);
+  versions.set(QA_COMPARE_DOCUMENT_ID, [
+    {
+      id: QA_COMPARE_VERSION_A_ID,
+      documentId: QA_COMPARE_DOCUMENT_ID,
+      versionNumber: 1,
+      isCurrent: false,
+      sourceContentSha256: 'd'.repeat(64),
+      effectiveFrom: mockTimestamp(50),
+      effectiveTo: mockTimestamp(95),
+      changeSummary: 'Ngân sách vận hành được phê duyệt ban đầu.',
+      createdAt: mockTimestamp(50),
+    },
+    {
+      id: QA_COMPARE_VERSION_B_ID,
+      documentId: QA_COMPARE_DOCUMENT_ID,
+      versionNumber: 2,
+      isCurrent: true,
+      sourceContentSha256: 'e'.repeat(64),
+      effectiveFrom: mockTimestamp(95),
+      effectiveTo: null,
+      changeSummary: 'Điều chỉnh ngân sách vận hành theo thiết kế mới.',
+      createdAt: mockTimestamp(95),
+    },
+  ]);
+}
+
 function seedJobs(): Map<string, Job> {
   const map = new Map<string, Job>();
   const job: Job = {
@@ -484,14 +543,17 @@ function seedConflicts(): ConflictRecord[] {
 }
 
 function freshStore(): Store {
+  const documents = seedDocuments();
+  const versions = seedVersions();
+  seedQaCompareDocument(documents, versions);
   return {
     users: [{ ...DEMO_USER }],
     refreshTokens: new Map(),
     accessTokens: new Map(),
     collections: seedCollections(),
     collectionOrgId: seedCollectionOrgId(),
-    documents: seedDocuments(),
-    versions: seedVersions(),
+    documents,
+    versions,
     jobs: seedJobs(),
     conflicts: seedConflicts(),
     downloadCapabilities: new Map(),

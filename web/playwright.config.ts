@@ -3,8 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 
 // The P2-15 E2E suite drives a real browser against a *mock-mode* dev server
 // (`VITE_MARKHAND_MOCK=1`), so the whole flow is deterministic and needs no
-// live backend. `ask → citation` is absent: the Q&A page is a placeholder
-// until P2-10 ships (blocked on R02/R03/R05).
+// live backend. `ask → citation` (P2-10, `e2e/qa.spec.ts`) is covered here
+// too now — the owner lowered P2-10's gate 2026-07-29 to build on the
+// contract + mock server rather than waiting on R02/R03/R05.
 //
 // The real-deployment half of P2-15 lives in `e2e-real/` and runs as the
 // `real` project below, driven only by `deploy/scripts/web-e2e-real.sh`
