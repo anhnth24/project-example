@@ -921,7 +921,17 @@ pub struct IndexMetadata {
 /// Expected public columns for every modeled/business table (exact-set drift guard).
 pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static str])] {
     &[
-        ("orgs", &["id", "slug", "name", "created_at", "updated_at"]),
+        (
+            "orgs",
+            &[
+                "id",
+                "slug",
+                "name",
+                "created_at",
+                "updated_at",
+                "acl_version",
+            ],
+        ),
         (
             "users",
             &[

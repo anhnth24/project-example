@@ -5,6 +5,7 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::db::error::DbError;
+use crate::db::orgs;
 use crate::services::authz_lock;
 
 /// Revoke a permission code from every role held by `user_id` in `org_id`.
@@ -34,6 +35,15 @@ pub async fn revoke_role_permission_for_principal(
         )
         .await
         .map_err(DbError::from)?;
+    if n > 0 {
+        // 1C-05: this DELETE removes a `role_permissions` row shared by
+        // EVERY member holding that role, not just `user_id` — the cache
+        // invalidation must be org-wide for the same reason (see
+        // migration 0031's doc comment). Skipped when `n == 0` (nothing
+        // actually changed) so a no-op revoke does not force every
+        // principal in the org to re-resolve for free.
+        orgs::bump_acl_version(txn, org_id).await?;
+    }
     Ok(n)
 }
 
@@ -64,5 +74,8 @@ pub async fn revoke_collection_access_for_principal(
     )
     .await
     .map_err(DbError::from)?;
+    // 1C-05: this changes visibility/ownership org-wide (not just for
+    // `user_id`), so the cache invalidation is org-wide too.
+    orgs::bump_acl_version(txn, org_id).await?;
     Ok(())
 }

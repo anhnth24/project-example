@@ -6,6 +6,7 @@ use std::pin::Pin;
 use deadpool_postgres::Pool;
 use uuid::Uuid;
 
+use crate::auth::context_cache::OrgContextCache;
 use crate::auth::jwt::JwtKeys;
 use crate::auth::session::{
     self, logout_session, refresh_session, revoke_all_user_families, SessionError, TokenPair,
@@ -66,11 +67,19 @@ pub struct PasswordAuthProvider {
     pool: Pool,
     auth: AuthConfig,
     keys: JwtKeys,
+    /// 1C-05 bounded org-context cache, one instance per process/provider.
+    /// See `auth::context_cache` for the invalidation design.
+    context_cache: OrgContextCache,
 }
 
 impl PasswordAuthProvider {
     pub fn new(pool: Pool, auth: AuthConfig, keys: JwtKeys) -> Self {
-        Self { pool, auth, keys }
+        Self {
+            pool,
+            auth,
+            keys,
+            context_cache: OrgContextCache::default(),
+        }
     }
 
     pub fn keys(&self) -> &JwtKeys {
@@ -83,6 +92,12 @@ impl PasswordAuthProvider {
 
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// 1C-05 bounded, TTL + version-checked cache for `OrgContext`
+    /// resolution. See `auth::context_cache` module doc.
+    pub fn context_cache(&self) -> &OrgContextCache {
+        &self.context_cache
     }
 }
 
