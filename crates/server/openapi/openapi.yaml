@@ -1654,6 +1654,14 @@ components:
           type: string
         mode:
           type: string
+          description: >-
+            offline_extractive|fallback_extractive|local_llm|cloud_llm|
+            subscription_cli|llm_unverified. Free-form string (not a closed
+            enum) so new modes can ship without a schema bump. llm_unverified
+            is a dev-gate-only value (env MARKHAND_QA_ALLOW_UNVERIFIED_LLM,
+            default off): the LLM answer passed citation/claim validation but
+            structured entailment is still unavailable, so it is never
+            grounded — the response always carries a matching warning.
         citations:
           type: array
           items:
