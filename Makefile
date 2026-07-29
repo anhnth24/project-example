@@ -1,4 +1,16 @@
-SHELL := /bin/bash
+# Linux/macOS/CI use /bin/bash. Windows Make cannot resolve that path; prefer
+# Git for Windows (not System32\bash.exe, which is the WSL launcher).
+ifeq ($(OS),Windows_NT)
+  ifneq ($(wildcard C:/Program Files/Git/bin/bash.exe),)
+    SHELL := C:/Program Files/Git/bin/bash.exe
+  else ifneq ($(wildcard C:/Program Files (x86)/Git/bin/bash.exe),)
+    SHELL := C:/Program Files (x86)/Git/bin/bash.exe
+  else
+    SHELL := bash
+  endif
+else
+  SHELL := /bin/bash
+endif
 
 .PHONY: install check-toolchain check-static check-ci check-boundaries check-migrations \
 	check-fixtures check-markhand-gates check-roadmap check-dependencies check-rust check-rust-tests \
@@ -6,7 +18,8 @@ SHELL := /bin/bash
 	check-corpus check-corpus-pending check-web check-desktop check-foundation \
 	check-spike spike-up spike-health spike-down spike-reset spike-lifecycle \
 	check-desktop-baseline p0-desktop-baseline bundle-linux dev-up dev-health dev-down dev-reset \
-	dev-server-smoke dev-init dev-seed-all dev-seed-password dev-print-defaults dev-download-embedding
+	dev-server dev-web dev-server-smoke dev-init dev-seed-all dev-seed-password \
+	dev-print-defaults dev-download-embedding
 
 install:
 	pnpm install --frozen-lockfile
@@ -134,6 +147,12 @@ dev-up:
 
 dev-health:
 	deploy/scripts/health.sh
+
+dev-server:
+	bash deploy/scripts/dev-server.sh
+
+dev-web:
+	pnpm --dir web dev
 
 dev-server-smoke:
 	deploy/scripts/server-smoke.sh
