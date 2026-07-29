@@ -2157,6 +2157,12 @@ textarea.input {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
+  /* The global `button` rule paints cream-on-accent; on this transparent
+     list row that inherited cream text is invisible on the cream ground. */
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-weight: 400;
+  min-height: 0;
   cursor: pointer;
 }
 
