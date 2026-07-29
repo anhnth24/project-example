@@ -218,6 +218,15 @@ function citeIdFor(index: number): string {
 function passageToCitation(passage: Passage, citeId: string): CitationPin {
   return {
     citeId,
+    // P2-10 gap close — these three now mirror the real
+    // `services::citation::CitationPin` shape (see `openapi.yaml`'s
+    // `CitationPin` doc comment), matching the same `documentId`/
+    // `collectionId`/`versionId` this mock's `passageCatalog()` already
+    // carries for the corresponding `search` hit, so a citation and its
+    // matching search hit deep-link to the exact same document/version.
+    logicalDocumentId: passage.documentId,
+    versionId: passage.versionId,
+    collectionId: passage.collectionId,
     sourceContentSha256: `src-${passage.versionId}`,
     canonicalMarkdownSha256: `md-${passage.versionId}`,
     quoteSha256: `quote-${passage.versionId}`,

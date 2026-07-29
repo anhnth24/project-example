@@ -249,7 +249,7 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     assert_markhand_app_role(&pool).await;
 
     let markdown = "# BA\n\nKinh phí được phê duyệt là 15 triệu đồng.\n";
-    let (ctx, document_id, _version_id, token) = seed_ask_doc(&pool, &store, markdown).await;
+    let (ctx, document_id, version_id, token) = seed_ask_doc(&pool, &store, markdown).await;
 
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let response = ask(
@@ -279,6 +279,23 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
         .answer
         .to_ascii_lowercase()
         .contains("glm grounded"));
+
+    // P2-10 gap close: `CitationPin` (`services::citation`) must carry the
+    // exact seeded document/version/collection identity end-to-end through
+    // `ask()` — this is what `CitationCard.tsx`'s `/library/:collectionId?
+    // doc=:documentId` deep-link (web) relies on; the field has always been
+    // on the struct, this asserts the live `ask()` path actually returns it
+    // populated with the *correct* value rather than merely present.
+    assert!(
+        !response.citations.is_empty(),
+        "expected at least one citation pin"
+    );
+    let expected_collection_id = *ctx.allowed_collection_ids().iter().next().unwrap();
+    for citation in &response.citations {
+        assert_eq!(citation.logical_document_id, document_id);
+        assert_eq!(citation.version_id, version_id);
+        assert_eq!(citation.collection_id, expected_collection_id);
+    }
 
     // Stream auth closes when cited document is deleted mid-stream.
     let keys = JwtKeys::from_auth(&test_auth_config()).unwrap();

@@ -9,7 +9,7 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 + serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
 xem chi tiết bên dưới), P2-15 (E2E — nửa mock-based xong, nay có thêm flow ask→citation
 của P2-10; nửa real-deployment hoãn), **P2-17** (Document graph — owner request mới
-2026-07-29, MVP server+web+mock xong, `similarity`/Qdrant chờ vòng riêng — xem chi tiết
+2026-07-29, MVP server+web+mock xong, `similarity` đã landed 2026-07-29 (recommend-by-id, org-filter bắt buộc, threshold 0.5 const, cap 500 cạnh/200 node — test tích hợp `graph_similarity_edges_from_qdrant_recommend` gated `MARKHAND_TEST_QDRANT_URL`, evidence đầu tiên trên CI `rust-integration`; follow-up: batch recommend + tune threshold trên corpus thật) — xem chi tiết
 bên dưới), **P2-18** (Project grouping — owner request mới 2026-07-29, org → project →
 collection → document, MVP server+web+mock xong — xem chi tiết bên dưới). P2-11/P2-12
 rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice) landed ở #317.
@@ -107,11 +107,30 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #312. Collection nav, filter + cursor pagination thật, preview qua SafeMarkdown. Không có endpoint cross-collection nên "tất cả bộ sưu tập" chỉ điều hướng.
 
+  **Cập nhật (URL param cho tài liệu đang mở, 2026-07-29):** tài liệu đang chọn chuyển từ
+  state cục bộ (`ViewState.selectedDocumentId`) sang query param thật trên URL
+  (`/library/:collectionId?doc=<documentId>` — `RouterProvider`'s `searchParams`, mới
+  thêm cạnh `pathname`/`match`). Reload giữ nguyên tài liệu đang mở (route param được
+  parse lại từ URL, không phải từ state đã mất); back/forward hoạt động qua
+  `popstate` có sẵn của `RouterProvider`, không cần code riêng. `?doc=` có thể trỏ tới
+  một tài liệu không nằm trên trang hiện tại (deep-link từ citation hoặc reload không
+  giữ vị trí phân trang) — rơi vào trường hợp đó thì `LibraryPage` gọi thẳng
+  `GET /documents/{documentId}` để lấy tài liệu, thay vì chỉ tìm trong `items` của trang
+  đang tải. Đổi trang (`goToPrevPage`/`goToNextPage`) xoá `?doc=` (điều hướng, không chỉ
+  set state) vì tài liệu đã chọn thuộc trang cũ. Đây cũng là điều kiện để đóng gap
+  citation deep-link của P2-10 (xem mục đó): `CitationCard` dựng đúng path này.
+  Thêm hướng dẫn/nút mở nhanh bộ sưu tập đầu tiên trên màn "Tất cả bộ sưu tập" (điều
+  hướng thôi, không phải panel upload cross-collection — giữ đúng giới hạn ghi ở dòng
+  Status phía trên).
+
 - **Plan/files:** Adapt browser-safe LibraryView; collection navigation, filter/page,
   status, preview states + SafeMarkdown; unresolved conflict badge/count, side-by-side
   cited BA/design/dev claims và resolved-history link.
 - **Depends:** P2-02/03/05/06. **Acceptance/tests:** Stable URL/pagination; API-only
-  preview; unsafe markdown, 403/404, switch-race tests.
+  preview; unsafe markdown, 403/404, switch-race tests. **+ ?doc= param**: select
+  pushes URL; deep-link preselects + previews; reload (fresh mount, same URL) keeps
+  selection; back/forward moves selection (`LibraryPage.test.tsx`'s "P2-07 URL param"
+  suite); E2E citation→preview (`qa.spec.ts`).
 - **Security:** No local path/public key. **Out:** desktop editor/compare.
 
 ## P2-08 — Upload progress và job lifecycle
@@ -192,6 +211,24 @@ P2-15 + Phase 1C gate → P2-16
   được giữ kèm epoch nó được tạo ra, và bị xoá sạch (adjust-state-while-rendering) ngay
   khi epoch đổi (đổi org/logout) — đóng luôn gap "chưa có test org-switch riêng cho
   AskPanel" đã ghi nhận trước đó (xem Acceptance/tests bên dưới).
+
+  **Cập nhật (citation deep-link gap đóng, 2026-07-29):** gap ở trên (`CitationPin`
+  không có `logicalDocumentId`/`versionId`) là gap **contract/spec**, không phải gap dữ
+  liệu — server (`services::citation::CitationPin`) đã luôn serialize
+  `logicalDocumentId`/`versionId`/`collectionId`; `openapi.yaml`'s `CitationPin` schema
+  chỉ đơn giản chưa khai báo chúng, nên `openapi-typescript` sinh type thiếu 3 field đó
+  dù JSON thật đã có sẵn. Đã đóng bằng cách nới schema (field mới optional/nullable,
+  không đổi required, không bump version — additive) + regenerate `contract.ts`.
+  `CitationCard` giờ dựng link thật `/library/:collectionId?doc=:documentId`
+  (`buildLibraryDocPath`, cùng route `LibraryPage` đọc — xem P2-07) khi pin mang đủ định
+  danh; `ChatTurnBubble` vẫn giữ ghi chú cũ (đổi câu chữ: "một số trích dẫn") cho trường
+  hợp hiếm một pin không mang định danh. `LibraryPage` chuyển từ state cục bộ sang
+  `?doc=` trên URL (xem P2-07) nên deep-link này giữ được cả reload lẫn back/forward.
+  Mock (`mocks/handlers/qa.ts`'s `passageToCitation`) cập nhật theo cùng shape. Còn lại:
+  `/citations/resolve`'s response object (inline, không `$ref` tới `CitationPin`) chưa có
+  `collectionId` — không nằm trong scope lần này (caller resolve đã biết
+  `logicalDocumentId`/`versionId` trước khi gọi, theo đúng thiết kế request của endpoint
+  đó).
 
 - **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
   readiness, stream reducer, fallback + version-change notes, citation deep-link with
@@ -318,9 +355,12 @@ P2-15 + Phase 1C gate → P2-16
   (thuật toán thuần); OpenAPI path/schemas (`GraphNode`/`GraphEdge`/`GraphCommunity`/
   `GraphResponse`) + `ROUTE_INVENTORY`; `web/src/pages/GraphPage.tsx`,
   `components/graph/**`, `lib/forceLayout.ts`, `mocks/handlers/graph.ts`.
-- **Depends:** P2-07 (điều hướng vào `/library/:collectionId` khi click node — không có
-  route sâu tới preview một tài liệu cụ thể, vì `LibraryPage` chọn tài liệu bằng state
-  cục bộ chứ không phải URL param) + backend 1B claims/conflicts + P1B-R05 ask-stream.
+- **Depends:** P2-07 (điều hướng vào `/library/:collectionId` khi click node — vẫn chưa
+  sâu tới preview một tài liệu cụ thể *từ đồ thị*: `GraphPage` truyền `collectionId`,
+  không truyền `documentId`, dù `LibraryPage` giờ đã đọc tài liệu đang mở từ URL param
+  `?doc=` — xem P2-07 — nên việc "click node → mở đúng tài liệu đó" chỉ cần
+  `GraphPage` build `?doc=` vào cùng link, chưa làm ở đây) + backend 1B
+  claims/conflicts + P1B-R05 ask-stream.
 - **Acceptance/tests:** `services::graph` unit test (components/pruning, xác định);
   `tests/graph.rs` DB-gated (permission, conflict edge, co_citation edge, org isolation,
   ACL riêng tư, bounded cap — chạy thật trên PG local, 6/6 pass); web unit
@@ -350,6 +390,15 @@ P2-15 + Phase 1C gate → P2-16
   route/rail admin mới cho một tính năng "đơn giản" theo yêu cầu owner). Project
   deletion ngoài phạm vi vòng này (tránh bàn semantics bộ sưu tập mồ côi).
 
+  **Cập nhật (409 cho trùng tên, 2026-07-29):** `POST /projects` và `POST /collections`
+  đều đã có unique constraint `(org_id, name)` trong DB từ trước (`uq_projects__org_name`
+  migrations/0032, `uq_collections__org_name` migrations/0004) nhưng route trước đó map
+  MỌI lỗi DB không phải `NotFound` thành 500 `internal_error` — trùng tên rơi vào đó
+  thay vì 409. Đóng theo đúng tiền lệ `services::orgs::CreateOrgError::SlugTaken`
+  (`routes::orgs`): thêm `RouteError::NameTaken` map từ `SqlState::UNIQUE_VIOLATION`
+  → `409 name_taken` ở cả hai route. `ROUTE_INVENTORY` + `openapi.yaml` (`createProject`/
+  `createCollection` responses) thêm `409`.
+
 - **Plan/files:** `crates/server/migrations/0032_expand_projects.sql`;
   `db/projects.rs`, `routes/projects.rs`; `routes/collections.rs` (assign-project +
   `projectId`/`projectName` hydration), `routes/search.rs`/`routes/ask.rs` (projectId
@@ -363,7 +412,8 @@ P2-15 + Phase 1C gate → P2-16
   backend 1B collections + retrieval (`services::retrieval::resolve_scope`).
 - **Acceptance/tests:** `tests/projects.rs` DB-gated (CRUD happy/validate/403/404, org
   isolation, assign/unassign, search filter theo project trả đúng tập tài liệu, 404
-  projectId lạ — chạy trên PG local); `db::models`/`schema_migrations.rs` drift guard
+  projectId lạ, **409 trùng tên cho cả `POST /projects` và `POST /collections`** —
+  chạy trên PG local); `db::models`/`schema_migrations.rs` drift guard
   cập nhật cho bảng `projects` + cột `collections.project_id`; web unit
   (`QaPage.test.tsx` phạm vi dropdown + reset khi đổi org, `LibraryPage.test.tsx` nhóm
   nav theo dự án, `ProjectsPanel.test.tsx` tạo/gán/bỏ gán + permission gate) +
