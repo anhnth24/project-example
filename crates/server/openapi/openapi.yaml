@@ -257,6 +257,41 @@ paths:
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /collections/{collectionId}/assign-project:
+    parameters:
+      - $ref: "#/components/parameters/collectionId"
+    post:
+      operationId: assignCollectionProject
+      summary: Assign or unassign this collection's project (P2-18)
+      description: >
+        `projectId: null` unassigns; `projectId: "<uuid>"` assigns — the key
+        itself is required, there is no "leave unchanged" outcome. A
+        dedicated action route rather than folding into the metadata PATCH —
+        see `docs/conventions/api.md` and `routes::collections`'s module doc
+        for why. Same `doc.upload` permission gate as create/update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignProjectRequest"
+      responses:
+        "200":
+          description: Collection with its (possibly now null) project assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Collection"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          description: Collection not found, or projectId does not resolve in this org.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
   /collections/{collectionId}/documents:
     get:
       operationId: listDocuments
@@ -866,6 +901,13 @@ paths:
           $ref: "#/components/responses/ApiError"
         "403":
           $ref: "#/components/responses/ApiError"
+        "404":
+          description: >
+            projectId does not resolve to a project in the caller's org (P2-18).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /ask:
@@ -890,6 +932,13 @@ paths:
           $ref: "#/components/responses/ApiError"
         "403":
           $ref: "#/components/responses/ApiError"
+        "404":
+          description: >
+            projectId does not resolve to a project in the caller's org (P2-18).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /ask/stream:
@@ -1062,6 +1111,80 @@ paths:
               schema:
                 $ref: "#/components/schemas/Org"
         "401":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /projects:
+    get:
+      operationId: listProjects
+      summary: List every project in the caller's org (P2-18)
+      description: >
+        Org-scoped, no permission gate beyond active membership — same shape
+        as GET /collections. "All projects" in the UI/API is simply the
+        absence of a projectId filter on /search, /ask, /ask/stream; it is
+        never a row this endpoint returns.
+      responses:
+        "200":
+          description: Projects in the caller's org.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectPage"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      operationId: createProject
+      summary: Create a project (P2-18)
+      description: >
+        Same `doc.upload` permission gate as POST /collections — see
+        `routes::projects`'s module doc for why no separate permission was
+        added.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    patch:
+      operationId: updateProject
+      summary: Rename a project (P2-18)
+      description: >
+        Rename only — no other mutable field yet. Project deletion is
+        explicitly out of scope for this slice.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProjectRequest"
+      responses:
+        "200":
+          description: Project renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
@@ -1306,6 +1429,32 @@ paths:
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /graph:
+    get:
+      operationId: getGraph
+      summary: >-
+        Document Graph MVP (P2-17): nodes/edges/communities for caller-visible
+        documents (requires qa.query, same precedent as /conflicts).
+      parameters:
+        - name: collectionId
+          in: query
+          description: Restrict nodes to one collection (must be in the caller's allow-list).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Bounded document graph (nodes/edges/communities).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphResponse"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     bearerAuth:
@@ -1357,6 +1506,13 @@ components:
         format: uuid
     orgId:
       name: orgId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    projectId:
+      name: projectId
       in: path
       required: true
       schema:
@@ -1428,6 +1584,13 @@ components:
         createdAt:
           type: string
           format: date-time
+        projectId:
+          type: [string, "null"]
+          format: uuid
+          description: P2-18 — null when this collection has no project assigned.
+        projectName:
+          type: [string, "null"]
+          description: Joined display name for projectId (null together with it).
     CollectionPage:
       type: object
       required: [items, page]
@@ -1438,6 +1601,50 @@ components:
             $ref: "#/components/schemas/Collection"
         page:
           $ref: "#/components/schemas/PageInfo"
+    Project:
+      type: object
+      required: [id, name, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    ProjectPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    UpdateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    AssignProjectRequest:
+      type: object
+      required: [projectId]
+      properties:
+        projectId:
+          type: [string, "null"]
+          format: uuid
+          description: >
+            null unassigns; a uuid assigns. The key is required — there is no
+            "leave unchanged" outcome for this action endpoint.
     CitationPin:
       type: object
       required:
@@ -1567,6 +1774,15 @@ components:
           items:
             type: string
             format: uuid
+        projectId:
+          type: string
+          format: uuid
+          description: >
+            P2-18 — optional project scope. Absent/null means "all projects":
+            no additional filter beyond collectionIds (today's exact
+            behavior). Narrows (never widens) whatever collectionIds already
+            restricts; a projectId that does not resolve in the caller's org
+            is a 404.
         mode:
           type: string
           enum: [current, as_of, compare, history]
@@ -1622,6 +1838,15 @@ components:
           items:
             type: string
             format: uuid
+        projectId:
+          type: string
+          format: uuid
+          description: >
+            P2-18 — optional project scope. Absent/null means "all projects":
+            no additional filter beyond collectionIds (today's exact
+            behavior). Narrows (never widens) whatever collectionIds already
+            restricts; a projectId that does not resolve in the caller's org
+            is a 404.
         mode:
           type: string
           enum: [current, as_of, compare, history]
@@ -1937,11 +2162,15 @@ components:
           format: date-time
     Membership:
       type: object
-      required: [userId, role, state, createdAt]
+      required: [userId, email, displayName, role, state, createdAt]
       properties:
         userId:
           type: string
           format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
         role:
           type: string
           enum: [owner, admin, editor, viewer]
@@ -2111,3 +2340,71 @@ components:
             $ref: "#/components/schemas/AuditEntry"
         page:
           $ref: "#/components/schemas/PageInfo"
+    GraphNode:
+      type: object
+      required: [id, title, collectionId, collectionName, status, degree]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        collectionId:
+          type: string
+          format: uuid
+        collectionName:
+          type: string
+        status:
+          type: string
+        degree:
+          type: integer
+    GraphEdge:
+      type: object
+      required: [source, target, kind, weight]
+      properties:
+        source:
+          type: string
+          format: uuid
+        target:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [conflict, co_citation, similarity]
+        weight:
+          type: number
+          minimum: 0
+          maximum: 1
+    GraphCommunity:
+      type: object
+      required: [id, label, nodeIds, size]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        nodeIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        size:
+          type: integer
+    GraphResponse:
+      type: object
+      required: [nodes, edges, communities, requestId]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+        communities:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphCommunity"
+        requestId:
+          type: string

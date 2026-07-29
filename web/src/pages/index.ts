@@ -1,5 +1,6 @@
 export { AdminMembersPage } from './AdminMembersPage';
 export { AdminUsagePage } from './AdminUsagePage';
+export { GraphPage } from './GraphPage';
 export { HelpPage } from './HelpPage';
 export { LibraryPage } from './LibraryPage';
 export { LoginPage } from './LoginPage';

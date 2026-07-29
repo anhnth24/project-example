@@ -29,6 +29,7 @@ import {
   DocumentList,
   DocumentPreview,
   Pagination,
+  ProjectsPanel,
   describeApiError,
   matchesQuery,
   type Collection,
@@ -96,6 +97,17 @@ export function LibraryPage({
     [client, collectionsRetry],
   );
   const collections: Collection[] = collectionsResult.data?.items ?? [];
+  // The heading must never flash a raw collectionId (owner-reported UI gap):
+  // while the nav's own `GET /collections` fetch is still in flight there is
+  // no name to show yet, so a neutral "Bộ sưu tập" placeholder is used
+  // instead of the id — same "loading" -> "loaded" rule `DocumentPreview`
+  // follows for a still-loading document. A collectionId that doesn't match
+  // any item (not yet loaded, or a stale/deleted deep link) falls back to
+  // the same neutral placeholder rather than ever rendering the id itself.
+  const activeCollection = collections.find((c) => c.id === collectionId);
+  const libraryHeading = !collectionId
+    ? 'Tất cả bộ sưu tập'
+    : (activeCollection?.name ?? 'Bộ sưu tập');
 
   const cursor = effectiveView.cursors[effectiveView.pageIndex];
   const [documentsRetry, setDocumentsRetry] = useState(0);
@@ -198,9 +210,7 @@ export function LibraryPage({
   return (
     <section className="page" style={{ maxWidth: 'none' }} aria-labelledby="library-heading">
       <p className="eyebrow">Thư viện</p>
-      <h1 id="library-heading">
-        {collectionId ? `Bộ sưu tập ${collectionId}` : 'Tất cả bộ sưu tập'}
-      </h1>
+      <h1 id="library-heading">{libraryHeading}</h1>
       <p className="lede">
         Duyệt bộ sưu tập, theo dõi trạng thái xử lý và xem trước nội dung Markdown đã chuyển đổi.
       </p>
@@ -226,6 +236,12 @@ export function LibraryPage({
         collections={collections}
         activeCollectionId={collectionId}
         loading={collectionsResult.status === 'loading'}
+      />
+
+      <ProjectsPanel
+        collections={collections}
+        client={client}
+        onChanged={() => setCollectionsRetry((n) => n + 1)}
       />
 
       {!collectionId ? (

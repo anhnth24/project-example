@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::api::ApiError;
 use crate::auth::context::OrgContext;
 use crate::auth::jwt::{AccessClaims, JwtKeys};
-use crate::auth::permissions::{resolve_org_context_in_txn, ResolveError};
+use crate::auth::permissions::ResolveError;
 use crate::auth::session::SessionError;
 
 /// Authenticated request with OrgContext loaded from current PG membership.
@@ -142,7 +142,11 @@ impl FromRequestParts<Arc<crate::http::AppState>> for AuthenticatedOrg {
         })?;
 
         // Authorization is current PG state — JWT org/user are hints only.
-        let context = resolve_org_context_in_txn(provider.pool(), org_id, user_id)
+        // The 1C-05 cache never trusts a hit without a fresh PG freshness
+        // check (disabled_at + org acl_version); see `auth::context_cache`.
+        let context = provider
+            .context_cache()
+            .resolve(provider.pool(), org_id, user_id)
             .await
             .map_err(|error| map_resolve_error(error, &request_id))?;
 

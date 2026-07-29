@@ -166,6 +166,28 @@ export interface paths {
         patch: operations["updateCollection"];
         trace?: never;
     };
+    "/collections/{collectionId}/assign-project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["collectionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assign or unassign this collection's project (P2-18)
+         * @description `projectId: null` unassigns; `projectId: "<uuid>"` assigns — the key itself is required, there is no "leave unchanged" outcome. A dedicated action route rather than folding into the metadata PATCH — see `docs/conventions/api.md` and `routes::collections`'s module doc for why. Same `doc.upload` permission gate as create/update.
+         */
+        post: operations["assignCollectionProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections/{collectionId}/documents": {
         parameters: {
             query?: never;
@@ -585,6 +607,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every project in the caller's org (P2-18)
+         * @description Org-scoped, no permission gate beyond active membership — same shape as GET /collections. "All projects" in the UI/API is simply the absence of a projectId filter on /search, /ask, /ask/stream; it is never a row this endpoint returns.
+         */
+        get: operations["listProjects"];
+        put?: never;
+        /**
+         * Create a project (P2-18)
+         * @description Same `doc.upload` permission gate as POST /collections — see `routes::projects`'s module doc for why no separate permission was added.
+         */
+        post: operations["createProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["projectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Rename a project (P2-18)
+         * @description Rename only — no other mutable field yet. Project deletion is explicitly out of scope for this slice.
+         */
+        patch: operations["updateProject"];
+        trace?: never;
+    };
     "/members": {
         parameters: {
             query?: never;
@@ -710,6 +778,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Document Graph MVP (P2-17): nodes/edges/communities for caller-visible documents (requires qa.query, same precedent as /conflicts). */
+        get: operations["getGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -740,10 +825,41 @@ export interface components {
             visibility: string;
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: uuid
+             * @description P2-18 — null when this collection has no project assigned.
+             */
+            projectId?: string | null;
+            /** @description Joined display name for projectId (null together with it). */
+            projectName?: string | null;
         };
         CollectionPage: {
             items: components["schemas"]["Collection"][];
             page: components["schemas"]["PageInfo"];
+        };
+        Project: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ProjectPage: {
+            items: components["schemas"]["Project"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        CreateProjectRequest: {
+            name: string;
+        };
+        UpdateProjectRequest: {
+            name: string;
+        };
+        AssignProjectRequest: {
+            /**
+             * Format: uuid
+             * @description null unassigns; a uuid assigns. The key is required — there is no "leave unchanged" outcome for this action endpoint.
+             */
+            projectId: string | null;
         };
         CitationPin: {
             citeId: string;
@@ -801,6 +917,11 @@ export interface components {
         SearchRequest: {
             query: string;
             collectionIds?: string[];
+            /**
+             * Format: uuid
+             * @description P2-18 — optional project scope. Absent/null means "all projects": no additional filter beyond collectionIds (today's exact behavior). Narrows (never widens) whatever collectionIds already restricts; a projectId that does not resolve in the caller's org is a 404.
+             */
+            projectId?: string;
             /** @enum {string} */
             mode?: "current" | "as_of" | "compare" | "history";
             /** Format: date-time */
@@ -826,6 +947,11 @@ export interface components {
         AskRequest: {
             question: string;
             collectionIds?: string[];
+            /**
+             * Format: uuid
+             * @description P2-18 — optional project scope. Absent/null means "all projects": no additional filter beyond collectionIds (today's exact behavior). Narrows (never widens) whatever collectionIds already restricts; a projectId that does not resolve in the caller's org is a 404.
+             */
+            projectId?: string;
             /** @enum {string} */
             mode?: "current" | "as_of" | "compare" | "history";
             /** Format: date-time */
@@ -989,6 +1115,8 @@ export interface components {
         Membership: {
             /** Format: uuid */
             userId: string;
+            email: string;
+            displayName: string;
             /** @enum {string} */
             role: "owner" | "admin" | "editor" | "viewer";
             /** @enum {string} */
@@ -1080,6 +1208,37 @@ export interface components {
             items: components["schemas"]["AuditEntry"][];
             page: components["schemas"]["PageInfo"];
         };
+        GraphNode: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: uuid */
+            collectionId: string;
+            collectionName: string;
+            status: string;
+            degree: number;
+        };
+        GraphEdge: {
+            /** Format: uuid */
+            source: string;
+            /** Format: uuid */
+            target: string;
+            /** @enum {string} */
+            kind: "conflict" | "co_citation" | "similarity";
+            weight: number;
+        };
+        GraphCommunity: {
+            id: string;
+            label: string;
+            nodeIds: string[];
+            size: number;
+        };
+        GraphResponse: {
+            nodes: components["schemas"]["GraphNode"][];
+            edges: components["schemas"]["GraphEdge"][];
+            communities: components["schemas"]["GraphCommunity"][];
+            requestId: string;
+        };
     };
     responses: {
         /** @description Canonical API error */
@@ -1110,6 +1269,7 @@ export interface components {
         inviteId: string;
         userId: string;
         orgId: string;
+        projectId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1460,6 +1620,43 @@ export interface operations {
                 };
             };
             404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    assignCollectionProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                collectionId: components["parameters"]["collectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssignProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Collection with its (possibly now null) project assignment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            /** @description Collection not found, or projectId does not resolve in this org. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };
@@ -2116,6 +2313,15 @@ export interface operations {
             400: components["responses"]["ApiError"];
             401: components["responses"]["ApiError"];
             403: components["responses"]["ApiError"];
+            /** @description projectId does not resolve to a project in the caller's org (P2-18). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };
@@ -2144,6 +2350,15 @@ export interface operations {
             400: components["responses"]["ApiError"];
             401: components["responses"]["ApiError"];
             403: components["responses"]["ApiError"];
+            /** @description projectId does not resolve to a project in the caller's org (P2-18). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };
@@ -2317,6 +2532,84 @@ export interface operations {
                 };
             };
             401: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listProjects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Projects in the caller's org. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectPage"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["projectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Project renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
@@ -2597,6 +2890,32 @@ export interface operations {
                 };
             };
             403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getGraph: {
+        parameters: {
+            query?: {
+                /** @description Restrict nodes to one collection (must be in the caller's allow-list). */
+                collectionId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded document graph (nodes/edges/communities). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphResponse"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
     };

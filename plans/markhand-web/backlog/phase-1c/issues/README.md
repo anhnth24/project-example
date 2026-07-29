@@ -117,13 +117,70 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-05 — Collection ACL resolver/cache
 
-- **Status:** In progress — resolver cơ bản (org/private/owner/`collection_user_access`) + fail-closed `services/retrieval/mod.rs:181` + test. **Thiếu đúng phần 1C**: grant theo `groups`/`role` chưa resolve (bảng có, không ai đọc), KHÔNG có ACL-version/snapshot, KHÔNG có cache, KHÔNG có invalidation API. `context.rs:11` tự ghi full ACL thuộc 1C.
+- **Status:** In progress — resolver cơ bản (org/private/owner/`collection_user_access`) +
+  fail-closed `services/retrieval/mod.rs:181` + test, **và giờ có version + cache** (phiên
+  này, worktree, chưa chạy DB-gated CI): `orgs.acl_version` (migration
+  `0031_expand_org_acl_version.sql`, cột `bigint NOT NULL DEFAULT 1`, expand-only) là version
+  **org-wide** (cố ý không per-membership/per-role — `revoke_role_permission_for_principal`
+  xoá một hàng `role_permissions` dùng chung bởi mọi member cùng role, nên version hẹp hơn
+  sẽ under-invalidate; over-invalidate cả org là hướng an toàn, chấp nhận được ở quy mô
+  POC). `db::orgs::bump_acl_version` được gọi trong CÙNG transaction với
+  `services::members::{change_role, suspend_member, reactivate_member (qua set_member_state),
+  remove_member}` và `services::acl_mutate::{revoke_role_permission_for_principal,
+  revoke_collection_access_for_principal}` — đúng tập mutation duy nhất ảnh hưởng
+  `auth::permissions::resolve_org_context*` hiện có (đã audit toàn bộ call site, xem báo
+  cáo phiên). Cache in-process `auth::context_cache::OrgContextCache` (bounded, mặc định
+  4096 principal / TTL 3s, field mới trên `auth::provider::PasswordAuthProvider`, không đổi
+  signature `PasswordAuthProvider::new`) bọc **đúng một** điểm vào: `AuthenticatedOrg`
+  extractor (`auth/middleware.rs`) — KHÔNG bọc `resolve_org_context_on_txn` (ask-stream
+  append/pull, cần snapshot không bị xé trong transaction đã khoá) và KHÔNG bọc
+  `services::upload::saga::reload_principal_locked` (saga tự re-check trước commit) — cả
+  hai đường này vẫn luôn-tươi như trước, không có rủi ro hồi quy từ cache. Mỗi cache hit
+  (trong TTL) BẮT BUỘC một freshness-check rẻ (`users.disabled_at` + `orgs.acl_version`,
+  2 bảng không RLS) trước khi tin dữ liệu cache — mismatch/disabled/lỗi truy vấn đều rơi về
+  resolve đầy đủ (fail-closed, không tự chế deny). Vì mọi hit đều hỏi lại PostgreSQL (không
+  bao giờ tin cache "mù" theo TTL), một version bump ở tiến trình khác lập tức thấy được ở
+  request tiếp theo của tiến trình này — nên **không cần cơ chế invalidation cross-instance
+  riêng** (câu hỏi mở nêu trong nhiệm vụ đã tự đóng nhờ thiết kế). TTL chỉ còn là lưới an
+  toàn cho (a) call site tương lai quên bump và (b) KHOẢNG TRỐNG ĐÃ BIẾT: tạo/xoá-mềm
+  collection qua `db::collections` (ngoài `services::acl_mutate`) **chưa** bump version —
+  cố ý để ngoài phạm vi phiên này (xem "Out" bên dưới).
+  Test DB-gated mới `tests/acl_cache.rs` (5 test): role-downgrade/suspend/remove qua route
+  HTTP thật (cùng bearer token, không re-login) đều 403 ngay ở request kế tiếp; ACL
+  collection revoke (gọi thẳng `OrgContextCache::resolve` như extractor thật) drop quyền
+  ngay; và một test tách riêng cơ chế version-check (bump `acl_version` thủ công, không qua
+  helper) để chứng minh chính cơ chế mismatch-detection hoạt động độc lập với nơi gọi nó.
+  Unit test thuần (không DB) trong `auth::context_cache` phủ `trusts_cache`/
+  `should_check_freshness`/bounded-eviction/`clear`. `tests/members.rs`,
+  `tests/uploads.rs`, `tests/sse_stream_readiness.rs`, `tests/orgs.rs`,
+  `tests/schema_migrations.rs` chạy lại xanh không đổi hành vi (xem kết quả verify trong
+  báo cáo phiên).
+  **Cố tình KHÔNG làm trong phiên này** (xem báo cáo phiên để biết lý do đầy đủ): (1)
+  grant theo `groups`/`role` vẫn CHƯA resolve (bảng có, không ai đọc) — đây là một tính
+  năng authz mới (semantics resolve qua `groups`/`group_memberships`), không phải cache
+  key, cần thiết kế/review riêng, không phải phạm vi "version + cache" của vòng này; (2)
+  version bump cho `db::collections::{insert,soft_delete,update_metadata}` — cần audit
+  call-site + test riêng, ghi nhận là khoảng trống đã biết bên trên, giới hạn bởi TTL cho
+  đến khi đóng; (3) cache/version không (chưa) operator-configurable qua env — hằng số
+  module `DEFAULT_CAPACITY`/`DEFAULT_TTL`, có thể nâng cấp thành config sau nếu cần.
 
-- **Plan/files:** Private/org/groups grants; ACL/version snapshot; cache key org/user/
-  membership/ACL version; invalidation APIs.
-- **Depends:** 1C-02/03. **Acceptance/tests:** Semantics đúng, empty/error fail closed;
-  grants/status/cache/revoke tests.
-- **Security/migration:** Backfill ACL version. **Out:** nested/time-based groups.
+- **Plan/files:** Private/org/groups grants (groups **vẫn thiếu**, xem trên); ACL/version
+  snapshot (**done**: `orgs.acl_version`, migration `0031`); cache key org/user/membership/
+  ACL version (**done**: `auth::context_cache::OrgContextCache`, key `(org_id, user_id)` +
+  version check); invalidation APIs (**không làm riêng** — invalidation là version-bump
+  trong transaction mutation, không phải API endpoint mới; không có yêu cầu nào đòi một API
+  invalidation tách biệt).
+- **Depends:** 1C-02/03. **Acceptance/tests:** Semantics đúng, empty/error fail closed
+  (pre-existing, không đổi); grants/status/cache/revoke tests (**done**: `tests/acl_cache.rs`
+  + unit tests `auth::context_cache`).
+- **Security/migration:** Backfill ACL version (**done**: `DEFAULT 1`, expand-only,
+  migration `0031`). **Gap version-bump đã ĐÓNG (migration `0033`, 2026-07-29)**: trigger
+  DB `bump_org_acl_version()` trên `collections`/`collection_user_access`/
+  `org_memberships`/`roles`/`role_permissions` — bump cùng transaction cho MỌI writer,
+  kể cả SQL trực tiếp (fixtures/vận hành; CI `rust-integration` bắt được đúng lỗ này
+  ở `api_http_contracts`/`citation_authz_matrix` trước khi vá). **Out:**
+  nested/time-based groups; groups/role-based grant resolution (tính năng mới, không
+  phải phần "cache" — xem trên); operator-configurable cache capacity/TTL qua env.
 
 ## 1C-06 — PostgreSQL ACL enforcement
 

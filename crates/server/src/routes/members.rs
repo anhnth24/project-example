@@ -93,6 +93,11 @@ pub fn router() -> Router<Arc<AppState>> {
 #[serde(rename_all = "camelCase")]
 struct MembershipDto {
     user_id: Uuid,
+    /// Joined from `users` (see `db::members`'s `MEMBERSHIP_COLUMNS` doc) so
+    /// the admin UI can render a name/email instead of a bare `user_id` —
+    /// closes the raw-UUID-in-UI gap the owner reported.
+    email: String,
+    display_name: String,
     role: String,
     state: String,
     created_at: DateTime<Utc>,
@@ -175,6 +180,8 @@ struct PatchMemberRequest {
 fn membership_dto(row: OrgMembership) -> MembershipDto {
     MembershipDto {
         user_id: row.user_id,
+        email: row.email,
+        display_name: row.display_name,
         role: row.role.as_str().to_string(),
         state: row.state.as_str().to_string(),
         created_at: row.created_at,

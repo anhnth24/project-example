@@ -8,6 +8,8 @@
 import { useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
 import { ChatPanel, SearchPanel, type SearchHit } from '../components/qa';
+import type { Collection } from '../components/library';
+import { useScopeSafeRequest } from '../hooks/useScopeSafeRequest';
 
 export function QaPage({
   collectionId,
@@ -22,13 +24,30 @@ export function QaPage({
   // real documents to choose from instead of a raw UUID field — see
   // `ChatPanel.tsx`'s module doc.
   const [candidateDocuments, setCandidateDocuments] = useState<SearchHit[]>([]);
+  // P2-18 — the "Phạm vi" dropdown itself lives inside `ChatPanel`'s
+  // composer (see that component's `onScopeChange` doc), but its value must
+  // also scope `SearchPanel`'s request — this page is the one place both
+  // siblings meet, so it's the natural owner of the lifted value.
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
+
+  // Only fetched for the heading's collection name — same "never show the
+  // raw id" rule `LibraryPage.tsx` follows for its own heading (owner-
+  // reported UI gap). While this is still loading, or for a stale/unknown
+  // collectionId, falls back to a neutral placeholder rather than the id.
+  const collectionsResult = useScopeSafeRequest(
+    (signal) => client.request('get', '/collections', { signal }),
+    [client],
+  );
+  const collections: Collection[] = collectionsResult.data?.items ?? [];
+  const activeCollection = collections.find((c) => c.id === collectionId);
+  const qaHeading = !collectionId
+    ? 'Hỏi đáp trên toàn bộ thư viện'
+    : `Hỏi đáp trên bộ sưu tập ${activeCollection?.name ?? ''}`.trim();
 
   return (
     <section className="page" style={{ maxWidth: 'none' }} aria-labelledby="qa-heading">
       <p className="eyebrow">Hỏi đáp</p>
-      <h1 id="qa-heading">
-        {collectionId ? `Hỏi đáp trên bộ sưu tập ${collectionId}` : 'Hỏi đáp trên toàn bộ thư viện'}
-      </h1>
+      <h1 id="qa-heading">{qaHeading}</h1>
       <p className="lede">
         Tìm kiếm tài liệu đã lập chỉ mục hoặc đặt câu hỏi để nhận câu trả lời có trích dẫn, phát dần
         theo thời gian thực.
@@ -37,6 +56,7 @@ export function QaPage({
       <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
         <SearchPanel
           collectionIds={collectionIds}
+          projectId={projectId}
           client={client}
           onHitsChanged={setCandidateDocuments}
         />
@@ -44,6 +64,7 @@ export function QaPage({
           collectionIds={collectionIds}
           client={client}
           candidateDocuments={candidateDocuments}
+          onScopeChange={setProjectId}
         />
       </div>
     </section>

@@ -111,9 +111,7 @@ describe('LibraryPage', () => {
 
     expect(await screen.findByRole('button', { name: /Onboarding Guide\.pdf/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /Leave Policy\.docx/ })).toBeVisible();
-    expect(
-      screen.getByRole('heading', { name: `Bộ sưu tập ${HANDBOOK_COLLECTION_ID}` }),
-    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Employee Handbook' })).toBeVisible();
   });
 
   it('shows a prompt instead of a document list when no collection is selected', async () => {
@@ -262,7 +260,7 @@ describe('LibraryPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Special/ }));
 
     // Scoped to the rendered-Markdown wrapper specifically: the page also has
-    // its own `<h1 id="library-heading">` (the "Bộ sưu tập <id>" heading),
+    // its own `<h1 id="library-heading">` (the collection-name heading),
     // which would otherwise be `querySelector('h1')`'s first match.
     await waitFor(() =>
       expect(
@@ -401,5 +399,25 @@ describe('LibraryPage', () => {
       );
       expect(screen.getByText('Chưa có tài liệu nào trong bộ sưu tập này.')).toBeVisible();
     });
+  });
+
+  describe('P2-18 projects', () => {
+    it('groups collection nav by project, with an unassigned group for collections with no project', async () => {
+      const client = await loggedInClient();
+      renderLibrary(client, undefined);
+
+      // Seeded: "Nhân sự" -> Employee Handbook; Product Specs unassigned.
+      expect(await screen.findByText('Nhân sự')).toBeVisible();
+      expect(screen.getByText('Chưa thuộc dự án')).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Employee Handbook' })).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Product Specs' })).toBeVisible();
+    });
+
+    // The create/assign flow itself (`ProjectsPanel`, gated by
+    // `useAuth().hasPermission`) is covered in `ProjectsPanel.test.tsx`,
+    // which — unlike this file's bare-`client`-injection convention — wraps
+    // in a real `AuthProvider` (same reason `AdminMembersPage.test.tsx`
+    // does, see its own module doc): `useAuth()` reads from `AuthContext`,
+    // which a bare injected `client` prop never populates.
   });
 });

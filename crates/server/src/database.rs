@@ -126,6 +126,18 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0030_expand_global_role_catalog.sql",
         include_str!("../migrations/0030_expand_global_role_catalog.sql"),
     ),
+    (
+        "0031_expand_org_acl_version.sql",
+        include_str!("../migrations/0031_expand_org_acl_version.sql"),
+    ),
+    (
+        "0032_expand_projects.sql",
+        include_str!("../migrations/0032_expand_projects.sql"),
+    ),
+    (
+        "0033_expand_acl_version_triggers.sql",
+        include_str!("../migrations/0033_expand_acl_version_triggers.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

@@ -2,13 +2,15 @@
 // user holds `member.manage` in mock mode and is seeded as an active owner, so
 // the admin pages are reachable and owner-tier controls are enabled.
 import { expect, test } from '@playwright/test';
-import { forceStatus, IDS, login } from './support';
+import { forceStatus, login, NAMES } from './support';
 
 async function openMembers(page: import('@playwright/test').Page): Promise<void> {
   await page.getByRole('link', { name: 'Thành viên' }).click();
   await expect(page.getByRole('heading', { name: 'Thành viên và vai trò' })).toBeVisible();
-  // The seeded owner row is enough to know the list has loaded.
-  await expect(page.getByRole('row').filter({ hasText: IDS.demoUser })).toBeVisible();
+  // The seeded owner row is enough to know the list has loaded. Rows are
+  // located by the rendered display name — the table never renders the raw
+  // `user_id` (see `support.ts`'s `NAMES` doc).
+  await expect(page.getByRole('row').filter({ hasText: NAMES.demoUser })).toBeVisible();
 }
 
 test('inviting a member shows the one-time token', async ({ page }) => {
@@ -30,7 +32,7 @@ test("changing a member's role persists after refetch", async ({ page }) => {
   await openMembers(page);
 
   // The second member is seeded `admin`; demote to editor.
-  const roleSelect = page.getByRole('combobox', { name: `Vai trò của ${IDS.secondMember}` });
+  const roleSelect = page.getByRole('combobox', { name: `Vai trò của ${NAMES.secondMember}` });
   await expect(roleSelect).toContainText('Quản trị viên');
   await roleSelect.click();
   await page.getByRole('option', { name: 'Biên tập viên' }).click();
@@ -44,7 +46,7 @@ test('suspending then reactivating a member toggles their state', async ({ page 
   await openMembers(page);
 
   // Second member is seeded active — suspend, then bring back.
-  const secondRow = page.getByRole('row').filter({ hasText: IDS.secondMember });
+  const secondRow = page.getByRole('row').filter({ hasText: NAMES.secondMember });
   await secondRow.getByRole('button', { name: 'Tạm ngưng' }).click();
   await expect(secondRow.getByText('Đã tạm ngưng')).toBeVisible();
 
@@ -57,7 +59,7 @@ test('the seeded suspended member can be reactivated', async ({ page }) => {
   await openMembers(page);
 
   // Third member is seeded `viewer` / `suspended`.
-  const thirdRow = page.getByRole('row').filter({ hasText: IDS.thirdMember });
+  const thirdRow = page.getByRole('row').filter({ hasText: NAMES.thirdMember });
   await expect(thirdRow.getByText('Đã tạm ngưng')).toBeVisible();
   await thirdRow.getByRole('button', { name: 'Kích hoạt lại' }).click();
   await expect(thirdRow.getByText('Đang hoạt động')).toBeVisible();
@@ -71,7 +73,7 @@ test('suspending the sole active owner is blocked by the last-owner invariant (4
 
   // The demo user is the only active owner; the server's last-owner invariant
   // rejects suspending them with a 409, surfaced as its specific message.
-  const ownerRow = page.getByRole('row').filter({ hasText: IDS.demoUser });
+  const ownerRow = page.getByRole('row').filter({ hasText: NAMES.demoUser });
   await ownerRow.getByRole('button', { name: 'Tạm ngưng' }).click();
 
   await expect(
@@ -89,7 +91,7 @@ test('an owner-tier mutation that 403s shows the owner-tier denial message', asy
   // handles honestly rather than assuming impossible) and assert the specific
   // owner-tier copy — not the generic permission message.
   await forceStatus(page, 'patchMember', 403, 1);
-  const roleSelect = page.getByRole('combobox', { name: `Vai trò của ${IDS.secondMember}` });
+  const roleSelect = page.getByRole('combobox', { name: `Vai trò của ${NAMES.secondMember}` });
   await roleSelect.click();
   await page.getByRole('option', { name: 'Chủ sở hữu' }).click();
 

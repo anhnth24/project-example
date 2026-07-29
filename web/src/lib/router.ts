@@ -14,6 +14,7 @@ const routeDefinitions: RouteDefinition[] = [
   { name: 'adminUsage', pattern: /^\/admin\/usage\/?$/ },
   { name: 'library', pattern: /^\/library(?:\/([^/]+))?\/?$/, param: 'collectionId' },
   { name: 'qa', pattern: /^\/qa(?:\/([^/]+))?\/?$/, param: 'collectionId' },
+  { name: 'graph', pattern: /^\/graph(?:\/([^/]+))?\/?$/, param: 'collectionId' },
   { name: 'help', pattern: /^\/help\/?$/ },
 ];
 
@@ -43,7 +44,7 @@ export function matchRoute(pathname: string): RouteMatch {
   return { name: 'notFound', params: {} };
 }
 
-/** Builds a path for `/library/:collectionId?` or `/qa/:collectionId?`. */
-export function buildScopedPath(base: 'library' | 'qa', collectionId?: string): string {
+/** Builds a path for `/library/:collectionId?`, `/qa/:collectionId?`, or `/graph/:collectionId?`. */
+export function buildScopedPath(base: 'library' | 'qa' | 'graph', collectionId?: string): string {
   return collectionId ? `/${base}/${encodeURIComponent(collectionId)}` : `/${base}`;
 }

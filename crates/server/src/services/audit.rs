@@ -37,6 +37,10 @@ pub enum AuditAction {
     CollectionCreate,
     CollectionUpdate,
     CollectionDelete,
+    // P2-18 org -> project -> collection -> document grouping (migrations/0032).
+    ProjectCreate,
+    ProjectUpdate,
+    CollectionAssignProject,
     DocumentUpload,
     DocumentDelete,
     DocumentTombstone,
@@ -86,6 +90,9 @@ impl AuditAction {
             Self::CollectionCreate => "collection.create",
             Self::CollectionUpdate => "collection.update",
             Self::CollectionDelete => "collection.delete",
+            Self::ProjectCreate => "project.create",
+            Self::ProjectUpdate => "project.update",
+            Self::CollectionAssignProject => "collection.assign_project",
             Self::DocumentUpload => "document.upload",
             Self::DocumentDelete => "document.delete",
             Self::DocumentTombstone => "document.tombstone",
@@ -128,6 +135,9 @@ impl AuditAction {
             "collection.create" => Ok(Self::CollectionCreate),
             "collection.update" => Ok(Self::CollectionUpdate),
             "collection.delete" => Ok(Self::CollectionDelete),
+            "project.create" => Ok(Self::ProjectCreate),
+            "project.update" => Ok(Self::ProjectUpdate),
+            "collection.assign_project" => Ok(Self::CollectionAssignProject),
             "document.upload" => Ok(Self::DocumentUpload),
             "document.delete" => Ok(Self::DocumentDelete),
             "document.tombstone" => Ok(Self::DocumentTombstone),
@@ -180,6 +190,10 @@ impl AuditAction {
             Self::CollectionCreate | Self::CollectionUpdate | Self::CollectionDelete => {
                 &["reason", "collection_id", "name_chars", "slug_chars"]
             }
+            // Structural only, same shape as Collection* above — never the
+            // project name free text itself.
+            Self::ProjectCreate | Self::ProjectUpdate => &["reason", "project_id", "name_chars"],
+            Self::CollectionAssignProject => &["reason", "collection_id", "project_id"],
             Self::DocumentUpload => &[
                 "reason",
                 "format",
@@ -277,6 +291,7 @@ pub enum AuditResource {
     Org,
     Document,
     Collection,
+    Project,
     Job,
     Quota,
     Object,
@@ -295,6 +310,7 @@ impl AuditResource {
             Self::Org => "org",
             Self::Document => "document",
             Self::Collection => "collection",
+            Self::Project => "project",
             Self::Job => "job",
             Self::Quota => "quota",
             Self::Object => "object",
@@ -313,6 +329,7 @@ impl AuditResource {
             "org" => Ok(Self::Org),
             "document" => Ok(Self::Document),
             "collection" => Ok(Self::Collection),
+            "project" => Ok(Self::Project),
             "job" | "jobs" => Ok(Self::Job),
             "quota" => Ok(Self::Quota),
             "object" => Ok(Self::Object),

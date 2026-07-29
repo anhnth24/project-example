@@ -9,3 +9,5 @@ export type Collection = components['schemas']['Collection'];
 export type LibraryDocument = components['schemas']['Document'];
 export type DocumentState = LibraryDocument['state'];
 export type PageInfo = components['schemas']['PageInfo'];
+/** P2-18 — org -> project -> collection -> document grouping. */
+export type Project = components['schemas']['Project'];

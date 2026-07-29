@@ -126,7 +126,7 @@ export function MemberRowActions({
           value={membership.role}
           options={roleOptions}
           onChange={handleRoleChange}
-          ariaLabel={`Vai trò của ${membership.userId}`}
+          ariaLabel={`Vai trò của ${membership.displayName}`}
           disabled={disabled}
           compact
         />

@@ -23,6 +23,7 @@ const BUSINESS_TABLES: &[&str] = &[
     "refresh_tokens",
     "org_invites",
     "collections",
+    "projects",
     "collection_user_access",
     "collection_group_access",
     "collection_role_access",

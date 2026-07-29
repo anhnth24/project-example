@@ -223,6 +223,70 @@ describe('QaPage', () => {
     expect(screen.getByText('CITE-0001')).toBeVisible();
   });
 
+  it('P2-18: "Phạm vi" project scope narrows both search and ask to that project\'s collections', async () => {
+    const client = await loggedInClient();
+    renderQa(client);
+
+    // "Nhân sự" (seeded org A project) is assigned only to the Employee
+    // Handbook collection (mockUuid(10)) — "Roadmap.xlsx" lives in Product
+    // Specs (mockUuid(11)), which is NOT in that project, so a search/ask
+    // scoped to "Nhân sự" must find nothing for a query that only matches
+    // Roadmap.xlsx.
+    const scopeTrigger = screen.getByRole('combobox', { name: 'Phạm vi dự án' });
+    expect(scopeTrigger).toHaveTextContent('Tất cả dự án');
+    fireEvent.click(scopeTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Nhân sự' }));
+    expect(scopeTrigger).toHaveTextContent('Nhân sự');
+
+    fireEvent.change(screen.getByLabelText('Từ khóa'), {
+      target: { value: 'lộ trình quý 3' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Tìm kiếm' }));
+    expect(
+      await screen.findByText(/Không tìm thấy kết quả phù hợp với "lộ trình quý 3"/),
+    ).toBeVisible();
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      expect(screen.getByTestId('qa-answer')).toHaveTextContent(
+        'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
+      );
+    });
+
+    // Back to "Tất cả dự án" (no filter) — the same question now finds it.
+    fireEvent.click(scopeTrigger);
+    fireEvent.click(screen.getByRole('option', { name: 'Tất cả dự án' }));
+    await waitFor(() => expect(screen.getByLabelText('Câu hỏi')).not.toBeDisabled());
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      const answers = screen.getAllByTestId('qa-answer');
+      expect(answers[answers.length - 1]).toHaveTextContent(
+        'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+      );
+    });
+  });
+
+  it('P2-18: switching org resets "Phạm vi" back to "Tất cả dự án"', async () => {
+    const client = await loggedInClient();
+    const manager = createScopeManager();
+    manager.setScope({ orgId: 'org-a', permissions: [], allowedCollectionIds: [] });
+    renderQa(client, undefined, manager);
+
+    const scopeTrigger = screen.getByRole('combobox', { name: 'Phạm vi dự án' });
+    fireEvent.click(scopeTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Nhân sự' }));
+    expect(scopeTrigger).toHaveTextContent('Nhân sự');
+
+    act(() => {
+      manager.setScope({ orgId: 'org-b', permissions: [], allowedCollectionIds: [] });
+    });
+
+    expect(screen.getByRole('combobox', { name: 'Phạm vi dự án' })).toHaveTextContent(
+      'Tất cả dự án',
+    );
+  });
+
   it('switching org clears the whole chat history in-memory (no stale-org bubble ever painted)', async () => {
     const client = await loggedInClient();
     const manager = createScopeManager();

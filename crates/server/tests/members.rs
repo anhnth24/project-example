@@ -206,6 +206,17 @@ async fn cross_org_denial_covers_every_member_endpoint() {
         !ids.contains(&user_b.to_string()),
         "org A member list leaked org B user: {body}"
     );
+    // Owner-reported UI gap (raw UUID in the admin members table): `list`
+    // must join `users` so the response carries a name/email, not just the
+    // id — see `db::members::MEMBERSHIP_COLUMNS`'s doc.
+    let user_a_item = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["userId"] == user_a.to_string())
+        .expect("org A caller's own row");
+    assert_eq!(user_a_item["email"], "admin-a@members-it.test");
+    assert_eq!(user_a_item["displayName"], "Integration User");
 
     // 2) PATCH org B's member using org A's token -> 404, not 403/500.
     let (status, body) = send(
@@ -706,6 +717,10 @@ async fn refresh_rejected_after_suspend() {
     .await;
     assert_eq!(status, StatusCode::OK, "suspend target: {body}");
     assert_eq!(body["state"], "suspended");
+    // The PATCH response must carry the same joined name/email `list_members`
+    // does (owner-reported UI gap, closed) — not just the target's role/state.
+    assert_eq!(body["email"], "suspend-target@members-it.test");
+    assert_eq!(body["displayName"], "Integration User");
 
     assert_refresh_rejected(&app, &refresh).await;
     ephemeral.drop().await;
@@ -732,6 +747,8 @@ async fn refresh_rejected_after_role_downgrade() {
     .await;
     assert_eq!(status, StatusCode::OK, "downgrade target: {body}");
     assert_eq!(body["role"], "admin");
+    assert_eq!(body["email"], "downgrade-target@members-it.test");
+    assert_eq!(body["displayName"], "Integration User");
 
     assert_refresh_rejected(&app, &refresh).await;
     ephemeral.drop().await;

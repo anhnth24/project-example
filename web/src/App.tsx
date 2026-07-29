@@ -7,6 +7,7 @@ import { RouteLink } from './components/RouteLink';
 import {
   AdminMembersPage,
   AdminUsagePage,
+  GraphPage,
   HelpPage,
   LibraryPage,
   LoginPage,
@@ -45,6 +46,12 @@ function RouteOutlet() {
       return (
         <ProtectedRoute>
           <QaPage collectionId={match.params.collectionId} />
+        </ProtectedRoute>
+      );
+    case 'graph':
+      return (
+        <ProtectedRoute>
+          <GraphPage collectionId={match.params.collectionId} />
         </ProtectedRoute>
       );
     case 'adminMembers':

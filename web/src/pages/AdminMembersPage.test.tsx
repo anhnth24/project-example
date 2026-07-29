@@ -23,6 +23,7 @@ import {
   getStore,
   mintTokenPair,
   ORG_A_ID,
+  SECOND_MEMBER_DISPLAY_NAME,
   SECOND_MEMBER_USER_ID,
   THIRD_MEMBER_USER_ID,
 } from '../mocks/fixtures';
@@ -58,8 +59,9 @@ function findRowByTagText(label: string): HTMLElement {
 }
 
 /**
- * The `<tr>` for a given `userId` (rendered verbatim as `<code>`, see
- * `MembersTable.tsx`) — the only row locator that stays valid across a role
+ * The `<tr>` for a given member's display name (rendered by `MembersTable.tsx`
+ * as `.member-identity-name` — the UUID itself is never rendered, see that
+ * component's doc) — the only row locator that stays valid across a role
  * change, unlike `findRowByTagText`, whose label is exactly what a role
  * mutation changes. Load-bearing: an earlier version of the role-change test
  * below used `findByText('Biên tập viên', ...)` with no row scoping and
@@ -68,8 +70,10 @@ function findRowByTagText(label: string): HTMLElement {
  * the exact same Vietnamese label in the *invites* table — a false positive
  * only mutation-testing caught.
  */
-function findRowByUserId(userId: string): HTMLElement {
-  return screen.getByText(userId).closest('tr') as HTMLElement;
+function findRowByDisplayName(displayName: string): HTMLElement {
+  return screen
+    .getByText(displayName, { selector: '.member-identity-name' })
+    .closest('tr') as HTMLElement;
 }
 
 beforeEach(() => {
@@ -124,7 +128,7 @@ describe('AdminMembersPage', () => {
       await screen.findByText('Quản trị viên', { selector: 'span.tag' });
 
       const roleSelect = screen.getByRole('combobox', {
-        name: `Vai trò của ${SECOND_MEMBER_USER_ID}`,
+        name: `Vai trò của ${SECOND_MEMBER_DISPLAY_NAME}`,
       });
       fireEvent.click(roleSelect);
       fireEvent.click(screen.getByRole('option', { name: 'Biên tập viên' }));
@@ -135,11 +139,11 @@ describe('AdminMembersPage', () => {
         );
         expect(membership?.role).toBe('editor');
       });
-      // Scoped to this member's own row — see `findRowByUserId`'s doc for why
-      // an unscoped `findByText('Biên tập viên')` would be a false positive
-      // here (the seeded invite fixture shares that exact label).
+      // Scoped to this member's own row — see `findRowByDisplayName`'s doc for
+      // why an unscoped `findByText('Biên tập viên')` would be a false
+      // positive here (the seeded invite fixture shares that exact label).
       await waitFor(() => {
-        const row = findRowByUserId(SECOND_MEMBER_USER_ID);
+        const row = findRowByDisplayName(SECOND_MEMBER_DISPLAY_NAME);
         expect(within(row).getByText('Biên tập viên', { selector: 'span.tag' })).toBeVisible();
       });
     });
@@ -202,6 +206,8 @@ describe('AdminMembersPage', () => {
       const otherOwnerId = mockUuid(40);
       roster.push({
         userId: otherOwnerId,
+        email: 'other-owner@example.com',
+        displayName: 'Other Owner',
         role: 'owner',
         state: 'active',
         createdAt: mockTimestamp(0),

@@ -15,6 +15,13 @@ pub struct CollectionDto {
     pub description: Option<String>,
     pub visibility: String,
     pub created_at: DateTime<Utc>,
+    /// P2-18 — nullable: absent/`null` for a collection with no project.
+    pub project_id: Option<Uuid>,
+    /// Joined display name for `project_id` (nullable together with it) so
+    /// the Library nav can group by project without a second round trip —
+    /// same "never show the raw id" convention `MembershipDto`'s
+    /// email/display_name join already follows.
+    pub project_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,6 +73,49 @@ pub struct JobDto {
 pub struct Page<T> {
     pub items: Vec<T>,
     pub page: PageInfo,
+}
+
+/// Document Graph MVP (P2-17) — one node per caller-visible document.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNodeDto {
+    pub id: Uuid,
+    pub title: String,
+    pub collection_id: Uuid,
+    pub collection_name: String,
+    /// `documents.state` (uploaded/converting/.../indexed/failed).
+    pub status: String,
+    pub degree: i64,
+}
+
+/// P2-17 graph edge. `kind` is `conflict` | `co_citation` | `similarity`;
+/// `weight` is `0..1` (see `services::graph::saturating_weight`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdgeDto {
+    pub source: Uuid,
+    pub target: Uuid,
+    pub kind: String,
+    pub weight: f64,
+}
+
+/// P2-17 community: one connected component of the (pruned) graph.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphCommunityDto {
+    pub id: String,
+    pub label: String,
+    pub node_ids: Vec<Uuid>,
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphResponseDto {
+    pub nodes: Vec<GraphNodeDto>,
+    pub edges: Vec<GraphEdgeDto>,
+    pub communities: Vec<GraphCommunityDto>,
+    pub request_id: String,
 }
 
 /// 1C-11 audit log read entry. Field names follow the existing telemetry

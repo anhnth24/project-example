@@ -39,6 +39,7 @@ const ALWAYS_ON_RAIL_CONTROLS: Array<{ role: 'link' | 'button'; name: string | R
   { role: 'link', name: 'Trang chủ Folyvo' },
   { role: 'link', name: 'Thư viện' },
   { role: 'link', name: 'Hỏi đáp' },
+  { role: 'link', name: 'Đồ thị' },
   { role: 'link', name: 'Thành viên' },
   { role: 'link', name: 'Sử dụng' },
   { role: 'link', name: 'Trợ giúp' },
@@ -173,7 +174,7 @@ describe('App / rail (icon-only shell nav)', () => {
     render(<App />);
 
     expect(screen.getByRole('link', { name: 'Trợ giúp' })).toHaveAttribute('aria-current', 'page');
-    for (const name of ['Thư viện', 'Hỏi đáp', 'Thành viên', 'Sử dụng']) {
+    for (const name of ['Thư viện', 'Hỏi đáp', 'Đồ thị', 'Thành viên', 'Sử dụng']) {
       expect(screen.getByRole('link', { name })).not.toHaveAttribute('aria-current');
     }
   });
@@ -257,9 +258,13 @@ describe('App / authenticated shell (P2-05 guard matrix + login/logout)', () => 
 
     fillAndSubmitLogin(DEMO_EMAIL, DEMO_PASSWORD);
 
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Bộ sưu tập col-42' })).toBeVisible(),
-    );
+    // Lands on the deep-linked library route (proven by the URL, not by a
+    // heading string containing the raw collectionId: `LibraryPage`'s own
+    // heading never renders a bare id — see its module doc — so an unknown
+    // fixture id like `col-42` reads as the neutral "Bộ sưu tập" placeholder,
+    // not `Bộ sưu tập col-42`).
+    await waitFor(() => expect(window.location.pathname).toBe('/library/col-42'));
+    expect(screen.getByRole('heading', { name: 'Bộ sưu tập' })).toBeVisible();
 
     // Session info moved from an always-visible topbar strip into the
     // avatar-triggered account menu (see components/shell/UserMenu.tsx) —

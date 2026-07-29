@@ -491,10 +491,12 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::jobs::router())
         .merge(routes::members::router())
         .merge(routes::orgs::router())
+        .merge(routes::projects::router())
         .merge(routes::audit::router())
         .merge(routes::search::router())
         .merge(routes::ask::router())
         .merge(routes::events::router())
+        .merge(routes::graph::router())
         .route("/api/v1/openapi.yaml", axum::routing::get(openapi_yaml));
 
     // P2-16: serve web/dist (hashed assets + SPA history fallback) when a

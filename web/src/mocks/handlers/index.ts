@@ -5,7 +5,9 @@
  */
 import './health';
 import './auth';
+import './graph';
 import './library';
 import './members';
 import './orgs';
+import './projects';
 import './qa';
