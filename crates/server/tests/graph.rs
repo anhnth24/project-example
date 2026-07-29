@@ -702,6 +702,18 @@ async fn graph_similarity_edges_from_qdrant_recommend() {
 
     let org_a = Uuid::new_v4();
     let owner_a = Uuid::new_v4();
+    // Creates the org/user/membership rows first — collections.org_id is a
+    // real FK; seeding a collection into a nonexistent org fails E23503
+    // (caught on this test's first live CI run).
+    common::seed_user_with_permissions(
+        &pool,
+        org_a,
+        owner_a,
+        "graph-similarity-a@example.com",
+        PASSWORD,
+        &["qa.query"],
+    )
+    .await;
     let collection_a = seed_collection(
         &pool,
         org_a,
@@ -738,6 +750,15 @@ async fn graph_similarity_edges_from_qdrant_recommend() {
 
     let org_b = Uuid::new_v4();
     let owner_b = Uuid::new_v4();
+    common::seed_user_with_permissions(
+        &pool,
+        org_b,
+        owner_b,
+        "graph-similarity-b@example.com",
+        PASSWORD,
+        &["qa.query"],
+    )
+    .await;
     let collection_b = seed_collection(
         &pool,
         org_b,
