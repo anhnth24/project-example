@@ -35,6 +35,14 @@ describe('matchRoute', () => {
     expect(matchRoute('/help')).toEqual({ name: 'help', params: {} });
   });
 
+  it('matches graph with and without a collection id', () => {
+    expect(matchRoute('/graph')).toEqual({ name: 'graph', params: {} });
+    expect(matchRoute('/graph/col-1')).toEqual({
+      name: 'graph',
+      params: { collectionId: 'col-1' },
+    });
+  });
+
   it('falls back to notFound for unknown paths', () => {
     expect(matchRoute('/does-not-exist')).toEqual({ name: 'notFound', params: {} });
     expect(matchRoute('/admin')).toEqual({ name: 'notFound', params: {} });
@@ -48,5 +56,10 @@ describe('buildScopedPath', () => {
 
   it('builds a scoped path and encodes the collection id', () => {
     expect(buildScopedPath('qa', 'col one')).toBe('/qa/col%20one');
+  });
+
+  it('builds a graph path', () => {
+    expect(buildScopedPath('graph')).toBe('/graph');
+    expect(buildScopedPath('graph', 'col-1')).toBe('/graph/col-1');
   });
 });

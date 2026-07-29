@@ -4,6 +4,7 @@ export { DocumentList } from './DocumentList';
 export { DocumentPreview, type PreviewLoadState } from './DocumentPreview';
 export { DocumentStateBadge } from './DocumentStateBadge';
 export { Pagination } from './Pagination';
+export { ProjectsPanel } from './ProjectsPanel';
 export {
   DOCUMENT_STATE_META,
   describeApiError,
@@ -11,4 +12,4 @@ export {
   formatDateTime,
   matchesQuery,
 } from './documentPresentation';
-export type { Collection, DocumentState, LibraryDocument, PageInfo } from './types';
+export type { Collection, DocumentState, LibraryDocument, PageInfo, Project } from './types';

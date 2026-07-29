@@ -13,6 +13,9 @@ pub enum AnswerMode {
     LocalLlm,
     CloudLlm,
     SubscriptionCli,
+    /// Dev-gate only (default OFF): LLM answer passed citation/claim validation
+    /// but structured entailment is still unavailable — never claim grounded.
+    LlmUnverified,
 }
 
 impl AnswerMode {
@@ -23,6 +26,7 @@ impl AnswerMode {
             Self::LocalLlm => "local_llm",
             Self::CloudLlm => "cloud_llm",
             Self::SubscriptionCli => "subscription_cli",
+            Self::LlmUnverified => "llm_unverified",
         }
     }
 }

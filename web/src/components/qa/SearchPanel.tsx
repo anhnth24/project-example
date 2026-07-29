@@ -40,12 +40,15 @@ function toSearchHit(raw: Record<string, unknown>): SearchHit {
 
 export function SearchPanel({
   collectionIds,
+  projectId,
   client = apiClient,
   onHitsChanged,
 }: {
   collectionIds?: string[];
+  /** P2-18 — "Phạm vi" selection from `ChatPanel`'s composer, lifted through `QaPage` (see `ChatPanel`'s `onScopeChange` doc for why the dropdown itself stays in the composer). `undefined` = "Tất cả dự án" (today's exact behavior). */
+  projectId?: string;
   client?: ApiClient;
-  /** Lets `AskPanel`'s compare/history document picker reuse whichever documents a search already turned up, instead of asking the user to type a UUID. */
+  /** Lets `ChatPanel`'s compare/history document picker reuse whichever documents a search already turned up, instead of asking the user to type a UUID. */
   onHitsChanged?: (hits: SearchHit[]) => void;
 }) {
   const inputId = useId();
@@ -57,11 +60,11 @@ export function SearchPanel({
     async (signal) => {
       if (submitted === undefined) return null;
       return client.request('post', '/search', {
-        body: { query: submitted, collectionIds, limit: 10 },
+        body: { query: submitted, collectionIds, projectId, limit: 10 },
         signal,
       });
     },
-    [client, submitted, collectionIds?.join(',')],
+    [client, submitted, collectionIds?.join(','), projectId],
   );
 
   const hits = (result.data?.hits ?? []).map((h) => toSearchHit(h as Record<string, unknown>));

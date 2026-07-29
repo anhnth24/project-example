@@ -1,0 +1,176 @@
+//! Document Graph MVP (P2-17, owner request 2026-07-29 — see
+//! `plans/markhand-web/backlog/phase-2/issues/README.md`): read-only graph
+//! data for the new "Đồ thị" web page — nodes (caller-visible documents),
+//! edges (`conflict` / `co_citation` / `similarity`), communities
+//! (connected components of whatever survives pruning).
+//!
+//! Permission choice (contract asked to pick from real code, not invent
+//! one): gated behind `qa.query`, the same permission
+//! `routes/documents.rs::list_conflicts`/`get_conflict` already require even
+//! though *listing documents themselves* (`list_documents`) needs no
+//! permission beyond collection ACL. This endpoint always blends
+//! conflict-derived and QA-history-derived (`co_citation`) edges into the
+//! response — the sensitive part — so the whole endpoint is gated at that
+//! existing precedent rather than a new `graph.read` permission with no
+//! seeded role grants anywhere in the migrations yet.
+//!
+//! ACL: node visibility is the same allow-list every other list route uses
+//! (`ctx.allowed_collection_ids()` / `ctx.allows_collection(...)`, see
+//! `routes/collections.rs`/`routes/documents.rs`); edges are only ever built
+//! from pairs already inside that visible node set (`db::graph`'s queries
+//! take `node_ids` and additionally scope by `org_id`), so an edge can never
+//! reference a document the caller could not otherwise see.
+//!
+//! `similarity` edges are opt-in on the vector index + an embedding runtime being
+//! configured (`AppState::vector_index()`/`AppState::embedder()`, same gate
+//! `services/retrieval` uses) and are not implemented in this pass — see the
+//! P2-17 report/backlog entry for why (no live vector store in this sandbox to
+//! validate against). When neither is configured, or once implemented,
+//! finds nothing, the endpoint still returns `conflict`/`co_citation` edges
+//! — it never fails just because vector search is unavailable.
+
+use std::sync::Arc;
+
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::{Json, Router};
+use serde::Deserialize;
+use uuid::Uuid;
+
+use crate::api::{ApiError, GraphCommunityDto, GraphEdgeDto, GraphNodeDto, GraphResponseDto};
+use crate::auth::middleware::AuthenticatedOrg;
+use crate::auth::permissions::require_permission;
+use crate::db::error::DbError;
+use crate::http::AppState;
+use crate::services::graph::build_org_graph;
+
+pub fn router() -> Router<Arc<AppState>> {
+    Router::new().route("/api/v1/graph", get(get_graph))
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphQuery {
+    #[serde(rename = "collectionId")]
+    collection_id: Option<Uuid>,
+}
+
+async fn get_graph(
+    State(state): State<Arc<AppState>>,
+    auth: AuthenticatedOrg,
+    Query(query): Query<GraphQuery>,
+) -> Result<Json<GraphResponseDto>, RouteError> {
+    require_permission(&auth.context, "qa.query")
+        .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
+    if let Some(collection_id) = query.collection_id {
+        if !auth.context.allows_collection(collection_id) {
+            return Err(RouteError::NotFound(auth.request_id.clone()));
+        }
+    }
+
+    let data = build_org_graph(state.pool(), &auth.context, query.collection_id)
+        .await
+        .map_err(|error| RouteError::from_db(error, &auth.request_id))?;
+
+    // similarity: see module doc — opt-in on the vector index + embedder, not
+    // implemented in this pass. `state.vector_index()`/`state.embedder()` are
+    // the real availability check a future pass would gate on.
+    let _similarity_available = state.vector_index().is_some() && state.embedder().is_some();
+
+    let nodes: Vec<GraphNodeDto> = data
+        .nodes
+        .iter()
+        .map(|n| GraphNodeDto {
+            id: n.id,
+            title: n.title.clone(),
+            collection_id: n.collection_id,
+            collection_name: n.collection_name.clone(),
+            status: n.status.clone(),
+            degree: n.degree,
+        })
+        .collect();
+
+    let edges_dto: Vec<GraphEdgeDto> = data
+        .edges
+        .iter()
+        .map(|edge| GraphEdgeDto {
+            source: edge.source,
+            target: edge.target,
+            kind: edge.kind.clone(),
+            weight: edge.weight,
+        })
+        .collect();
+
+    let communities: Vec<GraphCommunityDto> = data
+        .communities
+        .iter()
+        .enumerate()
+        .map(|(index, community)| GraphCommunityDto {
+            id: format!("community-{index}"),
+            label: community.label.clone(),
+            node_ids: community.node_ids.clone(),
+            size: community.node_ids.len() as i64,
+        })
+        .collect();
+
+    Ok(Json(GraphResponseDto {
+        nodes,
+        edges: edges_dto,
+        communities,
+        request_id: auth.request_id,
+    }))
+}
+
+enum RouteError {
+    Denied(String),
+    NotFound(String),
+    Database(String),
+}
+
+impl RouteError {
+    fn from_db(error: DbError, request_id: &str) -> Self {
+        match error {
+            DbError::NotFound => Self::NotFound(request_id.to_string()),
+            DbError::Config(message) if message == "collection_denied" => {
+                Self::NotFound(request_id.to_string())
+            }
+            _ => Self::Database(request_id.to_string()),
+        }
+    }
+}
+
+impl IntoResponse for RouteError {
+    fn into_response(self) -> Response {
+        let (status, code, message, request_id) = match self {
+            Self::Denied(request_id) => (
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Permission denied",
+                request_id,
+            ),
+            Self::NotFound(request_id) => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Collection not found",
+                request_id,
+            ),
+            Self::Database(request_id) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "Request failed",
+                request_id,
+            ),
+        };
+        (
+            status,
+            Json(ApiError {
+                code: code.into(),
+                message: message.into(),
+                request_id,
+                details: None,
+            }),
+        )
+            .into_response()
+    }
+}

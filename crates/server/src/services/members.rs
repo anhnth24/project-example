@@ -64,6 +64,7 @@ use crate::db::members::{self, NewInvite, OwnerRow};
 use crate::db::models::{
     AuditOutcome, MembershipRole, MembershipState, OrgInvite, OrgMembership, ResourceKind,
 };
+use crate::db::orgs;
 use crate::db::pool::with_org_txn_typed;
 use crate::db::quota;
 use crate::services::audit::{self, AuditAction, AuditRecord};
@@ -502,6 +503,9 @@ pub async fn change_role(
                 guard_last_owner(txn, &ctx, target_user_id, will_be_active_owner).await?;
 
                 let updated = members::update_role(txn, &ctx, target_user_id, new_role).await?;
+                // 1C-05: invalidate the org-context cache for every member of
+                // this org in the same transaction as the role change.
+                orgs::bump_acl_version(txn, ctx.org_id()).await?;
                 audit::record_in_txn(
                     txn,
                     &ctx,
@@ -555,6 +559,9 @@ pub async fn remove_member(
 
                 members::purge_refresh_tokens(txn, &ctx, target_user_id).await?;
                 members::delete(txn, &ctx, target_user_id).await?;
+                // 1C-05: invalidate the org-context cache for every member of
+                // this org in the same transaction as the removal.
+                orgs::bump_acl_version(txn, ctx.org_id()).await?;
 
                 audit::record_in_txn(
                     txn,
@@ -643,6 +650,10 @@ async fn set_member_state(
                     guard_last_owner(txn, &ctx, target_user_id, false).await?;
                 }
                 let updated = members::set_state(txn, &ctx, target_user_id, new_state).await?;
+                // 1C-05: invalidate the org-context cache for every member of
+                // this org in the same transaction as the state change
+                // (suspend/reactivate).
+                orgs::bump_acl_version(txn, ctx.org_id()).await?;
                 audit::record_in_txn(
                     txn,
                     &ctx,

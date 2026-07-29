@@ -60,6 +60,24 @@ export function formatDateTime(iso: string): string {
 }
 
 /**
+ * One- or two-letter monogram for the member avatar, derived from
+ * `displayName` (never from `userId` — the raw UUID must not leak into the
+ * UI, see `MembersTable.tsx`). Takes the first letter of up to the first two
+ * words; falls back to "?" for an empty/blank name so the avatar never
+ * renders nothing.
+ */
+export function memberInitials(displayName: string): string {
+  const letters = displayName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? '')
+    .join('');
+  return letters || '?';
+}
+
+/**
  * Mirrors `services::members::operation_manages_owner` on the server exactly
  * (see `crates/server/src/services/members.rs`): true when the operation
  * would grant the owner role, or when its target currently holds it — either

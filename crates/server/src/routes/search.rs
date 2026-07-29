@@ -15,7 +15,9 @@ use uuid::Uuid;
 use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
+use crate::db::error::DbError;
 use crate::db::models::AuditOutcome;
+use crate::db::projects;
 use crate::http::AppState;
 use crate::services::audit;
 use crate::services::citation::pins_from_hits;
@@ -33,6 +35,15 @@ struct SearchBody {
     query: String,
     #[serde(default)]
     collection_ids: Option<Vec<Uuid>>,
+    /// P2-18 — optional project scope. `None` (the default) is "all
+    /// projects": no additional filter beyond whatever `collectionIds`
+    /// already restricts, i.e. today's exact behavior. Resolved to the
+    /// project's collection ids server-side and intersected with
+    /// `collectionIds` (if both are given) before being handed to the
+    /// existing `resolve_scope`/ACL-intersection retrieval path — no new
+    /// retrieval mechanism, see `routes::search`/`routes::ask` module notes.
+    #[serde(default)]
+    project_id: Option<Uuid>,
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -126,12 +137,29 @@ async fn search(
     }
     let mode = parse_mode(&body)
         .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
-    let vector_index = state
-        .vector_index()
-        .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
     let collection_ids = body
         .collection_ids
         .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
+    // P2-18 — narrow (never widen) the requested collection scope to the
+    // project's collections, still ANDed with the caller's ACL by the
+    // existing `resolve_scope` inside `hybrid_search` below. Resolved before
+    // the `vector_index` availability check right below: an unknown
+    // `projectId` is a client input error independent of retrieval backend
+    // health, so it must 404 even when the vector store is unavailable.
+    let collection_ids = projects::resolve_project_scope(
+        state.pool(),
+        &auth.context,
+        body.project_id,
+        collection_ids,
+    )
+    .await
+    .map_err(|error| match error {
+        DbError::NotFound => RouteError::NotFound(auth.request_id.clone()),
+        _ => RouteError::Database(auth.request_id.clone()),
+    })?;
+    let vector_index = state
+        .vector_index()
+        .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
     let query_chars = body.query.len();
     let limit = body.limit.clamp(1, 100);
     let response = match hybrid_search(
@@ -235,6 +263,7 @@ async fn search(
 enum RouteError {
     Validation(String, &'static str),
     Denied(String),
+    NotFound(String),
     Unavailable(String),
     Database(String),
     RateLimited(crate::routes::rate_limit_guard::RateLimitRejected),
@@ -270,6 +299,12 @@ impl IntoResponse for RouteError {
                 StatusCode::FORBIDDEN,
                 "forbidden",
                 "Permission denied",
+                request_id,
+            ),
+            Self::NotFound(request_id) => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Project not found",
                 request_id,
             ),
             Self::Unavailable(request_id) => (

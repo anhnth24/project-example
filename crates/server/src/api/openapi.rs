@@ -34,6 +34,11 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
         &["204", "404", "429"],
     ),
     (
+        "post",
+        "/collections/{collectionId}/assign-project",
+        &["200", "403", "404", "429"],
+    ),
+    (
         "get",
         "/collections/{collectionId}/documents",
         &["200", "404", "429"],
@@ -84,8 +89,12 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
         "/jobs/{jobId}/events",
         &["200", "400", "401", "404", "429"],
     ),
-    ("post", "/search", &["200", "400", "401", "403", "429"]),
-    ("post", "/ask", &["200", "400", "401", "403", "429"]),
+    (
+        "post",
+        "/search",
+        &["200", "400", "401", "403", "404", "429"],
+    ),
+    ("post", "/ask", &["200", "400", "401", "403", "404", "429"]),
     (
         "post",
         "/ask/stream",
@@ -97,6 +106,16 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
     ("post", "/orgs", &["201", "400", "401", "409", "429"]),
     ("get", "/orgs/{orgId}", &["200", "401", "404", "429"]),
     ("post", "/orgs/switch", &["200", "401", "403", "429"]),
+    // P2-18 org -> project -> collection -> document grouping. GET has no
+    // 403: same as GET /collections, list_projects is unfiltered by
+    // permission (`org membership` is the only gate) — see routes::projects.
+    ("get", "/projects", &["200", "429"]),
+    ("post", "/projects", &["201", "400", "403", "429"]),
+    (
+        "patch",
+        "/projects/{projectId}",
+        &["200", "400", "403", "404", "429"],
+    ),
     // P2-11 / P2-12 membership + invite + usage admin surface (Wave 2).
     ("get", "/members", &["200", "403", "429"]),
     ("get", "/members/invites", &["200", "403", "429"]),
@@ -125,6 +144,8 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
     // 1C-11 audit-log read endpoint (write path pre-existing; this is the
     // first read surface — see routes/audit.rs).
     ("get", "/audit", &["200", "400", "403", "429"]),
+    // P2-17 Document Graph MVP — see routes/graph.rs.
+    ("get", "/graph", &["200", "403", "404", "429"]),
 ];
 
 const HEALTH_PATHS: &[&str] = &["/health/live", "/health/ready", "/health/start"];
@@ -143,6 +164,7 @@ pub const BODY_TAKING_OPERATIONS: &[(&str, &str)] = &[
     ("post", "/uploads"),
     ("post", "/collections"),
     ("patch", "/collections/{collectionId}"),
+    ("post", "/collections/{collectionId}/assign-project"),
     (
         "post",
         "/collections/{collectionId}/documents/{documentId}/approve-intake",
@@ -158,6 +180,8 @@ pub const BODY_TAKING_OPERATIONS: &[(&str, &str)] = &[
     ("post", "/ask/stream"),
     ("post", "/orgs"),
     ("post", "/orgs/switch"),
+    ("post", "/projects"),
+    ("patch", "/projects/{projectId}"),
     ("post", "/members/invites"),
     ("post", "/members/invites/accept"),
     ("patch", "/members/{userId}"),

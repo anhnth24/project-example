@@ -19,8 +19,10 @@ use crate::api::{resolve_last_event_id, ApiError, LastEventIdError};
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
 use crate::db::ask_streams;
+use crate::db::error::DbError;
 use crate::db::models::AuditOutcome;
 use crate::db::pool::with_org_txn;
+use crate::db::projects;
 use crate::http::AppState;
 use crate::services::audit;
 use crate::services::qa::ask_stream::{self, AskStreamPrepareError};
@@ -40,6 +42,10 @@ struct AskBody {
     question: String,
     #[serde(default)]
     collection_ids: Option<Vec<Uuid>>,
+    /// P2-18 — see `routes::search::SearchBody::project_id`'s doc; identical
+    /// contract, shared resolver (`db::projects::resolve_project_scope`).
+    #[serde(default)]
+    project_id: Option<Uuid>,
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -182,10 +188,28 @@ async fn ask_stream_route(
         }
         let mode = parse_mode(&body)
             .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
+        let question_chars = body.question.len();
+        let collection_ids = body
+            .collection_ids
+            .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
+        // P2-18 — same narrow-never-widen project scope as routes::search /
+        // ask_json's run_ask above. Resolved before the `vector_index`
+        // availability check right below — see that check's own comment in
+        // routes::search for why.
+        let collection_ids = projects::resolve_project_scope(
+            state.pool(),
+            &auth.context,
+            body.project_id,
+            collection_ids,
+        )
+        .await
+        .map_err(|error| match error {
+            DbError::NotFound => RouteError::ProjectNotFound(auth.request_id.clone()),
+            _ => RouteError::Database(auth.request_id.clone()),
+        })?;
         let vector_index = state
             .vector_index()
             .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
-        let question_chars = body.question.len();
         let started = ask_stream::start_ask_stream(
             state.pool(),
             vector_index,
@@ -195,8 +219,7 @@ async fn ask_stream_route(
             auth.claims.clone(),
             auth.request_id.clone(),
             body.question,
-            body.collection_ids
-                .map(|ids| ids.into_iter().collect::<BTreeSet<_>>()),
+            collection_ids,
             mode,
             body.limit.clamp(1, 20),
             body.conflict_ids,
@@ -295,10 +318,27 @@ async fn run_ask(
     }
     let mode = parse_mode(&body)
         .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
+    let question_chars = body.question.len();
+    let collection_ids = body
+        .collection_ids
+        .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
+    // P2-18 — same narrow-never-widen project scope as routes::search.
+    // Resolved before the `vector_index` availability check right below —
+    // see that check's own comment in routes::search for why.
+    let collection_ids = projects::resolve_project_scope(
+        state.pool(),
+        &auth.context,
+        body.project_id,
+        collection_ids,
+    )
+    .await
+    .map_err(|error| match error {
+        DbError::NotFound => RouteError::ProjectNotFound(auth.request_id.clone()),
+        _ => RouteError::Database(auth.request_id.clone()),
+    })?;
     let vector_index = state
         .vector_index()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
-    let question_chars = body.question.len();
     let response = match ask(
         state.pool(),
         vector_index,
@@ -307,9 +347,7 @@ async fn run_ask(
         &auth.context,
         AskRequest {
             question: body.question,
-            collection_ids: body
-                .collection_ids
-                .map(|ids| ids.into_iter().collect::<BTreeSet<_>>()),
+            collection_ids,
             mode,
             limit: body.limit.clamp(1, 20),
             conflict_ids: body.conflict_ids,
@@ -397,6 +435,9 @@ enum RouteError {
     Validation(String, &'static str),
     Denied(String),
     NotFound(String),
+    /// P2-18 — distinct from `NotFound` (stream session) purely so the
+    /// error message stays accurate; same status/code.
+    ProjectNotFound(String),
     Unavailable(String),
     Database(String),
     StreamClosed(String, &'static str),
@@ -439,6 +480,12 @@ impl IntoResponse for RouteError {
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "Stream session not found",
+                request_id,
+            ),
+            Self::ProjectNotFound(request_id) => (
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "Project not found",
                 request_id,
             ),
             Self::Unavailable(request_id) => (

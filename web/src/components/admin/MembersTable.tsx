@@ -1,7 +1,7 @@
 // P2-11: the membership list itself. Renders with the existing `.table`
 // component classes, same convention as `components/library/DocumentList.tsx`.
 import { MemberRowActions } from './MemberRowActions';
-import { ROLE_META, STATE_META, formatDateTime } from './memberPresentation';
+import { ROLE_META, STATE_META, formatDateTime, memberInitials } from './memberPresentation';
 import type { ApiClient } from '../../api/client';
 import type { Membership } from './types';
 
@@ -45,9 +45,12 @@ export function MembersTable({
             <td>
               <div className="member-identity">
                 <span className="member-avatar" aria-hidden="true">
-                  {membership.userId.replace(/-/g, '').slice(-2)}
+                  {memberInitials(membership.displayName)}
                 </span>
-                <span className="member-identity-id">{membership.userId}</span>
+                <div className="member-identity-text">
+                  <span className="member-identity-name">{membership.displayName}</span>
+                  <span className="member-identity-email text-muted">{membership.email}</span>
+                </div>
                 {membership.userId === currentUserId && (
                   <span className="tag tag-neutral">Bạn</span>
                 )}

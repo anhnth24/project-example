@@ -1,14 +1,35 @@
 import { registerOperation } from '../registry';
 import { notFound, conflict as conflictResponse, apiError, unauthorized } from '../apiError';
 import { nextRequestId, encodeCursor, decodeCursor, mockTimestamp } from '../ids';
-import { authContextForHeader, getStore, nextId } from '../fixtures';
+import {
+  authContextForHeader,
+  getStore,
+  nextId,
+  getCollectionProjectId,
+  setCollectionProjectId,
+  getOrgProjects,
+} from '../fixtures';
 import type { components } from '../../api/generated/contract';
 
 type Collection = components['schemas']['Collection'];
 type CreateCollectionRequest = components['schemas']['CreateCollectionRequest'];
 type UpdateCollectionRequest = components['schemas']['UpdateCollectionRequest'];
+type AssignProjectRequest = components['schemas']['AssignProjectRequest'];
 type Document = components['schemas']['Document'];
 type Job = components['schemas']['Job'];
+
+/** P2-18 — hydrates `projectId`/`projectName` onto a stored `Collection` at
+ * read time, same "joined at the read boundary, not stored on the record"
+ * shape `toMeResponse` already uses for `permissions`/`allowedCollectionIds`.
+ * `orgId` is the caller's *current* token org (never a fixed `user.orgId`),
+ * matching every other org-scoped lookup in this file. */
+function withProjectFields(collection: Collection, orgId: string): Collection {
+  const projectId = getCollectionProjectId(collection.id) ?? null;
+  const projectName = projectId
+    ? (getOrgProjects(orgId).find((p) => p.id === projectId)?.name ?? null)
+    : null;
+  return { ...collection, projectId, projectName };
+}
 
 // ---------------------------------------------------------------------------
 // Collections
@@ -26,9 +47,9 @@ type Job = components['schemas']['Job'];
 registerOperation('listCollections', (ctx) => {
   const auth = authContextForHeader(ctx.headers.get('authorization'));
   if (!auth) return unauthorized();
-  const items = getStore().collections.filter(
-    (c) => getStore().collectionOrgId.get(c.id) === auth.orgId,
-  );
+  const items = getStore()
+    .collections.filter((c) => getStore().collectionOrgId.get(c.id) === auth.orgId)
+    .map((c) => withProjectFields(c, auth.orgId));
   return { status: 200, body: { items, page: { hasMore: false, nextCursor: null } } };
 });
 
@@ -46,7 +67,7 @@ registerOperation('createCollection', async (ctx) => {
   };
   getStore().collections.push(collection);
   getStore().collectionOrgId.set(collection.id, auth.orgId);
-  return { status: 201, body: collection };
+  return { status: 201, body: withProjectFields(collection, auth.orgId) };
 });
 
 registerOperation('getCollection', (ctx) => {
@@ -56,16 +77,18 @@ registerOperation('getCollection', (ctx) => {
   if (!collection || getStore().collectionOrgId.get(collection.id) !== auth.orgId) {
     return notFound(`Collection ${ctx.params.collectionId} does not exist.`);
   }
-  return { status: 200, body: collection };
+  return { status: 200, body: withProjectFields(collection, auth.orgId) };
 });
 
 registerOperation('updateCollection', async (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
   const collection = getStore().collections.find((c) => c.id === ctx.params.collectionId);
   if (!collection) return notFound(`Collection ${ctx.params.collectionId} does not exist.`);
   const body = await ctx.json<UpdateCollectionRequest>();
   collection.name = body.name;
   if ('description' in body) collection.description = body.description ?? null;
-  return { status: 200, body: collection };
+  return { status: 200, body: withProjectFields(collection, auth.orgId) };
 });
 
 registerOperation('deleteCollection', (ctx) => {
@@ -74,6 +97,26 @@ registerOperation('deleteCollection', (ctx) => {
   if (idx === -1) return notFound(`Collection ${ctx.params.collectionId} does not exist.`);
   store.collections.splice(idx, 1);
   return { status: 204 };
+});
+
+// P2-18 — `projectId: null` unassigns, `projectId: "<uuid>"` assigns; the key
+// itself is required (mirrors the real `AssignProjectRequest` schema exactly
+// — see `routes::collections::assign_project`'s doc for why this is a
+// dedicated action route rather than folded into `updateCollection` above).
+registerOperation('assignCollectionProject', async (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
+  const collection = getStore().collections.find((c) => c.id === ctx.params.collectionId);
+  if (!collection || getStore().collectionOrgId.get(collection.id) !== auth.orgId) {
+    return notFound(`Collection ${ctx.params.collectionId} does not exist.`);
+  }
+  const body = await ctx.json<AssignProjectRequest>();
+  if (body.projectId !== null) {
+    const exists = getOrgProjects(auth.orgId).some((p) => p.id === body.projectId);
+    if (!exists) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  }
+  setCollectionProjectId(collection.id, body.projectId);
+  return { status: 200, body: withProjectFields(collection, auth.orgId) };
 });
 
 // ---------------------------------------------------------------------------

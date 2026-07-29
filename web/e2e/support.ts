@@ -43,6 +43,20 @@ export const DEMO = {
   password: 'demo-password',
 } as const;
 
+/**
+ * Display names the admin members table actually renders (`MembersTable.tsx`
+ * shows a name/email — never the raw `user_id` from `IDS` above, see the
+ * owner-reported UI gap this closed). Row lookups in `admin.spec.ts` filter
+ * by these, not by `IDS`, since a UUID no longer appears in that table's
+ * text at all.
+ */
+export const NAMES = {
+  demoUser: 'Demo User',
+  secondMember: 'Bao Tran',
+  thirdMember: 'Chi Vo',
+  globexMember: 'Duc Nguyen',
+} as const;
+
 /** Statuses `mockControl.forceStatus` accepts (src/mocks/control.ts). */
 type ForcedStatus = 401 | 403 | 404 | 409 | 429 | 503;
 

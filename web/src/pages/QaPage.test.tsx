@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiClient, type ApiClient } from '../api/client';
 import { installMockFetch, resetMockState, uninstallMockFetch } from '../mocks';
@@ -6,6 +6,7 @@ import { QA_STREAM_MARKERS } from '../mocks/handlers/qa';
 import { mockUuid } from '../mocks/ids';
 import { RouterProvider } from '../state/RouterProvider';
 import { ScopeProvider } from '../state/ScopeProvider';
+import { createScopeManager, type ScopeManager } from '../state/scope';
 import { QaPage } from './QaPage';
 
 const DEMO_EMAIL = 'demo@markhand.test';
@@ -18,10 +19,10 @@ async function loggedInClient(): Promise<ApiClient> {
   return client;
 }
 
-function renderQa(client: ApiClient, collectionId?: string) {
+function renderQa(client: ApiClient, collectionId?: string, manager?: ScopeManager) {
   return render(
     <RouterProvider>
-      <ScopeProvider>
+      <ScopeProvider manager={manager}>
         <QaPage collectionId={collectionId} client={client} />
       </ScopeProvider>
     </RouterProvider>,
@@ -140,7 +141,7 @@ describe('QaPage', () => {
     );
   });
 
-  it('"Hủy" aborts an in-flight ask and returns to an inert state', async () => {
+  it('"Hủy" aborts an in-flight turn, freezing it with a cancelled notice instead of blanking it', async () => {
     const client = await loggedInClient();
     renderQa(client);
 
@@ -148,9 +149,11 @@ describe('QaPage', () => {
     // does not race the mock's own near-instant stream resolution (see
     // `mocks/handlers/qa.ts`'s module doc: the whole response is a
     // pre-serialized string with nothing to actually await) — clicking
-    // "Hủy" sets `isActive` to `false` synchronously via `useAskStream`'s
-    // `reset()`, which hides the button regardless of whether the stream
-    // had already finished on its own by this point.
+    // "Hủy" sets this turn's status to `'cancelled'` synchronously
+    // (`ChatTurnBubble`'s own `abort()`, layered on `useAskStream`'s
+    // `reset()`), which hides the button and re-enables the composer
+    // regardless of whether the stream had already finished on its own by
+    // this point.
     fireEvent.change(screen.getByLabelText('Câu hỏi'), {
       target: { value: 'Lộ trình quý 3 là gì?' },
     });
@@ -158,5 +161,154 @@ describe('QaPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hủy' }));
 
     expect(screen.queryByRole('button', { name: 'Hủy' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Đã hủy câu trả lời này/)).toBeVisible();
+    // The composer re-enables immediately so the next question can be typed.
+    expect(screen.getByLabelText('Câu hỏi')).not.toBeDisabled();
+  });
+
+  it("keeps two turns' history: a second question does not disturb the first turn's answer", async () => {
+    const client = await loggedInClient();
+    renderQa(client);
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      expect(screen.getByTestId('qa-answer')).toHaveTextContent(
+        'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+      );
+    });
+    // The composer re-enables once the first turn settles, allowing a second question.
+    await waitFor(() => expect(screen.getByLabelText('Câu hỏi')).not.toBeDisabled());
+
+    await askQuestion('cau-hoi-khong-khop-bat-ky-tai-lieu-nao');
+    await waitFor(() => {
+      const answers = screen.getAllByTestId('qa-answer');
+      expect(answers).toHaveLength(2);
+      expect(answers[1]).toHaveTextContent(
+        'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
+      );
+    });
+    // The first turn's answer is still there, unchanged, in the log.
+    const answers = screen.getAllByTestId('qa-answer');
+    expect(answers[0]).toHaveTextContent(
+      'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+    );
+    expect(screen.getByRole('log', { name: 'Lịch sử hỏi đáp' })).toBeVisible();
+  });
+
+  it('citation_revoked on a second turn does not revoke/disturb the first, already-completed turn', async () => {
+    const client = await loggedInClient();
+    renderQa(client);
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      expect(screen.getByTestId('qa-answer')).toHaveTextContent(
+        'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+      );
+    });
+    expect(await screen.findByText('CITE-0001')).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText('Câu hỏi')).not.toBeDisabled());
+
+    await askQuestion(`Lộ trình quý 3 là gì? ${QA_STREAM_MARKERS.citationRevoked}`);
+    await waitFor(() => {
+      expect(screen.getByText(/Trích dẫn đã bị thu hồi giữa chừng/)).toBeVisible();
+    });
+
+    // The first turn's answer and citation are still present, unaffected by
+    // the second turn's revoke.
+    const answers = screen.getAllByTestId('qa-answer');
+    expect(answers).toHaveLength(2);
+    expect(answers[0]).toHaveTextContent(
+      'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+    );
+    expect(screen.getByText('CITE-0001')).toBeVisible();
+  });
+
+  it('P2-18: "Phạm vi" project scope narrows both search and ask to that project\'s collections', async () => {
+    const client = await loggedInClient();
+    renderQa(client);
+
+    // "Nhân sự" (seeded org A project) is assigned only to the Employee
+    // Handbook collection (mockUuid(10)) — "Roadmap.xlsx" lives in Product
+    // Specs (mockUuid(11)), which is NOT in that project, so a search/ask
+    // scoped to "Nhân sự" must find nothing for a query that only matches
+    // Roadmap.xlsx.
+    const scopeTrigger = screen.getByRole('combobox', { name: 'Phạm vi dự án' });
+    expect(scopeTrigger).toHaveTextContent('Tất cả dự án');
+    fireEvent.click(scopeTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Nhân sự' }));
+    expect(scopeTrigger).toHaveTextContent('Nhân sự');
+
+    fireEvent.change(screen.getByLabelText('Từ khóa'), {
+      target: { value: 'lộ trình quý 3' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Tìm kiếm' }));
+    expect(
+      await screen.findByText(/Không tìm thấy kết quả phù hợp với "lộ trình quý 3"/),
+    ).toBeVisible();
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      expect(screen.getByTestId('qa-answer')).toHaveTextContent(
+        'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
+      );
+    });
+
+    // Back to "Tất cả dự án" (no filter) — the same question now finds it.
+    fireEvent.click(scopeTrigger);
+    fireEvent.click(screen.getByRole('option', { name: 'Tất cả dự án' }));
+    await waitFor(() => expect(screen.getByLabelText('Câu hỏi')).not.toBeDisabled());
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      const answers = screen.getAllByTestId('qa-answer');
+      expect(answers[answers.length - 1]).toHaveTextContent(
+        'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+      );
+    });
+  });
+
+  it('P2-18: switching org resets "Phạm vi" back to "Tất cả dự án"', async () => {
+    const client = await loggedInClient();
+    const manager = createScopeManager();
+    manager.setScope({ orgId: 'org-a', permissions: [], allowedCollectionIds: [] });
+    renderQa(client, undefined, manager);
+
+    const scopeTrigger = screen.getByRole('combobox', { name: 'Phạm vi dự án' });
+    fireEvent.click(scopeTrigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Nhân sự' }));
+    expect(scopeTrigger).toHaveTextContent('Nhân sự');
+
+    act(() => {
+      manager.setScope({ orgId: 'org-b', permissions: [], allowedCollectionIds: [] });
+    });
+
+    expect(screen.getByRole('combobox', { name: 'Phạm vi dự án' })).toHaveTextContent(
+      'Tất cả dự án',
+    );
+  });
+
+  it('switching org clears the whole chat history in-memory (no stale-org bubble ever painted)', async () => {
+    const client = await loggedInClient();
+    const manager = createScopeManager();
+    manager.setScope({ orgId: 'org-a', permissions: [], allowedCollectionIds: [] });
+    renderQa(client, undefined, manager);
+
+    await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+    await waitFor(() => {
+      expect(screen.getByTestId('qa-answer')).toHaveTextContent(
+        'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+      );
+    });
+
+    act(() => {
+      manager.setScope({ orgId: 'org-b', permissions: [], allowedCollectionIds: [] });
+    });
+
+    expect(screen.queryByTestId('qa-answer')).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Chưa có câu hỏi nào trong phiên này — đặt câu hỏi bên dưới.'),
+    ).toBeVisible();
+    // The composer is enabled again — nothing is left "busy" from the discarded turn.
+    expect(screen.getByLabelText('Câu hỏi')).not.toBeDisabled();
   });
 });

@@ -270,6 +270,8 @@ registerOperation('acceptMemberInvite', async (ctx) => {
   }
   const membership: Membership = {
     userId: auth.user.userId,
+    email: auth.user.email,
+    displayName: auth.user.displayName,
     role: invite.role,
     state: 'active',
     createdAt: mockTimestamp(0),

@@ -13,7 +13,16 @@
  * button labels). Those are bumped to a deeper ramp step below, each marked
  * "contrast:" at the point of change.
  */
-@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
+/* Self-hosted fonts (@fontsource, bundled by Vite — no CDN request, so
+ * rendering is identical online/offline and CSP stays 'self'). Both families
+ * ship a real `vietnamese` unicode-range subset; the previous Google-hosted
+ * Caprasimo/Figtree pair had none (latin/latin-ext only, missing
+ * U+1EA0–U+1EF1), so every diacritic-carrying glyph fell back to whatever
+ * system font the machine had — mixed-face headings that differed per OS. */
+@import '@fontsource/baloo-2/700.css';
+@import '@fontsource/be-vietnam-pro/400.css';
+@import '@fontsource/be-vietnam-pro/600.css';
+@import '@fontsource/be-vietnam-pro/700.css';
 
 :root {
   --color-bg: #f5ead8;
@@ -53,9 +62,9 @@
   --color-accent-2-800: #3d472b;
   --color-accent-2-900: #272e1b;
 
-  --font-heading: 'Caprasimo', system-ui, sans-serif;
-  --font-heading-weight: 400;
-  --font-body: 'Figtree', system-ui, sans-serif;
+  --font-heading: 'Baloo 2', system-ui, sans-serif;
+  --font-heading-weight: 700;
+  --font-body: 'Be Vietnam Pro', system-ui, sans-serif;
 
   --space-1: 4.4px;
   --space-2: 8.8px;
@@ -1036,10 +1045,11 @@ textarea.input {
   background: color-mix(in srgb, var(--color-text) 4%, transparent);
 }
 
-/* Member identity cell (components/admin/MembersTable.tsx): the membership
-   API carries only a user id — no name or email — so the identity reads as a
-   round monogram avatar + the id set in monospace, with a "Bạn" tag when the
-   row is the signed-in caller. Replaces the old bare `<code>` UUID blob. */
+/* Member identity cell (components/admin/MembersTable.tsx): a round monogram
+   avatar (derived from displayName, never the user id) plus the member's
+   name (bold) and email (muted) stacked underneath, with a "Bạn" tag next to
+   the name when the row is the signed-in caller. Replaces the old bare
+   UUID display — the membership API now joins `users` for name/email. */
 .member-identity {
   align-items: center;
   display: flex;
@@ -1062,11 +1072,26 @@ textarea.input {
   width: 2.1rem;
 }
 
-.member-identity-id {
+.member-identity-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.member-identity-name {
+  align-items: center;
   color: var(--color-text);
-  font-family: ui-monospace, Menlo, monospace;
+  display: flex;
+  font-weight: 600;
+  gap: var(--space-2);
+}
+
+.member-identity-email {
   font-size: 12.5px;
-  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* — dialog — */
@@ -2026,4 +2051,203 @@ textarea.input {
    redundant (and would overlap the widened rail). */
 .rail-expanded .rail-tooltip {
   display: none;
+}
+
+/* P2-17 Document Graph MVP ------------------------------------------------ */
+
+/* Standard visually-hidden-but-announced utility (WCAG technique), used for
+   the graph page's `aria-live` filter/toggle summary — visible on screen
+   would be redundant with the sidebar/toolbar state it restates. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .graph-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.graph-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.graph-canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: 12px;
+}
+
+.graph-edge {
+  stroke: var(--color-neutral-500);
+  stroke-opacity: 0.6;
+}
+
+.graph-edge-conflict {
+  stroke: var(--color-accent-700);
+}
+
+.graph-edge-co_citation {
+  stroke: var(--color-accent-2-700);
+}
+
+.graph-edge-similarity {
+  stroke: var(--color-neutral-600);
+  stroke-dasharray: 4 3;
+}
+
+.graph-node-dot {
+  cursor: pointer;
+  stroke: var(--color-bg);
+  stroke-width: 1.5;
+}
+
+.graph-node-list-wrap h2 {
+  font-size: 14px;
+  margin-bottom: var(--space-2);
+}
+
+.graph-node-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.graph-node-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  /* The global `button` rule paints cream-on-accent; on this transparent
+     list row that inherited cream text is invisible on the cream ground. */
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-weight: 400;
+  min-height: 0;
+  cursor: pointer;
+}
+
+.graph-node-button:hover,
+.graph-node-button:focus-visible {
+  border-color: var(--color-divider);
+  background: var(--color-surface);
+}
+
+.graph-node-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.graph-sidebar {
+  border: 1px solid var(--color-divider);
+  border-radius: 12px;
+  padding: var(--space-3);
+}
+
+.graph-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.graph-sidebar-header h2 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.graph-community-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.graph-community-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.graph-community-label {
+  flex: 1;
+}
+
+.graph-community-count {
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-table-view table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--space-4);
+}
+
+.graph-table-view caption {
+  text-align: left;
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+
+.graph-table-view th,
+.graph-table-view td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-accent-700);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
 }

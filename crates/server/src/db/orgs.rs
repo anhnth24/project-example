@@ -77,3 +77,21 @@ pub async fn ensure_membership(txn: &Transaction<'_>, ctx: &OrgContext) -> Resul
     .await?;
     Ok(())
 }
+
+/// Bumps the org-wide ACL/membership resolution version (1C-05).
+///
+/// MUST be called in the SAME transaction as any mutation that can change
+/// what `auth::permissions::resolve_org_context*` would compute for ANY
+/// member of `org_id` — see migration `0031_expand_org_acl_version.sql` for
+/// the exact call-site list and the coarse-invalidation rationale.
+/// `auth::context_cache::OrgContextCache` treats any bump as invalidating
+/// every cached principal in the org; it never trusts a cached entry whose
+/// remembered version does not match the current value here.
+pub async fn bump_acl_version(txn: &Transaction<'_>, org_id: Uuid) -> Result<(), DbError> {
+    txn.execute(
+        "UPDATE orgs SET acl_version = acl_version + 1 WHERE id = $1",
+        &[&org_id],
+    )
+    .await?;
+    Ok(())
+}

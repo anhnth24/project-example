@@ -6,6 +6,7 @@ pub mod prompt;
 pub mod provider;
 pub mod stream;
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
@@ -54,6 +55,92 @@ pub fn force_extractive_only_runtime() -> bool {
             trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
         }
         Err(_) => false,
+    }
+}
+
+/// Dev-gate opt-in (default OFF): allow an LLM answer that passes citation/claim
+/// validation to reach the caller labeled `AnswerMode::LlmUnverified` even while
+/// structured entailment is unavailable (`force_extractive_only()` true). This
+/// NEVER claims grounded — the response always carries a fixed warning saying
+/// entailment is unverified. Off by default; every existing mode/warning/test
+/// stays bit-for-bit identical when unset.
+fn allow_unverified_llm() -> bool {
+    allow_unverified_llm_runtime()
+}
+
+/// Shared by JSON ask and durable SSE producer (P1B-R05).
+pub fn allow_unverified_llm_runtime() -> bool {
+    match std::env::var("MARKHAND_QA_ALLOW_UNVERIFIED_LLM") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            trimmed == "1" || trimmed.eq_ignore_ascii_case("true")
+        }
+        Err(_) => false,
+    }
+}
+
+/// Fixed warning attached whenever an `AnswerMode::LlmUnverified` answer is
+/// returned — must always accompany that mode so callers never mistake it for
+/// grounded/verified output.
+pub const UNVERIFIED_LLM_WARNING: &str =
+    "Dev-gate: LLM answer passed citation/claim checks but structured entailment \
+is NOT available — this answer is unverified, not grounded.";
+
+/// Decides the final (answer, mode) for a completed LLM response, applying the
+/// fail-closed / dev-gate policy, plus any extra warnings the caller must
+/// attach. Pure/DB-free by design so both `ask()` (JSON) and the SSE producer
+/// (`ask_stream::run_producer`) apply byte-identical semantics and so the
+/// policy is unit-testable without a live Postgres/Qdrant.
+///
+/// `real_mode` is only used once structured entailment ships and
+/// `force_extractive_only()` can return `false` in production; today that arm
+/// is unreachable (kept for forward-compat rather than deleted).
+pub(crate) fn resolve_llm_answer(
+    llm_answer: String,
+    extractive: &str,
+    valid_ids: &HashSet<String>,
+    citations: &[CitationPin],
+    mode: &VersionMode,
+    real_mode: AnswerMode,
+) -> (String, AnswerMode, Vec<String>) {
+    let mut warnings = Vec::new();
+    if force_extractive_only() && !allow_unverified_llm() {
+        warnings.push(
+            "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
+        );
+        return (
+            extractive.to_string(),
+            AnswerMode::OfflineExtractive,
+            warnings,
+        );
+    }
+    match validate_answer_citations(&llm_answer, valid_ids, citations, mode) {
+        Ok(()) => {
+            if force_extractive_only() {
+                // Dev-gate path: passed validation, but structured entailment is
+                // still unavailable — never claim grounded.
+                warnings.push(UNVERIFIED_LLM_WARNING.into());
+                (llm_answer, AnswerMode::LlmUnverified, warnings)
+            } else {
+                (llm_answer, real_mode, warnings)
+            }
+        }
+        Err(failure) => {
+            warnings.extend(failure.warnings);
+            warnings.push(
+                if failure.unverifiable {
+                    "Unverifiable claim-level grounding; using extractive fallback."
+                } else {
+                    "LLM grounding failed validation; using extractive fallback."
+                }
+                .into(),
+            );
+            (
+                extractive.to_string(),
+                AnswerMode::FallbackExtractive,
+                warnings,
+            )
+        }
     }
 }
 
@@ -171,34 +258,16 @@ pub async fn ask(
             let messages = build_grounded_messages(&request.question, &hybrid, &request.mode);
             match chat.complete(&messages).await {
                 Ok(llm_answer) => {
-                    if force_extractive_only() {
-                        warnings.push(
-                            "Structured entailment unavailable; fail-closed extractive-only grounding."
-                                .into(),
-                        );
-                        (extractive, AnswerMode::OfflineExtractive)
-                    } else {
-                        match validate_answer_citations(
-                            &llm_answer,
-                            &valid_ids,
-                            &citations,
-                            &request.mode,
-                        ) {
-                            Ok(()) => (llm_answer, chat.answer_mode()),
-                            Err(failure) => {
-                                warnings.extend(failure.warnings);
-                                warnings.push(
-                                    if failure.unverifiable {
-                                        "Unverifiable claim-level grounding; using extractive fallback."
-                                    } else {
-                                        "LLM grounding failed validation; using extractive fallback."
-                                    }
-                                    .into(),
-                                );
-                                (extractive, AnswerMode::FallbackExtractive)
-                            }
-                        }
-                    }
+                    let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
+                        llm_answer,
+                        &extractive,
+                        &valid_ids,
+                        &citations,
+                        &request.mode,
+                        chat.answer_mode(),
+                    );
+                    warnings.extend(extra_warnings);
+                    (answer, resolved_mode)
                 }
                 Err(ProviderError::Timeout) => {
                     warnings.push("LLM provider timed out; using extractive fallback.".into());
@@ -288,5 +357,204 @@ mod tests {
     fn force_extractive_only_is_enabled_by_default() {
         // Fail-closed until a trusted structured entailment verifier ships.
         assert!(force_extractive_only());
+    }
+
+    // --- Dev-gate (MARKHAND_QA_ALLOW_UNVERIFIED_LLM) ---
+    //
+    // `resolve_llm_answer` is pure/DB-free, so these exercise the exact policy
+    // shared by ask() and the SSE producer without a live Postgres/Qdrant.
+    // Env var mutation is process-global, so serialize with a mutex and always
+    // restore to unset afterwards (the crate-wide default state).
+
+    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    const GATE_VAR: &str = "MARKHAND_QA_ALLOW_UNVERIFIED_LLM";
+
+    fn with_dev_gate<T>(enabled: bool, run: impl FnOnce() -> T) -> T {
+        let guard = ENV_GUARD
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if enabled {
+            std::env::set_var(GATE_VAR, "1");
+        } else {
+            std::env::remove_var(GATE_VAR);
+        }
+        let result = run();
+        std::env::remove_var(GATE_VAR);
+        drop(guard);
+        result
+    }
+
+    fn test_pin(cite_id: &str, version: u128, quote: &str) -> CitationPin {
+        CitationPin {
+            cite_id: cite_id.into(),
+            org_id: Uuid::from_u128(1),
+            logical_document_id: Uuid::from_u128(2),
+            version_id: Uuid::from_u128(version),
+            version_number: version as i32,
+            source_content_sha256: "c".repeat(64),
+            canonical_markdown_sha256: "f".repeat(64),
+            quote_sha256: "e".repeat(64),
+            chunk_id: Uuid::from_u128(4),
+            chunk_identity_sha256: "d".repeat(64),
+            collection_id: Uuid::from_u128(5),
+            heading: "Kinh phí".into(),
+            quote: quote.into(),
+            page: None,
+            slide: None,
+            sheet: None,
+            source_span_start: 0,
+            source_span_end: quote.len(),
+            quote_local_start: 0,
+            quote_local_end: quote.len(),
+            effective_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            effective_to: None,
+            is_current: true,
+            anchor: "mhcite1.x".into(),
+        }
+    }
+
+    #[test]
+    fn dev_gate_off_is_bit_identical_fail_closed_regression() {
+        with_dev_gate(false, || {
+            assert!(!allow_unverified_llm_runtime());
+            let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+            let valid = HashSet::from(["CITE-0001".to_string()]);
+            let (answer, mode, warnings) = resolve_llm_answer(
+                "Kinh phí là 10 triệu [CITE-0001].".into(),
+                "## Trả lời trích xuất\n\nextractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            // Regression: with the gate unset, behavior must match the pre-dev-gate
+            // code path exactly — extractive answer, OfflineExtractive, single
+            // fail-closed warning, LLM answer never surfaced even though it would
+            // have passed validation.
+            assert_eq!(answer, "## Trả lời trích xuất\n\nextractive fallback text");
+            assert_eq!(mode, AnswerMode::OfflineExtractive);
+            assert_eq!(warnings.len(), 1);
+            assert!(warnings[0].contains("fail-closed"));
+        });
+    }
+
+    #[test]
+    fn dev_gate_on_valid_citation_returns_llm_unverified_with_fixed_warning() {
+        with_dev_gate(true, || {
+            assert!(allow_unverified_llm_runtime());
+            let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+            let valid = HashSet::from(["CITE-0001".to_string()]);
+            let (answer, mode, warnings) = resolve_llm_answer(
+                "Kinh phí là 10 triệu [CITE-0001].".into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(answer, "Kinh phí là 10 triệu [CITE-0001].");
+            assert_eq!(mode, AnswerMode::LlmUnverified);
+            assert_eq!(mode.as_str(), "llm_unverified");
+            assert!(warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.to_lowercase().contains("not")
+                        && w.to_lowercase().contains("grounded"))
+            );
+        });
+    }
+
+    #[test]
+    fn dev_gate_on_fabricated_citation_still_falls_back_extractive() {
+        with_dev_gate(true, || {
+            let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+            let valid = HashSet::from(["CITE-0001".to_string()]);
+            let (answer, mode, warnings) = resolve_llm_answer(
+                "Kinh phí là 99 triệu [CITE-9999].".into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(answer, "extractive fallback text");
+            assert_eq!(mode, AnswerMode::FallbackExtractive);
+            assert!(!warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
+            assert!(warnings
+                .iter()
+                .any(|w| w.contains("Fabricated") || w.contains("unknown")));
+        });
+    }
+
+    #[test]
+    fn dev_gate_on_wrong_compare_delta_falls_back_extractive() {
+        with_dev_gate(true, || {
+            let pins = vec![
+                test_pin("CITE-0001", 11, "Kinh phí là 10 triệu đồng."),
+                test_pin("CITE-0002", 12, "Kinh phí là 15 triệu đồng."),
+            ];
+            let mode = VersionMode::Compare {
+                document_id: Uuid::from_u128(2),
+                version_a: pins[0].version_id,
+                version_b: pins[1].version_id,
+            };
+            let valid = HashSet::from(["CITE-0001".to_string(), "CITE-0002".to_string()]);
+            // Wrong delta: newer value attributed to the older citation.
+            let (answer, resolved_mode, warnings) = resolve_llm_answer(
+                "Kinh phí cũ là 15 triệu [CITE-0001]. Kinh phí mới là 10 triệu [CITE-0002].".into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &mode,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(answer, "extractive fallback text");
+            assert_eq!(resolved_mode, AnswerMode::FallbackExtractive);
+            assert!(!warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
+        });
+    }
+
+    /// End-to-end through the real `ChatProvider::complete` call (not just the
+    /// pure policy function), same wiring `ask()` uses — a hermetic stand-in
+    /// for an HTTP-mocked `OpenAiCompatibleChat` run, since `ChatProvider::Static`
+    /// exercises the identical call path without a live GLM endpoint.
+    /// Plain `#[test]` + `block_on` (not `#[tokio::test]`) so the env-var mutex
+    /// guard is never held across an actual `.await` suspension point.
+    #[test]
+    fn dev_gate_on_wired_through_real_provider_complete_call() {
+        use crate::services::qa::provider::StaticChatProvider;
+
+        let guard = ENV_GUARD
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        std::env::set_var(GATE_VAR, "1");
+
+        let provider = ChatProvider::Static(StaticChatProvider::new(
+            "Kinh phí là 10 triệu [CITE-0001].",
+            AnswerMode::LocalLlm,
+        ));
+        let messages = GroundedMessages {
+            system: "s".into(),
+            user: "u".into(),
+        };
+        let llm_answer = futures::executor::block_on(provider.complete(&messages)).unwrap();
+        let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+        let valid = HashSet::from(["CITE-0001".to_string()]);
+        let (answer, mode, warnings) = resolve_llm_answer(
+            llm_answer,
+            "extractive fallback",
+            &valid,
+            &pins,
+            &VersionMode::Current,
+            provider.answer_mode(),
+        );
+
+        std::env::remove_var(GATE_VAR);
+        drop(guard);
+
+        assert_eq!(answer, "Kinh phí là 10 triệu [CITE-0001].");
+        assert_eq!(mode, AnswerMode::LlmUnverified);
+        assert!(warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
     }
 }

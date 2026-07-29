@@ -12,6 +12,7 @@
 // per-test reset hook. `window.__markhandMockReset` is also exposed so a test
 // can re-seed mid-scenario (e.g. after a destructive flow) without a reload.
 import { grantMemberManage } from '../components/admin/testSupport';
+import { grantDocUpload } from '../components/library/testSupport';
 import { succeedJob } from '../components/upload/testSupport';
 import { installMockFetch, mockControl, resetMockState } from './index';
 
@@ -39,15 +40,18 @@ declare global {
  * user `member.manage` so the P2-11/P2-12 admin flows are reachable in E2E —
  * the vitest suite deliberately does NOT grant it (it would change an
  * `App.test.tsx` assertion), but in mock-mode the demo user is the only user
- * and the admin pages are part of what E2E must cover.
+ * and the admin pages are part of what E2E must cover. Same reasoning for
+ * `doc.upload` (P2-18 project create/assign flows).
  */
 export function installBrowserMocks(): void {
   installMockFetch();
   resetMockState();
   grantMemberManage();
+  grantDocUpload();
   window.__markhandMockReset = () => {
     resetMockState();
     grantMemberManage();
+    grantDocUpload();
   };
   window.__markhandMockControl = mockControl;
   window.__markhandMockJobs = { succeed: succeedJob };

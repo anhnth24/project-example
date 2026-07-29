@@ -13,6 +13,14 @@
 // registers `askStream` against the same in-page `fetch` patch every other
 // mocked operation uses, so Playwright's page-context `fetch` override
 // already covers it.
+//
+// Chat UI (this same P2-10 issue, chat panel follow-up): `AskPanel` became
+// `ChatPanel` — a scrolling in-session history of turns instead of a single
+// question/answer. The four scenarios below are unchanged in substance (each
+// still asks exactly one question and checks the exact same copy/citations),
+// just re-pointed at the chat log's per-turn `data-testid="qa-answer"` where
+// a selector needed to stay unambiguous now that more than one can exist.
+// The new multi-turn scenario is the one addition.
 import { expect, test } from '@playwright/test';
 import { login } from './support';
 
@@ -52,7 +60,7 @@ test('ask streams a grounded answer token-by-token, then citations', async ({ pa
   );
   await expect(page.getByText('CITE-0001', { exact: true })).toBeVisible();
   // No preview deep-link here on purpose: `CitationPin` (contract.ts) carries
-  // no document/version id, so `AskPanel` cannot resolve one — it says so
+  // no document/version id, so `ChatPanel` cannot resolve one — it says so
   // instead of a silently-dead "Xem trước" button (see `CitationCard.tsx`'s
   // module doc for the verified contract gap this documents).
   await expect(
@@ -88,5 +96,38 @@ test('provider fallback still answers (extractive), labelled honestly, with a wa
   await expect(page.getByText(/Nhà cung cấp LLM tạm thời không khả dụng/)).toBeVisible();
   await expect(page.getByTestId('qa-answer')).toContainText(
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+  );
+});
+
+test('chat keeps multi-turn history: a second question is answered without disturbing the first turn', async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole('link', { name: 'Hỏi đáp' }).click();
+
+  const chatLog = page.getByRole('log', { name: 'Lịch sử hỏi đáp' });
+  const questionBox = page.getByRole('textbox', { name: 'Câu hỏi' });
+
+  await questionBox.fill(ASK_QUESTION);
+  await page.getByRole('button', { name: 'Hỏi' }).click();
+  await expect(chatLog.getByTestId('qa-answer').first()).toContainText(
+    'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+  );
+  // The composer re-enables once the first turn settles.
+  await expect(questionBox).toBeEnabled();
+
+  await questionBox.fill('cau-hoi-khong-khop-bat-ky-tai-lieu-nao');
+  await page.getByRole('button', { name: 'Hỏi' }).click();
+
+  const answers = chatLog.getByTestId('qa-answer');
+  await expect(answers).toHaveCount(2);
+  // Both turns' own question + answer are still visible — the first turn was
+  // never disturbed by the second (each owns its own stream state).
+  await expect(chatLog).toContainText(ASK_QUESTION);
+  await expect(answers.nth(0)).toContainText(
+    'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+  );
+  await expect(answers.nth(1)).toContainText(
+    'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
   );
 });

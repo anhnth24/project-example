@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
-use fileconv_knowledge::ask::{extractive_answer, AnswerMode};
+use fileconv_knowledge::ask::{extractive_answer, valid_citation_ids, AnswerMode};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -33,7 +33,9 @@ use crate::services::qa::grounding::{
 use crate::services::qa::prompt::build_grounded_messages;
 use crate::services::qa::provider::{ChatProvider, ProviderError, StreamCancel};
 use crate::services::qa::stream::{tokenize_answer, HEARTBEAT_INTERVAL, SSE_ENVELOPE_VERSION};
-use crate::services::qa::{force_extractive_only_runtime, hits_to_hybrid};
+use crate::services::qa::{
+    allow_unverified_llm_runtime, force_extractive_only_runtime, hits_to_hybrid, resolve_llm_answer,
+};
 use crate::services::retrieval::{hybrid_search, RetrievalHit, RetrievalRequest, VersionMode};
 use crate::services::stream_auth::{self, StreamAuthError};
 use crate::storage::qdrant::QdrantClient;
@@ -319,12 +321,20 @@ async fn run_producer(
         return;
     }
 
+    let extractive_forced = force_extractive_only_runtime();
     let use_provider_stream = provider
         .as_ref()
-        .is_some_and(|p| p.supports_incremental_stream() && !force_extractive_only_runtime());
+        .is_some_and(|p| p.supports_incremental_stream() && !extractive_forced);
 
     let mut answer_mode = AnswerMode::OfflineExtractive;
     let mut streamed_any = false;
+    // Dev-gate path (default OFF): buffer the full LLM answer so citation/claim
+    // validation (which needs the whole text) can run before anything is
+    // emitted — unlike true incremental streaming, which cannot be validated
+    // token-by-token. Only entered while entailment is fail-closed; once a
+    // trusted verifier ships, `use_provider_stream` takes over unconditionally.
+    let mut unverified_answer: Option<String> = None;
+    let mut dev_gate_attempted_and_failed = false;
 
     if use_provider_stream {
         if let Some(chat) = provider.as_ref() {
@@ -381,10 +391,60 @@ async fn run_producer(
                 }
             }
         }
+    } else if extractive_forced && allow_unverified_llm_runtime() && !hits.is_empty() {
+        if let Some(chat) = provider.as_ref() {
+            let hybrid = hits_to_hybrid(&hits);
+            let messages = build_grounded_messages(&question, &hybrid, &mode);
+            match chat.complete(&messages).await {
+                Ok(llm_answer) => {
+                    let valid_ids = valid_citation_ids(hybrid.len());
+                    // Same policy helper as the JSON ask() route — identical
+                    // fail-closed / dev-gate / validation semantics.
+                    let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
+                        llm_answer,
+                        &extractive,
+                        &valid_ids,
+                        &citations,
+                        &mode,
+                        chat.answer_mode(),
+                    );
+                    warnings.extend(extra_warnings);
+                    answer_mode = resolved_mode;
+                    match resolved_mode {
+                        AnswerMode::LlmUnverified => unverified_answer = Some(answer),
+                        AnswerMode::FallbackExtractive => dev_gate_attempted_and_failed = true,
+                        _ => {}
+                    }
+                }
+                Err(ProviderError::Timeout) => {
+                    warnings.push("LLM provider timed out; using extractive fallback.".into());
+                    answer_mode = AnswerMode::FallbackExtractive;
+                    dev_gate_attempted_and_failed = true;
+                }
+                Err(_) => {
+                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
+                    answer_mode = AnswerMode::FallbackExtractive;
+                    dev_gate_attempted_and_failed = true;
+                }
+            }
+        }
     }
 
-    if !streamed_any || matches!(answer_mode, AnswerMode::FallbackExtractive) {
-        if force_extractive_only_runtime() {
+    if let Some(answer) = unverified_answer {
+        for token in tokenize_answer(&answer) {
+            if cancel.is_cancelled() {
+                close(AskStreamStatus::Error, "cancelled").await;
+                return;
+            }
+            if let Err(error) = append("ask.token", json!({ "text": token })).await {
+                let reason = config_reason(&error).unwrap_or("stream_error");
+                cancel.cancel();
+                close(AskStreamStatus::Error, reason).await;
+                return;
+            }
+        }
+    } else if !streamed_any || matches!(answer_mode, AnswerMode::FallbackExtractive) {
+        if extractive_forced && !dev_gate_attempted_and_failed {
             warnings.push(
                 "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
             );
