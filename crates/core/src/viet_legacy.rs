@@ -468,6 +468,22 @@ mod tests {
             .collect()
     }
 
+    fn tcvn3_bytes_for(text: &str) -> Vec<u8> {
+        text.chars()
+            .map(|ch| {
+                if ch.is_ascii() {
+                    ch as u8
+                } else {
+                    TCVN3_MAP
+                        .iter()
+                        .find(|(_, mapped)| *mapped == ch)
+                        .map(|(b, _)| *b)
+                        .unwrap_or_else(|| panic!("missing TCVN3 byte for {ch}"))
+                }
+            })
+            .collect()
+    }
+
     #[test]
     fn decodes_tcvn3_sentence() {
         assert!(looks_like_tcvn3(T1));
@@ -498,6 +514,27 @@ mod tests {
     fn decode_text_routes() {
         assert_eq!(decode_text(T1), "Cộng hòa xã hội chủ nghĩa Việt Nam");
         assert_eq!(decode_text("đã là utf8".as_bytes()), "đã là utf8");
+    }
+
+    #[test]
+    fn decode_text_routes_new_tcvn3_phrase_without_uppercase_font_hint() {
+        let phrase = "Trường học";
+        let bytes = tcvn3_bytes_for(phrase);
+
+        assert!(looks_like_tcvn3(&bytes));
+        assert_eq!(decode_tcvn3(&bytes), phrase);
+
+        // decode_text route TCVN3 nhưng giữ AsMapped — không tự UppercaseFont (#289).
+        assert_eq!(decode_text(&bytes), phrase);
+        assert_ne!(decode_text(&bytes), phrase.to_uppercase());
+
+        // UppercaseFont chỉ khi caller có metadata font, không từ bytes thuần.
+        let hint = tcvn3_case_hint_from_font_name(".VnTimeH");
+        assert_eq!(hint, Some(Tcvn3CaseHint::UppercaseFont));
+        assert_eq!(
+            decode_tcvn3_with_hint(&bytes, hint.unwrap()),
+            phrase.to_uppercase()
+        );
     }
 
     #[test]
