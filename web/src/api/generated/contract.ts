@@ -936,6 +936,7 @@ export interface components {
             versionId?: string | null;
             /** Format: uuid */
             collectionId?: string | null;
+            documentTitle?: string | null;
             /** @description Original uploaded/source object SHA-256 */
             sourceContentSha256: string;
             /** @description Trusted canonical Markdown artifact SHA-256 */

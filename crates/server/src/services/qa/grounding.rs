@@ -484,6 +484,7 @@ mod tests {
             chunk_id: Uuid::from_u128(version + 10),
             chunk_identity_sha256: "d".repeat(64),
             collection_id: Uuid::from_u128(3),
+            document_title: Some("Tài liệu test".into()),
             heading: "h".into(),
             quote: quote.into(),
             page: None,

@@ -52,6 +52,10 @@ test('ask streams a grounded answer token-by-token, then a numbered footnote sou
   // inline plus a numbered "Nguồn trích dẫn" block at the end of the turn.
   await expect(page.getByText('CITE-0001', { exact: true })).not.toBeVisible();
   await expect(page.getByText('Nguồn trích dẫn').first()).toBeVisible();
+  // P2-19 gap close: the footnote now shows the real document title
+  // (`documentTitle`, mirrors `passageCatalog()`'s seeded title in
+  // `mocks/handlers/qa.ts`) instead of falling back to the collection name.
+  await expect(page.getByText('Roadmap.xlsx').first()).toBeVisible();
 
   // P2-10 gap close (still true post-redesign): `CitationPin` carries
   // `logicalDocumentId`/`versionId`/`collectionId`, so the footnote item for

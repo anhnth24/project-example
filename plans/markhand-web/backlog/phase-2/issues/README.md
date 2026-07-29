@@ -309,19 +309,28 @@ P2-15 + Phase 1C gate → P2-16
   `[CITE-xxxx]` server đã nhúng sẵn (xác minh trong `crates/knowledge/src/citation.rs` +
   `mocks/handlers/qa.ts`'s `buildAnswer`, không đoán) thành `[n]` inline + khối "Nguồn
   trích dẫn" đánh số cuối bubble (`CitationFootnotes.tsx`, tái cấu trúc từ
-  `CitationCard.tsx` chứ không viết lại logic deep-link/page-label). **Gap còn lại (đã
-  xác minh, không phải chưa làm xong):** `CitationPin` không có field `documentTitle` —
-  chỉ `logicalDocumentId`/`collectionId` (uuid) — nên một footnote không thể hiện tên tài
-  liệu thật mà không thêm N request lookup/pin (bị cấm theo brief); item hiện hiển thị
-  theo tên bộ sưu tập (từ `GET /collections` gọi đúng 1 lần/trang, không phải/citation) +
-  vị trí (trang/slide/sheet, field `page` đã có sẵn từ trước — xem P2-19 mục 3, KHÔNG
-  phải field mới) + quote. `page` **đã** hiển thị được (qua `CitationFootnotes`), bản mô
-  tả nhiệm vụ ban đầu nói "chưa hiển thị ở đâu" là sai/lỗi thời — đã xác minh code trước
-  khi tin. **(D)** Dọn spacing/heading nhất quán `.card`/design system hiện có; mode
+  `CitationCard.tsx` chứ không viết lại logic deep-link/page-label). `page` **đã** hiển
+  thị được (qua `CitationFootnotes`), bản mô tả nhiệm vụ ban đầu nói "chưa hiển thị ở đâu"
+  là sai/lỗi thời — đã xác minh code trước khi tin. **(D)** Dọn spacing/heading nhất quán
+  `.card`/design system hiện có; mode
   badge/warnings gọn lại. `ChatTurnBubble`/`HistoricalTurnBubble` (mới — turn đã lưu, tĩnh,
   không `useAskStream`) giờ dùng chung `AnswerText`/`CitationFootnotes`. E2E: `qa.spec.ts`
   cập nhật theo layout mới (tab, footnote, multi-select) + `chat-history.spec.ts` mới
   (part A) — suite mock E2E tổng 36 (từ 33).
+
+  **Cập nhật (vòng 11-A, 2026-07-29) — gap `documentTitle` đóng:** `CitationPin` giờ có
+  thêm field `documentTitle` (nullable, additive — schema `CitationPin` hiện có, KHÔNG
+  phải schema mới, nên pin-count 56 giữ nguyên). Nguồn: PostgreSQL hydration
+  (`db::search::hydrate_chunks_by_identity`) đã `JOIN documents d` sẵn cho ACL/state
+  recheck, nên thêm cột `d.title AS document_title` vào SELECT hiện có là rẻ (không join
+  mới, không N+1) — thread qua `AuthorizedChunk`/`RetrievalHit`/`CitationPin::pin_from_hit`.
+  `resolve_citation` lấy từ `documents::get_by_id(...).title` (đã có sẵn trong txn, không
+  query thêm). Web: `CitationFootnotes.tsx` ưu tiên `citation.documentTitle`, fallback tên
+  bộ sưu tập (`collectionNameById`) như cũ khi field vắng (turn lịch sử cũ chưa có).
+  `mocks/handlers/qa.ts`/`mocks/fixtures.ts` seed `documentTitle` khớp tài liệu thật; E2E
+  `qa.spec.ts` xác nhận "Roadmap.xlsx" hiển thị trong footnote. Server:
+  `citation_authz_matrix.rs`'s `live_pdf_pptx_xlsx_citation_preview_download_matrix`
+  assert `pin.document_title == Some(doc.title)` cho cả 3 định dạng đã seed.
 
 ## P2-11 — Member/role admin
 

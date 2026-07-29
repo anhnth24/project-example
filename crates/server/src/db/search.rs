@@ -36,6 +36,7 @@ pub struct HydratedChunkRow {
     pub version_number: i32,
     pub content_sha256: String,
     pub canonical_markdown_sha256: String,
+    pub document_title: String,
     pub heading_path: Vec<String>,
     pub body: String,
     pub page: Option<i32>,
@@ -101,6 +102,74 @@ pub fn index_generation_visible_for_retrieval(
     state: IndexGenerationState,
 ) -> bool {
     is_active && state == IndexGenerationState::Active
+}
+
+/// Central ACL predicate embedded in every chunk/claim query scoped by
+/// collection (1C-06). Proves the acting user holds `permission_param`
+/// (base-gated by `qa.query`, since history/compare modes require both) on
+/// the collection identified by `collection_id_expr` within
+/// `org_id_expr`'s org: an active (non-suspended, non-disabled) membership
+/// with a role granting the permission, AND collection visibility
+/// (org-wide, owned, or an explicit `collection_user_access` grant).
+///
+/// `org_id_expr`/`collection_id_expr` are correlated column references from
+/// the enclosing query (e.g. `"d.org_id"`/`"d.collection_id"`);
+/// `user_param`/`permission_param` are the `$N` placeholders already bound
+/// in the caller's parameter list — this function only composes SQL text,
+/// it never binds values itself.
+///
+/// Every query in this module that reads `chunks`/`claims` content scoped
+/// by collection MUST embed this rather than hand-roll an equivalent
+/// EXISTS — see `tests::every_chunk_scoped_query_embeds_acl_predicate` for
+/// the regression guard that enforces it, and
+/// `tests::acl_predicate_denies_suspended_membership_shape` for the
+/// membership-state contract this closes (a bare `org_memberships` row is
+/// not enough; `state = 'active'` is required — see migration `0029` /
+/// 1C-02's "suspended resolves like missing").
+fn acl_predicate_sql(
+    org_id_expr: &str,
+    collection_id_expr: &str,
+    user_param: &str,
+    permission_param: &str,
+) -> String {
+    format!(
+        "EXISTS (
+           SELECT 1
+           FROM collections acl_c
+           JOIN org_memberships acl_m
+             ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = {user_param}
+            AND acl_m.state = 'active'
+           JOIN users acl_u ON acl_u.id = acl_m.user_id
+           JOIN roles acl_r
+             ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+           JOIN role_permissions acl_rp
+             ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+           JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+           WHERE acl_c.org_id = {org_id_expr}
+             AND acl_c.id = {collection_id_expr}
+             AND acl_c.deleted_at IS NULL
+             AND acl_u.disabled_at IS NULL
+             AND acl_p.code = {permission_param}
+             AND EXISTS (
+               SELECT 1
+               FROM role_permissions query_rp
+               JOIN permissions query_p ON query_p.id = query_rp.permission_id
+               WHERE query_rp.org_id = acl_r.org_id
+                 AND query_rp.role_id = acl_r.id
+                 AND query_p.code = 'qa.query'
+             )
+             AND (
+               acl_c.visibility = 'org'
+               OR acl_c.owner_user_id = {user_param}
+               OR EXISTS (
+                 SELECT 1 FROM collection_user_access cua
+                 WHERE cua.org_id = acl_c.org_id
+                   AND cua.collection_id = acl_c.id
+                   AND cua.user_id = {user_param}
+               )
+             )
+         )"
+    )
 }
 
 fn normalize_fts_query(query: &str) -> String {
@@ -237,7 +306,11 @@ pub async fn fts_search(
     let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
     let rows = match visibility {
         VersionVisibility::Current => {
-            txn.query(
+            // 1C-06: candidate leg now carries its own ACL predicate
+            // (defense-in-depth) instead of relying solely on the
+            // hydration re-check downstream — see `acl_predicate_sql`.
+            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$5", "$6");
+            let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
                         ts_rank_cd(c.tsv, plainto_tsquery('simple', $4))::real AS rank
@@ -259,9 +332,20 @@ pub async fn fts_search(
                    AND im.is_active
                    AND im.state = 'active'
                    AND c.tsv @@ plainto_tsquery('simple', $4)
+                   AND {acl}
                  ORDER BY rank DESC, c.id
-                 LIMIT $3",
-                &[&ctx.org_id(), &collection_ids, &limit_i64, &folded],
+                 LIMIT $3"
+            );
+            txn.query(
+                &sql,
+                &[
+                    &ctx.org_id(),
+                    &collection_ids,
+                    &limit_i64,
+                    &folded,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                ],
             )
             .await?
         }
@@ -270,7 +354,8 @@ pub async fn fts_search(
                 return Ok(Vec::new());
             }
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
-            txn.query(
+            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$6", "$7");
+            let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
                         ts_rank_cd(c.tsv, plainto_tsquery('simple', $5))::real AS rank
@@ -292,14 +377,20 @@ pub async fn fts_search(
                    AND im.is_active
                    AND im.state = 'active'
                    AND c.tsv @@ plainto_tsquery('simple', $5)
+                   AND {acl}
                  ORDER BY rank DESC, c.id
-                 LIMIT $4",
+                 LIMIT $4"
+            );
+            txn.query(
+                &sql,
                 &[
                     &ctx.org_id(),
                     &collection_ids,
                     &versions,
                     &limit_i64,
                     &folded,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
                 ],
             )
             .await?
@@ -321,10 +412,12 @@ pub async fn hydrate_chunks_by_identity(
     }
     let rows = match visibility {
         VersionVisibility::Current => {
-            txn.query(
+            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5");
+            let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
                         coalesce(md.content_sha256, '') AS canonical_markdown_sha256,
+                        d.title AS document_title,
                         c.heading_path, c.body, c.page, c.slide, c.sheet,
                         c.span_start, c.span_end, d.state, d.deleted_at,
                         dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
@@ -345,47 +438,16 @@ pub async fn hydrate_chunks_by_identity(
                  WHERE c.org_id = $1
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
-                   AND EXISTS (
-                     SELECT 1
-                     FROM collections acl_c
-                     JOIN org_memberships acl_m
-                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
-                     JOIN users acl_u ON acl_u.id = acl_m.user_id
-                     JOIN roles acl_r
-                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
-                     JOIN role_permissions acl_rp
-                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
-                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
-                     WHERE acl_c.org_id = d.org_id
-                       AND acl_c.id = d.collection_id
-                       AND acl_c.deleted_at IS NULL
-                       AND acl_u.disabled_at IS NULL
-                       AND acl_p.code = $5
-                       AND EXISTS (
-                         SELECT 1
-                         FROM role_permissions query_rp
-                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
-                         WHERE query_rp.org_id = acl_r.org_id
-                           AND query_rp.role_id = acl_r.id
-                           AND query_p.code = 'qa.query'
-                       )
-                       AND (
-                         acl_c.visibility = 'org'
-                         OR acl_c.owner_user_id = $4
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = acl_c.org_id
-                             AND cua.collection_id = acl_c.id
-                             AND cua.user_id = $4
-                         )
-                       )
-                   )
+                   AND {acl}
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
                    AND dv.is_current
                    AND im.is_active
-                   AND im.state = 'active'",
+                   AND im.state = 'active'"
+            );
+            txn.query(
+                &sql,
                 &[
                     &ctx.org_id(),
                     &collection_ids,
@@ -401,10 +463,12 @@ pub async fn hydrate_chunks_by_identity(
                 return Ok(Vec::new());
             }
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
-            txn.query(
+            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$5", "$6");
+            let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
                         coalesce(md.content_sha256, '') AS canonical_markdown_sha256,
+                        d.title AS document_title,
                         c.heading_path, c.body, c.page, c.slide, c.sheet,
                         c.span_start, c.span_end, d.state, d.deleted_at,
                         dv.publication_state, dv.is_current, dv.effective_from, dv.effective_to,
@@ -426,46 +490,15 @@ pub async fn hydrate_chunks_by_identity(
                    AND d.collection_id = ANY($2)
                    AND c.chunk_identity_sha256 = ANY($3)
                    AND c.version_id = ANY($4)
-                   AND EXISTS (
-                     SELECT 1
-                     FROM collections acl_c
-                     JOIN org_memberships acl_m
-                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
-                     JOIN users acl_u ON acl_u.id = acl_m.user_id
-                     JOIN roles acl_r
-                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
-                     JOIN role_permissions acl_rp
-                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
-                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
-                     WHERE acl_c.org_id = d.org_id
-                       AND acl_c.id = d.collection_id
-                       AND acl_c.deleted_at IS NULL
-                       AND acl_u.disabled_at IS NULL
-                       AND acl_p.code = $6
-                       AND EXISTS (
-                         SELECT 1
-                         FROM role_permissions query_rp
-                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
-                         WHERE query_rp.org_id = acl_r.org_id
-                           AND query_rp.role_id = acl_r.id
-                           AND query_p.code = 'qa.query'
-                       )
-                       AND (
-                         acl_c.visibility = 'org'
-                         OR acl_c.owner_user_id = $5
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = acl_c.org_id
-                             AND cua.collection_id = acl_c.id
-                             AND cua.user_id = $5
-                         )
-                       )
-                   )
+                   AND {acl}
                    AND d.deleted_at IS NULL
                    AND d.state = 'indexed'
                    AND dv.publication_state = 'published'
                    AND im.is_active
-                   AND im.state = 'active'",
+                   AND im.state = 'active'"
+            );
+            txn.query(
+                &sql,
                 &[
                     &ctx.org_id(),
                     &collection_ids,
@@ -495,7 +528,9 @@ pub async fn load_authorized_conflict_evidence(
     }
     let rows = match visibility {
         VersionVisibility::Current => {
-            txn.query(
+            let acl_a = acl_predicate_sql("da.org_id", "da.collection_id", "$4", "$5");
+            let acl_b = acl_predicate_sql("db.org_id", "db.collection_id", "$4", "$5");
+            let sql = format!(
                 "SELECT conf.id AS conflict_id,
                         conf.status, conf.resolution_note, conf.resolved_at,
                         conf.claim_a_id, conf.claim_b_id,
@@ -532,76 +567,8 @@ pub async fn load_authorized_conflict_evidence(
                    AND conf.id = ANY($2)
                    AND da.collection_id = ANY($3)
                    AND db.collection_id = ANY($3)
-                   AND EXISTS (
-                     SELECT 1
-                     FROM collections acl_c
-                     JOIN org_memberships acl_m
-                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
-                     JOIN users acl_u ON acl_u.id = acl_m.user_id
-                     JOIN roles acl_r
-                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
-                     JOIN role_permissions acl_rp
-                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
-                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
-                     WHERE acl_c.org_id = da.org_id
-                       AND acl_c.id = da.collection_id
-                       AND acl_c.deleted_at IS NULL
-                       AND acl_u.disabled_at IS NULL
-                       AND acl_p.code = $5
-                       AND EXISTS (
-                         SELECT 1
-                         FROM role_permissions query_rp
-                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
-                         WHERE query_rp.org_id = acl_r.org_id
-                           AND query_rp.role_id = acl_r.id
-                           AND query_p.code = 'qa.query'
-                       )
-                       AND (
-                         acl_c.visibility = 'org'
-                         OR acl_c.owner_user_id = $4
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = acl_c.org_id
-                             AND cua.collection_id = acl_c.id
-                             AND cua.user_id = $4
-                         )
-                       )
-                   )
-                   AND EXISTS (
-                     SELECT 1
-                     FROM collections acl_c
-                     JOIN org_memberships acl_m
-                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $4
-                     JOIN users acl_u ON acl_u.id = acl_m.user_id
-                     JOIN roles acl_r
-                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
-                     JOIN role_permissions acl_rp
-                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
-                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
-                     WHERE acl_c.org_id = db.org_id
-                       AND acl_c.id = db.collection_id
-                       AND acl_c.deleted_at IS NULL
-                       AND acl_u.disabled_at IS NULL
-                       AND acl_p.code = $5
-                       AND EXISTS (
-                         SELECT 1
-                         FROM role_permissions query_rp
-                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
-                         WHERE query_rp.org_id = acl_r.org_id
-                           AND query_rp.role_id = acl_r.id
-                           AND query_p.code = 'qa.query'
-                       )
-                       AND (
-                         acl_c.visibility = 'org'
-                         OR acl_c.owner_user_id = $4
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = acl_c.org_id
-                             AND cua.collection_id = acl_c.id
-                             AND cua.user_id = $4
-                         )
-                       )
-                   )
+                   AND {acl_a}
+                   AND {acl_b}
                    AND da.deleted_at IS NULL
                    AND db.deleted_at IS NULL
                    AND da.state = 'indexed'
@@ -609,7 +576,10 @@ pub async fn load_authorized_conflict_evidence(
                    AND dva.publication_state = 'published'
                    AND dvb.publication_state = 'published'
                    AND dva.is_current
-                   AND dvb.is_current",
+                   AND dvb.is_current"
+            );
+            txn.query(
+                &sql,
                 &[
                     &ctx.org_id(),
                     &conflict_ids,
@@ -625,7 +595,9 @@ pub async fn load_authorized_conflict_evidence(
                 return Ok(Vec::new());
             }
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
-            txn.query(
+            let acl_a = acl_predicate_sql("da.org_id", "da.collection_id", "$5", "$6");
+            let acl_b = acl_predicate_sql("db.org_id", "db.collection_id", "$5", "$6");
+            let sql = format!(
                 "SELECT conf.id AS conflict_id,
                         conf.status, conf.resolution_note, conf.resolved_at,
                         conf.claim_a_id, conf.claim_b_id,
@@ -662,76 +634,8 @@ pub async fn load_authorized_conflict_evidence(
                    AND conf.id = ANY($2)
                    AND da.collection_id = ANY($3)
                    AND db.collection_id = ANY($3)
-                   AND EXISTS (
-                     SELECT 1
-                     FROM collections acl_c
-                     JOIN org_memberships acl_m
-                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
-                     JOIN users acl_u ON acl_u.id = acl_m.user_id
-                     JOIN roles acl_r
-                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
-                     JOIN role_permissions acl_rp
-                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
-                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
-                     WHERE acl_c.org_id = da.org_id
-                       AND acl_c.id = da.collection_id
-                       AND acl_c.deleted_at IS NULL
-                       AND acl_u.disabled_at IS NULL
-                       AND acl_p.code = $6
-                       AND EXISTS (
-                         SELECT 1
-                         FROM role_permissions query_rp
-                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
-                         WHERE query_rp.org_id = acl_r.org_id
-                           AND query_rp.role_id = acl_r.id
-                           AND query_p.code = 'qa.query'
-                       )
-                       AND (
-                         acl_c.visibility = 'org'
-                         OR acl_c.owner_user_id = $5
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = acl_c.org_id
-                             AND cua.collection_id = acl_c.id
-                             AND cua.user_id = $5
-                         )
-                       )
-                   )
-                   AND EXISTS (
-                     SELECT 1
-                     FROM collections acl_c
-                     JOIN org_memberships acl_m
-                       ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = $5
-                     JOIN users acl_u ON acl_u.id = acl_m.user_id
-                     JOIN roles acl_r
-                       ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
-                     JOIN role_permissions acl_rp
-                       ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
-                     JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
-                     WHERE acl_c.org_id = db.org_id
-                       AND acl_c.id = db.collection_id
-                       AND acl_c.deleted_at IS NULL
-                       AND acl_u.disabled_at IS NULL
-                       AND acl_p.code = $6
-                       AND EXISTS (
-                         SELECT 1
-                         FROM role_permissions query_rp
-                         JOIN permissions query_p ON query_p.id = query_rp.permission_id
-                         WHERE query_rp.org_id = acl_r.org_id
-                           AND query_rp.role_id = acl_r.id
-                           AND query_p.code = 'qa.query'
-                       )
-                       AND (
-                         acl_c.visibility = 'org'
-                         OR acl_c.owner_user_id = $5
-                         OR EXISTS (
-                           SELECT 1 FROM collection_user_access cua
-                           WHERE cua.org_id = acl_c.org_id
-                             AND cua.collection_id = acl_c.id
-                             AND cua.user_id = $5
-                         )
-                       )
-                   )
+                   AND {acl_a}
+                   AND {acl_b}
                    AND da.deleted_at IS NULL
                    AND db.deleted_at IS NULL
                    AND da.state = 'indexed'
@@ -739,7 +643,10 @@ pub async fn load_authorized_conflict_evidence(
                    AND dva.publication_state = 'published'
                    AND dvb.publication_state = 'published'
                    AND ca.version_id = ANY($4)
-                   AND cb.version_id = ANY($4)",
+                   AND cb.version_id = ANY($4)"
+            );
+            txn.query(
+                &sql,
                 &[
                     &ctx.org_id(),
                     &conflict_ids,
@@ -820,6 +727,7 @@ fn map_hydrated_chunk(row: &Row) -> Result<HydratedChunkRow, DbError> {
         version_number: row.get("version_number"),
         content_sha256: row.get("content_sha256"),
         canonical_markdown_sha256: row.get("canonical_markdown_sha256"),
+        document_title: row.get("document_title"),
         heading_path: row.get("heading_path"),
         body: row.get("body"),
         page: row.get("page"),
@@ -900,6 +808,92 @@ mod tests {
             normalize_fts_query("Bao nhiêu?"),
             "bao nhieu",
             "all-stop-word questions must retain a non-empty fallback"
+        );
+    }
+
+    /// 1C-06: the shared ACL predicate must gate on active membership,
+    /// non-disabled user, the requested permission gated by `qa.query`, and
+    /// one of the three collection-visibility routes. This is the contract
+    /// every candidate/hydration/evidence query relies on — pin its shape so
+    /// a future edit can't silently drop a clause (e.g. the `state =
+    /// 'active'` check that was missing before this round, see module doc).
+    #[test]
+    fn acl_predicate_sql_shape_is_pinned() {
+        let sql = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5");
+        for expected in [
+            "acl_m.user_id = $4",
+            "acl_m.state = 'active'",
+            "acl_u.disabled_at IS NULL",
+            "acl_c.org_id = d.org_id",
+            "acl_c.id = d.collection_id",
+            "acl_c.deleted_at IS NULL",
+            "acl_p.code = $5",
+            "query_p.code = 'qa.query'",
+            "acl_c.visibility = 'org'",
+            "acl_c.owner_user_id = $4",
+            "collection_user_access",
+        ] {
+            assert!(
+                sql.contains(expected),
+                "acl_predicate_sql missing required clause {expected:?} in:\n{sql}"
+            );
+        }
+    }
+
+    /// 1C-06 regression guard: every SQL string in this module that reads
+    /// `chunks`/`claims` content scoped by collection must route its ACL
+    /// check through `acl_predicate_sql(...)` rather than a hand-rolled
+    /// EXISTS clause. This is a fast, DB-free architecture-contract test in
+    /// the same family as
+    /// `middleware::write_gate::tests::middleware_source_holds_shared_lock_across_next_run`:
+    /// it source-scans this file (excluding the test module itself) and
+    /// pins the exact call-site count. Adding a new FTS/hydration/evidence
+    /// query branch without calling `acl_predicate_sql` will NOT change this
+    /// count and so will NOT fail this test by omission alone — the design
+    /// intent is that any new chunk/claim query copies an existing branch
+    /// (which already calls the builder) as its starting point. What this
+    /// test actually catches is someone reintroducing a literal inline
+    /// `collections acl_c` / `org_memberships acl_m` EXISTS block instead of
+    /// calling the builder (which would make the two counts below diverge:
+    /// a raw `acl_c` join without a matching `acl_predicate_sql(` call).
+    #[test]
+    fn every_chunk_scoped_query_embeds_acl_predicate() {
+        let src = include_str!("search.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+
+        // `= acl_predicate_sql(` (not the bare substring, which would also
+        // match the `fn acl_predicate_sql(` definition itself) — each call
+        // site binds the composed SQL to a local (`let acl = ...` / `let
+        // acl_a = ...` / `let acl_b = ...`).
+        let builder_calls = production.matches("= acl_predicate_sql(").count();
+        // fts_search (2 branches) + hydrate_chunks_by_identity (2 branches)
+        // + load_authorized_conflict_evidence (2 branches x 2 claim sides).
+        assert_eq!(
+            builder_calls, 8,
+            "expected exactly 8 acl_predicate_sql(...) call sites in production code \
+             (fts_search x2, hydrate_chunks_by_identity x2, \
+             load_authorized_conflict_evidence x4); got {builder_calls}. If you added a \
+             new chunk/claim query, route its ACL check through acl_predicate_sql and \
+             update this count deliberately."
+        );
+
+        // No hand-rolled ACL EXISTS block may exist outside the shared
+        // builder function's own definition — every occurrence of the
+        // `collections acl_c` join marker must live inside
+        // `acl_predicate_sql`'s own SQL template, not duplicated ad hoc in
+        // a query string.
+        let builder_start = production
+            .find("fn acl_predicate_sql(")
+            .expect("acl_predicate_sql definition must exist");
+        let builder_end = production
+            .find("fn normalize_fts_query(")
+            .expect("normalize_fts_query definition must exist");
+        assert!(builder_start < builder_end);
+        let after_builder = &production[builder_end..];
+        assert!(
+            !after_builder.contains("collections acl_c"),
+            "found a hand-rolled ACL EXISTS block outside acl_predicate_sql; \
+             route it through the shared builder instead"
         );
     }
 }

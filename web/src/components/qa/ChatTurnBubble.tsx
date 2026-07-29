@@ -51,7 +51,7 @@ export function ChatTurnBubble({
   /** The question text as typed for this turn — captured at submit time so a later composer edit can never retroactively change what an earlier bubble shows it asked. */
   question: string;
   client?: ApiClient;
-  /** `collectionId -> tên bộ sưu tập`, for `CitationFootnotes`'s fallback label (see that component's module doc for the `documentTitle` gap this works around). */
+  /** `collectionId -> tên bộ sưu tập`, for `CitationFootnotes`'s fallback label when a pin's `documentTitle` is absent (older stored turn) — see that component's module doc. */
   collectionNameById: ReadonlyMap<string, string>;
   /** Reports this turn's live status (plus a content snapshot, for persistence once settled) up to `ChatPanel` — fired once per status transition, never on every growing token. */
   onStatusChange?: (status: ChatTurnStatus, snapshot: ChatTurnSnapshot) => void;

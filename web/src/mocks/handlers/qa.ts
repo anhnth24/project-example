@@ -232,6 +232,12 @@ function passageToCitation(passage: Passage, citeId: string): CitationPin {
     logicalDocumentId: passage.documentId,
     versionId: passage.versionId,
     collectionId: passage.collectionId,
+    // P2-19 gap close: mirrors `services::citation::pin_from_hit`, which now
+    // always populates this from `documents.title` (hydration already joins
+    // `documents`). This mock's `passageCatalog()` already carries the same
+    // seeded document title, so reusing it here matches the real server
+    // instead of inventing separate mock-only data.
+    documentTitle: passage.title,
     sourceContentSha256: `src-${passage.versionId}`,
     canonicalMarkdownSha256: `md-${passage.versionId}`,
     quoteSha256: `quote-${passage.versionId}`,

@@ -51,6 +51,9 @@ pub struct CitationPin {
     pub chunk_id: Uuid,
     pub chunk_identity_sha256: String,
     pub collection_id: Uuid,
+    /// Document title (P2-19 gap close). Nullable/additive — see openapi.yaml's
+    /// `CitationPin` doc comment for why this is `Option` rather than required.
+    pub document_title: Option<String>,
     pub heading: String,
     pub quote: String,
     pub page: Option<u32>,
@@ -160,6 +163,7 @@ pub fn pin_from_hit(org_id: Uuid, cite_id: &str, hit: &RetrievalHit) -> Citation
         chunk_id: hit.chunk_id,
         chunk_identity_sha256: hit.chunk_identity_sha256.clone(),
         collection_id: hit.collection_id,
+        document_title: Some(hit.document_title.clone()),
         heading: hit.heading.clone(),
         quote,
         page: hit.page,
@@ -440,6 +444,7 @@ pub async fn resolve_citation(
                 };
                 Ok(Ok((
                     document.collection_id,
+                    document.title.clone(),
                     version,
                     artifact.object_key,
                     row,
@@ -450,7 +455,7 @@ pub async fn resolve_citation(
     .await
     .map_err(|_| CitationError::Database)??;
 
-    let (collection_id, version, markdown_key, row) = meta;
+    let (collection_id, document_title, version, markdown_key, row) = meta;
     let key = parse_key_for_org(&markdown_key, ctx.org_id())
         .map_err(|_| CitationError::ArtifactUnavailable)?;
     let bytes = store
@@ -517,6 +522,7 @@ pub async fn resolve_citation(
         chunk_id: request.chunk_id,
         chunk_identity_sha256: stored_identity,
         collection_id,
+        document_title: Some(document_title),
         heading,
         quote: request.quote,
         page: page.and_then(|value| u32::try_from(value).ok()),
@@ -559,6 +565,7 @@ mod tests {
             version_number: 2,
             content_sha256: "b".repeat(64),
             canonical_markdown_sha256: "c".repeat(64),
+            document_title: "Ngân sách vận hành".into(),
             heading: "Ngân sách".into(),
             snippet: "Kinh phí hiện tại là 15 triệu đồng.".into(),
             body: "Kinh phí hiện tại là 15 triệu đồng.".into(),
