@@ -1,6 +1,8 @@
-//! Pure graph algorithms for the Document Graph MVP (P2-17): degree-based
-//! bounding/pruning and connected components ("communities"). No DB, no I/O —
-//! fully unit-testable and deterministic regardless of input ordering.
+//! Document Graph MVP (P2-17): pure algorithms (degree-based bounding/pruning,
+//! connected components — DB-free, deterministic, unit-tested below) plus the
+//! `build_org_graph` orchestration that fetches caller-visible nodes/edges
+//! through `db::graph` (routes stay DTO-mapping only, per
+//! check-architecture-boundaries).
 //!
 //! Deliberately hand-rolled instead of a graph crate: components/pruning are
 //! small, well-understood algorithms (BFS + two sorts) and the project's own
@@ -11,6 +13,13 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use uuid::Uuid;
+
+use crate::auth::context::OrgContext;
+use crate::db::error::DbError;
+use crate::db::graph::{self as db_graph, GraphDocumentRow};
+use deadpool_postgres::Pool;
+
+use crate::db::pool::with_org_txn;
 
 /// One candidate edge before pruning. `kind` is carried through so the same
 /// document pair can carry more than one edge (e.g. both a `conflict` and a
@@ -155,6 +164,161 @@ pub fn saturating_weight(count: i64) -> f64 {
     1.0 - 1.0 / (1.0 + count.max(1) as f64)
 }
 
+// ---------------------------------------------------------------------
+// Orchestration (route -> service -> db, per check-architecture-boundaries):
+// fetch the caller-visible nodes and real-relation edges, then bound and
+// cluster them. Routes stay DTO-mapping only.
+// ---------------------------------------------------------------------
+
+/// Contract: "Bounded: cap nodes/edges (vd 500/2000)".
+pub const MAX_NODES: usize = 500;
+pub const MAX_EDGES: usize = 2000;
+/// Safety bound on the raw document fetch, generous relative to
+/// `MAX_NODES` so degree-based `prune()` — not query truncation — decides
+/// which 500 nodes survive when a tenant has more visible documents than
+/// the cap.
+const FETCH_SAFETY_CAP: i64 = 4000;
+
+#[derive(Debug, Clone)]
+pub struct GraphNodeData {
+    pub id: Uuid,
+    pub title: String,
+    pub collection_id: Uuid,
+    pub collection_name: String,
+    pub status: String,
+    pub degree: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphCommunityData {
+    pub label: String,
+    pub node_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphData {
+    pub nodes: Vec<GraphNodeData>,
+    pub edges: Vec<GraphEdgeInput>,
+    pub communities: Vec<GraphCommunityData>,
+}
+
+/// Builds the bounded, clustered document graph the route serves: visible
+/// documents (RLS + caller ACL, exactly the library's visibility) plus
+/// `conflict` and `co_citation` edges among them. `similarity` edges are a
+/// deliberate future slot — see `routes/graph.rs` module doc.
+pub async fn build_org_graph(
+    pool: &Pool,
+    ctx: &OrgContext,
+    collection_filter: Option<Uuid>,
+) -> Result<GraphData, DbError> {
+    let (documents, conflict_pairs, co_citation_pairs) = with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let documents = db_graph::list_visible_documents(
+                    txn,
+                    &ctx,
+                    collection_filter,
+                    FETCH_SAFETY_CAP,
+                )
+                .await?;
+                let node_ids: Vec<Uuid> = documents.iter().map(|d| d.id).collect();
+                let conflict_pairs = db_graph::conflict_edges_among(txn, &ctx, &node_ids).await?;
+                let co_citation_pairs =
+                    db_graph::co_citation_edges_among(txn, &ctx, &node_ids).await?;
+                Ok((documents, conflict_pairs, co_citation_pairs))
+            })
+        }
+    })
+    .await?;
+
+    let node_ids: Vec<Uuid> = documents.iter().map(|d| d.id).collect();
+
+    let mut edges: Vec<GraphEdgeInput> = Vec::new();
+    for (a, b, count) in &conflict_pairs {
+        edges.push(GraphEdgeInput {
+            source: *a,
+            target: *b,
+            kind: "conflict".to_string(),
+            weight: saturating_weight(*count),
+        });
+    }
+    for (a, b, count) in &co_citation_pairs {
+        edges.push(GraphEdgeInput {
+            source: *a,
+            target: *b,
+            kind: "co_citation".to_string(),
+            weight: saturating_weight(*count),
+        });
+    }
+
+    let pruned = prune(&node_ids, &edges, MAX_NODES, MAX_EDGES);
+
+    let mut degree: BTreeMap<Uuid, i64> = pruned.node_ids.iter().map(|id| (*id, 0)).collect();
+    for edge in &pruned.edges {
+        *degree.entry(edge.source).or_insert(0) += 1;
+        *degree.entry(edge.target).or_insert(0) += 1;
+    }
+
+    let doc_by_id: BTreeMap<Uuid, &GraphDocumentRow> =
+        documents.iter().map(|d| (d.id, d)).collect();
+
+    let nodes: Vec<GraphNodeData> = pruned
+        .node_ids
+        .iter()
+        .filter_map(|id| {
+            doc_by_id.get(id).map(|d| GraphNodeData {
+                id: d.id,
+                title: d.title.clone(),
+                collection_id: d.collection_id,
+                collection_name: d.collection_name.clone(),
+                status: d.state.clone(),
+                degree: *degree.get(id).unwrap_or(&0),
+            })
+        })
+        .collect();
+
+    let communities: Vec<GraphCommunityData> =
+        connected_components(&pruned.node_ids, &pruned.edges)
+            .iter()
+            .map(|component| GraphCommunityData {
+                label: community_label(&component.node_ids, &doc_by_id),
+                node_ids: component.node_ids.clone(),
+            })
+            .collect();
+
+    Ok(GraphData {
+        nodes,
+        edges: pruned.edges,
+        communities,
+    })
+}
+
+/// Contract: community label is "tên bộ sưu tập chi phối hoặc title tài liệu
+/// bậc cao nhất trong cụm" — a lone-document component labels itself by that
+/// document's title; a multi-document component labels itself by whichever
+/// collection has the most members in it (ties broken lexicographically so
+/// the choice is deterministic, not by insertion order).
+fn community_label(node_ids: &[Uuid], doc_by_id: &BTreeMap<Uuid, &GraphDocumentRow>) -> String {
+    if let [only] = node_ids {
+        return doc_by_id
+            .get(only)
+            .map(|d| d.title.clone())
+            .unwrap_or_else(|| "Không xác định".to_string());
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for id in node_ids {
+        if let Some(document) = doc_by_id.get(id) {
+            *counts.entry(document.collection_name.as_str()).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(name, _)| name.to_string())
+        .unwrap_or_else(|| "Không xác định".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +438,47 @@ mod tests {
         assert!(saturating_weight(2) < saturating_weight(100));
         assert!(saturating_weight(1_000_000) < 1.0);
         assert_eq!(saturating_weight(0), saturating_weight(1)); // count clamped to >= 1
+    }
+
+    fn doc(id: Uuid, title: &str, collection_name: &str) -> GraphDocumentRow {
+        GraphDocumentRow {
+            id,
+            title: title.to_string(),
+            collection_id: Uuid::new_v4(),
+            collection_name: collection_name.to_string(),
+            state: "indexed".to_string(),
+        }
+    }
+
+    #[test]
+    fn singleton_community_labels_by_document_title() {
+        let a = doc(uid(1), "Chính sách nghỉ phép", "Nhân sự");
+        let doc_by_id: BTreeMap<Uuid, &GraphDocumentRow> = [(a.id, &a)].into_iter().collect();
+        assert_eq!(
+            community_label(&[uid(1)], &doc_by_id),
+            "Chính sách nghỉ phép"
+        );
+    }
+
+    #[test]
+    fn multi_node_community_labels_by_majority_collection_name() {
+        let a = doc(uid(1), "A", "Nhân sự");
+        let b = doc(uid(2), "B", "Nhân sự");
+        let c = doc(uid(3), "C", "Tài chính");
+        let doc_by_id: BTreeMap<Uuid, &GraphDocumentRow> =
+            [(a.id, &a), (b.id, &b), (c.id, &c)].into_iter().collect();
+        assert_eq!(
+            community_label(&[uid(1), uid(2), uid(3)], &doc_by_id),
+            "Nhân sự"
+        );
+    }
+
+    #[test]
+    fn multi_node_community_tie_breaks_lexicographically() {
+        let a = doc(uid(1), "A", "Zeta");
+        let b = doc(uid(2), "B", "Alpha");
+        let doc_by_id: BTreeMap<Uuid, &GraphDocumentRow> =
+            [(a.id, &a), (b.id, &b)].into_iter().collect();
+        assert_eq!(community_label(&[uid(1), uid(2)], &doc_by_id), "Alpha");
     }
 }
