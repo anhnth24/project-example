@@ -79,9 +79,19 @@ describe('computeForceLayout', () => {
   // so this test has no dependency on that fixture module.
   describe('clustering near center (regression: nodes must not pile up at the canvas edge)', () => {
     const THREE_CLUSTER_NODES = [
-      'n200', 'n201', 'n202', 'n203', 'n204', // cluster 1 (5 nodes)
-      'n205', 'n206', 'n207', 'n208', 'n209', // cluster 2 (5 nodes)
-      'n210', 'n211', 'n212', // cluster 3 (3 nodes)
+      'n200',
+      'n201',
+      'n202',
+      'n203',
+      'n204', // cluster 1 (5 nodes)
+      'n205',
+      'n206',
+      'n207',
+      'n208',
+      'n209', // cluster 2 (5 nodes)
+      'n210',
+      'n211',
+      'n212', // cluster 3 (3 nodes)
     ];
     const THREE_CLUSTER_EDGES = [
       { source: 'n200', target: 'n201' },
@@ -173,7 +183,7 @@ describe('computeForceLayout', () => {
       }
     });
 
-    it('centers the whole graph\'s bounding box near the canvas center, not off in a corner', () => {
+    it("centers the whole graph's bounding box near the canvas center, not off in a corner", () => {
       const layout = computeForceLayout(THREE_CLUSTER_NODES, THREE_CLUSTER_EDGES, {
         width: WIDTH,
         height: HEIGHT,
