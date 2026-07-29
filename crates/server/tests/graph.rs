@@ -5,10 +5,17 @@
 //! are unset (see `common::boot_app_pool`), same as every other live-PG suite
 //! in this crate.
 //!
-//! `similarity` (Qdrant) is deliberately out of scope here: `routes/graph.rs`
-//! never queries Qdrant in this pass (see its module doc + the P2-17
-//! report), so there is nothing DB-observable to assert about it, and this
-//! suite has no `MARKHAND_TEST_QDRANT_URL` wiring.
+//! `similarity` (Qdrant) HTTP-route coverage is still out of scope here:
+//! `common::build_app_state` never configures `MARKHAND_EMBEDDING_*`, so
+//! `AppState::embedder()` is always `None` in this binary's router and the
+//! route never takes the similarity path. What *is* covered, gated behind
+//! `MARKHAND_TEST_QDRANT_URL` (unset in this sandbox — see the report for why
+//! it could not be run here), is `services::graph::build_org_graph` called
+//! directly with a real `QdrantClient` + a directly-constructed
+//! `ApprovedEmbeddingRuntime` (never calls `.embed()`, so no live embedding
+//! provider is needed) — the same "service takes plain dependencies, not
+//! AppState" shape the route uses, exercised the way `tests/storage.rs`
+//! already exercises `QdrantClient` against a live instance.
 
 mod common;
 
@@ -16,13 +23,24 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{admin_database_url, app_database_url, boot_app_pool, build_router};
 use deadpool_postgres::Pool;
+use fileconv_knowledge::identity::{
+    chunk_identity, IndexSignature, BODY_TEXT_VERSION, RUNTIME_VLLM_LOCAL,
+};
 use fileconv_server::auth::context::OrgContext;
+use fileconv_server::config::{Profile, SecretString};
 use fileconv_server::db::ask_streams::{self, NewAskStreamSession};
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::error::DbError;
-use fileconv_server::db::models::CollectionVisibility;
+use fileconv_server::db::index_metadata::{self, EnsureGeneration};
+use fileconv_server::db::models::{CollectionVisibility, EmbeddingRuntimePath};
 use fileconv_server::db::pool::with_org_txn;
+use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
+use fileconv_server::services::graph::{build_org_graph, SimilarityDeps};
+use fileconv_server::services::index_signature::CollectionName;
+use fileconv_server::storage::qdrant::{
+    ChunkPointPayload, QdrantAdminApiKey, QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
+};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -517,4 +535,345 @@ async fn graph_caps_nodes_at_the_documented_bound() {
         500,
         "expected the documented 500-node cap to bind"
     );
+}
+
+// ---------------------------------------------------------------------
+// `similarity` edges: Qdrant-gated integration test.
+//
+// NOT RUN in this sandbox — there is no live Qdrant instance here, so
+// `MARKHAND_TEST_QDRANT_URL` is unset and this test skips via the early
+// `return` below (see `#[ignore]` + this crate's convention in
+// `tests/storage.rs`). It is written to run for real on CI's
+// `rust-integration` job, which does provide a Qdrant service.
+// ---------------------------------------------------------------------
+
+fn test_qdrant_url() -> Option<String> {
+    match std::env::var("MARKHAND_TEST_QDRANT_URL") {
+        Ok(url) if !url.trim().is_empty() => Some(url),
+        _ => {
+            eprintln!(
+                "skipped: MARKHAND_TEST_QDRANT_URL unset — graph similarity integration test requires a live Qdrant instance"
+            );
+            None
+        }
+    }
+}
+
+fn test_qdrant_admin_client(url: &str) -> QdrantAdminClient {
+    // Local Qdrant ignores api-key when auth is disabled; construction still
+    // requires a distinct non-empty operator credential (same convention as
+    // `tests/storage.rs::test_admin_client`).
+    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
+        .unwrap_or_else(|_| "test-operator-admin-key".into());
+    QdrantAdminClient::new(url, QdrantAdminApiKey::new(SecretString::new(key)).unwrap())
+        .expect("admin client")
+}
+
+/// Seeds an active index generation for `collection_id` matching `signature`
+/// — the durable row `services::graph::compute_similarity_edges` looks up
+/// via `db::index_metadata::list_active_for_collections` to decide which
+/// Qdrant collection/scope to query. Mirrors what
+/// `services::indexing::ensure_generation` writes for a real index job.
+async fn seed_active_generation(
+    pool: &Pool,
+    org: Uuid,
+    owner: Uuid,
+    collection_id: Uuid,
+    signature: &IndexSignature<'_>,
+) {
+    let ctx = OrgContext::try_new(org, owner, [] as [&str; 0], []).unwrap();
+    let runtime_path = EmbeddingRuntimePath::parse(signature.runtime_path).expect("runtime path");
+    let dimensions = i32::try_from(signature.dimensions).expect("dimensions fit i32");
+    let digest = signature.digest();
+    let chunking_version = signature.chunking_version.to_string();
+    let body_text_version = signature.body_text_version.to_string();
+    let query_normalization_version = signature.query_normalization_version.to_string();
+    let embedding_family = signature.embedding_family.to_string();
+    let embedding_revision = signature.embedding_revision.to_string();
+    let normalized = signature.normalized;
+    with_org_txn(pool, &ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                index_metadata::ensure_active_generation(
+                    txn,
+                    &ctx,
+                    EnsureGeneration {
+                        collection_id: Some(collection_id),
+                        signature_sha256: &digest,
+                        chunking_version: &chunking_version,
+                        body_text_version: &body_text_version,
+                        query_normalization_version: &query_normalization_version,
+                        embedding_family: &embedding_family,
+                        embedding_revision: &embedding_revision,
+                        dimensions,
+                        normalized,
+                        runtime_path,
+                    },
+                )
+                .await
+            })
+        }
+    })
+    .await
+    .expect("seed active generation");
+}
+
+/// Upserts one current chunk point for `document_id`, using the index
+/// worker's own write path (`QdrantClient::upsert_points` — the same call
+/// `services::indexing::persist_chunk_batch` makes) rather than any
+/// test-only shortcut.
+#[allow(clippy::too_many_arguments)]
+async fn seed_similarity_point(
+    qdrant: &QdrantClient,
+    collection_name: &CollectionName,
+    org: Uuid,
+    collection_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+    vector: Vec<f32>,
+) {
+    let chunk = chunk_identity(
+        &document_id.to_string(),
+        &version_id.to_string(),
+        0,
+        "H",
+        &format!("similarity-fixture-{}", document_id.simple()),
+        BODY_TEXT_VERSION,
+    );
+    let scope = VectorScope::new(org, [collection_id]);
+    let point = UpsertPoint {
+        chunk_identity: chunk.clone(),
+        vector,
+        payload: ChunkPointPayload {
+            org_id: org,
+            collection_id,
+            document_id,
+            version_id,
+            chunk_id: chunk,
+            ordinal: 0,
+            is_current: true,
+            is_effective: true,
+            index_generation: 1,
+        },
+    };
+    qdrant
+        .upsert_points(collection_name, &scope, &[point])
+        .await
+        .expect("upsert similarity fixture point");
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_QDRANT_URL — not run in this sandbox, see module doc"]
+async fn graph_similarity_edges_from_qdrant_recommend() {
+    let Some((_db, pool)) = boot_pool().await else {
+        return;
+    };
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
+    let qdrant = QdrantClient::new(&qdrant_url).expect("qdrant client");
+    let admin = test_qdrant_admin_client(&qdrant_url);
+
+    // A directly-constructed embedder — `.embed()` is never called on this
+    // path (recommend is by point id, not by query vector), so no live
+    // embedding provider is required. `unique_family` keeps this run's
+    // digest/collection from colliding with any other test's.
+    let unique_family = format!("graph-similarity-itest-{}", Uuid::new_v4().simple());
+    let embedder = ApprovedEmbeddingRuntime::new(
+        "http://embedding.invalid/v1".into(),
+        "test-key".into(),
+        "mock".into(),
+        unique_family,
+        "r1".into(),
+        8,
+        RUNTIME_VLLM_LOCAL.into(),
+        Profile::Test,
+        false,
+        None,
+    )
+    .expect("embedder");
+    let signature = embedder.plan().index_signature(8).expect("signature");
+    let digest = signature.digest();
+    let collection_name = qdrant
+        .ensure_collection_for_digest(&digest, 8, true)
+        .await
+        .expect("ensure collection");
+
+    let org_a = Uuid::new_v4();
+    let owner_a = Uuid::new_v4();
+    let collection_a = seed_collection(
+        &pool,
+        org_a,
+        owner_a,
+        "Tương đồng A",
+        CollectionVisibility::Org,
+    )
+    .await;
+    let doc_near_1 = seed_document(
+        &pool,
+        org_a,
+        owner_a,
+        collection_a,
+        "Chính sách nghỉ phép 2024",
+    )
+    .await;
+    let doc_near_2 = seed_document(
+        &pool,
+        org_a,
+        owner_a,
+        collection_a,
+        "Chính sách nghỉ phép 2025",
+    )
+    .await;
+    let doc_far = seed_document(
+        &pool,
+        org_a,
+        owner_a,
+        collection_a,
+        "Báo cáo tài chính quý 3",
+    )
+    .await;
+    seed_active_generation(&pool, org_a, owner_a, collection_a, &signature).await;
+
+    let org_b = Uuid::new_v4();
+    let owner_b = Uuid::new_v4();
+    let collection_b = seed_collection(
+        &pool,
+        org_b,
+        owner_b,
+        "Tương đồng B",
+        CollectionVisibility::Org,
+    )
+    .await;
+    let doc_cross_org = seed_document(
+        &pool,
+        org_b,
+        owner_b,
+        collection_b,
+        "Chính sách nghỉ phép org khác",
+    )
+    .await;
+    seed_active_generation(&pool, org_b, owner_b, collection_b, &signature).await;
+
+    // Cosine-scored fixture vectors: near_1/near_2 point in (almost) the same
+    // direction (cosine ~1.0, well above `SIMILARITY_SCORE_THRESHOLD`); far
+    // is orthogonal to both (cosine ~0.0, filtered by the threshold); the
+    // cross-org document reuses near_1's exact vector — if org isolation
+    // ever regressed, it would otherwise be near_1's single closest neighbor.
+    let near_vector_1 = vec![1.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let near_vector_2 = vec![0.98, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let far_vector = vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+    seed_similarity_point(
+        &qdrant,
+        &collection_name,
+        org_a,
+        collection_a,
+        doc_near_1,
+        Uuid::new_v4(),
+        near_vector_1.clone(),
+    )
+    .await;
+    seed_similarity_point(
+        &qdrant,
+        &collection_name,
+        org_a,
+        collection_a,
+        doc_near_2,
+        Uuid::new_v4(),
+        near_vector_2,
+    )
+    .await;
+    seed_similarity_point(
+        &qdrant,
+        &collection_name,
+        org_a,
+        collection_a,
+        doc_far,
+        Uuid::new_v4(),
+        far_vector,
+    )
+    .await;
+    seed_similarity_point(
+        &qdrant,
+        &collection_name,
+        org_b,
+        collection_b,
+        doc_cross_org,
+        Uuid::new_v4(),
+        near_vector_1,
+    )
+    .await;
+
+    let ctx_a = OrgContext::try_new(org_a, owner_a, [] as [&str; 0], [collection_a]).unwrap();
+    let graph = build_org_graph(
+        &pool,
+        &ctx_a,
+        None,
+        Some(SimilarityDeps {
+            vector_index: &qdrant,
+            embedder: &embedder,
+        }),
+    )
+    .await
+    .expect("build org graph for org a");
+
+    let similarity_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|e| e.kind == "similarity")
+        .collect();
+    assert!(
+        similarity_edges.iter().any(|e| {
+            let endpoints = [e.source, e.target];
+            endpoints.contains(&doc_near_1) && endpoints.contains(&doc_near_2)
+        }),
+        "expected a similarity edge between the two near documents, got: {similarity_edges:?}"
+    );
+    assert!(
+        similarity_edges
+            .iter()
+            .all(|e| e.source != doc_far && e.target != doc_far),
+        "far document must be filtered out by the score threshold, got: {similarity_edges:?}"
+    );
+    assert!(
+        similarity_edges
+            .iter()
+            .all(|e| e.source != doc_cross_org && e.target != doc_cross_org),
+        "org B's document must never appear in org A's similarity edges, got: {similarity_edges:?}"
+    );
+
+    let near_1_node = graph
+        .nodes
+        .iter()
+        .find(|n| n.id == doc_near_1)
+        .expect("near_1 node present");
+    assert!(
+        near_1_node.degree >= 1,
+        "expected near_1's degree to reflect its similarity edge (prune/degree wiring)"
+    );
+
+    // Org isolation, other direction: org B's own graph must never surface
+    // a similarity edge (it has one visible document — no cross-document
+    // neighbor exists within its own node set, and it must not see org A's).
+    let ctx_b = OrgContext::try_new(org_b, owner_b, [] as [&str; 0], [collection_b]).unwrap();
+    let graph_b = build_org_graph(
+        &pool,
+        &ctx_b,
+        None,
+        Some(SimilarityDeps {
+            vector_index: &qdrant,
+            embedder: &embedder,
+        }),
+    )
+    .await
+    .expect("build org graph for org b");
+    assert!(
+        graph_b.edges.iter().all(|e| e.kind != "similarity"),
+        "org B must not see any similarity edge, got: {:?}",
+        graph_b.edges
+    );
+
+    admin.delete_collection(&collection_name).await.ok();
 }
