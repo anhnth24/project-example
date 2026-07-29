@@ -7,7 +7,8 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 **Trạng thái tổng quan (cập nhật 2026-07-28).** MVP xây trên mock server đã merge vào
 `master`: **13/16 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
 + serve). **1 In progress**: P2-15 (E2E — nửa mock-based xong, nửa real-deployment hoãn).
-**1 Blocked**: P2-10 (Q&A) chờ R02/R03/R05. P2-11/P2-12 rời khỏi Blocked nhờ lát
+**P2-10 (Q&A) rời Blocked** — owner hạ gate (dev/test) 2026-07-29, xây trên mock/contract
+không chờ full R02/R03/R05. P2-11/P2-12 rời khỏi Blocked nhờ lát
 membership API (1C-02/1C-11 slice) landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
@@ -131,7 +132,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-10 — Streaming search/Q&A/citations
 
-- **Status:** Blocked — chờ backend R02/R03/R05 (semantics `citation_revoked` khi xóa xen giữa 2 batch, reconnect/Last-Event-ID/purge, entailment fail-closed). UI chưa khóa để tránh làm trên hành vi server chưa chốt. `QaPage` hiện là placeholder.
+- **Status:** In progress — **owner hạ gate 2026-07-29** (môi trường dev/test, không chờ full live-evidence R02/R03/R05): UI xây trên OpenAPI/SSE contract hiện có + mock server như P2-01..09; semantics đã có trong contract (`citation_revoked`, Last-Event-ID, fallback extractive) làm theo contract, phần server chưa chốt hẳn (soak/purge/GLM entailment) KHÔNG chặn UI — nếu backend đổi semantics sau này thì cập nhật theo, rủi ro rework được owner chấp nhận. `QaPage` trước đó là placeholder.
 
 - **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
   readiness, stream reducer, fallback + version-change notes, citation deep-link with
