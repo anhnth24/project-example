@@ -46,7 +46,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-02 — Membership, invites và last-owner invariant
 
-- **Status:** In progress (gần Done) — **đã landed đầy đủ trong #317** (đọc code xác
+- **Status:** In progress — gần Done; **đã landed đầy đủ trong #317** (đọc code xác
   minh 2026-07-28, không phải backlog cũ ghi "Backlog"): invite create/accept/revoke/list
   hashed single-use `routes/members.rs` E1-E5, **`PATCH /api/v1/members/{userId}`** (đổi
   role/state, `routes/members.rs:450 patch_member`) và **`DELETE /api/v1/members/{userId}`**
