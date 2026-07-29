@@ -468,7 +468,7 @@ mod tests {
             .collect()
     }
 
-    fn tcvn3_bytes_for(text: &str) -> Vec<u8> {
+    fn encode_tcvn3(text: &str) -> Vec<u8> {
         text.chars()
             .map(|ch| {
                 if ch.is_ascii() {
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn decode_text_routes_new_tcvn3_phrase_without_uppercase_font_hint() {
         let phrase = "Trường học";
-        let bytes = tcvn3_bytes_for(phrase);
+        let bytes = encode_tcvn3(phrase);
 
         assert!(looks_like_tcvn3(&bytes));
         assert_eq!(decode_tcvn3(&bytes), phrase);
