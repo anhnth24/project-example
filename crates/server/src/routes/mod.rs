@@ -6,6 +6,7 @@ pub mod auth;
 pub mod collections;
 pub mod documents;
 pub mod events;
+pub mod graph;
 pub mod health;
 pub mod jobs;
 pub mod members;

@@ -710,6 +710,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Document Graph MVP (P2-17): nodes/edges/communities for caller-visible documents (requires qa.query, same precedent as /conflicts). */
+        get: operations["getGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1081,6 +1098,37 @@ export interface components {
         AuditPage: {
             items: components["schemas"]["AuditEntry"][];
             page: components["schemas"]["PageInfo"];
+        };
+        GraphNode: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: uuid */
+            collectionId: string;
+            collectionName: string;
+            status: string;
+            degree: number;
+        };
+        GraphEdge: {
+            /** Format: uuid */
+            source: string;
+            /** Format: uuid */
+            target: string;
+            /** @enum {string} */
+            kind: "conflict" | "co_citation" | "similarity";
+            weight: number;
+        };
+        GraphCommunity: {
+            id: string;
+            label: string;
+            nodeIds: string[];
+            size: number;
+        };
+        GraphResponse: {
+            nodes: components["schemas"]["GraphNode"][];
+            edges: components["schemas"]["GraphEdge"][];
+            communities: components["schemas"]["GraphCommunity"][];
+            requestId: string;
         };
     };
     responses: {
@@ -2599,6 +2647,32 @@ export interface operations {
                 };
             };
             403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getGraph: {
+        parameters: {
+            query?: {
+                /** @description Restrict nodes to one collection (must be in the caller's allow-list). */
+                collectionId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Bounded document graph (nodes/edges/communities). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphResponse"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];
         };
     };

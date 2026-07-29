@@ -39,6 +39,7 @@ const ALWAYS_ON_RAIL_CONTROLS: Array<{ role: 'link' | 'button'; name: string | R
   { role: 'link', name: 'Trang chủ Folyvo' },
   { role: 'link', name: 'Thư viện' },
   { role: 'link', name: 'Hỏi đáp' },
+  { role: 'link', name: 'Đồ thị' },
   { role: 'link', name: 'Thành viên' },
   { role: 'link', name: 'Sử dụng' },
   { role: 'link', name: 'Trợ giúp' },
@@ -173,7 +174,7 @@ describe('App / rail (icon-only shell nav)', () => {
     render(<App />);
 
     expect(screen.getByRole('link', { name: 'Trợ giúp' })).toHaveAttribute('aria-current', 'page');
-    for (const name of ['Thư viện', 'Hỏi đáp', 'Thành viên', 'Sử dụng']) {
+    for (const name of ['Thư viện', 'Hỏi đáp', 'Đồ thị', 'Thành viên', 'Sử dụng']) {
       expect(screen.getByRole('link', { name })).not.toHaveAttribute('aria-current');
     }
   });

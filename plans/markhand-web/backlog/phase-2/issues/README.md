@@ -5,11 +5,13 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 <!-- roadmap-default-status: backlog -->
 
 **Trạng thái tổng quan (cập nhật 2026-07-29).** MVP xây trên mock server đã merge vào
-`master`: **13/16 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
-+ serve). **2 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
+`master`: **13/17 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
++ serve). **3 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
 xem chi tiết bên dưới), P2-15 (E2E — nửa mock-based xong, nay có thêm flow ask→citation
-của P2-10; nửa real-deployment hoãn). P2-11/P2-12 rời khỏi Blocked nhờ lát
-membership API (1C-02/1C-11 slice) landed ở #317.
+của P2-10; nửa real-deployment hoãn), **P2-17** (Document graph — owner request mới
+2026-07-29, MVP server+web+mock xong, `similarity`/Qdrant chờ vòng riêng — xem chi tiết
+bên dưới). P2-11/P2-12 rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice)
+landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -290,6 +292,42 @@ P2-15 + Phase 1C gate → P2-16
 - **Acceptance/tests:** Deep-link, cache/header/API404, packaged E2E, SLO, scans,
   desktop test/build.
 - **Security:** Mock/source map policy; rollbackable immutable assets. **Out:** CDN/HA.
+
+## P2-17 — Document graph
+
+- **Status:** In progress — owner yêu cầu mới 2026-07-29 (force-directed graph + sidebar
+  "Communities" checkbox, có ảnh mẫu). MVP: `GET /api/v1/graph` (org/ACL-scoped như
+  `/collections`/`/documents`, gate `qa.query` cùng tiền lệ `/conflicts`) trả `conflict`
+  edges thật từ `claims`/`conflicts` (PG, đã test DB-gated: org isolation, ACL riêng tư,
+  bounded cap 500 node/2000 edge) và `co_citation` edges từ
+  `ask_stream_sessions.cited_document_ids` (bảng thật duy nhất lưu "tài liệu nào được
+  trích dẫn theo answer nào" — không có bảng lịch sử QA riêng). Communities = connected
+  components thuần Rust (không thêm crate graph). Web: trang "Đồ thị" (rail icon
+  `Network`), force-directed layout tự viết (~150 dòng, `lib/forceLayout.ts`, seeded
+  deterministic — không thêm `d3-force`), sidebar cộng đồng + filter bộ sưu tập + chế độ
+  xem bảng (a11y fallback) + danh sách node điều hướng bàn phím, mock fixture 13
+  node/3 cụm/3 loại cạnh cho org A + graph nhỏ riêng cho org B, unit/component/e2e test.
+  **`similarity` (Qdrant) là chỗ gắn sẵn (stub), CHƯA có truy vấn vector thật** —
+  sandbox không có Qdrant để kiểm chứng, và API `storage/qdrant.rs` hiện tại
+  (`scroll_points`) hard-code `with_vector: false` nên cần một vòng riêng (thêm biến
+  thể lấy vector thật + kiểm thử với Qdrant thật) trước khi bật edge này; graph vẫn
+  trả đủ `conflict`/`co_citation` khi không có Qdrant, không lỗi.
+
+- **Plan/files:** `crates/server/src/routes/graph.rs`, `db/graph.rs`, `services/graph.rs`
+  (thuật toán thuần); OpenAPI path/schemas (`GraphNode`/`GraphEdge`/`GraphCommunity`/
+  `GraphResponse`) + `ROUTE_INVENTORY`; `web/src/pages/GraphPage.tsx`,
+  `components/graph/**`, `lib/forceLayout.ts`, `mocks/handlers/graph.ts`.
+- **Depends:** P2-07 (điều hướng vào `/library/:collectionId` khi click node — không có
+  route sâu tới preview một tài liệu cụ thể, vì `LibraryPage` chọn tài liệu bằng state
+  cục bộ chứ không phải URL param) + backend 1B claims/conflicts + P1B-R05 ask-stream.
+- **Acceptance/tests:** `services::graph` unit test (components/pruning, xác định);
+  `tests/graph.rs` DB-gated (permission, conflict edge, co_citation edge, org isolation,
+  ACL riêng tư, bounded cap — chạy thật trên PG local, 6/6 pass); web unit
+  (`forceLayout.test.ts`, `GraphPage.test.tsx` 7 kịch bản) + `e2e/graph.spec.ts` (3 kịch
+  bản: cụm + sidebar, tắt cụm ẩn node, click node → preview thật qua library).
+- **Security:** Cùng ACL/permission với `/conflicts`; không thêm quyền mới chưa seed
+  role. **Out:** `similarity` edge thật (chờ Qdrant thật), deep-link preview một tài
+  liệu cụ thể từ đồ thị.
 
 ## Exit gate
 

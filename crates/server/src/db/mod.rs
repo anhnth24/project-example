@@ -9,6 +9,7 @@ pub mod document_versions;
 pub mod documents;
 pub mod embedding_batches;
 pub mod error;
+pub mod graph;
 pub mod index_metadata;
 pub(crate) mod jobs;
 pub mod members;

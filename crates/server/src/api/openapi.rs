@@ -125,6 +125,8 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
     // 1C-11 audit-log read endpoint (write path pre-existing; this is the
     // first read surface — see routes/audit.rs).
     ("get", "/audit", &["200", "400", "403", "429"]),
+    // P2-17 Document Graph MVP — see routes/graph.rs.
+    ("get", "/graph", &["200", "403", "404", "429"]),
 ];
 
 const HEALTH_PATHS: &[&str] = &["/health/live", "/health/ready", "/health/start"];

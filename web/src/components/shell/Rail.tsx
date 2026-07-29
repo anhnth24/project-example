@@ -9,6 +9,7 @@ import {
   Gauge,
   Library,
   MessageCircleQuestion,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   Users,
@@ -57,14 +58,17 @@ interface RailDestination {
  * Primary destinations shown as rail icons. Deliberately excludes `login`
  * (public-only — the rail itself is not rendered on that route, see App.tsx)
  * and does not invent a separate "upload" destination: the router
- * (`types/routes.ts`) has no `/upload` route — the P2.3 route list is
- * `/login`, `/library`, `/qa`, `/admin/members`, `/admin/usage`, `/help` —
- * so "upload" from the shell brief lives inside LibraryPage's own UI, not as
- * a rail-level navigation target.
+ * (`types/routes.ts`) has no `/upload` route — the route list is
+ * `/login`, `/library`, `/qa`, `/graph`, `/admin/members`, `/admin/usage`,
+ * `/help` — so "upload" from the shell brief lives inside LibraryPage's own
+ * UI, not as a rail-level navigation target. `graph` (P2-17, "Đồ thị") is
+ * the newest addition — a read-only cross-document view, so it sits right
+ * after `qa` rather than grouped with the admin-only destinations below it.
  */
 const RAIL_DESTINATIONS: RailDestination[] = [
   { route: 'library', to: '/library', label: 'Thư viện', Icon: Library },
   { route: 'qa', to: '/qa', label: 'Hỏi đáp', Icon: MessageCircleQuestion },
+  { route: 'graph', to: '/graph', label: 'Đồ thị', Icon: Network },
   { route: 'adminMembers', to: '/admin/members', label: 'Thành viên', Icon: Users },
   { route: 'adminUsage', to: '/admin/usage', label: 'Sử dụng', Icon: Gauge },
   { route: 'help', to: '/help', label: 'Trợ giúp', Icon: CircleHelp },

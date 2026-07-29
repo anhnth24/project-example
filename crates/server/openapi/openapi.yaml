@@ -1306,6 +1306,32 @@ paths:
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /graph:
+    get:
+      operationId: getGraph
+      summary: >-
+        Document Graph MVP (P2-17): nodes/edges/communities for caller-visible
+        documents (requires qa.query, same precedent as /conflicts).
+      parameters:
+        - name: collectionId
+          in: query
+          description: Restrict nodes to one collection (must be in the caller's allow-list).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Bounded document graph (nodes/edges/communities).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphResponse"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     bearerAuth:
@@ -2115,3 +2141,71 @@ components:
             $ref: "#/components/schemas/AuditEntry"
         page:
           $ref: "#/components/schemas/PageInfo"
+    GraphNode:
+      type: object
+      required: [id, title, collectionId, collectionName, status, degree]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        collectionId:
+          type: string
+          format: uuid
+        collectionName:
+          type: string
+        status:
+          type: string
+        degree:
+          type: integer
+    GraphEdge:
+      type: object
+      required: [source, target, kind, weight]
+      properties:
+        source:
+          type: string
+          format: uuid
+        target:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [conflict, co_citation, similarity]
+        weight:
+          type: number
+          minimum: 0
+          maximum: 1
+    GraphCommunity:
+      type: object
+      required: [id, label, nodeIds, size]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        nodeIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+        size:
+          type: integer
+    GraphResponse:
+      type: object
+      required: [nodes, edges, communities, requestId]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+        communities:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphCommunity"
+        requestId:
+          type: string
