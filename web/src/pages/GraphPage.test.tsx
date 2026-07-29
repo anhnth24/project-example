@@ -91,8 +91,12 @@ describe('GraphPage', () => {
     fireEvent.click(screen.getByRole('combobox', { name: 'Lọc theo bộ sưu tập' }));
     fireEvent.click(screen.getByRole('option', { name: 'Employee Handbook' }));
 
+    // The filter change refetches — a loading state briefly replaces the whole
+    // graph, which already satisfies the "specs doc gone" wait below. The
+    // handbook assertion must therefore also await the refetch completing
+    // rather than racing it (failed on slower CI runners as a sync getBy).
     await waitFor(() => expect(screen.queryByText('Đặc tả sản phẩm v1')).not.toBeInTheDocument());
-    expect(screen.getByText('Sổ tay nhân viên 2024')).toBeVisible();
+    expect(await screen.findByText('Sổ tay nhân viên 2024')).toBeVisible();
   });
 
   it('table view exposes edges structurally (kind + weight), not just node titles', async () => {
