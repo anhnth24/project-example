@@ -77,11 +77,23 @@ export function ChatPanel({
   collectionIds,
   client = apiClient,
   candidateDocuments,
+  onScopeChange,
 }: {
   collectionIds?: string[];
   client?: ApiClient;
   /** Documents a search already found — feeds the compare/history document picker below instead of asking for a raw UUID. */
   candidateDocuments: SearchHit[];
+  /**
+   * P2-18 — the "Phạm vi" (scope) dropdown lives in this composer, but its
+   * value must also filter `SearchPanel`'s request (a sibling component
+   * `QaPage` renders above this one) — this callback is how the selection
+   * reaches it, without lifting the dropdown's UI itself out of the
+   * composer. Called with `undefined` for "Tất cả dự án" (no filter, today's
+   * exact behavior) and once more with `undefined` whenever the org switches
+   * (see the epoch-reset handling below) — never left pointing at a
+   * previous org's project id.
+   */
+  onScopeChange?: (projectId: string | undefined) => void;
 }) {
   const questionId = useId();
   const asOfId = useId();
@@ -93,6 +105,35 @@ export function ChatPanel({
   const [documentId, setDocumentId] = useState('');
   const [versionA, setVersionA] = useState('');
   const [versionB, setVersionB] = useState('');
+
+  // "Phạm vi" (project scope) — reset to "Tất cả dự án" on an org switch,
+  // same {epoch, ...} reset idiom `chat` (below) already uses.
+  const [scope, setScope] = useState<{ epoch: number; projectId: string | undefined }>(() => ({
+    epoch,
+    projectId: undefined,
+  }));
+  let projectId = scope.projectId;
+  if (scope.epoch !== epoch) {
+    projectId = undefined;
+    setScope({ epoch, projectId });
+  }
+  const projectsResult = useScopeSafeRequest(
+    (signal) => client.request('get', '/projects', { signal }),
+    [client],
+  );
+  const projects = projectsResult.data?.items ?? [];
+  const scopeOptions: SelectOption[] = [
+    { value: '', label: 'Tất cả dự án' },
+    ...projects.map((p) => ({ value: p.id, label: p.name })),
+  ];
+  // Reports the effective projectId to the parent exactly once per change
+  // (including the epoch-reset above) — same adjust-state-while-rendering
+  // idiom `SearchPanel.tsx`'s `onHitsChanged` reporting uses.
+  const [reportedProjectId, setReportedProjectId] = useState<string | undefined>(undefined);
+  if (reportedProjectId !== projectId) {
+    setReportedProjectId(projectId);
+    onScopeChange?.(projectId);
+  }
 
   // The chat history itself, scoped to the epoch it was built under — see
   // this file's module doc for why a plain `useState<ChatTurn[]>` is not
@@ -168,6 +209,7 @@ export function ChatPanel({
     event.preventDefault();
     if (question.trim() === '' || busy) return;
     const request: AskRequest = { question, collectionIds, mode, limit: 10 };
+    if (projectId) request.projectId = projectId;
     if (mode === 'as_of' && asOf) request.asOf = new Date(asOf).toISOString();
     if (needsDocument && documentId) request.documentId = documentId;
     if (mode === 'compare') {
@@ -244,6 +286,18 @@ export function ChatPanel({
             alignItems: 'flex-end',
           }}
         >
+          <div>
+            <span id="qa-scope-label" className="field-label">
+              Phạm vi
+            </span>
+            <SelectControl
+              value={projectId ?? ''}
+              options={scopeOptions}
+              onChange={(value) => setScope({ epoch, projectId: value || undefined })}
+              ariaLabel="Phạm vi dự án"
+            />
+          </div>
+
           <div>
             <span id="qa-mode-label" className="field-label">
               Chế độ truy vấn

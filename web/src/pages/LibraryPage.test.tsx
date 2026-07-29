@@ -400,4 +400,24 @@ describe('LibraryPage', () => {
       expect(screen.getByText('Chưa có tài liệu nào trong bộ sưu tập này.')).toBeVisible();
     });
   });
+
+  describe('P2-18 projects', () => {
+    it('groups collection nav by project, with an unassigned group for collections with no project', async () => {
+      const client = await loggedInClient();
+      renderLibrary(client, undefined);
+
+      // Seeded: "Nhân sự" -> Employee Handbook; Product Specs unassigned.
+      expect(await screen.findByText('Nhân sự')).toBeVisible();
+      expect(screen.getByText('Chưa thuộc dự án')).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Employee Handbook' })).toBeVisible();
+      expect(screen.getByRole('link', { name: 'Product Specs' })).toBeVisible();
+    });
+
+    // The create/assign flow itself (`ProjectsPanel`, gated by
+    // `useAuth().hasPermission`) is covered in `ProjectsPanel.test.tsx`,
+    // which — unlike this file's bare-`client`-injection convention — wraps
+    // in a real `AuthProvider` (same reason `AdminMembersPage.test.tsx`
+    // does, see its own module doc): `useAuth()` reads from `AuthContext`,
+    // which a bare injected `client` prop never populates.
+  });
 });

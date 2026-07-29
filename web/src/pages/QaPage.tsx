@@ -24,6 +24,11 @@ export function QaPage({
   // real documents to choose from instead of a raw UUID field — see
   // `ChatPanel.tsx`'s module doc.
   const [candidateDocuments, setCandidateDocuments] = useState<SearchHit[]>([]);
+  // P2-18 — the "Phạm vi" dropdown itself lives inside `ChatPanel`'s
+  // composer (see that component's `onScopeChange` doc), but its value must
+  // also scope `SearchPanel`'s request — this page is the one place both
+  // siblings meet, so it's the natural owner of the lifted value.
+  const [projectId, setProjectId] = useState<string | undefined>(undefined);
 
   // Only fetched for the heading's collection name — same "never show the
   // raw id" rule `LibraryPage.tsx` follows for its own heading (owner-
@@ -51,6 +56,7 @@ export function QaPage({
       <div style={{ display: 'grid', gap: 'var(--space-4)' }}>
         <SearchPanel
           collectionIds={collectionIds}
+          projectId={projectId}
           client={client}
           onHitsChanged={setCandidateDocuments}
         />
@@ -58,6 +64,7 @@ export function QaPage({
           collectionIds={collectionIds}
           client={client}
           candidateDocuments={candidateDocuments}
+          onScopeChange={setProjectId}
         />
       </div>
     </section>

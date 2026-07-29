@@ -42,14 +42,43 @@
 //     `services/qa/ask_stream.rs`'s `config_reason`, consumed client-side by
 //     `api/sse.ts`'s `classifySseCloseCode`.
 import { registerOperation } from '../registry';
+import { notFound, unauthorized } from '../apiError';
 import { nextRequestId } from '../ids';
-import { getStore, nextId, QA_COMPARE_DOCUMENT_ID } from '../fixtures';
+import {
+  authContextForHeader,
+  collectionIdsForProject,
+  getOrgProjects,
+  getStore,
+  nextId,
+  QA_COMPARE_DOCUMENT_ID,
+} from '../fixtures';
 import type { components } from '../../api/generated/contract';
 
 type SearchRequest = components['schemas']['SearchRequest'];
 type AskRequest = components['schemas']['AskRequest'];
 type CitationPin = components['schemas']['CitationPin'];
 type SseEnvelope = components['schemas']['SseEnvelope'];
+
+/**
+ * P2-18 — resolves `projectId` (absent = "all projects", today's exact
+ * behavior) into the effective `collectionIds` scope, narrowing (never
+ * widening) whatever the request already specified — same contract as
+ * `db::projects::resolve_project_scope` server-side. Returns `undefined` (a
+ * 404) when `projectId` does not resolve to a project in the caller's org.
+ */
+function resolveProjectScope(
+  orgId: string,
+  projectId: string | undefined,
+  requested: string[] | undefined,
+): { collectionIds: string[] | undefined } | undefined {
+  if (!projectId) return { collectionIds: requested };
+  if (!getOrgProjects(orgId).some((p) => p.id === projectId)) return undefined;
+  const projectCollections = collectionIdsForProject(orgId, projectId);
+  const collectionIds = requested
+    ? requested.filter((id) => projectCollections.includes(id))
+    : projectCollections;
+  return { collectionIds };
+}
 
 // ---------------------------------------------------------------------------
 // Scenario markers — a test seam. Appending one of these tokens to a
@@ -309,7 +338,11 @@ function currentModeWarnings(mode: string, citations: CitationPin[]): string[] {
 // ---------------------------------------------------------------------------
 
 registerOperation('search', async (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
   const body = await ctx.json<SearchRequest>();
+  const scope = resolveProjectScope(auth.orgId, body.projectId, body.collectionIds);
+  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
   const mode = body.mode ?? 'current';
   const limit = body.limit ?? 10;
   let passages: Passage[];
@@ -319,7 +352,7 @@ registerOperation('search', async (ctx) => {
     passages = resolved.passages;
     warnings = resolved.warnings;
   } else {
-    passages = matchPassages(body.query, body.collectionIds, limit);
+    passages = matchPassages(body.query, scope.collectionIds, limit);
     warnings = [];
   }
   const citations = passages.map((p, i) => passageToCitation(p, citeIdFor(i)));
@@ -340,7 +373,11 @@ registerOperation('search', async (ctx) => {
 });
 
 registerOperation('ask', async (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
   const body = await ctx.json<AskRequest>();
+  const scope = resolveProjectScope(auth.orgId, body.projectId, body.collectionIds);
+  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
   const mode = body.mode ?? 'current';
   let passages: Passage[];
   let warnings: string[];
@@ -349,7 +386,7 @@ registerOperation('ask', async (ctx) => {
     passages = resolved.passages;
     warnings = resolved.warnings;
   } else {
-    passages = matchPassages(body.question, body.collectionIds, body.limit ?? 10);
+    passages = matchPassages(body.question, scope.collectionIds, body.limit ?? 10);
     warnings = [];
   }
   const citations = passages.map((p, i) => passageToCitation(p, citeIdFor(i)));
@@ -402,7 +439,11 @@ function serializeSseFrames(frames: SseFrame[], requestId: string): string {
 }
 
 registerOperation('askStream', async (ctx) => {
+  const auth = authContextForHeader(ctx.headers.get('authorization'));
+  if (!auth) return unauthorized();
   const body = await ctx.json<AskRequest>();
+  const scope = resolveProjectScope(auth.orgId, body.projectId, body.collectionIds);
+  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
   const rawQuestion = body.question;
   const revoke = rawQuestion.includes(QA_STREAM_MARKERS.citationRevoked);
   const fallback = rawQuestion.includes(QA_STREAM_MARKERS.providerFallback);
@@ -416,7 +457,7 @@ registerOperation('askStream', async (ctx) => {
     passages = resolved.passages;
     scenarioWarnings = resolved.warnings;
   } else {
-    passages = matchPassages(question, body.collectionIds, body.limit ?? 10);
+    passages = matchPassages(question, scope.collectionIds, body.limit ?? 10);
     scenarioWarnings = [];
   }
   const citations = passages.map((p, i) => passageToCitation(p, citeIdFor(i)));

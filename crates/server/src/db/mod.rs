@@ -16,6 +16,7 @@ pub mod members;
 pub mod models;
 pub mod orgs;
 pub mod pool;
+pub mod projects;
 pub mod quota;
 pub mod search;
 pub mod upload_operations;

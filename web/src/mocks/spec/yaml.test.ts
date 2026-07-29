@@ -118,9 +118,9 @@ describe('parseYaml against the real openapi.yaml', () => {
     expect(typeof doc.components).toBe('object');
   });
 
-  it('finds all 44 component schemas', () => {
+  it('finds all 49 component schemas', () => {
     const schemas = (doc.components as Record<string, unknown>).schemas as Record<string, unknown>;
-    expect(Object.keys(schemas)).toHaveLength(44);
+    expect(Object.keys(schemas)).toHaveLength(49);
   });
 
   it('parses a representative path item with multiple methods and shared parameters', () => {

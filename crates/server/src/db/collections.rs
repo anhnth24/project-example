@@ -17,6 +17,9 @@ pub struct NewCollection<'a> {
     pub visibility: CollectionVisibility,
 }
 
+const COLLECTION_COLUMNS: &str = "id, org_id, name, slug, description, owner_user_id,
+                    visibility, created_at, updated_at, deleted_at, project_id";
+
 /// Inserts a collection for `ctx.org_id` / `ctx.user_id` as owner.
 pub async fn insert(
     txn: &Transaction<'_>,
@@ -26,11 +29,12 @@ pub async fn insert(
     let visibility = input.visibility.as_str();
     let row = txn
         .query_one(
-            "INSERT INTO collections (
+            &format!(
+                "INSERT INTO collections (
                 id, org_id, name, slug, description, owner_user_id, visibility
              ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-             RETURNING id, org_id, name, slug, description, owner_user_id,
-                       visibility, created_at, updated_at, deleted_at",
+             RETURNING {COLLECTION_COLUMNS}"
+            ),
             &[
                 &input.id,
                 &ctx.org_id(),
@@ -53,10 +57,11 @@ pub async fn get_by_id(
 ) -> Result<Collection, DbError> {
     let row = txn
         .query_opt(
-            "SELECT id, org_id, name, slug, description, owner_user_id,
-                    visibility, created_at, updated_at, deleted_at
+            &format!(
+                "SELECT {COLLECTION_COLUMNS}
              FROM collections
-             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL"
+            ),
             &[&ctx.org_id(), &collection_id],
         )
         .await?
@@ -68,11 +73,12 @@ pub async fn get_by_id(
 pub async fn list(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<Vec<Collection>, DbError> {
     let rows = txn
         .query(
-            "SELECT id, org_id, name, slug, description, owner_user_id,
-                    visibility, created_at, updated_at, deleted_at
+            &format!(
+                "SELECT {COLLECTION_COLUMNS}
              FROM collections
              WHERE org_id = $1 AND deleted_at IS NULL
-             ORDER BY name",
+             ORDER BY name"
+            ),
             &[&ctx.org_id()],
         )
         .await?;
@@ -89,14 +95,41 @@ pub async fn update_metadata(
 ) -> Result<Collection, DbError> {
     let row = txn
         .query_opt(
-            "UPDATE collections
+            &format!(
+                "UPDATE collections
              SET name = $3,
                  description = $4,
                  updated_at = now()
              WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
-             RETURNING id, org_id, name, slug, description, owner_user_id,
-                       visibility, created_at, updated_at, deleted_at",
+             RETURNING {COLLECTION_COLUMNS}"
+            ),
             &[&ctx.org_id(), &collection_id, &name, &description],
+        )
+        .await?
+        .ok_or(DbError::NotFound)?;
+    map_collection(&row)
+}
+
+/// P2-18 — assigns/unassigns `collection_id`'s project (`None` clears it).
+/// `project_id`, when `Some`, must already be validated by the caller as a
+/// real project in `ctx.org_id()` (the composite FK is defense-in-depth, not
+/// the primary check — see `routes::collections::assign_project`).
+pub async fn assign_project(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Result<Collection, DbError> {
+    let row = txn
+        .query_opt(
+            &format!(
+                "UPDATE collections
+             SET project_id = $3,
+                 updated_at = now()
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+             RETURNING {COLLECTION_COLUMNS}"
+            ),
+            &[&ctx.org_id(), &collection_id, &project_id],
         )
         .await?
         .ok_or(DbError::NotFound)?;
@@ -136,5 +169,6 @@ fn map_collection(row: &Row) -> Result<Collection, DbError> {
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         deleted_at: row.get("deleted_at"),
+        project_id: row.get("project_id"),
     })
 }

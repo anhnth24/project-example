@@ -15,6 +15,13 @@ pub struct CollectionDto {
     pub description: Option<String>,
     pub visibility: String,
     pub created_at: DateTime<Utc>,
+    /// P2-18 — nullable: absent/`null` for a collection with no project.
+    pub project_id: Option<Uuid>,
+    /// Joined display name for `project_id` (nullable together with it) so
+    /// the Library nav can group by project without a second round trip —
+    /// same "never show the raw id" convention `MembershipDto`'s
+    /// email/display_name join already follows.
+    pub project_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

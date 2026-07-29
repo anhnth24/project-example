@@ -18,6 +18,7 @@ type Org = components['schemas']['Org'];
 type OrgRole = Org['role'];
 type OrgState = Membership['state'];
 type UsageEntry = components['schemas']['UsageEntry'];
+type Project = components['schemas']['Project'];
 
 export interface MockUser {
   userId: string;
@@ -114,6 +115,10 @@ interface Store {
   collections: Collection[];
   /** collectionId -> the org it belongs to. Not part of the wire `Collection` shape (the real schema has no `orgId` field — org isolation is enforced server-side from the bearer token, never a response field), kept here purely so mock handlers can filter. */
   collectionOrgId: Map<string, string>;
+  /** P2-18 — orgId -> that org's projects. Same per-org-roster shape as `membershipsByOrg`. */
+  projectsByOrg: Map<string, Project[]>;
+  /** P2-18 — collectionId -> assigned projectId, or `null` when unassigned. Not part of the wire `Collection` shape here either (that lives on the DTO's own `projectId`/`projectName` fields, computed at read time in `handlers/library.ts` — this map is the mutable "what's assigned" source of truth those fields are derived from). */
+  collectionProjectId: Map<string, string | null>;
   documents: Map<string, Document[]>; // collectionId -> documents
   versions: Map<string, DocumentVersion[]>; // documentId -> versions, oldest first
   jobs: Map<string, Job>;
@@ -474,6 +479,43 @@ function seedCollectionOrgId(): Map<string, string> {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// P2-18 projects — org -> project -> collection -> document grouping.
+// ---------------------------------------------------------------------------
+
+/** Org A: two projects. `PROJECT_A_HR_ID` is assigned to Employee Handbook
+ * (`mockUuid(10)`); `PROJECT_A_PRODUCT_ID` starts with zero collections
+ * assigned, so Product Specs (`mockUuid(11)`) stays under "Chưa thuộc dự án"
+ * — the "org A: 2 projects + 1 unassigned collection" fixture the E2E spec
+ * needs, without inventing a third org A collection. */
+export const PROJECT_A_HR_ID = mockUuid(200);
+export const PROJECT_A_PRODUCT_ID = mockUuid(201);
+/** Org B's own project, separate id space from org A's — same "distinct
+ * enough that a cross-org assertion can't pass by accident" convention as
+ * `ORG_B_COLLECTION_ID`. */
+export const PROJECT_B_ID = mockUuid(202);
+
+function seedProjects(): Map<string, Project[]> {
+  return new Map([
+    [
+      ORG_A_ID,
+      [
+        { id: PROJECT_A_HR_ID, name: 'Nhân sự', createdAt: mockTimestamp(0) },
+        { id: PROJECT_A_PRODUCT_ID, name: 'Sản phẩm', createdAt: mockTimestamp(1) },
+      ],
+    ],
+    [ORG_B_ID, [{ id: PROJECT_B_ID, name: 'Globex Ops', createdAt: mockTimestamp(90) }]],
+  ]);
+}
+
+function seedCollectionProjectId(): Map<string, string | null> {
+  return new Map([
+    [mockUuid(10), PROJECT_A_HR_ID],
+    [mockUuid(11), null],
+    [ORG_B_COLLECTION_ID, PROJECT_B_ID],
+  ]);
+}
+
 /**
  * P2-10 (Q&A) demo document — the one seeded document with **two** published
  * versions, so `mode: 'compare'`/`'history'` ask requests (and the version
@@ -578,6 +620,8 @@ function freshStore(): Store {
     accessTokens: new Map(),
     collections: seedCollections(),
     collectionOrgId: seedCollectionOrgId(),
+    projectsByOrg: seedProjects(),
+    collectionProjectId: seedCollectionProjectId(),
     documents,
     versions,
     jobs: seedJobs(),
@@ -713,6 +757,37 @@ export function findInviteAcrossOrgs(
 /** `orgId`'s `GET /usage` snapshot — `[]` for an org with none seeded rather than throwing, matching every other per-org accessor's "empty, not an error" default. */
 export function getOrgUsage(orgId: string): UsageEntry[] {
   return store.usageByOrg.get(orgId) ?? [];
+}
+
+/** P2-18 — `orgId`'s projects, auto-vivifying an empty roster like `getOrgMemberships`. */
+export function getOrgProjects(orgId: string): Project[] {
+  let projects = store.projectsByOrg.get(orgId);
+  if (!projects) {
+    projects = [];
+    store.projectsByOrg.set(orgId, projects);
+  }
+  return projects;
+}
+
+/** P2-18 — `collectionId`'s assigned project id, or `undefined` for a collection this store has never seen (distinct from `null`, which means "seen, explicitly unassigned"). */
+export function getCollectionProjectId(collectionId: string): string | null | undefined {
+  return store.collectionProjectId.get(collectionId);
+}
+
+/** P2-18 — assigns/unassigns `collectionId`'s project (`null` unassigns), same mutation shape `POST /collections/{id}/assign-project` performs server-side. */
+export function setCollectionProjectId(collectionId: string, projectId: string | null): void {
+  store.collectionProjectId.set(collectionId, projectId);
+}
+
+/** P2-18 — collection ids currently assigned to `projectId`, scoped to `orgId` via `collectionOrgId` (mirrors `db::projects::collection_ids_for_project`'s org-scoped filter). */
+export function collectionIdsForProject(orgId: string, projectId: string): string[] {
+  const ids: string[] = [];
+  for (const [collectionId, assigned] of store.collectionProjectId) {
+    if (assigned === projectId && store.collectionOrgId.get(collectionId) === orgId) {
+      ids.push(collectionId);
+    }
+  }
+  return ids;
 }
 
 export { encodeCursor, decodeCursor };

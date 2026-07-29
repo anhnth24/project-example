@@ -238,6 +238,19 @@ pub struct Collection {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// P2-18 — nullable: a collection with no project assigned is unaffected.
+    pub project_id: Option<Uuid>,
+}
+
+/// P2-18 org-scoped project: a named folder of collections (migrations/0032).
+/// "All projects" is never a row here — it is the absence of a project filter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1040,7 +1053,13 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
                 "created_at",
                 "updated_at",
                 "deleted_at",
+                "project_id",
             ],
+        ),
+        // P2-18 (migrations/0032) — org-scoped project folder of collections.
+        (
+            "projects",
+            &["id", "org_id", "name", "created_at", "updated_at"],
         ),
         (
             "collection_user_access",

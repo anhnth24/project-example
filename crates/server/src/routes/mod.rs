@@ -11,6 +11,7 @@ pub mod health;
 pub mod jobs;
 pub mod members;
 pub mod orgs;
+pub mod projects;
 pub mod rate_limit_guard;
 pub mod search;
 pub mod uploads;

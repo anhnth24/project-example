@@ -29,6 +29,7 @@ import {
   DocumentList,
   DocumentPreview,
   Pagination,
+  ProjectsPanel,
   describeApiError,
   matchesQuery,
   type Collection,
@@ -235,6 +236,12 @@ export function LibraryPage({
         collections={collections}
         activeCollectionId={collectionId}
         loading={collectionsResult.status === 'loading'}
+      />
+
+      <ProjectsPanel
+        collections={collections}
+        client={client}
+        onChanged={() => setCollectionsRetry((n) => n + 1)}
       />
 
       {!collectionId ? (
