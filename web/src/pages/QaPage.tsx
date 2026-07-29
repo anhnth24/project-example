@@ -7,7 +7,7 @@
 // from `ask`/`ask/stream` carry no document/version id to deep-link with).
 import { useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
-import { AskPanel, SearchPanel, type SearchHit } from '../components/qa';
+import { ChatPanel, SearchPanel, type SearchHit } from '../components/qa';
 
 export function QaPage({
   collectionId,
@@ -18,9 +18,9 @@ export function QaPage({
   client?: ApiClient;
 }) {
   const collectionIds = collectionId ? [collectionId] : undefined;
-  // Fed by `SearchPanel` so `AskPanel`'s compare/history document picker has
+  // Fed by `SearchPanel` so `ChatPanel`'s compare/history document picker has
   // real documents to choose from instead of a raw UUID field — see
-  // `AskPanel.tsx`'s module doc.
+  // `ChatPanel.tsx`'s module doc.
   const [candidateDocuments, setCandidateDocuments] = useState<SearchHit[]>([]);
 
   return (
@@ -40,7 +40,7 @@ export function QaPage({
           client={client}
           onHitsChanged={setCandidateDocuments}
         />
-        <AskPanel
+        <ChatPanel
           collectionIds={collectionIds}
           client={client}
           candidateDocuments={candidateDocuments}

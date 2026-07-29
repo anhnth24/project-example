@@ -165,10 +165,35 @@ P2-15 + Phase 1C gate → P2-16
   âm thầm retry/backoff nội bộ), nên UI không bịa tín hiệu không có thật; chỉ có trạng
   thái cuối (`completed`/`revoked`/`error` với lý do) là quan sát được.
 
+  **Cập nhật (chat UI, cùng ngày):** `AskPanel` (đơn lượt) → `ChatPanel` — giao diện hội
+  thoại nhiều lượt hỏi-đáp trong một phiên. Kiến trúc giữ nguyên như chốt: server vẫn
+  đơn lượt (`/ask`, `/ask/stream` không đổi, không gửi lịch sử lên server, không chế
+  conversation memory phía client thành context giả). Lịch sử chat **chỉ tồn tại trong
+  React state của `ChatPanel`** (session in-memory) — mất khi tải lại trang (đánh đổi đã
+  chấp nhận, ghi rõ trong UI), **không** persist localStorage vì có thể chứa nội dung tài
+  liệu. Mỗi lượt (`ChatTurnBubble`) sở hữu một instance `useAskStream` riêng — tái dùng
+  nguyên `useAskStream`/`state/askStream.ts`, không sửa reducer; một lượt sau không bao
+  giờ ghi đè state của lượt trước. Composer (ô nhập + chọn chế độ truy vấn) chỉ cho một
+  stream tại một thời điểm: disable khi lượt cuối chưa "settled", nút "Hủy" gọi
+  `reset()` của đúng lượt đang chạy — vì `reset()` tự nó không phân biệt được "đã hủy"
+  với "chưa từng chạy" (cả hai đều về `'idle'`), `ChatTurnBubble` tự đóng băng
+  answer/citations/warnings ngay trước khi gọi `reset()` và báo lên trạng thái
+  `'cancelled'` riêng (không phải trong `state/askStream.ts`) để composer biết lượt đã
+  xong. Label mode (`fallback_extractive`/`llm_unverified`/…) tra theo **key string
+  thuần** (`components/qa/answerMode.ts`) chứ không theo enum từ `contract.ts` — một
+  agent song song có thể thêm `llm_unverified` vào contract sau; UI đã sẵn sàng hiện
+  nhãn cảnh báo "Trả lời từ LLM (chưa kiểm chứng đối chiếu)" cho giá trị đó ngay cả
+  trước khi `api:generate` chạy lại. Scope-safety: `ChatPanel` tự phát hiện thấy trước đó
+  chưa org-scoped (state chat không hề tồn tại ở bản đơn lượt) nên đã làm đúng theo
+  pattern P2-06 hiện có (`LibraryPage.tsx`'s `effectiveView`/`retainedDocuments`): lịch sử
+  được giữ kèm epoch nó được tạo ra, và bị xoá sạch (adjust-state-while-rendering) ngay
+  khi epoch đổi (đổi org/logout) — đóng luôn gap "chưa có test org-switch riêng cho
+  AskPanel" đã ghi nhận trước đó (xem Acceptance/tests bên dưới).
+
 - **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
   readiness, stream reducer, fallback + version-change notes, citation deep-link with
   version badge/effective date, current conflict warning + resolved conflict note,
-  abort scope change.
+  abort scope change; **+ chat UI**: turn history, per-turn stream, org-scoped clear.
   - `web/src/mocks/handlers/qa.ts` — `search`/`ask` (đồng bộ, giữ tương thích) + `askStream`
     mới: toàn bộ response `/ask/stream` là một chuỗi `text/event-stream` dựng sẵn (mọi sự
     kiện đã quyết định xong trước khi trả response — không có gì thật sự bất đồng bộ như
@@ -177,27 +202,35 @@ P2-15 + Phase 1C gate → P2-16
     `DELIBERATELY_UNMOCKED_OPERATIONS` fallback của `registry.ts`/`fetchMock.ts` (2 file đó
     ngoài phạm vi sửa của task này — comment ở đó vẫn liệt kê `askStream` là "deliberately
     unmocked", nay không còn đúng cho riêng operation này; để lại làm việc chưa xong, xem
-    report cuối).
+    report cuối). Semantics đơn lượt của handler không đổi cho chat UI — mỗi lượt vẫn một
+    request/response độc lập.
   - `web/src/mocks/fixtures.ts` — thêm thuần túy (không sửa fixture cũ): một tài liệu 2
     phiên bản (`QA_COMPARE_DOCUMENT_ID`) cho demo compare/history có dữ liệu thật để so
     sánh.
-  - `web/src/state/askStream.ts` (+ test) — reducer thuần, `describeAskStreamError`.
-  - `web/src/components/qa/**` — `SearchPanel`, `AskPanel`, `CitationCard`,
-    `DocumentPreviewPanel`, `useAskStream`/`askStreamSource` (SSE qua P2-04, không
-    `EventSource`).
-  - `web/src/pages/QaPage.tsx`, `web/src/pages/QaPage.test.tsx`,
-    `web/e2e/qa.spec.ts` (4 spec mới, tổng suite E2E mock 24).
+  - `web/src/state/askStream.ts` (+ test) — reducer thuần, `describeAskStreamError`
+    (không đổi cho chat UI).
+  - `web/src/components/qa/**` — `SearchPanel`, `CitationCard`, `DocumentPreviewPanel`,
+    `useAskStream`/`askStreamSource` (SSE qua P2-04, không `EventSource`); **mới**:
+    `ChatPanel` (thay `AskPanel`), `ChatTurnBubble` (một lượt, một `useAskStream`),
+    `answerMode.ts` (map mode wire-string → nhãn tiếng Việt, key string thuần).
+  - `web/src/pages/QaPage.tsx`, `web/src/pages/QaPage.test.tsx` (+ test chat 2 lượt,
+    revoke lượt 2 không phá lượt 1, hủy giữa chừng, clear khi đổi org),
+    `web/e2e/qa.spec.ts` (4 spec cũ giữ hành vi tương đương qua layout chat + 1 spec chat
+    nhiều lượt mới, tổng suite E2E mock 25).
 - **Depends:** P2-04…07 + backend ACL. **Acceptance/tests:** `aria-live`; current source
   citation; multi-document citations; old/new amount example labels v1/v2 and delta;
   BA 10m vs design 15m warning then v2 resolved (**chưa làm** — xem gap ở trên);
   as-of/history/deep-link (**search only**, xem gap ở trên)/sequence/fallback/no-answer/
   revoke tests đã có (`askStream.test.ts` + `QaPage.test.tsx` + `qa.spec.ts`).
-  switch-mid-answer: **chưa có test riêng cho `AskPanel`** — `useAskStream` đi qua
-  `useScopeSafeSse` (P2-06) như mọi live source khác nên được kế thừa cùng bảo đảm
-  (abort-on-scope-change), nhưng bảo đảm đó chỉ được kiểm chứng trực tiếp ở
-  `hooks/useScopeSafeSse.test.tsx` (generic), không phải một kịch bản org-switch cụ thể
-  gắn với `AskPanel`/`QaPage` — ghi nhận là gap còn lại, không tự nhận đã test.
-- **Security:** Sanitized Markdown/server route IDs. **Out:** intelligence/conversation memory.
+  switch-mid-answer: **đã đóng** — `QaPage.test.tsx` nay có một kịch bản org-switch cụ thể
+  gắn với `ChatPanel` (hỏi 1 lượt, `manager.setScope` sang org khác, xác nhận lịch sử về
+  rỗng và composer hết "busy"), bên cạnh bảo đảm chung ở `hooks/useScopeSafeSse.test.tsx`.
+  Chat-specific: 2 lượt liên tiếp giữ history độc lập, `citation_revoked` ở lượt 2 không
+  phá lượt 1 (cả unit lẫn e2e), hủy giữa chừng giữ nguyên phần trả lời đã có kèm thông báo
+  "Đã hủy" thay vì xoá trắng.
+- **Security:** Sanitized Markdown/server route IDs. **Out:** intelligence/conversation
+  memory (server vẫn đơn lượt; history chat là UI-only, không gửi lên server, không
+  persist).
 
 ## P2-11 — Member/role admin
 
