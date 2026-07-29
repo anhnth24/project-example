@@ -24,6 +24,8 @@ const BUSINESS_TABLES: &[&str] = &[
     "org_invites",
     "collections",
     "projects",
+    "qa_chat_sessions",
+    "qa_chat_turns",
     "collection_user_access",
     "collection_group_access",
     "collection_role_access",

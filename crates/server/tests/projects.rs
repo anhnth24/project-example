@@ -924,3 +924,368 @@ async fn ask_project_filter_narrows_grounded_answer_scope() {
 
     ephemeral.drop().await;
 }
+
+// ---------------------------------------------------------------------
+// P2-19 — multi-project `projectIds[]` filter (union), deprecated
+// `projectId` kept working, both fields together, bounds, empty array.
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL"]
+async fn search_project_ids_filter_unions_multiple_projects() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    // See `search_project_filter_returns_exactly_that_projects_documents`'s
+    // comment: a real Qdrant is required for /search to get past its
+    // `vector_index()` availability check at all.
+    let Some(qdrant_url) = common::take_live(
+        std::env::var("MARKHAND_TEST_QDRANT_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty()),
+        "MARKHAND_TEST_QDRANT_URL",
+    ) else {
+        return;
+    };
+    let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
+    let app = fileconv_server::http::router(
+        common::build_app_state(pool.clone(), &ephemeral.app_url, None)
+            .with_retrieval_backends(qdrant, None),
+    );
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (ctx, token) = seed_caller(&pool, org, user, "search-projectids@projects-it.test").await;
+
+    // Three projects, one collection each, one uniquely-keyworded document
+    // each. Gamma stays unassigned — "all projects" territory.
+    let collection_alpha = seed_collection(&pool, &ctx, "PIDs Alpha Collection").await;
+    let collection_beta = seed_collection(&pool, &ctx, "PIDs Beta Collection").await;
+    let collection_gamma = seed_collection(&pool, &ctx, "PIDs Gamma Collection").await;
+    seed_indexed_document(
+        &pool,
+        &ctx,
+        collection_alpha,
+        "# PIDs Alpha\n\npidskeywordalpha xuất hiện duy nhất ở đây.",
+    )
+    .await;
+    seed_indexed_document(
+        &pool,
+        &ctx,
+        collection_beta,
+        "# PIDs Beta\n\npidskeywordbeta xuất hiện duy nhất ở đây.",
+    )
+    .await;
+    seed_indexed_document(
+        &pool,
+        &ctx,
+        collection_gamma,
+        "# PIDs Gamma\n\npidskeywordgamma xuất hiện duy nhất ở đây.",
+    )
+    .await;
+
+    let (status, project_alpha) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "PIDs Project Alpha" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project_alpha}");
+    let project_alpha_id = project_alpha["id"].as_str().unwrap().to_string();
+    let (status, project_beta) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "PIDs Project Beta" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project_beta}");
+    let project_beta_id = project_beta["id"].as_str().unwrap().to_string();
+
+    let (status, assigned) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/collections/{collection_alpha}/assign-project"),
+        Some(&token),
+        Some(json!({ "projectId": project_alpha_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    let (status, assigned) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/collections/{collection_beta}/assign-project"),
+        Some(&token),
+        Some(json!({ "projectId": project_beta_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+
+    // projectIds: [alpha, beta] must surface both Alpha's and Beta's
+    // documents but never Gamma's (unassigned, outside the union).
+    for (keyword, expect_hit) in [
+        ("pidskeywordalpha", true),
+        ("pidskeywordbeta", true),
+        ("pidskeywordgamma", false),
+    ] {
+        let (status, result) = send(
+            &app,
+            "POST",
+            "/api/v1/search",
+            Some(&token),
+            Some(json!({
+                "query": keyword,
+                "projectIds": [project_alpha_id, project_beta_id],
+                "limit": 10
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        let hit_count = result["hits"].as_array().unwrap().len();
+        if expect_hit {
+            assert!(
+                hit_count > 0,
+                "projectIds union must surface '{keyword}': {result}"
+            );
+        } else {
+            assert_eq!(
+                hit_count, 0,
+                "projectIds union must not surface Gamma's '{keyword}': {result}"
+            );
+        }
+    }
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL"]
+async fn search_project_id_and_project_ids_given_together_union() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let Some(qdrant_url) = common::take_live(
+        std::env::var("MARKHAND_TEST_QDRANT_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty()),
+        "MARKHAND_TEST_QDRANT_URL",
+    ) else {
+        return;
+    };
+    let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
+    let app = fileconv_server::http::router(
+        common::build_app_state(pool.clone(), &ephemeral.app_url, None)
+            .with_retrieval_backends(qdrant, None),
+    );
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (ctx, token) = seed_caller(&pool, org, user, "search-both-fields@projects-it.test").await;
+
+    let collection_alpha = seed_collection(&pool, &ctx, "Both Alpha Collection").await;
+    let collection_beta = seed_collection(&pool, &ctx, "Both Beta Collection").await;
+    seed_indexed_document(
+        &pool,
+        &ctx,
+        collection_alpha,
+        "# Both Alpha\n\nbothkeywordalpha xuất hiện duy nhất ở đây.",
+    )
+    .await;
+    seed_indexed_document(
+        &pool,
+        &ctx,
+        collection_beta,
+        "# Both Beta\n\nbothkeywordbeta xuất hiện duy nhất ở đây.",
+    )
+    .await;
+
+    let (status, project_alpha) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "Both Project Alpha" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project_alpha}");
+    let project_alpha_id = project_alpha["id"].as_str().unwrap().to_string();
+    let (status, project_beta) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "Both Project Beta" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project_beta}");
+    let project_beta_id = project_beta["id"].as_str().unwrap().to_string();
+
+    let (status, assigned) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/collections/{collection_alpha}/assign-project"),
+        Some(&token),
+        Some(json!({ "projectId": project_alpha_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    let (status, assigned) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/collections/{collection_beta}/assign-project"),
+        Some(&token),
+        Some(json!({ "projectId": project_beta_id })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+
+    // projectId: alpha (deprecated singular) + projectIds: [beta] together
+    // must union to both — neither field alone would find the other's doc.
+    let (status, result) = send(
+        &app,
+        "POST",
+        "/api/v1/search",
+        Some(&token),
+        Some(json!({
+            "query": "bothkeywordbeta",
+            "projectId": project_alpha_id,
+            "projectIds": [project_beta_id],
+            "limit": 10
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert!(
+        !result["hits"].as_array().unwrap().is_empty(),
+        "projectId + projectIds together must union, finding Beta's doc: {result}"
+    );
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn search_and_ask_404_for_unknown_project_id_in_array() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (_ctx, token) = seed_caller(&pool, org, user, "ghost-scope-array@projects-it.test").await;
+
+    // One real project alongside one that never existed — a single bad id
+    // anywhere in the array must 404 the whole request, same as the
+    // singular `projectId` contract.
+    let (status, real_project) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "Real Project For Ghost Array" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{real_project}");
+    let real_project_id = real_project["id"].as_str().unwrap().to_string();
+    let ghost = Uuid::new_v4();
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/search",
+        Some(&token),
+        Some(json!({
+            "query": "anything",
+            "projectIds": [real_project_id, ghost.to_string()]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/ask",
+        Some(&token),
+        Some(json!({
+            "question": "anything?",
+            "projectIds": [ghost.to_string()]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn search_project_ids_rejects_more_than_twenty() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (_ctx, token) = seed_caller(&pool, org, user, "too-many-projectids@projects-it.test").await;
+
+    let ids: Vec<String> = (0..21).map(|_| Uuid::new_v4().to_string()).collect();
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/search",
+        Some(&token),
+        Some(json!({ "query": "anything", "projectIds": ids })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "validation_failed");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn search_empty_project_ids_array_behaves_like_absent() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    // No Qdrant wired here on purpose: both "no project fields at all" and
+    // "projectIds: []" must resolve their (non-existent) project scope
+    // identically and fall through to the *next* check in routes::search
+    // (vector_index availability, 503 without a real backend) rather than
+    // 404 — proving an empty array is never mistaken for an unknown id.
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (_ctx, token) = seed_caller(&pool, org, user, "empty-projectids@projects-it.test").await;
+
+    let (status_absent, body_absent) = send(
+        &app,
+        "POST",
+        "/api/v1/search",
+        Some(&token),
+        Some(json!({ "query": "anything" })),
+    )
+    .await;
+    let (status_empty, body_empty) = send(
+        &app,
+        "POST",
+        "/api/v1/search",
+        Some(&token),
+        Some(json!({ "query": "anything", "projectIds": [] })),
+    )
+    .await;
+    assert_eq!(
+        status_absent,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "{body_absent}"
+    );
+    assert_eq!(
+        status_empty, status_absent,
+        "projectIds: [] must resolve identically to omitting it: {body_empty}"
+    );
+
+    ephemeral.drop().await;
+}

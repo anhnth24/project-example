@@ -1,11 +1,13 @@
-//! Tenant-scoped project repository (P2-18).
+//! Tenant-scoped project repository (P2-18; multi-project `projectIds[]`
+//! added P2-19).
 //!
 //! `resolve_project_scope` below is the one entry point `routes::search` and
-//! `routes::ask`/`routes::ask::ask_stream_route` both call to turn an
-//! optional `projectId` request field into a collection-id filter — see
-//! those modules' own docs for why this deliberately feeds the *existing*
-//! `collectionIds`/`resolve_scope` retrieval mechanism instead of adding a
-//! parallel one.
+//! `routes::ask`/`routes::ask::ask_stream_route` both call to turn the
+//! caller's project scope (the deprecated singular `projectId` and/or the
+//! `projectIds[]` array, merged by [`merge_project_ids`]) into a
+//! collection-id filter — see those modules' own docs for why this
+//! deliberately feeds the *existing* `collectionIds`/`resolve_scope`
+//! retrieval mechanism instead of adding a parallel one.
 //!
 //! A project is a named, org-scoped folder of collections
 //! (migrations/0032) — see `db::collections::assign_project` for the
@@ -119,48 +121,78 @@ pub async fn collection_ids_for_project(
     Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
-/// Resolves an optional `projectId` request field into an optional
-/// collection-id filter, ready to hand to `services::retrieval`'s existing
-/// `RetrievalRequest.collection_ids` (which already intersects whatever it
-/// is given against `OrgContext::allowed_collection_ids()` — see
+/// Bound on the number of `projectIds` accepted per request (P2-19) — the
+/// route layer rejects a longer array with 400 via [`merge_project_ids`]
+/// before [`resolve_project_scope`] ever runs (and therefore before any
+/// database round trip).
+pub const MAX_PROJECT_IDS: usize = 20;
+
+/// Pure, DB-free merge of the deprecated singular `projectId` and the new
+/// `projectIds[]` request fields (P2-19) into one bounded id list ready for
+/// [`resolve_project_scope`]. `routes::search`/`routes::ask` both call this
+/// before touching the database so the 400 (too many ids) never costs a
+/// round trip. Order/duplicates in the result are irrelevant —
+/// `resolve_project_scope` de-duplicates into a `BTreeSet` internally.
+pub fn merge_project_ids(
+    project_id: Option<Uuid>,
+    project_ids: Option<Vec<Uuid>>,
+) -> Result<Vec<Uuid>, &'static str> {
+    let many = project_ids.unwrap_or_default();
+    if many.len() > MAX_PROJECT_IDS {
+        return Err("Too many projectIds");
+    }
+    let mut merged: Vec<Uuid> = project_id.into_iter().collect();
+    merged.extend(many);
+    Ok(merged)
+}
+
+/// Resolves zero, one, or many project ids (already merged by
+/// [`merge_project_ids`]) into an optional collection-id filter, ready to
+/// hand to `services::retrieval`'s existing `RetrievalRequest.collection_ids`
+/// (which already intersects whatever it is given against
+/// `OrgContext::allowed_collection_ids()` — see
 /// `services::retrieval::resolve_scope`, unchanged by this feature).
 ///
-/// - `project_id: None` ("all projects") returns `Ok(requested)` unchanged —
-///   byte-for-byte today's behavior when no project filter is requested.
-/// - `project_id: Some(id)` that does not resolve to a real project in
+/// - `project_ids: []` ("all projects" — true whether the caller sent
+///   neither field, an empty `projectIds`, or both empty/absent) returns
+///   `Ok(requested)` unchanged — byte-for-byte today's behavior when no
+///   project filter is requested.
+/// - Any id in `project_ids` that does not resolve to a real project in
 ///   `ctx.org_id()` (never created, or belongs to another org — RLS makes
 ///   the two indistinguishable, which is the point) returns
 ///   `Err(DbError::NotFound)`; callers map this straight to a 404, same
-///   "no existence oracle" precedent `routes::orgs::get_org` documents.
-/// - `project_id: Some(id)` that does resolve returns the intersection of
-///   the project's collection ids with `requested` (or just the project's
-///   collection ids when `requested` is `None`) — narrowing, never widening,
-///   whatever scope the request already specified.
+///   "no existence oracle" precedent `routes::orgs::get_org` documents. This
+///   applies to every id in the array, not just a first/only one — one bad
+///   id anywhere in `projectIds` 404s the whole request, matching the
+///   single-`projectId` contract's semantics id-for-id.
+/// - When every id resolves, the result is the *union* of every named
+///   project's collection ids, intersected with `requested` (or returned
+///   as-is when `requested` is `None`) — still narrowing, never widening,
+///   whatever scope the request already specified. `projectId` and
+///   `projectIds` given together are unioned the same way (P2-19): they are
+///   just two sources feeding the same id list by the time this runs.
 pub async fn resolve_project_scope(
     pool: &Pool,
     ctx: &OrgContext,
-    project_id: Option<Uuid>,
+    project_ids: &[Uuid],
     requested: Option<BTreeSet<Uuid>>,
 ) -> Result<Option<BTreeSet<Uuid>>, DbError> {
-    let Some(project_id) = project_id else {
+    if project_ids.is_empty() {
         return Ok(requested);
-    };
+    }
+    let ids: BTreeSet<Uuid> = project_ids.iter().copied().collect();
     with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
-                get_by_id(txn, &ctx, project_id).await?;
-                let project_collections: BTreeSet<Uuid> =
-                    collection_ids_for_project(txn, &ctx, project_id)
-                        .await?
-                        .into_iter()
-                        .collect();
+                let mut union: BTreeSet<Uuid> = BTreeSet::new();
+                for project_id in &ids {
+                    get_by_id(txn, &ctx, *project_id).await?;
+                    union.extend(collection_ids_for_project(txn, &ctx, *project_id).await?);
+                }
                 Ok(match requested {
-                    Some(requested) => requested
-                        .intersection(&project_collections)
-                        .copied()
-                        .collect(),
-                    None => project_collections,
+                    Some(requested) => requested.intersection(&union).copied().collect(),
+                    None => union,
                 })
             })
         }
@@ -176,5 +208,45 @@ fn map_project(row: &Row) -> Project {
         name: row.get("name"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    #[test]
+    fn merge_absent_both_is_empty() {
+        assert_eq!(merge_project_ids(None, None).unwrap(), Vec::<Uuid>::new());
+    }
+
+    #[test]
+    fn merge_empty_array_same_as_absent() {
+        assert_eq!(
+            merge_project_ids(None, Some(Vec::new())).unwrap(),
+            Vec::<Uuid>::new()
+        );
+    }
+
+    #[test]
+    fn merge_unions_singular_and_array() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let c = Uuid::new_v4();
+        let merged = merge_project_ids(Some(a), Some(vec![b, c])).unwrap();
+        let set: BTreeSet<Uuid> = merged.into_iter().collect();
+        assert_eq!(set, BTreeSet::from([a, b, c]));
+    }
+
+    #[test]
+    fn merge_rejects_more_than_max() {
+        let ids: Vec<Uuid> = (0..(MAX_PROJECT_IDS + 1)).map(|_| Uuid::new_v4()).collect();
+        assert!(merge_project_ids(None, Some(ids)).is_err());
+    }
+
+    #[test]
+    fn merge_accepts_exactly_max() {
+        let ids: Vec<Uuid> = (0..MAX_PROJECT_IDS).map(|_| Uuid::new_v4()).collect();
+        assert!(merge_project_ids(None, Some(ids)).is_ok());
     }
 }

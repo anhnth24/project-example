@@ -1471,6 +1471,158 @@ paths:
           $ref: "#/components/responses/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
+  /chat-sessions:
+    get:
+      operationId: listChatSessions
+      summary: List the caller's own Q&A chat sessions (P2-19)
+      description: >-
+        Private per-user history — never another user's sessions, even
+        within the same org (requires qa.query, same gate as /search, /ask).
+        Newest-active-first; cursor pagination, same convention as GET
+        /audit.
+      parameters:
+        - name: limit
+          in: query
+          description: Page size (server default 50, clamped to [1, 100]).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          description: Opaque pagination cursor from a previous page's nextCursor.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The caller's chat sessions, most recently active first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSessionPage"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    post:
+      operationId: createChatSession
+      summary: Create a chat session (P2-19)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChatSessionRequest"
+      responses:
+        "201":
+          description: Chat session created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /chat-sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/sessionId"
+    get:
+      operationId: getChatSession
+      summary: Chat session detail with its turns, ordered by seq (P2-19)
+      description: >-
+        404 for a session id that does not exist, belongs to another user
+        (even in the same org), or another org — no existence oracle, same
+        precedent GET /orgs/{orgId} documents.
+      responses:
+        "200":
+          description: Session detail plus every turn, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSessionDetail"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      operationId: updateChatSession
+      summary: Rename a chat session (P2-19)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateChatSessionRequest"
+      responses:
+        "200":
+          description: Chat session renamed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      operationId: deleteChatSession
+      summary: Hard-delete a chat session; turns cascade (P2-19)
+      responses:
+        "204":
+          description: Chat session (and its turns) deleted.
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+  /chat-sessions/{sessionId}/turns:
+    parameters:
+      - $ref: "#/components/parameters/sessionId"
+    post:
+      operationId: appendChatTurn
+      summary: Append a turn to a chat session (P2-19)
+      description: >-
+        Client writes this after its own /ask or /ask/stream response has
+        already completed and been rendered — seq is server-assigned as
+        max(seq)+1 within one transaction. Citations/warnings are stored as
+        opaque JSON (the exact pins/strings the client already displayed)
+        and are never re-validated/re-authorized here; the client
+        re-validates a citation for real via POST /citations/resolve when
+        the user clicks a deep-link out of history.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppendChatTurnRequest"
+      responses:
+        "201":
+          description: Turn appended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatTurn"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "403":
+          $ref: "#/components/responses/ApiError"
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 components:
   securitySchemes:
     bearerAuth:
@@ -1529,6 +1681,13 @@ components:
         format: uuid
     projectId:
       name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    sessionId:
+      name: sessionId
       in: path
       required: true
       schema:
@@ -1815,12 +1974,28 @@ components:
         projectId:
           type: string
           format: uuid
+          deprecated: true
           description: >
             P2-18 — optional project scope. Absent/null means "all projects":
             no additional filter beyond collectionIds (today's exact
             behavior). Narrows (never widens) whatever collectionIds already
             restricts; a projectId that does not resolve in the caller's org
-            is a 404.
+            is a 404. Deprecated (P2-19) in favor of projectIds, which
+            subsumes it; kept fully working since the web app still sends
+            it. Sending both unions them.
+        projectIds:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: uuid
+          description: >
+            P2-19 — optional multi-project scope. Resolves to the union of
+            every named project's collection ids, then narrows (never
+            widens) whatever collectionIds/projectId already restrict.
+            Absent or empty means "no filter from this field" (identical to
+            omitting it). Any id that does not resolve in the caller's org
+            is a 404, same as projectId. Bounded to 20 ids; more is a 400.
         mode:
           type: string
           enum: [current, as_of, compare, history]
@@ -1879,12 +2054,28 @@ components:
         projectId:
           type: string
           format: uuid
+          deprecated: true
           description: >
             P2-18 — optional project scope. Absent/null means "all projects":
             no additional filter beyond collectionIds (today's exact
             behavior). Narrows (never widens) whatever collectionIds already
             restricts; a projectId that does not resolve in the caller's org
-            is a 404.
+            is a 404. Deprecated (P2-19) in favor of projectIds, which
+            subsumes it; kept fully working since the web app still sends
+            it. Sending both unions them.
+        projectIds:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: uuid
+          description: >
+            P2-19 — optional multi-project scope. Resolves to the union of
+            every named project's collection ids, then narrows (never
+            widens) whatever collectionIds/projectId already restrict.
+            Absent or empty means "no filter from this field" (identical to
+            omitting it). Any id that does not resolve in the caller's org
+            is a 404, same as projectId. Bounded to 20 ids; more is a 400.
         mode:
           type: string
           enum: [current, as_of, compare, history]
@@ -2446,3 +2637,131 @@ components:
             $ref: "#/components/schemas/GraphCommunity"
         requestId:
           type: string
+    ChatSession:
+      type: object
+      required: [id, title, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ChatSessionPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatSession"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    ChatTurn:
+      type: object
+      required:
+        - id
+        - seq
+        - question
+        - answer
+        - answerMode
+        - citations
+        - warnings
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+        question:
+          type: string
+        answer:
+          type: string
+        answerMode:
+          type: string
+          enum:
+            - offline_extractive
+            - fallback_extractive
+            - local_llm
+            - cloud_llm
+            - subscription_cli
+            - llm_unverified
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationPin"
+          description: >
+            Stored verbatim from AppendChatTurnRequest — never re-validated
+            server-side on read; see routes::chat_sessions module doc.
+        warnings:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+    ChatSessionDetail:
+      type: object
+      required: [id, title, createdAt, updatedAt, turns]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        turns:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatTurn"
+          description: Ordered by seq ascending (oldest first).
+    CreateChatSessionRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+    UpdateChatSessionRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+    AppendChatTurnRequest:
+      type: object
+      required: [question, answer, answerMode]
+      properties:
+        question:
+          type: string
+        answer:
+          type: string
+        answerMode:
+          type: string
+          enum:
+            - offline_extractive
+            - fallback_extractive
+            - local_llm
+            - cloud_llm
+            - subscription_cli
+            - llm_unverified
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CitationPin"
+          description: Defaults to [] when omitted. Stored opaque, not re-validated.
+        warnings:
+          type: array
+          items:
+            type: string
+          description: Defaults to [] when omitted.

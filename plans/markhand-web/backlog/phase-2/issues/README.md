@@ -5,7 +5,7 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 <!-- roadmap-default-status: backlog -->
 
 **Trạng thái tổng quan (cập nhật 2026-07-29).** MVP xây trên mock server đã merge vào
-`master`: **13/18 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
+`master`: **13/19 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
 + serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
 xem chi tiết bên dưới), P2-15 (E2E — nửa mock-based xong, nay có thêm flow ask→citation
 của P2-10; nửa real-deployment hoãn), **P2-17** (Document graph — owner request mới
@@ -479,3 +479,60 @@ P2-15 + Phase 1C gate → P2-16
 
 Phase 2 chỉ đóng khi P2-16 đạt trên backend deploy thật và Phase 1C denial/security
 gate đã pass; mock E2E không thay thế integration.
+
+## P2-19 — Chat history (private per-user) + multi-project `projectIds[]`
+
+- **Status:** In progress — owner yêu cầu mới 2026-07-29. Backend-only vòng này (server
+  API + OpenAPI + tests); web UI đọc/hiện lịch sử chat và multi-select phạm vi dự án
+  trong composer là việc của vòng sau, chưa làm ở đây.
+  **(1) `projectIds: string[]`** trên `SearchRequest`/`AskRequest` (ask-stream dùng
+  chung `AskRequest`): hợp (union) collection ids của mọi project trong mảng, giao với
+  ACL/`collectionIds` như `projectId` đơn (P2-18) đã làm — không có đường retrieval
+  mới. `projectId` đơn deprecated nhưng giữ hoạt động nguyên trạng (web hiện dùng nó);
+  gửi cả hai field cùng lúc thì hợp cả hai. Bất kỳ id nào không tồn tại/khác org → 404
+  (đồng nhất semantics với đơn). Bounded tối đa 20 ids, quá → 400 (kiểm tra thuần, không
+  round-trip DB). Mảng rỗng/absent = như không truyền.
+  **(2) Chat history riêng tư per-user**: bảng mới `qa_chat_sessions` (id, org_id,
+  user_id, title bounded ≤200, created_at, updated_at) + `qa_chat_turns` (id, session_id
+  FK cascade, org_id, seq, question bounded ≤8192, answer, answer_mode, citations jsonb,
+  warnings jsonb, created_at; UNIQUE(session_id, seq)) — RLS org-scoped như các bảng
+  khác, cộng `user_id = caller` trên mọi query (không có endpoint xem chat người khác,
+  kể cả cùng org — 404 đồng nhất, cùng khuôn `ask_stream_sessions`/P1B-R05 đã lập).
+  `GET/POST /chat-sessions`, `GET/PATCH/DELETE /chat-sessions/{id}`,
+  `POST /chat-sessions/{id}/turns` (client ghi sau khi stream/JSON `/ask` đã hiển thị
+  xong; seq server cấp = max+1 trong transaction, khoá `FOR UPDATE` trên session để hai
+  lần append đồng thời không đụng seq). Cùng permission `qa.query` với `/search`/`/ask`
+  (cùng surface Q&A, không thêm permission mới). Citations/warnings lưu jsonb nguyên vẹn
+  từ client, KHÔNG re-validate khi đọc lại (client tự re-validate qua
+  `POST /citations/resolve` khi thật sự click deep-link) — trade-off ghi rõ trong doc
+  comment route. Chỉ audit metadata-only `chat_session.create`/`chat_session.delete`
+  (never nội dung câu hỏi/trả lời/tiêu đề); rename và append-turn không audit.
+  **(3) Page number cho CitationPin — điều tra, không cần code mới**: đã tồn tại đầy đủ
+  từ trước (không phải P2-19): `pdf-inspector` chèn marker `<!-- Page N -->` mỗi trang
+  (`crates/core/src/conv/pdf.rs`), `chunking.rs::prepare_chunks` gọi
+  `fileconv_core::intelligence::page_before` để suy trang mỗi chunk, lưu cột
+  `chunks.page`, và `CitationPin.page: Option<u32>` (đã serialize `page` — không phải
+  tên `pageNumber` — trong OpenAPI/response) đã điền từ đó. Không thêm field trùng lặp.
+
+- **Plan/files:** `crates/server/migrations/0034_expand_qa_chat_history.sql`;
+  `db/chat_sessions.rs`, `routes/chat_sessions.rs`; `db/projects.rs` (`merge_project_ids`/
+  `resolve_project_scope` đa id), `routes/search.rs`/`routes/ask.rs` (`projectIds`);
+  `services/audit.rs` (`ChatSessionCreate`/`ChatSessionDelete` + `AuditResource::ChatSession`
+  allowlist); `db/models.rs`/`tests/schema_migrations.rs` drift guard; OpenAPI path/schemas
+  (`ChatSession`/`ChatSessionPage`/`ChatSessionDetail`/`ChatTurn`/
+  `CreateChatSessionRequest`/`UpdateChatSessionRequest`/`AppendChatTurnRequest`,
+  `SearchRequest`/`AskRequest` mở rộng `projectIds`) + `ROUTE_INVENTORY`/
+  `BODY_TAKING_OPERATIONS`; `web/src/mocks/spec/{openApiSpec,yaml}.test.ts` pin-count
+  49→56 + `contract.ts` regen.
+- **Depends:** P2-18 (`db::projects`/`resolve_project_scope`, `routes::search`/
+  `routes::ask` project filter), backend 1B ask/search + citation pins.
+- **Acceptance/tests:** `tests/projects.rs` DB-gated thêm (union 2 project đúng tài
+  liệu, 1 id lạ trong mảng → 404, cả `projectId`+`projectIds` cùng lúc → hợp, mảng rỗng
+  = như không truyền, >20 ids → 400) + unit test thuần cho `merge_project_ids`;
+  `tests/chat_history.rs` DB-gated (CRUD + append seq đúng thứ tự + cursor pagination +
+  user B không thấy/mở/xóa được session user A cùng org (404) + org isolation +
+  citations jsonb round-trip + title/question bounds 400).
+- **Security:** `qa.query` (không thêm permission mới); RLS org-scoped + lọc `user_id`
+  ứng dụng cho `qa_chat_*`, cùng khuôn `ask_stream_sessions`. **Out:** web UI lịch sử
+  chat + multi-select dropdown phạm vi dự án (vòng sau), share/team chat history, xóa
+  dự án (đã out ở P2-18), `pageNumber` field riêng (đã có `page`, xem mục 3).

@@ -495,6 +495,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::audit::router())
         .merge(routes::search::router())
         .merge(routes::ask::router())
+        .merge(routes::chat_sessions::router())
         .merge(routes::events::router())
         .merge(routes::graph::router())
         .route("/api/v1/openapi.yaml", axum::routing::get(openapi_yaml));

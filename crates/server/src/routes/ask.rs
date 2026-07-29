@@ -44,8 +44,14 @@ struct AskBody {
     collection_ids: Option<Vec<Uuid>>,
     /// P2-18 — see `routes::search::SearchBody::project_id`'s doc; identical
     /// contract, shared resolver (`db::projects::resolve_project_scope`).
+    /// Deprecated (P2-19): kept working as-is; prefer `project_ids` below.
     #[serde(default)]
     project_id: Option<Uuid>,
+    /// P2-19 — see `routes::search::SearchBody::project_ids`'s doc; identical
+    /// contract (union, bounded, 404 on any unknown id, unions with
+    /// `projectId` when both are given), shared merge/resolve helpers.
+    #[serde(default)]
+    project_ids: Option<Vec<Uuid>>,
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -188,18 +194,21 @@ async fn ask_stream_route(
         }
         let mode = parse_mode(&body)
             .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
+        // P2-19 — merge/bound before any database round trip.
+        let project_ids = projects::merge_project_ids(body.project_id, body.project_ids)
+            .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
         let question_chars = body.question.len();
         let collection_ids = body
             .collection_ids
             .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
-        // P2-18 — same narrow-never-widen project scope as routes::search /
-        // ask_json's run_ask above. Resolved before the `vector_index`
-        // availability check right below — see that check's own comment in
-        // routes::search for why.
+        // P2-18/P2-19 — same narrow-never-widen union project scope as
+        // routes::search / ask_json's run_ask above. Resolved before the
+        // `vector_index` availability check right below — see that check's
+        // own comment in routes::search for why.
         let collection_ids = projects::resolve_project_scope(
             state.pool(),
             &auth.context,
-            body.project_id,
+            &project_ids,
             collection_ids,
         )
         .await
@@ -318,24 +327,23 @@ async fn run_ask(
     }
     let mode = parse_mode(&body)
         .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
+    // P2-19 — merge/bound before any database round trip.
+    let project_ids = projects::merge_project_ids(body.project_id, body.project_ids)
+        .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
     let question_chars = body.question.len();
     let collection_ids = body
         .collection_ids
         .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
-    // P2-18 — same narrow-never-widen project scope as routes::search.
-    // Resolved before the `vector_index` availability check right below —
-    // see that check's own comment in routes::search for why.
-    let collection_ids = projects::resolve_project_scope(
-        state.pool(),
-        &auth.context,
-        body.project_id,
-        collection_ids,
-    )
-    .await
-    .map_err(|error| match error {
-        DbError::NotFound => RouteError::ProjectNotFound(auth.request_id.clone()),
-        _ => RouteError::Database(auth.request_id.clone()),
-    })?;
+    // P2-18/P2-19 — same narrow-never-widen union project scope as
+    // routes::search. Resolved before the `vector_index` availability check
+    // right below — see that check's own comment in routes::search for why.
+    let collection_ids =
+        projects::resolve_project_scope(state.pool(), &auth.context, &project_ids, collection_ids)
+            .await
+            .map_err(|error| match error {
+                DbError::NotFound => RouteError::ProjectNotFound(auth.request_id.clone()),
+                _ => RouteError::Database(auth.request_id.clone()),
+            })?;
     let vector_index = state
         .vector_index()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;

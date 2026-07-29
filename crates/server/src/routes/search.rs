@@ -42,8 +42,22 @@ struct SearchBody {
     /// `collectionIds` (if both are given) before being handed to the
     /// existing `resolve_scope`/ACL-intersection retrieval path — no new
     /// retrieval mechanism, see `routes::search`/`routes::ask` module notes.
+    ///
+    /// Deprecated (P2-19): kept working exactly as-is (the web app still
+    /// sends it) — prefer `projectIds` below, which subsumes it. Sending
+    /// both unions them (`db::projects::merge_project_ids`).
     #[serde(default)]
     project_id: Option<Uuid>,
+    /// P2-19 — union of project scopes. Same narrow-never-widen contract as
+    /// `projectId` above, generalized to many ids: resolves to the *union*
+    /// of every named project's collection ids, intersected with
+    /// `collectionIds`. Any unresolvable id (wrong org, never created) 404s
+    /// the whole request — consistent with the singular field. Bounded to
+    /// `db::projects::MAX_PROJECT_IDS`; a longer array is a 400. An absent
+    /// or empty array is "no filter from this field", identical to omitting
+    /// `projectId` — it only narrows scope when non-empty.
+    #[serde(default)]
+    project_ids: Option<Vec<Uuid>>,
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -137,26 +151,28 @@ async fn search(
     }
     let mode = parse_mode(&body)
         .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
+    // P2-19 — merge/bound before any database round trip; a too-long
+    // `projectIds` array is a plain 400, same class of check as `parse_mode`
+    // just above.
+    let project_ids = projects::merge_project_ids(body.project_id, body.project_ids)
+        .map_err(|message| RouteError::Validation(auth.request_id.clone(), message))?;
     let collection_ids = body
         .collection_ids
         .map(|ids| ids.into_iter().collect::<BTreeSet<_>>());
-    // P2-18 — narrow (never widen) the requested collection scope to the
-    // project's collections, still ANDed with the caller's ACL by the
-    // existing `resolve_scope` inside `hybrid_search` below. Resolved before
-    // the `vector_index` availability check right below: an unknown
-    // `projectId` is a client input error independent of retrieval backend
-    // health, so it must 404 even when the vector store is unavailable.
-    let collection_ids = projects::resolve_project_scope(
-        state.pool(),
-        &auth.context,
-        body.project_id,
-        collection_ids,
-    )
-    .await
-    .map_err(|error| match error {
-        DbError::NotFound => RouteError::NotFound(auth.request_id.clone()),
-        _ => RouteError::Database(auth.request_id.clone()),
-    })?;
+    // P2-18/P2-19 — narrow (never widen) the requested collection scope to
+    // the union of the named projects' collections, still ANDed with the
+    // caller's ACL by the existing `resolve_scope` inside `hybrid_search`
+    // below. Resolved before the `vector_index` availability check right
+    // below: an unknown project id is a client input error independent of
+    // retrieval backend health, so it must 404 even when the vector store is
+    // unavailable.
+    let collection_ids =
+        projects::resolve_project_scope(state.pool(), &auth.context, &project_ids, collection_ids)
+            .await
+            .map_err(|error| match error {
+                DbError::NotFound => RouteError::NotFound(auth.request_id.clone()),
+                _ => RouteError::Database(auth.request_id.clone()),
+            })?;
     let vector_index = state
         .vector_index()
         .ok_or_else(|| RouteError::Unavailable(auth.request_id.clone()))?;
