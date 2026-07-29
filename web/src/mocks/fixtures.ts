@@ -19,6 +19,7 @@ type OrgRole = Org['role'];
 type OrgState = Membership['state'];
 type UsageEntry = components['schemas']['UsageEntry'];
 type Project = components['schemas']['Project'];
+type CitationPin = components['schemas']['CitationPin'];
 
 export interface MockUser {
   userId: string;
@@ -108,6 +109,52 @@ export interface OrgProfile {
   allowedCollectionIds: string[];
 }
 
+/**
+ * P2-19 — one stored Q&A turn inside a chat session. Mirrors
+ * `db::chat_sessions::ChatTurn`'s wire fields exactly; `citations`/`warnings`
+ * are stored (and returned) opaque/verbatim, same "never re-validated on
+ * read" contract `routes::chat_sessions`'s module doc documents — this mock
+ * does not re-check a citation's hash/span/ACL any more than the real server
+ * does.
+ */
+export interface ChatTurnRecord {
+  id: string;
+  seq: number;
+  question: string;
+  answer: string;
+  answerMode: string;
+  citations: CitationPin[];
+  warnings: string[];
+  createdAt: string;
+}
+
+/**
+ * P2-19 — a private, per-user chat session. Scoped by BOTH `orgId` and
+ * `userId` (never just one) — mirrors the real `qa_chat_sessions` table's
+ * "RLS org isolation + `user_id = caller` application filter" so a session
+ * belonging to another user in the *same* org is exactly as invisible as one
+ * in a different org (`handlers/chatSessions.ts`'s own doc has the full
+ * rationale, same as `crates/server/src/db/chat_sessions.rs`'s).
+ */
+export interface ChatSessionRecord {
+  id: string;
+  orgId: string;
+  userId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  /**
+   * Monotonic "most recently active" rank, bumped on create/rename/append-
+   * turn. Every timestamp this fixture set hands out is deterministic
+   * (`mockTimestamp`), so two sessions/mutations can easily land on the same
+   * instant — this counter is what actually breaks ties for
+   * `listChatSessions`'s "most recently active first" ordering, the same
+   * role `nextId()`'s counter plays for id uniqueness.
+   */
+  activityRank: number;
+  turns: ChatTurnRecord[];
+}
+
 interface Store {
   users: MockUser[];
   refreshTokens: Map<string, { userId: string; orgId: string }>; // refreshToken -> {userId, orgId}
@@ -144,6 +191,14 @@ interface Store {
   orgProfiles: Map<string, OrgProfile>;
   /** orgId -> `GET /usage` snapshot (E8), read through `getOrgUsage()`. */
   usageByOrg: Map<string, UsageEntry[]>;
+  /**
+   * P2-19 — chat history, keyed by `chatSessionKey(orgId, userId)` (never by
+   * `orgId` alone — see `ChatSessionRecord`'s own doc). Read/written through
+   * `getUserChatSessions()`/`findUserChatSession()`, same auto-vivifying
+   * "always an array to push/splice against" convention `membershipsByOrg`
+   * already established.
+   */
+  chatSessionsByOrgUser: Map<string, ChatSessionRecord[]>;
 }
 
 const DEMO_USER: MockUser = {
@@ -575,6 +630,144 @@ function seedQaCompareDocument(
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// P2-19 — private per-user chat history seed. Self-contained (own citation
+// literals below, not derived from `mocks/handlers/qa.ts`'s live passage
+// catalog — that module already imports from this one, so the reverse import
+// would be circular), same "own fixed data, not derived from the spec"
+// convention every other seed function in this file follows. Two sessions for
+// the demo user in org A: one with a single-document citation, one with a
+// second turn citing two different documents (so the footnote UI's "Tổng hợp
+// từ N tài liệu" note and a `page`-bearing citation both have something real
+// to render in tests/demo without waiting on a live `/ask/stream` round trip).
+// ---------------------------------------------------------------------------
+
+export const DEMO_CHAT_SESSION_ROADMAP_ID = mockUuid(9300);
+export const DEMO_CHAT_SESSION_ONBOARDING_ID = mockUuid(9301);
+
+function chatSessionKey(orgId: string, userId: string): string {
+  return `${orgId} ${userId}`;
+}
+
+function seedCitation(
+  citeId: string,
+  documentId: string,
+  versionId: string,
+  collectionId: string,
+  quote: string,
+  page?: number,
+): CitationPin {
+  return {
+    citeId,
+    logicalDocumentId: documentId,
+    versionId,
+    collectionId,
+    sourceContentSha256: `src-${versionId}`,
+    canonicalMarkdownSha256: `md-${versionId}`,
+    quoteSha256: `quote-${versionId}`,
+    chunkIdentitySha256: `chunk-${versionId}`,
+    quote,
+    sourceSpanStart: 0,
+    sourceSpanEnd: quote.length,
+    quoteLocalStart: 0,
+    quoteLocalEnd: quote.length,
+    page,
+    isCurrent: true,
+    anchor: `mhcite-1.${documentId.slice(-4)}`,
+  };
+}
+
+function seedChatSessions(): Map<string, ChatSessionRecord[]> {
+  const roadmapCitation = seedCitation(
+    'CITE-0001',
+    mockUuid(110),
+    mockUuid(1100),
+    mockUuid(11),
+    'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+  );
+  const onboardingCitation = seedCitation(
+    'CITE-0001',
+    mockUuid(100),
+    mockUuid(1000),
+    mockUuid(10),
+    'Nhân viên mới cần hoàn thành khóa đào tạo hội nhập trong 30 ngày đầu tiên.',
+    3,
+  );
+  // A second, DIFFERENT document (not "Onboarding Guide.pdf" above) so the
+  // second turn's two citations exercise the footnote block's "Tổng hợp từ N
+  // tài liệu" note — reuses the already-seeded QA compare document (a real,
+  // `isCurrent` version, so its deep-link/preview genuinely resolves) rather
+  // than inventing a third document just for this.
+  const budgetCitation = seedCitation(
+    'CITE-0002',
+    QA_COMPARE_DOCUMENT_ID,
+    QA_COMPARE_VERSION_B_ID,
+    mockUuid(11),
+    'Ngân sách vận hành được điều chỉnh thành 15 triệu đồng mỗi quý theo thiết kế mới.',
+  );
+
+  const roadmapSession: ChatSessionRecord = {
+    id: DEMO_CHAT_SESSION_ROADMAP_ID,
+    orgId: ORG_A_ID,
+    userId: DEMO_USER.userId,
+    title: 'Lộ trình quý 3 tập trung vào việc gì?',
+    createdAt: mockTimestamp(200),
+    updatedAt: mockTimestamp(201),
+    activityRank: 2,
+    turns: [
+      {
+        id: mockUuid(9310),
+        seq: 1,
+        question: 'Lộ trình quý 3 tập trung vào việc gì?',
+        answer:
+          'Dựa trên tài liệu đã lập chỉ mục: Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục. [CITE-0001]',
+        answerMode: 'offline_extractive',
+        citations: [roadmapCitation],
+        warnings: [],
+        createdAt: mockTimestamp(200),
+      },
+    ],
+  };
+
+  const onboardingSession: ChatSessionRecord = {
+    id: DEMO_CHAT_SESSION_ONBOARDING_ID,
+    orgId: ORG_A_ID,
+    userId: DEMO_USER.userId,
+    title: 'Nhân viên mới cần hoàn thành gì trong 30 ngày đầu?',
+    createdAt: mockTimestamp(100),
+    updatedAt: mockTimestamp(103),
+    activityRank: 1,
+    turns: [
+      {
+        id: mockUuid(9320),
+        seq: 1,
+        question: 'Nhân viên mới cần hoàn thành gì trong 30 ngày đầu?',
+        answer:
+          'Dựa trên tài liệu đã lập chỉ mục: Nhân viên mới cần hoàn thành khóa đào tạo hội nhập trong 30 ngày đầu tiên. [CITE-0001]',
+        answerMode: 'offline_extractive',
+        citations: [onboardingCitation],
+        warnings: [],
+        createdAt: mockTimestamp(100),
+      },
+      {
+        id: mockUuid(9321),
+        seq: 2,
+        question: 'Còn ngân sách vận hành thì sao?',
+        answer:
+          'Dựa trên tài liệu đã lập chỉ mục: Nhân viên mới cần hoàn thành khóa đào tạo hội nhập trong 30 ngày đầu tiên. [CITE-0001] Ngân sách vận hành được điều chỉnh thành 15 triệu đồng mỗi quý theo thiết kế mới. [CITE-0002]',
+        answerMode: 'offline_extractive',
+        citations: [onboardingCitation, budgetCitation],
+        warnings: [],
+        createdAt: mockTimestamp(103),
+      },
+    ],
+  };
+
+  return new Map([
+    [chatSessionKey(ORG_A_ID, DEMO_USER.userId), [roadmapSession, onboardingSession]],
+  ]);
+}
+
 function seedJobs(): Map<string, Job> {
   const map = new Map<string, Job>();
   const job: Job = {
@@ -639,6 +832,7 @@ function freshStore(): Store {
     orgMemberships: seedOrgMemberships(),
     orgProfiles: seedOrgProfiles(),
     usageByOrg: seedUsageByOrg(),
+    chatSessionsByOrgUser: seedChatSessions(),
   };
 }
 
@@ -788,6 +982,39 @@ export function collectionIdsForProject(orgId: string, projectId: string): strin
     }
   }
   return ids;
+}
+
+/**
+ * P2-19 — `orgId`+`userId`'s own chat sessions, auto-vivifying an empty list
+ * like `getOrgMemberships`/`getOrgProjects`. Never scoped by `orgId` alone —
+ * see `ChatSessionRecord`'s own doc for why the composite key is load-bearing,
+ * not incidental.
+ */
+export function getUserChatSessions(orgId: string, userId: string): ChatSessionRecord[] {
+  const key = chatSessionKey(orgId, userId);
+  let sessions = store.chatSessionsByOrgUser.get(key);
+  if (!sessions) {
+    sessions = [];
+    store.chatSessionsByOrgUser.set(key, sessions);
+  }
+  return sessions;
+}
+
+/** One of `orgId`+`userId`'s own sessions by id, or `undefined` for a missing/foreign one — callers must map a miss to 404, never 403 (no existence oracle, same convention `handlers/chatSessions.ts` follows throughout). */
+export function findUserChatSession(
+  orgId: string,
+  userId: string,
+  sessionId: string,
+): ChatSessionRecord | undefined {
+  return getUserChatSessions(orgId, userId).find((s) => s.id === sessionId);
+}
+
+let chatSessionActivityCounter = 100; // above every seeded session's own activityRank
+
+/** Next monotonic `activityRank` for a create/rename/append-turn mutation — see `ChatSessionRecord`'s own doc. */
+export function nextChatSessionActivityRank(): number {
+  chatSessionActivityCounter += 1;
+  return chatSessionActivityCounter;
 }
 
 export { encodeCursor, decodeCursor };

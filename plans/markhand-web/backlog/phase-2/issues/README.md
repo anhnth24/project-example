@@ -294,6 +294,35 @@ P2-15 + Phase 1C gate → P2-16
   memory (server vẫn đơn lượt; history chat là UI-only, không gửi lên server, không
   persist).
 
+  **Cập nhật (chat-first redesign landed, 2026-07-29 — owner: "hiện tại phần hỏi đáp đang
+  nhìn lộn xộn quá"):** `QaPage` viết lại theo 4 phần. **(A)** Layout chat-first: log chat
+  + composer là cột chính, `SearchPanel` thu vào tab "Tìm kiếm" (tab "Hỏi đáp" mặc định);
+  sidebar lịch sử (`ChatHistorySidebar`, thu gọn được) đọc P2-19's `listChatSessions`
+  (mới, cursor "tải thêm", most-recently-active-first) — xem mục cập nhật riêng ở P2-19
+  bên dưới cho toàn bộ phần "ghi lịch sử thật". Disclaimer "chỉ lưu tạm trong phiên này"
+  cũ đã bỏ (không còn đúng). **(B)** Dropdown "Phạm vi" đơn (`projectId`) → multi-select
+  chip popover (`ProjectPicker.tsx`, tái dùng nguyên `useRailPopover`/`useFloatingMenu`
+  pattern của `OrgSwitch`) gửi `projectIds[]` (P2-19) cho cả `search`/`ask`/`ask/stream`;
+  `projectId` đơn không còn được UI dùng nữa (server vẫn nhận cả hai, xem P2-19).
+  **(C)** Citations chuyển từ danh sách `CitationCard` phẳng sang footnote cuối câu trả
+  lời: `citationFootnotes.ts` (thuần, có unit test riêng) tách answer text theo token
+  `[CITE-xxxx]` server đã nhúng sẵn (xác minh trong `crates/knowledge/src/citation.rs` +
+  `mocks/handlers/qa.ts`'s `buildAnswer`, không đoán) thành `[n]` inline + khối "Nguồn
+  trích dẫn" đánh số cuối bubble (`CitationFootnotes.tsx`, tái cấu trúc từ
+  `CitationCard.tsx` chứ không viết lại logic deep-link/page-label). **Gap còn lại (đã
+  xác minh, không phải chưa làm xong):** `CitationPin` không có field `documentTitle` —
+  chỉ `logicalDocumentId`/`collectionId` (uuid) — nên một footnote không thể hiện tên tài
+  liệu thật mà không thêm N request lookup/pin (bị cấm theo brief); item hiện hiển thị
+  theo tên bộ sưu tập (từ `GET /collections` gọi đúng 1 lần/trang, không phải/citation) +
+  vị trí (trang/slide/sheet, field `page` đã có sẵn từ trước — xem P2-19 mục 3, KHÔNG
+  phải field mới) + quote. `page` **đã** hiển thị được (qua `CitationFootnotes`), bản mô
+  tả nhiệm vụ ban đầu nói "chưa hiển thị ở đâu" là sai/lỗi thời — đã xác minh code trước
+  khi tin. **(D)** Dọn spacing/heading nhất quán `.card`/design system hiện có; mode
+  badge/warnings gọn lại. `ChatTurnBubble`/`HistoricalTurnBubble` (mới — turn đã lưu, tĩnh,
+  không `useAskStream`) giờ dùng chung `AnswerText`/`CitationFootnotes`. E2E: `qa.spec.ts`
+  cập nhật theo layout mới (tab, footnote, multi-select) + `chat-history.spec.ts` mới
+  (part A) — suite mock E2E tổng 36 (từ 33).
+
 ## P2-11 — Member/role admin
 
 - **Status:** Done — #317. UI member table/invite (one-time token)/suspend/role/remove, owner-tier fail-closed mirror server, last-owner 409 + owner-tier 403 mapped. Mở khoá nhờ lát membership API (1C-02/1C-11) landed cùng #317.
@@ -536,3 +565,36 @@ gate đã pass; mock E2E không thay thế integration.
   ứng dụng cho `qa_chat_*`, cùng khuôn `ask_stream_sessions`. **Out:** web UI lịch sử
   chat + multi-select dropdown phạm vi dự án (vòng sau), share/team chat history, xóa
   dự án (đã out ở P2-18), `pageNumber` field riêng (đã có `page`, xem mục 3).
+
+- **Cập nhật (web UI landed, 2026-07-29 — cùng vòng với P2-10's chat-first redesign, xem
+  mục cập nhật ở đó cho phần layout/footnote/picker):** phần "web UI đọc/hiện lịch sử chat
+  và multi-select phạm vi dự án" mà mục "Out" gốc ở trên hoãn sang vòng sau — nay đã làm.
+  `web/src/components/qa/useChatHistory.ts` (hook mới, không đụng `state/askStream.ts`)
+  gọi đủ 6 operation (`listChatSessions`/`createChatSession`/`getChatSession`/
+  `updateChatSession`/`deleteChatSession`/`appendChatTurn`). Luồng ghi lịch sử: một lượt
+  `ChatTurnBubble` settle `completed`/`revoked` (không phải `error`/`cancelled` — đã có
+  test riêng cho từng trường hợp) báo `snapshot` (answer/mode/citations/warnings) lên qua
+  `onStatusChange`; nếu chưa có session hiện hành, `recordTurn` tạo session trước (title =
+  câu hỏi đầu, cắt ở 80 ký tự) rồi mới append turn — fire-and-forget, lỗi chỉ hiện notice
+  nhỏ (`appendError`), không phá luồng chat. Bug thật đã bắt và sửa trong vòng này:
+  `activeSessionId` đổi từ `undefined` sang id thật ngay khi `recordTurn` vừa tạo xong
+  session cho cuộc trò chuyện ĐANG MỞ trước đó bị `ChatPanel` hiểu nhầm là "người dùng mở
+  phiên khác", xoá mất chính live turn vừa hoàn tất (thấy được qua React's "Cannot update a
+  component while rendering a different component" + phần tử biến mất khỏi DOM ngay sau
+  khi vừa tìm thấy trong test) — sửa bằng `sessionSwitchToken` riêng (chỉ tăng khi
+  `startNewConversation()`/`selectSession()` được gọi tường minh, không tăng khi
+  `recordTurn` tự gán id), tách hẳn hai trường hợp "id vừa được gán cho hội thoại đang mở"
+  và "người dùng thật sự đổi hội thoại". `mocks/handlers/chatSessions.ts` (mock mới, org+
+  user scoped qua `getUserChatSessions`/`findUserChatSession`, không enforce `qa.query` —
+  cùng tiền lệ `search`/`ask`/`graph` đã set vì `DEMO_USER` không có permission đó) +
+  `mocks/fixtures.ts` seed 2 phiên lịch sử thật (1 phiên 1 turn/1 citation, 1 phiên 2 turns
+  với turn thứ hai trích 2 tài liệu khác nhau + 1 citation có `page` — dữ liệu demo cho
+  đúng "Tổng hợp từ N tài liệu"/"Trang X" mà không cần dựng kịch bản live-stream phức tạp).
+  `ProjectPicker.tsx` gửi `projectIds[]` cho `SearchRequest`/`AskRequest` (mock's
+  `resolveProjectScope` union `projectId`+`projectIds` trước khi lọc `collectionIds`, mirror
+  `merge_project_ids` server-side). Test: unit (`QaPage.test.tsx`, 14 kịch bản: sidebar
+  list/mở lại/đổi tên/xóa, picker multi-select + reset khi đổi org, footnote page/multi-
+  doc note, ghi lịch sử completed/revoked có lưu — error/cancelled không lưu) +
+  `citationFootnotes.test.ts` (thuần, 10 case) + E2E `chat-history.spec.ts` mới (2 spec:
+  2 câu → "Cuộc trò chuyện mới" → 1 câu nữa → mở lại phiên đầu thấy nguyên transcript +
+  citation click được; đổi tên + xóa phiên).
