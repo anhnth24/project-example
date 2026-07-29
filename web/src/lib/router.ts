@@ -48,3 +48,14 @@ export function matchRoute(pathname: string): RouteMatch {
 export function buildScopedPath(base: 'library' | 'qa' | 'graph', collectionId?: string): string {
   return collectionId ? `/${base}/${encodeURIComponent(collectionId)}` : `/${base}`;
 }
+
+/**
+ * Builds `/library/:collectionId?doc=:documentId` (P2-07 citation deep-link).
+ * `collectionId` is required here — unlike `buildScopedPath`, there is no
+ * "all collections" variant that also opens one specific document, since
+ * `LibraryPage` only ever fetches a document list (and can only preselect a
+ * row from it) once a `collectionId` is in scope.
+ */
+export function buildLibraryDocPath(collectionId: string, documentId: string): string {
+  return `/library/${encodeURIComponent(collectionId)}?doc=${encodeURIComponent(documentId)}`;
+}

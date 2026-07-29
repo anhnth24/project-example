@@ -59,13 +59,28 @@ test('ask streams a grounded answer token-by-token, then citations', async ({ pa
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
   );
   await expect(page.getByText('CITE-0001', { exact: true })).toBeVisible();
-  // No preview deep-link here on purpose: `CitationPin` (contract.ts) carries
-  // no document/version id, so `ChatPanel` cannot resolve one — it says so
-  // instead of a silently-dead "Xem trước" button (see `CitationCard.tsx`'s
-  // module doc for the verified contract gap this documents).
-  await expect(
-    page.getByText(/Trích dẫn ở đây chưa kèm định danh tài liệu\/phiên bản/),
-  ).toBeVisible();
+
+  // P2-10 gap close: `CitationPin` (contract.ts) now carries
+  // `logicalDocumentId`/`versionId`/`collectionId` (`mocks/handlers/qa.ts`'s
+  // `passageToCitation`), so the citation for "Roadmap.xlsx" deep-links
+  // straight to its Library preview instead of the old dead-link note (see
+  // `CitationCard.tsx`'s module doc for the contract gap this closes).
+  // This question's tokens ("quý") also match the unrelated compare-doc
+  // fixture, so a second citation/link can render here too — scope to the
+  // CITE-0001 card specifically rather than assuming there is only one link.
+  await page
+    .locator('li.card', { hasText: 'CITE-0001' })
+    .getByRole('link', { name: 'Xem trước tài liệu' })
+    .click();
+  await expect(page).toHaveURL(/\/library\/[^/]+\?doc=[^/]+$/);
+  // `#library-preview-heading`, not a bare role query: the mock preview
+  // markdown re-embeds the title as its own `<h1># Roadmap.xlsx`, so the
+  // title text renders twice on this page (this panel's own heading, and
+  // that one) — same ambiguity `LibraryPage.test.tsx` documents.
+  await expect(page.locator('#library-preview-heading')).toHaveText('Roadmap.xlsx');
+  await expect(page.getByTestId('document-preview-markdown')).toContainText(
+    'Mock preview content for version',
+  );
 });
 
 test('citation_revoked mid-answer surfaces an accessible revoked notice without losing the partial answer', async ({

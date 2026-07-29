@@ -89,7 +89,10 @@ pub struct GraphNodeDto {
 }
 
 /// P2-17 graph edge. `kind` is `conflict` | `co_citation` | `similarity`;
-/// `weight` is `0..1` (see `services::graph::saturating_weight`).
+/// `weight` is `0..1` (`conflict`/`co_citation` via
+/// `services::graph::saturating_weight`, `similarity` — opt-in on a
+/// configured vector index + embedder — via
+/// `services::graph::normalize_similarity_weight`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphEdgeDto {

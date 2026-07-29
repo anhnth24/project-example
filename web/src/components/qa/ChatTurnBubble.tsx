@@ -169,10 +169,21 @@ export function ChatTurnBubble({
               <CitationCard key={citation.citeId} citation={citation} />
             ))}
           </ul>
-          <p className="text-muted">
-            Trích dẫn ở đây chưa kèm định danh tài liệu/phiên bản theo hợp đồng hiện tại — dùng ô
-            Tìm kiếm phía trên để mở bản xem trước theo tài liệu.
-          </p>
+          {/* P2-10 gap close: `CitationPin` now carries `logicalDocumentId`/
+              `collectionId` (see `CitationCard.tsx`'s module doc), so most
+              citations render their own "Xem trước tài liệu" deep-link
+              directly. This note only still applies to a pin that, for
+              whatever reason, doesn't carry that identity — kept rather than
+              removed outright so that case still points at a working
+              alternative instead of just going quiet. */}
+          {display.citations.some(
+            (citation) => !citation.collectionId || !citation.logicalDocumentId,
+          ) && (
+            <p className="text-muted">
+              Một số trích dẫn ở đây chưa kèm định danh tài liệu/phiên bản — dùng ô Tìm kiếm phía
+              trên để mở bản xem trước theo tài liệu.
+            </p>
+          )}
         </div>
       )}
     </div>

@@ -32,10 +32,12 @@
 // the real `GET /documents/{documentId}/versions` endpoint — no invented
 // picker data.
 //
-// Citation deep-link gap (see `CitationCard.tsx`'s own doc for the full
+// Citation deep-link (see `CitationCard.tsx`'s own doc for the full
 // reasoning): the `CitationPin` the contract returns from `ask`/`ask/stream`
-// carries no document/version id, so citations here render content only —
-// `ChatTurnBubble` says so below the list instead of a silently-dead link.
+// now carries `logicalDocumentId`/`versionId`/`collectionId` (P2-10 gap
+// close), so a citation with that identity renders a real
+// `/library/:collectionId?doc=` link; `ChatTurnBubble` still says so below
+// the list for the rarer pin that doesn't carry it.
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { apiClient, type ApiClient } from '../../api/client';
 import type { components } from '../../api/generated/contract';

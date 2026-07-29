@@ -21,7 +21,7 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
     ("get", "/auth/me", &["200", "401", "429"]),
     ("post", "/uploads", &["201", "400", "403", "413", "429"]),
     ("get", "/collections", &["200", "429"]),
-    ("post", "/collections", &["201", "403", "429"]),
+    ("post", "/collections", &["201", "403", "409", "429"]),
     ("get", "/collections/{collectionId}", &["200", "404", "429"]),
     (
         "patch",
@@ -110,7 +110,7 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
     // 403: same as GET /collections, list_projects is unfiltered by
     // permission (`org membership` is the only gate) — see routes::projects.
     ("get", "/projects", &["200", "429"]),
-    ("post", "/projects", &["201", "400", "403", "429"]),
+    ("post", "/projects", &["201", "400", "403", "409", "429"]),
     (
         "patch",
         "/projects/{projectId}",

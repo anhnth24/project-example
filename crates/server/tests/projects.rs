@@ -320,6 +320,90 @@ async fn create_project_denied_without_permission() {
     ephemeral.drop().await;
 }
 
+/// UX-3(b): duplicate `(org_id, name)` on `POST /projects` maps to `409
+/// name_taken`, the same precedent `services::orgs::CreateOrgError::SlugTaken`
+/// set for `POST /orgs` — a unique-violation on `uq_projects__org_name`
+/// (migrations/0032) must never surface as an opaque 500.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn create_project_rejects_a_duplicate_name_with_409() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (_ctx, token) = seed_caller(&pool, org, user, "dup-project@projects-it.test").await;
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "Marketing" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status_dup, body_dup) = send(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&token),
+        Some(json!({ "name": "Marketing" })),
+    )
+    .await;
+    assert_eq!(status_dup, StatusCode::CONFLICT, "{body_dup}");
+    assert_eq!(body_dup["code"], "name_taken");
+
+    ephemeral.drop().await;
+}
+
+/// Same 409 mapping precedent as `create_project_rejects_a_duplicate_name_with_409`,
+/// for `POST /collections`'s own `uq_collections__org_name` (migrations/0004).
+/// HTTP-level (not a direct DB insert) so this exercises the actual route's
+/// `RouteError::from_db` mapping, not just the constraint itself.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn create_collection_rejects_a_duplicate_name_with_409() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let app = build_router(pool.clone(), &ephemeral.app_url, None);
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let (_ctx, token) = seed_caller(&pool, org, user, "dup-collection@projects-it.test").await;
+
+    let (status, body) = send(
+        &app,
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(json!({
+            "name": "Support Docs",
+            "slug": format!("support-docs-{}", Uuid::new_v4().simple()),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status_dup, body_dup) = send(
+        &app,
+        "POST",
+        "/api/v1/collections",
+        Some(&token),
+        Some(json!({
+            "name": "Support Docs",
+            "slug": format!("support-docs-{}", Uuid::new_v4().simple()),
+        })),
+    )
+    .await;
+    assert_eq!(status_dup, StatusCode::CONFLICT, "{body_dup}");
+    assert_eq!(body_dup["code"], "name_taken");
+
+    ephemeral.drop().await;
+}
+
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn update_project_renames_and_requires_permission() {
