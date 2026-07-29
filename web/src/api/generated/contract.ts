@@ -693,6 +693,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List org audit log entries, newest first (requires audit.view). Read-only; audit_log is append-only and org-isolated by RLS. */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1038,6 +1055,29 @@ export interface components {
         };
         UsageResponse: {
             items: components["schemas"]["UsageEntry"][];
+        };
+        AuditEntry: {
+            /** Format: uuid */
+            id: string;
+            /** Format: int64 */
+            seq: number;
+            /** Format: uuid */
+            actorId?: string | null;
+            action: string;
+            targetType: string;
+            targetId?: string | null;
+            /** @enum {string} */
+            outcome: "success" | "deny" | "error" | "intent";
+            /** @description Per-action scalar allowlist only (services::audit::sanitize_for_action) — never document content, prompts, tokens, or PII. */
+            metadata: Record<string, never>;
+            /** Format: uuid */
+            requestId?: string | null;
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        AuditPage: {
+            items: components["schemas"]["AuditEntry"][];
+            page: components["schemas"]["PageInfo"];
         };
     };
     responses: {
@@ -2509,6 +2549,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageResponse"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                /** @description Page size (server default 50, clamped to [1, 100]). */
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous page's nextCursor. */
+                cursor?: string;
+                /** @description Exact audit action code filter (closed enum, e.g. member.role_change, document.upload). Unknown values are rejected with 400. */
+                action?: string;
+                /** @description Filter to a specific actor user id. */
+                actor?: string;
+                /** @description Inclusive lower bound on occurredAt (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper bound on occurredAt (RFC 3339). */
+                to?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paginated audit log entries for the caller's current org. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            /** @description Invalid action/actor/from/to/cursor. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
             403: components["responses"]["ApiError"];

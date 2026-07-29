@@ -19,8 +19,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiClient, type ApiClient } from '../api/client';
 import { installMockFetch, mockControl, resetMockState, uninstallMockFetch } from '../mocks';
 import {
+  getOrgMemberships,
   getStore,
   mintTokenPair,
+  ORG_A_ID,
   SECOND_MEMBER_USER_ID,
   THIRD_MEMBER_USER_ID,
 } from '../mocks/fixtures';
@@ -128,7 +130,9 @@ describe('AdminMembersPage', () => {
       fireEvent.click(screen.getByRole('option', { name: 'Biên tập viên' }));
 
       await waitFor(() => {
-        const membership = getStore().memberships.find((m) => m.userId === SECOND_MEMBER_USER_ID);
+        const membership = getOrgMemberships(ORG_A_ID).find(
+          (m) => m.userId === SECOND_MEMBER_USER_ID,
+        );
         expect(membership?.role).toBe('editor');
       });
       // Scoped to this member's own row — see `findRowByUserId`'s doc for why
@@ -148,7 +152,9 @@ describe('AdminMembersPage', () => {
       fireEvent.click(within(row).getByRole('button', { name: 'Kích hoạt lại' }));
 
       await waitFor(() => {
-        const membership = getStore().memberships.find((m) => m.userId === THIRD_MEMBER_USER_ID);
+        const membership = getOrgMemberships(ORG_A_ID).find(
+          (m) => m.userId === THIRD_MEMBER_USER_ID,
+        );
         expect(membership?.state).toBe('active');
       });
     });
@@ -162,7 +168,9 @@ describe('AdminMembersPage', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Xóa thành viên' }));
 
       await waitFor(() =>
-        expect(getStore().memberships.some((m) => m.userId === SECOND_MEMBER_USER_ID)).toBe(false),
+        expect(getOrgMemberships(ORG_A_ID).some((m) => m.userId === SECOND_MEMBER_USER_ID)).toBe(
+          false,
+        ),
       );
       await waitFor(() =>
         expect(
@@ -187,12 +195,12 @@ describe('AdminMembersPage', () => {
   describe('owner-tier restriction ("admin không quản owner")', () => {
     it('hides owner-granting and locks an owner row for a non-owner caller', async () => {
       const client = loggedInClient();
-      const store = getStore();
-      const callerRow = store.memberships.find((m) => m.role === 'owner');
+      const roster = getOrgMemberships(ORG_A_ID);
+      const callerRow = roster.find((m) => m.role === 'owner');
       expect(callerRow).toBeDefined();
       callerRow!.role = 'admin'; // the signed-in caller is no longer an owner...
       const otherOwnerId = mockUuid(40);
-      store.memberships.push({
+      roster.push({
         userId: otherOwnerId,
         role: 'owner',
         state: 'active',
@@ -226,7 +234,7 @@ describe('AdminMembersPage', () => {
         await within(row).findByText(/tổ chức phải luôn còn ít nhất một chủ sở hữu/),
       ).toBeVisible();
       // Fails closed: the membership itself must not have been mutated.
-      const owner = getStore().memberships.find((m) => m.role === 'owner');
+      const owner = getOrgMemberships(ORG_A_ID).find((m) => m.role === 'owner');
       expect(owner?.state).toBe('active');
     });
   });

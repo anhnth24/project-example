@@ -26,7 +26,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { apiClient, type ApiClient } from '../api/client';
+import { apiClient, type ApiClient, type SessionTokens } from '../api/client';
 import { isAbortError } from '../api/errors';
 import type { components } from '../api/generated/contract';
 import { useScope } from '../state/ScopeProvider';
@@ -221,10 +221,43 @@ export function AuthProvider({ children, client = apiClient }: AuthProviderProps
     async (email: string, password: string) => {
       abortRef.current?.abort();
       const epoch = (epochRef.current += 1);
-      const tokens = await client.login({ email, password });
-      savePersistedRefreshToken(tokens.refreshToken);
       const controller = new AbortController();
       abortRef.current = controller;
+      // `client.login()` (api/client.ts) is not side-effect-free like the
+      // bare `client.request()` POST `switchOrg` above uses — on a
+      // successful response it installs the returned tokens into the
+      // session manager itself (`sessionManager.setTokens(tokens)`, asserted
+      // by `api/client.test.ts`'s own "installs the returned tokens..."
+      // case), before this function ever gets to look at the epoch. An
+      // epoch guard placed only *after* `await client.login(...)` — the
+      // `switchOrg` shape — would stop a stale login from being *rendered*,
+      // but would not stop it from clobbering the session manager's tokens
+      // out from under a newer login/logout/switchOrg that already won by
+      // the time this one's HTTP response arrives. Passing `controller.signal`
+      // here (previously only `me()` got a signal) is what actually closes
+      // that: a login superseded by a newer call has this same controller
+      // aborted at the top of that newer call, so `rawFetch` rethrows the
+      // abort before `client.login()` ever reaches its `setTokens(...)`
+      // line — the stale install never happens, rather than merely going
+      // unrendered. (The one gap this can't close: if the response has
+      // already been fully received by the time `abort()` runs, the browser
+      // Fetch API's abort is a no-op on an already-settled request — the
+      // same inherent limit every abort-based cancellation here has. The
+      // epoch check right below still stops that outcome from being
+      // *rendered*, which is the tightest guarantee available without
+      // changing `client.login()`'s own documented contract.)
+      let tokens: SessionTokens;
+      try {
+        tokens = await client.login({ email, password }, controller.signal);
+      } catch (cause) {
+        // A non-abort failure (wrong password, network, ...) touches
+        // nothing here yet — same as before this change — so it just
+        // propagates for the caller (e.g. `LoginPage.tsx`) to show.
+        if (epochRef.current !== epoch || isAbortError(cause)) return;
+        throw cause;
+      }
+      if (epochRef.current !== epoch) return;
+      savePersistedRefreshToken(tokens.refreshToken);
       try {
         const me = await client.me(controller.signal);
         if (epochRef.current !== epoch) return;

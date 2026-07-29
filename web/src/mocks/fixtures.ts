@@ -17,6 +17,7 @@ type Membership = components['schemas']['Membership'];
 type Org = components['schemas']['Org'];
 type OrgRole = Org['role'];
 type OrgState = Membership['state'];
+type UsageEntry = components['schemas']['UsageEntry'];
 
 export interface MockUser {
   userId: string;
@@ -118,15 +119,26 @@ interface Store {
   jobs: Map<string, Job>;
   conflicts: ConflictRecord[];
   downloadCapabilities: Map<string, DownloadCapabilityRecord>;
-  /** Memberships of the demo org (`DEMO_USER.orgId`) — every seeded/mock user's role+state. Unaffected by org switch: the admin member/invite/usage pages are out of scope for the org-switch task and stay pinned to this one org's roster. */
-  memberships: Membership[];
-  invites: InviteRecord[];
+  /**
+   * orgId -> that org's member roster (role/state per user) for the admin
+   * members page (`handlers/members.ts` E1/E6/E7). Each org gets its own
+   * roster — a member row seeded for org A says nothing about org B, mirroring
+   * `collectionOrgId`'s "org isolation lives in the mock store, not on the
+   * wire shape" pattern above. Read/written through `getOrgMemberships()`,
+   * never indexed directly, so a lookup for an org with nothing seeded gets an
+   * (auto-vivified) empty roster instead of `undefined`.
+   */
+  membershipsByOrg: Map<string, Membership[]>;
+  /** orgId -> that org's invites (E2-E5), same per-org shape as `membershipsByOrg`. Read/written through `getOrgInvites()`/`findInviteAcrossOrgs()`. */
+  invitesByOrg: Map<string, InviteRecord[]>;
   /** Org catalog for `listOrgs`/`getOrg`/`switchOrg` (1C-01). */
   orgs: OrgRecord[];
   /** Every user's org memberships, across every org — not just the demo org's roster above. */
   orgMemberships: OrgMembershipRecord[];
   /** orgId -> permissions/allowedCollectionIds `GET /auth/me` reports once a session is scoped to that org. */
   orgProfiles: Map<string, OrgProfile>;
+  /** orgId -> `GET /usage` snapshot (E8), read through `getOrgUsage()`. */
+  usageByOrg: Map<string, UsageEntry[]>;
 }
 
 const DEMO_USER: MockUser = {
@@ -166,6 +178,8 @@ export const ORG_B_ID = mockUuid(3);
 export const ORG_B_COLLECTION_ID = mockUuid(12);
 export const ORG_B_DOCUMENT_ID = mockUuid(120);
 const ORG_B_VERSION_ID = mockUuid(1200);
+/** Org B's second seeded member (`editor`, active) — so its admin members roster has more than the demo user's own row, same reason `SECOND_MEMBER_USER_ID` exists for org A. */
+export const GLOBEX_MEMBER_USER_ID = mockUuid(32);
 
 function seedOrgs(): OrgRecord[] {
   return [
@@ -222,6 +236,84 @@ function seedInvites(): InviteRecord[] {
       createdAt: mockTimestamp(0),
     },
   ];
+}
+
+/**
+ * Org B's own admin members roster — deliberately small and deliberately
+ * different from org A's (`seedMemberships()`): the demo user is `owner` here
+ * (not `admin`, its org A role) and the second row is a distinct user id
+ * (`GLOBEX_MEMBER_USER_ID`, not `SECOND_MEMBER_USER_ID`) with a different
+ * role/state combination, so a test asserting "org B's list, not org A's" has
+ * more than an orgId to go on.
+ */
+function seedOrgBMemberships(): Membership[] {
+  return [
+    { userId: DEMO_USER.userId, role: 'owner', state: 'active', createdAt: mockTimestamp(90) },
+    {
+      userId: GLOBEX_MEMBER_USER_ID,
+      role: 'editor',
+      state: 'active',
+      createdAt: mockTimestamp(91),
+    },
+  ];
+}
+
+/** Org B's own invite — different email/role from org A's seeded invite (`seedInvites()`), so the two lists are never accidentally interchangeable in an assertion. */
+function seedOrgBInvites(): InviteRecord[] {
+  return [
+    {
+      id: mockUuid(9200),
+      email: 'khach-moi-globex@example.com',
+      role: 'viewer',
+      tokenHash: 'seed-invite-token-hash-unused-org-b',
+      expiresAt: mockTimestamp(60 * 24 * 7),
+      acceptedAt: null,
+      revokedAt: null,
+      createdAt: mockTimestamp(90),
+    },
+  ];
+}
+
+/** Per-org `GET /usage` snapshots (E8) — org A keeps the original hand-picked values `AdminUsagePage.test.tsx` asserts exact numbers against; org B's are deliberately smaller/different so a post-switch usage page reads as genuinely different data, not the same numbers under a new orgId. */
+function seedUsageByOrg(): Map<string, UsageEntry[]> {
+  return new Map([
+    [
+      ORG_A_ID,
+      [
+        {
+          resource: 'storage_bytes',
+          limit: 10_737_418_240,
+          committed: 3_221_225_472,
+          reserved: 104_857_600,
+          remaining: 7_411_335_168,
+        },
+        { resource: 'documents', limit: 5000, committed: 812, reserved: 3, remaining: 4185 },
+        { resource: 'concurrent_jobs', limit: 8, committed: 1, reserved: 0, remaining: 7 },
+        {
+          resource: 'tokens',
+          limit: 2_000_000,
+          committed: 415_000,
+          reserved: 0,
+          remaining: 1_585_000,
+        },
+      ],
+    ],
+    [
+      ORG_B_ID,
+      [
+        {
+          resource: 'storage_bytes',
+          limit: 2_147_483_648,
+          committed: 268_435_456,
+          reserved: 0,
+          remaining: 1_879_048_192,
+        },
+        { resource: 'documents', limit: 500, committed: 42, reserved: 0, remaining: 458 },
+        { resource: 'concurrent_jobs', limit: 2, committed: 0, reserved: 0, remaining: 2 },
+        { resource: 'tokens', limit: 200_000, committed: 12_000, reserved: 0, remaining: 188_000 },
+      ],
+    ],
+  ]);
 }
 
 function seedCollections(): Collection[] {
@@ -356,6 +448,65 @@ function seedCollectionOrgId(): Map<string, string> {
   ]);
 }
 
+/**
+ * P2-10 (Q&A) demo document — the one seeded document with **two** published
+ * versions, so `mode: 'compare'`/`'history'` ask requests (and the version
+ * picker that drives them, `components/qa/AskPanel.tsx`) have something real
+ * to compare instead of every other seeded document's single version. Added
+ * into the existing "Product Specs" collection (`mockUuid(11)`, already in
+ * `DEMO_USER.allowedCollectionIds`) rather than a new collection, and purely
+ * additive to `seedDocuments()`/`seedVersions()` above — no existing id's data
+ * changes, so `LibraryPage.test.tsx`/`DocumentRowActions.test.tsx` (which key
+ * off specific pre-existing titles/ids, not "how many documents total") stay
+ * unaffected. Numeric id range (150/1500/1501) is disjoint from every id used
+ * elsewhere in this file.
+ */
+export const QA_COMPARE_DOCUMENT_ID = mockUuid(150);
+export const QA_COMPARE_VERSION_A_ID = mockUuid(1500);
+export const QA_COMPARE_VERSION_B_ID = mockUuid(1501);
+
+function seedQaCompareDocument(
+  documents: Map<string, Document[]>,
+  versions: Map<string, DocumentVersion[]>,
+): void {
+  const collectionId = mockUuid(11);
+  const docs = documents.get(collectionId) ?? [];
+  docs.push({
+    id: QA_COMPARE_DOCUMENT_ID,
+    collectionId,
+    title: 'Chính sách ngân sách vận hành.pdf',
+    state: 'indexed',
+    currentVersionId: QA_COMPARE_VERSION_B_ID,
+    createdAt: mockTimestamp(50),
+    updatedAt: mockTimestamp(95),
+  });
+  documents.set(collectionId, docs);
+  versions.set(QA_COMPARE_DOCUMENT_ID, [
+    {
+      id: QA_COMPARE_VERSION_A_ID,
+      documentId: QA_COMPARE_DOCUMENT_ID,
+      versionNumber: 1,
+      isCurrent: false,
+      sourceContentSha256: 'd'.repeat(64),
+      effectiveFrom: mockTimestamp(50),
+      effectiveTo: mockTimestamp(95),
+      changeSummary: 'Ngân sách vận hành được phê duyệt ban đầu.',
+      createdAt: mockTimestamp(50),
+    },
+    {
+      id: QA_COMPARE_VERSION_B_ID,
+      documentId: QA_COMPARE_DOCUMENT_ID,
+      versionNumber: 2,
+      isCurrent: true,
+      sourceContentSha256: 'e'.repeat(64),
+      effectiveFrom: mockTimestamp(95),
+      effectiveTo: null,
+      changeSummary: 'Điều chỉnh ngân sách vận hành theo thiết kế mới.',
+      createdAt: mockTimestamp(95),
+    },
+  ]);
+}
+
 function seedJobs(): Map<string, Job> {
   const map = new Map<string, Job>();
   const job: Job = {
@@ -392,22 +543,32 @@ function seedConflicts(): ConflictRecord[] {
 }
 
 function freshStore(): Store {
+  const documents = seedDocuments();
+  const versions = seedVersions();
+  seedQaCompareDocument(documents, versions);
   return {
     users: [{ ...DEMO_USER }],
     refreshTokens: new Map(),
     accessTokens: new Map(),
     collections: seedCollections(),
     collectionOrgId: seedCollectionOrgId(),
-    documents: seedDocuments(),
-    versions: seedVersions(),
+    documents,
+    versions,
     jobs: seedJobs(),
     conflicts: seedConflicts(),
     downloadCapabilities: new Map(),
-    memberships: seedMemberships(),
-    invites: seedInvites(),
+    membershipsByOrg: new Map([
+      [ORG_A_ID, seedMemberships()],
+      [ORG_B_ID, seedOrgBMemberships()],
+    ]),
+    invitesByOrg: new Map([
+      [ORG_A_ID, seedInvites()],
+      [ORG_B_ID, seedOrgBInvites()],
+    ]),
     orgs: seedOrgs(),
     orgMemberships: seedOrgMemberships(),
     orgProfiles: seedOrgProfiles(),
+    usageByOrg: seedUsageByOrg(),
   };
 }
 
@@ -482,6 +643,50 @@ export function toMeResponse(
     allowedCollectionIds: profile?.allowedCollectionIds ?? user.allowedCollectionIds,
     sessionId,
   };
+}
+
+/** `orgId`'s admin members roster, auto-vivifying an empty one for an org with nothing seeded (rather than returning `undefined`) — the same "always an array to push/splice against" convention `documents`/`versions` already rely on via `?? []`/`.set(...)` at their call sites. */
+export function getOrgMemberships(orgId: string): Membership[] {
+  let roster = store.membershipsByOrg.get(orgId);
+  if (!roster) {
+    roster = [];
+    store.membershipsByOrg.set(orgId, roster);
+  }
+  return roster;
+}
+
+/** `orgId`'s invites, same auto-vivifying shape as `getOrgMemberships`. */
+export function getOrgInvites(orgId: string): InviteRecord[] {
+  let invites = store.invitesByOrg.get(orgId);
+  if (!invites) {
+    invites = [];
+    store.invitesByOrg.set(orgId, invites);
+  }
+  return invites;
+}
+
+/**
+ * Searches every org's invite list for one matching `predicate`. Accepting an
+ * invite (`acceptMemberInvite`) is the one flow in `handlers/members.ts` that
+ * cannot scope by the caller's *current* org (`authContextForHeader(...).orgId`)
+ * the way every other operation here does — the invite may belong to an org
+ * the caller isn't a member of yet (that's the entire point of the invite),
+ * so their bearer token's org tells you nothing about which org's invite list
+ * to search.
+ */
+export function findInviteAcrossOrgs(
+  predicate: (invite: InviteRecord) => boolean,
+): { orgId: string; invite: InviteRecord } | undefined {
+  for (const [orgId, invites] of store.invitesByOrg) {
+    const invite = invites.find(predicate);
+    if (invite) return { orgId, invite };
+  }
+  return undefined;
+}
+
+/** `orgId`'s `GET /usage` snapshot — `[]` for an org with none seeded rather than throwing, matching every other per-org accessor's "empty, not an error" default. */
+export function getOrgUsage(orgId: string): UsageEntry[] {
+  return store.usageByOrg.get(orgId) ?? [];
 }
 
 export { encodeCursor, decodeCursor };

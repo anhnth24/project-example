@@ -66,6 +66,10 @@ pub enum AuditAction {
     MemberInviteRevoke,
     MemberRoleChange,
     MemberRemove,
+    // 1C-11 audit-log read endpoint. Reading the audit trail is itself
+    // sensitive enough to audit (both the deny and the success path,
+    // mirroring search.query/ask.query below) — see routes/audit.rs.
+    AuditRead,
 }
 
 impl AuditAction {
@@ -107,6 +111,7 @@ impl AuditAction {
             Self::MemberInviteRevoke => "member.invite_revoke",
             Self::MemberRoleChange => "member.role_change",
             Self::MemberRemove => "member.remove",
+            Self::AuditRead => "audit.read",
         }
     }
 
@@ -148,6 +153,7 @@ impl AuditAction {
             "member.invite_revoke" => Ok(Self::MemberInviteRevoke),
             "member.role_change" => Ok(Self::MemberRoleChange),
             "member.remove" => Ok(Self::MemberRemove),
+            "audit.read" => Ok(Self::AuditRead),
             _ => Err(format!("audit_action_invalid:{value}")),
         }
     }
@@ -257,6 +263,10 @@ impl AuditAction {
                 "new_state",
             ],
             Self::MemberRemove => &["reason", "target_user_id", "old_role"],
+            // Never the filter values themselves (actor/action/time range are
+            // caller-supplied query params, not durable facts worth auditing
+            // verbatim) — only a bounded result count and the deny reason.
+            Self::AuditRead => &["reason", "result_count"],
         }
     }
 }
@@ -275,6 +285,7 @@ pub enum AuditResource {
     Search,
     Conflict,
     Member,
+    Audit,
 }
 
 impl AuditResource {
@@ -292,6 +303,7 @@ impl AuditResource {
             Self::Search => "search",
             Self::Conflict => "conflict",
             Self::Member => "member",
+            Self::Audit => "audit",
         }
     }
 
@@ -309,6 +321,7 @@ impl AuditResource {
             "search" => Ok(Self::Search),
             "conflict" => Ok(Self::Conflict),
             "member" => Ok(Self::Member),
+            "audit" => Ok(Self::Audit),
             _ => Err(format!("audit_resource_type_invalid:{value}")),
         }
     }

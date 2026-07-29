@@ -354,6 +354,146 @@ describe('AuthContext login/logout', () => {
 
     expect(screen.getByTestId('status')).toHaveTextContent('anonymous');
   });
+
+  // Race hardening (PR #323 follow-up): `switchOrg` already guarded its own
+  // out-of-order resolution with `if (epochRef.current !== epoch) return;`
+  // right after its await; `login()` previously had no equivalent guard at
+  // all, so a login that resolved late enough could install stale tokens
+  // over a newer login or logout that had already won. These two tests drive
+  // that same shape of race through `login()` — deliberately resolving the
+  // *stale* attempt's `client.login()` only after the superseding
+  // logout/login has already run, out of order, to prove the stale one is
+  // discarded rather than merely "usually loses the race".
+  describe('login() out-of-order resolution', () => {
+    it('login vs logout: a login that resolves after logout() must not persist tokens or repopulate the shell', async () => {
+      const { client } = createFakeClient();
+      const pendingLogin = deferred<SessionTokens>();
+      (client.login as ReturnType<typeof vi.fn>).mockReturnValue(pendingLogin.promise);
+      (client.me as ReturnType<typeof vi.fn>).mockResolvedValue(SAMPLE_ME);
+
+      function Harness() {
+        const { session, login, logout } = useAuth();
+        return (
+          <>
+            <span data-testid="status">{session.status}</span>
+            <button onClick={() => void login(DEMO_EMAIL, DEMO_PASSWORD).catch(() => {})}>
+              go
+            </button>
+            <button onClick={() => void logout()}>bye</button>
+          </>
+        );
+      }
+
+      render(
+        <ScopeProvider>
+          <AuthProvider client={client}>
+            <Harness />
+          </AuthProvider>
+        </ScopeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'));
+
+      await act(async () => {
+        screen.getByText('go').click();
+        await Promise.resolve();
+      });
+      expect(client.login).toHaveBeenCalledTimes(1);
+
+      // logout() fires while the login's own client.login() call is still
+      // pending — it supersedes the login (bumps the epoch) well before the
+      // stale login ever resolves.
+      await act(async () => {
+        screen.getByText('bye').click();
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId('status')).toHaveTextContent('anonymous');
+
+      // The stale login's client.login() now resolves successfully — after
+      // logout already ran. Without the epoch guard right after this await,
+      // this would call savePersistedRefreshToken() and go on to applyMe().
+      await act(async () => {
+        pendingLogin.resolve(sampleTokens());
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId('status')).toHaveTextContent('anonymous');
+      expect(client.me).not.toHaveBeenCalled();
+      expect(loadPersistedRefreshToken()).toBeNull();
+    });
+
+    it('login vs login: a rapid second login supersedes the first — the first stale resolution never applies', async () => {
+      const { client } = createFakeClient();
+      const loginCalls: Array<{ resolve: (tokens: SessionTokens) => void }> = [];
+      (client.login as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        const pending = deferred<SessionTokens>();
+        loginCalls.push(pending);
+        return pending.promise;
+      });
+      (client.me as ReturnType<typeof vi.fn>).mockResolvedValue(SAMPLE_ME);
+
+      function Harness() {
+        const { session, login } = useAuth();
+        return (
+          <>
+            <span data-testid="status">{session.status}</span>
+            <button onClick={() => void login('first@markhand.test', 'pw').catch(() => {})}>
+              first
+            </button>
+            <button onClick={() => void login('second@markhand.test', 'pw').catch(() => {})}>
+              second
+            </button>
+          </>
+        );
+      }
+
+      render(
+        <ScopeProvider>
+          <AuthProvider client={client}>
+            <Harness />
+          </AuthProvider>
+        </ScopeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('anonymous'));
+
+      await act(async () => {
+        screen.getByText('first').click();
+        await Promise.resolve();
+        screen.getByText('second').click();
+        await Promise.resolve();
+      });
+      expect(loginCalls.length).toBe(2);
+
+      // Resolve the FIRST (superseded) login's client.login() only after the
+      // second one already started — out of order, to prove it's discarded
+      // rather than merely "usually resolves last".
+      await act(async () => {
+        loginCalls[0].resolve(
+          sampleTokens({ accessToken: 'access-first', refreshToken: 'refresh-first' }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Discarded: no me() call and no persisted token from the stale first
+      // login — only the second login's own client.login() can produce those.
+      expect(client.me).not.toHaveBeenCalled();
+      expect(loadPersistedRefreshToken()).not.toBe('refresh-first');
+
+      await act(async () => {
+        loginCalls[1].resolve(
+          sampleTokens({ accessToken: 'access-second', refreshToken: 'refresh-second' }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('authenticated'));
+      expect(client.me).toHaveBeenCalledTimes(1);
+      expect(loadPersistedRefreshToken()).toBe('refresh-second');
+    });
+  });
 });
 
 describe('AuthContext session loss', () => {

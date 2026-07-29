@@ -4,10 +4,11 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-07-28).** MVP xây trên mock server đã merge vào
+**Trạng thái tổng quan (cập nhật 2026-07-29).** MVP xây trên mock server đã merge vào
 `master`: **13/16 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
-+ serve). **1 In progress**: P2-15 (E2E — nửa mock-based xong, nửa real-deployment hoãn).
-**1 Blocked**: P2-10 (Q&A) chờ R02/R03/R05. P2-11/P2-12 rời khỏi Blocked nhờ lát
++ serve). **2 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
+xem chi tiết bên dưới), P2-15 (E2E — nửa mock-based xong, nay có thêm flow ask→citation
+của P2-10; nửa real-deployment hoãn). P2-11/P2-12 rời khỏi Blocked nhờ lát
 membership API (1C-02/1C-11 slice) landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
@@ -131,16 +132,71 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-10 — Streaming search/Q&A/citations
 
-- **Status:** Blocked — chờ backend R02/R03/R05 (semantics `citation_revoked` khi xóa xen giữa 2 batch, reconnect/Last-Event-ID/purge, entailment fail-closed). UI chưa khóa để tránh làm trên hành vi server chưa chốt. `QaPage` hiện là placeholder.
+- **Status:** In progress — **owner hạ gate 2026-07-29** (môi trường dev/test, không chờ
+  full live-evidence R02/R03/R05): UI xây trên OpenAPI/SSE contract hiện có + mock server
+  như P2-01..09. `QaPage` không còn là placeholder: `search`/`ask` (đồng bộ) và
+  `POST /ask/stream` (mock mới, `mocks/handlers/qa.ts`) đều hoạt động; stream reducer
+  (`state/askStream.ts`) xử lý đúng thứ tự sự kiện `ask.started → ask.token* →
+  [ask.warning]* → ask.citations → ask.version_context → ask.completed → stream.closed`
+  (mirror `services/qa/ask_stream.rs`), có dedupe-guard độc lập với transport, và các
+  trạng thái `completed`/`revoked` (`citation_revoked` giữa chừng)/`error` (mọi
+  `stream.closed` reason + network/session-lost) đều accessible qua `aria-live="polite"`.
+  Mock kịch bản `citation_revoked` và fallback extractive điều khiển được qua marker cố
+  định trong câu hỏi (`QA_STREAM_MARKERS`, export từ `mocks/handlers/qa.ts` — seam cho
+  test, cùng quy ước `__markhandMock*`). current/as-of/compare/history đều có UI thật
+  (mode selector + document/version picker qua `GET /documents/{id}/versions` — không
+  phải chỉ current), vì cả bốn field đều có sẵn trong `AskRequest`/`SearchRequest`.
+  **Gap đã xác minh trong contract (không tự chế client-side):** `CitationPin`
+  (`openapi.yaml`, `components.schemas.CitationPin`) KHÔNG có `logicalDocumentId`/
+  `versionId` — chỉ `ResolveCitationRequest` (`/citations/resolve`) đòi hỏi hai field đó,
+  và caller phải *đã biết* chúng trước khi gọi, nên không có đường nào từ một citation
+  thô của `ask`/`ask/stream` quay lại "tài liệu/phiên bản nào" để deep-link preview —
+  `CitationCard.tsx`/`AskPanel.tsx` nói rõ điều này trong UI (không hiện nút "Xem trước"
+  chết) thay vì bịa một id. Deep-link + version badge **có** hoạt động đầy đủ cho kết quả
+  `search` (hits mang `documentId`/`versionId` — quy ước riêng của mock vì
+  `SearchResponse.hits` là `additionalProperties: true` trong spec, không phải trường bắt
+  buộc theo hợp đồng). Conflict warning demo: chỉ mô phỏng đúng một luật thật của server
+  (`services/qa/grounding.rs`: chế độ `current` trích một phiên bản không phải hiện hành
+  → warning) — kịch bản "BA 10 triệu vs thiết kế 15 triệu, cảnh báo rồi v2 resolved" đầy
+  đủ cần dữ liệu conflict-claim liên kết version mà thời lượng việc này không cho phép
+  dựng cho đúng cả 3 chế độ; ghi nhận là gap còn lại, không phải đã làm.
+  "Trạng thái reconnect" chỉ hiển thị chung là "đang stream" — transport P2-04
+  (`api/sse.ts`) không phát một `SseMessage` kind riêng cho "đang thử kết nối lại" (chỉ
+  âm thầm retry/backoff nội bộ), nên UI không bịa tín hiệu không có thật; chỉ có trạng
+  thái cuối (`completed`/`revoked`/`error` với lý do) là quan sát được.
 
 - **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
   readiness, stream reducer, fallback + version-change notes, citation deep-link with
   version badge/effective date, current conflict warning + resolved conflict note,
   abort scope change.
+  - `web/src/mocks/handlers/qa.ts` — `search`/`ask` (đồng bộ, giữ tương thích) + `askStream`
+    mới: toàn bộ response `/ask/stream` là một chuỗi `text/event-stream` dựng sẵn (mọi sự
+    kiện đã quyết định xong trước khi trả response — không có gì thật sự bất đồng bộ như
+    `jobEvents`), trả qua `rawBody` — deterministic, không `setTimeout`/sleep-race.
+    `registerOperation('askStream', ...)` khiến nó được match trước khi rơi vào
+    `DELIBERATELY_UNMOCKED_OPERATIONS` fallback của `registry.ts`/`fetchMock.ts` (2 file đó
+    ngoài phạm vi sửa của task này — comment ở đó vẫn liệt kê `askStream` là "deliberately
+    unmocked", nay không còn đúng cho riêng operation này; để lại làm việc chưa xong, xem
+    report cuối).
+  - `web/src/mocks/fixtures.ts` — thêm thuần túy (không sửa fixture cũ): một tài liệu 2
+    phiên bản (`QA_COMPARE_DOCUMENT_ID`) cho demo compare/history có dữ liệu thật để so
+    sánh.
+  - `web/src/state/askStream.ts` (+ test) — reducer thuần, `describeAskStreamError`.
+  - `web/src/components/qa/**` — `SearchPanel`, `AskPanel`, `CitationCard`,
+    `DocumentPreviewPanel`, `useAskStream`/`askStreamSource` (SSE qua P2-04, không
+    `EventSource`).
+  - `web/src/pages/QaPage.tsx`, `web/src/pages/QaPage.test.tsx`,
+    `web/e2e/qa.spec.ts` (4 spec mới, tổng suite E2E mock 24).
 - **Depends:** P2-04…07 + backend ACL. **Acceptance/tests:** `aria-live`; current source
   citation; multi-document citations; old/new amount example labels v1/v2 and delta;
-  BA 10m vs design 15m warning then v2 resolved; as-of/history/deep-link/sequence/
-  fallback/no-answer/revoke/switch-mid-answer tests.
+  BA 10m vs design 15m warning then v2 resolved (**chưa làm** — xem gap ở trên);
+  as-of/history/deep-link (**search only**, xem gap ở trên)/sequence/fallback/no-answer/
+  revoke tests đã có (`askStream.test.ts` + `QaPage.test.tsx` + `qa.spec.ts`).
+  switch-mid-answer: **chưa có test riêng cho `AskPanel`** — `useAskStream` đi qua
+  `useScopeSafeSse` (P2-06) như mọi live source khác nên được kế thừa cùng bảo đảm
+  (abort-on-scope-change), nhưng bảo đảm đó chỉ được kiểm chứng trực tiếp ở
+  `hooks/useScopeSafeSse.test.tsx` (generic), không phải một kịch bản org-switch cụ thể
+  gắn với `AskPanel`/`QaPage` — ghi nhận là gap còn lại, không tự nhận đã test.
 - **Security:** Sanitized Markdown/server route IDs. **Out:** intelligence/conversation memory.
 
 ## P2-11 — Member/role admin
@@ -182,7 +238,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-15 — Contract/integration/E2E suite
 
-- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **Còn hoãn**: ask→citation (P2-10 chặn), upload→indexed real-mode, OWASP baseline. Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-switch.spec.ts` chứng minh "no stale org-A render" (mock 20 spec). Unit/component đã có (424 test).
+- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **ask→citation đã hết hoãn** (P2-10): `web/e2e/qa.spec.ts` — search→preview, ask→stream→citations, kịch bản `citation_revoked` giữa chừng, kịch bản fallback extractive (mock 24 spec, xem chi tiết ở mục P2-10). **Còn hoãn**: upload→indexed real-mode, OWASP baseline. Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-switch.spec.ts` chứng minh "no stale org-A render" (mock 24 spec). Unit/component đã có (462 test, tăng từ P2-10's reducer/QaPage suite).
 
 - **Plan/files:** Unit API/SSE/cache; component auth/library/Q&A/admin; Playwright full
   flows, org switch, deny/quota; CI artifacts redacted.
