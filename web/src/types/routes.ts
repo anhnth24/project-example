@@ -13,6 +13,7 @@ export type RouteName =
   | 'graph'
   | 'adminMembers'
   | 'adminUsage'
+  | 'adminProjects'
   | 'help'
   | 'notFound';
 

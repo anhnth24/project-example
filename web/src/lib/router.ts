@@ -12,6 +12,9 @@ const routeDefinitions: RouteDefinition[] = [
   { name: 'login', pattern: /^\/login\/?$/ },
   { name: 'adminMembers', pattern: /^\/admin\/members\/?$/ },
   { name: 'adminUsage', pattern: /^\/admin\/usage\/?$/ },
+  // P2-18/UX gap close (owner-approved "Khu Quản trị" design, 2026-07-29):
+  // project management moves out of LibraryPage into its own admin route.
+  { name: 'adminProjects', pattern: /^\/admin\/projects\/?$/ },
   { name: 'library', pattern: /^\/library(?:\/([^/]+))?\/?$/, param: 'collectionId' },
   { name: 'qa', pattern: /^\/qa(?:\/([^/]+))?\/?$/, param: 'collectionId' },
   { name: 'graph', pattern: /^\/graph(?:\/([^/]+))?\/?$/, param: 'collectionId' },

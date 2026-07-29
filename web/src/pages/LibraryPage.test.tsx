@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApiClient, type ApiClient } from '../api/client';
 import type { components } from '../api/generated/contract';
 import { installMockFetch, mockControl, resetMockState, uninstallMockFetch } from '../mocks';
@@ -502,11 +502,158 @@ describe('LibraryPage', () => {
       expect(screen.getByRole('link', { name: 'Product Specs' })).toBeVisible();
     });
 
-    // The create/assign flow itself (`ProjectsPanel`, gated by
-    // `useAuth().hasPermission`) is covered in `ProjectsPanel.test.tsx`,
-    // which — unlike this file's bare-`client`-injection convention — wraps
-    // in a real `AuthProvider` (same reason `AdminMembersPage.test.tsx`
-    // does, see its own module doc): `useAuth()` reads from `AuthContext`,
-    // which a bare injected `client` prop never populates.
+    // The create/rename/assign flow itself moved out of this page entirely
+    // (P2-18 "Khu Quản trị" move, owner critique 2026-07-29) into its own
+    // route — `AdminProjectsPage.test.tsx` covers it, wrapped in a real
+    // `AuthProvider` (same reason `AdminMembersPage.test.tsx` does): a bare
+    // injected `client` prop, this file's own convention, never populates
+    // `AuthContext`, so `useAuth().hasPermission` here always reads `false`.
+    it('no longer renders the old ProjectsPanel create/assign form — only collection-nav grouping and a permission-gated shortcut link remain', async () => {
+      const client = await loggedInClient();
+      renderLibrary(client, undefined);
+
+      await screen.findByText('Nhân sự');
+      expect(screen.queryByRole('heading', { name: 'Dự án' })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Tên dự án mới')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Tạo dự án' })).not.toBeInTheDocument();
+      // The shortcut link itself is gated on `doc.upload`, which a bare
+      // injected `client` (no `AuthProvider`) always reads as `false` for —
+      // see this describe block's own note above.
+      expect(screen.queryByRole('link', { name: 'Quản lý dự án' })).not.toBeInTheDocument();
+    });
+  });
+
+  describe('P2-08 gap close: live document-status polling', () => {
+    const RESTORE_VISIBILITY = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+
+    afterEach(() => {
+      vi.useRealTimers();
+      if (RESTORE_VISIBILITY) {
+        Object.defineProperty(document, 'visibilityState', RESTORE_VISIBILITY);
+      }
+    });
+
+    function setVisibility(state: 'visible' | 'hidden') {
+      Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+      act(() => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    }
+
+    function documentListCallCount(spy: { mock: { calls: unknown[][] } }): number {
+      return spy.mock.calls.filter((call) => call[1] === '/collections/{collectionId}/documents')
+        .length;
+    }
+
+    it('polls the document list every 5s while a non-terminal document is on the page, and stops once every document is terminal', async () => {
+      const collection = seedCollection();
+      const doc = seedDocument(collection.id, { title: 'Processing.pdf', state: 'converting' });
+      const client = await loggedInClient();
+      const requestSpy = vi.spyOn(client, 'request');
+
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderLibrary(client, collection.id);
+
+      await screen.findByRole('button', { name: /Processing\.pdf/ });
+      const baseline = documentListCallCount(requestSpy);
+
+      // The server (not a user action) finishes the pipeline between polls.
+      const stored = getStore()
+        .documents.get(collection.id)!
+        .find((d) => d.id === doc.id)!;
+      stored.state = 'indexed';
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200);
+      });
+
+      expect(await screen.findByText('Đã lập chỉ mục')).toBeVisible();
+      expect(documentListCallCount(requestSpy)).toBeGreaterThan(baseline);
+      const callsWhileTerminal = documentListCallCount(requestSpy);
+
+      // Every document on the page is now terminal — no more requests, even
+      // across several more base intervals.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(documentListCallCount(requestSpy)).toBe(callsWhileTerminal);
+    });
+
+    it('does not poll while there is no non-terminal document on the page', async () => {
+      const collection = seedCollection();
+      seedDocument(collection.id, { title: 'AlreadyDone.pdf', state: 'indexed' });
+      const client = await loggedInClient();
+      const requestSpy = vi.spyOn(client, 'request');
+
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderLibrary(client, collection.id);
+
+      await screen.findByRole('button', { name: /AlreadyDone\.pdf/ });
+      const baseline = documentListCallCount(requestSpy);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(documentListCallCount(requestSpy)).toBe(baseline);
+    });
+
+    it('stops polling while the tab is hidden, and resumes once it is visible again', async () => {
+      const collection = seedCollection();
+      seedDocument(collection.id, { title: 'Hidden.pdf', state: 'converting' });
+      const client = await loggedInClient();
+      const requestSpy = vi.spyOn(client, 'request');
+
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderLibrary(client, collection.id);
+
+      await screen.findByRole('button', { name: /Hidden\.pdf/ });
+      const baseline = documentListCallCount(requestSpy);
+
+      setVisibility('hidden');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+      expect(documentListCallCount(requestSpy)).toBe(baseline);
+
+      setVisibility('visible');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200);
+      });
+      expect(documentListCallCount(requestSpy)).toBeGreaterThan(baseline);
+    });
+
+    it('backs off after a poll error instead of retrying at the base 5s cadence, and the next attempt still lands', async () => {
+      const collection = seedCollection();
+      seedDocument(collection.id, { title: 'Retry.pdf', state: 'converting' });
+      const client = await loggedInClient();
+      const requestSpy = vi.spyOn(client, 'request');
+
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderLibrary(client, collection.id);
+
+      await screen.findByRole('button', { name: /Retry\.pdf/ });
+      const baseline = documentListCallCount(requestSpy);
+
+      // The next `listDocuments` call — the first poll tick — comes back 429.
+      mockControl.forceStatus('listDocuments', 429, { times: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5200);
+      });
+      await waitFor(() => expect(documentListCallCount(requestSpy)).toBe(baseline + 1));
+
+      // Backed off to stage 1 (15s): a plain 6s more must NOT yet produce a
+      // second poll attempt — a still-5s cadence would have.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(documentListCallCount(requestSpy)).toBe(baseline + 1);
+
+      // By well past the 15s backoff mark, the next attempt fires (and
+      // succeeds, since the forced 429 above only applied once).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      await waitFor(() => expect(documentListCallCount(requestSpy)).toBe(baseline + 2));
+    });
   });
 });

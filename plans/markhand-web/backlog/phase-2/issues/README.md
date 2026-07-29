@@ -137,10 +137,32 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #312. XHR progress thật, job SSE-nudge → `GET /jobs/{id}`. Không quan sát được stage index (API chỉ trả convert job id) — báo "converted, indexing tiếp server-side".
 
+  **Cập nhật (badge tự cập nhật khi tài liệu đang xử lý, 2026-07-29 — owner critique:
+  "trạng thái document chưa đúng giai đoạn xử lý khi load lại trang hoặc mở chức năng
+  khác rồi quay lại"):** `LibraryPage` trước đó chỉ `refreshDocuments()` (refetch
+  `GET /collections/{id}/documents`) khi có hành động rõ ràng (upload xong, bấm action)
+  — một tài liệu worker đang chuyển `converting → converted → indexing → indexed` phía
+  server đứng im trên UI tới khi F5. Đóng bằng cách poll đúng request đó (không chế
+  transport mới, vẫn qua `useScopeSafeRequest` sẵn có) mỗi 5s khi trang hiện tại có ≥1
+  tài liệu ở trạng thái non-terminal (`uploaded|converting|converted|indexing`); dừng khi
+  hết non-terminal, tab ẩn (`document.visibilityState`/`visibilitychange`), rời trang,
+  hoặc đổi org/collection (đã "miễn phí" theo scope-safety sẵn có của
+  `documentsData`/`retainedDocuments`). Backoff 5s→15s→30s khi lỗi liên tiếp, reset khi
+  thành công. Preview panel đang mở tài liệu đó cũng cập nhật theo (đọc lại từ cùng danh
+  sách đã poll, không cần dây riêng). Mock seam: `__markhandMockDocs.advance(documentId)`
+  (`components/library/testSupport.ts`'s `advanceDocumentState`, quy ước
+  `__markhandMock*` sẵn có) tiến 1 bước forward-only
+  (`uploaded→converting→converted→indexing→indexed`) — không tự chế "failed" (đó là một
+  outcome thật, không phải bước tiến). Test: component `LibraryPage.test.tsx` (fake
+  timers — bật/tắt theo non-terminal, tắt khi tab ẩn, backoff khi lỗi 429) + E2E mới
+  `e2e/document-status-polling.spec.ts` (upload → converting → advance seam 3 lần →
+  badge tự chuyển converted/indexing/indexed, không `page.reload()`/`page.goto()`).
+
 - **Plan/files:** Multipart/progress/cancel; job SSE; reconnect snapshot; accessible
   status for uploaded→indexed/failed.
 - **Depends:** P2-04/07. **Acceptance/tests:** Client/server progress distinct; recover
-  refresh; success/cancel/loss/gap/413/415/429/filename tests.
+  refresh; success/cancel/loss/gap/413/415/429/filename tests. **+ live status poll**:
+  xem cập nhật ở trên.
 - **Security:** No client conversion queue. **Out:** folder/watch/resumable protocol.
 
 ## P2-09 — Download/delete/reindex/retry
@@ -399,15 +421,42 @@ P2-15 + Phase 1C gate → P2-16
   → `409 name_taken` ở cả hai route. `ROUTE_INVENTORY` + `openapi.yaml` (`createProject`/
   `createCollection` responses) thêm `409`.
 
+  **Cập nhật (chuyển sang "Khu Quản trị" `/admin/projects`, 2026-07-29 — owner critique:
+  "quản lý project/document/người dùng đang thiết kế UIUX chưa hợp lý"):** `ProjectsPanel.tsx`
+  (đặt trong trang Thư viện, xem quyết định cũ ở trên) bị xoá; toàn bộ chức năng chuyển
+  sang trang admin mới `AdminProjectsPage.tsx` tại route `/admin/projects`, gate bởi
+  `ProtectedRoute permission="doc.upload"` (cùng permission server yêu cầu, không thêm
+  permission mới) — cùng nhóm rail "Quản trị" với Thành viên/Sử dụng đã có (rail thêm
+  divider/label "QUẢN TRỊ", item "Dự án" chỉ hiện khi `hasPermission('doc.upload')`;
+  Thành viên/Sử dụng không đổi, vẫn không rail-gate như trước). Nâng cấp thành bảng: mỗi
+  dự án 1 hàng — tên (sửa inline qua `PATCH /projects/{id}`), chip bộ sưu tập thuộc nó
+  (mỗi chip có nút "×" bỏ gán), số bộ sưu tập; khu "Chưa thuộc dự án" liệt kê collection
+  chưa gán + dropdown gán nhanh. `LibraryPage` chỉ còn duyệt (nav collection nhóm theo dự
+  án như cũ qua `CollectionNav.tsx` — không đổi) + link "Quản lý dự án" (gate cùng
+  permission) trỏ `/admin/projects`. **Gap đã xác nhận, không tự chế:** `PATCH
+  /projects/{id}` không khai báo 409 trong `openapi.yaml` (chỉ `POST /projects` có) —
+  sửa file đó ngoài phạm vi lượt việc chuyển trang này, nên inline-rename không hiện
+  thông báo "trùng tên" riêng, chỉ generic error path. Mock: `POST /projects` đã enforce
+  trùng tên (409 `name_taken`) từ cập nhật trước; `PATCH /projects/{id}` mock cố tình
+  KHÔNG enforce (khớp đúng gap contract ở trên, không lệch hành vi so với spec thật).
+  Test: `AdminProjectsPage.test.tsx` (bảng, tạo, 409 inline khi tạo trùng tên, sửa tên
+  inline, gán/bỏ gán) + `LibraryPage.test.tsx` cập nhật (ProjectsPanel không còn) +
+  `e2e/projects.spec.ts` viết lại theo flow mới (vào `/admin/projects` tạo + gán + đổi
+  tên + bỏ gán, quay lại Thư viện thấy nav đổi nhóm, 409 trùng tên, guard rail ẩn "Dự án"
+  khi thiếu quyền) + `App.test.tsx` thêm case "in-shell notice cho `/admin/projects`
+  không có `doc.upload`" (cùng mẫu case `/admin/members` đã có).
+
 - **Plan/files:** `crates/server/migrations/0032_expand_projects.sql`;
   `db/projects.rs`, `routes/projects.rs`; `routes/collections.rs` (assign-project +
   `projectId`/`projectName` hydration), `routes/search.rs`/`routes/ask.rs` (projectId
   filter); OpenAPI path/schemas (`Project`/`ProjectPage`/`CreateProjectRequest`/
   `UpdateProjectRequest`/`AssignProjectRequest`, `Collection`/`SearchRequest`/
   `AskRequest` mở rộng) + `ROUTE_INVENTORY`/`BODY_TAKING_OPERATIONS`;
-  `web/src/components/library/{CollectionNav,ProjectsPanel}.tsx`,
-  `components/qa/{ChatPanel,SearchPanel}.tsx`, `pages/QaPage.tsx`,
-  `mocks/{fixtures,handlers/{library,projects,qa}}.ts`.
+  `web/src/components/library/CollectionNav.tsx`, `web/src/pages/AdminProjectsPage.tsx`
+  (replaces the old `components/library/ProjectsPanel.tsx`, removed), `App.tsx`/
+  `lib/router.ts`/`types/routes.ts` (`/admin/projects` route), `components/shell/Rail.tsx`
+  (+ `styles.css`, "QUẢN TRỊ" group), `components/qa/{ChatPanel,SearchPanel}.tsx`,
+  `pages/QaPage.tsx`, `mocks/{fixtures,handlers/{library,projects,qa}}.ts`.
 - **Depends:** P2-07 (Thư viện/`CollectionNav`), P2-10 (Q&A composer/`ChatPanel`),
   backend 1B collections + retrieval (`services::retrieval::resolve_scope`).
 - **Acceptance/tests:** `tests/projects.rs` DB-gated (CRUD happy/validate/403/404, org
@@ -416,9 +465,12 @@ P2-15 + Phase 1C gate → P2-16
   chạy trên PG local); `db::models`/`schema_migrations.rs` drift guard
   cập nhật cho bảng `projects` + cột `collections.project_id`; web unit
   (`QaPage.test.tsx` phạm vi dropdown + reset khi đổi org, `LibraryPage.test.tsx` nhóm
-  nav theo dự án, `ProjectsPanel.test.tsx` tạo/gán/bỏ gán + permission gate) +
-  `e2e/projects.spec.ts` (tạo dự án → gán bộ sưu tập → Hỏi đáp chọn phạm vi → search
-  đúng tập → "Tất cả dự án" ra đủ).
+  nav theo dự án + xác nhận ProjectsPanel không còn, `AdminProjectsPage.test.tsx`
+  bảng/tạo/409 inline/sửa tên/gán/bỏ gán, `App.test.tsx` in-shell notice cho
+  `/admin/projects` thiếu quyền) + `e2e/projects.spec.ts` viết lại (vào `/admin/projects`
+  tạo + gán + đổi tên + bỏ gán → quay lại Thư viện thấy nav đổi nhóm; 409 trùng tên;
+  guard rail ẩn "Dự án" khi thiếu quyền) — luồng cũ "gán rồi Hỏi đáp chọn phạm vi →
+  search đúng tập → 'Tất cả dự án' ra đủ" giữ nguyên hành vi, chỉ đổi nơi tạo/gán.
 - **Security:** Cùng permission `doc.upload` với collection create/update (không thêm
   permission mới); RLS org-scoped như `collections`. **Out:** xóa dự án, gán một bộ sưu
   tập vào nhiều dự án, project-scoped permission riêng.

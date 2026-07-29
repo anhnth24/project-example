@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import {
   CircleHelp,
+  FolderKanban,
   Gauge,
   Library,
   MessageCircleQuestion,
@@ -15,6 +16,7 @@ import {
   Users,
   type LucideIcon,
 } from 'lucide-react';
+import { useAuth } from '../../auth/AuthContext';
 import { BrandMark } from '../BrandMark';
 import { RouteLink } from '../RouteLink';
 import { useRouter } from '../../state/RouterProvider';
@@ -52,6 +54,15 @@ interface RailDestination {
   to: string;
   label: string;
   Icon: LucideIcon;
+  /**
+   * UI convenience only, same caveat `RouteGuard.tsx`'s own `ProtectedRoute`
+   * makes about its `permission` prop — hides the rail item when the
+   * signed-in caller lacks it, never an authorization decision (the target
+   * page's own `ProtectedRoute` and the server's 403 are what actually
+   * decide). Omitted means "always shown", matching every destination below
+   * before this field existed.
+   */
+  permission?: string;
 }
 
 /**
@@ -59,24 +70,79 @@ interface RailDestination {
  * (public-only — the rail itself is not rendered on that route, see App.tsx)
  * and does not invent a separate "upload" destination: the router
  * (`types/routes.ts`) has no `/upload` route — the route list is
- * `/login`, `/library`, `/qa`, `/graph`, `/admin/members`, `/admin/usage`,
- * `/help` — so "upload" from the shell brief lives inside LibraryPage's own
- * UI, not as a rail-level navigation target. `graph` (P2-17, "Đồ thị") is
- * the newest addition — a read-only cross-document view, so it sits right
- * after `qa` rather than grouped with the admin-only destinations below it.
+ * `/login`, `/library`, `/qa`, `/graph`, `/admin/projects`, `/admin/members`,
+ * `/admin/usage`, `/help` — so "upload" from the shell brief lives inside
+ * LibraryPage's own UI, not as a rail-level navigation target. `graph`
+ * (P2-17, "Đồ thị") is the newest addition — a read-only cross-document
+ * view, so it sits right after `qa` rather than grouped with the admin-only
+ * destinations below it.
  */
-const RAIL_DESTINATIONS: RailDestination[] = [
+const PRIMARY_DESTINATIONS: RailDestination[] = [
   { route: 'library', to: '/library', label: 'Thư viện', Icon: Library },
   { route: 'qa', to: '/qa', label: 'Hỏi đáp', Icon: MessageCircleQuestion },
   { route: 'graph', to: '/graph', label: 'Đồ thị', Icon: Network },
+];
+
+/**
+ * "Khu Quản trị" (owner-approved rail design, 2026-07-29): "Dự án" (new,
+ * P2-18's project management moved here from `LibraryPage`'s old
+ * `ProjectsPanel`) grouped with the two pre-existing admin destinations
+ * under one visible "QUẢN TRỊ" divider/label, rather than reading as three
+ * unrelated icons in the middle of the rail. Only "Dự án" carries a
+ * `permission` here — Members/Usage were never rail-gated (only their own
+ * page content is, via `ProtectedRoute`'s `permission` prop in `App.tsx`)
+ * and this change does not touch that. `doc.upload` is the same permission
+ * `POST /projects`/`POST /collections/{id}/assign-project` require
+ * server-side (see `AdminProjectsPage.tsx`'s own module doc) — no new
+ * permission was invented for this move.
+ */
+const ADMIN_DESTINATIONS: RailDestination[] = [
+  {
+    route: 'adminProjects',
+    to: '/admin/projects',
+    label: 'Dự án',
+    Icon: FolderKanban,
+    permission: 'doc.upload',
+  },
   { route: 'adminMembers', to: '/admin/members', label: 'Thành viên', Icon: Users },
   { route: 'adminUsage', to: '/admin/usage', label: 'Sử dụng', Icon: Gauge },
-  { route: 'help', to: '/help', label: 'Trợ giúp', Icon: CircleHelp },
 ];
+
+const HELP_DESTINATION: RailDestination = {
+  route: 'help',
+  to: '/help',
+  label: 'Trợ giúp',
+  Icon: CircleHelp,
+};
+
+function RailNavItem({ destination, active }: { destination: RailDestination; active: boolean }) {
+  const { to, label, Icon } = destination;
+  return (
+    <li>
+      <RailHint label={label}>
+        <RouteLink
+          to={to}
+          className="rail-btn rail-link"
+          aria-label={label}
+          aria-current={active ? 'page' : undefined}
+        >
+          <Icon size={20} strokeWidth={2.75} aria-hidden="true" />
+          <span className="rail-link-label" aria-hidden="true">
+            {label}
+          </span>
+        </RouteLink>
+      </RailHint>
+    </li>
+  );
+}
 
 export function Rail() {
   const { match } = useRouter();
+  const { hasPermission } = useAuth();
   const [expanded, setExpanded] = useState(readExpandedPref);
+  const visibleAdminDestinations = ADMIN_DESTINATIONS.filter(
+    (destination) => !destination.permission || hasPermission(destination.permission),
+  );
 
   function toggleExpanded() {
     setExpanded((prev) => {
@@ -116,23 +182,31 @@ export function Rail() {
 
       <nav className="rail-nav" aria-label="Điều hướng chính">
         <ul className="rail-nav-list">
-          {RAIL_DESTINATIONS.map(({ route, to, label, Icon }) => (
-            <li key={route}>
-              <RailHint label={label}>
-                <RouteLink
-                  to={to}
-                  className="rail-btn rail-link"
-                  aria-label={label}
-                  aria-current={match.name === route ? 'page' : undefined}
-                >
-                  <Icon size={20} strokeWidth={2.75} aria-hidden="true" />
-                  <span className="rail-link-label" aria-hidden="true">
-                    {label}
-                  </span>
-                </RouteLink>
-              </RailHint>
-            </li>
+          {PRIMARY_DESTINATIONS.map((destination) => (
+            <RailNavItem
+              key={destination.route}
+              destination={destination}
+              active={match.name === destination.route}
+            />
           ))}
+
+          {/* "QUẢN TRỊ" group divider — visible label only in the expanded
+              rail (mirrors `.rail-link-label`'s own collapsed/expanded
+              split); `aria-hidden` because it is a purely visual grouping
+              cue, not a landmark a screen-reader user needs announced
+              (each item beneath it still has its own accessible name). */}
+          <li className="rail-nav-divider" role="presentation" aria-hidden="true">
+            <span className="rail-nav-group-label">Quản trị</span>
+          </li>
+          {visibleAdminDestinations.map((destination) => (
+            <RailNavItem
+              key={destination.route}
+              destination={destination}
+              active={match.name === destination.route}
+            />
+          ))}
+
+          <RailNavItem destination={HELP_DESTINATION} active={match.name === 'help'} />
         </ul>
       </nav>
 

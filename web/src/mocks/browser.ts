@@ -12,7 +12,11 @@
 // per-test reset hook. `window.__markhandMockReset` is also exposed so a test
 // can re-seed mid-scenario (e.g. after a destructive flow) without a reload.
 import { grantMemberManage } from '../components/admin/testSupport';
-import { grantDocUpload } from '../components/library/testSupport';
+import {
+  advanceDocumentState,
+  grantDocUpload,
+  revokeDocUpload,
+} from '../components/library/testSupport';
 import { succeedJob } from '../components/upload/testSupport';
 import { installMockFetch, mockControl, resetMockState } from './index';
 
@@ -32,6 +36,20 @@ declare global {
      * its own seam rather than reusing `__markhandMockControl`. E2E-only.
      */
     __markhandMockJobs?: { succeed: typeof succeedJob };
+    /**
+     * Advances a document's own `state` one step along
+     * uploaded->converting->converted->indexing->indexed — see
+     * `components/library/testSupport.ts`'s `advanceDocumentState` for why
+     * this needs its own seam. E2E-only (P2-08 live-status-polling spec).
+     */
+    __markhandMockDocs?: { advance: typeof advanceDocumentState };
+    /**
+     * Revokes `doc.upload` from the demo user in place — the inverse of the
+     * grant this file applies by default below, needed by the rail "guard
+     * quyền" E2E spec. See `components/library/testSupport.ts`'s
+     * `revokeDocUpload` for the login-ordering caveat. E2E-only.
+     */
+    __markhandMockPermissions?: { revokeDocUpload: typeof revokeDocUpload };
   }
 }
 
@@ -55,4 +73,6 @@ export function installBrowserMocks(): void {
   };
   window.__markhandMockControl = mockControl;
   window.__markhandMockJobs = { succeed: succeedJob };
+  window.__markhandMockDocs = { advance: advanceDocumentState };
+  window.__markhandMockPermissions = { revokeDocUpload };
 }
