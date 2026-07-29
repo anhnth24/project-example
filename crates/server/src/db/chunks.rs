@@ -193,6 +193,13 @@ pub async fn delete_by_document(
 }
 
 /// Counts chunks visible under the tenant (cross-org denial evidence).
+///
+/// **Test-only by design — no collection ACL predicate.** Org-wide
+/// (`org_id` only, unused in production code today); see the identical
+/// warning on `db::documents::count` and
+/// `tests::org_only_count_helpers_stay_out_of_routes_and_services`
+/// (`tests/repositories.rs`), which enforces that nothing outside `tests/`
+/// calls it.
 pub async fn count(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbError> {
     let row = txn
         .query_one(

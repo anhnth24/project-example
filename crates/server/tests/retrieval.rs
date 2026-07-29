@@ -575,3 +575,303 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
 
     ephemeral.drop().await;
 }
+
+/// 1C-06: the FTS *candidate* leg must carry its own ACL predicate instead
+/// of relying solely on the hydration re-check downstream. This test calls
+/// `search::fts_search` directly with a `collection_ids` scope that
+/// includes a collection the caller has no ACL grant on — i.e. it
+/// deliberately bypasses `resolve_scope`'s allow-list intersection, the
+/// same shape a stale cached `OrgContext.allowed_collection_ids` (context
+/// cache TTL, or a long-lived ask-stream session) could produce. Before
+/// this round `fts_search` had no ACL check at all and would have returned
+/// the denied-collection candidate for hydration to filter out later; now
+/// it must never surface it as a candidate in the first place.
+///
+/// Also covers the membership-`state` gap found while building the shared
+/// ACL predicate: a *suspended* (not deleted) `org_memberships` row must
+/// deny both the FTS candidate leg and hydration, matching 1C-02's
+/// "suspended resolves like missing" invariant. The existing
+/// `fts_rank_accent_fold_and_active_generation_gates` test only exercised
+/// full membership deletion, which trivially denies via a missing JOIN row
+/// regardless of whether `state` is checked.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&base_url).await;
+    apply_migrations(&ephemeral.url)
+        .await
+        .expect("migrate ephemeral db");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let other_user = Uuid::new_v4();
+    let collection_allowed = Uuid::new_v4();
+    let collection_denied = Uuid::new_v4();
+    let role = Uuid::new_v4();
+    let document_allowed = Uuid::new_v4();
+    let document_denied = Uuid::new_v4();
+    let version_allowed = Uuid::new_v4();
+    let version_denied = Uuid::new_v4();
+    let meta_allowed = Uuid::new_v4();
+    let meta_denied = Uuid::new_v4();
+    let chunk_allowed = Uuid::new_v4();
+    let chunk_denied = Uuid::new_v4();
+    let identity_allowed = sha64('1');
+    let identity_denied = sha64('2');
+    let ctx = OrgContext::try_new(
+        org,
+        user,
+        [PERMISSION_QA_QUERY, PERMISSION_QA_HISTORY],
+        [collection_allowed, collection_denied],
+    )
+    .unwrap();
+
+    with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        let identity_allowed = identity_allowed.clone();
+        let identity_denied = identity_denied.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO orgs (id, slug, name) VALUES ($1, $2, $3)",
+                    &[&ctx.org_id(), &format!("org-{}", ctx.org_id()), &"org"],
+                )
+                .await?;
+                for (id, label) in [(ctx.user_id(), "u"), (other_user, "o")] {
+                    let email = format!("{id}@example.test");
+                    txn.execute(
+                        "INSERT INTO users (id, email, display_name, password_hash)
+                         VALUES ($1, $2, $3, 'test-hash')",
+                        &[&id, &email, &label],
+                    )
+                    .await?;
+                }
+                // Only the acting user is a member of the org; `other_user`
+                // merely owns the denied collection, proving that ownership
+                // by a non-member cannot leak access to a member either.
+                txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, 'viewer')",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO roles (id, org_id, code, name, is_system)
+                     VALUES ($1, $2, 'viewer', 'Viewer', true)",
+                    &[&role, &ctx.org_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id
+                     FROM permissions
+                     WHERE code IN ('qa.query', 'qa.history')",
+                    &[&ctx.org_id(), &role],
+                )
+                .await?;
+
+                // `collection_allowed`: acting user is the owner -> ACL grants access.
+                txn.execute(
+                    "INSERT INTO collections (
+                        id, org_id, name, slug, owner_user_id, visibility
+                     ) VALUES ($1, $2, 'allowed', $3, $4, 'private')",
+                    &[
+                        &collection_allowed,
+                        &ctx.org_id(),
+                        &format!("c-allowed-{collection_allowed}"),
+                        &ctx.user_id(),
+                    ],
+                )
+                .await?;
+                // `collection_denied`: owned by someone else, private, no
+                // direct grant to the acting user -> ACL must deny it, even
+                // though it is included in this request's `collection_ids`.
+                txn.execute(
+                    "INSERT INTO collections (
+                        id, org_id, name, slug, owner_user_id, visibility
+                     ) VALUES ($1, $2, 'denied', $3, $4, 'private')",
+                    &[
+                        &collection_denied,
+                        &ctx.org_id(),
+                        &format!("c-denied-{collection_denied}"),
+                        &other_user,
+                    ],
+                )
+                .await?;
+
+                for (doc, coll, version, meta, chunk, identity, tag) in [
+                    (
+                        document_allowed,
+                        collection_allowed,
+                        version_allowed,
+                        meta_allowed,
+                        chunk_allowed,
+                        identity_allowed.clone(),
+                        "allowed",
+                    ),
+                    (
+                        document_denied,
+                        collection_denied,
+                        version_denied,
+                        meta_denied,
+                        chunk_denied,
+                        identity_denied.clone(),
+                        "denied",
+                    ),
+                ] {
+                    txn.execute(
+                        "INSERT INTO documents (
+                            id, org_id, collection_id, title, state, created_by_user_id
+                         ) VALUES ($1, $2, $3, $4, 'indexed', $5)",
+                        &[&doc, &ctx.org_id(), &coll, &tag, &ctx.user_id()],
+                    )
+                    .await?;
+                    let content_sha = sha64(tag.chars().next().unwrap());
+                    txn.execute(
+                        "INSERT INTO document_versions (
+                            id, org_id, document_id, version_number, publication_state,
+                            is_current, content_sha256, original_object_key, effective_from,
+                            created_by_user_id
+                         ) VALUES ($1,$2,$3,1,'published',true,$4,$5, now(), $6)",
+                        &[
+                            &version,
+                            &ctx.org_id(),
+                            &doc,
+                            &content_sha,
+                            &format!("k-{tag}"),
+                            &ctx.user_id(),
+                        ],
+                    )
+                    .await?;
+                    txn.execute(
+                        "UPDATE documents SET current_version_id = $1 WHERE id = $2",
+                        &[&version, &doc],
+                    )
+                    .await?;
+                    let sig = sha64(tag.chars().next().unwrap());
+                    txn.execute(
+                        "INSERT INTO index_metadata (
+                            id, org_id, collection_id, index_signature_sha256,
+                            embedding_family, embedding_revision, dimensions, runtime_path,
+                            generation, is_active, state
+                         ) VALUES ($1,$2,$3,$4,'f','r',8,'local-hash',1,true,'active')",
+                        &[&meta, &ctx.org_id(), &coll, &sig],
+                    )
+                    .await?;
+                    txn.execute(
+                        "INSERT INTO chunks (
+                            id, org_id, document_id, version_id, ordinal, heading_path, body,
+                            chunk_identity_sha256, index_metadata_id, index_signature
+                         ) VALUES ($1,$2,$3,$4,0,ARRAY['Đối soát'],
+                                   'Đối soát giao dịch theo ngày',$5,$6,$7)",
+                        &[
+                            &chunk,
+                            &ctx.org_id(),
+                            &doc,
+                            &version,
+                            &identity,
+                            &meta,
+                            &sig,
+                        ],
+                    )
+                    .await?;
+                }
+
+                // --- Candidate leg (FTS) must not surface the denied collection ---
+                let hits = search::fts_search(
+                    txn,
+                    &ctx,
+                    &[collection_allowed, collection_denied],
+                    "Đối soát",
+                    &VersionVisibility::Current,
+                    10,
+                )
+                .await?;
+                assert_eq!(
+                    hits.len(),
+                    1,
+                    "FTS candidate leg must exclude the ACL-denied collection even when \
+                     it is present in collection_ids"
+                );
+                assert_eq!(hits[0].chunk_id, chunk_allowed);
+
+                // --- Hydration must agree (non-regression) ---
+                let hydrated = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection_allowed, collection_denied],
+                    &[identity_allowed.clone(), identity_denied.clone()],
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert_eq!(hydrated.len(), 1);
+                assert_eq!(hydrated[0].chunk_id, chunk_allowed);
+
+                // --- Suspended (not deleted) membership must deny both legs ---
+                txn.execute(
+                    "UPDATE org_memberships SET state = 'suspended'
+                     WHERE org_id = $1 AND user_id = $2",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                let hits_suspended = search::fts_search(
+                    txn,
+                    &ctx,
+                    &[collection_allowed],
+                    "Đối soát",
+                    &VersionVisibility::Current,
+                    10,
+                )
+                .await?;
+                assert!(
+                    hits_suspended.is_empty(),
+                    "FTS candidate leg must deny a suspended (not just deleted) membership"
+                );
+                let hydrated_suspended = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx,
+                    &[collection_allowed],
+                    std::slice::from_ref(&identity_allowed),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert!(
+                    hydrated_suspended.is_empty(),
+                    "hydration must deny a suspended (not just deleted) membership"
+                );
+
+                // --- Reactivate: sanity check this isn't a broader false-deny bug ---
+                txn.execute(
+                    "UPDATE org_memberships SET state = 'active'
+                     WHERE org_id = $1 AND user_id = $2",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                let hits_reactivated = search::fts_search(
+                    txn,
+                    &ctx,
+                    &[collection_allowed],
+                    "Đối soát",
+                    &VersionVisibility::Current,
+                    10,
+                )
+                .await?;
+                assert_eq!(
+                    hits_reactivated.len(),
+                    1,
+                    "reactivated membership must see its own collection again"
+                );
+
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("acl predicate fixture");
+
+    ephemeral.drop().await;
+}
