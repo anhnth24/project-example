@@ -35,6 +35,25 @@ export const DOCUMENT_STATE_META: Record<DocumentState, DocumentStateMeta> = {
   purged: { label: 'Đã xoá vĩnh viễn', tagClass: 'tag-neutral', spinning: false },
 };
 
+/**
+ * P2-08 gap close (live status polling, owner critique 2026-07-29): the
+ * states a document is still mid-pipeline in, server-side — anything not in
+ * this set is a resting point the worker will never move on from by itself
+ * (`indexed`/`failed`) or a soft-delete state (`tombstoned`/`purged`), so
+ * there is nothing left to poll for once every document on a page is one of
+ * those.
+ */
+const NON_TERMINAL_DOCUMENT_STATES: ReadonlySet<DocumentState> = new Set([
+  'uploaded',
+  'converting',
+  'converted',
+  'indexing',
+]);
+
+export function isNonTerminalState(state: DocumentState): boolean {
+  return NON_TERMINAL_DOCUMENT_STATES.has(state);
+}
+
 const dateTimeFormatter = new Intl.DateTimeFormat('vi-VN', {
   dateStyle: 'medium',
   timeStyle: 'short',

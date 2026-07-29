@@ -5,7 +5,7 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 <!-- roadmap-default-status: backlog -->
 
 **Trạng thái tổng quan (cập nhật 2026-07-29).** MVP xây trên mock server đã merge vào
-`master`: **13/18 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
+`master`: **13/19 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
 + serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
 xem chi tiết bên dưới), P2-15 (E2E — nửa mock-based xong, nay có thêm flow ask→citation
 của P2-10; nửa real-deployment hoãn), **P2-17** (Document graph — owner request mới
@@ -137,10 +137,32 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #312. XHR progress thật, job SSE-nudge → `GET /jobs/{id}`. Không quan sát được stage index (API chỉ trả convert job id) — báo "converted, indexing tiếp server-side".
 
+  **Cập nhật (badge tự cập nhật khi tài liệu đang xử lý, 2026-07-29 — owner critique:
+  "trạng thái document chưa đúng giai đoạn xử lý khi load lại trang hoặc mở chức năng
+  khác rồi quay lại"):** `LibraryPage` trước đó chỉ `refreshDocuments()` (refetch
+  `GET /collections/{id}/documents`) khi có hành động rõ ràng (upload xong, bấm action)
+  — một tài liệu worker đang chuyển `converting → converted → indexing → indexed` phía
+  server đứng im trên UI tới khi F5. Đóng bằng cách poll đúng request đó (không chế
+  transport mới, vẫn qua `useScopeSafeRequest` sẵn có) mỗi 5s khi trang hiện tại có ≥1
+  tài liệu ở trạng thái non-terminal (`uploaded|converting|converted|indexing`); dừng khi
+  hết non-terminal, tab ẩn (`document.visibilityState`/`visibilitychange`), rời trang,
+  hoặc đổi org/collection (đã "miễn phí" theo scope-safety sẵn có của
+  `documentsData`/`retainedDocuments`). Backoff 5s→15s→30s khi lỗi liên tiếp, reset khi
+  thành công. Preview panel đang mở tài liệu đó cũng cập nhật theo (đọc lại từ cùng danh
+  sách đã poll, không cần dây riêng). Mock seam: `__markhandMockDocs.advance(documentId)`
+  (`components/library/testSupport.ts`'s `advanceDocumentState`, quy ước
+  `__markhandMock*` sẵn có) tiến 1 bước forward-only
+  (`uploaded→converting→converted→indexing→indexed`) — không tự chế "failed" (đó là một
+  outcome thật, không phải bước tiến). Test: component `LibraryPage.test.tsx` (fake
+  timers — bật/tắt theo non-terminal, tắt khi tab ẩn, backoff khi lỗi 429) + E2E mới
+  `e2e/document-status-polling.spec.ts` (upload → converting → advance seam 3 lần →
+  badge tự chuyển converted/indexing/indexed, không `page.reload()`/`page.goto()`).
+
 - **Plan/files:** Multipart/progress/cancel; job SSE; reconnect snapshot; accessible
   status for uploaded→indexed/failed.
 - **Depends:** P2-04/07. **Acceptance/tests:** Client/server progress distinct; recover
-  refresh; success/cancel/loss/gap/413/415/429/filename tests.
+  refresh; success/cancel/loss/gap/413/415/429/filename tests. **+ live status poll**:
+  xem cập nhật ở trên.
 - **Security:** No client conversion queue. **Out:** folder/watch/resumable protocol.
 
 ## P2-09 — Download/delete/reindex/retry
@@ -272,6 +294,35 @@ P2-15 + Phase 1C gate → P2-16
   memory (server vẫn đơn lượt; history chat là UI-only, không gửi lên server, không
   persist).
 
+  **Cập nhật (chat-first redesign landed, 2026-07-29 — owner: "hiện tại phần hỏi đáp đang
+  nhìn lộn xộn quá"):** `QaPage` viết lại theo 4 phần. **(A)** Layout chat-first: log chat
+  + composer là cột chính, `SearchPanel` thu vào tab "Tìm kiếm" (tab "Hỏi đáp" mặc định);
+  sidebar lịch sử (`ChatHistorySidebar`, thu gọn được) đọc P2-19's `listChatSessions`
+  (mới, cursor "tải thêm", most-recently-active-first) — xem mục cập nhật riêng ở P2-19
+  bên dưới cho toàn bộ phần "ghi lịch sử thật". Disclaimer "chỉ lưu tạm trong phiên này"
+  cũ đã bỏ (không còn đúng). **(B)** Dropdown "Phạm vi" đơn (`projectId`) → multi-select
+  chip popover (`ProjectPicker.tsx`, tái dùng nguyên `useRailPopover`/`useFloatingMenu`
+  pattern của `OrgSwitch`) gửi `projectIds[]` (P2-19) cho cả `search`/`ask`/`ask/stream`;
+  `projectId` đơn không còn được UI dùng nữa (server vẫn nhận cả hai, xem P2-19).
+  **(C)** Citations chuyển từ danh sách `CitationCard` phẳng sang footnote cuối câu trả
+  lời: `citationFootnotes.ts` (thuần, có unit test riêng) tách answer text theo token
+  `[CITE-xxxx]` server đã nhúng sẵn (xác minh trong `crates/knowledge/src/citation.rs` +
+  `mocks/handlers/qa.ts`'s `buildAnswer`, không đoán) thành `[n]` inline + khối "Nguồn
+  trích dẫn" đánh số cuối bubble (`CitationFootnotes.tsx`, tái cấu trúc từ
+  `CitationCard.tsx` chứ không viết lại logic deep-link/page-label). **Gap còn lại (đã
+  xác minh, không phải chưa làm xong):** `CitationPin` không có field `documentTitle` —
+  chỉ `logicalDocumentId`/`collectionId` (uuid) — nên một footnote không thể hiện tên tài
+  liệu thật mà không thêm N request lookup/pin (bị cấm theo brief); item hiện hiển thị
+  theo tên bộ sưu tập (từ `GET /collections` gọi đúng 1 lần/trang, không phải/citation) +
+  vị trí (trang/slide/sheet, field `page` đã có sẵn từ trước — xem P2-19 mục 3, KHÔNG
+  phải field mới) + quote. `page` **đã** hiển thị được (qua `CitationFootnotes`), bản mô
+  tả nhiệm vụ ban đầu nói "chưa hiển thị ở đâu" là sai/lỗi thời — đã xác minh code trước
+  khi tin. **(D)** Dọn spacing/heading nhất quán `.card`/design system hiện có; mode
+  badge/warnings gọn lại. `ChatTurnBubble`/`HistoricalTurnBubble` (mới — turn đã lưu, tĩnh,
+  không `useAskStream`) giờ dùng chung `AnswerText`/`CitationFootnotes`. E2E: `qa.spec.ts`
+  cập nhật theo layout mới (tab, footnote, multi-select) + `chat-history.spec.ts` mới
+  (part A) — suite mock E2E tổng 36 (từ 33).
+
 ## P2-11 — Member/role admin
 
 - **Status:** Done — #317. UI member table/invite (one-time token)/suspend/role/remove, owner-tier fail-closed mirror server, last-owner 409 + owner-tier 403 mapped. Mở khoá nhờ lát membership API (1C-02/1C-11) landed cùng #317.
@@ -399,15 +450,42 @@ P2-15 + Phase 1C gate → P2-16
   → `409 name_taken` ở cả hai route. `ROUTE_INVENTORY` + `openapi.yaml` (`createProject`/
   `createCollection` responses) thêm `409`.
 
+  **Cập nhật (chuyển sang "Khu Quản trị" `/admin/projects`, 2026-07-29 — owner critique:
+  "quản lý project/document/người dùng đang thiết kế UIUX chưa hợp lý"):** `ProjectsPanel.tsx`
+  (đặt trong trang Thư viện, xem quyết định cũ ở trên) bị xoá; toàn bộ chức năng chuyển
+  sang trang admin mới `AdminProjectsPage.tsx` tại route `/admin/projects`, gate bởi
+  `ProtectedRoute permission="doc.upload"` (cùng permission server yêu cầu, không thêm
+  permission mới) — cùng nhóm rail "Quản trị" với Thành viên/Sử dụng đã có (rail thêm
+  divider/label "QUẢN TRỊ", item "Dự án" chỉ hiện khi `hasPermission('doc.upload')`;
+  Thành viên/Sử dụng không đổi, vẫn không rail-gate như trước). Nâng cấp thành bảng: mỗi
+  dự án 1 hàng — tên (sửa inline qua `PATCH /projects/{id}`), chip bộ sưu tập thuộc nó
+  (mỗi chip có nút "×" bỏ gán), số bộ sưu tập; khu "Chưa thuộc dự án" liệt kê collection
+  chưa gán + dropdown gán nhanh. `LibraryPage` chỉ còn duyệt (nav collection nhóm theo dự
+  án như cũ qua `CollectionNav.tsx` — không đổi) + link "Quản lý dự án" (gate cùng
+  permission) trỏ `/admin/projects`. **Gap đã xác nhận, không tự chế:** `PATCH
+  /projects/{id}` không khai báo 409 trong `openapi.yaml` (chỉ `POST /projects` có) —
+  sửa file đó ngoài phạm vi lượt việc chuyển trang này, nên inline-rename không hiện
+  thông báo "trùng tên" riêng, chỉ generic error path. Mock: `POST /projects` đã enforce
+  trùng tên (409 `name_taken`) từ cập nhật trước; `PATCH /projects/{id}` mock cố tình
+  KHÔNG enforce (khớp đúng gap contract ở trên, không lệch hành vi so với spec thật).
+  Test: `AdminProjectsPage.test.tsx` (bảng, tạo, 409 inline khi tạo trùng tên, sửa tên
+  inline, gán/bỏ gán) + `LibraryPage.test.tsx` cập nhật (ProjectsPanel không còn) +
+  `e2e/projects.spec.ts` viết lại theo flow mới (vào `/admin/projects` tạo + gán + đổi
+  tên + bỏ gán, quay lại Thư viện thấy nav đổi nhóm, 409 trùng tên, guard rail ẩn "Dự án"
+  khi thiếu quyền) + `App.test.tsx` thêm case "in-shell notice cho `/admin/projects`
+  không có `doc.upload`" (cùng mẫu case `/admin/members` đã có).
+
 - **Plan/files:** `crates/server/migrations/0032_expand_projects.sql`;
   `db/projects.rs`, `routes/projects.rs`; `routes/collections.rs` (assign-project +
   `projectId`/`projectName` hydration), `routes/search.rs`/`routes/ask.rs` (projectId
   filter); OpenAPI path/schemas (`Project`/`ProjectPage`/`CreateProjectRequest`/
   `UpdateProjectRequest`/`AssignProjectRequest`, `Collection`/`SearchRequest`/
   `AskRequest` mở rộng) + `ROUTE_INVENTORY`/`BODY_TAKING_OPERATIONS`;
-  `web/src/components/library/{CollectionNav,ProjectsPanel}.tsx`,
-  `components/qa/{ChatPanel,SearchPanel}.tsx`, `pages/QaPage.tsx`,
-  `mocks/{fixtures,handlers/{library,projects,qa}}.ts`.
+  `web/src/components/library/CollectionNav.tsx`, `web/src/pages/AdminProjectsPage.tsx`
+  (replaces the old `components/library/ProjectsPanel.tsx`, removed), `App.tsx`/
+  `lib/router.ts`/`types/routes.ts` (`/admin/projects` route), `components/shell/Rail.tsx`
+  (+ `styles.css`, "QUẢN TRỊ" group), `components/qa/{ChatPanel,SearchPanel}.tsx`,
+  `pages/QaPage.tsx`, `mocks/{fixtures,handlers/{library,projects,qa}}.ts`.
 - **Depends:** P2-07 (Thư viện/`CollectionNav`), P2-10 (Q&A composer/`ChatPanel`),
   backend 1B collections + retrieval (`services::retrieval::resolve_scope`).
 - **Acceptance/tests:** `tests/projects.rs` DB-gated (CRUD happy/validate/403/404, org
@@ -416,9 +494,12 @@ P2-15 + Phase 1C gate → P2-16
   chạy trên PG local); `db::models`/`schema_migrations.rs` drift guard
   cập nhật cho bảng `projects` + cột `collections.project_id`; web unit
   (`QaPage.test.tsx` phạm vi dropdown + reset khi đổi org, `LibraryPage.test.tsx` nhóm
-  nav theo dự án, `ProjectsPanel.test.tsx` tạo/gán/bỏ gán + permission gate) +
-  `e2e/projects.spec.ts` (tạo dự án → gán bộ sưu tập → Hỏi đáp chọn phạm vi → search
-  đúng tập → "Tất cả dự án" ra đủ).
+  nav theo dự án + xác nhận ProjectsPanel không còn, `AdminProjectsPage.test.tsx`
+  bảng/tạo/409 inline/sửa tên/gán/bỏ gán, `App.test.tsx` in-shell notice cho
+  `/admin/projects` thiếu quyền) + `e2e/projects.spec.ts` viết lại (vào `/admin/projects`
+  tạo + gán + đổi tên + bỏ gán → quay lại Thư viện thấy nav đổi nhóm; 409 trùng tên;
+  guard rail ẩn "Dự án" khi thiếu quyền) — luồng cũ "gán rồi Hỏi đáp chọn phạm vi →
+  search đúng tập → 'Tất cả dự án' ra đủ" giữ nguyên hành vi, chỉ đổi nơi tạo/gán.
 - **Security:** Cùng permission `doc.upload` với collection create/update (không thêm
   permission mới); RLS org-scoped như `collections`. **Out:** xóa dự án, gán một bộ sưu
   tập vào nhiều dự án, project-scoped permission riêng.
@@ -427,3 +508,93 @@ P2-15 + Phase 1C gate → P2-16
 
 Phase 2 chỉ đóng khi P2-16 đạt trên backend deploy thật và Phase 1C denial/security
 gate đã pass; mock E2E không thay thế integration.
+
+## P2-19 — Chat history (private per-user) + multi-project `projectIds[]`
+
+- **Status:** In progress — owner yêu cầu mới 2026-07-29. Backend-only vòng này (server
+  API + OpenAPI + tests); web UI đọc/hiện lịch sử chat và multi-select phạm vi dự án
+  trong composer là việc của vòng sau, chưa làm ở đây.
+  **(1) `projectIds: string[]`** trên `SearchRequest`/`AskRequest` (ask-stream dùng
+  chung `AskRequest`): hợp (union) collection ids của mọi project trong mảng, giao với
+  ACL/`collectionIds` như `projectId` đơn (P2-18) đã làm — không có đường retrieval
+  mới. `projectId` đơn deprecated nhưng giữ hoạt động nguyên trạng (web hiện dùng nó);
+  gửi cả hai field cùng lúc thì hợp cả hai. Bất kỳ id nào không tồn tại/khác org → 404
+  (đồng nhất semantics với đơn). Bounded tối đa 20 ids, quá → 400 (kiểm tra thuần, không
+  round-trip DB). Mảng rỗng/absent = như không truyền.
+  **(2) Chat history riêng tư per-user**: bảng mới `qa_chat_sessions` (id, org_id,
+  user_id, title bounded ≤200, created_at, updated_at) + `qa_chat_turns` (id, session_id
+  FK cascade, org_id, seq, question bounded ≤8192, answer, answer_mode, citations jsonb,
+  warnings jsonb, created_at; UNIQUE(session_id, seq)) — RLS org-scoped như các bảng
+  khác, cộng `user_id = caller` trên mọi query (không có endpoint xem chat người khác,
+  kể cả cùng org — 404 đồng nhất, cùng khuôn `ask_stream_sessions`/P1B-R05 đã lập).
+  `GET/POST /chat-sessions`, `GET/PATCH/DELETE /chat-sessions/{id}`,
+  `POST /chat-sessions/{id}/turns` (client ghi sau khi stream/JSON `/ask` đã hiển thị
+  xong; seq server cấp = max+1 trong transaction, khoá `FOR UPDATE` trên session để hai
+  lần append đồng thời không đụng seq). Cùng permission `qa.query` với `/search`/`/ask`
+  (cùng surface Q&A, không thêm permission mới). Citations/warnings lưu jsonb nguyên vẹn
+  từ client, KHÔNG re-validate khi đọc lại (client tự re-validate qua
+  `POST /citations/resolve` khi thật sự click deep-link) — trade-off ghi rõ trong doc
+  comment route. Chỉ audit metadata-only `chat_session.create`/`chat_session.delete`
+  (never nội dung câu hỏi/trả lời/tiêu đề); rename và append-turn không audit.
+  **(3) Page number cho CitationPin — điều tra, không cần code mới**: đã tồn tại đầy đủ
+  từ trước (không phải P2-19): `pdf-inspector` chèn marker `<!-- Page N -->` mỗi trang
+  (`crates/core/src/conv/pdf.rs`), `chunking.rs::prepare_chunks` gọi
+  `fileconv_core::intelligence::page_before` để suy trang mỗi chunk, lưu cột
+  `chunks.page`, và `CitationPin.page: Option<u32>` (đã serialize `page` — không phải
+  tên `pageNumber` — trong OpenAPI/response) đã điền từ đó. Không thêm field trùng lặp.
+
+- **Plan/files:** `crates/server/migrations/0034_expand_qa_chat_history.sql`;
+  `db/chat_sessions.rs`, `routes/chat_sessions.rs`; `db/projects.rs` (`merge_project_ids`/
+  `resolve_project_scope` đa id), `routes/search.rs`/`routes/ask.rs` (`projectIds`);
+  `services/audit.rs` (`ChatSessionCreate`/`ChatSessionDelete` + `AuditResource::ChatSession`
+  allowlist); `db/models.rs`/`tests/schema_migrations.rs` drift guard; OpenAPI path/schemas
+  (`ChatSession`/`ChatSessionPage`/`ChatSessionDetail`/`ChatTurn`/
+  `CreateChatSessionRequest`/`UpdateChatSessionRequest`/`AppendChatTurnRequest`,
+  `SearchRequest`/`AskRequest` mở rộng `projectIds`) + `ROUTE_INVENTORY`/
+  `BODY_TAKING_OPERATIONS`; `web/src/mocks/spec/{openApiSpec,yaml}.test.ts` pin-count
+  49→56 + `contract.ts` regen.
+- **Depends:** P2-18 (`db::projects`/`resolve_project_scope`, `routes::search`/
+  `routes::ask` project filter), backend 1B ask/search + citation pins.
+- **Acceptance/tests:** `tests/projects.rs` DB-gated thêm (union 2 project đúng tài
+  liệu, 1 id lạ trong mảng → 404, cả `projectId`+`projectIds` cùng lúc → hợp, mảng rỗng
+  = như không truyền, >20 ids → 400) + unit test thuần cho `merge_project_ids`;
+  `tests/chat_history.rs` DB-gated (CRUD + append seq đúng thứ tự + cursor pagination +
+  user B không thấy/mở/xóa được session user A cùng org (404) + org isolation +
+  citations jsonb round-trip + title/question bounds 400).
+- **Security:** `qa.query` (không thêm permission mới); RLS org-scoped + lọc `user_id`
+  ứng dụng cho `qa_chat_*`, cùng khuôn `ask_stream_sessions`. **Out:** web UI lịch sử
+  chat + multi-select dropdown phạm vi dự án (vòng sau), share/team chat history, xóa
+  dự án (đã out ở P2-18), `pageNumber` field riêng (đã có `page`, xem mục 3).
+
+- **Cập nhật (web UI landed, 2026-07-29 — cùng vòng với P2-10's chat-first redesign, xem
+  mục cập nhật ở đó cho phần layout/footnote/picker):** phần "web UI đọc/hiện lịch sử chat
+  và multi-select phạm vi dự án" mà mục "Out" gốc ở trên hoãn sang vòng sau — nay đã làm.
+  `web/src/components/qa/useChatHistory.ts` (hook mới, không đụng `state/askStream.ts`)
+  gọi đủ 6 operation (`listChatSessions`/`createChatSession`/`getChatSession`/
+  `updateChatSession`/`deleteChatSession`/`appendChatTurn`). Luồng ghi lịch sử: một lượt
+  `ChatTurnBubble` settle `completed`/`revoked` (không phải `error`/`cancelled` — đã có
+  test riêng cho từng trường hợp) báo `snapshot` (answer/mode/citations/warnings) lên qua
+  `onStatusChange`; nếu chưa có session hiện hành, `recordTurn` tạo session trước (title =
+  câu hỏi đầu, cắt ở 80 ký tự) rồi mới append turn — fire-and-forget, lỗi chỉ hiện notice
+  nhỏ (`appendError`), không phá luồng chat. Bug thật đã bắt và sửa trong vòng này:
+  `activeSessionId` đổi từ `undefined` sang id thật ngay khi `recordTurn` vừa tạo xong
+  session cho cuộc trò chuyện ĐANG MỞ trước đó bị `ChatPanel` hiểu nhầm là "người dùng mở
+  phiên khác", xoá mất chính live turn vừa hoàn tất (thấy được qua React's "Cannot update a
+  component while rendering a different component" + phần tử biến mất khỏi DOM ngay sau
+  khi vừa tìm thấy trong test) — sửa bằng `sessionSwitchToken` riêng (chỉ tăng khi
+  `startNewConversation()`/`selectSession()` được gọi tường minh, không tăng khi
+  `recordTurn` tự gán id), tách hẳn hai trường hợp "id vừa được gán cho hội thoại đang mở"
+  và "người dùng thật sự đổi hội thoại". `mocks/handlers/chatSessions.ts` (mock mới, org+
+  user scoped qua `getUserChatSessions`/`findUserChatSession`, không enforce `qa.query` —
+  cùng tiền lệ `search`/`ask`/`graph` đã set vì `DEMO_USER` không có permission đó) +
+  `mocks/fixtures.ts` seed 2 phiên lịch sử thật (1 phiên 1 turn/1 citation, 1 phiên 2 turns
+  với turn thứ hai trích 2 tài liệu khác nhau + 1 citation có `page` — dữ liệu demo cho
+  đúng "Tổng hợp từ N tài liệu"/"Trang X" mà không cần dựng kịch bản live-stream phức tạp).
+  `ProjectPicker.tsx` gửi `projectIds[]` cho `SearchRequest`/`AskRequest` (mock's
+  `resolveProjectScope` union `projectId`+`projectIds` trước khi lọc `collectionIds`, mirror
+  `merge_project_ids` server-side). Test: unit (`QaPage.test.tsx`, 14 kịch bản: sidebar
+  list/mở lại/đổi tên/xóa, picker multi-select + reset khi đổi org, footnote page/multi-
+  doc note, ghi lịch sử completed/revoked có lưu — error/cancelled không lưu) +
+  `citationFootnotes.test.ts` (thuần, 10 case) + E2E `chat-history.spec.ts` mới (2 spec:
+  2 câu → "Cuộc trò chuyện mới" → 1 câu nữa → mở lại phiên đầu thấy nguyên transcript +
+  citation click được; đổi tên + xóa phiên).

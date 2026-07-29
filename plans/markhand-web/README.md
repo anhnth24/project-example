@@ -14,7 +14,7 @@ Kế hoạch này biến report kiến trúc thành các gói việc có depende
 test và gate đo được. Không dùng thời gian lịch làm tiêu chí; chỉ chuyển phase khi
 gate kỹ thuật của phase trước đã đạt.
 
-Issue-level backlog (115 issues):
+Issue-level backlog (116 issues):
 [`backlog/README.md`](backlog/README.md).
 
 Roadmap dashboard tương tác:
@@ -45,7 +45,7 @@ không bị local override cũ che mất.
 | 1A | Tách logic RAG dùng chung thành `crates/knowledge`, desktop không đổi hành vi | [Phase plan](phase-1a-knowledge-extraction.md) | [10 issues](backlog/phase-1a/issues/README.md) |
 | 1B | POC single-org hoàn chỉnh: upload → convert → index → Q&A citation | [Phase plan](phase-1b-single-org-poc.md) | [24 issues](backlog/phase-1b/issues/README.md) |
 | 1C | Multi-org, RBAC/ACL, quota atomic và denial test | [Phase plan](phase-1c-multi-org-security.md) | [13 issues](backlog/phase-1c/issues/README.md) |
-| 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [Phase plan](phase-2-web-spa.md) | [18 issues](backlog/phase-2/issues/README.md) |
+| 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [Phase plan](phase-2-web-spa.md) | [19 issues](backlog/phase-2/issues/README.md) |
 | 3 | Port intelligence: BRD/PRD, quality, PII, bảng, version, export | [Phase plan](phase-3-intelligence.md) | [14 issues](backlog/phase-3/issues/README.md) |
 | 4 | OIDC/SSO, hardening production, DR và onboarding/help | [Phase plan](phase-4-production-hardening.md) | [14 issues](backlog/phase-4/issues/README.md) |
 

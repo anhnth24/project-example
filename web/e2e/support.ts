@@ -76,6 +76,14 @@ declare global {
     __markhandMockJobs?: {
       succeed: (jobId: string) => void;
     };
+    /** Advances a document's own `state` one step forward (src/components/library/testSupport.ts's `advanceDocumentState`). */
+    __markhandMockDocs?: {
+      advance: (documentId: string) => void;
+    };
+    /** Revokes `doc.upload` from the demo user (src/components/library/testSupport.ts's `revokeDocUpload`). */
+    __markhandMockPermissions?: {
+      revokeDocUpload: () => void;
+    };
   }
 }
 
@@ -137,6 +145,29 @@ export async function forceStatus(
 export async function succeedUploadJob(page: Page, jobId: string): Promise<void> {
   await page.waitForFunction(() => window.__markhandMockJobs !== undefined);
   await page.evaluate((id) => window.__markhandMockJobs!.succeed(id), jobId);
+}
+
+/**
+ * Advances `documentId`'s own server-side `state` one step forward
+ * (uploaded->converting->converted->indexing->indexed) via the mock seam —
+ * the P2-08 live-status-polling spec's stand-in for "the worker finished the
+ * next pipeline stage", since nothing in the mock advances a document's
+ * state on its own (see `components/library/testSupport.ts`'s own doc).
+ */
+export async function advanceDocument(page: Page, documentId: string): Promise<void> {
+  await page.waitForFunction(() => window.__markhandMockDocs !== undefined);
+  await page.evaluate((id) => window.__markhandMockDocs!.advance(id), documentId);
+}
+
+/**
+ * Revokes `doc.upload` from the demo user in the mock store. Must be called
+ * BEFORE `login()` submits the form — permissions are read once into
+ * `AuthContext`'s session at `GET /auth/me` time, not live off the store, so
+ * revoking after login would not retroactively hide anything gated on it.
+ */
+export async function revokeDocUpload(page: Page): Promise<void> {
+  await page.waitForFunction(() => window.__markhandMockPermissions !== undefined);
+  await page.evaluate(() => window.__markhandMockPermissions!.revokeDocUpload());
 }
 
 /** Opens the seeded "Employee Handbook" collection from the library's collection nav. */

@@ -5,6 +5,7 @@
  */
 import './health';
 import './auth';
+import './chatSessions';
 import './graph';
 import './library';
 import './members';

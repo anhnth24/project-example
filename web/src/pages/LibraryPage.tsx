@@ -32,7 +32,7 @@
 // row themselves. Selecting a document (`selectDocument` below) calls
 // `navigate()` so each selection is its own history entry, same as any other
 // in-app navigation this router already treats that way (`RouteLink`).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
 import {
   CollectionNav,
@@ -40,8 +40,8 @@ import {
   DocumentList,
   DocumentPreview,
   Pagination,
-  ProjectsPanel,
   describeApiError,
+  isNonTerminalState,
   matchesQuery,
   type Collection,
   type LibraryDocument,
@@ -52,6 +52,7 @@ import { DocumentRowActions } from '../components/actions';
 import { RouteLink } from '../components/RouteLink';
 import { Notice } from '../components/ui';
 import { UploadPanel } from '../components/upload';
+import { useAuth } from '../auth/AuthContext';
 import { useScopeSafeRequest } from '../hooks/useScopeSafeRequest';
 import { buildLibraryDocPath, buildScopedPath } from '../lib/router';
 import { useRouter } from '../state/RouterProvider';
@@ -59,6 +60,15 @@ import { useScope } from '../state/ScopeProvider';
 
 /** Server default is 50 (clamped [1,100]); 20 keeps a page comfortably scannable. */
 const DOCUMENTS_PAGE_SIZE = 20;
+
+/**
+ * P2-08 gap close ("trạng thái document chưa đúng giai đoạn xử lý khi load
+ * lại trang hoặc mở chức năng khác rồi quay lại", owner critique
+ * 2026-07-29): backoff stages while the document-list poll below keeps
+ * hitting an error — 5s, then 15s, then 30s, holding there; reset to stage 0
+ * the moment a poll succeeds.
+ */
+const POLL_BACKOFF_DELAYS_MS = [5000, 15000, 30000] as const;
 
 interface ViewState {
   /** Which `collectionId` this state was built for — the reset trigger. */
@@ -89,6 +99,7 @@ export function LibraryPage({
   client?: ApiClient;
 }) {
   const { epoch } = useScope();
+  const { hasPermission } = useAuth();
   const { searchParams, navigate } = useRouter();
   const [view, setView] = useState<ViewState>(() => initialView(collectionId));
   // A `collectionId` prop change (collection switch/deep link) re-scopes the
@@ -223,6 +234,77 @@ export function LibraryPage({
     setDocumentsRetry((n) => n + 1);
   }
 
+  // --- Live status polling (P2-08 gap close) -------------------------------
+  // Diagnosis (owner-verified): the worker moves a document
+  // uploaded -> converting -> converted -> indexing -> indexed/failed
+  // server-side, but this page only ever refetched `GET /documents` on an
+  // explicit user action — `refreshDocuments()` above — so a document mid-
+  // pipeline stayed visually stuck until a manual reload. Server state is
+  // the source of truth, so the fix polls the *exact same* request
+  // `refreshDocuments()` already drives (bumping `documentsRetry`, still
+  // going through `useScopeSafeRequest` — no new transport, per the task's
+  // own constraint) rather than inventing a second one.
+  //
+  // Poll while, and only while: a collection is open, the current *page* of
+  // `items` (server data, not the client-side search/status filter) holds at
+  // least one non-terminal document, and the tab is visible. All three are
+  // already naturally scope-safe: `items` comes from `documentsData`, which
+  // resets to `[]`/discards its retained copy on an org switch or a
+  // collection change exactly like every other read on this page (see that
+  // state's own module doc above) — this effect needs no separate epoch
+  // check of its own. Leaving the page (unmount) stops it via the effect's
+  // own cleanup, same as any other `useEffect` here.
+  const hasNonTerminalDocuments = items.some((doc) => isNonTerminalState(doc.state));
+
+  const [tabVisible, setTabVisible] = useState(() => document.visibilityState !== 'hidden');
+  useEffect(() => {
+    function handleVisibilityChange() {
+      setTabVisible(document.visibilityState !== 'hidden');
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // Backoff: bumped a stage on every observed `documentsResult` error, reset
+  // to stage 0 on every success. Deliberately not scoped to "was this
+  // specific fetch a poll tick" — any successful `GET /documents` (including
+  // one an upload/delete/manual retry triggered) is equally good evidence
+  // the connection has recovered, and any error is equally good evidence it
+  // hasn't, whichever call actually caused it.
+  //
+  // Adjust-state-while-rendering (the same idiom `useRequestGeneration`/
+  // `retainedDocuments` above use), not an effect: a plain `useEffect` that
+  // calls `setState` synchronously off a status transition is exactly the
+  // "cascading renders" pattern this codebase's lint config (and React's own
+  // docs) flag — comparing against the last-seen status at render time and
+  // adjusting during that same render sidesteps it entirely, no extra effect
+  // needed.
+  const [backoffTracking, setBackoffTracking] = useState<{
+    status: typeof documentsResult.status;
+    stage: number;
+  }>(() => ({ status: documentsResult.status, stage: 0 }));
+  if (backoffTracking.status !== documentsResult.status) {
+    let nextStage = backoffTracking.stage;
+    if (documentsResult.status === 'error') {
+      nextStage = Math.min(backoffTracking.stage + 1, POLL_BACKOFF_DELAYS_MS.length - 1);
+    } else if (documentsResult.status === 'success') {
+      nextStage = 0;
+    }
+    setBackoffTracking({ status: documentsResult.status, stage: nextStage });
+  }
+  const pollBackoffStage = backoffTracking.stage;
+
+  const pollingEnabled = Boolean(collectionId) && hasNonTerminalDocuments && tabVisible;
+  useEffect(() => {
+    if (!pollingEnabled) return;
+    const intervalId = setInterval(refreshDocuments, POLL_BACKOFF_DELAYS_MS[pollBackoffStage]);
+    return () => clearInterval(intervalId);
+    // `refreshDocuments` itself is stable (only ever calls the
+    // `setDocumentsRetry` state setter), so it is intentionally not in this
+    // effect's deps — a new `refreshDocuments` function identity exists every
+    // render regardless, and eslint's `exhaustive-deps` does not flag it here.
+  }, [pollingEnabled, pollBackoffStage]);
+
   // Turning the page drops whatever `?doc=` is open — the previously
   // selected document belonged to a different page's results, same as
   // before this became a URL param (`selectedDocumentId: null` on the old
@@ -288,17 +370,31 @@ export function LibraryPage({
         </Notice>
       )}
 
-      <CollectionNav
-        collections={collections}
-        activeCollectionId={collectionId}
-        loading={collectionsResult.status === 'loading'}
-      />
-
-      <ProjectsPanel
-        collections={collections}
-        client={client}
-        onChanged={() => setCollectionsRetry((n) => n + 1)}
-      />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 'var(--space-3)',
+          flexWrap: 'wrap',
+        }}
+      >
+        <CollectionNav
+          collections={collections}
+          activeCollectionId={collectionId}
+          loading={collectionsResult.status === 'loading'}
+        />
+        {/* P2-18 "Khu Quản trị" move: project management (create/rename/
+            assign) lives at `/admin/projects` now, not in this page (see
+            `AdminProjectsPage.tsx`'s own module doc) — this is just a
+            shortcut into it, gated the same way the rail's own "Dự án"
+            item is (`doc.upload`, same permission the server requires). */}
+        {hasPermission('doc.upload') && (
+          <RouteLink to="/admin/projects" className="btn btn-secondary btn-sm">
+            Quản lý dự án
+          </RouteLink>
+        )}
+      </div>
 
       {!collectionId ? (
         <Notice

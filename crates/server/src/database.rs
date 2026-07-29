@@ -138,6 +138,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0033_expand_acl_version_triggers.sql",
         include_str!("../migrations/0033_expand_acl_version_triggers.sql"),
     ),
+    (
+        "0034_expand_qa_chat_history.sql",
+        include_str!("../migrations/0034_expand_qa_chat_history.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

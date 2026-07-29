@@ -6,6 +6,7 @@ import { Rail } from './components/shell';
 import { RouteLink } from './components/RouteLink';
 import {
   AdminMembersPage,
+  AdminProjectsPage,
   AdminUsagePage,
   GraphPage,
   HelpPage,
@@ -26,6 +27,15 @@ import { ScopeProvider } from './state/ScopeProvider';
  * name of its own.
  */
 const MEMBER_MANAGE_PERMISSION = 'member.manage';
+
+/**
+ * Real permission constant (same one `ProjectsPanel.tsx`/`AdminProjectsPage.tsx`
+ * already gate their own UI on): `POST /projects`/`PATCH /projects/{id}`/
+ * `POST /collections/{id}/assign-project` all require `doc.upload` server-side
+ * (`routes::projects`'s module doc) — no new permission was introduced for the
+ * "Khu Quản trị" move, see the P2-18 backlog entry.
+ */
+const PROJECT_MANAGE_PERMISSION = 'doc.upload';
 
 function RouteOutlet() {
   const { match } = useRouter();
@@ -64,6 +74,12 @@ function RouteOutlet() {
       return (
         <ProtectedRoute permission={MEMBER_MANAGE_PERMISSION}>
           <AdminUsagePage />
+        </ProtectedRoute>
+      );
+    case 'adminProjects':
+      return (
+        <ProtectedRoute permission={PROJECT_MANAGE_PERMISSION}>
+          <AdminProjectsPage />
         </ProtectedRoute>
       );
     case 'help':

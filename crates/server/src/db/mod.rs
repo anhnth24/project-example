@@ -2,6 +2,7 @@
 
 pub mod ask_streams;
 pub mod audit;
+pub mod chat_sessions;
 pub mod chunks;
 pub mod claims;
 pub mod collections;
