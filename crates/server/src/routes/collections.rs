@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Deserialize;
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::api::{ApiError, CollectionDto, Page, PageInfo};
@@ -472,6 +473,10 @@ enum RouteError {
     Denied(String),
     Validation(String, &'static str),
     NotFound(String),
+    /// Duplicate `(org_id, name)` — `uq_collections__org_name` unique-violation.
+    /// Same mapping precedent as `services::orgs::CreateOrgError::SlugTaken`
+    /// and `routes::projects`'s own `NameTaken`.
+    NameTaken(String),
     Database(String),
 }
 
@@ -481,6 +486,9 @@ impl RouteError {
             DbError::NotFound => Self::NotFound(request_id.to_string()),
             DbError::Config(message) if message == "collection_denied" => {
                 Self::NotFound(request_id.to_string())
+            }
+            DbError::Query(pg_error) if pg_error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                Self::NameTaken(request_id.to_string())
             }
             _ => Self::Database(request_id.to_string()),
         }
@@ -506,6 +514,12 @@ impl IntoResponse for RouteError {
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "Collection not found",
+                request_id,
+            ),
+            Self::NameTaken(request_id) => (
+                StatusCode::CONFLICT,
+                "name_taken",
+                "Collection name is already taken in this org",
                 request_id,
             ),
             Self::Database(request_id) => (

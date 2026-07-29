@@ -21,13 +21,17 @@
 //! take `node_ids` and additionally scope by `org_id`), so an edge can never
 //! reference a document the caller could not otherwise see.
 //!
-//! `similarity` edges are opt-in on the vector index + an embedding runtime being
-//! configured (`AppState::vector_index()`/`AppState::embedder()`, same gate
-//! `services/retrieval` uses) and are not implemented in this pass — see the
-//! P2-17 report/backlog entry for why (no live vector store in this sandbox to
-//! validate against). When neither is configured, or once implemented,
-//! finds nothing, the endpoint still returns `conflict`/`co_citation` edges
-//! — it never fails just because vector search is unavailable.
+//! `similarity` edges are opt-in on the vector index + an embedding runtime
+//! being configured (`AppState::vector_index()`/`AppState::embedder()`, same
+//! gate `services/retrieval` uses) — computed by
+//! `services::graph::compute_similarity_edges` via the vector index's
+//! recommend-by-id API (P2-17 follow-up; see that function's doc for the
+//! pipeline). This route stays DTO-mapping only: it just checks both are
+//! configured and passes a `services::graph::SimilarityDeps` through, never
+//! reading the vector store itself. When neither is configured, or the
+//! vector store errors, the endpoint still returns `conflict`/`co_citation`
+//! edges — it never fails just because vector search is unavailable (see
+//! `build_org_graph`'s doc).
 
 use std::sync::Arc;
 
@@ -44,7 +48,7 @@ use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
 use crate::db::error::DbError;
 use crate::http::AppState;
-use crate::services::graph::build_org_graph;
+use crate::services::graph::{build_org_graph, SimilarityDeps};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/api/v1/graph", get(get_graph))
@@ -69,14 +73,20 @@ async fn get_graph(
         }
     }
 
-    let data = build_org_graph(state.pool(), &auth.context, query.collection_id)
+    // similarity: see module doc — opt-in on both the vector index and an
+    // embedder being configured; `None` when either is missing, which keeps
+    // `build_org_graph`'s response identical to before this pass.
+    let similarity = match (state.vector_index(), state.embedder()) {
+        (Some(vector_index), Some(embedder)) => Some(SimilarityDeps {
+            vector_index,
+            embedder,
+        }),
+        _ => None,
+    };
+
+    let data = build_org_graph(state.pool(), &auth.context, query.collection_id, similarity)
         .await
         .map_err(|error| RouteError::from_db(error, &auth.request_id))?;
-
-    // similarity: see module doc — opt-in on the vector index + embedder, not
-    // implemented in this pass. `state.vector_index()`/`state.embedder()` are
-    // the real availability check a future pass would gate on.
-    let _similarity_available = state.vector_index().is_some() && state.embedder().is_some();
 
     let nodes: Vec<GraphNodeDto> = data
         .nodes

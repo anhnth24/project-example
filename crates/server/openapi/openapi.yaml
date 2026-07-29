@@ -211,6 +211,14 @@ paths:
                 $ref: "#/components/schemas/Collection"
         "403":
           $ref: "#/components/responses/ApiError"
+        "409":
+          description: >
+            Collection name already used in this org (`uq_collections__org_name`).
+            Same `name_taken` mapping precedent as POST /orgs's `slug_taken`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /collections/{collectionId}:
@@ -1158,6 +1166,14 @@ paths:
           $ref: "#/components/responses/ApiError"
         "403":
           $ref: "#/components/responses/ApiError"
+        "409":
+          description: >
+            Project name already used in this org (`uq_projects__org_name`).
+            Same `name_taken` mapping precedent as POST /orgs's `slug_taken`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /projects/{projectId}:
@@ -1661,6 +1677,28 @@ components:
       properties:
         citeId:
           type: string
+        # P2-10/P2-07 gap close: the server (`services::citation::CitationPin`)
+        # has always serialized these three fields — this schema simply did
+        # not declare them, so `openapi-typescript`'s generated `CitationPin`
+        # type dropped them and the UI (`CitationCard.tsx`) could not build a
+        # "go to this document" deep-link even though the wire JSON already
+        # carried the id. Optional/nullable (not added to `required`) so this
+        # is a additive, non-breaking widen — no schema version bump. Field
+        # names match the existing `logicalDocumentId`/`versionId` convention
+        # `ResolveCitationRequest` and `/citations/resolve`'s response already
+        # use for the same identifiers, rather than inventing new names.
+        logicalDocumentId:
+          type: string
+          format: uuid
+          nullable: true
+        versionId:
+          type: string
+          format: uuid
+          nullable: true
+        collectionId:
+          type: string
+          format: uuid
+          nullable: true
         sourceContentSha256:
           type: string
           description: Original uploaded/source object SHA-256

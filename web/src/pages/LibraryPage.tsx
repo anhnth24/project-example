@@ -21,6 +21,17 @@
 // only source of truth for state (`converting` -> `indexed`, tombstoning),
 // which also means a delete's own row disappears on the next page load
 // rather than being optimistically hidden while the server may still reject.
+//
+// P2-07 gap close: which document is open lives in the URL's `?doc=`
+// query param (`useRouter().searchParams`), not local component state — a
+// reload re-parses the same URL and reopens the same document, and
+// back/forward through browser history moves the selection because it moves
+// through `RouterProvider`'s own `popstate` listener, both for free. This is
+// also what makes `CitationCard`'s deep-link (`/library/:collectionId?doc=`)
+// work: navigating there is indistinguishable from a user clicking the same
+// row themselves. Selecting a document (`selectDocument` below) calls
+// `navigate()` so each selection is its own history entry, same as any other
+// in-app navigation this router already treats that way (`RouteLink`).
 import { useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
 import {
@@ -38,9 +49,12 @@ import {
   type StatusFilterValue,
 } from '../components/library';
 import { DocumentRowActions } from '../components/actions';
+import { RouteLink } from '../components/RouteLink';
 import { Notice } from '../components/ui';
 import { UploadPanel } from '../components/upload';
 import { useScopeSafeRequest } from '../hooks/useScopeSafeRequest';
+import { buildLibraryDocPath, buildScopedPath } from '../lib/router';
+import { useRouter } from '../state/RouterProvider';
 import { useScope } from '../state/ScopeProvider';
 
 /** Server default is 50 (clamped [1,100]); 20 keeps a page comfortably scannable. */
@@ -54,7 +68,6 @@ interface ViewState {
   cursors: Array<string | undefined>;
   searchText: string;
   statusFilter: StatusFilterValue;
-  selectedDocumentId: string | null;
 }
 
 function initialView(collectionId: string | undefined): ViewState {
@@ -64,7 +77,6 @@ function initialView(collectionId: string | undefined): ViewState {
     cursors: [undefined],
     searchText: '',
     statusFilter: 'all',
-    selectedDocumentId: null,
   };
 }
 
@@ -77,6 +89,7 @@ export function LibraryPage({
   client?: ApiClient;
 }) {
   const { epoch } = useScope();
+  const { searchParams, navigate } = useRouter();
   const [view, setView] = useState<ViewState>(() => initialView(collectionId));
   // A `collectionId` prop change (collection switch/deep link) re-scopes the
   // whole page — pagination, filters, and selection all belonged to the
@@ -157,7 +170,35 @@ export function LibraryPage({
       matchesQuery(doc.title, effectiveView.searchText) &&
       (effectiveView.statusFilter === 'all' || doc.state === effectiveView.statusFilter),
   );
-  const selectedDocument = items.find((doc) => doc.id === effectiveView.selectedDocumentId) ?? null;
+
+  // Source of truth for "which document is open" is the URL, not local
+  // state — see this file's module doc. `selectedDocumentId` may name a
+  // document that is not on the currently-fetched page (a citation deep-link
+  // or a reload can point at any document in the collection, not just page
+  // 1), so a miss against `items` falls back to fetching that one document
+  // directly by id rather than silently showing nothing.
+  const selectedDocumentId = searchParams.get('doc');
+  const documentFromList = items.find((doc) => doc.id === selectedDocumentId) ?? null;
+  const directDocumentResult = useScopeSafeRequest(
+    async (signal) => {
+      if (!selectedDocumentId || documentFromList) return null;
+      return client.request('get', '/documents/{documentId}', {
+        params: { path: { documentId: selectedDocumentId } },
+        signal,
+      });
+    },
+    [client, selectedDocumentId, documentFromList],
+  );
+  // A directly-fetched fallback is only trusted when it actually belongs to
+  // the collection currently open — `GET /documents/{documentId}` is
+  // permission-checked (so a cross-collection id in the query string is
+  // never a data leak), but a mismatch here would still be the wrong
+  // document for this collection's heading/breadcrumb.
+  const directDocument =
+    directDocumentResult.data && directDocumentResult.data.collectionId === collectionId
+      ? directDocumentResult.data
+      : null;
+  const selectedDocument = documentFromList ?? directDocument;
 
   const previewResult = useScopeSafeRequest(
     async (signal) => {
@@ -171,7 +212,8 @@ export function LibraryPage({
   );
 
   function selectDocument(documentId: string) {
-    setView((v) => ({ ...v, selectedDocumentId: documentId }));
+    if (!collectionId) return;
+    navigate(buildLibraryDocPath(collectionId, documentId));
   }
 
   // Re-runs the documents request (and, through the selected document's
@@ -181,19 +223,33 @@ export function LibraryPage({
     setDocumentsRetry((n) => n + 1);
   }
 
+  // Turning the page drops whatever `?doc=` is open — the previously
+  // selected document belonged to a different page's results, same as
+  // before this became a URL param (`selectedDocumentId: null` on the old
+  // local `ViewState`). Only navigates when there was a selection to clear,
+  // so plain pagination without a preview open doesn't grow history for no
+  // reason.
+  function clearSelection() {
+    if (collectionId && searchParams.get('doc')) {
+      navigate(buildScopedPath('library', collectionId));
+    }
+  }
+
   function goToPrevPage() {
-    setView((v) =>
-      v.pageIndex === 0 ? v : { ...v, pageIndex: v.pageIndex - 1, selectedDocumentId: null },
-    );
+    if (effectiveView.pageIndex === 0) return;
+    clearSelection();
+    setView((v) => ({ ...v, pageIndex: v.pageIndex - 1 }));
   }
 
   function goToNextPage() {
+    const page = documentsResult.data?.page;
+    const nextCursor = page?.nextCursor;
+    if (!page?.hasMore || !nextCursor) return;
+    clearSelection();
     setView((v) => {
-      const page = documentsResult.data?.page;
-      if (!page?.hasMore || !page.nextCursor) return v;
       const cursors = v.cursors.slice(0, v.pageIndex + 1);
-      cursors.push(page.nextCursor);
-      return { ...v, pageIndex: v.pageIndex + 1, cursors, selectedDocumentId: null };
+      cursors.push(nextCursor);
+      return { ...v, pageIndex: v.pageIndex + 1, cursors };
     });
   }
 
@@ -245,7 +301,37 @@ export function LibraryPage({
       />
 
       {!collectionId ? (
-        <Notice tone="info">Chọn một bộ sưu tập ở trên để xem danh sách tài liệu.</Notice>
+        <Notice
+          tone="info"
+          // UX gap (owner backlog): "Tất cả bộ sưu tập" has no upload panel of
+          // its own (`POST /uploads` needs a `collectionId` — see the module
+          // doc above), so the fastest path to actually uploading something is
+          // one click into whichever collection already exists. Navigation
+          // only — this is deliberately not a second, cross-collection upload
+          // panel bolted onto this screen; see the P2-07 report for why.
+          action={
+            collections.length > 0 ? (
+              <RouteLink
+                className="btn btn-secondary btn-sm"
+                to={buildScopedPath('library', collections[0].id)}
+                // Explicit `aria-label` (generic, no collection name):
+                // `CollectionNav` already renders a same-named link for this
+                // exact collection, so this button's *visible* text
+                // includes the name for sighted users, but its accessible
+                // name deliberately does not — otherwise "Employee Handbook"
+                // (say) would resolve to two links by accessible name, which
+                // is exactly the ambiguity `e2e/support.ts`'s
+                // `openEmployeeHandbook` (and several other suites) would
+                // trip on.
+                aria-label="Mở bộ sưu tập đầu tiên để tải lên"
+              >
+                Mở {collections[0].name} để tải lên
+              </RouteLink>
+            ) : undefined
+          }
+        >
+          Chọn một bộ sưu tập ở trên để xem danh sách tài liệu.
+        </Notice>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
           {/* Scoped to the open collection — `POST /uploads` needs a
@@ -295,7 +381,7 @@ export function LibraryPage({
               <DocumentList
                 items={visibleItems}
                 totalOnPage={items.length}
-                selectedDocumentId={effectiveView.selectedDocumentId}
+                selectedDocumentId={selectedDocumentId}
                 onSelect={selectDocument}
                 loading={documentsResult.status === 'loading' && documentsData === undefined}
               />

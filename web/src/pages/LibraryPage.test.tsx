@@ -96,6 +96,13 @@ function renderLibrary(client: ApiClient, collectionId?: string) {
 
 describe('LibraryPage', () => {
   beforeEach(() => {
+    // P2-07: `?doc=` now lives on `window.location.search`
+    // (`RouterProvider`'s `searchParams`), which — unlike the `collectionId`
+    // prop `renderLibrary` injects directly — is real browser state that
+    // persists across tests unless reset. Without this, a test that
+    // navigates to `?doc=...` would leak that query string into whichever
+    // test runs next.
+    window.history.pushState(null, '', '/');
     installMockFetch();
     resetMockState();
   });
@@ -398,6 +405,88 @@ describe('LibraryPage', () => {
         expect(screen.queryByRole('button', { name: /Sẽ bị xóa\.pdf/ })).not.toBeInTheDocument(),
       );
       expect(screen.getByText('Chưa có tài liệu nào trong bộ sưu tập này.')).toBeVisible();
+    });
+  });
+
+  describe('P2-07 URL param (?doc=)', () => {
+    it('selecting a document pushes ?doc= onto the URL', async () => {
+      const collection = seedCollection();
+      const doc = seedDocumentWithVersion(collection.id, { title: 'Selected.pdf' });
+      const client = await loggedInClient();
+      renderLibrary(client, collection.id);
+
+      fireEvent.click(await screen.findByRole('button', { name: /Selected\.pdf/ }));
+
+      await waitFor(() =>
+        expect(window.location.search).toBe(`?doc=${encodeURIComponent(doc.id)}`),
+      );
+    });
+
+    it('opening the page with ?doc= already on the URL preselects and previews that document (deep-link)', async () => {
+      const collection = seedCollection();
+      const doc = seedDocumentWithVersion(collection.id, { title: 'DeepLinked.pdf' });
+      seedDocumentWithVersion(collection.id, { title: 'Other.pdf' });
+      window.history.pushState(null, '', `/library/${collection.id}?doc=${doc.id}`);
+      const client = await loggedInClient();
+      renderLibrary(client, collection.id);
+
+      // Preselected without any click: the row shows selected and its own
+      // preview loads straight away. `getByText` (not `getByRole('heading',
+      // …)`) because the mock's preview markdown re-embeds the title as its
+      // own `# DeepLinked.pdf` heading — same title text appears twice
+      // (this panel's own `<h2 id="library-preview-heading">` and that `<h1>`
+      // inside the rendered Markdown), so only the id-scoped one is unambiguous.
+      expect(await screen.findByTestId('document-preview-markdown')).toHaveTextContent(
+        'Mock preview content for version 1',
+      );
+      expect(document.getElementById('library-preview-heading')).toHaveTextContent(
+        'DeepLinked.pdf',
+      );
+    });
+
+    it('reload (fresh mount at the same URL) keeps the same document open', async () => {
+      const collection = seedCollection();
+      const doc = seedDocumentWithVersion(collection.id, { title: 'Reloaded.pdf' });
+      const client = await loggedInClient();
+      const first = renderLibrary(client, collection.id);
+
+      fireEvent.click(await screen.findByRole('button', { name: /Reloaded\.pdf/ }));
+      await waitFor(() => expect(window.location.search).toContain(doc.id));
+
+      // Simulate a reload: unmount without touching `window.location` (a
+      // real reload keeps the URL, tears down all component state, and
+      // re-parses it from scratch), then mount a brand-new instance.
+      first.unmount();
+      renderLibrary(client, collection.id);
+
+      expect(await screen.findByTestId('document-preview-markdown')).toHaveTextContent(
+        'Mock preview content for version 1',
+      );
+      expect(document.getElementById('library-preview-heading')).toHaveTextContent('Reloaded.pdf');
+    });
+
+    it('back/forward (popstate) moves the selection without a click', async () => {
+      const collection = seedCollection();
+      const docA = seedDocumentWithVersion(collection.id, { title: 'A.pdf' });
+      const docB = seedDocumentWithVersion(collection.id, { title: 'B.pdf' });
+      const client = await loggedInClient();
+      renderLibrary(client, collection.id);
+
+      fireEvent.click(await screen.findByRole('button', { name: /A\.pdf/ }));
+      await waitFor(() => expect(window.location.search).toContain(docA.id));
+      fireEvent.click(await screen.findByRole('button', { name: /B\.pdf/ }));
+      await waitFor(() => expect(window.location.search).toContain(docB.id));
+
+      // Back: the browser itself moves history; `popstate` is what
+      // `RouterProvider` listens for (it never intercepts real back/forward).
+      // jsdom dispatches `popstate` asynchronously, so this is a `waitFor`,
+      // not an immediate assertion.
+      window.history.back();
+
+      await waitFor(() => expect(window.location.search).toContain(docA.id));
+      await waitFor(() =>
+        expect(document.getElementById('library-preview-heading')).toHaveTextContent('A.pdf'),
+      );
     });
   });
 

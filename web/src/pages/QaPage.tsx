@@ -3,8 +3,9 @@
 // `plans/markhand-web/backlog/phase-2/issues/README.md`'s P2-10 entry). Was a
 // placeholder before this; every field/endpoint used below is one the
 // contract (`web/src/api/generated/contract.ts`) actually declares — see
-// `components/qa/**`'s own module docs for the one verified gap (citations
-// from `ask`/`ask/stream` carry no document/version id to deep-link with).
+// `components/qa/**`'s own module docs for the citation deep-link (`ask`/
+// `ask/stream` citations now carry `logicalDocumentId`/`versionId`/
+// `collectionId` to deep-link with — P2-10 gap close).
 import { useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
 import { ChatPanel, SearchPanel, type SearchHit } from '../components/qa';

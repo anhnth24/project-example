@@ -18,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use crate::api::{ApiError, Page, PageInfo};
@@ -239,6 +240,9 @@ enum RouteError {
     Denied(String),
     Validation(String, &'static str),
     NotFound(String),
+    /// Duplicate `(org_id, name)` — `uq_projects__org_name` unique-violation.
+    /// Same mapping precedent as `services::orgs::CreateOrgError::SlugTaken`.
+    NameTaken(String),
     Database(String),
 }
 
@@ -246,6 +250,9 @@ impl RouteError {
     fn from_db(error: DbError, request_id: &str) -> Self {
         match error {
             DbError::NotFound => Self::NotFound(request_id.to_string()),
+            DbError::Query(pg_error) if pg_error.code() == Some(&SqlState::UNIQUE_VIOLATION) => {
+                Self::NameTaken(request_id.to_string())
+            }
             _ => Self::Database(request_id.to_string()),
         }
     }
@@ -270,6 +277,12 @@ impl IntoResponse for RouteError {
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "Project not found",
+                request_id,
+            ),
+            Self::NameTaken(request_id) => (
+                StatusCode::CONFLICT,
+                "name_taken",
+                "Project name is already taken in this org",
                 request_id,
             ),
             Self::Database(request_id) => (

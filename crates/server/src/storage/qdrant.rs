@@ -464,6 +464,103 @@ impl QdrantClient {
         Ok(hits)
     }
 
+    /// Recommend cross-document neighbors from vectors Qdrant already holds —
+    /// no vector is ever transferred to the app. `positive_ids` are point ids
+    /// (e.g. a document's own current chunk points); Qdrant resolves them
+    /// against its stored vectors server-side and returns near neighbors,
+    /// excluding the positive ids themselves. Mandatory org + authorized
+    /// collection filter, same as [`Self::search_filtered`]. Used by
+    /// `services::graph`'s `similarity` edges (P2-17 follow-up) instead of
+    /// scrolling whole vectors back into the app.
+    pub async fn recommend(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        positive_ids: &[Uuid],
+        extra_must: &[Value],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, StorageError> {
+        scope.validate()?;
+        if limit == 0 || positive_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut must = mandatory_filter_must(scope);
+        must.extend(extra_must.iter().cloned());
+        let positive: Vec<Value> = positive_ids
+            .iter()
+            .map(|id| Value::String(id.to_string()))
+            .collect();
+        let url = format!(
+            "{}/collections/{}/points/query",
+            self.base_url,
+            collection_name.as_str()
+        );
+        let body = json!({
+            "query": { "recommend": { "positive": positive, "negative": [] } },
+            "filter": { "must": must },
+            "limit": limit,
+            "with_payload": true,
+        });
+        let response = self
+            .authed(self.http.post(&url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if response.status().as_u16() == 404 || !response.status().is_success() {
+            return self
+                .recommend_legacy(collection_name, scope, positive_ids, extra_must, limit)
+                .await;
+        }
+        let payload: Value = response.json().await.map_err(|_| StorageError::Backend)?;
+        let hits = parse_search_hits(&payload)?;
+        enforce_hits_in_scope(scope, &hits)?;
+        Ok(hits)
+    }
+
+    /// Pre-1.7 Qdrant fallback for [`Self::recommend`] (older `/points/recommend`
+    /// endpoint, same request/response shape as the legacy search fallback).
+    async fn recommend_legacy(
+        &self,
+        collection_name: &CollectionName,
+        scope: &VectorScope,
+        positive_ids: &[Uuid],
+        extra_must: &[Value],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, StorageError> {
+        let mut must = mandatory_filter_must(scope);
+        must.extend(extra_must.iter().cloned());
+        let positive: Vec<Value> = positive_ids
+            .iter()
+            .map(|id| Value::String(id.to_string()))
+            .collect();
+        let url = format!(
+            "{}/collections/{}/points/recommend",
+            self.base_url,
+            collection_name.as_str()
+        );
+        let body = json!({
+            "positive": positive,
+            "negative": [],
+            "filter": { "must": must },
+            "limit": limit,
+            "with_payload": true,
+        });
+        let response = self
+            .authed(self.http.post(&url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| StorageError::Transport)?;
+        if !response.status().is_success() {
+            return Err(StorageError::Backend);
+        }
+        let payload: Value = response.json().await.map_err(|_| StorageError::Backend)?;
+        let hits = parse_search_hits(&payload)?;
+        enforce_hits_in_scope(scope, &hits)?;
+        Ok(hits)
+    }
+
     /// Overwrite selected payload fields via filter only (no body `points`).
     ///
     /// The filter always includes mandatory org/collection scope, `has_id` for

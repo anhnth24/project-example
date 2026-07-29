@@ -89,11 +89,17 @@ describe('QaPage', () => {
       );
     });
     expect(await screen.findByText('CITE-0001')).toBeVisible();
+    // P2-10 gap close: the mock's citation now carries logicalDocumentId/
+    // collectionId (`mocks/handlers/qa.ts`'s `passageToCitation`), so
+    // `CitationCard` renders a real deep-link instead of the old dead-link
+    // note — see `CitationCard.test.tsx` for the link-target assertion.
+    // This question's tokens ("quý") also match the unrelated compare-doc
+    // fixture's budget quote, so more than one citation (and deep-link) can
+    // render here — `getAllByRole` rather than assuming exactly one.
+    expect(screen.getAllByRole('link', { name: 'Xem trước tài liệu' }).length).toBeGreaterThan(0);
     expect(
-      screen.getByText(
-        /Trích dẫn ở đây chưa kèm định danh tài liệu\/phiên bản theo hợp đồng hiện tại/,
-      ),
-    ).toBeVisible();
+      screen.queryByText(/Một số trích dẫn ở đây chưa kèm định danh tài liệu\/phiên bản/),
+    ).not.toBeInTheDocument();
     // Default scenario is not the fallback path.
     expect(screen.queryByText('Trả lời trích xuất (không qua LLM)')).not.toBeInTheDocument();
   });

@@ -12,14 +12,21 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::error::DbError;
 use crate::db::graph::{self as db_graph, GraphDocumentRow};
+use crate::db::index_metadata;
 use deadpool_postgres::Pool;
 
 use crate::db::pool::with_org_txn;
+use crate::services::embedding::ApprovedEmbeddingRuntime;
+use crate::services::index_signature::{collection_name_for_digest, CollectionName};
+use crate::services::retrieval::generation_compatible_with_runtime;
+use crate::storage::error::StorageError;
+use crate::storage::qdrant::{QdrantClient, VectorScope};
 
 /// One candidate edge before pruning. `kind` is carried through so the same
 /// document pair can carry more than one edge (e.g. both a `conflict` and a
@@ -179,6 +186,59 @@ pub const MAX_EDGES: usize = 2000;
 /// the cap.
 const FETCH_SAFETY_CAP: i64 = 4000;
 
+// ---------------------------------------------------------------------
+// `similarity` edges (P2-17 follow-up): opt-in on a configured vector index
+// + embedder, computed via Qdrant's recommend-by-id API — never by scrolling
+// whole vectors back into the app. See `compute_similarity_edges` below for
+// the full pipeline; the constants here are its tunable knobs.
+// ---------------------------------------------------------------------
+
+/// Cross-document neighbors requested per document from Qdrant's recommend API.
+const SIMILARITY_TOP_K: usize = 5;
+/// Minimum Qdrant Cosine score (`[-1, 1]`) to keep a similarity edge at all.
+/// A fresh constant for the graph — not reused from retrieval's hybrid
+/// rerank score, which blends lexical + vector signals and lives on a
+/// different scale entirely.
+pub const SIMILARITY_SCORE_THRESHOLD: f32 = 0.5;
+/// How many of a document's own current chunks are sent as Qdrant `positive`
+/// ids. Small and fixed so the recommend request body stays cheap regardless
+/// of document size.
+const SIMILARITY_POSITIVE_CHUNKS_PER_DOC: usize = 3;
+/// Page size used while scrolling for representative chunk point ids.
+const SIMILARITY_SCROLL_PAGE_LIMIT: usize = 512;
+/// Bounds how many scroll pages we fetch while looking for representative
+/// chunk ids across the whole node set — caps total scanned points at
+/// `SIMILARITY_SCROLL_PAGE_LIMIT * SIMILARITY_SCROLL_MAX_PAGES` regardless of
+/// how many chunks any single document has.
+const SIMILARITY_SCROLL_MAX_PAGES: usize = 8;
+/// Bounds the number of Qdrant recommend round-trips this endpoint makes —
+/// one per document that has at least one representative chunk. Documents
+/// beyond this cap simply get no similarity edges (conflict/co_citation
+/// edges are unaffected, and which documents are affected is deterministic:
+/// `list_visible_documents`' `ORDER BY created_at DESC, id DESC` decides
+/// iteration order). A single batched call (Qdrant's `points/recommend/batch`)
+/// would remove this cap entirely — left for a follow-up, see the P2-17
+/// report.
+const SIMILARITY_NODE_CAP: usize = 200;
+/// Cap applied to the raw similarity edge set before it is merged with
+/// conflict/co_citation edges and hits the shared `prune()` — keeps one
+/// signal from crowding out the others ahead of the overall `MAX_EDGES`.
+const MAX_SIMILARITY_EDGES: usize = 500;
+
+/// Similarity dependencies, injected by the route from
+/// `AppState::vector_index()` / `AppState::embedder()` — `services::graph`
+/// deliberately does not read `AppState` itself (no precedent for services
+/// doing so; see how `services::retrieval::hybrid_search` instead takes
+/// `&QdrantClient` + `Option<&ApprovedEmbeddingRuntime>` as plain
+/// parameters). Keeping the service AppState-free is also what lets
+/// `tests/graph.rs`'s Qdrant-gated integration test call `build_org_graph`
+/// directly against a real `QdrantClient` without booting the whole app.
+#[derive(Clone, Copy)]
+pub struct SimilarityDeps<'a> {
+    pub vector_index: &'a QdrantClient,
+    pub embedder: &'a ApprovedEmbeddingRuntime,
+}
+
 #[derive(Debug, Clone)]
 pub struct GraphNodeData {
     pub id: Uuid,
@@ -204,12 +264,20 @@ pub struct GraphData {
 
 /// Builds the bounded, clustered document graph the route serves: visible
 /// documents (RLS + caller ACL, exactly the library's visibility) plus
-/// `conflict` and `co_citation` edges among them. `similarity` edges are a
-/// deliberate future slot — see `routes/graph.rs` module doc.
+/// `conflict`, `co_citation`, and (when `similarity` is configured)
+/// `similarity` edges among them.
+///
+/// `similarity` is `None` when the vector index and/or embedder is not
+/// configured — the response is unaffected (same as before this pass). When
+/// it is configured, a Qdrant error during similarity computation is
+/// swallowed (no edges added) rather than failing the whole graph — the
+/// endpoint must keep returning `conflict`/`co_citation` edges even if the
+/// vector store is unavailable.
 pub async fn build_org_graph(
     pool: &Pool,
     ctx: &OrgContext,
     collection_filter: Option<Uuid>,
+    similarity: Option<SimilarityDeps<'_>>,
 ) -> Result<GraphData, DbError> {
     let (documents, conflict_pairs, co_citation_pairs) = with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
@@ -250,6 +318,16 @@ pub async fn build_org_graph(
             kind: "co_citation".to_string(),
             weight: saturating_weight(*count),
         });
+    }
+
+    if let Some(deps) = similarity {
+        match compute_similarity_edges(pool, ctx, deps, &documents).await {
+            Ok(similarity_edges) => edges.extend(similarity_edges),
+            Err(_) => {
+                // Fail-soft: see this function's doc comment — a vector
+                // store hiccup must not fail the whole graph.
+            }
+        }
     }
 
     let pruned = prune(&node_ids, &edges, MAX_NODES, MAX_EDGES);
@@ -317,6 +395,234 @@ fn community_label(node_ids: &[Uuid], doc_by_id: &BTreeMap<Uuid, &GraphDocumentR
         .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
         .map(|(name, _)| name.to_string())
         .unwrap_or_else(|| "Không xác định".to_string())
+}
+
+// ---------------------------------------------------------------------
+// `similarity` edges: Qdrant recommend-by-id, aggregate, threshold, cap.
+// ---------------------------------------------------------------------
+
+/// Computes `similarity` edges among `documents` (the same visible node set
+/// `conflict`/`co_citation` edges are built from). For each document with at
+/// least one representative current chunk point, asks Qdrant to recommend
+/// its top-`SIMILARITY_TOP_K` cross-document neighbors from vectors already
+/// indexed by `services::indexing` — no vector ever leaves Qdrant into this
+/// process. Only generations whose signature matches `deps.embedder`'s plan
+/// are queried (mirrors `services::retrieval::generation_compatible_with_runtime`,
+/// so this never sends a query into a Qdrant collection built for a
+/// different embedding family/dimensionality).
+async fn compute_similarity_edges(
+    pool: &Pool,
+    ctx: &OrgContext,
+    deps: SimilarityDeps<'_>,
+    documents: &[GraphDocumentRow],
+) -> Result<Vec<GraphEdgeInput>, StorageError> {
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+    let plan = deps.embedder.plan();
+    let Some(query_dimensions) = plan.expected_dimensions() else {
+        return Ok(Vec::new());
+    };
+
+    let doc_by_id: BTreeMap<Uuid, &GraphDocumentRow> =
+        documents.iter().map(|d| (d.id, d)).collect();
+    let collection_ids: Vec<Uuid> = documents.iter().map(|d| d.collection_id).collect();
+    let active = with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                index_metadata::list_active_for_collections(txn, &ctx, &collection_ids).await
+            })
+        }
+    })
+    .await
+    .map_err(|_| StorageError::Backend)?;
+
+    let mut by_signature: BTreeMap<String, BTreeSet<Uuid>> = BTreeMap::new();
+    for meta in active {
+        if !generation_compatible_with_runtime(&meta, plan, query_dimensions) {
+            continue;
+        }
+        if let Some(collection_id) = meta.collection_id {
+            by_signature
+                .entry(meta.index_signature_sha256)
+                .or_default()
+                .insert(collection_id);
+        }
+    }
+    if by_signature.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut raw_pairs: Vec<(Uuid, Uuid, f32)> = Vec::new();
+    let mut processed = 0usize;
+
+    'groups: for (digest, group_collections) in by_signature {
+        if processed >= SIMILARITY_NODE_CAP {
+            break;
+        }
+        let collection_name = collection_name_for_digest(&digest)?;
+        let scope = VectorScope::new(ctx.org_id(), group_collections.iter().copied());
+
+        let target_docs: BTreeSet<Uuid> = documents
+            .iter()
+            .filter(|d| group_collections.contains(&d.collection_id))
+            .map(|d| d.id)
+            .collect();
+        if target_docs.is_empty() {
+            continue;
+        }
+
+        let representatives =
+            representative_chunk_points(deps.vector_index, &collection_name, &scope, &target_docs)
+                .await?;
+        let current_only = [json!({ "key": "is_current", "match": { "value": true } })];
+
+        for (document_id, positive_ids) in &representatives {
+            if positive_ids.is_empty() {
+                continue;
+            }
+            if processed >= SIMILARITY_NODE_CAP {
+                break 'groups;
+            }
+            processed += 1;
+
+            let hits = deps
+                .vector_index
+                .recommend(
+                    &collection_name,
+                    &scope,
+                    positive_ids,
+                    &current_only,
+                    SIMILARITY_TOP_K,
+                )
+                .await?;
+            for hit in hits {
+                // A document's other chunks are not a cross-document
+                // neighbor; a neighbor outside the caller-visible node set
+                // must never surface as an edge (same invariant
+                // `routes/graph.rs` documents for conflict/co_citation).
+                if hit.payload.document_id == *document_id
+                    || !doc_by_id.contains_key(&hit.payload.document_id)
+                {
+                    continue;
+                }
+                raw_pairs.push((*document_id, hit.payload.document_id, hit.score));
+            }
+        }
+    }
+
+    let edges = aggregate_similarity_pairs(raw_pairs, SIMILARITY_SCORE_THRESHOLD)
+        .into_iter()
+        .map(|(a, b, score)| GraphEdgeInput {
+            source: a,
+            target: b,
+            kind: "similarity".to_string(),
+            weight: normalize_similarity_weight(score),
+        })
+        .collect();
+    Ok(cap_similarity_edges(edges, MAX_SIMILARITY_EDGES))
+}
+
+/// Gathers up to `SIMILARITY_POSITIVE_CHUNKS_PER_DOC` current chunk point
+/// ids per document in `target_document_ids`, by scrolling Qdrant (payload +
+/// point id only — never vectors, see `QdrantClient::scroll_points_page`'s
+/// `with_vector: false`). Bounded by `SIMILARITY_SCROLL_MAX_PAGES`: a
+/// document with no current chunk indexed yet (or one this scan didn't
+/// reach) simply gets no entry and is skipped by the caller, exactly like a
+/// missing vector index is already handled elsewhere in this pipeline.
+async fn representative_chunk_points(
+    qdrant: &QdrantClient,
+    collection_name: &CollectionName,
+    scope: &VectorScope,
+    target_document_ids: &BTreeSet<Uuid>,
+) -> Result<BTreeMap<Uuid, Vec<Uuid>>, StorageError> {
+    let mut representatives: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+    let document_ids: Vec<Value> = target_document_ids
+        .iter()
+        .map(|id| Value::String(id.to_string()))
+        .collect();
+    let extra_must = [
+        json!({ "key": "document_id", "match": { "any": document_ids } }),
+        json!({ "key": "is_current", "match": { "value": true } }),
+    ];
+
+    let mut offset: Option<Value> = None;
+    for _ in 0..SIMILARITY_SCROLL_MAX_PAGES {
+        let page = qdrant
+            .scroll_points_page(
+                collection_name,
+                scope,
+                &extra_must,
+                SIMILARITY_SCROLL_PAGE_LIMIT,
+                offset.clone(),
+            )
+            .await?;
+        for (point_id, payload) in page.points {
+            let bucket = representatives.entry(payload.document_id).or_default();
+            if bucket.len() < SIMILARITY_POSITIVE_CHUNKS_PER_DOC {
+                bucket.push(point_id);
+            }
+        }
+        match page.next_page_offset {
+            Some(next) if representatives.len() < target_document_ids.len() => offset = Some(next),
+            _ => break,
+        }
+    }
+    Ok(representatives)
+}
+
+/// Canonicalizes each unordered document pair (`(min, max)` by id) and keeps
+/// the max score seen for it, dropping anything below `threshold`. Max (not
+/// mean) is deliberate: a single very close chunk pair between two documents
+/// is a meaningful signal even when their other chunks are unrelated — mean
+/// would dilute it toward the documents' average content, the same
+/// "any evidence counts" reasoning `conflict`/`co_citation` edges already
+/// use (see `db::graph::conflict_edges_among`/`co_citation_edges_among`).
+pub fn aggregate_similarity_pairs(
+    raw: Vec<(Uuid, Uuid, f32)>,
+    threshold: f32,
+) -> Vec<(Uuid, Uuid, f32)> {
+    let mut best: BTreeMap<(Uuid, Uuid), f32> = BTreeMap::new();
+    for (a, b, score) in raw {
+        if a == b || score < threshold {
+            continue;
+        }
+        let key = if a < b { (a, b) } else { (b, a) };
+        best.entry(key)
+            .and_modify(|existing| {
+                if score > *existing {
+                    *existing = score;
+                }
+            })
+            .or_insert(score);
+    }
+    best.into_iter()
+        .map(|((a, b), score)| (a, b, score))
+        .collect()
+}
+
+/// Maps a Qdrant Cosine score (range `[-1, 1]`) onto the contract's `0..1`
+/// edge weight. Approved embedding runtimes are expected to score mostly
+/// non-negative for genuinely related chunks in practice, but the map covers
+/// the full Cosine range so a pathological negative score still lands
+/// in-bounds instead of silently clamping to an uninformative 0.
+pub fn normalize_similarity_weight(score: f32) -> f64 {
+    (((score as f64) + 1.0) / 2.0).clamp(0.0, 1.0)
+}
+
+/// Caps the similarity edge set before it is merged with conflict/co_citation
+/// edges, ranked the same way `prune()` ranks edges (weight desc, ties by
+/// `(source, target)` asc) so truncation is deterministic.
+pub fn cap_similarity_edges(mut edges: Vec<GraphEdgeInput>, cap: usize) -> Vec<GraphEdgeInput> {
+    edges.sort_by(|a, b| {
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| (a.source, a.target).cmp(&(b.source, b.target)))
+    });
+    edges.truncate(cap);
+    edges
 }
 
 #[cfg(test)]
@@ -480,5 +786,75 @@ mod tests {
         let doc_by_id: BTreeMap<Uuid, &GraphDocumentRow> =
             [(a.id, &a), (b.id, &b)].into_iter().collect();
         assert_eq!(community_label(&[uid(1), uid(2)], &doc_by_id), "Alpha");
+    }
+
+    // -------------------------------------------------------------
+    // `similarity` edges: pure aggregate/threshold/cap unit tests
+    // (no Qdrant — the Qdrant-gated path is covered by the `#[ignore]`d
+    // integration test in `tests/graph.rs`, run only with
+    // `MARKHAND_TEST_QDRANT_URL`).
+    // -------------------------------------------------------------
+
+    #[test]
+    fn aggregate_drops_scores_below_threshold() {
+        let raw = vec![(uid(1), uid(2), 0.49), (uid(3), uid(4), 0.5)];
+        let kept = aggregate_similarity_pairs(raw, 0.5);
+        assert_eq!(kept, vec![(uid(3), uid(4), 0.5)]);
+    }
+
+    #[test]
+    fn aggregate_canonicalizes_pair_order_regardless_of_direction() {
+        // Same pair discovered from both directions (doc 2's recommend call
+        // found doc 1, and vice versa) must collapse into one edge.
+        let raw = vec![(uid(2), uid(1), 0.6), (uid(1), uid(2), 0.7)];
+        let kept = aggregate_similarity_pairs(raw, 0.0);
+        assert_eq!(kept, vec![(uid(1), uid(2), 0.7)]);
+    }
+
+    #[test]
+    fn aggregate_keeps_max_not_mean_across_duplicate_chunk_pairs() {
+        let raw = vec![
+            (uid(1), uid(2), 0.55),
+            (uid(1), uid(2), 0.9),
+            (uid(1), uid(2), 0.6),
+        ];
+        let kept = aggregate_similarity_pairs(raw, 0.0);
+        assert_eq!(kept, vec![(uid(1), uid(2), 0.9)]);
+    }
+
+    #[test]
+    fn aggregate_drops_self_pairs() {
+        let raw = vec![(uid(1), uid(1), 0.99)];
+        assert!(aggregate_similarity_pairs(raw, 0.0).is_empty());
+    }
+
+    #[test]
+    fn normalize_weight_maps_cosine_range_into_zero_one() {
+        assert_eq!(normalize_similarity_weight(1.0), 1.0);
+        assert_eq!(normalize_similarity_weight(-1.0), 0.0);
+        assert_eq!(normalize_similarity_weight(0.0), 0.5);
+        // Pathological out-of-range score still clamps in-bounds.
+        assert_eq!(normalize_similarity_weight(5.0), 1.0);
+        assert_eq!(normalize_similarity_weight(-5.0), 0.0);
+    }
+
+    #[test]
+    fn cap_similarity_edges_keeps_highest_weight_ties_broken_by_endpoints() {
+        let edges = vec![
+            edge(1, 2, "similarity", 0.4),
+            edge(3, 4, "similarity", 0.9),
+            edge(5, 6, "similarity", 0.9),
+        ];
+        let capped = cap_similarity_edges(edges, 2);
+        assert_eq!(
+            capped,
+            vec![edge(3, 4, "similarity", 0.9), edge(5, 6, "similarity", 0.9)]
+        );
+    }
+
+    #[test]
+    fn cap_similarity_edges_is_a_noop_under_the_cap() {
+        let edges = vec![edge(1, 2, "similarity", 0.6)];
+        assert_eq!(cap_similarity_edges(edges.clone(), 500), edges);
     }
 }
