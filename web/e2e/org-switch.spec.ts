@@ -8,7 +8,7 @@
 // somewhere" flow the old `org-scope.spec.ts` could not drive before 1C-01
 // shipped `GET /orgs` / `POST /orgs/switch`.
 import { expect, test } from '@playwright/test';
-import { forceStatus, IDS, login, openEmployeeHandbook } from './support';
+import { forceStatus, login, NAMES, openEmployeeHandbook } from './support';
 
 test('switching org replaces org A data with org B data — no stale org A render survives', async ({
   page,
@@ -60,13 +60,15 @@ test('switching org replaces org A data with org B data — no stale org A rende
   // The admin members page (`handlers/members.ts`'s org-scoping gap, now
   // closed) also moved with the switch: org B's own roster renders — the
   // demo user's row plus its distinct second member — and neither of org A's
-  // member ids (`secondMember`/`thirdMember`) appears anywhere.
+  // member names (`secondMember`/`thirdMember`) appears anywhere. Rows are
+  // located by rendered display name, not the raw `user_id` (see
+  // `support.ts`'s `NAMES` doc).
   await page.getByRole('link', { name: 'Thành viên' }).click();
   await expect(page.getByRole('heading', { name: 'Thành viên và vai trò' })).toBeVisible();
-  await expect(page.getByRole('row').filter({ hasText: IDS.demoUser })).toBeVisible();
-  await expect(page.getByRole('row').filter({ hasText: IDS.globexMember })).toBeVisible();
-  await expect(page.getByRole('row').filter({ hasText: IDS.secondMember })).toHaveCount(0);
-  await expect(page.getByRole('row').filter({ hasText: IDS.thirdMember })).toHaveCount(0);
+  await expect(page.getByRole('row').filter({ hasText: NAMES.demoUser })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: NAMES.globexMember })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: NAMES.secondMember })).toHaveCount(0);
+  await expect(page.getByRole('row').filter({ hasText: NAMES.thirdMember })).toHaveCount(0);
 });
 
 test('a denied switch (membership_missing) leaves org A active and shows an accessible error', async ({

@@ -159,8 +159,12 @@ const DEMO_USER: MockUser = {
 
 /** A second seeded org member — active admin, non-owner — so member-list tests have more than one row and a non-owner promotion/demotion target. */
 export const SECOND_MEMBER_USER_ID = mockUuid(30);
+export const SECOND_MEMBER_DISPLAY_NAME = 'Bao Tran';
+export const SECOND_MEMBER_EMAIL = 'bao-tran@example.com';
 /** A third seeded org member — suspended viewer — so the list shows a non-active row too. */
 export const THIRD_MEMBER_USER_ID = mockUuid(31);
+export const THIRD_MEMBER_DISPLAY_NAME = 'Chi Vo';
+export const THIRD_MEMBER_EMAIL = 'chi-vo@example.com';
 
 /**
  * Org switch (1C-01 + P2-06/P2-15). `DEMO_USER.orgId` (`mockUuid(2)`) is
@@ -180,6 +184,8 @@ export const ORG_B_DOCUMENT_ID = mockUuid(120);
 const ORG_B_VERSION_ID = mockUuid(1200);
 /** Org B's second seeded member (`editor`, active) — so its admin members roster has more than the demo user's own row, same reason `SECOND_MEMBER_USER_ID` exists for org A. */
 export const GLOBEX_MEMBER_USER_ID = mockUuid(32);
+export const GLOBEX_MEMBER_DISPLAY_NAME = 'Duc Nguyen';
+export const GLOBEX_MEMBER_EMAIL = 'duc-nguyen@example.com';
 
 function seedOrgs(): OrgRecord[] {
   return [
@@ -207,15 +213,26 @@ function seedOrgProfiles(): Map<string, OrgProfile> {
 
 function seedMemberships(): Membership[] {
   return [
-    { userId: DEMO_USER.userId, role: 'owner', state: 'active', createdAt: mockTimestamp(0) },
+    {
+      userId: DEMO_USER.userId,
+      email: DEMO_USER.email,
+      displayName: DEMO_USER.displayName,
+      role: 'owner',
+      state: 'active',
+      createdAt: mockTimestamp(0),
+    },
     {
       userId: SECOND_MEMBER_USER_ID,
+      email: SECOND_MEMBER_EMAIL,
+      displayName: SECOND_MEMBER_DISPLAY_NAME,
       role: 'admin',
       state: 'active',
       createdAt: mockTimestamp(10),
     },
     {
       userId: THIRD_MEMBER_USER_ID,
+      email: THIRD_MEMBER_EMAIL,
+      displayName: THIRD_MEMBER_DISPLAY_NAME,
       role: 'viewer',
       state: 'suspended',
       createdAt: mockTimestamp(20),
@@ -248,9 +265,18 @@ function seedInvites(): InviteRecord[] {
  */
 function seedOrgBMemberships(): Membership[] {
   return [
-    { userId: DEMO_USER.userId, role: 'owner', state: 'active', createdAt: mockTimestamp(90) },
+    {
+      userId: DEMO_USER.userId,
+      email: DEMO_USER.email,
+      displayName: DEMO_USER.displayName,
+      role: 'owner',
+      state: 'active',
+      createdAt: mockTimestamp(90),
+    },
     {
       userId: GLOBEX_MEMBER_USER_ID,
+      email: GLOBEX_MEMBER_EMAIL,
+      displayName: GLOBEX_MEMBER_DISPLAY_NAME,
       role: 'editor',
       state: 'active',
       createdAt: mockTimestamp(91),

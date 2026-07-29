@@ -1937,11 +1937,15 @@ components:
           format: date-time
     Membership:
       type: object
-      required: [userId, role, state, createdAt]
+      required: [userId, email, displayName, role, state, createdAt]
       properties:
         userId:
           type: string
           format: uuid
+        email:
+          type: string
+        displayName:
+          type: string
         role:
           type: string
           enum: [owner, admin, editor, viewer]

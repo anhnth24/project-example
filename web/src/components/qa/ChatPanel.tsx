@@ -153,7 +153,11 @@ export function ChatPanel({
       ...new Map(
         candidateDocuments.filter((h) => h.documentId).map((h) => [h.documentId!, h]),
       ).values(),
-    ].map((h) => ({ value: h.documentId!, label: h.title ?? h.documentId! })),
+      // `title` is optional (see this file's + `SearchPanel.tsx`'s own module
+      // docs: `hits` has no fixed wire shape) — the option label must never
+      // fall back to the raw `documentId` uuid, so an untitled hit reads as
+      // "Tài liệu không có tiêu đề" instead.
+    ].map((h) => ({ value: h.documentId!, label: h.title ?? 'Tài liệu không có tiêu đề' })),
   ];
   const versionOptions: SelectOption[] = versions.map((v) => ({
     value: v.id,

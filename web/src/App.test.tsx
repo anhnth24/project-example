@@ -257,9 +257,13 @@ describe('App / authenticated shell (P2-05 guard matrix + login/logout)', () => 
 
     fillAndSubmitLogin(DEMO_EMAIL, DEMO_PASSWORD);
 
-    await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Bộ sưu tập col-42' })).toBeVisible(),
-    );
+    // Lands on the deep-linked library route (proven by the URL, not by a
+    // heading string containing the raw collectionId: `LibraryPage`'s own
+    // heading never renders a bare id — see its module doc — so an unknown
+    // fixture id like `col-42` reads as the neutral "Bộ sưu tập" placeholder,
+    // not `Bộ sưu tập col-42`).
+    await waitFor(() => expect(window.location.pathname).toBe('/library/col-42'));
+    expect(screen.getByRole('heading', { name: 'Bộ sưu tập' })).toBeVisible();
 
     // Session info moved from an always-visible topbar strip into the
     // avatar-triggered account menu (see components/shell/UserMenu.tsx) —

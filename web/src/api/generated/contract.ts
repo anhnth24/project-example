@@ -989,6 +989,8 @@ export interface components {
         Membership: {
             /** Format: uuid */
             userId: string;
+            email: string;
+            displayName: string;
             /** @enum {string} */
             role: "owner" | "admin" | "editor" | "viewer";
             /** @enum {string} */

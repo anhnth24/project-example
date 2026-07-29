@@ -24,15 +24,29 @@ pub struct OwnerRow {
     pub state: MembershipState,
 }
 
+/// Columns every membership query below selects, joined against `users` so
+/// callers get a display name/email alongside the raw `user_id` (owner-
+/// reported UI gap: the admin members page was showing a bare UUID). `users`
+/// carries no RLS (see the module doc's "pure data access" note and
+/// `db/models.rs`'s `OrgMembership::email` doc) so joining it inside an
+/// org-scoped transaction does not widen what a caller can see — the
+/// `org_memberships` half of the join is still filtered by `org_id` exactly
+/// as before.
+const MEMBERSHIP_COLUMNS: &str = "m.org_id, m.user_id, m.role, m.state, m.created_at, \
+     u.email, u.display_name";
+
 /// Lists every membership row for the tenant (both states — admins must be
 /// able to see suspended members in order to reactivate them).
 pub async fn list(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<Vec<OrgMembership>, DbError> {
     let rows = txn
         .query(
-            "SELECT org_id, user_id, role, state, created_at
-             FROM org_memberships
-             WHERE org_id = $1
-             ORDER BY created_at, user_id",
+            &format!(
+                "SELECT {MEMBERSHIP_COLUMNS}
+                 FROM org_memberships m
+                 JOIN users u ON u.id = m.user_id
+                 WHERE m.org_id = $1
+                 ORDER BY m.created_at, m.user_id"
+            ),
             &[&ctx.org_id()],
         )
         .await?;
@@ -47,9 +61,12 @@ pub async fn get(
 ) -> Result<OrgMembership, DbError> {
     let row = txn
         .query_opt(
-            "SELECT org_id, user_id, role, state, created_at
-             FROM org_memberships
-             WHERE org_id = $1 AND user_id = $2",
+            &format!(
+                "SELECT {MEMBERSHIP_COLUMNS}
+                 FROM org_memberships m
+                 JOIN users u ON u.id = m.user_id
+                 WHERE m.org_id = $1 AND m.user_id = $2"
+            ),
             &[&ctx.org_id(), &user_id],
         )
         .await?
@@ -68,10 +85,17 @@ pub async fn try_insert(
     let role_str = role.as_str();
     let row = txn
         .query_opt(
-            "INSERT INTO org_memberships (org_id, user_id, role)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (org_id, user_id) DO NOTHING
-             RETURNING org_id, user_id, role, state, created_at",
+            &format!(
+                "WITH m AS (
+                     INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (org_id, user_id) DO NOTHING
+                     RETURNING org_id, user_id, role, state, created_at
+                 )
+                 SELECT {MEMBERSHIP_COLUMNS}
+                 FROM m
+                 JOIN users u ON u.id = m.user_id"
+            ),
             &[&ctx.org_id(), &user_id, &role_str],
         )
         .await?;
@@ -88,10 +112,17 @@ pub async fn update_role(
     let role_str = role.as_str();
     let row = txn
         .query_opt(
-            "UPDATE org_memberships
-             SET role = $3
-             WHERE org_id = $1 AND user_id = $2
-             RETURNING org_id, user_id, role, state, created_at",
+            &format!(
+                "WITH m AS (
+                     UPDATE org_memberships
+                     SET role = $3
+                     WHERE org_id = $1 AND user_id = $2
+                     RETURNING org_id, user_id, role, state, created_at
+                 )
+                 SELECT {MEMBERSHIP_COLUMNS}
+                 FROM m
+                 JOIN users u ON u.id = m.user_id"
+            ),
             &[&ctx.org_id(), &user_id, &role_str],
         )
         .await?
@@ -110,10 +141,17 @@ pub async fn set_state(
     let state_str = state.as_str();
     let row = txn
         .query_opt(
-            "UPDATE org_memberships
-             SET state = $3
-             WHERE org_id = $1 AND user_id = $2
-             RETURNING org_id, user_id, role, state, created_at",
+            &format!(
+                "WITH m AS (
+                     UPDATE org_memberships
+                     SET state = $3
+                     WHERE org_id = $1 AND user_id = $2
+                     RETURNING org_id, user_id, role, state, created_at
+                 )
+                 SELECT {MEMBERSHIP_COLUMNS}
+                 FROM m
+                 JOIN users u ON u.id = m.user_id"
+            ),
             &[&ctx.org_id(), &user_id, &state_str],
         )
         .await?
@@ -203,6 +241,8 @@ fn map_membership(row: &Row) -> Result<OrgMembership, DbError> {
         role: MembershipRole::parse(&role).map_err(DbError::Config)?,
         state: MembershipState::parse(&state).map_err(DbError::Config)?,
         created_at: row.get("created_at"),
+        email: row.get("email"),
+        display_name: row.get("display_name"),
     })
 }
 

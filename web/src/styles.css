@@ -1045,10 +1045,11 @@ textarea.input {
   background: color-mix(in srgb, var(--color-text) 4%, transparent);
 }
 
-/* Member identity cell (components/admin/MembersTable.tsx): the membership
-   API carries only a user id — no name or email — so the identity reads as a
-   round monogram avatar + the id set in monospace, with a "Bạn" tag when the
-   row is the signed-in caller. Replaces the old bare `<code>` UUID blob. */
+/* Member identity cell (components/admin/MembersTable.tsx): a round monogram
+   avatar (derived from displayName, never the user id) plus the member's
+   name (bold) and email (muted) stacked underneath, with a "Bạn" tag next to
+   the name when the row is the signed-in caller. Replaces the old bare
+   UUID display — the membership API now joins `users` for name/email. */
 .member-identity {
   align-items: center;
   display: flex;
@@ -1071,11 +1072,26 @@ textarea.input {
   width: 2.1rem;
 }
 
-.member-identity-id {
+.member-identity-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.member-identity-name {
+  align-items: center;
   color: var(--color-text);
-  font-family: ui-monospace, Menlo, monospace;
+  display: flex;
+  font-weight: 600;
+  gap: var(--space-2);
+}
+
+.member-identity-email {
   font-size: 12.5px;
-  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* — dialog — */

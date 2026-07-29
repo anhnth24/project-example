@@ -111,9 +111,7 @@ describe('LibraryPage', () => {
 
     expect(await screen.findByRole('button', { name: /Onboarding Guide\.pdf/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /Leave Policy\.docx/ })).toBeVisible();
-    expect(
-      screen.getByRole('heading', { name: `Bộ sưu tập ${HANDBOOK_COLLECTION_ID}` }),
-    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Employee Handbook' })).toBeVisible();
   });
 
   it('shows a prompt instead of a document list when no collection is selected', async () => {
@@ -262,7 +260,7 @@ describe('LibraryPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Special/ }));
 
     // Scoped to the rendered-Markdown wrapper specifically: the page also has
-    // its own `<h1 id="library-heading">` (the "Bộ sưu tập <id>" heading),
+    // its own `<h1 id="library-heading">` (the collection-name heading),
     // which would otherwise be `querySelector('h1')`'s first match.
     await waitFor(() =>
       expect(

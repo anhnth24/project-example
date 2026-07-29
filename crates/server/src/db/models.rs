@@ -117,6 +117,14 @@ pub struct OrgMembership {
     pub role: MembershipRole,
     pub state: MembershipState,
     pub created_at: DateTime<Utc>,
+    /// Joined from `users` (not org-scoped, not RLS'd — see `db/members.rs`'s
+    /// query docs) so the admin UI can show a name/email instead of a raw
+    /// `user_id` (owner-reported UI gap: raw UUIDs leaking into the members
+    /// table). Always present: `org_memberships.user_id` is a `NOT NULL`
+    /// foreign key into `users(id)`, so every row this module produces has a
+    /// matching user.
+    pub email: String,
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
