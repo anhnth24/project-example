@@ -273,7 +273,12 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-09 — Atomic quota lifecycle
 
-- **Status:** In progress — reserve/finalize/refund + reserve_upload hai-tài-nguyên atomic (`services/quota.rs`), idempotency theo key, expiry, sweeper **đã wire** vào background (`http.rs:367`), checked arithmetic, advisory lock; 11 test DB-gated + unit. **Thiếu**: token-quota lifecycle (`Tokens` định nghĩa nhưng `ask` không reserve), concurrent-jobs enforce ở prod (test-only), quota reconcile, test mới đạt 16 concurrent (acceptance đòi ≥100).
+- **Status:** In progress — reserve/finalize/refund + reserve_upload hai-tài-nguyên atomic (`services/quota.rs`), idempotency theo key, expiry, sweeper **đã wire** vào background (`http.rs`), checked arithmetic, advisory lock. Đợt này đóng 4 phần "Thiếu" cũ (đã xác minh từng điểm trước khi làm):
+  (a) **Token-quota lifecycle**: consumer token thật duy nhất trên đường `ask` là **chat provider** (`ChatProvider::complete`/`stream_tokens` — được gọi cả ở chế độ fail-closed để đo outage); khi không cấu hình provider (MVP extractive-only) không tiêu token nên không reserve. Reserve ước lượng (prompt + `MAX_ANSWER_CHARS`/4, heuristic ~4 chars/token vì response OpenAI-compat/GLM stream không bảo đảm block `usage`) trước khi gọi provider ở cả `ask()` JSON (`services/qa/mod.rs`) lẫn `ask/stream` (`ask_stream.rs::start_ask_stream`, reserve TRƯỚC khi tạo durable session → deny là 429 sạch không side-effect); settle usage thật qua `quota::finalize_actual` mới (commit số đo, không phải số ước lượng); refund khi transport fail, commit prompt-only khi timeout, commit phần đã stream khi cancel/`citation_revoked` giữa chừng (token provider đã tiêu thì không refund). Hết quota → 429 `quota_exceeded` + `x-quota-*` headers (tái dùng nguyên `QuotaError` contract của upload, `routes/ask.rs`) + audit `quota.deny`. Token của embedding-provider (index/backfill hàng loạt) **chưa** meter — backlog riêng, gắn với job lifecycle chứ không phải request `ask`.
+  (b) **Concurrent-jobs enforce ở prod**: mọi đường claim prod (`jobs::claim`/`claim_type`/`claim_reconcile` — chính là đường `bin/worker.rs` → `workers/*::run_once`) giờ lấy advisory lock `concurrent_jobs`, clamp limit theo slot còn trống, insert reservation `job.slot.{job_id}.{uuid}` (amount 1, TTL = lease TTL) **atomic trong cùng txn claim**; heartbeat gia hạn reservation cùng lease; complete/fail/cancel(+children)/reclaim/dry-run-release refund slot ngay. Hết slot → claim trả rỗng (worker idle-poll); org thiếu `org_quotas` → fail-closed lỗi cấu hình rõ ràng (cùng posture upload).
+  (c) **Quota reconcile**: task nền `http.rs::start_quota_reconcile` (knob `MARKHAND_QUOTA_RECONCILE_INTERVAL_SECS`, default 3600s, min 60s, `0` = off; cùng pattern maintenance-lock + ops-fence guard như sweeper) gọi `quota::reconcile_all_orgs`: đối chiếu `usage_counters` với ground truth (storage = bytes version + derived artifacts của documents còn sống; documents = count sống) và refund slot `concurrent_jobs` mồ côi (job không còn leased). Drift → upsert counter + audit `quota.reconcile` (action mới, allowlist chỉ số liệu, actor NULL qua `audit::record_system_in_txn` vì là system action). **Lưu ý ngữ nghĩa**: trước đây counter storage/documents là cộng dồn vĩnh viễn (xoá tài liệu không trả quota); reconcile đưa counter về mức sử dụng thật → sau purge quota được giải phóng ở lần reconcile kế. Tokens **không** reconcile (tiêu ở provider ngoài, không có ground truth đếm lại được).
+  (d) **Test concurrent ≥100**: `tests/quota.rs::concurrent_reserve_does_not_over_reserve` nâng 16 → **100 task thật** (pool cố định 16, deadpool xếp hàng không timeout + advisory lock serialize admission → không flaky). Test DB-gated mới: claim bị clamp theo `max_concurrent_jobs` + release đủ đường complete/fail/reclaim; reconcile sửa drift + refund slot mồ côi + audit row (actor NULL, idempotent lần 2); `finalize_actual` commit số đo/refund khi 0/idempotency terminal. Suite quota 14/14, jobs 18/18, pool_worker_defense 2/2 xanh cục bộ (PG16).
+  **Còn lại (out of đợt này)**: meter token embedding-provider theo job; billing (đã Out từ đầu).
 
 - **Plan/files:** Reserve/finalize/refund, idempotency/expiry/sweeper/reconcile cho
   storage/token/jobs.
@@ -283,13 +288,69 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-10 — Rate limit và per-org fairness
 
-- **Status:** In progress — limiter per-IP/user/route (`middleware/rate_limit.rs`) + Retry-After header + metrics privacy-safe + worker type-fairness (`workers/index.rs:137`). **Thiếu đúng phần định nghĩa 1C-10**: **per-ORG fairness** (không có bucket per-org — key org chỉ là prefix per-user; không có scheduler/semaphore GPU per-org; worker chạy **1 org/tiến trình** `bin/worker.rs:151`), không có test noisy-neighbor/SLO, không có GPU scheduler.
+- **Status:** In progress — limiter per-IP/user/route (`middleware/rate_limit.rs`) +
+  Retry-After header + metrics privacy-safe + worker type-fairness
+  (`workers/index.rs:137`) đã có từ trước. **Phần per-ORG fairness đã landed
+  (2026-07-30, xác minh từng điểm "Thiếu" bằng code trước khi xây):**
+  1. **Bucket rate-limit per-ORG thật** (gap cũ đúng: key `user:{org}:{user}` chỉ dùng
+     org làm prefix — mỗi user vẫn có bucket riêng, org N user = N× capacity): thêm tầng
+     thứ 3 `RateLimiter::check_org` (key `org:{org_id}`, `org_per_minute` default 600,
+     env `MARKHAND_RATE_ORG_PER_MINUTE`, compose POC set 3000). Wire tại MỘT điểm
+     `routes/rate_limit_guard.rs::check_user` (user bucket trước → scope `user` cho user
+     tự vượt; org bucket sau → scope `org`) nên mọi route authenticated
+     (ask/search/upload/events/reindex) tự có tầng org. **Nguồn limit chọn env knob
+     đồng nhất, KHÔNG cột `org_quotas`** — trade-off ghi rõ: limiter sync in-process
+     (không DB trên request path), theo tiền lệ `MARKHAND_RATE_*`; per-org tiered limit
+     (cột `org_quotas` + cached read) để lại đến khi có yêu cầu tier thật. Test unit
+     fast `org_bucket_bounds_many_users_without_touching_other_orgs` (org A 10 user chỉ
+     lọt đúng org-capacity, org B nguyên vẹn).
+  2. **Worker fairness đa-org** — xác minh "1 org/tiến trình" nghĩa thật: worker pin org
+     qua env `MARKHAND_WORKER_ORG_ID` (một UUID, `bin/worker.rs:151` cũ), mọi claim txn
+     set GUC RLS org đó; claim SQL CÓ lọc org (`org_id = $1` + FORCE RLS) nên "fair
+     ORDER BY xuyên org trong query claim" là bất khả thi nếu không phá posture RLS
+     (worker không context thấy 0 hàng — `pool_worker_defense`). Giải pháp trong hạ tầng
+     hiện có: `workers/fairness.rs::OrgRotation` — `MARKHAND_WORKER_ORG_ID` nhận danh
+     sách UUID phẩy, mỗi cycle round-robin quét từ cursor, phục vụ tối đa 1 job rồi đẩy
+     cursor qua org vừa phục vụ ⇒ **bound xác định: giữa 2 job liên tiếp của một org có
+     backlog, tối đa N-1 job org khác chen vào**, bất kể backlog org ồn to bao nhiêu.
+     Poison-org (attempt lỗi) cũng bị đẩy cursor qua để không ghim đầu rotation. Tái
+     dụng nguyên claim path 1C-09 (advisory lock + reservation `concurrent_jobs` clamp
+     trong claim txn) — không xây scheduler trùng. Đơn-org giữ nguyên hành vi cũ
+     (rotation 1 phần tử); reconcile oneshot bắt buộc đúng 1 org.
+  3. **Test noisy-neighbor DB-gated** `tests/noisy_neighbor.rs` (đo bằng ĐẾM thứ tự
+     claim, không wall-clock — SLO wall-clock thuộc 1C-13): (a) org A 20 job vs org B
+     4 job → chuỗi phục vụ xen kẽ đúng `[A,B,A,B,A,B,A,B]` rồi A-only, đủ 24; (b) org A
+     giữ chặt slot `concurrent_jobs` duy nhất (lease không complete) + còn backlog →
+     admission 1C-09 trả claim rỗng và rotation rơi xuống org B **trong cùng một
+     cycle**; cả hai org cạn/kẹt → cycle idle (không busy-loop). Unit fast trong
+     `workers/fairness.rs` phủ alternation/skip-idle/poison-advance/duplicate-reject.
+  **GPU scheduler/semaphore per-org: N/A-until-GPU (xác minh 2026-07-30, không xây)** —
+  grep toàn repo: server crate KHÔNG có GPU workload nào; GPU chỉ xuất hiện ở (a)
+  feature `cuda` opt-in của whisper trong `crates/core` (desktop/CLI, ngoài server),
+  (b) container vLLM/embedding GPU opt-in profile trong `deploy/compose.spike.yml`/
+  `deploy/dev/compose.yml` (external HTTP provider, POC default `mock`). **Điều kiện
+  kích hoạt**: khi một GPU inference service dùng chung (vLLM/TEI nội bộ) vào đường
+  serving thật (embedding profile ≠ mock trỏ GPU chung), cần per-org admission tại
+  call-site embedding/ask (semaphore keyed org) — job-level đã được `concurrent_jobs`
+  bound sẵn. **SLO wall-clock test**: thuộc 1C-13 (cần Phase 0 capacity baseline,
+  chưa có) — không làm ở đây.
 
-- **Plan/files:** User/IP/auth limits, per-org worker/GPU scheduler/semaphore, headers,
-  privacy-safe metrics.
-- **Depends:** 1C-09 + Phase 0 SLO/capacity. **Acceptance/tests:** Noisy org không phá
-  SLO org khác; burst/window/fair-load/crash-release/proxy tests.
-- **Security/migration:** Chỉ trusted proxy IP, bounded state. **Out:** multi-region.
+- **Plan/files:** User/IP/auth limits (**done từ trước**); per-org API bucket (**done**:
+  `middleware/rate_limit.rs::check_org` + `routes/rate_limit_guard.rs`); per-org worker
+  fairness (**done**: `workers/fairness.rs::OrgRotation` + `bin/worker.rs` multi-org
+  env); GPU scheduler/semaphore (**N/A-until-GPU**, xem điều kiện kích hoạt ở trên);
+  headers, privacy-safe metrics (**done từ trước**, scope mới `org` trong 429 details
+  là giá trị tĩnh, không PII).
+- **Depends:** 1C-09 (dùng lại reservation `concurrent_jobs`) + Phase 0 SLO/capacity
+  (chỉ còn cần cho phần SLO 1C-13). **Acceptance/tests:** Noisy org không bỏ đói org
+  khác — **done ở mức deterministic-count** (`tests/noisy_neighbor.rs` DB-gated + unit
+  fairness/rate-limit fast); burst/window/crash-release/proxy tests đã có từ trước
+  (`rate_limit.rs` tests, `sse_stream_readiness.rs` trusted-proxy 429); riêng
+  **fairness SLO wall-clock** chuyển 1C-13.
+- **Security/migration:** Chỉ trusted proxy IP, bounded state (org bucket nằm trong
+  cùng HashMap HARD_CAP 10k key, evictable như các key khác). Không migration mới.
+  **Out:** multi-region; per-org tiered rate limit từ `org_quotas` (đợi yêu cầu tier
+  thật); GPU semaphore (until-GPU).
 
 ## 1C-11 — Audit/admin APIs
 

@@ -241,8 +241,20 @@ async fn ask_stream_route(
             AskStreamPrepareError::Retrieval(error) => {
                 RouteError::from_retrieval(error, &auth.request_id)
             }
+            AskStreamPrepareError::Quota(error) => {
+                RouteError::Quota(error, auth.request_id.clone())
+            }
             AskStreamPrepareError::Database => RouteError::Database(auth.request_id.clone()),
-        })?;
+        });
+        let started = match started {
+            Ok(started) => started,
+            Err(error) => {
+                if let RouteError::Quota(quota_error, _) = &error {
+                    audit_token_quota_deny(&state, &auth, quota_error).await?;
+                }
+                return Err(error);
+            }
+        };
         let session_id_str = started.session_id.to_string();
         audit::record(
             state.pool(),
@@ -417,6 +429,10 @@ async fn run_ask(
         Err(crate::services::qa::AskError::Retrieval(error)) => {
             return Err(RouteError::from_retrieval(error, &auth.request_id));
         }
+        Err(crate::services::qa::AskError::Quota(error)) => {
+            audit_token_quota_deny(state, auth, &error).await?;
+            return Err(RouteError::Quota(error, auth.request_id.clone()));
+        }
     };
     audit::record(
         state.pool(),
@@ -439,6 +455,36 @@ async fn run_ask(
     Ok(response)
 }
 
+/// Durable `quota.deny` audit for a token-quota denial on ask (1C-09 a).
+/// Only the exceeded case is a deny; infrastructure quota errors surface as
+/// plain 5xx without a deny row.
+async fn audit_token_quota_deny(
+    state: &AppState,
+    auth: &AuthenticatedOrg,
+    error: &crate::services::quota::QuotaError,
+) -> Result<(), RouteError> {
+    if !matches!(error, crate::services::quota::QuotaError::QuotaExceeded(_)) {
+        return Ok(());
+    }
+    audit::record(
+        state.pool(),
+        &auth.context,
+        audit::AuditRecord {
+            request_id: &auth.request_id,
+            action: "quota.deny",
+            resource_type: "quota",
+            resource_id: Some("tokens"),
+            outcome: AuditOutcome::Deny,
+            metadata: serde_json::json!({
+                "reason": "quota_exceeded",
+                "resource_kind": "tokens",
+            }),
+        },
+    )
+    .await
+    .map_err(|_| RouteError::Database(auth.request_id.clone()))
+}
+
 enum RouteError {
     Validation(String, &'static str),
     Denied(String),
@@ -450,6 +496,10 @@ enum RouteError {
     Database(String),
     StreamClosed(String, &'static str),
     RateLimited(crate::routes::rate_limit_guard::RateLimitRejected),
+    /// Token-quota admission (1C-09 a): rendered through the shared
+    /// `QuotaError` HTTP contract (429 `quota_exceeded` + x-quota-* headers,
+    /// same as storage quota on upload).
+    Quota(crate::services::quota::QuotaError, String),
 }
 
 impl RouteError {
@@ -470,6 +520,9 @@ impl IntoResponse for RouteError {
     fn into_response(self) -> Response {
         if let Self::RateLimited(rejected) = self {
             return rejected.into_response();
+        }
+        if let Self::Quota(error, request_id) = self {
+            return error.into_response_with_request_id(&request_id);
         }
         let (status, code, message, request_id) = match self {
             Self::Validation(request_id, message) => (
@@ -514,7 +567,7 @@ impl IntoResponse for RouteError {
                 "Stream authorization closed",
                 request_id,
             ),
-            Self::RateLimited(_) => unreachable!(),
+            Self::RateLimited(_) | Self::Quota(..) => unreachable!(),
         };
         (
             status,

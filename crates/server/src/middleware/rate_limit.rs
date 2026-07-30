@@ -12,6 +12,16 @@ pub struct RateLimitConfig {
     pub user_per_minute: u32,
     pub ip_per_minute: u32,
     pub expensive_route_per_minute: u32,
+    /// Shared ceiling for ALL authenticated traffic of one org (1C-10).
+    ///
+    /// The per-user bucket alone lets an org multiply its capacity by adding
+    /// users; this bucket bounds the whole org so a noisy org cannot crowd out
+    /// other tenants by spreading load across many accounts. Uniform for every
+    /// org and env-tunable, matching the existing `MARKHAND_RATE_*` precedent —
+    /// per-org tiered limits (an `org_quotas` column + cached read) are a
+    /// deliberate non-goal until a real tiering requirement exists, because the
+    /// limiter is synchronous and in-process (no DB on the request path).
+    pub org_per_minute: u32,
 }
 
 impl Default for RateLimitConfig {
@@ -21,6 +31,7 @@ impl Default for RateLimitConfig {
             user_per_minute: 120,
             ip_per_minute: 240,
             expensive_route_per_minute: 60,
+            org_per_minute: 600,
         }
     }
 }
@@ -41,6 +52,9 @@ impl RateLimitConfig {
         if let Some(value) = env_u32("MARKHAND_RATE_ROUTE_PER_MINUTE")? {
             config.expensive_route_per_minute = value;
         }
+        if let Some(value) = env_u32("MARKHAND_RATE_ORG_PER_MINUTE")? {
+            config.org_per_minute = value;
+        }
         config.validate()?;
         Ok(config)
     }
@@ -54,6 +68,7 @@ impl RateLimitConfig {
                 "expensive_route_per_minute",
                 self.expensive_route_per_minute,
             ),
+            ("org_per_minute", self.org_per_minute),
         ] {
             if value == 0 {
                 return Err(format!("rate limit {name} must be >= 1"));
@@ -182,6 +197,11 @@ impl RateLimiter {
         )
     }
 
+    /// Org-wide bucket shared by every user of the org (per-org fairness).
+    pub fn check_org(&self, org_id: &str) -> Result<(), Duration> {
+        self.check(&format!("org:{org_id}"), self.config.org_per_minute)
+    }
+
     /// Per-route bucket keyed by peer IP (or user+route when `subject` is set).
     pub fn check_route(&self, route: &str, subject: &str) -> Result<(), Duration> {
         self.check(
@@ -246,10 +266,55 @@ mod tests {
             user_per_minute: 2,
             ip_per_minute: 2,
             expensive_route_per_minute: 2,
+            org_per_minute: 2,
         });
         assert!(limiter.check_auth_ip("1.2.3.4").is_ok());
         assert!(limiter.check_auth_ip("1.2.3.4").is_ok());
         assert!(limiter.check_auth_ip("1.2.3.4").is_err());
+    }
+
+    #[test]
+    fn org_bucket_bounds_many_users_without_touching_other_orgs() {
+        // Noisy-neighbor at the API layer: org A cannot exceed its org-wide
+        // capacity by spreading requests across many distinct users, and org
+        // B's traffic is untouched while A is saturated.
+        let limiter = RateLimiter::new(RateLimitConfig {
+            auth_per_minute: 1_000,
+            user_per_minute: 1_000,
+            ip_per_minute: 1_000,
+            expensive_route_per_minute: 1_000,
+            org_per_minute: 4,
+        });
+        let mut org_a_accepted = 0;
+        for user in 0..10 {
+            if limiter.check_org("org-a").is_ok() {
+                org_a_accepted += 1;
+            }
+            let _ = limiter.check_user("org-a", &format!("user-{user}"));
+        }
+        assert_eq!(
+            org_a_accepted, 4,
+            "org bucket must cap the whole org regardless of user spread"
+        );
+        assert!(limiter.check_org("org-a").is_err());
+        for _ in 0..4 {
+            assert!(
+                limiter.check_org("org-b").is_ok(),
+                "org B must keep full capacity while org A is saturated"
+            );
+        }
+    }
+
+    #[test]
+    fn org_capacity_has_default_and_rejects_zero() {
+        let config = RateLimitConfig::default();
+        assert_eq!(config.org_per_minute, 600);
+        assert!(RateLimitConfig {
+            org_per_minute: 0,
+            ..RateLimitConfig::default()
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -269,6 +334,7 @@ mod tests {
             user_per_minute: 1,
             ip_per_minute: 1,
             expensive_route_per_minute: 1,
+            org_per_minute: 1,
         });
         assert!(limiter.check_route("search", "10.0.0.1").is_ok());
         assert!(limiter.check_route("search", "10.0.0.1").is_err());
@@ -316,6 +382,7 @@ mod tests {
             user_per_minute: 1_000,
             ip_per_minute: 1_000,
             expensive_route_per_minute: 1_000,
+            org_per_minute: 1_000,
         });
         for i in 0..20_000 {
             let _ = limiter.check_ip(&format!("198.51.100.{}", i % 250));
@@ -335,6 +402,7 @@ mod tests {
             user_per_minute: 8,
             ip_per_minute: 8,
             expensive_route_per_minute: 8,
+            org_per_minute: 8,
         }));
         let accepted = Arc::new(AtomicUsize::new(0));
         let rejected = Arc::new(AtomicUsize::new(0));
