@@ -173,9 +173,16 @@ async fn force_expire(pool: &Pool, context: &OrgContext, key: &str) {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
 async fn concurrent_reserve_does_not_over_reserve() {
-    let Some((ephemeral, pool)) = boot_pool().await else {
+    let Some(admin) = admin_database_url() else {
         return;
     };
+    let Some(app) = app_database_url() else {
+        return;
+    };
+    // 100 real tasks (1C-09 acceptance) against a fixed-size pool: deadpool
+    // queues waiters without a timeout and the per-(org,resource) advisory
+    // lock serializes admission, so this is contention-heavy but not flaky.
+    let (ephemeral, pool) = common::boot_app_pool_with_max_size(&admin, &app, 16).await;
     let pool = Arc::new(pool);
     let context = seed_org_with_quota(
         &pool,
@@ -191,7 +198,7 @@ async fn concurrent_reserve_does_not_over_reserve() {
     )
     .await;
 
-    let attempts = 16;
+    let attempts = 100;
     let mut tasks = Vec::new();
     for idx in 0..attempts {
         let pool = Arc::clone(&pool);
@@ -1037,6 +1044,317 @@ async fn quota_rows_are_org_scoped_by_predicate_and_rls() {
     })
     .await
     .unwrap();
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn job_claim_enforces_and_releases_concurrent_slots() {
+    use fileconv_server::db::models::JobType;
+    use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
+
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-job-slots",
+        QuotaFixture {
+            storage: 1_000_000,
+            documents: 100,
+            concurrent: 2,
+            tokens: 100,
+        },
+    )
+    .await;
+    for index in 0..5 {
+        jobs::enqueue(
+            &pool,
+            &context,
+            EnqueueJob::new(
+                JobType::Convert,
+                JobPayload::default(),
+                format!("slot-job-{index}"),
+            ),
+        )
+        .await
+        .expect("enqueue");
+    }
+
+    // Claim asks for 10 but only max_concurrent_jobs = 2 slots exist.
+    let first = jobs::claim(&pool, &context, "slot-worker", 10, Duration::from_secs(60))
+        .await
+        .expect("first claim");
+    assert_eq!(first.len(), 2, "claim must be clamped to free slots");
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        2
+    );
+
+    // No free slot: further claims return empty even with pending jobs.
+    let starved = jobs::claim(&pool, &context, "slot-worker", 10, Duration::from_secs(60))
+        .await
+        .expect("starved claim");
+    assert!(starved.is_empty(), "no claim beyond concurrent limit");
+
+    // Completing one job releases its slot for the next claim.
+    let done = &first[0];
+    jobs::complete(
+        &pool,
+        &context,
+        done.id,
+        done.lease_owner.as_deref().expect("lease"),
+        done.attempts,
+    )
+    .await
+    .expect("complete");
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        1
+    );
+    let refill = jobs::claim(&pool, &context, "slot-worker", 10, Duration::from_secs(60))
+        .await
+        .expect("refill claim");
+    assert_eq!(refill.len(), 1);
+
+    // Failing a job releases its slot too.
+    let failed = &first[1];
+    jobs::fail(
+        &pool,
+        &context,
+        failed.id,
+        failed.lease_owner.as_deref().expect("lease"),
+        failed.attempts,
+        "synthetic failure",
+    )
+    .await
+    .expect("fail");
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        1
+    );
+
+    // Crash path: expired lease reclaimed -> slot refunded without waiting TTL.
+    let crashed = &refill[0];
+    with_org_txn(&pool, &context, {
+        let context = context.clone();
+        let job_id = crashed.id;
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE jobs SET lease_expires_at = now() - interval '1 second'
+                     WHERE org_id = $1 AND id = $2",
+                    &[&context.org_id(), &job_id],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("force lease expiry");
+    let reclaimed = jobs::reclaim_expired(&pool, &context, 10, Duration::from_secs(1))
+        .await
+        .expect("reclaim");
+    assert_eq!(reclaimed.len(), 1);
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        0
+    );
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn reconcile_repairs_counter_drift_and_orphaned_job_slots() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-reconcile",
+        QuotaFixture {
+            storage: 1_000_000,
+            documents: 100,
+            concurrent: 10,
+            tokens: 100,
+        },
+    )
+    .await;
+
+    // Simulated crash drift: counter says 999 bytes / 3 documents, but the org
+    // holds zero live documents. Plus an orphaned concurrent-jobs slot whose
+    // job is pending (not leased) — the refund-on-terminal write was "lost".
+    let orphan_job = Uuid::new_v4();
+    with_org_txn(&pool, &context, {
+        let context = context.clone();
+        move |txn| {
+            Box::pin(async move {
+                for (key, value) in [("storage_bytes", 999_i64), ("documents", 3_i64)] {
+                    txn.execute(
+                        "INSERT INTO usage_counters (
+                            org_id, counter_key, period_start, period_end, value
+                         )
+                         VALUES (
+                            $1, $2,
+                            timestamptz '1970-01-01 00:00:00+00',
+                            timestamptz '9999-12-31 00:00:00+00',
+                            $3
+                         )",
+                        &[&context.org_id(), &key, &value],
+                    )
+                    .await?;
+                }
+                txn.execute(
+                    "INSERT INTO jobs (id, org_id, job_type, idempotency_key)
+                     VALUES ($1, $2, 'convert', 'orphan-slot-job')",
+                    &[&orphan_job, &context.org_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO quota_reservations (
+                        org_id, reservation_key, resource_kind, amount, expires_at, job_id
+                     )
+                     VALUES ($1, 'job.slot.orphan', 'concurrent_jobs', 1,
+                             now() + interval '1 hour', $2)",
+                    &[&context.org_id(), &orphan_job],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed drift");
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        1
+    );
+
+    let outcome = quota::reconcile_all_orgs(&pool)
+        .await
+        .expect("reconcile all orgs");
+    assert_eq!(outcome.counters_fixed, 2, "storage + documents drift fixed");
+    assert_eq!(outcome.job_slots_released, 1);
+
+    assert_eq!(counter_value(&pool, &context, "storage_bytes").await, 0);
+    assert_eq!(counter_value(&pool, &context, "documents").await, 0);
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await,
+        0
+    );
+
+    // Idempotent: a second pass finds no drift.
+    let second = quota::reconcile_all_orgs(&pool)
+        .await
+        .expect("second reconcile");
+    assert_eq!(second.counters_fixed, 0);
+    assert_eq!(second.job_slots_released, 0);
+
+    // Every applied fix wrote a system audit row (actor NULL, numbers only).
+    with_org_txn(&pool, &context, {
+        let context = context.clone();
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT actor_user_id, resource_id, metadata
+                         FROM audit_log
+                         WHERE org_id = $1 AND action = 'quota.reconcile'
+                         ORDER BY seq",
+                        &[&context.org_id()],
+                    )
+                    .await?;
+                assert_eq!(rows.len(), 3, "storage + documents + slots audits");
+                for row in &rows {
+                    let actor: Option<Uuid> = row.get("actor_user_id");
+                    assert!(actor.is_none(), "system reconcile has no human actor");
+                    let metadata: serde_json::Value = row.get("metadata");
+                    assert!(metadata.get("resource_kind").is_some());
+                }
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("audit rows");
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+async fn finalize_actual_commits_measured_token_usage() {
+    let Some((ephemeral, pool)) = boot_pool().await else {
+        return;
+    };
+    let context = seed_org_with_quota(
+        &pool,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        "quota-tokens-actual",
+        QuotaFixture {
+            storage: 100,
+            documents: 10,
+            concurrent: 10,
+            tokens: 1_000,
+        },
+    )
+    .await;
+
+    // Reserve an estimate, settle with the smaller measured amount.
+    quota::reserve(
+        &pool,
+        &context,
+        "ask-tokens-1",
+        ResourceKind::Tokens,
+        500,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .expect("reserve estimate");
+    let settled = quota::finalize_actual(&pool, &context, "ask-tokens-1", 37)
+        .await
+        .expect("finalize actual");
+    assert!(matches!(settled, QuotaSettlement::Finalized(_)));
+    assert_eq!(counter_value(&pool, &context, "tokens").await, 37);
+    assert_eq!(
+        active_reserved(&pool, &context, ResourceKind::Tokens).await,
+        0
+    );
+
+    // actual == 0 refunds instead of committing.
+    quota::reserve(
+        &pool,
+        &context,
+        "ask-tokens-2",
+        ResourceKind::Tokens,
+        500,
+        Duration::from_secs(60),
+        None,
+    )
+    .await
+    .expect("reserve second");
+    let refunded = quota::finalize_actual(&pool, &context, "ask-tokens-2", 0)
+        .await
+        .expect("zero-usage settle");
+    assert!(matches!(refunded, QuotaSettlement::Refunded(_)));
+    assert_eq!(counter_value(&pool, &context, "tokens").await, 37);
+
+    // Terminal reservations keep the finalize idempotency contract.
+    assert!(matches!(
+        quota::finalize_actual(&pool, &context, "ask-tokens-2", 10)
+            .await
+            .expect("settle refunded"),
+        QuotaSettlement::RefundedCannotFinalize(_)
+    ));
 
     ephemeral.drop().await;
 }

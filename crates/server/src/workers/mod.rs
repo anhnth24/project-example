@@ -3,6 +3,7 @@
 pub mod convert;
 pub mod delete;
 pub mod embedding;
+pub mod fairness;
 pub mod index;
 pub mod limits;
 pub mod reconcile;

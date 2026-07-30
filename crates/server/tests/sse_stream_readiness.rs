@@ -134,6 +134,7 @@ async fn live_router_trusted_proxy_and_rate_limit_429_metadata() {
         user_per_minute: 1_000,
         ip_per_minute: 2,
         expensive_route_per_minute: 1_000,
+        org_per_minute: 1_000,
     });
     let state = build_app_state(pool, &ephemeral.app_url, None)
         .with_rate_limiter(limiter)
