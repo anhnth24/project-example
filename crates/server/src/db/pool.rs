@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use deadpool_postgres::{Config, Pool, PoolConfig, Runtime};
+use deadpool_postgres::{Config, ManagerConfig, Pool, PoolConfig, RecyclingMethod, Runtime};
 use tokio_postgres::{NoTls, Transaction};
 
 use crate::auth::context::OrgContext;
@@ -22,10 +22,28 @@ pub fn create_pool(database_url: &str) -> Result<Pool, DbError> {
 }
 
 /// Creates a pool with an explicit max size (use `1` to force connection reuse in tests).
+///
+/// Pool defense (1C-08): every *reused* connection is recycled with deadpool's
+/// [`RecyclingMethod::Clean`] sequence (`CLOSE ALL; SET SESSION AUTHORIZATION
+/// DEFAULT; RESET ALL; UNLISTEN *; SELECT pg_advisory_unlock_all(); DISCARD
+/// TEMP; DISCARD SEQUENCES;`). The happy path ([`with_org_txn`]) only ever sets
+/// transaction-local GUCs, which vanish at COMMIT/ROLLBACK by construction;
+/// `Clean` defends the raw `pool.get()` paths (readiness probes, write gate,
+/// future code) against *session-level* contamination — `set_config(...,
+/// false)`, leaked advisory locks, `LISTEN`, temp tables — surviving a
+/// checkout/checkin cycle. Cost: one extra batched round trip per checkout of
+/// a reused connection; unlike `DISCARD ALL` it does not run `DEALLOCATE ALL`
+/// or `DISCARD PLAN`, so the per-connection prepared-statement cache stays
+/// effective. The write-gate shared advisory lock is released before its
+/// client returns to the pool (`middleware/write_gate.rs`), so
+/// `pg_advisory_unlock_all()` at recycle is a backstop, not a conflict.
 pub fn create_pool_with_max_size(database_url: &str, max_size: usize) -> Result<Pool, DbError> {
     let mut cfg = Config::new();
     cfg.url = Some(database_url.to_string());
     cfg.pool = Some(PoolConfig::new(max_size));
+    cfg.manager = Some(ManagerConfig {
+        recycling_method: RecyclingMethod::Clean,
+    });
     if database_requires_tls(database_url).map_err(DbError::Config)? {
         let connector = make_rustls_connect().map_err(DbError::Config)?;
         cfg.create_pool(Some(Runtime::Tokio1), connector)
