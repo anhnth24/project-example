@@ -39,6 +39,7 @@ struct IndexedDoc {
     user: Uuid,
     collection_id: Uuid,
     document_id: Uuid,
+    document_title: String,
     version_id: Uuid,
     source_sha: String,
     markdown_sha: String,
@@ -156,6 +157,7 @@ async fn seed_indexed_format(
         let signature = signature.clone();
         let original_key = original_key.clone();
         let markdown_key = markdown_key.clone();
+        let document_title = document_title.clone();
         move |txn| {
             Box::pin(async move {
                 collections::insert(
@@ -273,6 +275,7 @@ async fn seed_indexed_format(
         user,
         collection_id,
         document_id,
+        document_title,
         version_id,
         source_sha,
         markdown_sha,
@@ -368,6 +371,8 @@ async fn live_pdf_pptx_xlsx_citation_preview_download_matrix() {
         assert_eq!(pin.version_id, doc.version_id);
         assert_eq!(pin.source_content_sha256, doc.source_sha);
         assert_eq!(pin.canonical_markdown_sha256, doc.markdown_sha);
+        // P2-19 gap close: resolved pin carries the real seeded document title.
+        assert_eq!(pin.document_title, Some(doc.document_title.clone()));
         assert!(pin.anchor.starts_with("mhcite1."));
         assert_eq!(pin.page, doc.page.map(|v| v as u32));
         assert_eq!(pin.slide, doc.slide.map(|v| v as u32));

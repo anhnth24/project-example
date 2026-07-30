@@ -654,6 +654,7 @@ function seedCitation(
   documentId: string,
   versionId: string,
   collectionId: string,
+  documentTitle: string,
   quote: string,
   page?: number,
 ): CitationPin {
@@ -662,6 +663,7 @@ function seedCitation(
     logicalDocumentId: documentId,
     versionId,
     collectionId,
+    documentTitle,
     sourceContentSha256: `src-${versionId}`,
     canonicalMarkdownSha256: `md-${versionId}`,
     quoteSha256: `quote-${versionId}`,
@@ -683,6 +685,7 @@ function seedChatSessions(): Map<string, ChatSessionRecord[]> {
     mockUuid(110),
     mockUuid(1100),
     mockUuid(11),
+    'Roadmap.xlsx',
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
   );
   const onboardingCitation = seedCitation(
@@ -690,6 +693,7 @@ function seedChatSessions(): Map<string, ChatSessionRecord[]> {
     mockUuid(100),
     mockUuid(1000),
     mockUuid(10),
+    'Onboarding Guide.pdf',
     'Nhân viên mới cần hoàn thành khóa đào tạo hội nhập trong 30 ngày đầu tiên.',
     3,
   );
@@ -703,6 +707,7 @@ function seedChatSessions(): Map<string, ChatSessionRecord[]> {
     QA_COMPARE_DOCUMENT_ID,
     QA_COMPARE_VERSION_B_ID,
     mockUuid(11),
+    'Chính sách ngân sách vận hành.pdf',
     'Ngân sách vận hành được điều chỉnh thành 15 triệu đồng mỗi quý theo thiết kế mới.',
   );
 

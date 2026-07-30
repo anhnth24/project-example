@@ -15,9 +15,10 @@
 //      this page does directly, but `collectionNameById` (built once here
 //      from the same `GET /collections` call this page already makes for its
 //      own heading) is threaded down through `ChatPanel` to every bubble, so
-//      a footnote can show a collection name without an extra request per
-//      citation (see `CitationFootnotes.tsx`'s own doc for the
-//      `documentTitle` gap this works around).
+//      a footnote can show a collection name as a fallback — without an
+//      extra request per citation — when a pin's `documentTitle` (P2-19 gap
+//      closed) is absent, e.g. an older stored turn (see `CitationFootnotes.tsx`'s
+//      own doc).
 //   D. General cleanup: consistent `.card`/spacing, the old "lịch sử chỉ lưu
 //      tạm trong phiên này" disclaimer removed (there is now a real,
 //      server-backed history).

@@ -184,12 +184,71 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-06 — PostgreSQL ACL enforcement
 
-- **Status:** In progress — tenant+ACL predicate trên FTS/hydration/conflict-evidence (`db/search.rs:312/486`), list/count tenant-scoped, test DB-gated + fast. **Thiếu**: autocomplete (không tồn tại), nhánh FTS candidate chưa mang ACL subquery (dựa re-check ở hydration), count chưa có ACL predicate, không unit test missing-predicate riêng.
+- **Status:** In progress — vòng 11-B xác minh lại 4 điểm "Thiếu" trước đó bằng code thật
+  (đọc 2026-07-29; 3/4 stale hoặc đã đóng, 1/4 đúng và đã sửa):
+  1. **Đúng, đã sửa**: nhánh FTS candidate (`db::search::fts_search`, `db/search.rs:290`)
+     trước đây KHÔNG có ACL subquery — chỉ lọc `org_id`/`collection_id = ANY(...)`/version/
+     index-generation, dựa hoàn toàn vào (a) `resolve_scope` intersect
+     `ctx.allowed_collection_ids()` ở tầng service trước khi gọi, và (b) hydration re-check
+     sau đó. Đây là gap thật (defense-in-depth thiếu, TOCTOU nếu `allowed_collection_ids`
+     stale — context cache TTL 3s hoặc phiên ask-stream sống lâu). Đã thêm ACL EXISTS
+     predicate vào cả hai nhánh (`Current`/`VersionIds`) qua hàm builder dùng chung
+     `acl_predicate_sql` (`db/search.rs:128`), cùng pattern JOIN
+     `collections`/`org_memberships`/`roles`/`role_permissions`/`permissions` +
+     `collection_user_access` mà `hydrate_chunks_by_identity`/
+     `load_authorized_conflict_evidence` đã dùng; hydration re-check GIỮ NGUYÊN (không bỏ).
+     **Phát hiện thêm ngoài 4 điểm gốc**: pattern ACL cũ ở cả hydrate lẫn conflict-evidence
+     thiếu `acl_m.state = 'active'` — một membership `suspended` (chưa xóa hẳn) vẫn qua được
+     re-check, khác invariant 1C-02 "suspended resolves like missing". Đã đóng luôn trong hàm
+     builder dùng chung (áp dụng cho cả 3 query family). Test DB-gated mới
+     `fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership`
+     (`tests/retrieval.rs`) phủ cả hai: (a) FTS/hydration không lộ collection ngoài ACL dù
+     `collection_ids` request cố tình chứa nó (mô phỏng stale scope/TOCTOU), (b) suspend
+     (không xóa) membership → cả hai nhánh deny, reactivate → thấy lại (sanity chống
+     false-deny).
+  2. **Stale — không phải leak thật**: `db::documents::count`/`db::chunks::count`
+     (org-only, không ACL) chỉ được gọi từ `tests/repositories.rs`/`tests/index_worker.rs`
+     làm cross-org denial evidence — grep toàn repo xác nhận KHÔNG route/service nào gọi
+     chúng; không có endpoint count/total nào lộ ra HTTP (đã rà `routes/*.rs`,
+     `openapi/openapi.yaml`, response schema của `/api/v1/search` — không trường
+     `count`/`total` nào tồn tại). Không có leak thật để sửa vòng này. Đã siết footgun: doc
+     comment trên cả hai hàm nói rõ "test-only, không ACL, đừng gọi từ route/service" +
+     test source-scan mới `org_only_count_helpers_stay_out_of_routes_and_services`
+     (`tests/repositories.rs`) fail nếu tương lai có ai gọi chúng từ `src/routes`/
+     `src/services`.
+  3. **Đã làm**: cơ chế chống missing-predicate chọn là **builder trung tâm +
+     source-scan test cùng nhà với `middleware::write_gate`'s
+     `middleware_source_holds_shared_lock_across_next_run`** — không cần DB. Mọi query
+     đọc `chunks`/`claims` scoped theo collection PHẢI gọi `acl_predicate_sql(...)`
+     (`db/search.rs:128`) thay vì tự viết EXISTS; test
+     `every_chunk_scoped_query_embeds_acl_predicate` pin đúng 8 call-site (fts_search x2,
+     hydrate_chunks_by_identity x2, load_authorized_conflict_evidence x4) và fail nếu có
+     block `collections acl_c` viết tay ngoài hàm builder; test
+     `acl_predicate_sql_shape_is_pinned` pin đủ các mệnh đề bắt buộc (active membership,
+     disabled_at, permission + qa.query base gate, 3 nhánh visibility). Lựa chọn này thay vì
+     DB-gated so sánh hành vi vì nó chạy được `cargo test` không cần Postgres, bắt lỗi ngay
+     lúc review thay vì chờ CI DB-gated, và khớp tiền lệ đã có trong repo
+     (`write_gate.rs`) thay vì phát minh cơ chế mới.
+  4. **Đúng, xác nhận stale claim cũ đã đóng đúng**: grep `autocomplete` toàn repo (routes,
+     services, openapi.yaml, web/, app/) — không có endpoint/tính năng search-autocomplete
+     nào tồn tại (chỉ có thuộc tính HTML `autoComplete`/`aria-autocomplete` không liên quan
+     trên form đăng nhập). Xác nhận KHÔNG xây trong vòng này (out of scope, tránh thêm
+     surface mới chỉ để tick box) — khi xây sau này PHẢI dùng `acl_predicate_sql` ngay từ
+     đầu, không được lặp lại kiểu "list trước, ACL sau" mà điểm 1 vừa phải vá.
+  - Danh sách "list/count tenant-scoped" ở các vòng trước vẫn đúng cho `documents::
+    list_in_collection`/`db/graph.rs` (đã check `allowed_collection_ids`/`d.collection_id`
+    tại route reachable); không đổi gì thêm ở đó vòng này.
 
-- **Plan/files:** Tenant+ACL predicates cho list/count/autocomplete/FTS/hydration.
+- **Plan/files:** Tenant+ACL predicates cho list/count/FTS/hydration (autocomplete: không
+  xây, ghi nhận sẽ mang ACL predicate từ đầu nếu xây sau này — xem điểm 4 ở trên).
 - **Depends:** 1C-05. **Acceptance/tests:** Không path thiếu context; no existence/count
-  leak; SQL join/subquery/missing-predicate tests.
-- **Security/migration:** PG authority, prepared queries. **Out:** vector/object path.
+  leak (xác nhận không có route/endpoint count nào tồn tại để leak — xem điểm 2); SQL
+  join/subquery/missing-predicate tests — `tests::every_chunk_scoped_query_embeds_acl_predicate`
+  + `tests::acl_predicate_sql_shape_is_pinned` (`db/search.rs`, fast) và
+  `fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership` +
+  `org_only_count_helpers_stay_out_of_routes_and_services` (DB-gated/fast, `tests/`).
+- **Security/migration:** PG authority, prepared queries. **Out:** vector/object path,
+  autocomplete (chưa xây — xem điểm 4).
 
 ## 1C-07 — Qdrant/storage/jobs fail-closed enforcement
 

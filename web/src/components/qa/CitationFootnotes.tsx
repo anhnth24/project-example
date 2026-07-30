@@ -6,18 +6,16 @@
 // restructuring of that same card into a footnote-shaped item, not a parallel
 // implementation.
 //
-// **Verified contract gap (not invented):** `CitationPin`
-// (`api/generated/contract.ts`) has no `documentTitle` field — only
-// `logicalDocumentId`/`collectionId` (uuids). A citation therefore cannot
-// show a real document *name* without either (a) a field the contract
-// doesn't have, or (b) one extra lookup per pin, which the task brief
-// explicitly rules out ("ĐỪNG gọi thêm N request lookup per pin"). This
-// component instead resolves `collectionId` against `collectionNameById` — a
-// map the caller already has in hand from a single `GET /collections` call
-// made once per page, not once per citation — and falls back to the
-// collection's name + location + quote. Tracked as a backlog gap
-// (`plans/markhand-web/backlog/phase-2/issues/README.md`'s P2-19 entry):
-// "cần `documentTitle` trong `CitationPin`".
+// **P2-19 gap closed:** `CitationPin` (`api/generated/contract.ts`) now
+// carries a nullable `documentTitle` — `services::citation::pin_from_hit`/
+// `resolve_citation` populate it from `documents.title`, which PostgreSQL
+// hydration already joins for ACL/state (no extra per-pin lookup; see the
+// P2-19 backlog entry's trade-off note). This component prefers
+// `citation.documentTitle` when present; a pin that still omits it (older
+// stored chat turn, or a future producer that cannot resolve one) falls back
+// to `collectionId` resolved against `collectionNameById` — a map the caller
+// already has in hand from a single `GET /collections` call made once per
+// page, not once per citation — same graceful-degradation fallback as before.
 import { buildLibraryDocPath } from '../../lib/router';
 import { RouteLink } from '../RouteLink';
 import { footnoteAnchorId } from './AnswerText';
@@ -63,6 +61,7 @@ export function CitationFootnotes({
           const collectionName = citation.collectionId
             ? (collectionNameById.get(citation.collectionId) ?? UNKNOWN_COLLECTION_LABEL)
             : UNKNOWN_COLLECTION_LABEL;
+          const sourceLabel = citation.documentTitle ?? collectionName;
           const location = locationLabel(citation);
           const deepLinkable = hasDeepLink(citation);
           return (
@@ -81,7 +80,7 @@ export function CitationFootnotes({
                 }}
               >
                 <strong>[{n}]</strong>
-                <span>{collectionName}</span>
+                <span>{sourceLabel}</span>
                 {location && <span className="text-muted">— {location}</span>}
                 {citation.isCurrent === false && (
                   <span

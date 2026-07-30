@@ -1858,6 +1858,20 @@ components:
           type: string
           format: uuid
           nullable: true
+        # P2-19 gap close: the server (`services::citation::CitationPin`) now
+        # always populates this from `documents.title` — hydration already
+        # JOINs `documents d` for ACL/state, so this is one extra selected
+        # column, not a new join/query (see the P2-19 backlog entry's
+        # "trade-off" note for why the alternative — resolving titles via a
+        # separate lookup — was rejected as an N+1 the brief forbids).
+        # Nullable/additive like the three uuid fields above: a resolved
+        # pin from `resolve_citation` also always carries it (from
+        # `documents::get_by_id`), but the type stays optional so a future
+        # producer that cannot resolve a title still degrades gracefully
+        # rather than being forced to invent one.
+        documentTitle:
+          type: string
+          nullable: true
         sourceContentSha256:
           type: string
           description: Original uploaded/source object SHA-256
