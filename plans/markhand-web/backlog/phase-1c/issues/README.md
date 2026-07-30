@@ -288,13 +288,69 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-10 — Rate limit và per-org fairness
 
-- **Status:** In progress — limiter per-IP/user/route (`middleware/rate_limit.rs`) + Retry-After header + metrics privacy-safe + worker type-fairness (`workers/index.rs:137`). **Thiếu đúng phần định nghĩa 1C-10**: **per-ORG fairness** (không có bucket per-org — key org chỉ là prefix per-user; không có scheduler/semaphore GPU per-org; worker chạy **1 org/tiến trình** `bin/worker.rs:151`), không có test noisy-neighbor/SLO, không có GPU scheduler.
+- **Status:** In progress — limiter per-IP/user/route (`middleware/rate_limit.rs`) +
+  Retry-After header + metrics privacy-safe + worker type-fairness
+  (`workers/index.rs:137`) đã có từ trước. **Phần per-ORG fairness đã landed
+  (2026-07-30, xác minh từng điểm "Thiếu" bằng code trước khi xây):**
+  1. **Bucket rate-limit per-ORG thật** (gap cũ đúng: key `user:{org}:{user}` chỉ dùng
+     org làm prefix — mỗi user vẫn có bucket riêng, org N user = N× capacity): thêm tầng
+     thứ 3 `RateLimiter::check_org` (key `org:{org_id}`, `org_per_minute` default 600,
+     env `MARKHAND_RATE_ORG_PER_MINUTE`, compose POC set 3000). Wire tại MỘT điểm
+     `routes/rate_limit_guard.rs::check_user` (user bucket trước → scope `user` cho user
+     tự vượt; org bucket sau → scope `org`) nên mọi route authenticated
+     (ask/search/upload/events/reindex) tự có tầng org. **Nguồn limit chọn env knob
+     đồng nhất, KHÔNG cột `org_quotas`** — trade-off ghi rõ: limiter sync in-process
+     (không DB trên request path), theo tiền lệ `MARKHAND_RATE_*`; per-org tiered limit
+     (cột `org_quotas` + cached read) để lại đến khi có yêu cầu tier thật. Test unit
+     fast `org_bucket_bounds_many_users_without_touching_other_orgs` (org A 10 user chỉ
+     lọt đúng org-capacity, org B nguyên vẹn).
+  2. **Worker fairness đa-org** — xác minh "1 org/tiến trình" nghĩa thật: worker pin org
+     qua env `MARKHAND_WORKER_ORG_ID` (một UUID, `bin/worker.rs:151` cũ), mọi claim txn
+     set GUC RLS org đó; claim SQL CÓ lọc org (`org_id = $1` + FORCE RLS) nên "fair
+     ORDER BY xuyên org trong query claim" là bất khả thi nếu không phá posture RLS
+     (worker không context thấy 0 hàng — `pool_worker_defense`). Giải pháp trong hạ tầng
+     hiện có: `workers/fairness.rs::OrgRotation` — `MARKHAND_WORKER_ORG_ID` nhận danh
+     sách UUID phẩy, mỗi cycle round-robin quét từ cursor, phục vụ tối đa 1 job rồi đẩy
+     cursor qua org vừa phục vụ ⇒ **bound xác định: giữa 2 job liên tiếp của một org có
+     backlog, tối đa N-1 job org khác chen vào**, bất kể backlog org ồn to bao nhiêu.
+     Poison-org (attempt lỗi) cũng bị đẩy cursor qua để không ghim đầu rotation. Tái
+     dụng nguyên claim path 1C-09 (advisory lock + reservation `concurrent_jobs` clamp
+     trong claim txn) — không xây scheduler trùng. Đơn-org giữ nguyên hành vi cũ
+     (rotation 1 phần tử); reconcile oneshot bắt buộc đúng 1 org.
+  3. **Test noisy-neighbor DB-gated** `tests/noisy_neighbor.rs` (đo bằng ĐẾM thứ tự
+     claim, không wall-clock — SLO wall-clock thuộc 1C-13): (a) org A 20 job vs org B
+     4 job → chuỗi phục vụ xen kẽ đúng `[A,B,A,B,A,B,A,B]` rồi A-only, đủ 24; (b) org A
+     giữ chặt slot `concurrent_jobs` duy nhất (lease không complete) + còn backlog →
+     admission 1C-09 trả claim rỗng và rotation rơi xuống org B **trong cùng một
+     cycle**; cả hai org cạn/kẹt → cycle idle (không busy-loop). Unit fast trong
+     `workers/fairness.rs` phủ alternation/skip-idle/poison-advance/duplicate-reject.
+  **GPU scheduler/semaphore per-org: N/A-until-GPU (xác minh 2026-07-30, không xây)** —
+  grep toàn repo: server crate KHÔNG có GPU workload nào; GPU chỉ xuất hiện ở (a)
+  feature `cuda` opt-in của whisper trong `crates/core` (desktop/CLI, ngoài server),
+  (b) container vLLM/embedding GPU opt-in profile trong `deploy/compose.spike.yml`/
+  `deploy/dev/compose.yml` (external HTTP provider, POC default `mock`). **Điều kiện
+  kích hoạt**: khi một GPU inference service dùng chung (vLLM/TEI nội bộ) vào đường
+  serving thật (embedding profile ≠ mock trỏ GPU chung), cần per-org admission tại
+  call-site embedding/ask (semaphore keyed org) — job-level đã được `concurrent_jobs`
+  bound sẵn. **SLO wall-clock test**: thuộc 1C-13 (cần Phase 0 capacity baseline,
+  chưa có) — không làm ở đây.
 
-- **Plan/files:** User/IP/auth limits, per-org worker/GPU scheduler/semaphore, headers,
-  privacy-safe metrics.
-- **Depends:** 1C-09 + Phase 0 SLO/capacity. **Acceptance/tests:** Noisy org không phá
-  SLO org khác; burst/window/fair-load/crash-release/proxy tests.
-- **Security/migration:** Chỉ trusted proxy IP, bounded state. **Out:** multi-region.
+- **Plan/files:** User/IP/auth limits (**done từ trước**); per-org API bucket (**done**:
+  `middleware/rate_limit.rs::check_org` + `routes/rate_limit_guard.rs`); per-org worker
+  fairness (**done**: `workers/fairness.rs::OrgRotation` + `bin/worker.rs` multi-org
+  env); GPU scheduler/semaphore (**N/A-until-GPU**, xem điều kiện kích hoạt ở trên);
+  headers, privacy-safe metrics (**done từ trước**, scope mới `org` trong 429 details
+  là giá trị tĩnh, không PII).
+- **Depends:** 1C-09 (dùng lại reservation `concurrent_jobs`) + Phase 0 SLO/capacity
+  (chỉ còn cần cho phần SLO 1C-13). **Acceptance/tests:** Noisy org không bỏ đói org
+  khác — **done ở mức deterministic-count** (`tests/noisy_neighbor.rs` DB-gated + unit
+  fairness/rate-limit fast); burst/window/crash-release/proxy tests đã có từ trước
+  (`rate_limit.rs` tests, `sse_stream_readiness.rs` trusted-proxy 429); riêng
+  **fairness SLO wall-clock** chuyển 1C-13.
+- **Security/migration:** Chỉ trusted proxy IP, bounded state (org bucket nằm trong
+  cùng HashMap HARD_CAP 10k key, evictable như các key khác). Không migration mới.
+  **Out:** multi-region; per-org tiered rate limit từ `org_quotas` (đợi yêu cầu tier
+  thật); GPU semaphore (until-GPU).
 
 ## 1C-11 — Audit/admin APIs
 
