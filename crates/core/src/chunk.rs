@@ -211,6 +211,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn three_level_heading_path_vietnamese() {
+        let md = "\
+# Phần I
+
+Giới thiệu phần I.
+
+## Mục 1
+
+Nội dung mục 1.
+
+### Tiểu mục 1.1
+
+Chi tiết tiểu mục.
+
+## Mục 2
+
+Nội dung mục 2.
+";
+        let c = chunk_markdown(md, 1000);
+
+        assert_eq!(c.len(), 4);
+        assert_eq!(c[0].heading, "Phần I");
+        assert_eq!(c[0].text, "Giới thiệu phần I.");
+        assert_eq!(c[1].heading, "Phần I > Mục 1");
+        assert_eq!(c[1].text, "Nội dung mục 1.");
+        assert_eq!(c[2].heading, "Phần I > Mục 1 > Tiểu mục 1.1");
+        assert_eq!(c[2].text, "Chi tiết tiểu mục.");
+        assert_eq!(c[3].heading, "Phần I > Mục 2");
+        assert_eq!(c[3].text, "Nội dung mục 2.");
+    }
+
+    #[test]
+    fn split_paragraphs_keep_full_heading_path() {
+        let para = "x".repeat(150);
+        let md = format!("# Phụ lục\n\n{para}\n\n{para}\n\n{para}\n");
+        let c = chunk_markdown(&md, 320);
+
+        assert!(c.len() >= 2, "expected split, got {}", c.len());
+        assert!(
+            c.iter().all(|k| k.heading == "Phụ lục"),
+            "every sub-chunk must keep section heading path"
+        );
+        assert!(c.iter().all(|k| k.chars <= 320));
+    }
+
+    #[test]
     fn splits_by_heading_with_path() {
         let md = "# Chương I\n\nMở đầu.\n\n## Điều 1\n\nNội dung điều 1.\n\n## Điều 2\n\nNội dung điều 2.\n";
         let c = chunk_markdown(md, 1000);
