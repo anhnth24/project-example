@@ -105,7 +105,7 @@ Mỗi catalog issue được map thành GitHub issue với:
   closed count/progress của milestone. Sync không tự reopen issue đã đóng.
 
 ```bash
-# xem trước 113 issue
+# xem trước 116 issue
 python3 scripts/sync-github-issues.py --dry-run
 
 # tạo milestone trước, rồi issue
