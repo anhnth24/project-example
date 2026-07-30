@@ -19,8 +19,9 @@ use uuid::Uuid;
 use crate::auth::context::OrgContext;
 use crate::db::documents::{self, MarkdownArtifactRecord, NewMarkdownArtifact};
 use crate::db::error::DbError;
-use crate::db::models::{EventLogEntry, Job, JobStatus, JobType, OutboxEvent};
-use crate::db::{jobs as repo, pool};
+use crate::db::models::{EventLogEntry, Job, JobStatus, JobType, OutboxEvent, ResourceKind};
+use crate::db::{jobs as repo, pool, quota as quota_repo};
+use crate::services::quota as quota_service;
 
 pub const CURRENT_JOB_PAYLOAD_VERSION: i32 = 4;
 pub const CURRENT_EVENT_PAYLOAD_VERSION: i32 = 2;
@@ -528,9 +529,13 @@ pub async fn claim(
         let worker_id = worker_id.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::claim_pending(txn, &ctx, &worker_id, limit, lease_ttl_secs)
-                    .await
-                    .map_err(Into::into)
+                let Some((slots, observed_at)) = admit_job_slots(txn, &ctx, limit).await? else {
+                    return Ok(Vec::new());
+                };
+                let jobs =
+                    repo::claim_pending(txn, &ctx, &worker_id, slots, lease_ttl_secs).await?;
+                reserve_job_slots(txn, &ctx, &jobs, lease_ttl_secs, observed_at).await?;
+                Ok(jobs)
             })
         }
     })
@@ -553,9 +558,20 @@ pub async fn claim_type(
         let worker_id = worker_id.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::claim_pending_of_type(txn, &ctx, job_type, &worker_id, limit, lease_ttl_secs)
-                    .await
-                    .map_err(Into::into)
+                let Some((slots, observed_at)) = admit_job_slots(txn, &ctx, limit).await? else {
+                    return Ok(Vec::new());
+                };
+                let jobs = repo::claim_pending_of_type(
+                    txn,
+                    &ctx,
+                    job_type,
+                    &worker_id,
+                    slots,
+                    lease_ttl_secs,
+                )
+                .await?;
+                reserve_job_slots(txn, &ctx, &jobs, lease_ttl_secs, observed_at).await?;
+                Ok(jobs)
             })
         }
     })
@@ -583,21 +599,84 @@ pub async fn claim_reconcile(
         let worker_id = worker_id.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::claim_pending_reconcile(
+                let Some((slots, observed_at)) = admit_job_slots(txn, &ctx, limit).await? else {
+                    return Ok(Vec::new());
+                };
+                let jobs = repo::claim_pending_reconcile(
                     txn,
                     &ctx,
                     &worker_id,
-                    limit,
+                    slots,
                     lease_ttl_secs,
                     require_cleanup_target,
                     document_id,
                 )
-                .await
-                .map_err(Into::into)
+                .await?;
+                reserve_job_slots(txn, &ctx, &jobs, lease_ttl_secs, observed_at).await?;
+                Ok(jobs)
             })
         }
     })
     .await
+}
+
+/// Concurrent-jobs admission for a claim transaction (1C-09 b).
+///
+/// Takes the per-org `concurrent_jobs` advisory lock, computes free slots from
+/// active reservations, and clamps the requested claim limit. `None` means no
+/// capacity — the caller returns an empty claim (worker idles and retries).
+/// Missing `org_quotas` fails closed with a visible configuration error, the
+/// same posture as upload admission.
+async fn admit_job_slots(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    limit: i64,
+) -> Result<Option<(i64, chrono::DateTime<chrono::Utc>)>, JobError> {
+    let (available, observed_at) = quota_service::lock_and_available_job_slots(txn, ctx)
+        .await
+        .map_err(job_slot_admission_error)?;
+    if available == 0 {
+        crate::telemetry::inc_quota("job_slots_exhausted");
+        return Ok(None);
+    }
+    Ok(Some((limit.min(available), observed_at)))
+}
+
+/// Reserve one `concurrent_jobs` slot per claimed job, atomically with the claim.
+async fn reserve_job_slots(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    jobs: &[Job],
+    lease_ttl_secs: i64,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), JobError> {
+    for job in jobs {
+        quota_service::reserve_job_slot_in_txn(txn, ctx, job.id, lease_ttl_secs, observed_at)
+            .await
+            .map_err(job_slot_admission_error)?;
+    }
+    Ok(())
+}
+
+/// Refund the claimed job's concurrent-jobs slot on any terminal transition
+/// (complete / fail / cancel / reclaim / dry-run release). No-op when the job
+/// holds no slot (e.g. enqueued before this enforcement shipped).
+async fn release_job_slot(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+) -> Result<(), JobError> {
+    let observed_at = quota_repo::fresh_clock_timestamp(txn).await?;
+    quota_repo::refund_reserved_by_job(txn, ctx, job_id, ResourceKind::ConcurrentJobs, observed_at)
+        .await?;
+    Ok(())
+}
+
+fn job_slot_admission_error(error: quota_service::QuotaError) -> JobError {
+    JobError::Database(DbError::Config(format!(
+        "job_slot_admission:{}",
+        error.code()
+    )))
 }
 
 /// Releases a leased reconcile job after dry-run without completing it.
@@ -617,9 +696,12 @@ pub async fn release_dry_run(
         let lease_token = lease_token.to_string();
         move |txn| {
             Box::pin(async move {
-                repo::release_dry_run_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
-                    .await?
-                    .ok_or(JobError::LeaseLost)
+                let job =
+                    repo::release_dry_run_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
+                        .await?
+                        .ok_or(JobError::LeaseLost)?;
+                release_job_slot(txn, &ctx, job.id).await?;
+                Ok(job)
             })
         }
     })
@@ -651,6 +733,16 @@ pub async fn heartbeat(
                 )
                 .await?
                 {
+                    // Keep the concurrent-jobs slot alive exactly as long as
+                    // the lease: a long job must not lose its slot mid-run.
+                    quota_repo::extend_reserved_by_job(
+                        txn,
+                        &ctx,
+                        job_id,
+                        ResourceKind::ConcurrentJobs,
+                        lease_ttl_secs,
+                    )
+                    .await?;
                     Ok(())
                 } else {
                     Err(JobError::LeaseLost)
@@ -721,6 +813,10 @@ pub async fn reclaim_expired(
             Box::pin(async move {
                 let jobs = repo::reclaim_expired(txn, &ctx, limit, backoff_secs).await?;
                 for job in &jobs {
+                    // The lease is gone either way (pending retry or dead
+                    // letter): free the concurrency slot immediately instead
+                    // of waiting out the reservation TTL.
+                    release_job_slot(txn, &ctx, job.id).await?;
                     let event_type = match job.status {
                         JobStatus::Pending => "job.reclaimed",
                         JobStatus::DeadLetter => "job.dead_lettered",
@@ -778,6 +874,7 @@ pub(crate) async fn complete_within_txn(
     let job = repo::complete_owned(txn, ctx, job_id, lease_token, claimed_attempts)
         .await?
         .ok_or(JobError::LeaseLost)?;
+    release_job_slot(txn, ctx, job.id).await?;
     let outbox_key = transition_key(&job, "job.succeeded");
     write_job_event(txn, ctx, &job, "job.succeeded", &outbox_key).await?;
     Ok(job)
@@ -802,6 +899,7 @@ pub async fn complete_with_markdown_artifact(
                 let job = repo::complete_owned(txn, &ctx, job_id, &lease_token, claimed_attempts)
                     .await?
                     .ok_or(JobError::LeaseLost)?;
+                release_job_slot(txn, &ctx, job.id).await?;
                 let artifact = documents::insert_markdown_artifact(
                     txn,
                     &ctx,
@@ -886,6 +984,7 @@ pub(crate) async fn fail_within_txn(
     )
     .await?
     .ok_or(JobError::LeaseLost)?;
+    release_job_slot(txn, ctx, job.id).await?;
     let event_type = match job.status {
         JobStatus::Pending => "job.retry_scheduled",
         JobStatus::DeadLetter => "job.dead_lettered",
@@ -922,12 +1021,14 @@ pub async fn cancel(
                         let job = repo::cancel_job(txn, &ctx, job_id)
                             .await?
                             .ok_or(JobError::NotFound)?;
+                        release_job_slot(txn, &ctx, job.id).await?;
                         let children = repo::cancel_embedding_children(txn, &ctx, job.id).await?;
                         let outbox_key = transition_key(&job, "job.cancelled");
                         write_job_event(txn, &ctx, &job, "job.cancelled", &outbox_key).await?;
                         crate::services::indexing::handle_terminal_index_job(txn, &ctx, &job)
                             .await?;
                         for child in &children {
+                            release_job_slot(txn, &ctx, child.id).await?;
                             let outbox_key = transition_key(child, "job.cancelled");
                             write_job_event(txn, &ctx, child, "job.cancelled", &outbox_key).await?;
                             crate::services::indexing::handle_terminal_index_job(txn, &ctx, child)
