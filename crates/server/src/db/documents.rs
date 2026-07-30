@@ -173,6 +173,15 @@ pub async fn mark_deleted_at(
 }
 
 /// Counts documents for the tenant (used by cross-org denial tests).
+///
+/// **Test-only by design — no collection ACL predicate.** This is org-wide
+/// (`org_id` only); it does not check `allowed_collection_ids` or the
+/// `collections`/`org_memberships`/`role_permissions` ACL chain (see
+/// `db::search::acl_predicate_sql`). Calling this from a route or service
+/// would leak the existence/count of documents in collections the caller
+/// has no access to. `tests::org_only_count_helpers_stay_out_of_routes_and_services`
+/// (`tests/repositories.rs`) enforces that nothing outside `tests/` calls
+/// it; add ACL scoping first if a real count endpoint is ever built.
 pub async fn count(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbError> {
     let row = txn
         .query_one(

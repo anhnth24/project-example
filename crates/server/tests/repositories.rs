@@ -603,3 +603,47 @@ async fn document_state_machine_legal_illegal_and_concurrent() {
 
     ephemeral.drop().await;
 }
+
+/// 1C-06: `db::documents::count`/`db::chunks::count` are deliberately
+/// org-only (no collection ACL predicate) — their own doc comments say so
+/// ("used by cross-org denial tests" / "cross-org denial evidence"), and
+/// today nothing outside `tests/` calls them (verified while auditing
+/// 1C-06's "count chưa có ACL predicate" backlog claim: no live
+/// list/count route or service exists that would leak existence/counts of
+/// documents outside a caller's ACL scope). This fast, DB-free test is the
+/// regression guard: if a future route or service handler starts calling
+/// either helper directly, that org-only count *would* become a real
+/// existence/count leak, so fail loudly instead of silently reintroducing
+/// the exact class of bug this issue was meant to close.
+#[test]
+fn org_only_count_helpers_stay_out_of_routes_and_services() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for dir in ["src/routes", "src/services"] {
+        let root = manifest.join(dir);
+        let mut stack = vec![root.clone()];
+        while let Some(path) = stack.pop() {
+            for entry in std::fs::read_dir(&path)
+                .unwrap_or_else(|error| panic!("read_dir {path:?}: {error}"))
+            {
+                let entry = entry.expect("dir entry");
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    stack.push(entry_path);
+                    continue;
+                }
+                if entry_path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                    continue;
+                }
+                let src = std::fs::read_to_string(&entry_path)
+                    .unwrap_or_else(|error| panic!("read {entry_path:?}: {error}"));
+                assert!(
+                    !src.contains("documents::count(") && !src.contains("chunks::count("),
+                    "{entry_path:?} calls an org-only count() helper with no ACL predicate \
+                     (db::documents::count / db::chunks::count are test-only by design); \
+                     add collection ACL scoping (see db::search::acl_predicate_sql) before \
+                     using a count() from a route/service"
+                );
+            }
+        }
+    }
+}

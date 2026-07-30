@@ -32,6 +32,7 @@ fn hit(version_number: i32, is_current: bool) -> RetrievalHit {
         version_number,
         content_sha256: format!("{:0>64}", 200 + version_number),
         canonical_markdown_sha256: "".into(),
+        document_title: "Ngân sách".into(),
         heading: "Ngân sách".into(),
         snippet: format!("Kinh phí version {version_number} là giá trị kiểm thử."),
         body: format!("Kinh phí version {version_number} là giá trị kiểm thử."),

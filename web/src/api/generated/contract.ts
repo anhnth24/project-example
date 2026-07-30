@@ -795,6 +795,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/chat-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's own Q&A chat sessions (P2-19)
+         * @description Private per-user history — never another user's sessions, even within the same org (requires qa.query, same gate as /search, /ask). Newest-active-first; cursor pagination, same convention as GET /audit.
+         */
+        get: operations["listChatSessions"];
+        put?: never;
+        /** Create a chat session (P2-19) */
+        post: operations["createChatSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat-sessions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: components["parameters"]["sessionId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Chat session detail with its turns, ordered by seq (P2-19)
+         * @description 404 for a session id that does not exist, belongs to another user (even in the same org), or another org — no existence oracle, same precedent GET /orgs/{orgId} documents.
+         */
+        get: operations["getChatSession"];
+        put?: never;
+        post?: never;
+        /** Hard-delete a chat session; turns cascade (P2-19) */
+        delete: operations["deleteChatSession"];
+        options?: never;
+        head?: never;
+        /** Rename a chat session (P2-19) */
+        patch: operations["updateChatSession"];
+        trace?: never;
+    };
+    "/chat-sessions/{sessionId}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: components["parameters"]["sessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append a turn to a chat session (P2-19)
+         * @description Client writes this after its own /ask or /ask/stream response has already completed and been rendered — seq is server-assigned as max(seq)+1 within one transaction. Citations/warnings are stored as opaque JSON (the exact pins/strings the client already displayed) and are never re-validated/re-authorized here; the client re-validates a citation for real via POST /citations/resolve when the user clicks a deep-link out of history.
+         */
+        post: operations["appendChatTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -869,6 +936,7 @@ export interface components {
             versionId?: string | null;
             /** Format: uuid */
             collectionId?: string | null;
+            documentTitle?: string | null;
             /** @description Original uploaded/source object SHA-256 */
             sourceContentSha256: string;
             /** @description Trusted canonical Markdown artifact SHA-256 */
@@ -925,9 +993,12 @@ export interface components {
             collectionIds?: string[];
             /**
              * Format: uuid
-             * @description P2-18 — optional project scope. Absent/null means "all projects": no additional filter beyond collectionIds (today's exact behavior). Narrows (never widens) whatever collectionIds already restricts; a projectId that does not resolve in the caller's org is a 404.
+             * @deprecated
+             * @description P2-18 — optional project scope. Absent/null means "all projects": no additional filter beyond collectionIds (today's exact behavior). Narrows (never widens) whatever collectionIds already restricts; a projectId that does not resolve in the caller's org is a 404. Deprecated (P2-19) in favor of projectIds, which subsumes it; kept fully working since the web app still sends it. Sending both unions them.
              */
             projectId?: string;
+            /** @description P2-19 — optional multi-project scope. Resolves to the union of every named project's collection ids, then narrows (never widens) whatever collectionIds/projectId already restrict. Absent or empty means "no filter from this field" (identical to omitting it). Any id that does not resolve in the caller's org is a 404, same as projectId. Bounded to 20 ids; more is a 400. */
+            projectIds?: string[];
             /** @enum {string} */
             mode?: "current" | "as_of" | "compare" | "history";
             /** Format: date-time */
@@ -955,9 +1026,12 @@ export interface components {
             collectionIds?: string[];
             /**
              * Format: uuid
-             * @description P2-18 — optional project scope. Absent/null means "all projects": no additional filter beyond collectionIds (today's exact behavior). Narrows (never widens) whatever collectionIds already restricts; a projectId that does not resolve in the caller's org is a 404.
+             * @deprecated
+             * @description P2-18 — optional project scope. Absent/null means "all projects": no additional filter beyond collectionIds (today's exact behavior). Narrows (never widens) whatever collectionIds already restricts; a projectId that does not resolve in the caller's org is a 404. Deprecated (P2-19) in favor of projectIds, which subsumes it; kept fully working since the web app still sends it. Sending both unions them.
              */
             projectId?: string;
+            /** @description P2-19 — optional multi-project scope. Resolves to the union of every named project's collection ids, then narrows (never widens) whatever collectionIds/projectId already restrict. Absent or empty means "no filter from this field" (identical to omitting it). Any id that does not resolve in the caller's org is a 404, same as projectId. Bounded to 20 ids; more is a 400. */
+            projectIds?: string[];
             /** @enum {string} */
             mode?: "current" | "as_of" | "compare" | "history";
             /** Format: date-time */
@@ -1245,6 +1319,60 @@ export interface components {
             communities: components["schemas"]["GraphCommunity"][];
             requestId: string;
         };
+        ChatSession: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        ChatSessionPage: {
+            items: components["schemas"]["ChatSession"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        ChatTurn: {
+            /** Format: uuid */
+            id: string;
+            seq: number;
+            question: string;
+            answer: string;
+            /** @enum {string} */
+            answerMode: "offline_extractive" | "fallback_extractive" | "local_llm" | "cloud_llm" | "subscription_cli" | "llm_unverified";
+            /** @description Stored verbatim from AppendChatTurnRequest — never re-validated server-side on read; see routes::chat_sessions module doc. */
+            citations: components["schemas"]["CitationPin"][];
+            warnings: string[];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ChatSessionDetail: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Ordered by seq ascending (oldest first). */
+            turns: components["schemas"]["ChatTurn"][];
+        };
+        CreateChatSessionRequest: {
+            title: string;
+        };
+        UpdateChatSessionRequest: {
+            title: string;
+        };
+        AppendChatTurnRequest: {
+            question: string;
+            answer: string;
+            /** @enum {string} */
+            answerMode: "offline_extractive" | "fallback_extractive" | "local_llm" | "cloud_llm" | "subscription_cli" | "llm_unverified";
+            /** @description Defaults to [] when omitted. Stored opaque, not re-validated. */
+            citations?: components["schemas"]["CitationPin"][];
+            /** @description Defaults to [] when omitted. */
+            warnings?: string[];
+        };
     };
     responses: {
         /** @description Canonical API error */
@@ -1276,6 +1404,7 @@ export interface components {
         userId: string;
         orgId: string;
         projectId: string;
+        sessionId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2938,6 +3067,169 @@ export interface operations {
                     "application/json": components["schemas"]["GraphResponse"];
                 };
             };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listChatSessions: {
+        parameters: {
+            query?: {
+                /** @description Page size (server default 50, clamped to [1, 100]). */
+                limit?: number;
+                /** @description Opaque pagination cursor from a previous page's nextCursor. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's chat sessions, most recently active first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionPage"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateChatSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Chat session created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSession"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: components["parameters"]["sessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Session detail plus every turn, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSessionDetail"];
+                };
+            };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    deleteChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: components["parameters"]["sessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Chat session (and its turns) deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateChatSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: components["parameters"]["sessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateChatSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Chat session renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSession"];
+                };
+            };
+            400: components["responses"]["ApiError"];
+            403: components["responses"]["ApiError"];
+            404: components["responses"]["ApiError"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    appendChatTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sessionId: components["parameters"]["sessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppendChatTurnRequest"];
+            };
+        };
+        responses: {
+            /** @description Turn appended. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatTurn"];
+                };
+            };
+            400: components["responses"]["ApiError"];
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
             429: components["responses"]["RateLimited"];

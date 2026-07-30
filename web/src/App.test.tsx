@@ -319,6 +319,26 @@ describe('App / authenticated shell (P2-05 guard matrix + login/logout)', () => 
     expect(window.location.pathname).toBe('/admin/members');
   });
 
+  // P2-18 "Khu Quản trị" move: `/admin/projects` is gated by the same
+  // `permission` mechanism (`doc.upload`) as `/admin/members`
+  // (`member.manage`) above — the demo vitest fixture user has neither by
+  // default (see `mocks/fixtures.ts`'s own note on `DEMO_USER`), so this is
+  // the same "in-shell notice, not a redirect" contract for the new route.
+  it('renders an in-shell notice — not the admin projects page, not a redirect — for a signed-in user without doc.upload', async () => {
+    window.history.pushState(null, '', '/admin/projects');
+    render(<App />);
+    await waitFor(() => expect(window.location.pathname).toBe('/login'));
+
+    fillAndSubmitLogin(DEMO_EMAIL, DEMO_PASSWORD);
+
+    await waitFor(() => expect(screen.getByText(/không có quyền/)).toBeVisible());
+    expect(screen.queryByRole('heading', { name: 'Dự án' })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe('/admin/projects');
+    // The rail's own "Dự án" item is also hidden for this caller — not just
+    // the page content.
+    expect(screen.queryByRole('link', { name: 'Dự án' })).not.toBeInTheDocument();
+  });
+
   it('restores the session on unmount/remount without forcing a re-login (real page-reload-from-a-fresh-client case is covered in auth/AuthContext.test.tsx)', async () => {
     window.history.pushState(null, '', '/library');
     render(<App />);

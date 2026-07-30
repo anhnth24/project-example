@@ -1850,6 +1850,23 @@ textarea.input {
   justify-content: center;
 }
 
+/* "QUẢN TRỊ" group divider (P2-18 Rail update): a plain rule in the
+   collapsed rail (no room for a label next to 44px icons); the label itself
+   only appears once `.rail-expanded` gives it room, same collapsed/expanded
+   split `.rail-link-label` already uses. */
+.rail-nav-divider {
+  border-top: 1px solid var(--color-divider);
+  flex: 0 0 auto;
+  justify-content: flex-start !important;
+  margin-block: var(--space-1);
+  padding-top: var(--space-2);
+  width: 100%;
+}
+
+.rail-nav-group-label {
+  display: none;
+}
+
 .rail-btn,
 .rail-link {
   align-items: center;
@@ -2045,6 +2062,17 @@ textarea.input {
   font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.rail-expanded .rail-nav-group-label {
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding-block: var(--space-1) var(--space-2);
+  padding-inline: var(--space-3);
+  text-transform: uppercase;
 }
 
 /* Labels already name every destination, so the hover/focus tooltips would be

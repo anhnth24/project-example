@@ -1061,6 +1061,34 @@ pub fn expected_table_columns() -> &'static [(&'static str, &'static [&'static s
             "projects",
             &["id", "org_id", "name", "created_at", "updated_at"],
         ),
+        // P2-19 (migrations/0034) — private per-user Q&A chat history.
+        (
+            "qa_chat_sessions",
+            &[
+                "id",
+                "org_id",
+                "user_id",
+                "title",
+                "created_at",
+                "updated_at",
+            ],
+        ),
+        (
+            "qa_chat_turns",
+            &[
+                "id",
+                "session_id",
+                "org_id",
+                "user_id",
+                "seq",
+                "question",
+                "answer",
+                "answer_mode",
+                "citations",
+                "warnings",
+                "created_at",
+            ],
+        ),
         (
             "collection_user_access",
             &[

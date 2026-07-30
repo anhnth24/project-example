@@ -60,23 +60,28 @@ type CitationPin = components['schemas']['CitationPin'];
 type SseEnvelope = components['schemas']['SseEnvelope'];
 
 /**
- * P2-18 — resolves `projectId` (absent = "all projects", today's exact
+ * P2-19 — resolves `projectId` (deprecated singular) UNIONED with
+ * `projectIds[]` (absent/empty on both = "all projects", today's exact
  * behavior) into the effective `collectionIds` scope, narrowing (never
  * widening) whatever the request already specified — same contract as
- * `db::projects::resolve_project_scope` server-side. Returns `undefined` (a
- * 404) when `projectId` does not resolve to a project in the caller's org.
+ * `db::projects::resolve_project_scope`/`merge_project_ids` server-side.
+ * Returns `undefined` (a 404) when any named project id does not resolve to
+ * a project in the caller's org.
  */
 function resolveProjectScope(
   orgId: string,
   projectId: string | undefined,
+  projectIds: string[] | undefined,
   requested: string[] | undefined,
 ): { collectionIds: string[] | undefined } | undefined {
-  if (!projectId) return { collectionIds: requested };
-  if (!getOrgProjects(orgId).some((p) => p.id === projectId)) return undefined;
-  const projectCollections = collectionIdsForProject(orgId, projectId);
+  const allIds = [...new Set([...(projectId ? [projectId] : []), ...(projectIds ?? [])])];
+  if (allIds.length === 0) return { collectionIds: requested };
+  const orgProjects = getOrgProjects(orgId);
+  if (!allIds.every((id) => orgProjects.some((p) => p.id === id))) return undefined;
+  const unionCollections = [...new Set(allIds.flatMap((id) => collectionIdsForProject(orgId, id)))];
   const collectionIds = requested
-    ? requested.filter((id) => projectCollections.includes(id))
-    : projectCollections;
+    ? requested.filter((id) => unionCollections.includes(id))
+    : unionCollections;
   return { collectionIds };
 }
 
@@ -227,6 +232,12 @@ function passageToCitation(passage: Passage, citeId: string): CitationPin {
     logicalDocumentId: passage.documentId,
     versionId: passage.versionId,
     collectionId: passage.collectionId,
+    // P2-19 gap close: mirrors `services::citation::pin_from_hit`, which now
+    // always populates this from `documents.title` (hydration already joins
+    // `documents`). This mock's `passageCatalog()` already carries the same
+    // seeded document title, so reusing it here matches the real server
+    // instead of inventing separate mock-only data.
+    documentTitle: passage.title,
     sourceContentSha256: `src-${passage.versionId}`,
     canonicalMarkdownSha256: `md-${passage.versionId}`,
     quoteSha256: `quote-${passage.versionId}`,
@@ -350,7 +361,12 @@ registerOperation('search', async (ctx) => {
   const auth = authContextForHeader(ctx.headers.get('authorization'));
   if (!auth) return unauthorized();
   const body = await ctx.json<SearchRequest>();
-  const scope = resolveProjectScope(auth.orgId, body.projectId, body.collectionIds);
+  const scope = resolveProjectScope(
+    auth.orgId,
+    body.projectId,
+    body.projectIds,
+    body.collectionIds,
+  );
   if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
   const mode = body.mode ?? 'current';
   const limit = body.limit ?? 10;
@@ -385,7 +401,12 @@ registerOperation('ask', async (ctx) => {
   const auth = authContextForHeader(ctx.headers.get('authorization'));
   if (!auth) return unauthorized();
   const body = await ctx.json<AskRequest>();
-  const scope = resolveProjectScope(auth.orgId, body.projectId, body.collectionIds);
+  const scope = resolveProjectScope(
+    auth.orgId,
+    body.projectId,
+    body.projectIds,
+    body.collectionIds,
+  );
   if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
   const mode = body.mode ?? 'current';
   let passages: Passage[];
@@ -451,7 +472,12 @@ registerOperation('askStream', async (ctx) => {
   const auth = authContextForHeader(ctx.headers.get('authorization'));
   if (!auth) return unauthorized();
   const body = await ctx.json<AskRequest>();
-  const scope = resolveProjectScope(auth.orgId, body.projectId, body.collectionIds);
+  const scope = resolveProjectScope(
+    auth.orgId,
+    body.projectId,
+    body.projectIds,
+    body.collectionIds,
+  );
   if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
   const rawQuestion = body.question;
   const revoke = rawQuestion.includes(QA_STREAM_MARKERS.citationRevoked);

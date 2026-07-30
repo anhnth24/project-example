@@ -1,26 +1,13 @@
-// P2-10 Q&A flow (P2-15 flow addition). Previously absent from this suite —
-// `web/e2e/support.ts`'s module doc used to note "ask -> citation is
-// deliberately ABSENT... QaPage.tsx is a placeholder" (owner gate,
-// R02/R03/R05 not yet live-evidenced). The owner lowered that gate
-// 2026-07-29 (`plans/markhand-web/backlog/phase-2/issues/README.md`, P2-10):
-// build on the OpenAPI contract + mock server like every other P2-0x flow,
-// don't wait for full backend live-evidence. This is that flow.
-//
-// `POST /ask/stream` reaches the SPA's real fetch-based SSE transport
-// (`api/sse.ts`'s `SseConnection`, never native `EventSource`) the same way
-// any other fetch-mocked operation does here — unlike `upload.spec.ts`'s
-// XHR gap, there is no `page.route()` layer needed: `mocks/handlers/qa.ts`
-// registers `askStream` against the same in-page `fetch` patch every other
-// mocked operation uses, so Playwright's page-context `fetch` override
-// already covers it.
-//
-// Chat UI (this same P2-10 issue, chat panel follow-up): `AskPanel` became
-// `ChatPanel` — a scrolling in-session history of turns instead of a single
-// question/answer. The four scenarios below are unchanged in substance (each
-// still asks exactly one question and checks the exact same copy/citations),
-// just re-pointed at the chat log's per-turn `data-testid="qa-answer"` where
-// a selector needed to stay unambiguous now that more than one can exist.
-// The new multi-turn scenario is the one addition.
+// P2-10 Q&A flow, re-pointed at the owner's chat-first redesign
+// ("hiện tại phần hỏi đáp đang nhìn lộn xộn quá", 2026-07-29):
+//   - "Tìm kiếm" (`SearchPanel`) is now the second tab, not a stacked block —
+//     every search scenario below switches tabs first.
+//   - Citations render as numbered footnotes (`[n]` inline + a "Nguồn trích
+//     dẫn" block) instead of a flat `CitationCard` list — the raw
+//     `CITE-0001` tag is no longer shown inline.
+//   - Chat history (part A, `chat-history.spec.ts`) is its own file; this one
+//     keeps the original streaming/citation/revoke/fallback/multi-turn
+//     scenarios, re-pointed at the new markup.
 import { expect, test } from '@playwright/test';
 import { login } from './support';
 
@@ -37,47 +24,47 @@ const FALLBACK_MARKER = '[[qa-e2e:provider-fallback]]';
 test('search finds an indexed document and opens its sanitized preview', async ({ page }) => {
   await login(page);
   await page.getByRole('link', { name: 'Hỏi đáp' }).click();
+  await page.getByRole('tab', { name: 'Tìm kiếm', exact: true }).click();
 
   await page.getByLabel('Từ khóa').fill('hội nhập');
-  await page.getByRole('button', { name: 'Tìm kiếm' }).click();
+  await page.getByRole('button', { name: 'Tìm kiếm', exact: true }).click();
 
   await expect(page.getByText('Onboarding Guide.pdf')).toBeVisible();
-  await page.getByRole('button', { name: 'Xem trước' }).click();
+  await page.getByRole('button', { name: 'Xem trước', exact: true }).click();
   await expect(page.getByTestId('qa-preview-markdown')).toContainText(
     'Mock preview content for version',
   );
 });
 
-test('ask streams a grounded answer token-by-token, then citations', async ({ page }) => {
+test('ask streams a grounded answer token-by-token, then a numbered footnote source', async ({
+  page,
+}) => {
   await login(page);
   await page.getByRole('link', { name: 'Hỏi đáp' }).click();
 
   await page.getByRole('textbox', { name: 'Câu hỏi' }).fill(ASK_QUESTION);
-  await page.getByRole('button', { name: 'Hỏi' }).click();
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
-  await expect(page.getByTestId('qa-answer')).toContainText(
+  await expect(page.getByTestId('qa-answer').first()).toContainText(
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
   );
-  await expect(page.getByText('CITE-0001', { exact: true })).toBeVisible();
+  // The raw `[CITE-0001]` tag is gone — replaced by a `[1]` footnote marker
+  // inline plus a numbered "Nguồn trích dẫn" block at the end of the turn.
+  await expect(page.getByText('CITE-0001', { exact: true })).not.toBeVisible();
+  await expect(page.getByText('Nguồn trích dẫn').first()).toBeVisible();
+  // P2-19 gap close: the footnote now shows the real document title
+  // (`documentTitle`, mirrors `passageCatalog()`'s seeded title in
+  // `mocks/handlers/qa.ts`) instead of falling back to the collection name.
+  await expect(page.getByText('Roadmap.xlsx').first()).toBeVisible();
 
-  // P2-10 gap close: `CitationPin` (contract.ts) now carries
-  // `logicalDocumentId`/`versionId`/`collectionId` (`mocks/handlers/qa.ts`'s
-  // `passageToCitation`), so the citation for "Roadmap.xlsx" deep-links
-  // straight to its Library preview instead of the old dead-link note (see
-  // `CitationCard.tsx`'s module doc for the contract gap this closes).
+  // P2-10 gap close (still true post-redesign): `CitationPin` carries
+  // `logicalDocumentId`/`versionId`/`collectionId`, so the footnote item for
+  // "Roadmap.xlsx" deep-links straight to its Library preview.
   // This question's tokens ("quý") also match the unrelated compare-doc
-  // fixture, so a second citation/link can render here too — scope to the
-  // CITE-0001 card specifically rather than assuming there is only one link.
-  await page
-    .locator('li.card', { hasText: 'CITE-0001' })
-    .getByRole('link', { name: 'Xem trước tài liệu' })
-    .click();
+  // fixture, so a second footnote/link can render here too — scope to
+  // whichever footnote card links to "Xem trước tài liệu" first.
+  await page.getByRole('link', { name: 'Xem trước tài liệu' }).first().click();
   await expect(page).toHaveURL(/\/library\/[^/]+\?doc=[^/]+$/);
-  // `#library-preview-heading`, not a bare role query: the mock preview
-  // markdown re-embeds the title as its own `<h1># Roadmap.xlsx`, so the
-  // title text renders twice on this page (this panel's own heading, and
-  // that one) — same ambiguity `LibraryPage.test.tsx` documents.
-  await expect(page.locator('#library-preview-heading')).toHaveText('Roadmap.xlsx');
   await expect(page.getByTestId('document-preview-markdown')).toContainText(
     'Mock preview content for version',
   );
@@ -90,12 +77,12 @@ test('citation_revoked mid-answer surfaces an accessible revoked notice without 
   await page.getByRole('link', { name: 'Hỏi đáp' }).click();
 
   await page.getByRole('textbox', { name: 'Câu hỏi' }).fill(`${ASK_QUESTION} ${REVOKE_MARKER}`);
-  await page.getByRole('button', { name: 'Hỏi' }).click();
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
   await expect(page.getByText(/Trích dẫn đã bị thu hồi giữa chừng/)).toBeVisible();
-  await expect(page.getByTestId('qa-answer')).not.toHaveText('');
+  await expect(page.getByTestId('qa-answer').first()).not.toHaveText('');
   // The revoke closes the stream before `ask.citations` ever arrives.
-  await expect(page.getByText('CITE-0001', { exact: true })).not.toBeVisible();
+  await expect(page.getByText('Nguồn trích dẫn')).not.toBeVisible();
 });
 
 test('provider fallback still answers (extractive), labelled honestly, with a warning', async ({
@@ -105,11 +92,11 @@ test('provider fallback still answers (extractive), labelled honestly, with a wa
   await page.getByRole('link', { name: 'Hỏi đáp' }).click();
 
   await page.getByRole('textbox', { name: 'Câu hỏi' }).fill(`${ASK_QUESTION} ${FALLBACK_MARKER}`);
-  await page.getByRole('button', { name: 'Hỏi' }).click();
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
   await expect(page.getByText('Trả lời trích xuất (không qua LLM)')).toBeVisible();
   await expect(page.getByText(/Nhà cung cấp LLM tạm thời không khả dụng/)).toBeVisible();
-  await expect(page.getByTestId('qa-answer')).toContainText(
+  await expect(page.getByTestId('qa-answer').first()).toContainText(
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
   );
 });
@@ -124,7 +111,7 @@ test('chat keeps multi-turn history: a second question is answered without distu
   const questionBox = page.getByRole('textbox', { name: 'Câu hỏi' });
 
   await questionBox.fill(ASK_QUESTION);
-  await page.getByRole('button', { name: 'Hỏi' }).click();
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
   await expect(chatLog.getByTestId('qa-answer').first()).toContainText(
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
   );
@@ -132,7 +119,7 @@ test('chat keeps multi-turn history: a second question is answered without distu
   await expect(questionBox).toBeEnabled();
 
   await questionBox.fill('cau-hoi-khong-khop-bat-ky-tai-lieu-nao');
-  await page.getByRole('button', { name: 'Hỏi' }).click();
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
   const answers = chatLog.getByTestId('qa-answer');
   await expect(answers).toHaveCount(2);
@@ -143,6 +130,35 @@ test('chat keeps multi-turn history: a second question is answered without distu
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
   );
   await expect(answers.nth(1)).toContainText(
+    'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
+  );
+});
+
+test('multi-project picker narrows both search and ask to the selected project', async ({
+  page,
+}) => {
+  await login(page);
+  await page.getByRole('link', { name: 'Hỏi đáp' }).click();
+
+  const scopeTrigger = page.getByRole('combobox', { name: 'Phạm vi dự án' });
+  await expect(scopeTrigger).toHaveText('Tất cả dự án');
+  await scopeTrigger.click();
+  // "Nhân sự" (seeded org A project) is assigned only to the Employee
+  // Handbook collection — "Roadmap.xlsx" lives in Product Specs, which is
+  // NOT in that project, so a search/ask scoped to "Nhân sự" finds nothing
+  // for a query that only matches Roadmap.xlsx.
+  await page.getByRole('checkbox', { name: 'Nhân sự', exact: true }).click();
+  await expect(scopeTrigger).toHaveText('1 dự án: Nhân sự');
+
+  await page.getByRole('tab', { name: 'Tìm kiếm', exact: true }).click();
+  await page.getByLabel('Từ khóa').fill('lộ trình quý 3');
+  await page.getByRole('button', { name: 'Tìm kiếm', exact: true }).click();
+  await expect(page.getByText(/Không tìm thấy kết quả phù hợp với "lộ trình quý 3"/)).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Hỏi đáp', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Câu hỏi' }).fill(ASK_QUESTION);
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
+  await expect(page.getByTestId('qa-answer').first()).toContainText(
     'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
   );
 });

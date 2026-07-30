@@ -3,6 +3,7 @@
 pub mod ask;
 pub mod audit;
 pub mod auth;
+pub mod chat_sessions;
 pub mod collections;
 pub mod documents;
 pub mod events;

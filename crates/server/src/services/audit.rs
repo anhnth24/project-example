@@ -74,6 +74,13 @@ pub enum AuditAction {
     // sensitive enough to audit (both the deny and the success path,
     // mirroring search.query/ask.query below) — see routes/audit.rs.
     AuditRead,
+    // P2-19 private per-user chat history (migrations/0034). Metadata-only —
+    // never the question/answer content itself (both are in
+    // `FORBIDDEN_METADATA_KEYS` below already); every other chat-history
+    // mutation (rename, append-turn) is deliberately NOT audited per the
+    // P2-19 spec — see `routes::chat_sessions`'s module doc.
+    ChatSessionCreate,
+    ChatSessionDelete,
 }
 
 impl AuditAction {
@@ -119,6 +126,8 @@ impl AuditAction {
             Self::MemberRoleChange => "member.role_change",
             Self::MemberRemove => "member.remove",
             Self::AuditRead => "audit.read",
+            Self::ChatSessionCreate => "chat_session.create",
+            Self::ChatSessionDelete => "chat_session.delete",
         }
     }
 
@@ -164,6 +173,8 @@ impl AuditAction {
             "member.role_change" => Ok(Self::MemberRoleChange),
             "member.remove" => Ok(Self::MemberRemove),
             "audit.read" => Ok(Self::AuditRead),
+            "chat_session.create" => Ok(Self::ChatSessionCreate),
+            "chat_session.delete" => Ok(Self::ChatSessionDelete),
             _ => Err(format!("audit_action_invalid:{value}")),
         }
     }
@@ -281,6 +292,9 @@ impl AuditAction {
             // caller-supplied query params, not durable facts worth auditing
             // verbatim) — only a bounded result count and the deny reason.
             Self::AuditRead => &["reason", "result_count"],
+            // Structural only — never title/question/answer content (those
+            // are in `FORBIDDEN_METADATA_KEYS` regardless).
+            Self::ChatSessionCreate | Self::ChatSessionDelete => &["reason", "session_id"],
         }
     }
 }
@@ -301,6 +315,7 @@ pub enum AuditResource {
     Conflict,
     Member,
     Audit,
+    ChatSession,
 }
 
 impl AuditResource {
@@ -320,6 +335,7 @@ impl AuditResource {
             Self::Conflict => "conflict",
             Self::Member => "member",
             Self::Audit => "audit",
+            Self::ChatSession => "chat_session",
         }
     }
 
@@ -338,6 +354,7 @@ impl AuditResource {
             "search" => Ok(Self::Search),
             "conflict" => Ok(Self::Conflict),
             "member" => Ok(Self::Member),
+            "chat_session" => Ok(Self::ChatSession),
             "audit" => Ok(Self::Audit),
             _ => Err(format!("audit_resource_type_invalid:{value}")),
         }

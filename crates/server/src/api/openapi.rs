@@ -146,6 +146,29 @@ pub const ROUTE_INVENTORY: &[(&str, &str, &[&str])] = &[
     ("get", "/audit", &["200", "400", "403", "429"]),
     // P2-17 Document Graph MVP — see routes/graph.rs.
     ("get", "/graph", &["200", "403", "404", "429"]),
+    // P2-19 private per-user Q&A chat history — see routes/chat_sessions.rs.
+    ("get", "/chat-sessions", &["200", "400", "403", "429"]),
+    ("post", "/chat-sessions", &["201", "400", "403", "429"]),
+    (
+        "get",
+        "/chat-sessions/{sessionId}",
+        &["200", "403", "404", "429"],
+    ),
+    (
+        "patch",
+        "/chat-sessions/{sessionId}",
+        &["200", "400", "403", "404", "429"],
+    ),
+    (
+        "delete",
+        "/chat-sessions/{sessionId}",
+        &["204", "403", "404", "429"],
+    ),
+    (
+        "post",
+        "/chat-sessions/{sessionId}/turns",
+        &["201", "400", "403", "404", "429"],
+    ),
 ];
 
 const HEALTH_PATHS: &[&str] = &["/health/live", "/health/ready", "/health/start"];
@@ -185,6 +208,9 @@ pub const BODY_TAKING_OPERATIONS: &[(&str, &str)] = &[
     ("post", "/members/invites"),
     ("post", "/members/invites/accept"),
     ("patch", "/members/{userId}"),
+    ("post", "/chat-sessions"),
+    ("patch", "/chat-sessions/{sessionId}"),
+    ("post", "/chat-sessions/{sessionId}/turns"),
 ];
 
 pub fn embedded_openapi_yaml() -> &'static str {

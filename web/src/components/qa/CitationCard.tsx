@@ -17,7 +17,8 @@ import { RouteLink } from '../RouteLink';
 
 export type CitationPin = components['schemas']['CitationPin'];
 
-function locationLabel(citation: CitationPin): string | null {
+/** Exported for `CitationFootnotes.tsx` — same "page/slide/sheet, whichever is present" label a footnote item shows, kept in one place rather than duplicated. */
+export function locationLabel(citation: CitationPin): string | null {
   if (citation.page !== undefined) return `Trang ${citation.page}`;
   if (citation.slide !== undefined) return `Slide ${citation.slide}`;
   if (citation.sheet !== undefined) return `Sheet ${citation.sheet}`;
