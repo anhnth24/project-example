@@ -1,7 +1,8 @@
 # Lộ trình dự án
 
-> Trạng thái tính đến 2026-07-11. Backlog rút từ [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md)
-> và điểm yếu đã biết trong các `REPORT*.md`.
+> Trạng thái tính đến 2026-07-30. Backlog desktop rút từ
+> [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md) và điểm yếu đã biết
+> trong các `REPORT*.md`. Tiến độ Markhand Web: [`../plans/markhand-web/README.md`](../plans/markhand-web/README.md).
 
 ## Đã hoàn thành ✅
 
@@ -48,7 +49,17 @@
 
 ## Đang làm / Gần ✋
 
-- (trống — xem backlog Markhand Web tại `../plans/markhand-web/backlog/`)
+### Markhand Web (on-prem RAG platform)
+
+Phase F, 0 và 1A **đã đóng** (32/32 issue). Phase 1B **19/24 Done** — còn retrieval/API
+slice R02–R06 (R03 Review). O-chain release (O01–O05) và soak qualification đã pass trên
+live infrastructure (2026-07-26). Phase 1C **12/13 In progress** — nền multi-org/RLS/ACL
+đã có từ 1B, exit gate denial suite chưa đạt. Phase 2 **13/19 Done** trên mock/CI
+(#311–#318, #327, #332); còn P2-10, P2-15, P2-16 và ba issue mở rộng P2-17…19. Phase 3–4
+chưa activate (Backlog).
+
+Dashboard: [`../plans/markhand-web/roadmap.html`](../plans/markhand-web/roadmap.html) ·
+Issue catalog: [`../plans/markhand-web/backlog/`](../plans/markhand-web/backlog/)
 
 ## Backlog
 
