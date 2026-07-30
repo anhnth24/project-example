@@ -127,6 +127,18 @@ async fn seed_org(pool: &Pool, org: Uuid, user: Uuid, slug: &str) -> OrgContext 
                 orgs::ensure_user(txn, &context, user, &format!("{slug}@example.test"), &slug)
                     .await?;
                 orgs::ensure_membership(txn, &context).await?;
+                // 1C-09: claim admission is quota-gated; generous limits so
+                // these queue-semantics tests are unaffected by concurrency.
+                txn.execute(
+                    "INSERT INTO org_quotas (
+                        org_id, max_storage_bytes, max_documents,
+                        max_concurrent_jobs, max_monthly_tokens
+                     )
+                     VALUES ($1, 1000000000, 100000, 100, 1000000000)
+                     ON CONFLICT (org_id) DO NOTHING",
+                    &[&context.org_id()],
+                )
+                .await?;
                 Ok(())
             })
         }

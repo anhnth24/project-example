@@ -124,6 +124,7 @@ impl AppState {
             runtime.config().quota_sweep(),
             Arc::clone(&maintenance_lock),
         );
+        start_quota_reconcile(pool.clone(), Arc::clone(&maintenance_lock));
         start_ask_stream_maintenance(pool.clone(), maintenance_lock);
         start_telemetry_observers(pool.clone());
         let startup = StartupState::new();
@@ -386,6 +387,73 @@ fn start_quota_sweep(
                 Ok(_) => {}
                 Err(error) => {
                     tracing::warn!(target: "quota", code = error.code(), "quota expiry sweep failed");
+                }
+            }
+            guard.release().await;
+        }
+    });
+}
+
+const DEFAULT_QUOTA_RECONCILE_INTERVAL_SECS: u64 = 3_600;
+const MIN_QUOTA_RECONCILE_INTERVAL_SECS: u64 = 60;
+
+/// Reconcile interval knob: `MARKHAND_QUOTA_RECONCILE_INTERVAL_SECS`
+/// (default hourly, clamped to >= 60s; `0` disables the task entirely).
+/// Invalid values fall back to the default with a warning rather than
+/// failing startup — reconcile is a repair loop, not a serving dependency.
+fn quota_reconcile_interval_from_env() -> Option<Duration> {
+    let raw = match std::env::var("MARKHAND_QUOTA_RECONCILE_INTERVAL_SECS") {
+        Ok(value) => value,
+        Err(_) => return Some(Duration::from_secs(DEFAULT_QUOTA_RECONCILE_INTERVAL_SECS)),
+    };
+    match raw.trim().parse::<u64>() {
+        Ok(0) => None,
+        Ok(secs) => Some(Duration::from_secs(
+            secs.max(MIN_QUOTA_RECONCILE_INTERVAL_SECS),
+        )),
+        Err(_) => {
+            tracing::warn!(
+                target: "quota",
+                "invalid MARKHAND_QUOTA_RECONCILE_INTERVAL_SECS; using default"
+            );
+            Some(Duration::from_secs(DEFAULT_QUOTA_RECONCILE_INTERVAL_SECS))
+        }
+    }
+}
+
+/// Periodic quota drift repair (1C-09 c), same background pattern as the
+/// expiry sweep above: maintenance mutex + ops-fence/backup guard per tick.
+fn start_quota_reconcile(pool: Pool, maintenance_lock: Arc<tokio::sync::Mutex<()>>) {
+    let Some(period) = quota_reconcile_interval_from_env() else {
+        tracing::info!(target: "quota", "quota reconcile disabled by configuration");
+        return;
+    };
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Skip the immediate first tick so startup is not front-loaded with a
+        // full-org scan.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let _maintenance = maintenance_lock.lock().await;
+            let Ok(guard) = acquire_background_mutation_guard(&pool).await else {
+                tracing::debug!(target: "quota", "quota reconcile skipped: ops fence / backup lock active");
+                continue;
+            };
+            match quota::reconcile_all_orgs(&pool).await {
+                Ok(outcome) if outcome.counters_fixed > 0 || outcome.job_slots_released > 0 => {
+                    tracing::info!(
+                        target: "quota",
+                        orgs_checked = outcome.orgs_checked,
+                        counters_fixed = outcome.counters_fixed,
+                        job_slots_released = outcome.job_slots_released,
+                        "quota reconcile repaired drift"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(target: "quota", code = error.code(), "quota reconcile failed");
                 }
             }
             guard.release().await;

@@ -20,7 +20,9 @@ use crate::services::qa::stream::tokenize_answer;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_ANSWER_CHARS: usize = 16_384;
+/// Hard cap on provider answer length; also the output allowance used by the
+/// token-quota reservation estimate (1C-09 a) — keep the two in sync.
+pub const MAX_ANSWER_CHARS: usize = 16_384;
 const MAX_STREAM_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Error)]

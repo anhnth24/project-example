@@ -16,6 +16,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::db::models::ResourceKind;
 use crate::services::citation::{pins_from_hits, CitationPin};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::qa::grounding::{
@@ -23,7 +24,8 @@ use crate::services::qa::grounding::{
     validate_answer_citations, version_context_note, VersionContext,
 };
 use crate::services::qa::prompt::{build_grounded_messages, GroundedMessages};
-use crate::services::qa::provider::{ChatProvider, ProviderError};
+use crate::services::qa::provider::{ChatProvider, ProviderError, MAX_ANSWER_CHARS};
+use crate::services::quota::{self, QuotaError, DEFAULT_RESERVATION_TTL};
 use crate::services::retrieval::{
     hybrid_search, RetrievalError, RetrievalHit, RetrievalRequest, VersionMode,
 };
@@ -144,6 +146,94 @@ pub(crate) fn resolve_llm_answer(
     }
 }
 
+// --- Token-quota lifecycle around the chat-provider call (1C-09 a) ---
+//
+// The only real token consumer on the ask path is the configured chat
+// provider (`ChatProvider::complete` / `stream_tokens`); when no provider is
+// configured (extractive-only MVP deployment) nothing is reserved. Neither
+// the OpenAI-compatible non-streaming response nor GLM streaming chunks are
+// guaranteed to carry a `usage` block, so both admission and settlement use
+// the same character heuristic (~4 chars/token) — reserve an upper bound
+// (prompt + MAX_ANSWER_CHARS allowance), settle measured characters.
+
+/// Heuristic chars→tokens divisor (BPE average; Vietnamese diacritics make
+/// this conservative in the reserve direction).
+const TOKEN_CHARS_PER_TOKEN: u64 = 4;
+
+pub(crate) fn estimate_tokens_from_chars(chars: usize) -> u64 {
+    (chars as u64).div_ceil(TOKEN_CHARS_PER_TOKEN).max(1)
+}
+
+/// An admitted token reservation covering one provider interaction.
+#[derive(Debug, Clone)]
+pub(crate) struct TokenLease {
+    pub reservation_key: String,
+    pub prompt_tokens: u64,
+}
+
+/// Reserve prompt + max-answer tokens before the provider call. Fail-closed:
+/// `QuotaExceeded` surfaces as a distinguishable 429 to the caller.
+pub(crate) async fn reserve_ask_tokens(
+    pool: &Pool,
+    ctx: &OrgContext,
+    messages: &GroundedMessages,
+) -> Result<TokenLease, QuotaError> {
+    let prompt_chars = messages.system.chars().count() + messages.user.chars().count();
+    let prompt_tokens = estimate_tokens_from_chars(prompt_chars);
+    let reserve_amount = prompt_tokens
+        .checked_add(estimate_tokens_from_chars(MAX_ANSWER_CHARS))
+        .ok_or(QuotaError::ArithmeticOverflow)?;
+    let reservation_key = format!("ask.tokens.{}", Uuid::new_v4());
+    quota::reserve(
+        pool,
+        ctx,
+        &reservation_key,
+        ResourceKind::Tokens,
+        reserve_amount,
+        DEFAULT_RESERVATION_TTL,
+        None,
+    )
+    .await?;
+    Ok(TokenLease {
+        reservation_key,
+        prompt_tokens,
+    })
+}
+
+/// Settle a token lease after the provider interaction.
+///
+/// `answer_chars = Some(n)` commits prompt + measured answer tokens (the
+/// provider really consumed them — even when the answer is later discarded by
+/// fail-closed grounding). `None` means the request never got off the ground
+/// (transport failure): refund. Settlement failures are logged, never bubbled
+/// — the reservation then simply expires via the sweeper (capacity held for
+/// at most the TTL, counters untouched).
+pub(crate) async fn settle_ask_tokens(
+    pool: &Pool,
+    ctx: &OrgContext,
+    lease: TokenLease,
+    answer_chars: Option<usize>,
+) {
+    let result = match answer_chars {
+        Some(chars) => {
+            let actual = lease.prompt_tokens.saturating_add(if chars == 0 {
+                0
+            } else {
+                estimate_tokens_from_chars(chars)
+            });
+            quota::finalize_actual(pool, ctx, &lease.reservation_key, actual).await
+        }
+        None => quota::refund(pool, ctx, &lease.reservation_key).await,
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            target: "quota",
+            code = error.code(),
+            "ask token settlement failed; reservation left for expiry sweeper"
+        );
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AskRequest {
     pub question: String,
@@ -171,6 +261,10 @@ pub enum AskError {
     InvalidRequest(&'static str),
     #[error("provider error")]
     Provider(#[from] ProviderError),
+    /// Token-quota admission failed (1C-09 a). `QuotaExceeded` maps to the
+    /// same distinguishable 429 contract as storage quota on upload.
+    #[error("quota error")]
+    Quota(QuotaError),
 }
 
 impl AskError {
@@ -179,6 +273,7 @@ impl AskError {
             Self::Retrieval(error) => error.code(),
             Self::InvalidRequest(_) => "ask_invalid_request",
             Self::Provider(_) => "ask_provider",
+            Self::Quota(error) => error.code(),
         }
     }
 }
@@ -256,8 +351,16 @@ pub async fn ask(
     let (answer, mode) = match provider {
         Some(chat) if !hybrid.is_empty() => {
             let messages = build_grounded_messages(&request.question, &hybrid, &request.mode);
+            // Token quota (1C-09 a): reserve before the provider call — the
+            // only real token consumer on this path — fail-closed on denial.
+            let lease = reserve_ask_tokens(pool, ctx, &messages)
+                .await
+                .map_err(AskError::Quota)?;
             match chat.complete(&messages).await {
                 Ok(llm_answer) => {
+                    // The provider consumed prompt + answer tokens even when
+                    // fail-closed grounding discards the answer below.
+                    settle_ask_tokens(pool, ctx, lease, Some(llm_answer.chars().count())).await;
                     let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
                         llm_answer,
                         &extractive,
@@ -270,10 +373,15 @@ pub async fn ask(
                     (answer, resolved_mode)
                 }
                 Err(ProviderError::Timeout) => {
+                    // The request reached the provider; the prompt was very
+                    // likely billed. Commit prompt tokens, no answer chars.
+                    settle_ask_tokens(pool, ctx, lease, Some(0)).await;
                     warnings.push("LLM provider timed out; using extractive fallback.".into());
                     (extractive, AnswerMode::FallbackExtractive)
                 }
                 Err(_) => {
+                    // Transport/parse failure before any usable exchange.
+                    settle_ask_tokens(pool, ctx, lease, None).await;
                     warnings.push("LLM provider unavailable; using extractive fallback.".into());
                     (extractive, AnswerMode::FallbackExtractive)
                 }

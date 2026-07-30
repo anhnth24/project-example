@@ -393,6 +393,9 @@ services:
       MARKHAND_RATE_USER_PER_MINUTE: ${MARKHAND_RATE_USER_PER_MINUTE:-600}
       MARKHAND_RATE_IP_PER_MINUTE: ${MARKHAND_RATE_IP_PER_MINUTE:-1200}
       MARKHAND_RATE_ROUTE_PER_MINUTE: ${MARKHAND_RATE_ROUTE_PER_MINUTE:-600}
+      # Org-wide ceiling (1C-10): single-org POC needs headroom above the user
+      # ceiling; multi-org deploys tune this down to enforce fairness.
+      MARKHAND_RATE_ORG_PER_MINUTE: ${MARKHAND_RATE_ORG_PER_MINUTE:-3000}
       # Mock profile signature (print-index-signature.py --base-url http://mock-embedding:8080/v1 ...)
       MARKHAND_INDEX_SIGNATURE: ${MARKHAND_INDEX_SIGNATURE:-72dda20007ffb7fbe293612091103321eb9e4e0e4a0517a5f3413e31a2978874}
       MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
