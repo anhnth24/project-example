@@ -1304,7 +1304,9 @@ async fn live_convert_worker_promotes_immutable_markdown_version() {
     assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 1);
     assert_eq!(
         quota_reservation_statuses(&pool, &ctx, job.id).await,
-        vec!["finalized".to_string()]
+        // claim-time concurrent-jobs slot (refunded at promotion), then the
+        // storage reservation finalized by the promote transaction
+        vec!["refunded".to_string(), "finalized".to_string()]
     );
     assert!(markdown_artifact_key(&pool, &ctx, version_id)
         .await
@@ -1478,7 +1480,8 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 0);
         assert_eq!(
             quota_reservation_statuses(&pool, &ctx, job.id).await,
-            vec!["refunded".to_string()]
+            // slot + storage, both refunded when the faulted attempt rolls back
+            vec!["refunded".to_string(), "refunded".to_string()]
         );
         for staged_key in checkpoint_staged_keys(&pool, &ctx, job.id).await {
             let staged_key = fileconv_server::storage::parse_key_for_org(&staged_key, ctx.org_id())
@@ -1507,7 +1510,14 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
         assert_eq!(count_index_outbox(&pool, &ctx, job.id).await, 1);
         assert_eq!(
             quota_reservation_statuses(&pool, &ctx, job.id).await,
-            vec!["refunded".to_string(), "finalized".to_string()]
+            // first attempt's slot+storage refunded, retry's slot refunded at
+            // promotion, retry's storage finalized
+            vec![
+                "refunded".to_string(),
+                "refunded".to_string(),
+                "refunded".to_string(),
+                "finalized".to_string(),
+            ]
         );
     }
 
@@ -2401,7 +2411,9 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
     );
     assert_eq!(
         quota_reservation_statuses(&pool, &ctx, job.id).await,
-        vec!["reserved".to_string()]
+        // slot refunded by the fail path; storage stuck reserved because the
+        // faulted refund deferred compensation to the sweeper
+        vec!["refunded".to_string(), "reserved".to_string()]
     );
     tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(
@@ -2412,7 +2424,7 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
     );
     assert_eq!(
         quota_reservation_statuses(&pool, &ctx, job.id).await,
-        vec!["expired".to_string()]
+        vec!["refunded".to_string(), "expired".to_string()]
     );
 
     make_job_available(&pool, &ctx, job.id).await;
@@ -2430,7 +2442,14 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
     assert_eq!(count_markdown_artifacts(&pool, &ctx, document_id).await, 1);
     assert_eq!(
         quota_reservation_statuses(&pool, &ctx, job.id).await,
-        vec!["expired".to_string(), "finalized".to_string()]
+        // first attempt: slot refunded, storage expired via sweep; retry:
+        // slot refunded at promotion, storage finalized
+        vec![
+            "refunded".to_string(),
+            "expired".to_string(),
+            "refunded".to_string(),
+            "finalized".to_string(),
+        ]
     );
 
     ephemeral.drop().await;

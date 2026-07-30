@@ -661,7 +661,7 @@ async fn reserve_job_slots(
 /// Refund the claimed job's concurrent-jobs slot on any terminal transition
 /// (complete / fail / cancel / reclaim / dry-run release). No-op when the job
 /// holds no slot (e.g. enqueued before this enforcement shipped).
-async fn release_job_slot(
+pub(crate) async fn release_job_slot(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     job_id: Uuid,
