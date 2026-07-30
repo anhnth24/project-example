@@ -364,6 +364,7 @@ struct ConfigFile {
     profile: Option<String>,
     bind_addr: Option<String>,
     database_url: Option<String>,
+    worker_database_url: Option<String>,
     qdrant_url: Option<String>,
     qdrant_api_key: Option<String>,
     minio_url: Option<String>,
@@ -460,6 +461,26 @@ impl ServerConfig {
             .filter(|value| !value.trim().is_empty())
             .cloned()
             .map(SecretString::new);
+        // 1C-08: dedicated DB role for workers. The worker process prefers
+        // `MARKHAND_WORKER_DATABASE_URL` (a `markhand_worker` least-privilege
+        // connection, see migration 0035) and deliberately FALLS BACK to
+        // `MARKHAND_DATABASE_URL` (the `markhand_app` role) when unset, so
+        // deployments that predate the worker role keep working unchanged.
+        // Trade-off (fail-open-config, matching the `markhand_app` grant
+        // precedent in 0027 where role provisioning is an ops concern): a
+        // deploy that forgets the variable silently runs the worker with the
+        // broader app role instead of failing. RLS + FORCE RLS still bound
+        // that blast radius; the separation-of-privilege win only requires
+        // setting one env var, and tests assert the worker role posture.
+        let database_url = if role == RuntimeRole::Worker {
+            optional_value(file, env, "MARKHAND_WORKER_DATABASE_URL", |value| {
+                value.worker_database_url.as_ref()
+            })
+            .map(SecretString::new)
+            .or(database_url)
+        } else {
+            database_url
+        };
         let qdrant_url = optional_value(file, env, "MARKHAND_QDRANT_URL", |value| {
             value.qdrant_url.as_ref()
         });
@@ -1204,6 +1225,7 @@ mod tests {
             profile: Some("test".into()),
             bind_addr: Some("127.0.0.1:9000".into()),
             database_url: Some("postgres://file-secret".into()),
+            worker_database_url: None,
             qdrant_url: Some("http://qdrant.test".into()),
             qdrant_api_key: None,
             minio_url: Some("http://minio.test".into()),
@@ -1542,6 +1564,39 @@ mod tests {
         assert!(!endpoints_debug.contains("qdrant.internal"));
         assert!(!endpoints_debug.contains("minio.internal"));
         assert!(!endpoints_debug.contains("top-secret"));
+    }
+
+    #[test]
+    fn worker_role_prefers_dedicated_database_url_with_app_fallback() {
+        let base = BTreeMap::from([(
+            "MARKHAND_DATABASE_URL".into(),
+            "postgres://markhand_app@db.internal/markhand".into(),
+        )]);
+        // Fallback: without MARKHAND_WORKER_DATABASE_URL the worker keeps the
+        // app-role URL so pre-worker-role deployments do not break.
+        let config = ServerConfig::from_sources_for_role(None, &base, RuntimeRole::Worker).unwrap();
+        assert_eq!(
+            config.database_url.as_ref().unwrap().expose(),
+            "postgres://markhand_app@db.internal/markhand"
+        );
+
+        let mut env = base.clone();
+        env.insert(
+            "MARKHAND_WORKER_DATABASE_URL".into(),
+            "postgres://markhand_worker@db.internal/markhand".into(),
+        );
+        let config = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker).unwrap();
+        assert_eq!(
+            config.database_url.as_ref().unwrap().expose(),
+            "postgres://markhand_worker@db.internal/markhand"
+        );
+
+        // The API process must never pick up the worker URL.
+        let config = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Api).unwrap();
+        assert_eq!(
+            config.database_url.as_ref().unwrap().expose(),
+            "postgres://markhand_app@db.internal/markhand"
+        );
     }
 
     #[test]

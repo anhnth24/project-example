@@ -34,6 +34,7 @@
     "0031_expand_org_acl_version.sql": "7b7288a22e12f76fb73fbecbd181a54255f7263adae82c691d304f78d128d9e6",
     "0032_expand_projects.sql": "f3c1b556fb3f3304401b3188555cbdc48b243a0834c203ddec93fd5b47d78fb9",
     "0033_expand_acl_version_triggers.sql": "c4a51ae6e5a3676d9493d0174e0f5d41758d0b137ae3d94f7ce4c4a8573592a3",
-    "0034_expand_qa_chat_history.sql": "383f7347cf1e09145a4dbf38df101949f571981dfb90b5287f5fa3c21c60ffc1"
+    "0034_expand_qa_chat_history.sql": "383f7347cf1e09145a4dbf38df101949f571981dfb90b5287f5fa3c21c60ffc1",
+    "0035_expand_worker_role.sql": "0daa913d8dca0b6c6013f0aa3f854a924eb6b6832ffe93d6908016901a520c5b"
   }
 }

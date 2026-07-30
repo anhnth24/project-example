@@ -142,6 +142,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0034_expand_qa_chat_history.sql",
         include_str!("../migrations/0034_expand_qa_chat_history.sql"),
     ),
+    (
+        "0035_expand_worker_role.sql",
+        include_str!("../migrations/0035_expand_worker_role.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -377,6 +381,47 @@ mod tests {
         assert!(
             source.contains("CREATE OR REPLACE FUNCTION provision_org_role_catalog(p_org_id uuid)")
         );
+    }
+
+    #[test]
+    fn worker_role_grants_are_guarded_scoped_and_append_only_audit() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0035_expand_worker_role.sql")
+            .expect("worker role migration")
+            .1;
+        // Grants apply only when ops pre-provisioned the role (0027 pattern).
+        assert!(
+            source.contains("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'markhand_worker')"),
+            "worker grants must be guarded on role existence"
+        );
+        // Audit stays append-only for the worker, like markhand_app.
+        assert!(source
+            .contains("REVOKE UPDATE, DELETE, TRUNCATE ON TABLE audit_log FROM markhand_worker"));
+        assert!(source.contains("GRANT SELECT, INSERT ON TABLE audit_log TO markhand_worker"));
+        // No schema mutation rights.
+        assert!(source.contains("REVOKE CREATE ON SCHEMA public FROM markhand_worker"));
+        // Least privilege: auth/ACL/chat/upload/capability tables are never
+        // mentioned, so no grant can reach them.
+        for denied in [
+            "refresh_tokens",
+            "org_memberships",
+            "org_invites",
+            "collection_user_access",
+            "collection_group_access",
+            "collection_role_access",
+            "role_permissions",
+            "qa_chat_sessions",
+            "qa_chat_turns",
+            "ask_stream_sessions",
+            "upload_operations",
+            "download_capability_redemptions",
+        ] {
+            assert!(
+                !source.contains(denied),
+                "worker migration must not touch {denied}"
+            );
+        }
     }
 
     #[test]
