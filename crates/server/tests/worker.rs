@@ -752,6 +752,18 @@ async fn run_convert_worker_until_completed(
     for round in 0..12 {
         make_job_available(pool, ctx, convert_job_id).await;
         let outcome = worker.run_once(ctx).await.expect("worker run");
+        // A promotion can commit while its acknowledgement races a heartbeat
+        // (ReconciliationNeeded / CommittedOutcomeUnknown are designed
+        // outcomes, not failures) — the database is the truth. Without this,
+        // a completed job leaves every later round claiming nothing.
+        if !matches!(outcome, ConvertWorkerRun::Completed { .. })
+            && get_job(pool, ctx, convert_job_id).await.status == JobStatus::Succeeded
+        {
+            return ConvertWorkerRun::Completed {
+                job_id: convert_job_id,
+                markdown_bytes: 0,
+            };
+        }
         match outcome {
             ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id => {
                 return outcome;

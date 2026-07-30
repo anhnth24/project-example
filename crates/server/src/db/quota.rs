@@ -364,6 +364,13 @@ pub async fn refund_reserved_by_job(
 }
 
 /// Extend the expiry of active reservations tied to `job_id` (heartbeat).
+///
+/// SKIP LOCKED: a terminal transition (promotion/complete/fail) refunds this
+/// row inside its own transaction and may hold the row lock until commit.
+/// The heartbeat must never queue behind that — its call timeout is a
+/// fraction of the lease, and a blocked heartbeat turns a successful commit
+/// into a spurious reconciliation. A skipped row needs no extension anyway:
+/// whoever holds it is settling the reservation.
 pub async fn extend_reserved_by_job(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -376,10 +383,14 @@ pub async fn extend_reserved_by_job(
         .execute(
             "UPDATE quota_reservations
              SET expires_at = clock_timestamp() + ($4::bigint * interval '1 second')
-             WHERE org_id = $1
-               AND job_id = $2
-               AND resource_kind = $3
-               AND status = 'reserved'",
+             WHERE id IN (
+                 SELECT id FROM quota_reservations
+                 WHERE org_id = $1
+                   AND job_id = $2
+                   AND resource_kind = $3
+                   AND status = 'reserved'
+                 FOR UPDATE SKIP LOCKED
+             )",
             &[&ctx.org_id(), &job_id, &kind, &ttl_secs],
         )
         .await?;
