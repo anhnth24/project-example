@@ -600,6 +600,62 @@ mod tests {
     }
 
     #[test]
+    fn convert_path_rejects_unknown_extension_without_io() {
+        let conv = Converter::new();
+
+        for path in [Path::new("file.xyz"), Path::new("Makefile")] {
+            let legacy = conv.convert_path(path).unwrap_err();
+            assert!(
+                matches!(legacy, ConvertError::Unsupported("không rõ đuôi file")),
+                "path {path:?}"
+            );
+
+            let detailed = conv.convert_path_detailed(path).unwrap_err();
+            assert_eq!(
+                detailed.kind,
+                ConvertErrorKind::Unsupported,
+                "path {path:?}"
+            );
+            assert!(
+                matches!(
+                    detailed.error,
+                    ConvertError::Unsupported("không rõ đuôi file")
+                ),
+                "path {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn convert_path_missing_known_extension_returns_failed() {
+        use std::panic;
+
+        let missing = std::env::temp_dir().join(format!(
+            "fileconv_missing_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!missing.exists());
+
+        let conv = Converter::new();
+        let legacy = conv.convert_path(&missing).unwrap_err();
+        match legacy {
+            ConvertError::Failed(ref msg) => assert!(!msg.trim().is_empty()),
+            other => panic!("expected Failed for missing file, got {other:?}"),
+        }
+
+        let detailed = conv.convert_path_detailed(&missing).unwrap_err();
+        assert_eq!(detailed.kind, ConvertErrorKind::Failed);
+        assert!(matches!(detailed.error, ConvertError::Failed(_)));
+
+        let no_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| conv.convert_path(&missing)));
+        assert!(matches!(no_panic, Ok(Err(_))));
+    }
+
+    #[test]
     fn concurrent_detailed_converts_do_not_leak_warnings() {
         use std::sync::Arc;
         let dir = std::env::temp_dir().join(format!(
