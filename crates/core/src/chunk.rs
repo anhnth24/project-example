@@ -211,6 +211,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn three_level_heading_path_vietnamese() {
+        let md = "\
+# Phần I
+
+Giới thiệu phần I.
+
+## Mục 1
+
+Nội dung mục 1.
+
+### Tiểu mục 1.1
+
+Chi tiết tiểu mục.
+
+## Mục 2
+
+Nội dung mục 2.
+";
+        let c = chunk_markdown(md, 1000);
+
+        assert_eq!(c.len(), 4);
+        let expected: &[(&str, &str)] = &[
+            ("Phần I", "Giới thiệu phần I."),
+            ("Phần I > Mục 1", "Nội dung mục 1."),
+            ("Phần I > Mục 1 > Tiểu mục 1.1", "Chi tiết tiểu mục."),
+            ("Phần I > Mục 2", "Nội dung mục 2."),
+        ];
+        for (i, (heading, text)) in expected.iter().enumerate() {
+            assert_eq!(c[i].heading, *heading, "chunk {i} heading");
+            assert_eq!(c[i].text, *text, "chunk {i} text");
+        }
+    }
+
+    #[test]
+    fn split_nested_section_keeps_full_heading_path() {
+        let para = "x".repeat(150);
+        // Body dài chỉ thuộc ## Mục A dưới # Phần I — pha 1 đã flush path 2 cấp trước pha 2.
+        let md = format!("# Phần I\n\n## Mục A\n\n{para}\n\n{para}\n\n{para}\n");
+        let c = chunk_markdown(&md, 320);
+
+        assert!(c.len() >= 2, "expected split, got {}", c.len());
+        assert!(
+            c.iter().all(|k| k.heading == "Phần I > Mục A"),
+            "nested path must survive paragraph split, got {:?}",
+            c.iter().map(|k| &k.heading).collect::<Vec<_>>()
+        );
+        assert!(c.iter().all(|k| k.chars <= 320));
+    }
+
+    #[test]
     fn splits_by_heading_with_path() {
         let md = "# Chương I\n\nMở đầu.\n\n## Điều 1\n\nNội dung điều 1.\n\n## Điều 2\n\nNội dung điều 2.\n";
         let c = chunk_markdown(md, 1000);
