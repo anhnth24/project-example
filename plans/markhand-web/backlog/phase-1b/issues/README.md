@@ -5,6 +5,12 @@ Parent plan: [`../../../phase-1b-single-org-poc.md`](../../../phase-1b-single-or
 <!-- roadmap-default-status: blocked -->
 <!-- roadmap-groups: F,I,R,O -->
 
+**Trạng thái tổng quan (cập nhật 2026-07-30).** **19/24 Done** — foundation F01–F06,
+ingest I01–I07, retrieval R01, operations O01–O05 (O-chain + soak pass live 2026-07-26).
+**5 active:** R02–R06 (R03 Review). Phase 1B gate **chưa đóng** cho tới khi R02–R06 đạt
+acceptance; release suite O04/O05 đã pass trên cùng commit `f4f33cd` nhưng phụ thuộc R04–R06
+trong critical path.
+
 Tất cả issue bắt đầu ở **Blocked**. Chỉ chuyển `Ready` khi external gate và predecessor
 ghi trong issue đã `Done`.
 
